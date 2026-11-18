@@ -5875,7 +5875,15 @@ pointer to its entry.
    `execution-and-storage.md` §4.10: a row is a part only from a minimum size
    on, and a long array is stored in chunks. The rule it replaces turned 2,600
    small rows into 2,800 documents in one transaction and wrote 610,081 bytes
-   of documents for an append to a list of 10,000.
+   of documents for an append to a list of 10,000. The trade-off of P20: an
+   edit of one small row writes its chunk, a document of up to 65,536 bytes,
+   where storage takes no patch below a path of a document, and under the
+   rule it replaces an edit of a small row with a declared key wrote one
+   part document of 24 bytes. Whether storage takes such a patch is open
+   (question 290, point a). P25 and P26 complete P20: a chunk list holds the
+   number of entries of each chunk, and the arrays of argument documents and
+   state cells are stored in chunks as well, which conflicts with a mergeable
+   `push` unless storage applies the layout (question 296).
 4. **P18 with P19.** P18 changes the records of a plan and is written in full
    into `plan-and-label-templates.md` §1.1. It is designed and not built. P19
    makes the compile-time checks on declared labels modular under it, which is
@@ -6333,7 +6341,17 @@ today.
   construct.
 - **P20. Part documents: a row is a part only from a minimum size on, and a
   long array is stored in chunks** (questions 229 and 264, with question 290
-  for what stays open). The coordinator's decision. *Measured* (prototype notes
+  for what stays open). The coordinator's decision. *The trade-off, first:*
+  with chunks an edit of one small row writes the chunk that holds it, which
+  is a document of up to 65,536 bytes written whole where storage takes no
+  patch below a path of a document. Under the rule that P20 replaces, an edit
+  of a row of 23 bytes with a declared key wrote one part document of 24
+  bytes. So P20 exchanges a write of 610,081 bytes for each append to a list
+  of 10,000 for a write of at most 65,536 bytes for each edit, each append and
+  each removal, and what the decision is worth for small rows depends on
+  question 290, point (a), which stays open; the prototype is to measure
+  both, the bytes of the documents written whole and the bytes of a patch.
+  *Measured* (prototype notes
   511 and 513), on a `map` over an array of plain values in place with rows of
   23 bytes, with a declared key and with none: the rule of
   `execution-and-storage.md` §4.10 that made every split point directly below a
@@ -6351,7 +6369,9 @@ today.
   number, so that the chunks form a tree. A chunk that exceeds the number is
   divided in two, and two adjacent chunks that together fall under half of it
   become one. An insertion, a removal or an edit of one row writes the chunk
-  that holds it and, only on a split or a merge, the list above. No row is
+  that holds it and, only on a split or a merge, the list above; P25 revises
+  that for an insertion and a removal, which write one list for each level
+  as well. No row is
   renumbered in storage by an insertion elsewhere: a position is derived from
   the order of the chunks and the offset in the chunk. (c) A part returns in
   place only where its size falls under half of `PART_MIN_BYTES`. A read sees
@@ -6374,9 +6394,11 @@ today.
   decision gives up:* an edit of a small row with a declared key writes its
   chunk, where a row that is a part by itself was one document of 24 bytes.
   *Open under it* (question 290): whether storage takes a patch below a path
-  of a document, which is not decided; whether a chunk list holds the number
-  of entries below each link; which arrays are stored in chunks; and the
-  stored form of a chunk list. *Alternative:* the rule as it was, with the
+  of a document, which is not decided; the stored form of a chunk list; and a
+  document of many small split points that are not the entries of one array.
+  Two further points of that question are decided provisionally: whether a
+  chunk list holds the number of entries below each link (P25), and which
+  arrays are stored in chunks (P26). *Alternative:* the rule as it was, with the
   measured cost. *Tests:* none. The prototype has the old rule as an
   accounting, and its reads do not go through part documents. *If decided
   otherwise:* those paragraphs and the sentences that name a chunk are
@@ -6396,20 +6418,23 @@ today.
   element and that nothing under a key is deleted, and are not changed.
   *Decision:* the compiler reports a warning,
   `array-by-key:state-without-key`, the name assumed, where the body of a
-  per-element construct over an array of plain record values in place, whose
-  array type declares no key, holds per-element state: a handler binding, a
-  state cell, an operation, an instance of a `lift` or a `computed`, or a child
-  called through `asInstance()`. The message names `ArrayByKey` and an array of
-  references as the corrections. *Alternative:* no diagnostic. *Reason:* the
+  per-element construct over an array of plain record values whose array type
+  declares no key holds per-element state: a handler binding, a state cell, an
+  operation, or a child called through `asInstance()`. It covers an array of
+  plain record values in place, a plain array generated from scratch, and a
+  chain of per-element constructs whose first source is one of these. The
+  message names `ArrayByKey` and an array of references as the corrections.
+  *Revised* on the objection of the documents' author: the list of per-element
+  state does not hold an instance of a `lift` or a `computed`, which stores no
+  document under the key, so the warning is not reported for a body that
+  holds nothing else. *Alternative:* no diagnostic. *Reason:* the
   cost is invisible in the source and a declared key removes it. *How it is
   written:* `language-subset.md` §4.4.1 ("Per-element state with no declared
   key"), its catalog of diagnostics and its question 47, and a sentence each in
   `plan-and-label-templates.md` §1.3 and in `builtin-inventory.md` ("Element
-  keys"). *Assumed in the writing:* it is reported for a plain array generated
-  from scratch with no declared key as well, and for a construct over the
-  result of another per-element construct whose first source is such an array;
-  it is not reported over an array of references, over an array with a declared
-  key, or over an array of scalars. *Tests:* none; the crate does not report
+  keys"). *Assumed in the writing:* it is not reported over an array of
+  references, over an array with a declared key, or over an array of
+  scalars. *Tests:* none; the crate does not report
   it. *If decided otherwise:* those sentences and the row of the catalog are
   removed.
 - **P22. A cone that places the result of a per-element construct and observes
@@ -6480,6 +6505,56 @@ today.
   otherwise:* that paragraph is removed and the checks of one change are the
   length of the list over plain values in place. Over an array of references a
   reference to an element is a link and the question does not arise.
+- **P25. A chunk list holds the number of entries of each chunk it names**
+  (question 290, point b). The coordinator's decision, on the objection of the
+  documents' author to P20 as it was stated. *The case:* with a list that
+  holds links alone, as P20 had it, no insertion writes a list, and a reader of
+  one position that has no numbers in memory reads every chunk before the
+  position. *Decision:* beside each link a chunk list holds the number of
+  entries of the array below that link. A read by position is bounded by the
+  depth of the tree: one document for each level and one chunk. An insertion
+  or a removal writes the chunk and one list for each level, which is one
+  level up to about 930 chunks, about a million rows that are parts, and two
+  beyond that. The bound of P20 is restated: one change of one row writes one
+  chunk and one list for each level, and on a split two chunks; an edit writes
+  no list. *Alternative:* links alone. *Reason:* a read of one row by position
+  must not follow the length of the list. *How it is written:*
+  `execution-and-storage.md` §4.10, the paragraphs "The chunk list", "How a
+  position is derived" and "What one change of an array writes" with its
+  table and the bound, and its question 103, point (b). *Tests:* none; the
+  prototype has no chunk. *If decided otherwise:* the numbers leave those
+  paragraphs, and an insertion writes its chunk alone. The rule is the same
+  for an array over an array of references, over an array of plain values in
+  place, over a plain array generated from scratch, and over the result of
+  another per-element construct.
+- **P26. P20 applies to every stored array, and not only to one that a result
+  document or a part stores** (question 290, point c, with question 296 for
+  what conflicts). The coordinator's decision, on the same objection. *The
+  case:* an array of plain values in place in an argument document or in a
+  state cell is one document at any length, 676,691 bytes for the 10,000
+  small records that the prototype measured, and every edit of one element
+  writes below a path of it. *Decision:* such an array is stored in chunks by
+  the same rule. *Alternative:* the arrays of a result alone. *How it is
+  written:* `execution-and-storage.md` §4.10, "An array of an argument
+  document or of a state cell", and its questions 103, point (c), and 107.
+  *Assumed in the writing:* the runtime that commits a transaction lays the
+  array out when the transaction seals, and a handler body and a client name
+  the array's path and decide no split; no element of a source array is a
+  part, since a split point is a kept path of a result, so no document of a
+  source array is named by a key; and a chunk of a source document takes the
+  scheme of that document. *What was looked for and found:* a `set` of the
+  whole array, a `splice` and a reference by key into the array have no
+  conflict, since each names the array's path, or the array and a key, and
+  resolves through the chunk list. A mergeable `push` conflicts: it commits
+  today without a read of the array, and with P25 each push writes the number
+  of the last chunk, so two concurrent pushes write the same number unless
+  storage applies the layout below the operation that the writer sent. And a
+  writer that is not the compiled runtime finds a chunk list at the place of
+  the array. Both are question 296. *Tests:* none. *If decided otherwise:*
+  that paragraph is removed and a source array is one document. The case is
+  an array of plain values in place and an array of references in an argument
+  document or a state cell; the result of another per-element construct is an
+  array of a result.
 
 
 ## Open, and needing the owner
@@ -10386,8 +10461,8 @@ over the result of another per-element construct.
 **From the prototype's notes 505 to 522.** At commit `e63851c1ee` the
 prototype's executor marks what a write reaches, keeps keys, has a cone hold a
 reference to a collection that it places, and keeps the layout of a stored
-result as an accounting. Questions 290 to 295 are what those notes, and the
-provisional decisions P20 to P24 that the coordinator took from them, leave
+result as an accounting. Questions 290 to 296 are what those notes, and the
+provisional decisions P20 to P26 that the coordinator took from them, leave
 undecided. The lists of these notes are a `map` over an array of references,
 over an array of plain values in place with a declared key and with none, and
 over the result of a `filter` of plain values in place; nothing was tried over
@@ -10401,17 +10476,23 @@ a plain array generated from scratch or with a `flatMap`.
      member below a path is sent and stored as that change. With it, one
      change of one small row sends the bytes of the change; without it, the
      unit sent is the chunk, at most 65,536 bytes. Not decided, and nothing is
-     assumed. (b) Whether a chunk list holds, beside each link, the number of
-     entries below it. P20 has the list above written only on a split or a
-     merge, so it holds no number, and a reader of one position that has no
-     numbers in memory reads every chunk before the position. With the
-     numbers, a position is found in one document for each level, and each
+     assumed. That is the trade-off of P20: an edit of a small row with a
+     declared key wrote one part document of 24 bytes under the rule that P20
+     replaces, and writes its chunk under P20. The prototype is to measure
+     both, the bytes of the documents written whole and the bytes of a patch.
+     (b) Whether a chunk list holds, beside each link, the number of
+     entries below it. *Assumed,* provisional (P25): it does. A position is
+     found in one document for each level of the tree and one chunk, and each
      insertion or removal writes one list for each level beside the chunk.
-     *Assumed:* no numbers, as P20 states it. (c) Which arrays are stored in
-     chunks. *Assumed:* every array that a result document or a part stores,
-     and not the array of an argument document or of a state cell, so that an
-     array of plain values in place that a handler writes is one document at
-     any length, 676,691 bytes for the 10,000 small records measured. (d) The
+     The alternative is a list of links alone, which an insertion does not
+     write and under which a reader of one position that has no numbers in
+     memory reads every chunk before the position. (c) Which arrays are
+     stored in chunks. *Assumed,* provisional (P26): every stored array, the
+     array of an argument document and of a state cell included, so that an
+     array of plain values in place that a handler writes is not one document
+     at any length, which was 676,691 bytes for the 10,000 small records
+     measured. The alternative is the arrays of a result alone. Question 296
+     has what conflicts with it. (d) The
      stored form of a chunk list and the identifier of a chunk, which is
      *assumed* to hold a serial number that the list at the place of the array
      keeps. (e) A document can still exceed `DOCUMENT_MAX_BYTES` where it holds
@@ -10424,14 +10505,15 @@ a plain array generated from scratch or with a `flatMap`.
      per-element construct.
 291. **The warning for per-element state under a key formed from the value**
      (LS question 47). Provisional decision P21. *Assumed:* the name
-     `array-by-key:state-without-key`, the severity of a warning, and what
-     counts as per-element state: a handler binding, a state cell, an
-     operation, an instance of a `lift` or a `computed`, and a child called
-     through `asInstance()`. *Assumed* as well: it is reported for a plain
-     array generated from scratch with no declared key and for a construct
-     over the result of another per-element construct whose first source is
-     such an array, and it is not reported where the state is in a child
-     called through a factory value, which the compiler does not see. It is
+     `array-by-key:state-without-key` and the severity of a warning. By the
+     decision as revised, per-element state is a handler binding, a state
+     cell, an operation, and a child called through `asInstance()`, and not
+     an instance of a `lift` or a `computed`, which stores no document under
+     the key; and the warning covers an array of plain record values in
+     place, a plain array generated from scratch, and a chain of per-element
+     constructs whose first source is one of these. *Assumed:* it is not
+     reported where the state is in a child called through a factory value,
+     which the compiler does not see. It is
      never reported over an array of references.
 292. **What a reference to a placed collection leaves open** (ES question
      104; PL question 175). Provisional decision P22. (a) One collection that
@@ -10478,6 +10560,28 @@ a plain array generated from scratch or with a `flatMap`.
      the move retired is deleted, and whether the retention rule that the
      coordinator recommends under questions 254 and 255 covers it. Nothing is
      assumed.
+296. **A source array that is stored in chunks, and its writers** (ES question
+     107). Provisional decisions P25 and P26 together. The case is an array of
+     plain values in place, or an array of references, in an argument document
+     or a state cell. (a) A mergeable `push` commits today without a read of
+     the array, so that two concurrent pushes merge. With the array in chunks
+     each push writes the last chunk and, by P25, the number of that chunk in
+     each list, so two concurrent pushes write the same number, and a push
+     that fills a chunk splits it. *Assumed:* the writer sends the operation on
+     the array at its path, and storage applies the layout where it applies
+     the operation, so that the pushes merge as today. That today's storage
+     can do so was not verified against source; if it cannot, either P25 or
+     P26 gives way for an array that is pushed to. (b) A writer that is not
+     the compiled runtime, as a client, the command line and a runtime of the
+     validation period of a migration, finds a chunk list at the place of the
+     array. *Assumed:* each reads and writes through the list, and a write at
+     or below the place of the array by a writer that does not know the form
+     is refused. (c) The labels of a chunk of a source document: *assumed*
+     repeated in each chunk as for a result. (d) *Assumed:* no element of a
+     source array is a part, and a chunk of a source document takes the
+     scheme of that document. A `set` of the whole array, a `splice` and a
+     reference by key into the array were looked at and have no conflict that
+     was found.
 
 
 ## Open, and not needing the owner
@@ -11097,8 +11201,9 @@ The open questions each document ends with stay where they are.
   holds, `equals`, a cone with a static side-write, or a read by key into the
   document of a computed output, is compared at every pull; question 294 has
   what the documents do not say for it.
-- **The provisional decisions P20 to P24 and their tests.** P20 and P21 have no
-  test: the prototype has neither the chunks nor the warning. P22, P23 and P24
+- **The provisional decisions P20 to P26 and their tests.** P20, P21, P25 and
+  P26 have no test: the prototype has neither the chunks nor the warning.
+  P22, P23 and P24
   are what the executor does, with tests of the executor that bound the
   evaluations, the hashes, the checks and the bytes of one change at 100 and
   1,000 elements; those tests were written after the measurements. For P23 the
@@ -11307,7 +11412,12 @@ The open questions each document ends with stay where they are.
       and provenance records in the sizes. Measure the list of note 513 again,
       and a list that shrinks, a list built by appends, rows over
       `PART_MIN_BYTES`, and a read of one row by position with and without the
-      numbers of entries in the chunk lists (question 290).
+      numbers of entries in the chunk lists (P25). Report for each change both
+      the bytes of the documents written whole and the bytes of a patch
+      (question 290, point a). Store an array of an argument document and of a
+      state cell in chunks (P26), with `set`, `push`, a `splice` and a
+      reference by key into it, and try two concurrent pushes (question
+      296).
    3. Report the warning of P21 in the crate, and count how often it is
       reported over the corpus.
    4. Measure what the round did not: a construct over a plain array generated

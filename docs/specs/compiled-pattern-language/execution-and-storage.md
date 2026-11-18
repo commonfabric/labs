@@ -84,7 +84,8 @@ This document adds the following.
   (section 4.10).
 - A **chunk document** holds a contiguous run of the entries of an array
   whose content is too large for one document, and a **chunk list** at
-  the place of the array holds the storage links to the chunks (section
+  the place of the array holds the storage links to the chunks, each
+  with the number of entries below it (section
   4.10).
 - A **collection reference** is what a cone holds of the assembled
   result of a per-element construct that it places and does not observe
@@ -3324,9 +3325,9 @@ says how many scope instances exist.
 | Result document | The kept outputs that are not stored in a part document, their labels, their provenance, and a storage link in the place of each part | The result cell's, assigned when the instance is created | The space's, and one per user or session that a kept output of that scope was evaluated for |
 | Part document | One kept subtree that the rule of section 4.10 stores by itself, with its labels and provenance | Section 4.10 | As the result document |
 | Chunk document | One contiguous run of the entries of an array that is too large for one document, with the labels and provenance of the run (provisional, P20) | Section 4.10 | As the result document |
-| Argument document | The instance's argument, as the creator wrote it | Derived from the result cell, linked from it | As today |
+| Argument document | The instance's argument, as the creator wrote it. An array in it that is too large for one document is stored in chunk documents (section 4.10; provisional, P26) | Derived from the result cell, linked from it | As today |
 | Parameters document | The private parameters of an instance whose callee is an inline pattern written at an instantiation in a function body (section 4.6) | Derived from the result cell, linked from it | As the argument document |
-| State cell document | The value of one state cell | Section 5.2 | By the cell's declared scope |
+| State cell document | The value of one state cell. An array in it that is too large for one document is stored in chunk documents (section 4.10; provisional, P26) | Section 5.2 | By the cell's declared scope |
 | Operation state document | The durable state of one aggregate, `reduce`, index, effect, `wish`, forced cache or materializer. For an effect it includes the stored request, for a `wish` the stored operands, and for a `reduce` the initial value (`plan-and-label-templates.md` §3.13 and §3.19, where the last two are assumptions) | Section 6 | By the scope of the operation's cone instance |
 | Cache document | The entries of cones the runtime promoted | Section 8.4 | One per scope the promoted cones have |
 | Binding state document | The state of a binding made in a function body: the copied paths, and a link for each cell and each container bound by reference | Section 5.5 | The body's |
@@ -4153,10 +4154,12 @@ to every array that a result document or a part stores: the array of a
 kept collection, over an array of references, over an array of plain
 values in place, over a plain array generated from scratch, and over the
 result of another per-element construct alike; the `children` array of
-a node; and an array inside a value that an opaque call returns. It
-does not apply to the array of an argument document or of a state cell,
-which a handler or a client writes and this section does not lay out
-(section 11, question 103).
+a node; and an array inside a value that an opaque call returns.
+Provisional (P26 of the continuation plan): it applies as well to an
+array in an argument document, in a parameters document and in a state
+cell document, which a handler or a client writes ("An array of an
+argument document or of a state cell", below; section 11, question
+107).
 
 - **A chunk document** holds a contiguous run of the entries of one
   array, in their order, with the label entries and provenance records
@@ -4168,14 +4171,19 @@ which a handler or a client writes and this section does not lay out
   form is a record with the tag of a storage link and a member that
   marks it as a list, so that what is stored tells it from an array of
   the pattern, and a value of that form written by pattern code or by a
-  client is refused. A chunk list holds no position, no count of
-  entries and no key (section 11, question 103, has the alternative).
+  client is refused. Provisional (P25 of the continuation plan): beside
+  each link the list holds the number of entries of the array below
+  that link, which for a link to a chunk is the length of its run and
+  for a link to a chunk of links the sum of the numbers in it. A chunk
+  list holds no position and no key.
 - **A tree.** A chunk list is an array of storage links, and rule 3
   applies to it: a list whose content exceeds `DOCUMENT_MAX_BYTES` is
   stored in chunk documents that hold runs of links to chunks, and the
   place of the array holds the list of links to those. With a storage
-  link of 61 bytes a document holds 1,074 links, so one list serves
-  1,074 chunks and a tree of two levels 1,074 times 1,074.
+  link of 61 bytes and its number, about 70 bytes, a document holds
+  about 930 entries of a list. One list then serves about 930 chunks,
+  which is about a million rows that are parts and more where the rows
+  are in place, and a tree of two levels about 930 times 930 chunks.
 - **The first division.** When the content of an array first exceeds
   `DOCUMENT_MAX_BYTES`, the entries are divided in two runs at the
   boundary between entries that is nearest half of the bytes, and each
@@ -4212,14 +4220,18 @@ which a handler or a client writes and this section does not lay out
 **How a position is derived.** No stored document holds the position of
 an entry of an array that is stored in chunks. The position of an entry
 is the number of entries in the chunks before its chunk, in the order of
-the lists, plus its offset in the run of its chunk. An insertion or a
-removal therefore changes the position of every later entry and writes
-none of them: no later chunk, no storage link, and no part. The runtime
-that has loaded the instance keeps the number of entries of each chunk
-in memory, beside the element table of a kept collection (section 2.5),
-and finds the chunk of a position from those numbers. A reader that
-holds no such numbers reads the lists and the chunks before the
-position, and counts.
+the lists, plus its offset in the run of its chunk. The numbers in the
+chunk lists give the first term (provisional, P25): a reader finds the
+chunk of a position by reading the list at the place of the array and
+one chunk of links for each further level, adding the numbers of the
+links it passes, and then reads the one chunk. A read by position
+therefore loads one document for each level of the tree and one chunk,
+at any length of the array. An insertion or a removal changes the
+position of every later entry and writes none of them: no later chunk,
+no storage link, and no part. It writes the chunk it changed and, for
+each level of the tree, the one list whose number for that chunk
+changed. The runtime that has loaded the instance may keep the numbers
+in memory, beside the element table of a kept collection (section 2.5).
 
 **How a path, a reference by key and a storage link resolve through
 chunks.**
@@ -4255,16 +4267,20 @@ chunks.**
 | --- | --- |
 | A member of a row stored in place changes | The chunk that holds the row, or the document that holds the array where it is not stored in chunks |
 | A member of a row that is a part changes | The part document alone |
-| A row under `PART_MIN_BYTES` is appended or inserted | The chunk that holds the position. On a split: the new chunk and the lists above |
-| A row of at least `PART_MIN_BYTES` is appended or inserted | The part document, created, and the chunk that receives its storage link, with the same on a split |
-| A row is removed | The chunk that held it, and the part document of the row, deleted, where it had one. On a merge: the chunk merged into and the lists above |
-| A row crosses `PART_MIN_BYTES`, or falls under half of it | The part document, created or deleted, and the chunk that holds the row |
-| Rows are reordered | The chunks that hold a position whose entry changed |
-| The array is replaced by another of other rows | Every chunk whose run changed |
+| A row under `PART_MIN_BYTES` is appended or inserted | The chunk that holds the position, and one list for each level of the tree, for the number of entries. On a split: the new chunk as well |
+| A row of at least `PART_MIN_BYTES` is appended or inserted | The part document, created, the chunk that receives its storage link, and one list for each level. On a split: the new chunk as well |
+| A row is removed | The chunk that held it, one list for each level, and the part document of the row, deleted, where it had one. On a merge: the chunk merged into, and the other chunk deleted |
+| A row crosses `PART_MIN_BYTES`, or falls under half of it | The part document, created or deleted, and the chunk that holds the row. No list: no number changed |
+| Rows are reordered | The chunks that hold a position whose entry changed, and the lists only where a row moved from one chunk to another |
+| The array is replaced by another of other rows | Every chunk whose run changed, and the lists whose numbers changed |
 
-The bytes of the documents that one change of one row writes are at most
-those of one chunk, and on a split or a merge those of two chunks and of
-one list for each level of the tree, at any length of the array. The
+The bound, provisional (P25): one change of one row writes at most one
+chunk and, where the number of entries changed, one list for each level
+of the tree, and on a split or a merge two chunks. A tree has one level
+of lists up to about 930 chunks and two beyond that, so the documents
+written are at most four, each of at most `DOCUMENT_MAX_BYTES`, at any
+length of the array up to about 930 times 930 chunks. An edit of a row
+writes no list. The
 write of a chunk is a `splice` of its run or a write below a path of it
 (section 4.2). Whether storage takes the second as a patch, so that the
 bytes sent are those of the change and not those of the chunk, is not
@@ -4309,6 +4325,52 @@ changes it. What is stored under the key outside the result, the state
 cells, streams, operation state and children, is moved as section 2.5
 has it and is not part of this layout.
 
+**An array of an argument document or of a state cell.** Provisional
+(P26 of the continuation plan; section 11, question 107). Rule 3 and
+the paragraphs on chunks apply to every stored array, so an array of
+plain values in place that a handler or a client writes is stored in
+chunks from `DOCUMENT_MAX_BYTES` on, and an edit of one element of an
+array of 10,000 records writes one chunk and not below a path of one
+document of 676,691 bytes, which is what the prototype measured for
+that array. The same for an array of references in such a document,
+whose entries are links.
+
+- **Addressing is unchanged.** A handle, a link, a slot and a reference
+  by key name the document and a path, or the array and a key. A path
+  with a position resolves through the chunk list as above. A handle by
+  position, `items.key(i)`, is bound at the position, whichever chunk
+  holds it.
+- **Who lays the array out.** *Assumed:* the runtime that commits the
+  transaction applies the rule when the transaction seals, as for a
+  result. A handler body and a client name the array's path in every
+  write and decide no split.
+- **`set` of the whole array** writes every chunk whose run changed, by
+  the first division where the new content exceeds the number.
+- **`push` and a `splice`** are written by the writer as an operation on
+  the array at its path. The committing runtime applies it to the last
+  chunk, or to the chunk of the position, and to one list for each
+  level.
+- **A reference by key** into such an array resolves as into any array
+  that is stored in chunks: from the element table or the kept keys,
+  and where there are none by reading the chunks in order and forming
+  the keys.
+- **No entry of such an array is a part.** *Assumed:* split points are
+  kept paths of a result, and an element of a source array is none. An
+  element that is larger than `DOCUMENT_MAX_BYTES` by itself is a chunk
+  of one entry. So no document of a source array is named by a key,
+  and a re-key of an element writes its chunk alone.
+- **The chunk documents** are named from the document that holds the
+  array, with the path of the array and the serial number, and
+  *assumed* to take the scheme of that document, since a state cell is
+  no derived state.
+
+Three things conflict with this or are not determined, and are in
+question 107: a mergeable `push`, which today commits without a read of
+the array and with P25 writes a number that two concurrent pushes both
+change; a writer that is not the compiled runtime, which finds a chunk
+list at the place of the array; and the envelope of a chunk of a
+document whose labels a writer declared.
+
 **Worked sizes.** The prototype measured the layout with every row a
 part once the document exceeds `DOCUMENT_MAX_BYTES`, for a `map` over an
 array of plain values in place whose rows are 23 bytes and whose storage
@@ -4323,10 +4385,10 @@ from the same sizes by the rule of this section and is not measured.
 | 2,600, 200 rows appended | append | 2,800 part documents created in the one transaction, and the array of links, about 171,000 bytes | The array of 2,800 rows is about 65,700 bytes and is divided once: 2 chunks of about 32,900 bytes and a list of 2 links |
 | 3,000 | settle | 3,002 documents, 250,960 bytes | 4 documents: the result, the part that holds the list, and 2 chunks of about 35,200 bytes |
 | 10,000 | settle | 10,002 documents, 838,960 bytes | 6 documents: the result, the part that holds the list of 4 links, and 4 chunks of about 58,700 bytes |
-| 10,000 | append | 2 documents, 610,081 bytes, for 98 bytes put in | 1 chunk of at most 65,536 bytes, for about 24 bytes put in |
+| 10,000 | append | 2 documents, 610,081 bytes, for 98 bytes put in | 1 chunk of at most 65,536 bytes, for about 24 bytes put in, and the part that holds the list of 4 entries, about 300 bytes, for one number |
 | 10,000 | edit one field, `ArrayByKey` | 1 part document of 24 bytes | 1 chunk of at most 65,536 bytes, 14 bytes put in |
 | 10,000 | edit one field, no declared key | 2 documents, 610,025 bytes, one part deleted and one created | 1 chunk of at most 65,536 bytes, and no part |
-| 10,000 | remove first | 1 document of 609,940 bytes, one part deleted | 1 chunk of at most 65,536 bytes |
+| 10,000 | remove first | 1 document of 609,940 bytes, one part deleted | 1 chunk of at most 65,536 bytes, and the part that holds the list, for one number |
 
 A list that is built by appends has chunks that are half full: each
 split leaves a first run of about half of `DOCUMENT_MAX_BYTES` that no
@@ -4424,9 +4486,9 @@ Nothing but the storage link in its parent names a part document.
   for a read of a subtree, the part documents below the path that its
   schema reaches. It loads no other part. A session that lists rooms by
   name loads each room's result document and no row. A reader of one
-  row of an array that is stored in chunks loads the lists and the
-  chunk of the row, and where it holds no numbers of entries, the
-  chunks before it. A reader of the whole array loads every chunk and
+  row of an array that is stored in chunks loads one list for each
+  level of the tree and the chunk of the row. A reader of the whole
+  array loads every chunk and
   the parts its schema reaches.
 - **Subscribing.** The reader subscribes to the same documents. A change
   inside one row is a write to that row's part document and reaches the
@@ -6830,7 +6892,7 @@ Added by the ruling that the scheduler is switched per space (section 9):
      array is stored in chunks" to "Worked sizes" of section 4.10 are
      removed with the sentences that name a chunk in sections 2.2, 4.1,
      4.2 and 10.1, and the measured cost stands. Four points under the
-     decision are open.
+     decision follow: two are open, and two are decided provisionally.
      - **(a) Whether storage takes a patch below a path of a document.**
        Section 4.2 has the write of a kept collection as a `splice` of
        the stored array. No document says that a write of one member
@@ -6839,22 +6901,27 @@ Added by the ruling that the scheduler is switched per space (section 9):
        the bytes of the change. Without it, the unit sent is the chunk,
        at most 65,536 bytes, where it was measured as 46,895 bytes for a
        list of 2,000 small rows in one document. Nothing is assumed.
-     - **(b) A chunk list holds no count of entries.** As the decision
-       has it, a list above is written only on a split or a merge, so
-       it can hold no number that an insertion changes. A reader of one
-       position that holds no numbers then reads every chunk before the
-       position. The alternative: each link in a list carries the
-       number of entries below it. A position is then found by reading
-       one document for each level, and each insertion or removal
-       writes one list for each level beside the chunk, each a document
-       of at most 65,536 bytes of which one number changes. *Assumed:*
-       no count, as the decision states it.
-     - **(c) Which arrays.** *Assumed:* every array that a result
-       document or a part stores, and not the array of an argument
-       document or of a state cell. An array of plain values in place
-       that a handler or a client writes is then one document at any
-       length: 676,691 bytes for the 10,000 small records that the
-       prototype measured.
+     - **(b) Whether a chunk list holds the number of entries below each
+       link.** *Assumed,* provisional (P25 of the continuation plan, the
+       coordinator's decision, and not ruled): it does. A read by
+       position then loads one document for each level of the tree and
+       one chunk, and each insertion or removal writes the chunk and
+       one list for each level, each a document of at most 65,536
+       bytes of which one number changes. The alternative is a list of
+       links alone, which an insertion does not write and under which a
+       reader of one position that holds no numbers reads every chunk
+       before the position. If the owner decides for it, the numbers
+       leave the paragraphs "The chunk list", "How a position is
+       derived" and "What one change of an array writes".
+     - **(c) Which arrays.** *Assumed,* provisional (P26 of the
+       continuation plan, the coordinator's decision, and not ruled):
+       every stored array, the array of an argument document, of a
+       parameters document and of a state cell document included, so
+       that an array of plain values in place that a handler or a
+       client writes is not one document at any length: it was 676,691
+       bytes for the 10,000 small records that the prototype measured.
+       The alternative is the arrays of a result alone. Question 107
+       has what conflicts with the decision.
      - **(d) The stored form of a chunk list and the serial number in the
        identifier of a chunk.** Both are assumed in section 4.10. With
        the serial number in the list at the place of the array, a split
@@ -6924,6 +6991,44 @@ Added by the ruling that the scheduler is switched per space (section 9):
      move writes a stream document under the new key, and when a
      document that the move retired is deleted. Nothing is assumed. It
      is question 295 of the continuation plan.
+107. **A source array that is stored in chunks, and its writers**
+     (section 4.10, "An array of an argument document or of a state
+     cell"). Provisional decision P26 stores the array of an argument
+     document or of a state cell in chunks, and P25 has a chunk list
+     hold the number of entries of each chunk. Four points conflict or
+     are not determined.
+     - **(a) A mergeable `push`.** A `push` that reads nothing of the
+       array commits without a conflict with another such `push`
+       (`footprint-analysis.md`, "A read and a push"). With the array
+       in chunks, each push writes the last chunk and the number of
+       that chunk in each list, so two concurrent pushes write the
+       same number, and a push that fills the chunk splits it. Either
+       storage applies the push and the layout itself, below the
+       operation that the writer sent, or two such pushes conflict.
+       *Assumed:* the writer sends the operation on the array at its
+       path, and the layout is applied where the operation is applied,
+       so that the pushes merge as today. Whether today's storage can
+       do so was not verified against source.
+     - **(b) A writer that is not the compiled runtime.** A client, the
+       command line and a runtime of the validation period read and
+       write the document by its address. *Assumed:* each reads and
+       writes through the chunk list as the runtime does, and a writer
+       that does not know the form is refused where it writes at or
+       below the place of the array. Section 9.7 says nothing of it.
+     - **(c) The labels.** A chunk's envelope is complete for its
+       paths. For a source document the entries are those that its
+       writers and its schema give. *Assumed:* they are repeated in
+       each chunk as for a result.
+     - **(d) No element is a part,** and the scheme and the identifier
+       of a chunk of a source document: all three are assumed in the
+       section.
+     A `set` of the whole array, a `splice` and a reference by key into
+     the array have no conflict that was found: each names the array's
+     path, or the array and a key, and resolves through the chunk list.
+     The case is an array of plain values in place and an array of
+     references in an argument document or a state cell; the result of
+     another per-element construct is an array of a result and is not
+     this case. It is question 296 of the continuation plan.
 
 
 ### 11.2 For another document or the prototype

@@ -665,9 +665,14 @@ and 150 of `plan-and-label-templates.md` §8 and question 44 of
   continuation plan; §13, question 47). The compiler reports a warning,
   `array-by-key:state-without-key`, where the body of a per-element
   construct holds per-element state and the construct is over an array
-  of plain record values in place whose type declares no key. Per-element
-  state is a handler binding, a state cell, an operation, an instance of
-  a `lift` or a `computed`, and a child called through `asInstance()`.
+  of plain record values whose type declares no key: an array of plain
+  values in place, a plain array generated from scratch, or the result
+  of a chain of per-element constructs whose first source is one of
+  these. Per-element state is what stores a document under the element
+  key: a handler binding, a state cell, an operation, and a child
+  called through `asInstance()`. An instance of a `lift` or a
+  `computed` in the body is none: it stores no document under the key,
+  and the warning is not reported for it.
   The reason is what the element key of such a value costs: the key is
   formed from the whole value, so an edit of the row in place is a new
   element. Each edit moves the state of the row to another key, stores
@@ -677,12 +682,10 @@ and 150 of `plan-and-label-templates.md` §8 and question 44 of
   the array with `ArrayByKey`, or hold the rows as an array of
   references. The warning is not reported over an array of references,
   where the key is the identity of the cell; over an array with a
-  declared key; or over an array of scalars. *Assumed:* it is reported
-  for a plain array generated from scratch with no declared key as
-  well, and for a construct over the result of another per-element
-  construct whose first source is such an array, since the elements of
-  that result have the upstream keys. The rulings that make the cost
-  are not changed by the warning.
+  declared key; or over an array of scalars. It is reported for a chain
+  because the elements of the result of another per-element construct
+  have the upstream keys. The rulings that make the cost are not
+  changed by the warning.
 - **Two declared keys for one array.** *Assumed:* an array whose type
   declares one key is not assignable to a parameter whose type
   declares another key, and the compiler reports it where it sees both
@@ -4073,7 +4076,7 @@ none of the other eight.
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
 | `array-by-key:declaration` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 138). An `ArrayByKey<T, "field">` whose second argument is not a string literal type, or a union of string literal types, each of which names a required top-level property of `T` of type `string` or `number`. The declaration concerns an array of plain values in place, a plain array generated from scratch included; on an array of references it is accepted and has no effect (§13, question 43) | Name required `string` or `number` properties of the element: `ArrayByKey<Repo, "id">`, or `ArrayByKey<Repo, "owner" \| "name">` | new |
 | `array-by-key:mismatch` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 141). An array whose type declares one key with `ArrayByKey` is passed to a parameter, or assigned to a place, whose type declares another key, where the compiler sees both types. A place whose type is a plain array type accepts the array, and by ruling forms keys with the key fields that the schema traversed while the link to the array is resolved declares (`plan-and-label-templates.md` §8, questions 143 and 145). *Assumed:* an array whose type declares no key is accepted where a key is declared (its question 147). By ruling the type of the result of a `map` over an array with a declared key keeps the key of its receiver, as the type of the result of a `filter` does, so either result is reported; *assumed:* the type of a `flatMap` result declares no key, and nothing is reported for it (its question 150). The rule concerns plain values, in an array of plain values in place and in the result of another per-element construct where the upstream position holds a value; on an array of references nothing is reported | Declare the same key fields on both types, or declare a plain array type on the receiving side | new |
-| `array-by-key:state-without-key` | warning | Provisional (P21 of the continuation plan), the name *assumed* (§4.4.1, "Per-element state with no declared key"; §13, question 47). The body of a `map`, a `filter` or a `flatMap` over an array of plain record values in place, or over a plain array generated from scratch, whose array type declares no key, holds per-element state: a handler binding, a state cell, an operation, an instance of a `lift` or a `computed`, or a child called through `asInstance()`. The same for a construct over the result of another per-element construct whose first source is such an array. Not reported over an array of references, over an array with a declared key, or over an array of scalars | Declare the key fields on the array type with `ArrayByKey`, or hold the rows as an array of references | new |
+| `array-by-key:state-without-key` | warning | Provisional (P21 of the continuation plan), the name *assumed* (§4.4.1, "Per-element state with no declared key"; §13, question 47). The body of a `map`, a `filter` or a `flatMap` over an array of plain record values in place, or over a plain array generated from scratch, whose array type declares no key, holds per-element state: a handler binding, a state cell, an operation, or a child called through `asInstance()`. The same for a construct over the result of a chain of per-element constructs whose first source is such an array. An instance of a `lift` or a `computed` is no such state. Not reported over an array of references, over an array with a declared key, or over an array of scalars | Declare the key fields on the array type with `ArrayByKey`, or hold the rows as an array of references | new |
 
 ## 11. Corpus evidence
 
@@ -5178,9 +5181,12 @@ use, so that the other numbers stay as other documents cite them.
     value** (to the project owner). *Assumed,* provisional (P21 of the
     continuation plan, the coordinator's decision, and not ruled): the
     warning `array-by-key:state-without-key` of §4.4.1 and of the
-    catalog ([§10](#10-diagnostics-catalog)). The name, the severity
-    and the list of what counts as per-element state are this
-    document's. The prototype measured the cost that the warning names,
+    catalog ([§10](#10-diagnostics-catalog)). The name and the
+    severity are this document's. By the decision, per-element state is
+    a handler binding, a state cell, an operation and a child called
+    through `asInstance()`, and an instance of a `lift` or a `computed`
+    is none, since it stores no document under the key. The prototype
+    measured the cost that the warning names,
     on a `map` over an array of plain values in place with no declared
     key whose rows have a state cell, a handler binding, a `lift` and
     an `asInstance()` child. Each edit of one row that a handler makes
