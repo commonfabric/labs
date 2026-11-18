@@ -3469,6 +3469,12 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
 only while their sharing setting (kept by the index; `cf index sharing` and
