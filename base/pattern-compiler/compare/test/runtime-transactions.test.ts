@@ -89,14 +89,14 @@ describe("RuntimeTransactions", () => {
       transactions: hooks,
       documents,
     });
-    await hooks.settled();
+    expect(await hooks.settled()).toEqual([]);
     return { hooks, instance };
   };
 
   it("holds in storage every document the executor's commits wrote, as the executor holds it", async () => {
     const { hooks, instance } = await started({ secret: "s", note: "n" });
     instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
-    await hooks.settled();
+    expect(await hooks.settled()).toEqual([]);
 
     const stored = hooks.stored();
     expect([...stored.keys()].sort()).toEqual(
@@ -112,7 +112,7 @@ describe("RuntimeTransactions", () => {
   it("commits one transaction of the runtime for each transaction the executor commits", async () => {
     const { hooks, instance } = await started({ secret: "s", note: "n" });
     instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
-    await hooks.settled();
+    expect(await hooks.settled()).toEqual([]);
 
     // The append of the event and the watermark that passes it are
     // transactions of their own in the runtime.
@@ -156,7 +156,7 @@ describe("RuntimeTransactions", () => {
     );
     const before = preparations();
     instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
-    await hooks.settled();
+    expect(await hooks.settled()).toEqual([]);
 
     expect(instance.result()).toMatchObject({ last: "ts" });
     expect(preparations()).toBeGreaterThan(before);
@@ -179,7 +179,7 @@ describe("RuntimeTransactions", () => {
     const { hooks, instance } = await started({ secret: "s", note: "n" });
     const before = preparations();
     instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
-    await hooks.settled();
+    expect(await hooks.settled()).toEqual([]);
 
     expect(preparations()).toBe(before);
     const last = instance.stateCells().find(({ name }) => name === "last");
