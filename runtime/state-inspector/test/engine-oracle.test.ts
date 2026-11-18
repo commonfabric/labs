@@ -263,7 +263,7 @@ Deno.test("oracle: scans the log for unchecked commits once per report", async (
     let scans = 0;
     const prepare = space.db.prepare.bind(space.db);
     space.db.prepare = ((sql: string) => {
-      if (sql.includes(`'$.reads.confirmed'`)) scans++;
+      if (sql.includes(`'$.compaction'`)) scans++;
       return prepare(sql);
     }) as typeof space.db.prepare;
 
@@ -442,6 +442,107 @@ Deno.test("oracle: counts a read below what compaction kept of the instance it r
     space.close();
     await Deno.remove(path).catch(() => {});
     await Deno.remove(out).catch(() => {});
+  }
+});
+
+Deno.test("oracle: finds a stale read whose entity id the JSON spells with an escape", async () => {
+  // Bob's seq-2 write is missed by a seq-10 read at seq 1, of an id holding
+  // a quotation mark (which JSON escapes), and of `entity:doc` spelled
+  // `entity:doc`.
+  const quoted = 'entity:"doc';
+  const quotedStore = async () => {
+    const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+    const engine = await open({ url: toFileUrl(path) });
+    for (const [who, title] of [[ALICE, "t0"], [BOB, "t1"]] as const) {
+      applyCommit(engine, {
+        ...who,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: quoted, value: doc({ title }) }],
+        },
+      });
+    }
+    close(engine);
+    return path;
+  };
+  const cases = [
+    {
+      id: quoted,
+      store: quotedStore,
+      original: JSON.stringify({
+        ...forgedCommit,
+        reads: {
+          confirmed: [{ ...forgedCommit.reads.confirmed[0], id: quoted }],
+          pending: [],
+        },
+      }),
+    },
+    {
+      id: "entity:doc",
+      store: async () => {
+        const { engine, path } = await seedContendedStore();
+        close(engine);
+        return path;
+      },
+      original: JSON.stringify(forgedCommit).replace(
+        `"entity:doc"`,
+        `"entity:\\u0064oc"`,
+      ),
+    },
+  ];
+  for (const { id, store, original } of cases) {
+    const path = await store();
+    forge(path, original);
+
+    const space = openSpace(path);
+    try {
+      const { anomalies, readSetsNotKept } = readCoherence(space);
+      assertEquals(readSetsNotKept, 0);
+      assertEquals(
+        anomalies.map((a) => [a.readerCommitSeq, a.missedWriteSeq]),
+        [[10, 2]],
+      );
+      const entity = entityConflicts(space, id);
+      assertEquals(entity.staleReads.map((a) => a.readerCommitSeq), [10]);
+      assertEquals(entity.readSetsNotKept, 0);
+    } finally {
+      space.close();
+      await Deno.remove(path).catch(() => {});
+    }
+  }
+});
+
+Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the report", async () => {
+  // A read of entity:doc with a basis that is not a seq, one with a scope
+  // that is none, and a read set holding a bare string, also spelled with an
+  // escape.
+  const read = forgedCommit.reads.confirmed[0];
+  const reading = (confirmed: unknown[]) =>
+    JSON.stringify({ ...forgedCommit, reads: { confirmed, pending: [] } });
+  for (
+    const original of [
+      reading([{ ...read, seq: "x" }]),
+      reading([{ ...read, scope: "elsewhere" }]),
+      reading(["entity:doc"]),
+      reading(["entity:doc"]).replace(`"entity:doc"`, `"entity:\\u0064oc"`),
+    ]
+  ) {
+    const { engine, path } = await seedContendedStore();
+    close(engine);
+    forge(path, original);
+
+    const space = openSpace(path);
+    try {
+      assertEquals(readCoherence(space), {
+        anomalies: [],
+        readSetsNotKept: 1,
+      });
+      assertEquals(entityConflicts(space, "entity:doc").readSetsNotKept, 1);
+    } finally {
+      space.close();
+      await Deno.remove(path).catch(() => {});
+    }
   }
 });
 

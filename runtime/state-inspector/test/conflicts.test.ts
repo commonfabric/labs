@@ -544,3 +544,79 @@ Deno.test("conflicts: counts commits compaction hollowed as unchecked", async ()
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("conflicts: keeps the ACL document's first write when compaction only appends its audit revision", async () => {
+  // A digest-storing engine: of:y written at 1, read at 2 (stored with a
+  // digest), the ACL document first written at 3. A compaction run that
+  // truncates nothing still writes the ACL document's audit revision, at 4.
+  const SPACE = "did:key:z6MkInspectedSpace";
+  const ACL = `of:${SPACE}`;
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf-" });
+  const store = `${dir}/store.sqlite`;
+  const out = `${dir}/compacted.sqlite`;
+  const engine = await openEngine({
+    url: toFileUrl(store),
+    storeReadsDigest: true,
+  });
+  const commit = (
+    localSeq: number,
+    confirmed: ClientCommit["reads"]["confirmed"],
+    id: string,
+    value: number | Record<string, string>,
+  ): ClientCommit => ({
+    localSeq,
+    reads: { confirmed, pending: [] },
+    operations: [{ op: "set", id, value: { value } }],
+  });
+  try {
+    applyCommit(engine, { sessionId: "s:a", commit: commit(1, [], "of:y", 1) });
+    applyCommit(engine, {
+      sessionId: "s:a",
+      commit: commit(
+        2,
+        [{ id: "of:y", path: toDocumentPath(["value"]), seq: 1 }],
+        "of:z",
+        2,
+      ),
+    });
+    applyCommit(engine, {
+      sessionId: `session:${SPACE}:owner`,
+      principal: SPACE,
+      commit: commit(1, [], ACL, { [SPACE]: "OWNER" }),
+    });
+  } finally {
+    close(engine);
+  }
+  try {
+    const count = (path: string) => {
+      const space = openSpace(path);
+      try {
+        return entityConflicts(space, ACL).readSetsNotKept;
+      } finally {
+        space.close();
+      }
+    };
+    expect(count(store)).toBe(0);
+    await compactStore({
+      store,
+      out,
+      selection: { prefixes: ["computed:"] },
+      runId: "audit-only",
+    });
+    const space = openSpace(out);
+    try {
+      expect(
+        space.db.prepare(
+          `SELECT seq, commit_seq FROM revision WHERE id = ? ORDER BY seq`,
+        ).all(ACL),
+      ).toEqual([{ seq: 3, commit_seq: 3 }, { seq: 4, commit_seq: 4 }]);
+    } finally {
+      space.close();
+    }
+    // Seq 2's read set is a digest, but it came before the ACL document's
+    // first write, which compaction kept.
+    expect(count(out)).toBe(0);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
