@@ -220,6 +220,8 @@ const WRITTEN: Record<string, Written[]> = {
   "body-constant": [{ argument: { words: ["a", "b"] } }],
   // A declaration of policy at module scope, which no run reads.
   "module-policy": [{ argument: { message: "kept" } }],
+  // A pattern compiled in that passes its whole argument on.
+  "whole-argument": [{ argument: { note: "n", count: 2 } }],
   // The debug renderers, in the reactive tier and in a function body.
   "debug-strings": [{
     argument: { entry: { tags: ["x", "y"], title: "a" } },

@@ -6313,3 +6313,18 @@ describe("a built-in that the executor does not have", () => {
     expect(instance.result()).toEqual({ message: "kept" });
   });
 });
+
+// A pattern compiled in that passes its whole argument on
+// (`fixtures/whole-argument.tsx`).
+describe("a pattern compiled in that names its whole argument", () => {
+  it("reads every path that the call binds: a computed value, an input, an input under a computed key that is a string literal, and a literal", async () => {
+    const instance = new Instance(await artifactOf("whole-argument"), {
+      note: "n",
+      count: 2,
+    });
+
+    expect(instance.result()).toEqual({
+      context: { input: "n!", count: 2, label: "l", jam: 2 },
+    });
+  });
+});

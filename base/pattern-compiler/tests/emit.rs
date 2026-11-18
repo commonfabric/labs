@@ -1114,3 +1114,52 @@ export const P = pattern<{ words: string[] }>(({ words }) => {
     assert!(text.contains("\"show\": $h.constant(show)"), "{text}");
     assert!(text.contains("\"mark\": mark"), "{text}");
 }
+
+#[test]
+fn a_computed_key_that_is_a_string_literal_names_a_path_of_the_argument_of_a_pattern_compiled_in() {
+    // "A key that is static ... is the name it evaluates to" (PL §3.4).
+    let (_, code) = emitted(
+        r#"import { pattern } from "commonfabric";
+const Inner = pattern<{ jam: string; plain: string }>(({ jam, plain }) => {
+  return { both: jam + plain };
+});
+export const P = pattern<{ note: string }>(({ note }) => {
+  const inner = Inner({ ["jam"]: "j", plain: note });
+  return { both: inner.both };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    assert!(text.contains("{ \"jam\": (\"j\") }"), "{text}");
+}
+
+#[test]
+fn a_pattern_compiled_in_that_reads_its_argument_whole_is_given_every_path_the_call_binds() {
+    let (_, code) = emitted(
+        r#"import { pattern, Writable } from "commonfabric";
+const Context = pattern<{ input: string; state: Writable<number>; label: string }>(
+  (context) => context,
+);
+export const P = pattern<{ note: string; state: Writable<number> }>(({ note, state }) => {
+  const input = note + "!";
+  const context = Context({ input, state, label: "l" });
+  return { context };
+});
+"#,
+        "P",
+    );
+    let text = source(&code);
+    // A path bound to a slot or to a value of another cone is given as
+    // what value code reads there, for a callee that passes its whole
+    // argument on.
+    assert!(
+        text.contains("\"input\": $rt.thunk(($h) => ($h.output(0)))"),
+        "{text}"
+    );
+    assert!(
+        text.contains("\"state\": $rt.thunk(($h) => ($h.slot("),
+        "{text}"
+    );
+    assert!(text.contains("\"label\": (\"l\")"), "{text}");
+}

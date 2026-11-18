@@ -1431,6 +1431,18 @@ export class Instance {
           if (typeof found !== "object" || found === null) return undefined;
           found = force((found as Record<string, unknown>)[segment], host);
         }
+        // The argument of a pattern compiled in, read whole: each path
+        // that the call binds is held for the host that reads it.
+        if (
+          isRecord(found) &&
+          Object.values(found).some((member) => member instanceof Thunk)
+        ) {
+          return Object.fromEntries(
+            Object.entries(found).map((
+              [name, member],
+            ) => [name, force(member, host)]),
+          );
+        }
         return found;
       },
       or: (value: unknown, fallback: () => unknown) =>

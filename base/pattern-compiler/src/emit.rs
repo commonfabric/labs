@@ -1428,6 +1428,20 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                                         ),
                                     }
                                 }
+                                // "A key that is static ... is the name it
+                                // evaluates to" (PL §3.4).
+                                ObjectPropertyKind::ObjectProperty(property)
+                                    if matches!(
+                                        property.key.as_expression().map(unwrap),
+                                        Some(Expression::StringLiteral(_))
+                                    ) =>
+                                {
+                                    if let Some(Expression::StringLiteral(key)) =
+                                        property.key.as_expression().map(unwrap)
+                                    {
+                                        members.push((key.value.to_string(), &property.value));
+                                    }
+                                }
                                 other => self.generator.unsupported(
                                     "a spread or a computed key in the argument of a pattern compiled in",
                                     self.module,
@@ -1539,6 +1553,14 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
     fn inline(&mut self, context: usize, members: Vec<(String, String, Option<Place>)>) -> String {
         let info = self.generator.finished.facts.contexts[context].clone();
         let within = info.cone.is_some() && info.cone == self.cone;
+        // Whether the callee binds its whole argument to one name.
+        let whole = self
+            .generator
+            .function_at(info.module, info.start)
+            .and_then(|function| function.params().items.first())
+            .is_some_and(|parameter| {
+                matches!(parameter.pattern, BindingPattern::BindingIdentifier(_))
+            });
         let mut given: Vec<String> = Vec::new();
         for (name, code, place) in members {
             match place {
@@ -1552,6 +1574,12 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                     if within && Some(self.generator.cone_of(value)) == self.cone =>
                 {
                     given.push(format!("{}: {code}", json!(name)));
+                }
+                // A path bound to a slot or to a value of another cone:
+                // the callee's code reads the place itself. A callee
+                // that names its whole argument reads it here.
+                Some(_) if whole => {
+                    given.push(format!("{}: $rt.thunk(($h) => ({code}))", json!(name)));
                 }
                 Some(_) => {}
             }
