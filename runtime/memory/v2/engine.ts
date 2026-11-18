@@ -4473,18 +4473,13 @@ ORDER BY r.seq, r.op_index
       if (splicedArrays.size === 0) continue;
       // The document as the revision left it, which says how long each
       // spliced array ended up.
-      let after: EntityDocument | null | undefined;
-      try {
-        after = readRevision(engine, {
-          branch,
-          id: options.id,
-          scopeKey: options.scopeKey,
-          seq: row.seq,
-          opIndex: row.op_index,
-        });
-      } catch {
-        after = undefined;
-      }
+      const after = readRevision(engine, {
+        branch,
+        id: options.id,
+        scopeKey: options.scopeKey,
+        seq: row.seq,
+        opIndex: row.op_index,
+      });
       for (const pointer of splicedArrays) {
         const array = parsePointer(pointer);
         let node: unknown = after;
@@ -4524,10 +4519,12 @@ ORDER BY r.seq, r.op_index
  * place nets out across the splices staying where it was.
  *
  * Where the replay cannot follow the array, it reports every element from
- * the first splice's index on: the revision's length for the array is
- * unknown, or another op changes which element an index holds (an `add`,
+ * the first splice's index on: the array is not there once the revision
+ * applied, or another op changes which element an index holds (an `add`,
  * `remove` or `move` at an index, an `add-unique` or `remove-by-value`), or
- * a splice falls outside the array.
+ * a later op above the array leaves it at a length the splices cannot have
+ * come to. Otherwise the replay ends at `afterLength`, the length it was
+ * worked back from.
  */
 const overwrittenArrayElements = (
   array: readonly string[],
@@ -4593,7 +4590,6 @@ const overwrittenArrayElements = (
       }
     }
   }
-  if (held.length !== afterLength) return whole();
 
   const overwritten: SessionOverwrite[] = [];
   const bound = Math.min(beforeLength, afterLength);

@@ -191,6 +191,73 @@ describe("selectSessionOverwritePathsSince()", () => {
       expect(overwritten(filled)).toEqual([]);
     });
 
+    it("counts the elements an append beside it adds as added", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 0, remove: 0, add: ["x"] },
+        { op: "append", path: "/value/tags", values: ["y"] },
+      ));
+      expect(overwritten(filled)).toEqual([
+        { array: ["value", "tags"], fromIndex: 0, toIndex: 4 },
+      ]);
+    });
+
+    it("returns every element from its index on beside an op whose effect on the indices it cannot know", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 2, remove: 0, add: ["x"] },
+        { op: "add-unique", path: "/value/tags", values: ["a", "z"] },
+      ));
+      expect(overwritten(filled)).toEqual([
+        { array: ["value", "tags"], fromIndex: 2 },
+      ]);
+    });
+
+    it("returns every element from its index on beside an op that removes an element by its index", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 2, remove: 0, add: ["x"] },
+        { op: "remove", path: "/value/tags/0" },
+      ));
+      expect(overwritten(filled)).toEqual([
+        ["value", "tags", "0"],
+        { array: ["value", "tags"], fromIndex: 2 },
+      ]);
+    });
+
+    it("returns every element from its index on where a later op above the array leaves it too short for its splices", () => {
+      commit(patch(
+        {
+          op: "splice",
+          path: "/value/tags",
+          index: 0,
+          remove: 0,
+          add: ["x", "y", "z"],
+        },
+        {
+          op: "replace",
+          path: "/value",
+          value: { name: "", bio: "", tags: [], count: 0 },
+        },
+      ));
+      expect(overwritten(filled)).toEqual([
+        ["value"],
+        { array: ["value", "tags"], fromIndex: 0 },
+      ]);
+    });
+
+    it("returns every element from its index on where a later op above the array leaves its splices outside it", () => {
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 3, remove: 1, add: [] },
+        {
+          op: "replace",
+          path: "/value",
+          value: { name: "", bio: "", tags: ["only"], count: 0 },
+        },
+      ));
+      expect(overwritten(filled)).toEqual([
+        ["value"],
+        { array: ["value", "tags"], fromIndex: 3 },
+      ]);
+    });
+
     it("leaves out the elements a move's splices leave where they were", () => {
       // `c` moves to the head: an insertion, then the removal of its old
       // place, which leaves `d` at index 3.
