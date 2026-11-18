@@ -184,6 +184,33 @@ describe("CFIframe", () => {
       expect(templateValues(element)[5]).toEqual({ glaze: GLAZE });
     });
 
+    it("keeps a context failure when the assets are refused, and reports the refusal once it is dismissed", () => {
+      // Dismissing a context failure retries the context, which a refusal
+      // written over it would lose.
+
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      const contextFailure = {
+        description: "no context",
+        source: "cf-iframe context",
+        lineno: 0,
+        colno: 0,
+        stacktrace: "no context",
+      };
+      internals(element).onError(
+        new CustomEvent("common-iframe-error", { detail: contextFailure }),
+      );
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toEqual(contextFailure);
+
+      internals(element).dismissError();
+
+      expect(element._errorDetails?.source).toBe("cf-iframe assets");
+      expect(templateValues(element)[1]).toBe("");
+    });
+
     it("leaves an error the guest raised in place when the assets change", () => {
       const element = new CFIframe();
       const error = {

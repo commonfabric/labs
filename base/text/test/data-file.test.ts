@@ -164,6 +164,15 @@ describe("data-file", () => {
       );
     });
 
+    it("throws for a binary media file whose `data:` URL holds no base64", () => {
+      expect(() =>
+        dataFileUrl("data:image/png;base64,not base64!", "glaze.png")
+      )
+        .toThrow(
+          "Data file `glaze.png` does not hold an `image/png` `data:` URL.",
+        );
+    });
+
     it("throws listing the table for a file outside it", () => {
       expect(() => dataFileUrl("{}", "cities.json")).toThrow(
         /`cities\.json` has no media type a `data:` URL can carry\. Known extensions: .*`\.png`/,

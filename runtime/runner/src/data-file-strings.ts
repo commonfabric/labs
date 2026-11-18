@@ -7,9 +7,10 @@ import { createSigilLinkFromParsedLink } from "./link-utils.ts";
 import type { MemorySpace } from "./runtime.ts";
 
 /**
- * Shortest string stored by reference. A link to a code document takes about
- * as many characters as a string a little under this length, so a shorter one
- * stays inline.
+ * Shortest string stored by reference. A link takes about 170 characters, and
+ * the code document it names is one more document for every read of the
+ * result to load, so a string well under a kilobyte saves too little to pay
+ * for that.
  */
 const SHORTEST_LINKED = 1024;
 
@@ -36,9 +37,12 @@ export interface LinkedValue {
  * (`docs/specs/iframe-static-assets.md`, part 1).
  *
  * A code document carries no CFC envelope, so only program content goes into
- * one: a string reaches the set by a reader returning it, and no other way. A
- * string equal to a recorded one is linked wherever it occurs, which exposes
- * nothing, since the space holds that text unlabeled already.
+ * one: a string reaches the set by a reader returning it, and no other way.
+ * Setup links only the string leaves of a result projection: the pattern's own
+ * constants, and a name a later setup carries over from the stored result. A
+ * value computed at run time reaches a result document as a link to its cell.
+ * A leaf equal to a recorded string holds program content however it got
+ * there, so linking it exposes nothing the program does not.
  *
  * The set is bounded, by count and by total length, and drops the string used
  * least recently once it is full. A string it dropped is written inline by the
@@ -55,15 +59,21 @@ export class DataFileStrings {
 
   /**
    * Records `text` as returned by a data-file reader. A string shorter than
-   * the shortest one stored by reference is not recorded.
+   * the shortest one stored by reference is not recorded, and nor is one
+   * longer than all the set holds together.
    */
   record(text: string): void {
-    if (text.length < SHORTEST_LINKED) return;
+    if (text.length < SHORTEST_LINKED || text.length > MOST_CHARACTERS) return;
     if (this.#codeDocumentIds.has(text)) {
       this.#codeDocumentIds.get(text);
     } else {
       this.#codeDocumentIds.put(text, null);
     }
+  }
+
+  /** Forgets every recorded string. */
+  clear(): void {
+    this.#codeDocumentIds.clear();
   }
 
   /**

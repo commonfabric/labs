@@ -169,9 +169,10 @@ URL. Both calls declare what they read, as `dataFile()` does: a build attaches
 the file, or lists the directory and attaches each such file in it. `cf piece
 getsrc` writes an image back as the bytes it was read from.
 
-A string a data-file read returns that a pattern passes into its view, as an
-iframe pattern passes its guest's document and script, is stored once in the
-space rather than once in each piece.
+A string of 1,024 characters or more that a data-file read returns and a
+pattern passes into its view, as an iframe pattern passes its guest's document
+and script, is stored once in the space rather than once in each piece. A
+shorter one is stored inline in each piece.
 
 A file the source cannot name — one read by a computed path, or one that ships
 with a pattern that does not read it — is attached with a repeatable

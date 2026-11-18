@@ -25,6 +25,7 @@ import type {
   PatternIndexPublishResponse,
   PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
+import { decodeDataFile, encodeDataFile } from "@commonfabric/text/data-file";
 import { lineageForEntry, type SlotSources } from "./pattern-versions.ts";
 import { shellWord } from "./shell-quote.ts";
 
@@ -172,8 +173,8 @@ export interface RollbackDeps {
     "listLineages" | "listVersions" | "getVersion" | "rollback"
   >;
   sources: SlotSources;
-  readTextFile: (path: string) => Promise<string>;
-  writeTextFile: (path: string, contents: string) => Promise<void>;
+  readFile: (path: string) => Promise<Uint8Array>;
+  writeFile: (path: string, bytes: Uint8Array) => Promise<void>;
 }
 
 /** What `cf pattern rollback` did. */
@@ -222,16 +223,18 @@ const diskPath = (root: string, name: string): string => {
 };
 
 /**
- * The contents of `path`, or `undefined` where there is no file. Any other
- * failure to read is thrown, so a file that could not be read is never
- * taken for one that is not there and written over.
+ * The contents of `path` as a source package stores the file `name`, an image
+ * as its `data:` URL among them (`decodeDataFile`), or `undefined` where there
+ * is no file. Any other failure to read is thrown, so a file that could not be
+ * read is never taken for one that is not there and written over.
  */
 const readIfThere = async (
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
   path: string,
+  name: string,
 ): Promise<string | undefined> => {
   try {
-    return await read(path);
+    return decodeDataFile(await read(path), name);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return undefined;
     throw new PatternHistoryError(
@@ -246,11 +249,11 @@ const readIfThere = async (
 const differing = async (
   files: readonly PatternIndexProgramFile[],
   root: string,
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
 ): Promise<PatternIndexProgramFile[]> => {
   const out: PatternIndexProgramFile[] = [];
   for (const file of files) {
-    const now = await readIfThere(read, diskPath(root, file.name));
+    const now = await readIfThere(read, diskPath(root, file.name), file.name);
     if (now !== file.contents) out.push(file);
   }
   return out;
@@ -266,13 +269,13 @@ const unkept = async (
   current: readonly PatternIndexProgramFile[],
   writing: readonly PatternIndexProgramFile[],
   root: string,
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
 ): Promise<string[]> => {
   const kept = new Map(current.map((file) => [file.name, file.contents]));
   const lost: string[] = [];
   for (const file of writing) {
     const path = diskPath(root, file.name);
-    const now = await readIfThere(read, path);
+    const now = await readIfThere(read, path, file.name);
     if (now !== undefined && now !== kept.get(file.name)) {
       lost.push(relative(Deno.cwd(), path));
     }
@@ -339,7 +342,7 @@ export async function rollbackEntry(
   const changed = await differing(
     restored.program.files,
     root,
-    deps.readTextFile,
+    deps.readFile,
   );
   if (target.head && changed.length === 0) {
     throw new PatternHistoryError(
@@ -363,7 +366,7 @@ export async function rollbackEntry(
       current.program.files,
       changed,
       root,
-      deps.readTextFile,
+      deps.readFile,
     );
     if (lost.length > 0) {
       throw new PatternHistoryError(
@@ -373,15 +376,28 @@ export async function rollbackEntry(
       );
     }
   }
+  // Every file is encoded before the first is written, so a version holding a
+  // binary file whose contents are not a `data:` URL writes nothing.
+  const bytes = changed.map((file) => {
+    try {
+      return encodeDataFile(file.contents, file.name);
+    } catch (error) {
+      throw new PatternHistoryError(
+        `This version's ${file.name} cannot be written as a file (${
+          error instanceof Error ? error.message : String(error)
+        }); nothing was restored.`,
+      );
+    }
+  });
   for (const file of changed) {
     const path = diskPath(root, file.name);
     await Deno.mkdir(dirname(path), { recursive: true });
     await requireInside(root, path);
   }
   const written: string[] = [];
-  for (const file of changed) {
+  for (const [i, file] of changed.entries()) {
     const path = diskPath(root, file.name);
-    await deps.writeTextFile(path, file.contents);
+    await deps.writeFile(path, bytes[i]);
     written.push(relative(Deno.cwd(), path));
   }
   const version = target.head ? undefined : await client.rollback({

@@ -115,6 +115,23 @@ describe("guest-document", () => {
         );
       });
 
+      it("writes the record after a byte order mark ahead of the doctype", () => {
+        expect(guestDocument("\ufeff<!doctype html><p></p>", undefined, ASSETS))
+          .toBe(`\ufeff<!doctype html>${RECORD}<p></p>`);
+      });
+
+      it("finds no doctype after many comments in time linear in their number", () => {
+        // Each comment ends at its first `-->`; a scan that let one stretch
+        // across a later `-->` would try exponentially many ways to split
+        // them before giving up.
+
+        const comments = "<!-- a --><!-- b -->".repeat(2000);
+
+        expect(guestDocument(`${comments}<p></p>`, undefined, ASSETS)).toBe(
+          `${RECORD}${comments}<p></p>`,
+        );
+      });
+
       it("writes the record at the start of a document with no doctype", () => {
         expect(guestDocument("<p>plain</p><!doctype html>", undefined, ASSETS))
           .toBe(`${RECORD}<p>plain</p><!doctype html>`);

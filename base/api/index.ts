@@ -2596,7 +2596,9 @@ export interface BuiltInCompileAndRunParams<T> {
 
   /**
    * Names of entries in `files` that carry data rather than code. A pattern
-   * reads one with `dataFile()`; nothing compiles, imports, or transforms it.
+   * reads a text file with `dataFile()`, and an image, a font, or a sound with
+   * `dataFile.url()` or `dataFile.urls()`; nothing compiles, imports, or
+   * transforms one.
    */
   dataFiles?: string[];
 

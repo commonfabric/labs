@@ -2013,6 +2013,7 @@ export class Engine extends EventTarget {
     this.#runtimeInternals = undefined;
     this.#compilerInternals = undefined;
     this.#executableRegistry.clear();
+    this.#dataFileStrings.clear();
   }
 
   #getSESRuntime(): SESRuntime {

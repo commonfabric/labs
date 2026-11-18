@@ -41,7 +41,8 @@ deno task cf piece link ... editor-id/items viewer-id/items
   rest of the package. A file named this way must be on disk where the call
   resolves to, or the build refuses and says which module asked for it. An
   image, a font, or a sound is read with `dataFile.url(path)` as a `data:` URL,
-  and every one in a directory with `dataFile.urls(directory)`; see
+  and every image, font, or sound directly inside a directory with
+  `dataFile.urls(directory)`; see
   [the tutorial](../../tutorial/06-workflow.md).
 - `--datafile` attaches a file the source cannot name: one read by a computed
   path, or one that ships with a program that does not read it. It is
