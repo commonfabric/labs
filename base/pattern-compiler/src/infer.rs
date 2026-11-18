@@ -924,8 +924,15 @@ impl<'a> Resolver<'_, 'a> {
                 };
                 self.of(Shape::Array(narrowed))
             }
-            "filter" | "slice" | "concat" | "toReversed" | "toSorted" | "toSpliced" | "reverse"
-            | "sort" | "splice" | "fill" | "with" => self.of(Shape::Array(element)),
+            // The result of a `filter` holds elements of its receiver, each
+            // with the upstream key, so its type declares the key fields
+            // that the type of the receiver declares.
+            "filter" => {
+                let result = self.intern(Shape::Array(element));
+                Ok(self.with_key_fields_of(array, result))
+            }
+            "slice" | "concat" | "toReversed" | "toSorted" | "toSpliced" | "reverse" | "sort"
+            | "splice" | "fill" | "with" => self.of(Shape::Array(element)),
             "flat" => self.of(Shape::Array(self.element_of(element).unwrap_or(element))),
             "some" | "every" | "includes" => self.of(Shape::Boolean),
             "find" | "findLast" | "at" | "pop" | "shift" | "minBy" | "maxBy" | "min" | "max" => {

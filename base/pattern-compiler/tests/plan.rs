@@ -3781,27 +3781,27 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
     );
 }
 
-/// Rulings Z37, Z38 and Z45 (PL §1.1, `Collection.keyFields`; §1.3, "A
-/// declared key field"): the element type `KeyedBy<T, "field">` writes
-/// the keyword `keyFields` into the schema of the array's items, and the
-/// record of a collection over the array holds a copy. A union of field
-/// names declares several fields, which the keyword holds in the order of
-/// their names. The source is a slot in `saved` and in `pairs`, arrays of
-/// plain values in place, and an output in `repos`, a plain array
-/// generated from scratch. A construct over the result of another
-/// construct names that collection and has no copy: its elements have the
-/// upstream key.
+/// Rulings Z37, Z45 and Z49 (PL §1.1, `Collection.keyFields`; §1.3, "A
+/// declared key field"): the array type `ArrayByKey<T, "field">` writes
+/// the keyword `keyFields` into the schema of the array, beside `items`
+/// and not into the schema of the items, and the record of a collection
+/// over the array holds a copy. A union of field names declares several
+/// fields, which the keyword holds in the order of their names. The
+/// source is a slot in `saved` and in `pairs`, arrays of plain values in
+/// place, and an output in `repos`, a plain array generated from
+/// scratch. A construct over the result of another construct names that
+/// collection and has no copy: its elements have the upstream key.
 #[test]
-fn declared_key_fields_are_in_the_items_schema_and_the_collection_record() {
+fn declared_key_fields_are_in_the_array_schema_and_the_collection_record() {
     let analysis = program(
-        r#"import { lift, pattern, type KeyedBy } from "commonfabric";
+        r#"import { lift, pattern, type ArrayByKey } from "commonfabric";
 interface Repo { id: number; name: string; owner: string; stars: number }
-const fetched = lift((input: { names: string[] }): KeyedBy<Repo, "id">[] =>
+const fetched = lift((input: { names: string[] }): ArrayByKey<Repo, "id"> =>
   input.names.map((name, index) => ({ id: index, name, owner: "o", stars: 1 })));
 export const P = pattern<{
   names: string[];
-  saved: KeyedBy<Repo, "id">[];
-  pairs: KeyedBy<Repo, "owner" | "name">[];
+  saved: ArrayByKey<Repo, "id">;
+  pairs: ArrayByKey<Repo, "owner" | "name">;
   plain: Repo[];
 }>(
   ({ names, saved, pairs, plain }) => {
@@ -3853,10 +3853,10 @@ export const P = pattern<{
             text("map", "slot", "null"),
         ]
     );
-    // The items schema of the slot of `saved` has the keyword, and that
-    // of `plain` has none.
+    // The schema of the slot of `saved` has the keyword beside `items`,
+    // the schema of its items has none, and that of `plain` has none.
     let schemas = serde_json::to_value(&found.schemas).expect("schemas");
-    let items_of = |name: &str| -> Value {
+    let schema_of = |name: &str| -> Value {
         let slot = plan["slots"]
             .as_array()
             .expect("slots")
@@ -3868,16 +3868,154 @@ export const P = pattern<{
             .expect("schemas")
             .iter()
             .find(|schema| schema[0] == slot["schema"])
-            .map(|schema| schema[1]["items"].clone())
+            .map(|schema| schema[1].clone())
             .expect("the schema of the slot")
     };
-    assert_eq!(items_of("saved")["keyFields"], json!(["id"]));
-    assert_eq!(items_of("pairs")["keyFields"], json!(["name", "owner"]));
+    assert_eq!(schema_of("saved")["type"], json!("array"));
+    assert_eq!(schema_of("saved")["keyFields"], json!(["id"]));
+    assert_eq!(schema_of("pairs")["keyFields"], json!(["name", "owner"]));
+    assert_eq!(schema_of("saved")["items"]["keyFields"], Value::Null);
+    assert_eq!(schema_of("pairs")["items"]["keyFields"], Value::Null);
     assert_eq!(
-        items_of("saved")["properties"]["name"]["type"],
+        schema_of("saved")["items"]["properties"]["name"]["type"],
         json!("string")
     );
-    assert_eq!(items_of("plain")["keyFields"], Value::Null);
+    assert_eq!(schema_of("plain")["keyFields"], Value::Null);
+}
+
+/// The construct, the kind of the source, the key fields and the sites
+/// of each collection of a plan.
+fn collections_of(plan: &Value) -> Vec<(String, String, String, String)> {
+    plan["collections"]
+        .as_array()
+        .expect("collections")
+        .iter()
+        .map(|collection| {
+            let source = collection["source"]
+                .as_object()
+                .and_then(|source| source.keys().next().cloned())
+                .unwrap_or_default();
+            let sites: Vec<String> = collection["within"]
+                .as_array()
+                .map(|steps| {
+                    steps
+                        .iter()
+                        .filter_map(|step| step["site"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            (
+                collection["construct"].as_str().unwrap_or("").to_string(),
+                source,
+                collection["keyFields"].to_string(),
+                sites.join("/"),
+            )
+        })
+        .collect()
+}
+
+/// PL §8, question 143 (assumed there): a reader whose parameter is
+/// typed as a plain array and that receives an array with a declared key
+/// forms keys with the key fields of that array. `Rows` is compiled in,
+/// and the record of its collection has the key fields of what the call
+/// gives it. `saved` is an array of plain values in place, whose type
+/// the caller's input declares. `repos` is a plain array generated from
+/// scratch, the result of a `lift` whose return type declares the key.
+/// `saved.filter(...)` is the result of another per-element construct:
+/// the collection of `Rows` names that collection and has no copy, since
+/// its elements have the upstream key. `plain` declares no key.
+#[test]
+fn a_collection_of_a_reader_typed_as_a_plain_array_has_the_key_fields_of_the_array_given() {
+    let analysis = program(
+        r#"import { lift, pattern, type ArrayByKey } from "commonfabric";
+interface Repo { id: number; name: string; stars: number }
+const fetched = lift((input: { names: string[] }): ArrayByKey<Repo, "id"> =>
+  input.names.map((name, index) => ({ id: index, name, stars: 1 })));
+const Rows = pattern<{ repos: Repo[] }>(({ repos }) => ({
+  names: repos.map((repo) => repo.name),
+}));
+export const P = pattern<{
+  names: string[];
+  saved: ArrayByKey<Repo, "id">;
+  plain: Repo[];
+}>(
+  ({ names, saved, plain }) => {
+    const repos = fetched({ names });
+    return {
+      inPlace: Rows({ repos: saved }),
+      scratch: Rows({ repos }),
+      derived: Rows({ repos: saved.filter((repo) => repo.stars > 0) }),
+      none: Rows({ repos: plain }),
+      tag: <Rows repos={repos} />,
+    };
+  },
+);
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let text = |a: &str, b: &str, c: &str, d: &str| {
+        (a.to_string(), b.to_string(), c.to_string(), d.to_string())
+    };
+    assert_eq!(
+        collections_of(&plan),
+        [
+            text("map", "slot", r#"["id"]"#, "Rows"),
+            text("map", "output", r#"["id"]"#, "Rows"),
+            text("filter", "slot", r#"["id"]"#, ""),
+            text("map", "collection", "null", "Rows"),
+            text("map", "slot", "null", "Rows"),
+            text("map", "output", r#"["id"]"#, "Rows"),
+        ]
+    );
+}
+
+/// Ruling Z49 (PL §1.3, "The key belongs to the array"): an element
+/// that is put into a second array has the key that the second array
+/// declares, or none. `copied` and `renamed` are plain arrays generated
+/// from scratch, each filled by a `lift` with elements it read from
+/// `saved`, an array with the declared key `id`: a collection over the
+/// first has no key fields, and one over the second has those that its
+/// own type declares.
+#[test]
+fn an_element_put_into_a_second_array_has_the_key_that_array_declares_or_none() {
+    let analysis = program(
+        r#"import { lift, pattern, type ArrayByKey } from "commonfabric";
+interface Repo { id: number; name: string; stars: number }
+const copy = lift((input: { repos: Repo[] }): Repo[] =>
+  input.repos.filter((repo) => repo.stars > 0));
+const rename = lift((input: { repos: Repo[] }): ArrayByKey<Repo, "name"> =>
+  input.repos.filter((repo) => repo.stars > 0));
+export const P = pattern<{ saved: ArrayByKey<Repo, "id"> }>(({ saved }) => {
+  const copied = copy({ repos: saved });
+  const renamed = rename({ repos: saved });
+  return {
+    first: saved.map((repo) => repo.name),
+    second: copied.map((repo) => repo.name),
+    third: renamed.map((repo) => repo.name),
+  };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let text = |a: &str, b: &str, c: &str, d: &str| {
+        (a.to_string(), b.to_string(), c.to_string(), d.to_string())
+    };
+    assert_eq!(
+        collections_of(&plan),
+        [
+            text("map", "slot", r#"["id"]"#, ""),
+            text("map", "output", "null", ""),
+            text("map", "output", r#"["name"]"#, ""),
+        ]
+    );
+    let errors: Vec<&str> = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.diagnostics)
+        .filter(|diagnostic| diagnostic.id.starts_with("array-by-key:"))
+        .map(|diagnostic| diagnostic.id)
+        .collect();
+    assert_eq!(errors, Vec::<&str>::new());
 }
 
 /// PL §1.1, `Binding.state`: a state path of a binding of a pattern

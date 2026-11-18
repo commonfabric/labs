@@ -184,15 +184,12 @@ pub fn is_cell_cast_target(name: &str) -> bool {
 }
 
 /// The API types that are their first type argument with an annotation
-/// added: defaults, scopes, `Reactive`, the label aliases of §8.1, and
-/// the key marker `KeyedBy<T, "field">` of §7.2, which is a marker of
-/// the design that `base/api/index.ts` does not export.
+/// added: defaults, scopes, `Reactive`, and the label aliases of §8.1.
 pub fn is_transparent_wrapper(name: &str) -> bool {
     matches!(
         name,
         "Reactive"
             | "Default"
-            | "KeyedBy"
             | "PerSpace"
             | "PerUser"
             | "PerSession"

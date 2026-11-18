@@ -9,7 +9,7 @@ use pattern_compiler::diagnostics::{Diagnostic, Severity};
 use pattern_compiler::program::{analyze, SourceFile};
 
 const PRELUDE: &str = "import { action, Cell, computed, eventKey, fetchJson, generateText, wish, \
-handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, type KeyedBy, \
+handler, grantSpaceAccess, ifElse, lift, llm, pattern, patternTool, SELF, sqliteDatabase, table, Writable, type ArrayByKey, \
 type Confidential, type Default, type PatternFactory, type PerUser, type Reactive, type WriteAuthorizedBy, \
 exchangeRules, UI, UiAction, type Integrity, type MaxConfidentiality, type PolicyOf, type RequiresIntegrity, \
 type TrustedActionWrite, type VNode } from \"commonfabric\";\n";
@@ -1481,20 +1481,20 @@ fn a_call_through_as_instance_is_accepted_in_the_reactive_tier() {
     );
 }
 
-/// Ruling Z38 (`language-subset.md` §7.2): `KeyedBy<T, "field">` is `T`
-/// with a key annotation, written as the element type of an array type.
-/// For assignability it is `T`: an array of it is given where an array
-/// of `T` is declared, and a member of an element is read as one of `T`.
-/// The array is a pattern input, whose elements are plain values in
-/// place or references, and the return type of a `lift`, a plain array
-/// generated from scratch.
+/// Ruling Z49 (`language-subset.md` §4.4.1, "A declared key"):
+/// `ArrayByKey<T, "field">` is a `T[]` with a key annotation on the
+/// array, and its elements are plain `T`. For assignability it is
+/// `T[]`: it is given where an array of `T` is declared, and a member of
+/// an element is read as one of `T`. The array is a pattern input, whose
+/// elements are plain values in place or references, and the return
+/// type of a `lift`, a plain array generated from scratch.
 #[test]
-fn keyed_by_is_its_first_argument_with_a_key_annotation() {
+fn array_by_key_is_an_array_of_its_first_argument_with_a_key_annotation() {
     let found = check(
         "interface Repo { id: number; name: string }\n\
          const names = lift((repos: Repo[]) => repos.map((repo) => repo.name));\n\
-         const fetched = lift((count: number): KeyedBy<Repo, \"id\">[] => [{ id: count, name: \"n\" }]);\n\
-         export default pattern<{ saved: KeyedBy<Repo, \"id\">[]; count: number }>(({ saved, count }) => ({\n\
+         const fetched = lift((count: number): ArrayByKey<Repo, \"id\"> => [{ id: count, name: \"n\" }]);\n\
+         export default pattern<{ saved: ArrayByKey<Repo, \"id\">; count: number }>(({ saved, count }) => ({\n\
            names: names(saved),\n\
            rows: saved.map((repo) => repo.name),\n\
            fresh: fetched(count).map((repo) => repo.id),\n\
@@ -1509,20 +1509,55 @@ fn keyed_by_is_its_first_argument_with_a_key_annotation() {
     );
 }
 
-/// Ruling Z45 and `language-subset.md` §4.4.1 (assumed there): the second
-/// argument of `KeyedBy` is a string literal type or a union of them, and
-/// each names a required top-level property of the first argument whose
-/// type is `string` or `number`. Anything else is `keyed-by:declaration`,
-/// reported at the marker. The element type is that of a pattern input,
-/// an array of plain values in place or of references, which the type
-/// does not tell apart.
+/// Ruling Z49: `ArrayByKey<T, "field">` is an array type, so it is not
+/// given where a number or one element is declared, and `KeyedBy` is no
+/// type of the language: an array of it declares no key, so it is given
+/// where another key is declared with no `array-by-key:mismatch`.
 #[test]
-fn keyed_by_names_required_top_level_string_or_number_properties() {
+fn array_by_key_is_an_array_type_and_keyed_by_declares_no_key() {
+    let found = |parameter: &str, input: &str| {
+        ids(&check(&format!(
+            "interface Repo {{ id: number; name: string }}\n\
+             const Sub = pattern<{{ given: {parameter} }}>(({{ given }}) => ({{ given }}));\n\
+             export default pattern<{{ saved: {input} }}>(({{ saved }}) => ({{\n\
+               sub: Sub({{ given: saved }}),\n\
+             }}));"
+        )))
+    };
+    let none = Vec::<&str>::new();
+    assert_eq!(found("Repo[]", "ArrayByKey<Repo, \"id\">"), none);
+    assert_eq!(
+        found("number", "ArrayByKey<Repo, \"id\">"),
+        ["subset-type:mismatch"]
+    );
+    assert_eq!(
+        found("Repo", "ArrayByKey<Repo, \"id\">"),
+        ["subset-type:mismatch"]
+    );
+    assert_eq!(
+        found("ArrayByKey<Repo, \"name\">", "ArrayByKey<Repo, \"id\">"),
+        ["array-by-key:mismatch"]
+    );
+    assert!(
+        !found("ArrayByKey<Repo, \"name\">", "KeyedBy<Repo, \"id\">[]")
+            .contains(&"array-by-key:mismatch")
+    );
+}
+
+/// Ruling Z45 and `language-subset.md` §4.4.1 (assumed there): the second
+/// argument of `ArrayByKey` is a string literal type or a union of them,
+/// and each names a required top-level property of the first argument
+/// whose type is `string` or `number`. Anything else is
+/// `array-by-key:declaration`, reported at the type. The array is a
+/// pattern input, an array of plain values in place or of references,
+/// which the type does not tell apart.
+#[test]
+fn array_by_key_names_required_top_level_string_or_number_properties() {
     let declaration = |fields: &str| {
         ids(&check(&format!(
             "interface Owner {{ login: string }}\n\
              interface Repo {{ id: number; name: string; owner: Owner; note?: string; open: boolean; tag: \"a\" | \"b\" }}\n\
-             export default pattern<{{ saved: KeyedBy<Repo, {fields}>[] }}>(({{ saved }}) => ({{\n\
+             export default pattern<{{ saved: ArrayByKey<Repo, {fields}> }}>(({{ saved }}) => ({{\n\
                rows: saved.map((repo) => repo.name),\n\
              }}));"
         )))
@@ -1546,33 +1581,39 @@ fn keyed_by_names_required_top_level_string_or_number_properties() {
         "string",
         "7",
     ] {
-        assert_eq!(declaration(refused), ["keyed-by:declaration"], "{refused}");
+        assert_eq!(
+            declaration(refused),
+            ["array-by-key:declaration"],
+            "{refused}"
+        );
     }
 }
 
-/// The report of `keyed-by:declaration` is at the marker, and is an error.
+/// The report of `array-by-key:declaration` is at the type, and is an
+/// error.
 #[test]
-fn keyed_by_declaration_is_reported_at_the_marker_as_an_error() {
+fn array_by_key_declaration_is_reported_at_the_type_as_an_error() {
     let (position, snippet) = marked(
         "interface Repo { id: number; name?: string }\n\
-         export default pattern<{ saved: /*!*/KeyedBy<Repo, \"name\">[] }>(({ saved }) => ({\n\
+         export default pattern<{ saved: /*!*/ArrayByKey<Repo, \"name\"> }>(({ saved }) => ({\n\
            rows: saved.map((repo) => repo.id),\n\
          }));",
     );
     let found: Vec<_> = check(&snippet)
         .into_iter()
-        .filter(|diagnostic| diagnostic.id == "keyed-by:declaration")
+        .filter(|diagnostic| diagnostic.id == "array-by-key:declaration")
         .collect();
     assert_eq!(found.len(), 1);
     assert_eq!((found[0].line, found[0].column), position);
     assert_eq!(found[0].severity, Severity::Error);
 }
 
-/// `plan-and-label-templates.md` §1.3, "Two declared keys for one value"
-/// (assumed there): a value whose type declares one key is not passed to
-/// a parameter whose type declares another key (`keyed-by:mismatch`). A
-/// parameter whose type declares no key accepts it, and so does one that
-/// declares the same fields in another order. `saved` is a pattern
+/// `plan-and-label-templates.md` §1.3, "Two declared keys for one array"
+/// (assumed there): an array whose type declares one key is not passed
+/// to a parameter whose type declares another key
+/// (`array-by-key:mismatch`). A parameter whose type declares no key
+/// accepts it, and so does one that declares the same fields in another
+/// order. `saved` is a pattern
 /// input, an array of plain values in place or of references, which the
 /// type does not tell apart. `fetched(count)` is a plain array generated
 /// from scratch, and `saved.filter(...)` the result of another
@@ -1582,46 +1623,46 @@ fn a_value_that_declares_one_key_is_not_passed_where_another_key_is_declared() {
     let found = |parameter: &str, argument: &str| {
         ids(&check(&format!(
             "interface Repo {{ id: number; name: string; owner: string }}\n\
-             const fetched = lift((count: number): KeyedBy<Repo, \"id\">[] => [{{ id: count, name: \"n\", owner: \"o\" }}]);\n\
+             const fetched = lift((count: number): ArrayByKey<Repo, \"id\"> => [{{ id: count, name: \"n\", owner: \"o\" }}]);\n\
              const Sub = pattern<{{ repos: {parameter} }}>(({{ repos }}) => ({{ count: repos.length }}));\n\
-             export default pattern<{{ saved: KeyedBy<Repo, \"id\">[]; pairs: KeyedBy<Repo, \"owner\" | \"name\">[]; plain: Repo[]; count: number }}>(\n\
+             export default pattern<{{ saved: ArrayByKey<Repo, \"id\">; pairs: ArrayByKey<Repo, \"owner\" | \"name\">; plain: Repo[]; count: number }}>(\n\
                ({{ saved, pairs, plain, count }}) => ({{\n\
                  sub: Sub({{ repos: {argument} }}),\n\
                }}));"
         )))
     };
     let none = Vec::<&str>::new();
-    let mismatch = vec!["keyed-by:mismatch"];
+    let mismatch = vec!["array-by-key:mismatch"];
     // Another key.
-    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "saved"), mismatch);
+    assert_eq!(found("ArrayByKey<Repo, \"name\">", "saved"), mismatch);
     assert_eq!(
-        found("KeyedBy<Repo, \"id\" | \"name\">[]", "saved"),
+        found("ArrayByKey<Repo, \"id\" | \"name\">", "saved"),
         mismatch
     );
-    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "pairs"), mismatch);
+    assert_eq!(found("ArrayByKey<Repo, \"name\">", "pairs"), mismatch);
     assert_eq!(
-        found("KeyedBy<Repo, \"name\">[]", "fetched(count)"),
+        found("ArrayByKey<Repo, \"name\">", "fetched(count)"),
         mismatch
     );
     assert_eq!(
         found(
-            "KeyedBy<Repo, \"name\">[]",
+            "ArrayByKey<Repo, \"name\">",
             "saved.filter((repo) => repo.id > 0)"
         ),
         mismatch
     );
     // The same key, also written in another order.
-    assert_eq!(found("KeyedBy<Repo, \"id\">[]", "saved"), none);
+    assert_eq!(found("ArrayByKey<Repo, \"id\">", "saved"), none);
     assert_eq!(
-        found("KeyedBy<Repo, \"name\" | \"owner\">[]", "pairs"),
+        found("ArrayByKey<Repo, \"name\" | \"owner\">", "pairs"),
         none
     );
-    assert_eq!(found("KeyedBy<Repo, \"id\">[]", "fetched(count)"), none);
+    assert_eq!(found("ArrayByKey<Repo, \"id\">", "fetched(count)"), none);
     // A parameter that declares no key.
     assert_eq!(found("Repo[]", "saved"), none);
     assert_eq!(found("Repo[]", "pairs"), none);
     // A value that declares no key, where the parameter declares one.
-    assert_eq!(found("KeyedBy<Repo, \"name\">[]", "plain"), none);
+    assert_eq!(found("ArrayByKey<Repo, \"name\">", "plain"), none);
 }
 
 /// The same rule at the state of a handler, at the argument of a `lift`
@@ -1632,28 +1673,28 @@ fn a_value_that_declares_one_key_is_not_passed_where_another_key_is_declared() {
 fn a_mismatched_declared_key_is_reported_at_the_value_at_each_kind_of_call() {
     for (declarations, call) in [
         (
-            "const use = handler<unknown, { repos: Writable<KeyedBy<Repo, \"name\">[]> }>((_, { repos }) => { repos.set([]); });",
+            "const use = handler<unknown, { repos: Writable<ArrayByKey<Repo, \"name\">> }>((_, { repos }) => { repos.set([]); });",
             "use({ repos: /*!*/saved })",
         ),
         (
-            "const count = lift((input: { repos: KeyedBy<Repo, \"name\">[] }) => input.repos.length);",
+            "const count = lift((input: { repos: ArrayByKey<Repo, \"name\"> }) => input.repos.length);",
             "count({ repos: /*!*/saved })",
         ),
         (
-            "function count(repos: KeyedBy<Repo, \"name\">[]): number { return repos.length; }",
+            "function count(repos: ArrayByKey<Repo, \"name\">): number { return repos.length; }",
             "computed(() => count(/*!*/saved.get()))",
         ),
     ] {
         let (position, snippet) = marked(&format!(
             "interface Repo {{ id: number; name: string }}\n\
              {declarations}\n\
-             export default pattern<{{ saved: Writable<KeyedBy<Repo, \"id\">[]> }}>(({{ saved }}) => ({{\n\
+             export default pattern<{{ saved: Writable<ArrayByKey<Repo, \"id\">> }}>(({{ saved }}) => ({{\n\
                out: {call},\n\
              }}));"
         ));
         let found: Vec<_> = check(&snippet)
             .into_iter()
-            .filter(|diagnostic| diagnostic.id == "keyed-by:mismatch")
+            .filter(|diagnostic| diagnostic.id == "array-by-key:mismatch")
             .collect();
         assert_eq!(found.len(), 1, "{call}");
         assert_eq!((found[0].line, found[0].column), position, "{call}");

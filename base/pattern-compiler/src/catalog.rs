@@ -506,13 +506,13 @@ pub const CATALOG: &[Entry] = &[
 /// these, so that it moves into [`CATALOG`].
 pub const PROVISIONAL: &[Entry] = &[
     part(
-        "keyed-by:declaration",
+        "array-by-key:declaration",
         Error,
         "nothing is reported where the first argument or a key field is a type the checker \
          does not evaluate",
     ),
     part(
-        "keyed-by:mismatch",
+        "array-by-key:mismatch",
         Error,
         "reported at the four sites where assignability is applied, for a value that is \
          not a literal; an assignment and the argument of a handle method are not checked",

@@ -1136,10 +1136,10 @@ impl<'a> Resolver<'_, 'a> {
         if let Some((given, declared)) = self.key_mismatch(from, to, 0) {
             self.type_report(
                 module,
-                "keyed-by:mismatch",
+                "array-by-key:mismatch",
                 expression.span(),
                 &format!(
-                    "A value whose type declares the key `{given}` is given where the \
+                    "An array whose type declares the key `{given}` is given where the \
                      key `{declared}` is declared"
                 ),
             );
@@ -1191,8 +1191,8 @@ impl<'a> Resolver<'_, 'a> {
         verdict
     }
 
-    /// The key fields that `KeyedBy` declares on a type node, as the text
-    /// of the keyword `keyFields`.
+    /// The key fields that `ArrayByKey` declares on a type node, as the
+    /// text of the keyword `keyFields`.
     fn declared_key(&self, ty: TypeId) -> Option<String> {
         self.annotations_of(ty)
             .into_iter()
@@ -1202,10 +1202,10 @@ impl<'a> Resolver<'_, 'a> {
     }
 
     /// The two keys, where a value of type `from` given where `to` is
-    /// declared has a part whose type declares one key at a position
-    /// where `to` declares another (`keyed-by:mismatch`; PL §1.3, "Two
-    /// declared keys for one value"). A position at which one of the two
-    /// declares no key is no mismatch. The walk goes through handles,
+    /// declared has an array whose type declares one key at a position
+    /// where `to` declares another (`array-by-key:mismatch`; PL §1.3,
+    /// "Two declared keys for one array"). A position at which one of
+    /// the two declares no key is no mismatch. The walk goes through handles,
     /// arrays, the properties both types declare, and the members of a
     /// union, and gives up at depth 6, so a mismatch deeper than that is
     /// not found.

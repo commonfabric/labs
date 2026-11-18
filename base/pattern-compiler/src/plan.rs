@@ -501,6 +501,13 @@ struct Emitter<'r, 'm, 'a> {
     /// has it: the pattern's input, the element of a collection, and the
     /// event and the state of a named handler.
     root_types: HashMap<Root, TypeId>,
+    /// The key fields that the type of a computed value declares with
+    /// `ArrayByKey`, by the value and a path of it, noted where the
+    /// value is given to a pattern compiled in: the parameter of that
+    /// pattern can declare a plain array type, and a collection over it
+    /// then has the key fields of the array it is given (PL §8, question
+    /// 143, assumed there).
+    value_keys: HashMap<(usize, Vec<String>), Value>,
     /// The type the pattern declares for its result.
     result_type: Option<TypeId>,
     /// The value type of a state cell, where its constructor is written
@@ -917,6 +924,54 @@ impl<'a> Emitter<'_, '_, 'a> {
             nodes.push(self.type_below(last, segment)?);
         }
         Some(nodes)
+    }
+
+    /// The key fields that a type declares with `ArrayByKey`, as the
+    /// value of the keyword `keyFields`. A handle of the array is crossed.
+    fn key_fields_of_type(&self, ty: TypeId) -> Option<Value> {
+        let mut ty = ty;
+        for _ in 0..4 {
+            ty = self.resolver.present(ty);
+            match self.resolver.shape(ty) {
+                Shape::Handle(_, value) => ty = value,
+                _ => break,
+            }
+        }
+        self.resolver
+            .annotations_of(ty)
+            .into_iter()
+            .find(|annotation| annotation.key == "keyFields")
+            .and_then(|annotation| annotation.value)
+    }
+
+    /// Notes the key fields that the declared type of `expression`
+    /// declares, for the computed value it evaluated to.
+    fn note_key_fields(&mut self, expression: &Expression<'a>, place: &Place) {
+        let Place::Value(value, path) = place else {
+            return;
+        };
+        let fields = self
+            .resolver
+            .declared(self.module, expression)
+            .ok()
+            .and_then(|ty| self.key_fields_of_type(ty));
+        if let Some(fields) = fields {
+            self.value_keys.insert((*value, path.clone()), fields);
+        }
+    }
+
+    /// The key fields of the array at a place, from the declared type
+    /// of the slot root it is a path of, or from what was noted for a
+    /// computed value.
+    fn place_key_fields(&self, place: &Place) -> Option<Value> {
+        match place {
+            Place::Slot(root, path) => self
+                .slot_types(root, path)
+                .and_then(|nodes| nodes.last().copied())
+                .and_then(|ty| self.key_fields_of_type(ty)),
+            Place::Value(value, path) => self.value_keys.get(&(*value, path.clone())).cloned(),
+            _ => None,
+        }
     }
 
     /// The type one segment below a type: a property, or for `*` an
@@ -1831,6 +1886,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                         static_key_name(&property.key),
                     ) {
                         self.literal_keys.insert(key.to_string());
+                    }
+                    if let (false, Some(key), Place::Record(fields)) =
+                        (property.computed, static_key_name(&property.key), &argument)
+                    {
+                        if let Some(place) = fields.get(key) {
+                            self.note_key_fields(&property.value, place);
+                        }
                     }
                     let value = self
                         .resolver
@@ -3021,7 +3083,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             },
             "map" | "filter" | "flatMap" | "some" | "every" | "findIndex" | "find" => {
                 match arguments.first().and_then(|first| FunctionLike::of(first)) {
-                    Some(function) => self.collection(receiver, name, function, hint, at),
+                    Some(function) => self.collection(call, receiver, name, function, hint, at),
                     None => {
                         self.unsupported("an element construct with no callback in place", at);
                         Place::Unknown
@@ -3317,6 +3379,7 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// An element construct: a collection, and the cone of its body.
     fn collection(
         &mut self,
+        call: &CallExpression<'a>,
         receiver: &Place,
         via: &str,
         function: FunctionLike<'_, 'a>,
@@ -3349,20 +3412,22 @@ impl<'a> Emitter<'_, '_, 'a> {
         if let Some(element) = parameters.first() {
             self.root_type(self.module, Root::Element(collection), element);
             // `Collection.keyFields`: a copy of the key fields that the
-            // element type of the receiver declares with `KeyedBy`, for
-            // a source that is a slot or an output. A construct over
+            // type of the receiver declares with `ArrayByKey`, for a
+            // source that is a slot or an output (PL §1.1; rulings Z45
+            // and Z49). Where the receiver is typed as a plain array,
+            // they are the key fields of the array the place holds (PL
+            // §8, question 143, assumed there). A construct over
             // another collection has none: its elements have the
-            // upstream key (PL §1.1; rulings Z38 and Z45).
-            let declared = self
-                .root_types
-                .get(&Root::Element(collection))
-                .and_then(|ty| {
-                    self.resolver
-                        .annotations_of(*ty)
-                        .into_iter()
-                        .find(|annotation| annotation.key == "keyFields")
-                })
-                .and_then(|annotation| annotation.value);
+            // upstream key.
+            let written = match unwrap(&call.callee) {
+                Expression::StaticMemberExpression(member) => self
+                    .resolver
+                    .declared(self.module, &member.object)
+                    .ok()
+                    .and_then(|ty| self.key_fields_of_type(ty)),
+                _ => None,
+            };
+            let declared = written.or_else(|| self.place_key_fields(receiver));
             let derived = self.collections[collection]["source"]
                 .get("collection")
                 .is_some();
@@ -4114,7 +4179,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                                     Some(function) => {
                                         self.bind_inline(function, BodyKind::InlineHandler, &name)
                                     }
-                                    None => self.eval(expression, &format!("@{name}")),
+                                    None => {
+                                        let place = self.eval(expression, &format!("@{name}"));
+                                        self.note_key_fields(expression, &place);
+                                        place
+                                    }
                                 },
                                 None => Place::Const,
                             }
@@ -7560,6 +7629,7 @@ pub fn emit_module<'a>(
             formal_names: Vec::new(),
             tags: Vec::new(),
             root_types: HashMap::new(),
+            value_keys: HashMap::new(),
             result_type: None,
             state_types: HashMap::new(),
             child_types: HashMap::new(),

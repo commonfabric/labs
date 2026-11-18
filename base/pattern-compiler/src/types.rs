@@ -361,6 +361,29 @@ impl<'a> Resolver<'_, 'a> {
     }
 
     /// The annotations on the root of `ty` (§8.1).
+    /// `to` with the key fields that `from` declares with `ArrayByKey`,
+    /// and `to` itself where `from` declares none: the type of a
+    /// construct whose result has the elements of its receiver, each
+    /// with the upstream key (PL §1.3).
+    pub(crate) fn with_key_fields_of(&self, from: TypeId, to: TypeId) -> TypeId {
+        let declared = self
+            .types
+            .borrow()
+            .annotations(from)
+            .iter()
+            .find(|annotation| annotation.key == "keyFields")
+            .cloned();
+        let Some(declared) = declared else {
+            return to;
+        };
+        let annotated = self.add(self.shape(to));
+        self.types
+            .borrow_mut()
+            .annotations
+            .insert(annotated, vec![declared]);
+        annotated
+    }
+
     pub fn annotations_of(&self, ty: TypeId) -> Vec<Annotation> {
         self.types.borrow().annotations(ty).to_vec()
     }
@@ -1245,16 +1268,17 @@ impl<'a> Resolver<'_, 'a> {
                     argument_text(arguments.len().saturating_sub(1)),
                 )
             }
-            "KeyedBy" => {
-                // `KeyedBy<T, "field">` or `KeyedBy<T, "a" | "b">`: `T`
-                // with a key annotation, whose value is the names of the
-                // key fields in the order of the names (§7.2; rulings Z38
-                // and Z45). For assignability it is `T`.
+            "ArrayByKey" => {
+                // `ArrayByKey<T, "field">` or `ArrayByKey<T, "a" | "b">`:
+                // an array of `T` with a key annotation on the array,
+                // whose value is the names of the key fields in the
+                // order of the names (§4.4.1, "A declared key"; rulings
+                // Z45 and Z49). For assignability it is `T[]`, and the
+                // type of an element carries no key.
                 let fields = self.key_fields(module, reference.span, first(), arguments.get(1));
-                let ty = self.annotate_once(
-                    module,
-                    reference.span,
-                    first(),
+                let array = self.add(Shape::Array(first()));
+                let ty = self.annotate(
+                    array,
                     "keyFields",
                     serde_json::to_string(&fields).unwrap_or_default(),
                 );
@@ -2393,13 +2417,13 @@ impl<'a> Resolver<'_, 'a> {
         self.annotate(ty, key, argument)
     }
 
-    /// The names of the key fields that the second argument of a
-    /// `KeyedBy` declares, in the order of the names. The argument is a
-    /// string literal type or a union of them, and each names a required
-    /// top-level property of `value` whose type is `string` or `number`:
-    /// anything else is reported as `keyed-by:declaration` (§4.4.1,
-    /// assumed there). Nothing is reported for a part that is not
-    /// evaluated.
+    /// The names of the key fields that the second argument of an
+    /// `ArrayByKey` declares, in the order of the names. The argument is
+    /// a string literal type or a union of them, and each names a
+    /// required top-level property of `value`, the type of an element,
+    /// whose type is `string` or `number`: anything else is reported as
+    /// `array-by-key:declaration` (§4.4.1, assumed there). Nothing is
+    /// reported for a part that is not evaluated.
     fn key_fields(
         &self,
         module: usize,
@@ -2407,9 +2431,9 @@ impl<'a> Resolver<'_, 'a> {
         value: TypeId,
         declared: Option<&TypeId>,
     ) -> Vec<String> {
-        let refuse = |found: String| self.report(module, "keyed-by:declaration", span, found);
+        let refuse = |found: String| self.report(module, "array-by-key:declaration", span, found);
         let Some(declared) = declared else {
-            refuse("A `KeyedBy` that names no key field".to_string());
+            refuse("An `ArrayByKey` that names no key field".to_string());
             return Vec::new();
         };
         let members = match self.shape(*declared) {
@@ -2423,9 +2447,9 @@ impl<'a> Resolver<'_, 'a> {
                     fields.push(text[1..text.len() - 1].to_string());
                 }
                 Shape::Unresolved(_) | Shape::Parameter(_) => {}
-                _ => {
-                    refuse("A key field of `KeyedBy` that is not a string literal type".to_string())
-                }
+                _ => refuse(
+                    "A key field of `ArrayByKey` that is not a string literal type".to_string(),
+                ),
             }
         }
         fields.sort();

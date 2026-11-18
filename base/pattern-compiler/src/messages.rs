@@ -337,12 +337,13 @@ pub fn rewrite(id: &str) -> &'static str {
             "Bind the handler on an element inside the surface the contract names, or name in \
              the policy the handler that the surface's control does bind."
         }
-        "keyed-by:declaration" => {
+        "array-by-key:declaration" => {
             "Name one required top-level property of type `string` or `number`, or a union \
-             of such names, as in `KeyedBy<Repo, \"owner\" | \"name\">`."
+             of such names, as in `ArrayByKey<Repo, \"owner\" | \"name\">`."
         }
-        "keyed-by:mismatch" => {
-            "Declare the same key fields on both types, or declare no key on the parameter."
+        "array-by-key:mismatch" => {
+            "Declare the same key fields on both types, or declare a plain array type on the \
+             receiving side."
         }
         _ => "",
     }

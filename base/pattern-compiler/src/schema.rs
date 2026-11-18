@@ -346,10 +346,10 @@ impl Resolver<'_, '_> {
                 if annotation.key == "default" {
                     schema.insert("default".to_string(), annotation_value(annotation));
                 } else if annotation.key == "keyFields" {
-                    // The key fields that `KeyedBy` declares: the keyword
-                    // `keyFields` of the schema of the items, the names in
-                    // the order of the names (PL §1.3, "A declared key
-                    // field").
+                    // The key fields that `ArrayByKey` declares: the
+                    // keyword `keyFields` of the schema of the array,
+                    // beside `items`, the names in the order of the names
+                    // (PL §1.3, "A declared key field"; ruling Z49).
                     schema.insert("keyFields".to_string(), annotation_value(annotation));
                 } else if LABEL_KEYS.contains(&annotation.key) {
                     ifc.insert(annotation.key.to_string(), annotation_value(annotation));
