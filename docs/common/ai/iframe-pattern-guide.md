@@ -1119,10 +1119,18 @@ In this repository, test the guest with a `guest.test.ts` beside it.
 guest into its `guest.html` in Deno and serves it in-memory cells and presence
 rooms through the real bridge, so the test drives the document and reads back
 what the guest wrote. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is
-a complete example. `openGuestPage()` loads `guest.html` as it is written, with
-no assets in it, so a guest that reads assets is tested in a browser instead:
-`patterns/integration/iframe-donut-menu.test.ts` deploys one and reads its
-frame.
+a complete example. A guest that reads assets is handed them as the option
+`assets`. `readAssets()` from the same file reads the pattern's `assets/`
+directory the way `dataFile.urls()` does, and `openGuestPage()` puts the record
+into `guest.html` the way the host does, so `cf-asset:` references and
+`fabric.asset()` work in the test as they do in the frame. The simulated
+document draws nothing, so a test of a guest that draws on a canvas replaces
+the canvas's drawing context with a stand-in, as
+`patterns/examples/iframe-donut-menu/guest.test.ts` does. The simulated
+document applies no Content Security Policy, so whether the frame loads each
+asset under the guest's policy is a browser test's question:
+`patterns/integration/iframe-donut-menu.test.ts` deploys the same guest and
+reads its frame.
 
 Launch a repository pattern against local servers from the repository root.
 Start the servers first:
