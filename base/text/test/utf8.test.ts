@@ -176,6 +176,37 @@ describe("utf8SortedKeysOf()", () => {
     expect(sorted1).toBe(sorted2);
   });
 
+  it("returns the same (`===`) value for two frozen objects whose keys arrive in the same order", () => {
+    const sorted1 = utf8SortedKeysOf(
+      Object.freeze({ path: [], id: "one", space: "here" }),
+    );
+    const sorted2 = utf8SortedKeysOf(
+      Object.freeze({ path: ["x"], id: "two", space: "there" }),
+    );
+    expect(sorted1).toEqual(["id", "path", "space"]);
+    expect(sorted2).toBe(sorted1);
+  });
+
+  it("returns different values for frozen objects that hold the same keys in different orders", () => {
+    // Both orders need sorting, and both sort to the same keys. Each object is
+    // still answered from the array made for its own order.
+    const sorted1 = utf8SortedKeysOf(Object.freeze({ c: 1, a: 2, b: 3 }));
+    const sorted2 = utf8SortedKeysOf(Object.freeze({ b: 1, c: 2, a: 3 }));
+    expect(sorted1).toEqual(["a", "b", "c"]);
+    expect(sorted2).toEqual(["a", "b", "c"]);
+    expect(sorted2).not.toBe(sorted1);
+  });
+
+  it("tells apart two key orders that read the same once their keys are run together", () => {
+    // Three keys, `z`, `b` and `a`, against two keys, the first of which
+    // holds the quotes and the comma a list of the three would be written
+    // with.
+    const three = utf8SortedKeysOf(Object.freeze({ z: 1, b: 2, a: 3 }));
+    const two = utf8SortedKeysOf(Object.freeze({ 'z","b': 1, a: 2 }));
+    expect(three).toEqual(["a", "b", "z"]);
+    expect(two).toEqual(["a", 'z","b']);
+  });
+
   it("returns a new value on each call, given a frozen object whose keys arrive already in order", () => {
     const obj = Object.freeze({ alive: true, be: null, feeling: [4] });
     const sorted1 = utf8SortedKeysOf(obj);
