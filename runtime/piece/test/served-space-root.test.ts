@@ -62,12 +62,23 @@ describe("pieces-controller", () => {
   let clientRequests: string[];
   let cleanups: Array<() => Promise<void>>;
 
-  /** Serves the patterns under `temporary`, recording each path into `log`. */
-  const serveRoute = (route: PatternsRoute, log?: string[]): URL => {
+  /** What every answer of the serving runtimes' route waits for first. */
+  let servingRouteOpen: Promise<void>;
+
+  /**
+   * Serves the patterns under `temporary`, recording each path into `log`, and
+   * answering each request once `open()` resolves.
+   */
+  const serveRoute = (
+    route: PatternsRoute,
+    log?: string[],
+    open: () => Promise<void> = () => Promise.resolve(),
+  ): URL => {
     const server = Deno.serve(
       { hostname: "127.0.0.1", port: 0, onListen() {} },
       async (request) => {
         log?.push(new URL(request.url).pathname);
+        await open();
         return await route.serve(request) ??
           new Response("Not found", { status: 404 });
       },
@@ -132,7 +143,8 @@ describe("pieces-controller", () => {
       await Deno.writeTextFile(path, contents);
     }
     const route = new PatternsRoute(temporary);
-    const servingApiUrl = serveRoute(route);
+    servingRouteOpen = Promise.resolve();
+    const servingApiUrl = serveRoute(route, undefined, () => servingRouteOpen);
     clientApiUrl = serveRoute(route, clientRequests);
     serving = await listenServingMemoryServer({
       apiUrl: servingApiUrl,
@@ -163,6 +175,27 @@ describe("pieces-controller", () => {
       expect(clientRequests).not.toContain(`/api/patterns/${DEFAULT_APP_FILE}`);
     });
 
+    it("resolves a root the serving runtime links after the client has synced the space", async () => {
+      // The serving runtime cannot fetch the root's source until the client
+      // has read the space with no root in it.
+      const routeOpened = Promise.withResolvers<void>();
+      servingRouteOpen = routeOpened.promise;
+      const client = runtimeFor({ apiUrl: clientApiUrl, web: true });
+      const space = await client.createSpace();
+      expect(await client.viewReplication.enable(space)).toBe(true);
+      const controller = await controllerFor(client, space);
+      const ensured = controller.ensureDefaultPattern();
+      await client.idle();
+      await client.storageManager.synced();
+      routeOpened.resolve();
+
+      const root = await ensured;
+
+      expect(getPatternSource(root.getCell())).toBe(
+        `system:${DEFAULT_APP_FILE}`,
+      );
+    });
+
     it("resolves a new Home's root from the serving runtime and fetches no root source", async () => {
       const client = runtimeFor({ apiUrl: clientApiUrl, web: true });
       expect(await client.viewReplication.enable(home)).toBe(true);
@@ -176,6 +209,21 @@ describe("pieces-controller", () => {
   });
 
   describe("createSpace() on a client that replicates views", () => {
+    it("records the new space in a Home the serving runtime creates for a new user", async () => {
+      const client = runtimeFor({ apiUrl: clientApiUrl, web: true });
+      const controller = await controllerFor(client, home);
+      const space = await controller.createSpace("Garden");
+
+      const homeRoot = (await controller.ensureDefaultPattern()).getCell();
+      const observer = runtimeFor({ apiUrl: clientApiUrl });
+      const spaces = observer.getCellFromLink(
+        homeRoot.getAsNormalizedFullLink(),
+      ).key("spaces");
+      await spaces.sync();
+      expect(spaces.get()).toEqual([{ did: space, name: "Garden" }]);
+      expect(clientRequests).not.toContain(`/api/patterns/${HOME_FILE}`);
+    });
+
     it("records the new space in Home without loading Home's pattern in the client", async () => {
       // Home exists before the client arrives, as it does for a returning
       // user.
