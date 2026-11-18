@@ -9,12 +9,17 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
-import { PieceController, PiecesController } from "@commonfabric/piece/ops";
+import {
+  PieceController,
+  PiecesController,
+  readPieceSourceState,
+} from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { validateStructuredResultValue } from "@commonfabric/runner/cfc";
+import { decodeDataFile } from "@commonfabric/text/data-file";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
   PATTERN_AUTHOR_RETURN_SCHEMA,
@@ -75,6 +80,29 @@ const INCOMPATIBLE_PATTERN_SOURCE = [
   "}));",
   "",
 ].join("\n");
+
+/** The bytes of a picture a pattern ships beside its source. */
+const GLAZE_BYTES = Uint8Array.from({ length: 300 }, (_, i) => (i * 7) % 256);
+
+/** `GLAZE_BYTES` as a source package stores them: a base64 `data:` URL. */
+const GLAZE_DATA_URL = decodeDataFile(GLAZE_BYTES, "glaze.png");
+
+/**
+ * A pattern that reads `./glaze.png`, the picture beside it, and multiplies
+ * its input by `factor`.
+ */
+const glazePatternSource = (factor: number) =>
+  [
+    "import { computed, dataFile, pattern } from 'commonfabric';",
+    "const GLAZE = dataFile.url('./glaze.png');",
+    "interface Input { n: number; }",
+    "interface Output { doubled: number; glaze: string; }",
+    "export default pattern<Input, Output>(({ n }) => ({",
+    `  doubled: computed(() => n * ${factor}),`,
+    "  glaze: GLAZE,",
+    "}));",
+    "",
+  ].join("\n");
 
 const DEFAULT_PATTERN_SOURCE = [
   "import { handler, pattern, type Cell, type Stream } from 'commonfabric';",
@@ -186,6 +214,35 @@ describe("piece-source", () => {
     const output = result.output as RunPatternToolSuccessOutput;
     expect(output.status).toBe("ok");
     return output;
+  }
+
+  /**
+   * Creates a piece running `glazePatternSource(2)` as `entry`, with the
+   * picture beside it and the data files in `extra`, and returns its cell
+   * and the handle token naming it.
+   */
+  async function createGlazePiece(
+    entry = "/main.tsx",
+    extra: { name: string; contents: string }[] = [],
+  ) {
+    const directory = entry.slice(0, entry.lastIndexOf("/"));
+    const data = [
+      { name: `${directory}/glaze.png`, contents: GLAZE_DATA_URL },
+      ...extra,
+    ];
+    const controller = await pieces.create({
+      main: entry,
+      files: [{ name: entry, contents: glazePatternSource(2) }, ...data],
+      dataFiles: data.map((file) => file.name),
+    }, { input: { n: 21 } });
+    const cell = controller.getCell();
+    return {
+      cell,
+      token: createLLMFriendlyLink(
+        cell.getAsNormalizedFullLink(),
+        pieces.getSpace(),
+      ),
+    };
   }
 
   describe("readPieceSourceTool", () => {
@@ -308,6 +365,44 @@ describe("piece-source", () => {
       expect(output.status).toBe("error");
       expect(output.message).toContain("not a position inside one");
     });
+
+    it("lists a binary media file by name, media type, and size in place of returning it, and returns a text data file", async () => {
+      const engine = createEngine();
+      const { token } = await createGlazePiece("/main.tsx", [
+        { name: "/note.txt", contents: "glaze before frying" },
+      ]);
+
+      const result = await engine.invokeBuiltinTool("read_piece_source", {
+        token,
+      });
+      const output = result.output as ReadPieceSourceToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.files).toEqual([
+        { name: "/main.tsx", contents: glazePatternSource(2) },
+        { name: "/note.txt", contents: "glaze before frying" },
+      ]);
+      expect(output.dataFiles).toEqual(["/note.txt"]);
+      expect(output.omittedFiles?.files).toEqual([
+        { name: "/glaze.png", mediaType: "image/png", bytes: 300 },
+      ]);
+      expect(output.omittedFiles?.reason).toContain("revise_piece");
+      // Nowhere in the output, not only not under `files`.
+      expect(JSON.stringify(output)).not.toContain(
+        GLAZE_DATA_URL.slice(GLAZE_DATA_URL.indexOf(",") + 1),
+      );
+    });
+
+    it("lists no omitted files for a source holding no binary media", async () => {
+      const engine = createEngine();
+      const created = await createPiece(engine);
+
+      const result = await engine.invokeBuiltinTool("read_piece_source", {
+        token: created.resultRef,
+      });
+      const output = result.output as ReadPieceSourceToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output).not.toHaveProperty("omittedFiles");
+    });
   });
 
   describe("revisePieceTool", () => {
@@ -390,6 +485,47 @@ describe("piece-source", () => {
       expect(after.files.map((file) => file.contents)).toContain(
         DOUBLING_PATTERN_SOURCE,
       );
+    });
+
+    it("carries the piece's binary media files over unchanged into a revision that sends only its source", async () => {
+      const engine = createEngine();
+      const { cell, token } = await createGlazePiece();
+
+      const result = await engine.invokeBuiltinTool("revise_piece", {
+        token,
+        sourceText: glazePatternSource(3),
+      });
+      const output = result.output as RevisePieceToolSuccessOutput;
+      expect(output.status).toBe("ok");
+
+      // The stored program, which is what `cf piece getsrc` writes back as
+      // bytes: the picture is the one the piece held before.
+      const after = await readPieceSourceState(runtime, cell);
+      expect(after.currentRevisionId).toBe(output.revisionId);
+      expect(after.files).toEqual([
+        { name: "/main.tsx", contents: glazePatternSource(3) },
+        { name: "/glaze.png", contents: GLAZE_DATA_URL },
+      ]);
+      expect(after.dataFiles).toEqual(["/glaze.png"]);
+    });
+
+    it("writes the revision in the directory of the entry it replaces, where the paths the source reads resolve as they did", async () => {
+      const engine = createEngine();
+      const { cell, token } = await createGlazePiece("/donuts/main.tsx");
+
+      const result = await engine.invokeBuiltinTool("revise_piece", {
+        token,
+        sourceText: glazePatternSource(3),
+      });
+      const output = result.output as RevisePieceToolSuccessOutput;
+      expect(output.status).toBe("ok");
+
+      const after = await readPieceSourceState(runtime, cell);
+      expect(after.entry).toBe("/donuts/main.tsx");
+      expect(after.files).toEqual([
+        { name: "/donuts/main.tsx", contents: glazePatternSource(3) },
+        { name: "/donuts/glaze.png", contents: GLAZE_DATA_URL },
+      ]);
     });
   });
 
@@ -597,7 +733,7 @@ describe("piece-source", () => {
         expectedRevisionId: before.sourceRevisionId,
       })).output as PieceSourceToolErrorOutput;
       expect(revised.message).toBe(
-        "revise_piece could not read the piece's current revision: the source store is unreachable",
+        "revise_piece could not read the piece's current source: the source store is unreachable",
       );
     });
 

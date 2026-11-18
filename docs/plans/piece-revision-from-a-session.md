@@ -87,6 +87,16 @@ Takes a handle token naming a piece root and returns that piece's current
 authored source files. The read goes through `readPieceSourceState`, so it
 is addressed by handle rather than by path and is not a file read.
 
+A binary media file (an image, a font, a sound) is stored in the source as
+a base64 `data:` URL
+([`iframe-static-assets.md`](../specs/iframe-static-assets.md), part 2), so
+the read leaves it out of `files` and lists it under `omittedFiles` by name,
+media type, and size in bytes, with the reason. A few pictures would
+otherwise put several hundred kilobytes of base64 into the child's context,
+none of which it can usefully edit. A file whose stored contents are not a
+`data:` URL of its media type refuses the read, as `cf piece getsrc`
+refuses it.
+
 The output carries the piece's live CFC labels, the same view
 `describe_handle` reports over the same referent, so the child's context
 ceiling rises to include them and every later boundary measures the child
@@ -116,8 +126,17 @@ Takes a piece handle and a revised `sourceText`, runs
 `checkPattern` and then `setPattern`, and returns the revision id and a
 handle to the refreshed result. It never returns source.
 
-`expectedRevisionId` is optional. Supplied, the piece's current revision is
-read before anything is compiled and a mismatch refuses the write: a piece
+The program it writes is `sourceText` plus every binary media file of the
+piece's current source, carried over unchanged at its own path: those are
+the files the read leaves out, so the child never holds them to send back,
+and a revision cannot drop or corrupt one. `sourceText` is written as
+`main.tsx` in the directory of the entry it replaces, because a data file is
+read by a path relative to the module reading it. Text files other than the
+entry, data or code, are not carried over.
+
+The piece's current source is read before anything is compiled, for those
+files and for the revision it is at. `expectedRevisionId` is optional.
+Supplied, a mismatch with that revision refuses the write: a piece
 that moved since the source being edited was read is a different piece to
 revise. Independently of it, the write carries the piece's current pattern
 as `expectedPattern`, which the apply path re-checks inside the write
