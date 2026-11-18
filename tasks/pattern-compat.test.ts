@@ -110,6 +110,7 @@ describe("pattern-compat", () => {
         expect(shown.code).toBe(1);
         expect(shown.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
         expect(shown.out).toBeUndefined();
         expect(shown.err).toContain(
@@ -227,6 +228,8 @@ describe("pattern-compat", () => {
         expect(shown.code).toBe(1);
         expect(shown.said).toEqual([
           "Checking update compatibility for 2 patterns.",
+          "[1/2] demo/a.tsx",
+          "[2/2] demo/gone.tsx",
         ]);
         expect(shown.err).toContain(
           "\ndemo/gone.tsx\n  has 1 baseline(s) but yields no contract now: " +
@@ -372,6 +375,39 @@ describe("pattern-compat", () => {
       });
     });
 
+    it("says a counted line naming each pattern, in key order, as its judging starts", async () => {
+      await record("demo/gone.tsx", WITH_TITLE);
+      const events: string[] = [];
+      const modules: Record<string, unknown> = {
+        "patterns/demo/b.tsx": patternModule(WITH_TITLE),
+        "patterns/demo/a.tsx": {},
+      };
+      await judge(modules, {
+        evaluate: (file) => {
+          events.push(`evaluate ${file}`);
+          return Promise.resolve(modules[file]);
+        },
+        say: (line) => events.push(line),
+        records: {
+          append: (record) => {
+            if (record.line === "record") events.push(record.test.n);
+          },
+        },
+      });
+
+      expect(events).toEqual([
+        "Checking update compatibility for 3 patterns.",
+        "[1/3] demo/a.tsx",
+        "evaluate patterns/demo/a.tsx",
+        "pattern-compat demo/a.tsx",
+        "[2/3] demo/b.tsx",
+        "evaluate patterns/demo/b.tsx",
+        "pattern-compat demo/b.tsx",
+        "[3/3] demo/gone.tsx",
+        "pattern-compat demo/gone.tsx",
+      ]);
+    });
+
     describe("options", () => {
       it("judges only the patterns `--only` selects", async () => {
         const shown = await judge({
@@ -381,6 +417,7 @@ describe("pattern-compat", () => {
 
         expect(shown.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
         expect(shown.out).toContain("Skipped 1 file(s)");
       });
@@ -399,6 +436,7 @@ describe("pattern-compat", () => {
         const untimed = await judge(modules);
         expect(untimed.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
       });
 
@@ -449,7 +487,10 @@ describe("pattern-compat", () => {
 
       expect(shown?.err).toBeUndefined();
       expect(shown?.code).toBe(0);
-      expect(said).toEqual(["Checking update compatibility for 1 patterns."]);
+      expect(said).toEqual([
+        "Checking update compatibility for 1 patterns.",
+        "[1/1] examples/counter/counter.tsx",
+      ]);
       expect(shown?.out).toContain(
         "\n1 pattern(s) can be updated from every recorded contract.",
       );

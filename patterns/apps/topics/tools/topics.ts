@@ -72,8 +72,8 @@ import {
 /** The board this client addresses unless the environment names another. */
 const DEFAULT_BOARD = {
   apiUrl: "https://estuary.saga-castor.ts.net",
-  space: "topics-dev-476ea34f",
-  board: "of:fid1:jtdD-DSmuGrLGSt_6sJ3DS_7jmerrkKTEnW3fZV9e34",
+  space: "did:key:z6MknaHtzD7bZjEfbF4nAbzQBQcERadRVt91eYRtyjaTKbYK",
+  board: "of:fid1:rMKK3pYbF5IWa7KQL5oe-nd7WyFceQhXjOl2lyWwPVo",
 };
 
 /** The checkout's `cf` launcher, which writes run. */
