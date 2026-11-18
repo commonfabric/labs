@@ -1461,6 +1461,13 @@ export const coveringSelector = (
 };
 
 /**
+ * A span of a traversal (`CompoundCycleTracker.openSpan()`): how many pairs
+ * the tracker had admitted when it began, and the lowest cut of the span
+ * enclosing it.
+ */
+export type CutSpan = { readonly admitted: number; readonly enclosing: number };
+
+/**
  * Cycle tracker for more complex objects with multiple parts.
  *
  * Identity check on `partialKey`, structural check on `extraKey` via
@@ -1478,13 +1485,6 @@ export const coveringSelector = (
  * This will not work correctly if the key is modified after being
  * added.
  */
-/**
- * A span of a traversal (`CompoundCycleTracker.openSpan()`): how many pairs
- * the tracker had admitted when it began, and the lowest cut of the span
- * enclosing it.
- */
-export type CutSpan = { readonly admitted: number; readonly enclosing: number };
-
 export class CompoundCycleTracker<
   EqualKey,
   ExtraKey extends JSONSchema | undefined,
