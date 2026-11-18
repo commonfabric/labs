@@ -22,7 +22,11 @@ import {
   setBound,
   styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { SharedNoteCore, type StoredComment } from "./main.tsx";
+import {
+  type ActivityRow,
+  SharedNoteCore,
+  type StoredComment,
+} from "./main.tsx";
 import {
   profileGesture,
   type TestProfile,
@@ -75,11 +79,15 @@ export default pattern(() => {
   });
   const content = Writable.of<string>(BODY);
   const comments = Writable.of<StoredComment[]>([]);
+  const title = Writable.of<string>("Plan");
+  const activity = Writable.of<ActivityRow[]>([]);
   const note = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   // The same note in another of Ada's tabs, in a third with nothing
   // selected, and as a viewer with no profile sees it.
@@ -88,14 +96,24 @@ export default pattern(() => {
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   const freshTab = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
-  const guest = SharedNoteCore({ content, comments, participantName: "" });
+  const guest = SharedNoteCore({
+    content,
+    comments,
+    participantName: "",
+    title,
+    activity,
+  });
 
   // === Actions ===
 

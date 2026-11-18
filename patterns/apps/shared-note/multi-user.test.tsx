@@ -12,7 +12,11 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import { SharedNoteCore, type StoredComment } from "./main.tsx";
+import {
+  type ActivityRow,
+  SharedNoteCore,
+  type StoredComment,
+} from "./main.tsx";
 import {
   profileGesture,
   type TestProfile,
@@ -27,11 +31,19 @@ interface Setup {
 
   /** The note's comments. */
   comments: Writable<StoredComment[]>;
+
+  /** The note's title. */
+  title: Writable<string>;
+
+  /** The note's activity rows. */
+  activity: Writable<ActivityRow[]>;
 }
 
 export const setup = pattern<Record<string, never>, Setup>(() => ({
   content: Writable.of<string>(BODY),
   comments: Writable.of<StoredComment[]>([]),
+  title: Writable.of<string>("Plan"),
+  activity: Writable.of<ActivityRow[]>([]),
 }));
 
 /** The posted comments among `comments`. */
@@ -45,6 +57,8 @@ export const ada = pattern<{ setup: Setup }>(({ setup }) => {
   const note = SharedNoteCore({
     content: setup.content,
     comments: setup.comments,
+    title: setup.title,
+    activity: setup.activity,
     myProfile: profile,
     participantName: "Ada",
   });
@@ -75,6 +89,8 @@ export const grace = pattern<{ setup: Setup }>(({ setup }) => {
   const note = SharedNoteCore({
     content: setup.content,
     comments: setup.comments,
+    title: setup.title,
+    activity: setup.activity,
     myProfile: profile,
     participantName: "Grace",
   });
