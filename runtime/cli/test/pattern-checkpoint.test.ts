@@ -49,14 +49,16 @@ describe("cf pattern checkpoint", () => {
   const run = async (
     outcome: VersionOutcome,
     more: { json?: boolean } = {},
+    running: RunningPattern = RUNNING,
+    entry = "./bins.tsx",
   ) => {
     const sent: DeployedSource[] = [];
     const printed: unknown[] = [];
     let readFor: unknown;
-    await checkpoint({ ...OPTIONS, ...more }, "./bins.tsx", {
+    await checkpoint({ ...OPTIONS, ...more }, entry, {
       readRunning: (config) => {
         readFor = config;
-        return Promise.resolve(RUNNING);
+        return Promise.resolve(running);
       },
       recordVersion: (deployed) => {
         sent.push(deployed);
@@ -114,6 +116,31 @@ describe("cf pattern checkpoint", () => {
       expect(printed).toEqual([line]);
       expect(Deno.exitCode).toBe(1);
     }
+  });
+
+  it("hands on the origin a piece follows, so its pattern is not kept as the person's own", async () => {
+    const { sent } = await run(
+      { status: "skipped", reason: "the piece follows system:x.tsx" },
+      {},
+      { ...RUNNING, origin: "system:x.tsx" },
+    );
+    expect(sent.map((d) => d.origin)).toEqual(["system:x.tsx"]);
+    expect(Deno.exitCode).toBe(1);
+  });
+
+  it("refuses an entry whose name is not the file the piece runs, keeping nothing", async () => {
+    let sent = 0;
+    await expect(
+      checkpoint(OPTIONS, "./todo.tsx", {
+        readRunning: () => Promise.resolve(RUNNING),
+        recordVersion: () => {
+          sent += 1;
+          return Promise.resolve({ status: "skipped", reason: "x" });
+        },
+        render: () => {},
+      }),
+    ).rejects.toThrow(/The piece runs bins.tsx, not .\/todo.tsx/);
+    expect(sent).toBe(0);
   });
 
   it("reports the outcome as JSON", async () => {

@@ -2838,10 +2838,14 @@ export interface RunningPattern {
   patternId: string;
 
   program: RuntimeProgram;
+
+  /** The origin the piece follows, when it follows one (`setsrc --origin`). */
+  origin?: string;
 }
 
 /**
- * Reads what the piece `config` names runs now, without changing it.
+ * Reads what the piece `config` names runs now, without changing it. The
+ * pattern pointer is read once, so the id and the source always match.
  *
  * @throws Error when the piece points at no pattern, or its pattern's source
  * is not in the space.
@@ -2864,7 +2868,12 @@ export async function readRunningPattern(
       resolvedConfig.pieceScope,
     );
     const ref = await piece.getPatternRef();
-    const program = await piece.getPatternSourceProgram();
+    const program = ref === undefined
+      ? undefined
+      : await pieces.runtime.patternManager.getPatternSourceProgramByIdentity(
+        ref.identity,
+        pieces.getSpace(),
+      );
     if (ref === undefined || program === undefined) {
       throw new Error(
         `Piece "${resolvedConfig.piece}" does not contain a pattern source.`,
@@ -2874,7 +2883,8 @@ export async function readRunningPattern(
       space: pieces.getSpace(),
       id: resolvedConfig.piece,
       patternId: ref.identity,
-      program,
+      program: { ...program, mainExport: ref.symbol },
+      ...(ref.source.origin === undefined ? {} : { origin: ref.source.origin }),
     };
   } finally {
     await pieces.dispose();

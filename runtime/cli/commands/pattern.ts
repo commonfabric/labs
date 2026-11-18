@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command, ValidationError } from "@cliffy/command";
 import { basename, dirname } from "@std/path";
 import { LLMClient } from "@commonfabric/llm";
 import type { MemorySpace, Runtime } from "@commonfabric/runner";
@@ -501,12 +501,28 @@ export async function checkpoint(
 ): Promise<void> {
   const config = parsePieceOptions(options);
   const running: RunningPattern = await readRunning(config);
+  // Only the entry's name ties it to the piece: the folder marker that will
+  // hold both makes the pairing sure, so this check stays this light.
+  if (basename(running.program.main) !== basename(entry)) {
+    throw new ValidationError(
+      `The piece runs ${
+        basename(running.program.main)
+      }, not ${entry}; name the entry file the piece was deployed from.`,
+      { exitCode: 1 },
+    );
+  }
   const outcome = await (recordVersion ??
     ((deployed) => recordVersionInIndex(config.identity, deployed)))({
       entry: absPath(entry),
       program: running.program,
       patternId: () => Promise.resolve(running.patternId),
       piece: { space: running.space, id: running.id },
+      // A piece following a system or repository pattern is not the
+      // person's work, and keeps no version, as a deploy of it does not.
+      ...(running.origin === undefined ? {} : { origin: running.origin }),
+      // Until the index shares a checkpoint only once it has settled (in
+      // use a full day, unchanged), viewing the piece would share it the
+      // first time it is opened; private until an explicit share.
       keepPrivate: true,
     });
   if (options.json) {
@@ -764,10 +780,10 @@ export const pattern = new Command()
     targetOptions(
       new Command()
         .description(
-          "Keep what a piece runs now as a private version of a pattern, " +
-            "without deploying it: the sharing setting never shares it on " +
-            "its own; cf pattern share does. Pairs with deploys made with " +
-            "--no-index-version, keeping one version when a change is done.",
+          "Keep what a piece runs now as a private checkpoint in a " +
+            "pattern's history, the version cf pattern rollback goes back " +
+            "to. It deploys nothing, and stays private until " +
+            "cf pattern share.",
         )
         .arguments("<entry:string>")
         .option(

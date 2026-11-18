@@ -3474,7 +3474,11 @@ private version of the entry's lineage, without deploying: the pattern the piece
 points at, with its source, so it is exactly what was deployed. The sharing
 setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
 pairs with deploys that keep no version, keeping one when a change is done, and
-exits 1 with the reason when no version was kept.
+exits 1 with the reason when no version was kept. A checkpoint of a source the
+newest version already has keeps no new one, says so, and exits 0. It refuses an
+entry file whose name is not the one the piece runs; the description and
+hashtags come from the entry file as it is now. A piece following an origin
+keeps no version, as a deploy of it does not.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
