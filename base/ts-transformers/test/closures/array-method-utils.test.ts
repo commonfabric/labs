@@ -7,6 +7,33 @@ import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { parseModule } from "../transformed-ast.ts";
 import { validateSource } from "../utils.ts";
 
+/**
+ * The names each `mapWithPattern(...)` call in `output` hands its callback,
+ * the properties of its captures object.
+ */
+function capturedNames(output: string): string[] {
+  const names: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === "mapWithPattern"
+    ) {
+      const captures = node.arguments[1];
+      if (captures && ts.isObjectLiteralExpression(captures)) {
+        for (const property of captures.properties) {
+          if (property.name && ts.isIdentifier(property.name)) {
+            names.push(property.name.text);
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(parseModule(output));
+  return names;
+}
+
 /** The names the variable declarations in `output` declare. */
 function declaredNames(output: string): string[] {
   const names: string[] = [];
@@ -96,6 +123,32 @@ export default pattern<{ rows: Record<string, { x: number }>[] }>(({ rows }) => 
       ).toEqual([
         expect.stringContaining("Defaults on dynamic destructuring keys"),
       ]);
+    });
+
+    it("captures a pattern binding a computed key in the element parameter names", async () => {
+      // `k` is the pattern's, so the hoisted callback is handed it, whether or
+      // not a key beside it is lifted.
+
+      for (
+        const callback of [
+          "rows.map(({ [k]: { x } }) => x)",
+          "rows.map(({ [k]: { x }, [j]: y }) => y.x)",
+        ]
+      ) {
+        const { diagnostics, output } = await validateSource(
+          `/// <cts-enable />
+import { pattern } from "commonfabric";
+const j = "a";
+export default pattern<{ rows: Record<"a" | "b", { x: number }>[]; k: "a" | "b" }>(
+  ({ rows, k }) => ({ out: ${callback} }),
+);`,
+          { types: COMMONFABRIC_TYPES },
+        );
+
+        expect(diagnostics.filter(({ severity }) => severity === "error"))
+          .toEqual([]);
+        expect(capturedNames(output)).toContain("k");
+      }
     });
 
     it("reports nothing for a computed key with no default", async () => {

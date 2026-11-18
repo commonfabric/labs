@@ -1692,6 +1692,10 @@ rather than capture-rewritten here.
 Capture analysis:
 
 - captures identifiers/property chains declared outside callback scope
+- captures what a parameter's defaults and the computed keys of its
+  destructuring pattern read, at any depth, as `k` in
+  `rows.map(({ [k]: { x } }) => x)`: they are evaluated in the enclosing
+  scope's terms (`test/closures/array-method-utils.test.ts`)
 - captures a method call's receiver rather than its method: `c.get()` captures
   `c`, and `state.counter.set(x)` captures `state.counter`. A transparent
   wrapper around the callee keeps the reference, so `(c.get)()` and
