@@ -1630,7 +1630,23 @@ declared key. With no declared key such a reference reads as nothing
 once the computation returns the element with another value. The owner
 gave that ruling with the reservation that a copy is acceptable where
 the reference proves complex to build for little gain
-(`plan-and-label-templates.md` §8, question 148).
+(`plan-and-label-templates.md` §8, question 148). By ruling the same
+holds where such an output is inside an element body, whichever of the
+three cases that body is over: a link to one of its elements that is
+stored elsewhere reads the current value. An array at a path below a
+value that a function body returns, and an array that the reactive tier
+writes, give their elements no place for now, and a body over one is
+given the value and stores a copy. That is a known limit, and no ruling
+says that such an array never gives its elements a place (its question
+151). By ruling a plain array generated from scratch that is given whole
+to an instance of its own, as `Rows.asInstance()({ repos })`, is given
+as a link to the stored output with the schema of the array, and the
+argument of the instance does not hold the values (its §3.15, "Labels
+going in", and its §8, question 149). An array of plain values in place
+and an array of references that are given whole are given as links
+already. What the argument holds for the result of another per-element
+construct that is given whole to an instance of its own is *assumed*:
+the assembled values.
 
 **Resolving a reference by key.** A reference by key that is stored
 outside the element body, as in a cell a handler wrote, is resolved by
@@ -2461,17 +2477,25 @@ the declaration of the key from the array type and the keyword from the
 schema of the array. Its key names the fields and holds one salted hash
 of their values, it is written with `jsonFromFabricValue`, and its
 store resolves a reference by key from the key alone, as ruled. The
-record forms of its key, the way it combines the secret and the value,
-and what it hashes for a whole value differ from the documents
-(`plan-and-label-templates.md` §1.3, "A declared key field", and its
-§8, questions 144 and 152). In the fixtures the array is what a `lift`
-returns, which the executor stores in a document of the output, and a
-handler over it stores a reference by key, with that document as the
-collection. A pattern whose input is typed `Repo[]` and that is given
-the array keys its rows by `id` where it is compiled in. Where it is
-called through `asInstance()` and given what a `lift` returns, its
-argument holds the values and its rows are keyed by their whole values,
-which is *assumed* to be the design (its question 149). The runtime of
+record forms of its key and what it hashes for a whole value differ from
+the documents (`plan-and-label-templates.md` §1.3, "A declared key
+field", and its §8, question 144). It forms the salted hash from an
+array of the secret and the value, where by ruling the hash is of the
+record with `salt` and `value` (its question 152). In the fixtures the
+array is what a `lift` returns, which the executor stores in a document
+of the output, and a handler over it stores a reference by key, with
+that document as the collection. A pattern whose input is typed `Repo[]`
+and that is given the array keys its rows by `id` where it is compiled
+in, which is *assumed* to be the design (its question 149). By ruling a
+pattern that is called through `asInstance()` and given whole what a
+`lift` or a `computed` returns is given a link to the stored output with
+the schema of the array, so its rows are keyed by `id` as well, and its
+argument does not hold the values. The prototype's executor writes the
+values into the argument and keys the rows by their whole values, and
+does not follow that ruling. By ruling the type of the result of the
+`map` in the example keeps the key `id` of its receiver, as the type of
+the result of the `filter` does. The prototype's compiler gives the type
+of a `map` result no key (its question 150). The runtime of
 today has no such declaration, so nothing of this is compared with
 it.
 

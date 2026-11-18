@@ -1249,8 +1249,21 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   generated from scratch, which a `lift` or a `computed` returns
   whole, has a reference by key as an element of a stored array of
   plain values has, where the owner accepts a copy if the reference
-  proves complex to build for little gain. Fourteen things about a
-  declared key are assumed. Nine are about the declaration and the
+  proves complex to build for little gain. Four more things are ruled,
+  for a plain array generated from scratch and for the result of another
+  per-element construct over an array with a declared key. Such an array
+  that is given whole to an instance of its own is given as a link to
+  the stored output with the schema of the array, so the key fields are
+  carried forward and the argument does not hold the values. The type of
+  a `map` result keeps the key of its receiver, as the type of a
+  `filter` result does. An array that a `lift` or a `computed` of an
+  element body returns whole gives its elements the reference by key as
+  well, and a link to one of them reads the current value. And the
+  salted hash is of the record of the salt and the value. One known
+  limit is recorded: an array below a value that a function body
+  returns, or one that the reactive tier writes, gives its elements no
+  reference by key for now. Thirteen things about a declared key are
+  assumed. Eight are about the declaration and the
   form of the key: each field is a required top-level property of
   type `string` or `number`, with a key field that holds a reference
   deferred; the schema keyword is named `keyFields`; an array whose
@@ -1260,17 +1273,12 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   forms keys from the whole value where it meets no schema with the
   keyword; an array whose type declares no key is accepted where
   a key is declared; a reader whose type declares no key and that is
-  an instance of its own, given whole what a `lift` or a `computed`
-  returns, is given the values and forms keys from the whole value,
-  where a reader that is compiled in is given the key fields by the
-  compiler; the type of a `filter` result declares the key of its
-  receiver, and the type of a `map` or a `flatMap` result declares
-  none; and an array below a value that a function body returns, or
-  one that the reactive tier writes, gives its elements no reference
-  by key
-  ([plan format and label templates](plan-and-label-templates.md), §8,
-  questions 138, 139, 141, 144, 145, 147 and 149 to 151, with
-  question 152 on the record of question 144; the names of the two
+  compiled in is given the key fields by the compiler, and the result of
+  another per-element construct that is given whole to an instance of
+  its own is given as the assembled values; and the type of a `flatMap`
+  result declares no key ([plan format and label
+  templates](plan-and-label-templates.md), §8, questions 138, 139, 141,
+  144, 145, 147, 149 and 150; the names of the two
   diagnostics are question 44 of
   [language subset](language-subset.md), §13). The other five
   follow. Over an array of
