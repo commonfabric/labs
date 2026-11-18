@@ -502,31 +502,41 @@ tests of it are of the executor alone. `Child` of the crate's plan has no
 `argumentSchema` and no `resultSchema`, and the documents of an instance that
 was re-keyed keep the name of the key it was made under.
 
-The type marker `KeyedBy<T, "field">` declares the key of a plain value (rulings
-Z37 and Z38), and `KeyedBy<T, "a" | "b">` declares several key fields, across
-which the element has one key (ruling Z45). The front end reads the marker as
-`T` with a key annotation. The schema of the items of the array has the keyword
-`keyFields`, the names of the fields in the order of their code points, and the
-record of a collection whose source is a slot or an output holds a copy
-(`Collection.keyFields`). The crate reports `keyed-by:declaration` where the
-second argument is not a string literal type or a union of them, or where a
-field is not a required top-level property of type `string` or `number`, and
-`keyed-by:mismatch` where a value whose type declares one key is given where the
-type declares another key. A type that declares no key, on either side, is no
-mismatch. Neither identifier is in the catalog of `language-subset.md` in this
-tree, so both are in `PROVISIONAL` of `src/catalog.rs`.
+The array type `ArrayByKey<T, "field">` declares the key of the plain values of
+an array (rulings Z37 and Z49), and `ArrayByKey<T, "a" | "b">` declares several
+key fields, across which an element has one key (ruling Z45). The front end
+reads it as an array of `T` with a key annotation on the array, and the type of
+an element carries no key. `KeyedBy` is no type of the language. The schema of
+the array has the keyword `keyFields` beside `items`, the names of the fields in
+the order of their code points, and the record of a collection whose source is a
+slot or an output holds a copy (`Collection.keyFields`). Where the receiver of a
+construct is typed as a plain array, as the parameter of a pattern compiled in
+can be, the record has the key fields of the array that the place holds. The
+type of a `filter` result declares the key fields of its receiver. The crate
+reports `array-by-key:declaration` where the second argument is not a string
+literal type or a union of them, or where a field is not a required top-level
+property of type `string` or `number`, and `array-by-key:mismatch` where an
+array whose type declares one key is given where the type declares another key.
+A type that declares no key, on either side, is no mismatch. Neither identifier
+is in the catalog of `language-subset.md` in this tree, so both are in
+`PROVISIONAL` of `src/catalog.rs`.
 
-The key of a plain value with declared key fields names the fields (ruling Z44).
-Its element part is `fields:`, then each field in the order of the names as the
-name, `=` and the value, joined with `,`, and the occurrence count follows as in
-any key: `fields:name=labs,owner=cf#0`. A `\` stands before each `\`, `,` and
-`=` of a name and of a string value. A number is written as `#` and its
-canonical form, as `id=#7`, and a string value that starts with `#` has a `\`
-before it, so the number 7 and the strings `7` and `#7` are three keys. A plain
-value with no declared key, and one that does not hold a string or a number at
-every declared field, is keyed whole, as `value:` and its canonical form, which
-names no field. So the key of a field `id` that holds 7 is not the key of a
-whole value 7.
+A key is the record of its parts, written by the JSON codec of fabric values
+(`jsonFromFabricValue()` in `base/data-model/src/codecs.ts`), and the executor
+joins no parts of a key with a separator of its own (ruling Z51). The key of a
+plain value holds `hash`, the hash of the array of the secret of the space and
+the value by the value hasher (`hashOf()` in
+`base/data-model/src/value-hash/impl.ts`), and `count`, the occurrence count.
+With declared key fields it holds `fields`, the names in the order of their
+names, and the hash is that of the array of the values of those fields in that
+order (rulings Z47 and Z48). It holds no value of a field. The key of a position
+that holds a link holds `cell`, the document and the path that the link names,
+and the key of a member of a `flatMap` segment holds the key of the upstream
+element and that of the member. A plain value with no declared key, and one that
+does not hold a string or a number at every declared field, is keyed whole. So
+the key of a field `id` that holds 7 is not the key of a whole value 7, and the
+number 7 and the string `7` have two keys. The secret is an option of `Store`
+and of `Instance`; without it the store mints one.
 
 The store resolves a reference by key from the key alone (`Store.locate`,
 `fieldsOfKey` in `exec/store.ts`): it forms the keys of the array with the
@@ -536,20 +546,34 @@ the same for a reference to a member below the element, as the one
 `owner.set(repo.owner)` stores, and for every reader, whatever key the reader's
 type declares. Forming a key uses a declaration: an element table is keyed with
 `Collection.keyFields`, and an array that is read whole gives each member a
-reference by key formed with the key fields that the schema of the read
-declares. A change of a member that is no key field changes no key: the cone
-instances that read the changed member are evaluated, and the state cells and
-the `asInstance()` instance of the key stay, for a new array from a computation,
-a `set` of the whole array in another order, and a write through a reference by
-key, which then re-keys nothing. A write to a key field through a reference by
-key re-keys the element. A position that holds a link is keyed by its cell, with
-or without declared fields, and a construct over the result of another construct
-has the upstream key. `compare/fixtures/keyed-by.tsx` has one key field and
-`compare/fixtures/keyed-by-fields.tsx` two, each over a plain array generated
-from scratch with a `filter` and a `map` after it and over an array of plain
-values in place. An element of an array that a `lift` returns has no place in
-the executor, so a handler of a body over it is given the value and stores no
-reference by key. Today's runtime has no `KeyedBy`, so the tests of both
+reference by key formed with the key fields that the schema of the read declares
+beside `items`. A reader whose schema declares none forms keys with the key
+fields of the array schema that a link on the way to the array holds, and with
+the whole value where no link holds one (ruling Z52). A change of a member that
+is no key field changes no key: the cone instances that read the changed member
+are evaluated, and the state cells and the `asInstance()` instance of the key
+stay, for a new array from a computation, a `set` of the whole array in another
+order, and a write through a reference by key, which then re-keys nothing. A
+write to a key field through a reference by key re-keys the element. A position
+that holds a link is keyed by its cell, with or without declared fields, and a
+construct over the result of another construct has the upstream key.
+
+The array that the body of a `lift` or a `computed` returns whole for an output
+is stored in a document of the output, and an element of it has a reference by
+key whose collection is that document, with or without a declared key (ruling
+Z53). A read that reaches the document of an output outside every element body
+brings the output up to date first, and a write to the document is refused.
+
+`compare/fixtures/array-by-key.tsx` has one key field and
+`compare/fixtures/array-by-key-fields.tsx` two, each over a plain array
+generated from scratch with a `filter` and a `map` after it and over an array of
+plain values in place. `compare/fixtures/array-by-key-form.tsx` has a key field
+whose name holds a `:` and whose value is a number in one element and a string
+in another. `compare/fixtures/array-by-key-reader.tsx` gives an array with a
+declared key to a pattern whose parameter is typed as a plain array, compiled in
+and called through `asInstance()`. `compare/fixtures/generated-reference.tsx`
+stores a reference to an element of a plain array generated from scratch that
+declares no key. Today's runtime has no `ArrayByKey`, so the tests of these
 fixtures are of the executor alone.
 
 `compare/values.ts` compares the values the executor computes with those of
@@ -586,7 +610,10 @@ instances and bindings a function body makes. Notes 387 on have rulings Z24 to
 Z38: the layout of the children of a view node, the re-key of a plain value in
 place, the copy a function body holds, `asInstance()` and `KeyedBy`. Notes 406
 on have rulings Z39 to Z43: the plan without `Binding.result`, the key that does
-not name its field, and what a re-key moves.
+not name its field, and what a re-key moves. Notes 419 on have rulings Z44 and
+Z45, and notes 432 on rulings Z47 to Z53: `ArrayByKey`, the salted hash in a
+key, the written form of a key, where a reader with no declared key gets the key
+fields, and the reference to an element of a plain array generated from scratch.
 
 ## The parser
 
