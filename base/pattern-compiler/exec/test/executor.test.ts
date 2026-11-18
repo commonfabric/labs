@@ -6328,3 +6328,46 @@ describe("a pattern compiled in that names its whole argument", () => {
     });
   });
 });
+
+// `navigateTo` in a handler is a request of an effect, which the handler
+// makes and commits with (BI, `navigateTo`; `fixtures/handle-passed.tsx`).
+describe("a handler that requests a navigation", () => {
+  it("commits, and the instance holds the request with the target it was given", async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/handle-passed.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const instance = new Instance(
+      await artifactOf("handle-passed"),
+      { mine: "a", other: "b" },
+      {
+        artifacts: (id) =>
+          patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+      },
+    );
+
+    const outcome = instance.send(0, {});
+
+    expect(outcome.committed).toBe(true);
+    expect(instance.store.read(new Ref(ARGUMENT, ["mine"]))).toBe("joined");
+    expect(instance.requests.map(({ kind }) => kind)).toEqual(["navigateTo"]);
+    // The target is the result of the child that the handler made.
+    expect(instance.store.read(instance.requests[0].target as Ref))
+      .toMatchObject({ mine: "joined", other: "b" });
+  });
+
+  it("holds no request of a handler that throws", async () => {
+    const instance = new Instance(await artifactOf("handler-throws"), {});
+    const before = instance.requests.length;
+
+    for (let binding = 0; binding < instance.plan.bindings.length; binding++) {
+      instance.send(binding, {});
+    }
+
+    expect(instance.requests.length).toBe(before);
+  });
+});

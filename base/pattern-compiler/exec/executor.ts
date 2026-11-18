@@ -1208,6 +1208,13 @@ export class Instance {
    */
   checks = 0;
 
+  /**
+   * The effects that the handlers of the instance requested, in order:
+   * the kind, and what the request was given. The executor answers none
+   * of them.
+   */
+  readonly requests: { kind: string; target: unknown }[] = [];
+
   constructor(
     readonly artifact: Artifact,
     argument: unknown,
@@ -3553,6 +3560,7 @@ export class Instance {
       [id, document],
     ) => [id, structuredClone(document)] as const);
     const queued = root.#queue.length;
+    const requested = root.requests.length;
     const instances = new Set(root.#instances.keys());
     const bound = new Map(root.#bound);
     const children = this.#children.length;
@@ -3571,6 +3579,7 @@ export class Instance {
         this.store.log.push({ doc: id, path: [], at: this.store.clock });
       }
       root.#queue.length = queued;
+      root.requests.length = requested;
       for (const id of [...root.#instances.keys()]) {
         if (!instances.has(id)) root.#instances.delete(id);
       }
@@ -3907,6 +3916,16 @@ const commonfabric = (instance: Instance): unknown => {
     str: (strings: TemplateStringsArray, ...values: unknown[]) =>
       String.raw({ raw: strings }, ...values),
     toSchema: () => ({}),
+    // A request of an effect (BI, `navigateTo`): the handler makes it
+    // and commits with it, and the executor answers no effect.
+    navigateTo: (target: unknown) => {
+      if (instance.loading) return absent(instance, "navigateTo");
+      instance.root.requests.push({
+        kind: "navigateTo",
+        target: target instanceof Handle ? target.target : target,
+      });
+      return undefined;
+    },
     // The debug renderers are conversions to a string (FA §3.3).
     debugStr,
     toCompactDebugString,
