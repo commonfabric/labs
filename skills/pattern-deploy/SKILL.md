@@ -117,12 +117,13 @@ A pattern reads a file that is not code — a fixture, a lookup table — with
 reads it. That call is the declaration, so `new`, `setsrc`, `check` and `test`
 all attach the file without being told. It is never parsed, compiled, or
 importable, and `getsrc` returns it byte for byte. It must sit inside the
-deployment root, and be UTF-8 text or an image, a font, or a sound, which
-`dataFile.url(path)` reads as a `data:` URL (`dataFile.urls(directory)` reads a
-directory of them). Repeatable `--datafile <path>` remains for a file the source
-cannot name: one read by a computed path, or one that ships with a pattern that
-does not read it. The same complete-revision rule applies to those, so repeat
-every data-file flag on each update too.
+deployment root, and be UTF-8 text, which `dataFile(path)` reads, or an image, a
+font, or a sound, which `dataFile.url(path)` reads as a `data:` URL
+(`dataFile.urls(directory)` reads a directory of them). Repeatable
+`--datafile <path>` remains for a file the source cannot name: one read by a
+computed path, or one that ships with a pattern that does not read it. The same
+complete-revision rule applies to those, so repeat every data-file flag on each
+update too.
 
 **Inspect piece state:**
 

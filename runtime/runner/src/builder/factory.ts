@@ -40,6 +40,7 @@ import { renderCellReference } from "../cell-reference.ts";
 import { getEntityId } from "../create-ref.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { freezeVerifiedPlainData } from "../sandbox/plain-data.ts";
+import { joinSpaceMembers } from "../space-members.ts";
 import {
   registerUnsafeHostTrustedValue,
   type UnsafeHostTrust,
@@ -368,6 +369,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccess,
     spaceAccessOf,
     spaceMembers,
+    joinSpaceMembers,
     spaceOf,
     spaceOfLink,
     spaceDeleted,

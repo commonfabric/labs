@@ -1262,6 +1262,7 @@ const ARGUMENT_PROVIDERS: Readonly<Record<string, Provider>> = {
   "piece new:main": patternFiles,
   "pattern publish:entry": patternFiles,
   "pattern share:entry": patternFiles,
+  "pattern checkpoint:entry": patternFiles,
   "pattern history:entry": patternFiles,
   "pattern rollback:entry": patternFiles,
   "pattern unpublish:entry": patternFiles,

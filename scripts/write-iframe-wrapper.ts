@@ -814,6 +814,17 @@ async function main(): Promise<void> {
       }, which the generator writes beside it.`,
     );
   }
+  // A directory where an output goes cannot be replaced, and `--force` would
+  // otherwise write the outputs before it and then fail at it.
+  for (const { path, label } of outputs) {
+    const info = await Deno.lstat(path).catch((error) => {
+      if (error instanceof Deno.errors.NotFound) return undefined;
+      throw error;
+    });
+    if (info?.isDirectory) {
+      throw new TypeError(`${label} names ${path}, which is a directory.`);
+    }
+  }
   if (!options.force) {
     for (const { path } of outputs) {
       if (!await exists(path)) continue;

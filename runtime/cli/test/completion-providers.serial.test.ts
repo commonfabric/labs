@@ -299,6 +299,7 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf pattern publish --root ", "dirs", undefined],
   ["cf pattern share ", "files", "*.tsx"],
   ["cf pattern share --root ", "dirs", undefined],
+  ["cf pattern checkpoint ", "files", "*.tsx"],
   ["cf pattern history ", "files", "*.tsx"],
   ["cf pattern rollback ", "files", "*.tsx"],
   ["cf pattern unpublish ", "files", "*.tsx"],
