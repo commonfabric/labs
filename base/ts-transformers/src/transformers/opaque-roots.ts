@@ -1,3 +1,4 @@
+import { getComputedPropertyKeyInfo } from "@commonfabric/schema-generator/property-name";
 import ts from "typescript";
 
 import { detectCallKind, isReactiveOriginExpression } from "../ast/mod.ts";
@@ -21,8 +22,15 @@ export type OpaquePathTerminalCallKind = "get" | "key";
 
 export function classifyOpaquePathTerminalCall(
   call: ts.CallExpression,
+  checker?: ts.TypeChecker,
 ): OpaquePathTerminalCallKind | undefined {
   const target = unwrapExpression(call.expression);
+  // A key written as a name a checker can read the literal type of, as `GET`
+  // in `const GET = "get"; cell[GET]()`, names its method as a literal does.
+  const keyName = checker && ts.isElementAccessExpression(target)
+    ? constantMethodKeyName(target, checker)
+    : undefined;
+  if (keyName === "get" || keyName === "key") return keyName;
 
   if (ts.isPropertyAccessExpression(target)) {
     switch (target.name.text) {
@@ -107,6 +115,23 @@ export function isTopmostMemberAccess(node: ts.Node): boolean {
       ts.isElementAccessExpression(parent)) &&
     parent.expression === node
   );
+}
+
+/**
+ * The method name the key of `access` names where the key is a plain name of
+ * a literal type, as `K` in `const K = "push"; x[K]`, or `undefined` for any
+ * other key. Reading such a key has no effect, so a lowering may name the
+ * method in its place; a key with an effect of its own, such as a call, is
+ * never read so.
+ */
+export function constantMethodKeyName(
+  access: ts.ElementAccessExpression,
+  checker: ts.TypeChecker,
+): string | undefined {
+  const key = unwrapExpression(access.argumentExpression);
+  if (!ts.isIdentifier(key)) return undefined;
+  const info = getComputedPropertyKeyInfo(key, checker);
+  return info?.kind === "literal" ? info.text : undefined;
 }
 
 export function isOpaqueOriginCall(

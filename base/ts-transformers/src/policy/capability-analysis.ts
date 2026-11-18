@@ -1826,15 +1826,18 @@ function collectArrayLocalsPassedToSet(
     return false;
   };
 
+  // The callee of each call the walk has reached. A call is visited before its
+  // children, so a member access is known to be a callee by the time it is
+  // visited, whether or not it has a parent: one a pass built has none.
+  const callees = new WeakSet<ts.Node>();
+  const isCallee = (node: ts.Node): boolean => callees.has(node);
+
   const isCallReceiverForMethod = (
     node: ts.PropertyAccessExpression | ts.ElementAccessExpression,
     methods: ReadonlySet<string>,
   ): boolean => {
     const methodName = getCallMethodNameFromExpression(node);
-    return !!methodName &&
-      methods.has(methodName) &&
-      ts.isCallExpression(node.parent) &&
-      node.parent.expression === node;
+    return !!methodName && methods.has(methodName) && isCallee(node);
   };
 
   const visit = (node: ts.Node): void => {
@@ -1849,6 +1852,7 @@ function collectArrayLocalsPassedToSet(
     }
 
     if (ts.isCallExpression(node)) {
+      callees.add(node.expression);
       const methodName = getCallMethodNameFromExpression(node.expression);
       const receiver = getCallReceiverFromExpression(node.expression);
       const receiverIsCellLike = !checker ||
@@ -1867,8 +1871,7 @@ function collectArrayLocalsPassedToSet(
     if (ts.isPropertyAccessExpression(node)) {
       const current = unwrapExpression(node.expression);
       const isSetCallReceiver = node.name.text === "set" &&
-        ts.isCallExpression(node.parent) &&
-        node.parent.expression === node;
+        isCallee(node);
       const isIdentityWriterReceiver = isCallReceiverForMethod(
         node,
         ARRAY_IDENTITY_WRITER_METHODS,
@@ -1886,8 +1889,7 @@ function collectArrayLocalsPassedToSet(
       const isSetCallReceiver = node.argumentExpression &&
         isLiteralElement(node.argumentExpression) &&
         getLiteralElementText(node.argumentExpression) === "set" &&
-        ts.isCallExpression(node.parent) &&
-        node.parent.expression === node;
+        isCallee(node);
       const isIdentityWriterReceiver = isCallReceiverForMethod(
         node,
         ARRAY_IDENTITY_WRITER_METHODS,

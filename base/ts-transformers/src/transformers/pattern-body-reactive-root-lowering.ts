@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { MERGEABLE_OP_METHODS } from "@commonfabric/api";
+import { getComputedPropertyKeyInfo } from "@commonfabric/schema-generator/property-name";
 import {
   getLiftAppliedInnerCall,
   getLiftAppliedInputAndCallback,
@@ -12,7 +13,10 @@ import {
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
 import type { TransformationContext } from "../core/mod.ts";
-import { unwrapExpression } from "../utils/expression.ts";
+import {
+  outermostTransparentWrapper,
+  unwrapExpression,
+} from "../utils/expression.ts";
 import {
   cloneKeyExpression,
   getCommonFabricKeyName,
@@ -30,6 +34,7 @@ import {
 import {
   addBindingTargetSymbols,
   collectLocalOpaqueRootSymbols,
+  constantMethodKeyName,
   getOpaqueAccessInfo,
   isOpaqueOriginCall,
   isOpaqueRootInfo,
@@ -150,6 +155,47 @@ function registerReplacement(
   if (originalType) {
     typeRegistry.set(replacement, originalType);
   }
+}
+
+/**
+ * The method a member access in callee position calls: the last segment of
+ * its path, or, for a key the path keeps as written, the string a key of a
+ * literal type names. `evaluatesKey` marks a key that is more than a name,
+ * such as `chooseKey()` in `user.name[chooseKey()]("x")`, whose evaluation a
+ * rewrite naming the method in its place would drop.
+ */
+function calledMethod(
+  access: ts.Node,
+  path: readonly (string | ts.Expression)[],
+  checker: ts.TypeChecker,
+): { readonly name: string; readonly evaluatesKey: boolean } | undefined {
+  const last = path[path.length - 1];
+  if (typeof last === "string") return { name: last, evaluatesKey: false };
+  if (!ts.isElementAccessExpression(access)) return undefined;
+  const name = constantMethodKeyName(access, checker);
+  if (name !== undefined) return { name, evaluatesKey: false };
+  const key = getComputedPropertyKeyInfo(access.argumentExpression, checker);
+  return key?.kind === "literal"
+    ? { name: key.text, evaluatesKey: true }
+    : undefined;
+}
+
+/**
+ * Whether `access` is the receiver of a method call through a transparent
+ * wrapper, as `user.tags` is in `(user.tags).push("y")` and
+ * `(user.tags)["push"]("y")`.
+ */
+function isWrappedMethodReceiver(
+  access: ts.Node,
+  callTargetParents: WeakMap<ts.Node, ts.CallExpression>,
+): boolean {
+  if (!ts.isExpression(access)) return false;
+  const outer = outermostTransparentWrapper(access);
+  const member = outer.parent;
+  return outer !== access && !!member &&
+    (ts.isPropertyAccessExpression(member) ||
+      ts.isElementAccessExpression(member)) &&
+    member.expression === outer && callTargetParents.has(member);
 }
 
 export function reportComputationError(
@@ -747,7 +793,9 @@ function rewriteTrackedOpaquePatternBody(
         return wrappedCellGet;
       }
 
-      callTargetParents.set(node.expression, node);
+      // A transparent wrapper around the callee keeps the reference, so
+      // `(x.tags["push"])(v)` calls the method `x.tags.push(v)` calls.
+      callTargetParents.set(unwrapExpression(node.expression), node);
     }
 
     // Pre-visit dynamic-wrap: wraps `obj[dynamicKey]` accesses where the
@@ -851,8 +899,19 @@ function rewriteTrackedOpaquePatternBody(
       // A member access in callee position is a method call, whether the
       // method is named with a property access or a static element key.
       const parentCall = callTargetParents.get(node);
-      const methodName = info.path[info.path.length - 1];
-      if (parentCall && typeof methodName === "string") {
+      const method = calledMethod(node, info.path, context.checker);
+      const methodName = method?.name;
+      if (parentCall && methodName !== undefined) {
+        if (method?.evaluatesKey) {
+          // Naming the method in place of the key would skip evaluating it.
+          reportOnce(
+            visited,
+            "computation",
+            "Method calls on opaque pattern values are not lowerable. " +
+              notLowerableMethodRemedy(methodName),
+          );
+          return visited;
+        }
         if (KNOWN_PATH_TERMINAL_METHODS.has(methodName)) {
           if (info.path.length <= 1) {
             return visited;
@@ -884,6 +943,14 @@ function rewriteTrackedOpaquePatternBody(
               notLowerableMethodRemedy(methodName),
           );
         }
+        return visited;
+      }
+
+      // A receiver behind a transparent wrapper, as `user.tags` in
+      // `(user.tags).push("y")`, is left for the access around the wrapper,
+      // which reads its path through the wrapper and lowers or reports the
+      // method call as it would `user.tags.push("y")`.
+      if (isWrappedMethodReceiver(node, callTargetParents)) {
         return visited;
       }
 

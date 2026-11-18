@@ -152,6 +152,113 @@ export default pattern<Input>(({ user }) => {
       expect(pushSegments.length).toBe(1);
       expect(ts.isElementAccessExpression(pushSegments[0]!.parent)).toBe(true);
     });
+
+    for (
+      const [spelling, call] of [
+        ["behind parentheses", '(user.tags["push"])("y")'],
+        ["through a `const` key", 'user.tags[PUSH]("y")'],
+        ["on a parenthesized receiver", '(user.tags)["push"]("y")'],
+      ]
+    ) {
+      it(`reports a write method named by a string key ${spelling} as a computation error`, async () => {
+        const { diagnostics } = await compile(`
+const PUSH = "push";
+interface User { tags: string[] }
+interface Input { user: User }
+export default pattern<Input>(({ user }) => {
+  ${call};
+  return { done: true };
+});`);
+
+        expect(diagnostics.map(({ type, message }) => ({ type, message })))
+          .toEqual([{
+            type: "pattern-context:computation",
+            message: "Method calls on opaque pattern values are not " +
+              "lowerable. Writes to pattern inputs must go through a " +
+              "module-scope handler<> (typed Writable<T>), not the pattern " +
+              "body, which runs once at construction.",
+          }]);
+      });
+    }
+
+    it("reports a write method named on a parenthesized receiver as a computation error", async () => {
+      const { diagnostics } = await compile(`
+interface Input { user: { tags: string[] } }
+export default pattern<Input>(({ user }) => {
+  (user.tags).push("y");
+  return { done: true };
+});`);
+
+      expect(diagnostics.map(({ type }) => type)).toEqual([
+        "pattern-context:computation",
+      ]);
+    });
+
+    it("reports a method a key that evaluates something names, and keeps the key's evaluation", async () => {
+      // The key's literal type names `set`, but naming `set` in place of the
+      // key would skip calling `chooseKey()`, which throws first.
+
+      const { output, diagnostics } = await compile(`
+import { Writable } from "commonfabric";
+function chooseKey(): "set" { throw new Error("missing key"); }
+export default pattern<{ user: { name: Writable<string> } }>(({ user }) => {
+  user.name[chooseKey()]("x");
+  return { done: true };
+});`);
+
+      expect(diagnostics.map(({ type }) => type)).toEqual([
+        "pattern-context:computation",
+      ]);
+      expect(callsNamed(output, "chooseKey").length).toBe(1);
+    });
+
+    for (
+      const [spelling, call] of [
+        ["by name", "user.name.get()"],
+        ["by a string key", 'user.name["get"]()'],
+        ["by a `const` key", "user.name[GET]()"],
+      ]
+    ) {
+      it(`reports a statement \`.get()\` on a writable field ${spelling}`, async () => {
+        const { diagnostics } = await compile(`
+import { Writable } from "commonfabric";
+const GET = "get";
+export default pattern<{ user: { name: Writable<string> } }>(({ user }) => {
+  ${call};
+  return { done: true };
+});`);
+
+        expect(diagnostics.map(({ type }) => type)).toContain(
+          "pattern-context:get-call",
+        );
+      });
+    }
+
+    it("lowers a `set` on a writable field of a pattern input as it lowers one on the input itself", async () => {
+      // The method the lowering rebuilds on the field's key read has no
+      // parent, which the capability analysis that walks it must allow.
+
+      const field = await compile(`
+import { Writable } from "commonfabric";
+export default pattern<{ user: { name: Writable<string> } }>(({ user }) => {
+  user.name.set("x");
+  return { done: true };
+});`);
+      const whole = await compile(`
+import { Writable } from "commonfabric";
+export default pattern<{ name: Writable<string> }>(({ name }) => {
+  name.set("x");
+  return { done: true };
+});`);
+
+      expect(field.diagnostics).toEqual(whole.diagnostics);
+      expect(
+        callsNamed(field.output, "set").some((call) =>
+          ts.isPropertyAccessExpression(call.expression) &&
+          isKeyRead(call.expression.expression, "user", "name")
+        ),
+      ).toBe(true);
+    });
   });
 
   describe("block scopes", () => {

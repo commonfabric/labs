@@ -2569,9 +2569,10 @@ function getArrayElementTypeNode(
     sourceFile,
     TYPE_NODE_FLAGS,
   );
-  if (elementNode) {
-    ensureTypeNodeRegistered(elementNode, checker, typeRegistry);
-  }
+  // The print is read as the type it was printed from: the checker resolves
+  // a printed reference to nothing, so an element that is itself an alias of
+  // an array, as `B` in `type A = B[]; type B = C[]`, would read as no array.
+  if (elementNode) typeRegistry?.set(elementNode, elementType);
   return elementNode;
 }
 
