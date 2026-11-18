@@ -718,6 +718,26 @@ export class Store {
       : document.value;
   }
 
+  /** The position of each key of a list of keys that `keysOf` formed. */
+  readonly #positions = new WeakMap<readonly string[], Map<string, number>>();
+
+  /**
+   * The position that holds `key` among `keys`, or -1: a lookup in an
+   * index that is built once for each list of keys, so that resolving a
+   * reference by key does not scan the keys of its array.
+   */
+  #positionOf(keys: readonly string[], key: string): number {
+    let positions = this.#positions.get(keys);
+    if (positions === undefined) {
+      positions = new Map();
+      keys.forEach((held, index) => {
+        if (!positions?.has(held)) positions?.set(held, index);
+      });
+      this.#positions.set(keys, positions);
+    }
+    return positions.get(key) ?? -1;
+  }
+
   /** The arrays whose keys are being formed. */
   readonly #keying = new Set<string>();
 
@@ -1001,7 +1021,10 @@ export class Store {
         const here = new Ref(doc, at);
         const indexOf = (key: string) =>
           Array.isArray(held)
-            ? this.keysOf(held, here, undefined, fieldsOfKey(key)).indexOf(key)
+            ? this.#positionOf(
+              this.keysOf(held, here, undefined, fieldsOfKey(key)),
+              key,
+            )
             : -1;
         let index = indexOf(key);
         for (let hops = 0; index < 0 && hops < MAX_LINKS; hops++) {
