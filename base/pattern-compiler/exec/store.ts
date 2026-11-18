@@ -735,10 +735,15 @@ export class Store {
     if (named !== undefined) return named()[index];
     const held = this.peek(doc, path);
     if (typeof held !== "object" || held === null) return undefined;
+    // An array has a list of keys for each set of key fields that a
+    // reader formed keys with: the one with the most fields is taken.
+    let found: KeyState | undefined;
     for (const state of this.#states.get(held)?.values() ?? []) {
-      return state.keys[index];
+      if (found === undefined || state.fields.length > found.fields.length) {
+        found = state;
+      }
     }
-    return undefined;
+    return found?.keys[index];
   }
 
   /**

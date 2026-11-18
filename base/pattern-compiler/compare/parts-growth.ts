@@ -137,13 +137,15 @@ export const change = (
     return bytes(member);
   } else if (operation === "edit one field") {
     const at = (length >> 1) + turn;
+    // The edit keeps the size of the row.
+    const title = wide ? `edited${turn}`.padEnd(1_960, "y") : `edited${turn}`;
     if (references) {
-      instance.store.write(new Ref(cell(at), ["title"]), `edited${turn}`);
+      instance.store.write(new Ref(cell(at), ["title"]), title);
       instance.settle();
     } else {
-      instance.writeArgument(["items", `${at}`, "title"], `edited${turn}`);
+      instance.writeArgument(["items", `${at}`, "title"], title);
     }
-    return bytes(`edited${turn}`);
+    return bytes(title);
   } else if (operation === "remove first") {
     instance.spliceArgument(["items"], 0, 1, []);
     return 0;
