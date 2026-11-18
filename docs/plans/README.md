@@ -27,6 +27,13 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [What a served view's references cost](served-reference-reads.md) traces
+  how a browser that only resolves a reference to a piece makes the serving
+  loop start that piece and seed a session's defaults for it, sets that
+  against `serving-loop.md` §1 and `scoped-cell-instances.md`, and puts three
+  questions to the owner: whether resolving a link is demand, whether every
+  start must seed every actor's session defaults, and what a start for view
+  demand should instantiate.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the
