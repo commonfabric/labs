@@ -181,6 +181,24 @@ describe("field", () => {
       expect(field.text).toBe("caf x");
     });
 
+    it("deletes one whole character forward, preserving its neighbors and one undo step", () => {
+      for (const character of ["👍🏽", "e\u0301", "👩\u200D💻"]) {
+        for (const key of ["\x1b[3~", "\x04"]) { // Delete, Control-D
+          const original = `a${character}b`;
+          const field = new Field(original);
+          type(field, "\x01\x1b[C"); // Home, then right to the character
+          type(field, key);
+
+          expect(field.text).toBe("ab");
+
+          type(field, "\x1a"); // Control-Z
+          expect(field.text).toBe(original);
+          type(field, "\x12"); // Control-R
+          expect(field.text).toBe("ab");
+        }
+      }
+    });
+
     it("moves across a line break one step at a time", () => {
       const field = new Field("ab\ncd", true);
       type(field, "\x1b[D\x1b[D\x1b[D"); // to the end of the first line
