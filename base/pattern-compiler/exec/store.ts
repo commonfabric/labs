@@ -2031,6 +2031,58 @@ export class Store {
   }
 
   /**
+   * Stores a value at a path of a document, with no link followed: the
+   * write of the runtime to a document that it lays out itself, as the
+   * result document is. A value that the path holds already is not
+   * written.
+   */
+  put(doc: string, path: readonly string[], value: unknown): void {
+    const document = this.docs.get(doc);
+    if (document === undefined) return;
+    const old = this.peek(doc, path);
+    if (old === value || JSON.stringify(old) === JSON.stringify(value)) return;
+    this.onWrite?.(doc, path);
+    if (path.length === 0) {
+      this.journal?.push({ doc, path, old });
+      document.value = value;
+    } else {
+      let holder = document.value as Record<string, unknown>;
+      for (const segment of path.slice(0, -1)) {
+        holder = holder?.[segment] as Record<string, unknown>;
+      }
+      if (typeof holder !== "object" || holder === null) return;
+      this.journal?.push({ doc, path, old });
+      holder[path[path.length - 1]] = value;
+    }
+    this.#changed(doc, path, old);
+  }
+
+  /** The splice of `splice`, at a path of a document, with no link followed. */
+  spliceAt(
+    doc: string,
+    path: readonly string[],
+    start: number,
+    removed: number,
+    members: readonly unknown[],
+  ): void {
+    const held = this.peek(doc, path);
+    if (!Array.isArray(held)) return;
+    if (removed === 0 && members.length === 0) return;
+    this.onWrite?.(doc, path);
+    const taken = held.splice(start, removed, ...members);
+    this.journal?.push({
+      doc,
+      path,
+      splice: { start, inserted: members.length, removed: taken },
+    });
+    this.#changed(doc, path, taken, {
+      start,
+      removed: taken.length,
+      inserted: members.length,
+    });
+  }
+
+  /**
    * The address that a reference names as a string: the text of the
    * codec for `addressOf()`. Two references name one thing where their
    * texts are the same.
