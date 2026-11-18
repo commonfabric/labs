@@ -59,6 +59,7 @@ import {
   type Undo,
   withDefaults,
 } from "./store.ts";
+import type { PartsOptions, Sealed } from "./parts.ts";
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -1527,6 +1528,12 @@ export type Transaction = {
     created: number;
     deleted: number;
   };
+  /**
+   * The part documents that the changes since the transaction before
+   * this one wrote, by the layout of provisional decision P20
+   * (`PartedDocuments.seal()`): absent where the store keeps none.
+   */
+  parted?: Sealed;
   /** The cones that took an error state, by their `entry`. */
   failed: string[];
   /** Whether what the transaction staged is stored. */
@@ -2222,6 +2229,11 @@ export class Instance {
        * the default) or formed whole (`formed`).
        */
       assembly?: "applied" | "formed";
+      /**
+       * How the documents are laid out in part documents (provisional
+       * decision P20); `false` keeps no part documents.
+       */
+      parts?: PartsOptions | false;
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -2229,6 +2241,7 @@ export class Instance {
         secret: options.secret,
         space: options.space,
         keys: options.keys,
+        parts: options.parts,
       });
     this.id = options.id ?? "result";
     this.argument = argumentOf(this.id);
@@ -2355,6 +2368,8 @@ export class Instance {
         stored.bytes += instance.#laidBytes(laid);
       }
     }
+    const parted = this.store.parts?.seal();
+    if (parted !== undefined) open.record.parted = parted;
     this.#tx = undefined;
     this.store.journal = undefined;
     this.#transactions.push(open.record);
@@ -3904,6 +3919,12 @@ export class Instance {
     unit.keys = (entry.members ?? []).map(({ key }) => key);
     unit.values = [...values];
     unit.positions = undefined;
+    if ("path" in unit.place) {
+      this.store.rowKeys.set(
+        JSON.stringify([this.id, unit.place.path]),
+        () => unit.keys,
+      );
+    }
     const forms = values.map((value, index) =>
       this.#formOf(
         value,

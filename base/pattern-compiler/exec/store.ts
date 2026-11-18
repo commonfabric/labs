@@ -21,6 +21,8 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 
+import { PartedDocuments, type PartsOptions } from "./parts.ts";
+
 /** The members of a JSON schema the executor reads. */
 export type Schema = boolean | {
   type?: string | string[];
@@ -692,11 +694,51 @@ export class Store {
    * position that holds a link names.
    */
   constructor(
-    options: { secret?: string; space?: string; keys?: "kept" | "formed" } = {},
+    options: {
+      secret?: string;
+      space?: string;
+      keys?: "kept" | "formed";
+      /** How the documents are laid out in parts; `false` for no parts. */
+      parts?: PartsOptions | false;
+    } = {},
   ) {
     this.#secret = options.secret ?? crypto.randomUUID();
     this.#space = options.space;
     this.#kept = (options.keys ?? "kept") === "kept";
+    this.parts = options.parts === false ? undefined : new PartedDocuments({
+      keyAt: (doc, path, index) => this.#rowKey(doc, path, index),
+      ...options.parts,
+    });
+  }
+
+  /**
+   * The documents that each document of `docs` is stored in, by the
+   * layout of provisional decision P20: every change of a document is
+   * applied to them as it is made.
+   */
+  readonly parts: PartedDocuments | undefined;
+
+  /**
+   * The keys of the rows of a stored array that no key state holds, by
+   * the text of the document and the path: whoever stores the rows of a
+   * collection under their element keys names them here.
+   */
+  readonly rowKeys = new Map<string, () => readonly string[]>();
+
+  /** The key of the row at a position of a stored array, where known. */
+  #rowKey(
+    doc: string,
+    path: readonly string[],
+    index: number,
+  ): string | undefined {
+    const named = this.rowKeys.get(JSON.stringify([doc, path]));
+    if (named !== undefined) return named()[index];
+    const held = this.peek(doc, path);
+    if (typeof held !== "object" || held === null) return undefined;
+    for (const state of this.#states.get(held)?.values() ?? []) {
+      return state.keys[index];
+    }
+    return undefined;
   }
 
   /**
@@ -828,6 +870,7 @@ export class Store {
     this.clock += 1;
     this.log.push({ doc, path, at: this.clock });
     const keyed = this.#touch(doc, path, splice, old);
+    this.parts?.changed(doc, path, this.docs.get(doc)?.value, old, splice);
     this.onChange?.({
       doc,
       path,
