@@ -6803,7 +6803,8 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 
     /// `array-by-key:state-without-key` (provisional decision P21): the
-    /// body of a per-element construct holds per-element state, the
+    /// body of a per-element construct holds per-element state (a state
+    /// cell, a handler binding, an operation or a child instance), the
     /// elements are records, and neither the array nor, for a construct
     /// over the result of another one, the array that the chain of
     /// constructs starts at declares a key. An element is taken as a
@@ -6849,17 +6850,13 @@ impl<'a> Emitter<'_, '_, 'a> {
                 ("bindings", "a handler binding"),
                 ("operations", "an operation"),
                 ("children", "a child instance"),
-                ("bodies", "a `lift` or a `computed`"),
             ];
             let held: Vec<&str> = kinds
                 .iter()
                 .filter(|(list, _)| {
-                    plan[*list].as_array().is_some_and(|records| {
-                        records.iter().any(|record| {
-                            inside(record, index)
-                                && (*list != "bodies" || record["kind"] != "handler")
-                        })
-                    })
+                    plan[*list]
+                        .as_array()
+                        .is_some_and(|records| records.iter().any(|record| inside(record, index)))
                 })
                 .map(|(_, name)| *name)
                 .collect();

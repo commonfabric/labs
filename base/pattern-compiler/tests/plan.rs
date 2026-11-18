@@ -4661,3 +4661,40 @@ fn the_template_of_a_body_is_written_once_for_all_its_write_edges() {
         .sum();
     assert!(templates < 8 * 40, "{templates} bytes");
 }
+
+/// Provisional decision P18 (PL §1.1, "A pattern compiled in is written
+/// once"): a plan is linear in its source, for any depth of calls. Each
+/// of `depth` patterns calls the next one at two sites, and the last
+/// holds a state cell. The crate writes a callee out at every call
+/// site, so the plan doubles with each level, and the test is ignored
+/// until the crate holds a callee once.
+#[test]
+#[ignore = "P18 is not built: the crate writes a pattern that is compiled in out at each call site"]
+fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() {
+    let bytes = |depth: usize| {
+        let mut text = String::from(
+            "import { pattern, Writable } from \"commonfabric\";\n\
+             const P0 = pattern<{ n: number }>(({ n }) => { const c = Writable.of(0); return { v: n + c.get() }; });\n",
+        );
+        for level in 1..=depth {
+            text.push_str(&format!(
+                "const P{level} = pattern<{{ n: number }}>(({{ n }}) => {{ const a = P{below}({{ n }}); const b = P{below}({{ n: n + 1 }}); return {{ v: a.v + b.v }}; }});\n",
+                below = level - 1
+            ));
+        }
+        text.push_str(&format!(
+            "export const Top = pattern<{{ n: number }}>(({{ n }}) => ({{ v: P{depth}({{ n }}).v }}));\n"
+        ));
+        raw_plan_of(&program(&text), "Top").to_string().len()
+    };
+    let sizes: Vec<usize> = (1..=6).map(bytes).collect();
+    let steps: Vec<usize> = sizes.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    // Linear: each level adds what the level before it added, within a
+    // tenth.
+    for pair in steps.windows(2) {
+        assert!(
+            pair[1] * 10 <= pair[0] * 11,
+            "the plans are {sizes:?} bytes for 1 to 6 levels"
+        );
+    }
+}

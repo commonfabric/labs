@@ -1804,7 +1804,6 @@ fn per_element_state_under_a_key_formed_from_the_value_is_a_warning() {
     let stateless = "({ title: item.title })";
     assert_eq!(found("Item[]", "items", cell), warned);
     assert_eq!(found("Item[]", "items", bound), warned);
-    assert_eq!(found("Item[]", "items", lifted), warned);
     assert_eq!(
         found(
             "Item[]",
@@ -1816,6 +1815,8 @@ fn per_element_state_under_a_key_formed_from_the_value_is_a_warning() {
     // No state in the body, a declared key, and elements that are no
     // records.
     assert_eq!(found("Item[]", "items", stateless), none);
+    // A `lift` in the body stores no document under the key.
+    assert_eq!(found("Item[]", "items", lifted), none);
     assert_eq!(found("ArrayByKey<Item, \"id\">", "items", cell), none);
     assert_eq!(
         found(

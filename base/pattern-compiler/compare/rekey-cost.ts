@@ -44,7 +44,7 @@ export const CASES: Case[] = [
   { name: "references", pattern: "Plain", references: true },
 ];
 
-const artifacts = async (): Promise<Artifact[]> => {
+export const artifacts = async (): Promise<Artifact[]> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL("./fixtures/rows-state.emit.json", import.meta.url),
@@ -113,6 +113,12 @@ export const keystrokes = (
     documentsWritten: sum(({ written }) => written.length),
     documentsMoved: (instance.store.moves - before.moves) / KEYSTROKES,
     patchBytes: sum(({ patchBytes }) => patchBytes),
+    // The part documents written (provisional decision P20), and the
+    // bytes that those hold.
+    partedDocuments: sum(({ parted }) => parted?.written.length ?? 0),
+    partedBytes: sum(({ parted }) => parted?.bytes ?? 0),
+    partedCreated: sum(({ parted }) => parted?.created ?? 0),
+    partedDeleted: sum(({ parted }) => parted?.deleted ?? 0),
     resultDocuments: sum(({ stored }) => stored.documents),
     partsCreated: sum(({ stored }) => stored.created),
     partsDeleted: sum(({ stored }) => stored.deleted),
@@ -164,6 +170,7 @@ export const polled = (
       length,
       round,
       documents: instance.store.docs.size,
+      partDocuments: instance.store.parts?.size ?? 0,
       byKind: instance.documents(),
       instances: instance.childInstances().length,
     });

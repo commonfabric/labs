@@ -9,6 +9,12 @@ import {
   OPERATIONS,
   start,
 } from "../../compare/parts-growth.ts";
+import {
+  artifacts as rowArtifacts,
+  CASES as ROW_CASES,
+  keystrokes,
+  polled,
+} from "../../compare/rekey-cost.ts";
 import { DOCUMENT_MAX_BYTES } from "../parts.ts";
 
 // The executor with its documents laid out in part documents
@@ -54,4 +60,34 @@ describe("the executor's documents in part documents (P20)", () => {
       });
     }
   }
+});
+
+// `fixtures/rows-state.tsx` through part documents: each row has a state
+// cell, a handler binding, a `lift` and an instance called through
+// `asInstance()`, over an array of plain values in place with no
+// declared key, the same with `ArrayByKey`, and over an array of
+// references.
+describe("a row that has state, in part documents (P20)", () => {
+  it("writes part documents of a bounded size for one keystroke, at any number of rows", async () => {
+    const patterns = await rowArtifacts();
+    for (const one of ROW_CASES) {
+      const [few, many] = [
+        keystrokes(patterns, one, 100),
+        keystrokes(patterns, one, 3_000),
+      ];
+      expect(many.partedBytes).toBeLessThanOrEqual(4 * DOCUMENT_MAX_BYTES);
+      expect(many.partedDocuments).toBeLessThanOrEqual(
+        few.partedDocuments + 2,
+      );
+    }
+  });
+
+  it("keeps the part documents of every value that a list with no declared key ever held", async () => {
+    const patterns = await rowArtifacts();
+    const [unkeyed, keyed] = ROW_CASES;
+    const [first, last] = polled(patterns, unkeyed, 10, 5, [0, 5]);
+    expect(last.partDocuments - first.partDocuments).toBe(100);
+    const [before, after] = polled(patterns, keyed, 10, 5, [0, 5]);
+    expect(after.partDocuments).toBe(before.partDocuments);
+  });
 });
