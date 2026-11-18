@@ -309,6 +309,24 @@ type Entry = {
   checkedAt?: number;
 };
 
+/**
+ * The schema of a position as a body is handed it: where the type is a
+ * union of a handle type with `undefined` or `null`, the handle type,
+ * which is what the body holds where the position is bound.
+ */
+const handleVariant = (schema: Schema | undefined): Schema | undefined => {
+  if (typeof schema !== "object" || schema.asCell !== undefined) return schema;
+  const variants = (schema.anyOf ?? []).filter((variant) =>
+    typeof variant !== "object" ||
+    (variant.type !== "undefined" && variant.type !== "null")
+  );
+  const [only] = variants;
+  return variants.length === 1 && typeof only === "object" &&
+      only.asCell !== undefined
+    ? only
+    : schema;
+};
+
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
@@ -2086,9 +2104,11 @@ export class Instance {
    * the instance computes").
    */
   handleOf(value: unknown, host: Host | undefined, slot?: number): unknown {
-    const declared = slot === undefined
-      ? undefined
-      : this.schemaOf(this.plan.slots[slot].schema);
+    const declared = handleVariant(
+      slot === undefined
+        ? undefined
+        : this.schemaOf(this.plan.slots[slot].schema),
+    );
     if (value instanceof StreamMarker) {
       return new Handle(this, streamOf(value), host, slot, [], declared);
     }

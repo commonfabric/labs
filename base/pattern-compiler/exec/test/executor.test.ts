@@ -6386,3 +6386,17 @@ describe("a handler that requests a navigation", () => {
     expect(instance.requests.length).toBe(before);
   });
 });
+
+// A state path that the handler declares as a handle or `undefined`
+// (`fixtures/handle-or-undefined.tsx`).
+describe("a state path declared as a handle or `undefined`", () => {
+  it("is handed to the body as a handle where it is bound", async () => {
+    const instance = new Instance(await artifactOf("handle-or-undefined"), {
+      item: { title: "a" },
+    });
+
+    expect(instance.send(0, {})).toMatchObject({ committed: true });
+
+    expect(instance.result()).toMatchObject({ out: "a" });
+  });
+});

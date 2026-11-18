@@ -27,6 +27,10 @@ export type Schema = boolean | {
   properties?: Record<string, Schema>;
   items?: Schema;
   asCell?: unknown;
+
+  /** The variants of a union. */
+  anyOf?: Schema[];
+
   /**
    * In the schema of an array, beside `items`: the key fields that the
    * array type declares with `ArrayByKey`, in the order of their names

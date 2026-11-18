@@ -222,6 +222,11 @@ const WRITTEN: Record<string, Written[]> = {
   "module-policy": [{ argument: { message: "kept" } }],
   // A pattern compiled in that passes its whole argument on.
   "whole-argument": [{ argument: { note: "n", count: 2 } }],
+  // A state path declared as a handle or `undefined`.
+  "handle-or-undefined": [{
+    argument: { item: { title: "a" } },
+    events: [{ binding: 0, event: {} }],
+  }],
   // The debug renderers, in the reactive tier and in a function body.
   "debug-strings": [{
     argument: { entry: { tags: ["x", "y"], title: "a" } },
