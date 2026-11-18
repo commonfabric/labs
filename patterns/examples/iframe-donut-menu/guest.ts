@@ -34,7 +34,7 @@ for (const donut of MENU) {
   button.textContent = donut.name;
   button.disabled = true;
   button.addEventListener("click", () => {
-    state.key("favorite").set(donut.id).catch((failure) => {
+    choose(donut.id).catch((failure) => {
       error.textContent = describeFailure(failure);
     });
   });
@@ -43,14 +43,28 @@ for (const donut of MENU) {
   menu.append(item);
 }
 
-/** Draws the favorite's picture onto the canvas, or clears it. */
-async function draw(favorite: string | null): Promise<void> {
+/** Makes the donut `id` the favorite. */
+async function choose(id: string): Promise<void> {
+  // A child write needs the state to exist; the default stands in for it
+  // until the first write creates it.
+  await state.initialize(DEFAULT_STATE);
+  await state.key("favorite").set(id);
+}
+
+/**
+ * Draws the favorite's picture onto the canvas, or clears it. A picture
+ * decoded after another favorite was chosen is not drawn, so the canvas shows
+ * the latest choice whichever decode finishes first.
+ */
+async function draw(favorite: string | null): Promise<boolean> {
   const context = canvas.getContext("2d")!;
   context.clearRect(0, 0, canvas.width, canvas.height);
   const donut = MENU.find((candidate) => candidate.id === favorite);
-  if (donut === undefined) return;
+  if (donut === undefined) return true;
   const image = await fabric.asset(donut.picture).image();
+  if (canvas.dataset.favorite !== donut.id) return false;
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return true;
 }
 
 /** Shows `value`, the stored state or its default. */
@@ -65,7 +79,9 @@ function show(value: IframeStateData | undefined): void {
   }
   canvas.dataset.favorite = favorite ?? "";
   draw(favorite).then(
-    () => (canvas.dataset.drawn = favorite ?? ""),
+    (drawn) => {
+      if (drawn) canvas.dataset.drawn = favorite ?? "";
+    },
     (failure) => (error.textContent = describeFailure(failure)),
   );
 }

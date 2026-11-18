@@ -103,6 +103,14 @@ describe("iframe donut menu", () => {
       await guest.waitFor<boolean>(`() =>
         !document.querySelector('button[data-donut="glazed"]').disabled
       `);
+      // The guest shows its own write at once, so the piece's state is what
+      // says the write was stored.
+      const stored = Promise.withResolvers<void>();
+      const cancelStored = cc.getResult(piece.getCell()).key("state").key(
+        "favorite",
+      ).sink((favorite) => {
+        if (favorite === "glazed") stored.resolve();
+      });
       await guest.click('button[data-donut="glazed"]');
 
       // A pixel of the donut's ring, which is opaque in the picture and
@@ -114,8 +122,8 @@ describe("iframe donut menu", () => {
           return canvas.getContext('2d').getImageData(3, 16, 1, 1).data[3];
         }`),
       ).toBe(255);
-      await cc.synced();
-      expect(await piece.result.get(["state", "favorite"])).toBe("glazed");
+      await stored.promise;
+      cancelStored();
     } finally {
       guest.close();
     }
