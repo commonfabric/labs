@@ -450,9 +450,13 @@ which element keys what they hold is kept
   of plain values in place, in particular a plain array that one
   computation generates from scratch, as the result of an API call
   is, the author can declare the key in the element type with the
-  type marker `KeyedBy<T, "field">`: the key is then the value of
-  that field, and an element of a new array with the same value of
-  the field is the same element. An array of references does not
+  type marker `KeyedBy<T, "field">`: the key then names that field
+  and holds its value, and an element of a new array with the same
+  value of the field is the same element. The marker can name
+  several fields, as `KeyedBy<Repo, "owner" | "name">`, and the
+  element then has one key across them. A reference that holds such
+  a key is resolved from the key alone, with no schema. An array of
+  references does not
   need the marker, because the key is the identity of the element's
   cell and an edit does not change it, and the result of another
   per-element construct carries a declared key through the upstream
@@ -1199,8 +1203,10 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   an instance that a computation of the body made, replaces what is
   stored under the new key, moves nothing for another element whose
   occurrence count it changed, and does not happen for a write that is
-  not made through a reference by key; a key does not say whether it was
-  formed from the whole value or from a declared key field; and
+  not made through a reference by key; a key formed from declared key
+  fields names the fields and holds their values, a key formed from
+  the whole value names no field, and a reference by key is resolved
+  from the key alone, with no schema; and
   `items.key(i)` is a handle by position that nothing rewrites, equal to
   the reference of the element that stands at `i` at the moment of the
   comparison. Three things are assumed, each for an array of plain
@@ -1223,8 +1229,17 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   ([language subset](language-subset.md), §13, questions 41 and 42).
   Each is the same over the three cases of a source. That an author
   declares the key of an array of plain values in place with the type
-  marker `KeyedBy<T, "field">` is ruled. Four things about it are
-  assumed. Over an array of plain values in place with no declared
+  marker `KeyedBy<T, "field">` is ruled, and so is that the marker
+  names several fields as a union of their names. Nine things about
+  it are assumed. Five are about the declaration and the form of the
+  key: the fields enter the key in the order of their names, each is
+  a required top-level property of type `string` or `number`, the
+  schema keyword is `keyFields`, the element part is written as in
+  `name=labs,owner=commonfabric`, and a value whose type declares one
+  key is not accepted where another key is declared
+  ([plan format and label templates](plan-and-label-templates.md), §8,
+  questions 137 to 141). The other four follow. Over an array of
+  plain values in place with no declared
   key, an instance called through `asInstance()` is re-keyed with its
   element when a write through a reference by key changes the value;
   over an array of references no edit changes a key, and a declared

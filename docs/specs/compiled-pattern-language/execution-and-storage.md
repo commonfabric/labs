@@ -2223,8 +2223,10 @@ the key of an element of an array of references, and of the result of
 another per-element construct, derives from upstream causes and stays
 stable. By ruling the author declares the key of such an array in the
 element type, with the type marker `KeyedBy<T, "field">`, and the key
-of each element is then the value of that field, with the occurrence
-count where two elements have the same value of it
+of each element then names that field and holds its value, with the
+occurrence count where two elements have the same value of it. By
+ruling the marker can name several fields, as a union of their names,
+and the element then has one key across them
 (`plan-and-label-templates.md` §1.3, "A declared key field"). Without
 the marker the key of each is its whole value with the occurrence
 count, and an element whose value changes in one member is a new
@@ -2304,10 +2306,14 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   (`builtin-inventory.md`, `fetchJson`), and each response replaces
   `result.items` whole. So `response.result.items` is an array of
   plain values in place that is generated from scratch. The schema of
-  its items has `keyField: "id"`.
-- **The key** of an element of `response.result.items` is the salted
-  hash of the value of `id`, with the occurrence count, which is 0
-  unless a response holds one `id` twice.
+  its items has `keyFields: ["id"]`; the keyword is *assumed*
+  (`plan-and-label-templates.md` §8, question 139).
+- **The key** of an element of `response.result.items` names the
+  field `id` and holds its value, with the occurrence count, which is
+  0 unless a response holds one `id` twice. For the repository whose
+  `id` is 7 the element part is written `id=#7`; the written form is
+  *assumed* (its question 140). It is not the key of an element whose
+  whole value is 7, which names no field.
 - **The result of the `filter`** is the result of another per-element
   construct: an element has the key it has in
   `response.result.items`. **The result of the `map`** is the same
@@ -2326,10 +2332,66 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   stays, with its argument as last written, and a link to it that a
   handler stored elsewhere reads it. When a later response holds the
   `id` again, the row has the same instance.
+- **A reference by key is resolved with no schema.** Where the body
+  of the `map` also binds a handler whose state declares the element
+  with a plain type, as `repo: Repo`, the handler is given a
+  reference by key, and `selected.set(repo.name)` stores that
+  reference with the path `name`. The link has the schema of the
+  member, a string, and not that of the items. A reader of `selected`
+  resolves it from the key alone: in the collection that the
+  reference names it finds the element whose `id` is 7, and reads
+  `name` there. No reader needs to know that the array was declared
+  with `KeyedBy`, and the runtime keeps no record of the schema the
+  array is stored under for this.
 - **Without the marker** the key of an element is the hash of its
   whole value. A response in which `stars` changed is then a new key
   and a new instance, and the instance of the old key stays with the
   old value.
+
+*The same, with a key of two fields.* An API whose repositories have
+no `id` of their own identifies one by its owner and its name.
+
+```tsx
+// Shown for illustration only.
+// `KeyedBy` is the type marker of this design. `commonfabric` does not
+// export it yet.
+type Repo = { owner: string; name: string; stars: number };
+
+const RepoSearch = pattern<{ url: string; minStars: number }>(
+  ({ url, minStars }) => {
+    const response = fetchJson<{
+      items: KeyedBy<Repo, "owner" | "name">[];
+    }>({ url });
+    const rows = response.result.items
+      .filter((repo) => repo.stars >= minStars)
+      .map((repo) => RepoRow.asInstance()({ repo }));
+    return { rows };
+  },
+);
+```
+
+- **The stored form** is as above, an array of plain values in place
+  that is generated from scratch. The schema of its items has
+  `keyFields: ["name", "owner"]`, the names in the order of the names
+  (*assumed*, `plan-and-label-templates.md` §8, questions 137 and
+  139).
+- **The key** of an element is one key, formed across the two fields.
+  For the repository `labs` of the owner `commonfabric` the element
+  part is written `name=labs,owner=commonfabric` (*assumed*, its
+  question 140). Two repositories named `labs` of two owners have two
+  keys with the occurrence count 0, and two rows.
+- **The results of the `filter` and of the `map`** are the result of
+  another per-element construct, and their elements have that key.
+- **A new response** that holds the same `owner` and `name` with
+  another `stars` is the same key and the same instance of `RepoRow`.
+  A repository that its owner renames has another `name`, so it is
+  another key and another instance, and the instance of the old key
+  stays.
+- **A reference by key** to such an element, or to a member of it, is
+  resolved by finding the element of the array whose `name` and
+  `owner` have the values that the key holds.
+- **An array of references** with the same element type would be
+  keyed by its cells, and the marker would change nothing there.
 
 The prototype's executor has the second case in a fixture, with a
 `lift` in the place of `fetchJson`: each element has the key of its
@@ -2337,9 +2399,10 @@ The prototype's executor has the second case in a fixture, with a
 `stars`, and the instance of a row is the same when its element has
 another `stars`, leaves the result of the `filter`, and enters it
 again. Its key holds the value of the field with no salt and no hash,
-and the name of the field. By ruling a key does not say how it was
-formed, and the resolver takes the key field from the schema, so the
-name of the field is not part of a key
+and no name of the field, and its store resolves a reference by key
+through the schema that the array is stored under. By ruling the key
+names its fields and is resolved with no schema, so the prototype
+does not follow the ruling there, and it has no key of several fields
 (`plan-and-label-templates.md` §1.3, "A declared key field"). The
 runtime of today has no such marker, so nothing of this is compared
 with it.
@@ -2348,7 +2411,12 @@ Three points are open for a declared key: a write to the key field
 itself (`plan-and-label-templates.md` §8, question 129), the document
 of a keyed plain value that a body pushes elsewhere (section 11,
 question 93), and the marker on an array of references
-(`language-subset.md` §13, question 43).
+(`language-subset.md` §13, question 43). Five points about the
+declaration and the form of a key that names its fields are assumed:
+the order of the fields, which properties can be key fields, the
+schema keyword, the written form of the element part, and a value
+passed where another key is declared (`plan-and-label-templates.md`
+§8, questions 137 to 141).
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -4021,10 +4089,14 @@ count.
   link's scope.
 - The element part for a position that holds a plain value is the hash of
   a secret of the space and the canonical form of the value. Where the
-  schema of the array's items declares a key field, which the type
-  marker `KeyedBy<T, "field">` writes there, it is the hash of the
-  secret and the canonical form of the value of that field
-  (`plan-and-label-templates.md` §1.3, "A declared key field"). The
+  element type declares key fields with the type marker
+  `KeyedBy<T, "field">`, by ruling the element part names each field
+  and holds the canonical form of its value, and a reference by key
+  that holds it is resolved from the key alone
+  (`plan-and-label-templates.md` §1.3, "A declared key field").
+  *Assumed* (its §8, question 140): the values are held as they are,
+  with no hash, and an identifier of a document that is derived from
+  such a key is salted as one derived from a whole value is. The
   case is an array of plain values in place, a plain array generated
   from scratch included.
 - The occurrence count is the number of earlier positions of the
@@ -5585,8 +5657,10 @@ object whole keeps the object's integrity where a default fills one of
 its properties (2.2); a write through a handle bound to a value the
 instance produced is refused, and one bound to a reference lands at the
 reference's target (2.4); the element type of an array of plain
-values may declare a key field with `KeyedBy<T, "field">`, and the key
-of an element is then the value of that field (2.6, 5.3). The ruling
+values may declare a key field with `KeyedBy<T, "field">`, or several
+as a union of their names, and the key of an element then names the
+fields and holds their values, and is resolved with no schema (2.6,
+5.3). The ruling
 on the keep set
 answers what was question 1 of this list, the size of a result document.
 
