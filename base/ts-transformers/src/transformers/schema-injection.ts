@@ -12,6 +12,7 @@ import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/pattern-contract/s
 import ts from "typescript";
 
 import {
+  cellPayloadType,
   classifyArrayMethodCall,
   declaredVerbResultTypeNode,
   detectCallKind,
@@ -53,6 +54,7 @@ import {
   type CrossStageState,
   type FunctionCapabilitySummary,
   HelpersOnlyTransformer,
+  type ReactiveCapability,
   type SchemaHint,
   TransformationContext,
   type TypeRegistry,
@@ -72,7 +74,9 @@ import {
   isCellLikeTypeNode,
   preservedWrapperFor,
   printTypeNode,
+  scopedCellParts,
   validateShrinkCoverage,
+  wrapScopedCell,
 } from "./type-shrinking.ts";
 
 type UiContractHint = NonNullable<SchemaHint["cfcUiContract"]>;
@@ -337,9 +341,10 @@ function contractReading(
 /**
  * The node a cell's value is read from: the value type node the cell's
  * authored node writes, or, for a cell whose wrapper no node writes out, such
- * as one reached through a generic alias or a printed one, its value type
- * printed. A printed node is not taken apart: its value is printed from its
- * type. `undefined` where `node` is not a cell.
+ * as one reached through a generic alias or a printed one, the value its
+ * outermost cell holds, printed (`cellPayloadType()`), so a cell inside that
+ * value stays a cell. A printed node is not taken apart: its value is printed
+ * from its type. `undefined` where `node` is not a cell.
  */
 function cellValueTypeNode(
   node: ts.TypeNode,
@@ -355,7 +360,7 @@ function cellValueTypeNode(
   // Schema generation can read some prints only from the type behind them — a
   // name the emitting module does not import, the brand arm of an expanded
   // `Default` — so the node is registered with its type.
-  const valueType = unwrapCellLikeType(type, checker);
+  const valueType = cellPayloadType(type, checker);
   const printed = typeToSchemaTypeNode(
     valueType,
     checker,
@@ -366,6 +371,71 @@ function cellValueTypeNode(
     context.state.typeRegistry.set(printed, valueType);
   }
   return printed;
+}
+
+/**
+ * Narrows `node`, a callback parameter's type, to what the callback does with
+ * it (`applyShrinkAndWrap()`). A cell's value is narrowed, read as
+ * `cellValueTypeNode()` reads it, and the cell is rewrapped in the capability
+ * the callback earns. A cell a scope wrapper holds is narrowed inside the
+ * wrapper and put back in it (`wrapScopedCell()`), since only the wrapper
+ * names the scope.
+ */
+function shrinkAndWrapParameterType(
+  paramSummary: CapabilityParamSummary,
+  node: ts.TypeNode,
+  type: ts.Type | undefined,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  mode: CapabilitySummaryApplicationMode,
+  wrapCapability: ReactiveCapability,
+  context: TransformationContext,
+  fn: ts.ArrowFunction | ts.FunctionExpression,
+): ts.TypeNode {
+  const typeRegistry = context.state.typeRegistry;
+  const scoped = scopedCellParts(
+    node,
+    false,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    context.state,
+  );
+  const cellNode = scoped?.cell ?? node;
+  const cellType = scoped
+    ? getTypeFromTypeNodeWithFallback(cellNode, checker, typeRegistry)
+    : type;
+  const valueNode = cellValueTypeNode(
+    cellNode,
+    cellType,
+    checker,
+    sourceFile,
+    context,
+  );
+  const shouldWrap = !!valueNode;
+  const baseTypeNode = valueNode ?? cellNode;
+  const baseType =
+    (shouldWrap ? cellPayloadType(cellType, checker) : cellType) ??
+      getTypeFromTypeNodeWithFallback(baseTypeNode, checker, typeRegistry);
+  const narrowed = applyShrinkAndWrap(
+    paramSummary,
+    baseTypeNode,
+    baseType,
+    shouldWrap,
+    checker,
+    sourceFile,
+    factory,
+    mode,
+    wrapCapability,
+    context,
+    fn,
+    shouldWrap ? preservedWrapperFor(cellNode, cellType, checker) : undefined,
+  );
+  return scoped
+    ? wrapScopedCell(narrowed, scoped, factory, typeRegistry)
+    : narrowed;
 }
 
 function applyCapabilitySummaryToArgument(
@@ -401,35 +471,10 @@ function applyCapabilitySummaryToArgument(
       fn,
     );
   }
-  const innerTypeNode = cellValueTypeNode(
+  return shrinkAndWrapParameterType(
+    paramSummary,
     argumentNode,
     argumentType,
-    checker,
-    sourceFile,
-    context,
-  );
-  const shouldWrap = !!innerTypeNode;
-  const preservedWrapper = shouldWrap
-    ? preservedWrapperFor(argumentNode, argumentType, checker)
-    : undefined;
-  const baseTypeNode = innerTypeNode ?? argumentNode;
-  let baseType = shouldWrap && argumentType
-    ? (unwrapCellLikeType(argumentType, checker) ?? argumentType)
-    : argumentType;
-
-  if (!baseType) {
-    baseType = getTypeFromTypeNodeWithFallback(
-      baseTypeNode,
-      checker,
-      context.state.typeRegistry,
-    );
-  }
-
-  return applyShrinkAndWrap(
-    paramSummary,
-    baseTypeNode,
-    baseType,
-    shouldWrap,
     checker,
     sourceFile,
     factory,
@@ -437,7 +482,6 @@ function applyCapabilitySummaryToArgument(
     mode === "defaults_only" ? "opaque" : paramSummary.capability,
     context,
     fn,
-    preservedWrapper,
   );
 }
 
@@ -474,25 +518,10 @@ function applyCapabilitySummaryToParameter(
     );
   }
 
-  const innerTypeNode = cellValueTypeNode(
+  return shrinkAndWrapParameterType(
+    paramSummary,
     parameterNode,
     parameterType,
-    checker,
-    sourceFile,
-    context,
-  );
-  const shouldWrap = !!innerTypeNode;
-  const preservedWrapper = shouldWrap
-    ? preservedWrapperFor(parameterNode, parameterType, checker)
-    : undefined;
-
-  return applyShrinkAndWrap(
-    paramSummary,
-    innerTypeNode ?? parameterNode,
-    shouldWrap
-      ? (unwrapCellLikeType(parameterType, checker) ?? parameterType)
-      : parameterType,
-    shouldWrap,
     checker,
     sourceFile,
     factory,
@@ -500,7 +529,6 @@ function applyCapabilitySummaryToParameter(
     paramSummary.capability,
     context,
     fn,
-    preservedWrapper,
   );
 }
 

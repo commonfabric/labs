@@ -433,6 +433,71 @@ export function make(count: Writable<number>) {
     });
   });
 
+  describe("a cell parameter narrowed to the capability its callback earns", () => {
+    // The cell is rewrapped in the capability its callback earns. Only a scope
+    // wrapper names the cell's scope, and a generic alias of a cell writes no
+    // wrapper out, so the value is read from the cell's type, one cell deep.
+
+    const module = (declaration: string) =>
+      `/// <cts-enable />
+import { handler, lift, type PerUser, Writable } from "commonfabric";
+type Slot<T> = Writable<T>;
+export const x = ${declaration};`;
+
+    /**
+     * The schema of the cell parameter `declaration`'s callback narrows: the
+     * second argument, a handler's state schema or a lift's input schema.
+     */
+    async function cellSchema(declaration: string): Promise<unknown> {
+      return argumentValues(
+        callOf(await transform(module(declaration)), "x"),
+      )[1];
+    }
+
+    it("keeps a handler state cell's scope on its readonly narrowing", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: PerUser<Writable<number>>) => { console.log(e.n, s.get()); })",
+        ),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a lift argument cell's scope on its readonly narrowing", async () => {
+      expect(
+        await cellSchema("lift((s: PerUser<Writable<number>>) => s.get())"),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps the cell a handler state cell holds when a generic alias writes the outer one", async () => {
+      const aliased = await cellSchema(
+        "handler((e: { n: number }, s: Slot<Writable<number>>) => { console.log(e.n, s.get().get()); })",
+      );
+
+      expect(aliased).toEqual({ type: "number", asCell: ["readonly", "cell"] });
+      expect(aliased).toEqual(
+        await cellSchema(
+          "handler((e: { n: number }, s: Writable<Writable<number>>) => { console.log(e.n, s.get().get()); })",
+        ),
+      );
+    });
+
+    it("keeps the cell a lift argument cell holds when a generic alias writes the outer one", async () => {
+      expect(
+        await cellSchema("lift((s: Slot<Writable<number>>) => s.get().get())"),
+      ).toEqual(
+        await cellSchema(
+          "lift((s: Writable<Writable<number>>) => s.get().get())",
+        ),
+      );
+    });
+  });
+
   describe("lift applied", () => {
     /** The schema arguments of each lift `body` hoists, by hoisted name. */
     async function hoistedLiftSchemas(

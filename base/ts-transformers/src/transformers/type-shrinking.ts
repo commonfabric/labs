@@ -1495,7 +1495,7 @@ function getScopedCell(
  * A scope wrapper around a cell, taken apart: its name, its cell, the `null`
  * or `undefined` beside the cell inside it, and its type.
  */
-interface ScopedCellParts {
+export interface ScopedCellParts {
   readonly name: string;
   readonly cell: ts.TypeNode;
   readonly nullish: readonly ts.TypeNode[];
@@ -1534,14 +1534,14 @@ function scopedCellNode(
 }
 
 /**
- * Helper for `applyCellCapabilityPathsToTypeNode()`, which returns the parts
- * of a scope wrapper around a cell that `node` holds, as `scopedCellNode()`
- * does, or, for a print of one, its cell printed afresh from its type. The
+ * Returns the parts of a scope wrapper around a cell that `node` holds, as
+ * `scopedCellNode()` does, or, for a print of one, its cell printed afresh
+ * from its type. The
  * print of an `optional` property's type holds the `undefined` its
  * optionality adds, which the parts leave out, as the property is written
  * without it.
  */
-function scopedCellParts(
+export function scopedCellParts(
   node: ts.TypeNode,
   optional: boolean,
   checker: ts.TypeChecker,
@@ -1580,7 +1580,7 @@ function scopedCellParts(
  * the scope from the wrapper's name, and reads the cell from `node`, keeping
  * any narrowing it carries.
  */
-function wrapScopedCell(
+export function wrapScopedCell(
   node: ts.TypeNode,
   scoped: ScopedCellParts,
   factory: ts.NodeFactory,

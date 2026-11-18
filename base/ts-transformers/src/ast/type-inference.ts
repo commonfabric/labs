@@ -336,6 +336,28 @@ export function unwrapOpaqueLikeType(
   return type;
 }
 
+/**
+ * The value the outermost cell of `type` holds, with any cell inside that
+ * value left as it is: `Writable<number>` for `Writable<Writable<number>>`,
+ * where `unwrapCellLikeType()` reads on to `number`. Each member of a union is
+ * read so, and a member that is no cell, such as `undefined`, stays as it is.
+ * A cell this reads no wrapper of is read as `unwrapCellLikeType()` reads it.
+ */
+export function cellPayloadType(
+  type: ts.Type | undefined,
+  checker: ts.TypeChecker,
+): ts.Type | undefined {
+  if (!type || !isCellLikeType(type, checker)) return type;
+  if (type.isUnion()) {
+    return getUnionType(
+      checker,
+      type.types.map((member) => cellPayloadType(member, checker) ?? member),
+    );
+  }
+  return getCellPayloadType(type, checker) ??
+    unwrapCellLikeType(type, checker);
+}
+
 export function unwrapCellLikeType(
   type: ts.Type | undefined,
   checker: ts.TypeChecker,
