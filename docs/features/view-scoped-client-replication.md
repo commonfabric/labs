@@ -177,7 +177,8 @@ graphs to the selections the request's views keep. Each releases the roots the
 request drops and walks only the roots it adds, so a root the old and new sets
 both name is not walked again, and a view whose revision changes loses its
 support until the planner selects for the new revision. A session's first
-views, and recovery, evaluate every graph whole. A selection that changes only what
+views, a replacement on a session marked for a full resync, and recovery
+evaluate every graph whole. A selection that changes only what
 the view may run or adopt leaves the graphs standing: its plans ride the
 session's next frame, a frame of plans alone when nothing dirtied it. A frame carries the plans when they are owed, by
 such a selection or by a rebuilt graph; an incremental frame that owes none
