@@ -317,9 +317,10 @@ A file that is not code — a fixture, a lookup table, a list of names — ships
 is recovered with the source, byte for byte. It is never parsed, type-checked,
 compiled, or importable. The pattern reads a text file with
 `dataFile("./data/cities.json")` from `commonfabric`, and an image, a font, or a
-sound with `dataFile.url()` as a `data:` URL. Either call is the declaration,
-and its path resolves against the module that reads it, the way an import
-specifier does. Store the file where the call points and `new`, `setsrc`,
+sound with `dataFile.url()` as a `data:` URL, or every image, font, and sound
+directly inside a directory with `dataFile.urls(directory)`. Each call is the
+declaration, and its path resolves against the module that reads it, the way an
+import specifier does. Store the file where the call points and `new`, `setsrc`,
 `check`, `test`, and `dev` all attach it, the way they already follow what the
 source imports. A name with no file behind it fails the build and says which
 module read it.

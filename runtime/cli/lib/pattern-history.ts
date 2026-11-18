@@ -376,15 +376,28 @@ export async function rollbackEntry(
       );
     }
   }
+  // Every file is encoded before the first is written, so a version holding a
+  // binary file whose contents are not a `data:` URL writes nothing.
+  const bytes = changed.map((file) => {
+    try {
+      return encodeDataFile(file.contents, file.name);
+    } catch (error) {
+      throw new PatternHistoryError(
+        `This version's ${file.name} cannot be written as a file (${
+          error instanceof Error ? error.message : String(error)
+        }); nothing was restored.`,
+      );
+    }
+  });
   for (const file of changed) {
     const path = diskPath(root, file.name);
     await Deno.mkdir(dirname(path), { recursive: true });
     await requireInside(root, path);
   }
   const written: string[] = [];
-  for (const file of changed) {
+  for (const [i, file] of changed.entries()) {
     const path = diskPath(root, file.name);
-    await deps.writeFile(path, encodeDataFile(file.contents, file.name));
+    await deps.writeFile(path, bytes[i]);
     written.push(relative(Deno.cwd(), path));
   }
   const version = target.head ? undefined : await client.rollback({

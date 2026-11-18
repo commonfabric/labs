@@ -209,6 +209,31 @@ describe("pattern-history", () => {
       expect(await Deno.readFile(image)).toEqual(glaze);
     });
 
+    it("refuses, writing nothing, a version whose image holds no `data:` URL", async () => {
+      // The entry file comes first, so a rollback that encoded each file as
+      // it wrote it would have written the entry before refusing the image.
+
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/glaze.png", contents: "not a data URL" },
+          ],
+        },
+      });
+
+      await expect(rollbackEntry(entry, "1", { force: true }, deps)).rejects
+        .toThrow(
+          "This version's /glaze.png cannot be written as a file (Data file " +
+            "`/glaze.png` does not hold an `image/png` `data:` URL.); nothing " +
+            "was restored.",
+        );
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      await expect(Deno.stat(join(dir, "glaze.png"))).rejects.toThrow();
+      expect(rollbacks).toEqual([]);
+    });
+
     it("refuses a version naming a file outside the pattern's directory, writing nothing", async () => {
       const { deps, rollbacks } = await indexWith(entry, {
         "ver-1": {
