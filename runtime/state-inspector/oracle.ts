@@ -27,8 +27,9 @@ export interface ReadCoherence {
   /**
    * Commits whose reads the check could not replay: stored with a digest in
    * place of confirmed reads (02-storage.md §3.3), hollowed by compaction,
-   * held in an unreadable payload, holding a read it could not resolve, or
-   * reading an entity before compaction squashed its writes. Empty
+   * held in a payload that does not show them, holding a read it could not
+   * resolve, or reading an entity at a basis older than what compaction kept
+   * of the instance read. Empty
    * {@link anomalies} show the store coherent only when this is 0.
    */
   readSetsNotKept: number;

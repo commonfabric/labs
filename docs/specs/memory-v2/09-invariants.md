@@ -35,8 +35,9 @@ Checkers referenced below:
   (`runtime/state-inspector/test/engine-oracle.test.ts` proves it detects
   seeded corruption). It also counts the commits whose reads it cannot
   replay — stored with a digest in their place (02-storage.md §3.3),
-  hollowed by compaction, undecodable, or reading an entity whose earlier
-  writes compaction squashed — so it certifies a store only when that count
+  hollowed by compaction, held in a payload that does not show them, or
+  reading an instance at a basis older than what compaction kept of it —
+  so it certifies a store only when that count
   is 0;
 - the **differential harness**:
   `runtime/memory/test/v2-differential-consistency.test.ts`, which runs

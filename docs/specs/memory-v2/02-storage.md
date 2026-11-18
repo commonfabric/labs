@@ -159,7 +159,8 @@ A replay is matched against either form (§3.7.4 of the commit model). Both
 determine the whole submission, up to a SHA-256 collision. The byte length and
 counts are for the reader of the log; nothing in admission reads them.
 Offline readers cannot replay a read set stored this way, nor one compaction
-hollowed, nor a read whose intervening writes compaction squashed: the
+hollowed, nor a read at a basis older than what compaction kept of the
+instance it read: the
 stale-read check (`cf inspect conflicts`, the INV-1 oracle) counts each, and
 reports how many commits it could not check rather than calling the store
 consistent.

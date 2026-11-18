@@ -857,8 +857,8 @@ WHERE session_id = :session_id
 // Compaction (docs/plans/compact-space.md, I4) attributes the boundary row of
 // every instance it truncates to a commit stamped with
 // {@link COMPACTION_SESSION_PREFIX}, so this row says whether history below
-// it was deleted or never existed — see {@link historyCompactedBelow}.
-const SELECT_OLDEST_REVISION_ATTRIBUTION = `
+// it was deleted or never existed — see {@link historyCompactedBelowRow}.
+export const SELECT_OLDEST_REVISION_ATTRIBUTION = `
 SELECT r.seq AS seq, c.class AS class, c.session_id AS session_id
 FROM revision r
 JOIN "commit" c ON c.seq = r.commit_seq
@@ -1054,9 +1054,19 @@ FROM instance_name_mark
  */
 export const COMPACTION_SESSION_PREFIX = "compaction:";
 
+/** An instance's oldest row and the commit it is attributed to, as
+ * {@link SELECT_OLDEST_REVISION_ATTRIBUTION} reads it. */
+export type OldestRevisionAttribution = {
+  seq: number;
+  class: string;
+  session_id: string;
+};
+
 /**
  * Whether the instance's history below `basisSeq` was compacted away, as
- * opposed to never having existed.
+ * opposed to never having existed, given its oldest row `oldest`, which
+ * {@link SELECT_OLDEST_REVISION_ATTRIBUTION} reads (undefined for an
+ * instance with no row).
  *
  * Reconstructing a basis reads the newest row at or before it, and a basis
  * older than the instance's oldest row reads as absent either way. The two
@@ -1071,6 +1081,16 @@ export const COMPACTION_SESSION_PREFIX = "compaction:";
  * instance whose oldest row points at an ordinary commit lost nothing, and a
  * basis older than it is a genuine absence.
  */
+export const historyCompactedBelowRow = (
+  oldest: OldestRevisionAttribution | undefined,
+  basisSeq: number,
+): boolean =>
+  oldest !== undefined &&
+  basisSeq < oldest.seq &&
+  oldest.class === "system" &&
+  oldest.session_id.startsWith(COMPACTION_SESSION_PREFIX);
+
+/** {@link historyCompactedBelowRow} for the instance's row in `engine`. */
 const historyCompactedBelow = (
   engine: Engine,
   options: {
@@ -1079,17 +1099,15 @@ const historyCompactedBelow = (
     scopeKey: string;
     basisSeq: number;
   },
-): boolean => {
-  const oldest = engine.statement("selectOldestRevisionAttribution").get({
-    branch: options.branch,
-    id: options.id,
-    scope_key: options.scopeKey,
-  }) as { seq: number; class: string; session_id: string } | undefined;
-  return oldest !== undefined &&
-    options.basisSeq < oldest.seq &&
-    oldest.class === "system" &&
-    oldest.session_id.startsWith(COMPACTION_SESSION_PREFIX);
-};
+): boolean =>
+  historyCompactedBelowRow(
+    engine.statement("selectOldestRevisionAttribution").get({
+      branch: options.branch,
+      id: options.id,
+      scope_key: options.scopeKey,
+    }) as OldestRevisionAttribution | undefined,
+    options.basisSeq,
+  );
 
 /** A decoded revision the engine keeps, with the encoded size it stands in
  * for in the cache's byte budget. */

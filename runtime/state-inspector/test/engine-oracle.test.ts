@@ -263,7 +263,7 @@ Deno.test("oracle: scans the log for unchecked commits once per report", async (
     let scans = 0;
     const prepare = space.db.prepare.bind(space.db);
     space.db.prepare = ((sql: string) => {
-      if (sql.includes(`'%"digest"%'`)) scans++;
+      if (sql.includes(`'$.reads.confirmed'`)) scans++;
       return prepare(sql);
     }) as typeof space.db.prepare;
 
@@ -293,7 +293,8 @@ Deno.test("oracle: does not certify a store whose write history compaction squas
 
   const space = openSpace(out);
   try {
-    // Bob's seq-2 read and the forged seq-10 read predate the squash.
+    // Bob's seq-2 read and the forged seq-10 read are at seq 1, below seq 2,
+    // the oldest revision compaction kept.
     assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 2 });
   } finally {
     space.close();
@@ -315,6 +316,132 @@ Deno.test("oracle: counts a commit whose payload breaks off before it names the 
   } finally {
     space.close();
     await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: counts a commit whose payload is JSON that does not show its reads", async () => {
+  // Valid JSON naming neither the entity nor a digest, which the codec
+  // cannot decode: a payload shaped like no commit, and a read set whose
+  // read names no entity in text.
+  for (
+    const original of [
+      `fvj1:{"/":{"invalid-type@999":{}}}`,
+      `fvj1:${
+        JSON.stringify({
+          localSeq: 99,
+          reads: { confirmed: [{ "/": { "invalid-type@999": {} } }] },
+          operations: [],
+        })
+      }`,
+    ]
+  ) {
+    const { engine, path } = await seedContendedStore();
+    close(engine);
+    forge(path, original);
+
+    const space = openSpace(path);
+    try {
+      assertEquals(readCoherence(space), {
+        anomalies: [],
+        readSetsNotKept: 1,
+      });
+      assertEquals(entityConflicts(space, "entity:doc").readSetsNotKept, 1);
+    } finally {
+      space.close();
+      await Deno.remove(path).catch(() => {});
+    }
+  }
+});
+
+Deno.test("oracle: does not count a commit whose reads it sees, whatever else it cannot decode", async () => {
+  // The reads name no entity, so no read was hidden, though an operation's
+  // value carries a tag the codec does not know.
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  forge(
+    path,
+    `fvj1:${
+      JSON.stringify({
+        localSeq: 99,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: "entity:derived",
+          value: { "/": { "invalid-type@999": {} } },
+        }],
+      })
+    }`,
+  );
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: counts a read below what compaction kept of the instance it read, and no other", async () => {
+  // User-scoped of:x is written at 1 and space-scoped of:x at 2, 4 and 5.
+  // Commit 3 reads space of:x at 2, commit 6 user of:x at 1, and commit 7
+  // space of:x at 5. Compacting the space scope alone, keeping two revisions
+  // of each instance, keeps space of:x's 4 and 5 and deletes its 2. Only
+  // commit 3's read is below what compaction kept of the instance it read:
+  // commit 6's basis is lower still, but compaction left its instance whole.
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const out = `${path}.compacted.sqlite`;
+  const engine = await open({ url: toFileUrl(path) });
+  const alice = {
+    sessionId: "session:did%3Akey%3AzAlice:s1",
+    principal: "did:key:zAlice",
+  };
+  let localSeq = 0;
+  const commit = (
+    operations: ClientCommit["operations"],
+    confirmed: ClientCommit["reads"]["confirmed"] = [],
+  ) =>
+    applyCommit(engine, {
+      ...alice,
+      commit: {
+        localSeq: ++localSeq,
+        reads: { confirmed, pending: [] },
+        operations,
+      },
+    });
+  const at = (seq: number, scope?: "user") => ({
+    id: "of:x",
+    path: toDocumentPath(["value"]),
+    seq,
+    ...(scope ? { scope } : {}),
+  });
+  try {
+    commit([{ op: "set", id: "of:x", scope: "user", value: doc(1) }]);
+    commit([{ op: "set", id: "of:x", value: doc(2) }]);
+    commit([{ op: "set", id: "of:a", value: doc(3) }], [at(2)]);
+    commit([{ op: "set", id: "of:x", value: doc(4) }]);
+    commit([{ op: "set", id: "of:x", value: doc(5) }]);
+    commit([{ op: "set", id: "of:b", value: doc(6) }], [at(1, "user")]);
+    commit([{ op: "set", id: "of:c", value: doc(7) }], [at(5)]);
+  } finally {
+    close(engine);
+  }
+  await compactStore({
+    store: path,
+    out,
+    selection: { prefixes: ["of:"], scope: "space" },
+    cut: { keepLast: 2 },
+    runId: "one-scope",
+  });
+
+  const space = openSpace(out);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 1 });
+    assertEquals(entityConflicts(space, "of:x").readSetsNotKept, 1);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+    await Deno.remove(out).catch(() => {});
   }
 });
 
