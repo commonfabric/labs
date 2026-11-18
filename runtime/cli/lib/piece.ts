@@ -2826,6 +2826,71 @@ export async function checkPiecePattern(
   return await piece.checkPattern(program);
 }
 
+/** What a piece runs now: the pattern it points at and that pattern's source. */
+export interface RunningPattern {
+  /** The space (a DID) the piece is in. */
+  space: string;
+
+  /** The piece's id. */
+  id: string;
+
+  /** The content-addressed id of the pattern it runs. */
+  patternId: string;
+
+  program: RuntimeProgram;
+
+  /** The origin the piece follows, when it follows one (`setsrc --origin`). */
+  origin?: string;
+}
+
+/**
+ * Reads what the piece `config` names runs now, without changing it. The
+ * pattern pointer is read once, so the id and the source always match.
+ *
+ * @throws Error when the piece points at no pattern, or its pattern's source
+ * is not in the space.
+ */
+export async function readRunningPattern(
+  config: PieceConfig,
+  deps: PieceResolutionDeps = {},
+): Promise<RunningPattern> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  try {
+    const resolvedConfig = await resolvePieceConfigWithPieces(
+      config,
+      pieces,
+      deps,
+    );
+    const piece = await pieces.get(
+      resolvedConfig.piece,
+      false,
+      undefined,
+      resolvedConfig.pieceScope,
+    );
+    const ref = await piece.getPatternRef();
+    const program = ref === undefined
+      ? undefined
+      : await pieces.runtime.patternManager.getPatternSourceProgramByIdentity(
+        ref.identity,
+        pieces.getSpace(),
+      );
+    if (ref === undefined || program === undefined) {
+      throw new Error(
+        `Piece "${resolvedConfig.piece}" does not contain a pattern source.`,
+      );
+    }
+    return {
+      space: pieces.getSpace(),
+      id: resolvedConfig.piece,
+      patternId: ref.identity,
+      program: { ...program, mainExport: ref.symbol },
+      ...(ref.source.origin === undefined ? {} : { origin: ref.source.origin }),
+    };
+  } finally {
+    await pieces.dispose();
+  }
+}
+
 export async function savePiecePattern(
   config: PieceConfig,
   outPath: string,

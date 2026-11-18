@@ -181,6 +181,12 @@ export interface DeployedSource {
    * repository pattern, which is not the person's own work.
    */
   origin?: string;
+
+  /**
+   * Keep the version private whatever the person's sharing setting says, so
+   * only an explicit `cf pattern share` hands it to anyone.
+   */
+  keepPrivate?: boolean;
 }
 
 /** What recording a deploy as a version came to. */
@@ -302,6 +308,7 @@ export async function recordDeployedVersion(
         deployed.piece.space,
         deployed.piece.id,
       ),
+      ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });
     return { status: "recorded", created: response.created, response };
   } catch (error) {

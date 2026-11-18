@@ -2144,7 +2144,7 @@ export class CellImpl<T extends FabricValue>
       // link-resolution's kicks. Ordinary load failures resolve from the
       // replica; the terminal session check below rejects terminal failures.
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 
@@ -4129,7 +4129,7 @@ export class CellImpl<T extends FabricValue>
         // cell as synced and will not start a second load of its own, so keep
         // this promise in the shared settled pool until the first load lands.
         this.#runtime.storageManager.trackUntilSettled(
-          this.#startLoad().catch(() => {}),
+          this.#startLoad(),
         );
       }
       return subscribeToReferencedDocs(
@@ -4162,7 +4162,7 @@ export class CellImpl<T extends FabricValue>
     }
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
     return subscribeToReferencedDocs(
@@ -4197,10 +4197,14 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Starts loading this cell's backing doc for a read that does not wait for
-   * the load, and returns the load's promise.
+   * the load, and returns a promise that settles when the load does. The
+   * promise never rejects: a load that fails is logged, and the read that
+   * started it sees the doc as absent.
    */
-  #startLoad(): Promise<unknown> {
-    return this.#load(true);
+  #startLoad(): Promise<void> {
+    return this.#load(true).then(() => {}, (error: unknown) => {
+      logger.warn("load-failed", "loading a cell failed", this.#link, error);
+    });
   }
 
   /**
@@ -4257,7 +4261,7 @@ export class CellImpl<T extends FabricValue>
   ): Cancel {
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 

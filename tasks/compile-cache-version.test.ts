@@ -116,9 +116,9 @@ describe("compile-cache-version", () => {
       ]);
     });
 
-    it("returns 1 and prints the failure on standard error when the command fails", async () => {
-      // The entries that compiled before the failure are still reported, and
-      // neither form prints a result.
+    it("rejects with the command's failure, after reporting the entries that compiled", async () => {
+      // Neither form prints a result. The rejection leaves the process through
+      // its top-level `await`, which exits with status 1.
 
       const failure = new Error("the tree changed while it compiled");
       const failing: CompileCacheVersionCommands = {
@@ -132,11 +132,10 @@ describe("compile-cache-version", () => {
         },
       };
 
-      expect(await main([], failing)).toBe(1);
-      expect(await main(["--memo"], failing)).toBe(1);
+      await expect(main([], failing)).rejects.toBe(failure);
+      await expect(main(["--memo"], failing)).rejects.toBe(failure);
       expect(stdout).toEqual(COMPILED_LINES);
-      const failed = `compile-cache-version failed: ${failure.message}`;
-      expect(stderr).toEqual([...COMPILED_LINES, failed, failed]);
+      expect(stderr).toEqual(COMPILED_LINES);
     });
   });
 });
