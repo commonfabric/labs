@@ -589,7 +589,10 @@ describe("pattern-versions", () => {
             },
             recordVersion: (deployed) => {
               recorded.push(deployed.keepPrivate);
-              return Promise.resolve({ status: "failed", reason: "index down" });
+              return Promise.resolve({
+                status: "failed",
+                reason: "index down",
+              });
             },
             render: () => {},
             warn: (line) => lines.push(line),

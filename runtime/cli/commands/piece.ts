@@ -5332,7 +5332,9 @@ export function parseIndexVersionMode(
   if (value === undefined || value === "auto") return "auto";
   if (value === "private" || value === "none") return value;
   throw new ValidationError(
-    `--index-version takes auto, private or none, not ${JSON.stringify(value)}.`,
+    `--index-version takes auto, private or none, not ${
+      JSON.stringify(value)
+    }.`,
     { exitCode: 1 },
   );
 }
