@@ -726,11 +726,17 @@ export class Store {
 
   /**
    * The keys last formed for a stored array, by its address and the key
-   * fields: the array they were formed for, and the clock then.
+   * fields: the array they were formed for, the clock then, and the
+   * documents that forming them read.
    */
   readonly #keys = new Map<
     string,
-    { clock: number; held: readonly unknown[]; keys: string[] }
+    {
+      clock: number;
+      held: readonly unknown[];
+      keys: string[];
+      documents: Position[];
+    }
   >();
 
   /**
@@ -826,18 +832,21 @@ export class Store {
     // keyed by its position while the keys of that array are formed.
     const reentered = this.#keying.has(id);
     // The keys of a stored array are a function of what is stored, so
-    // they stand while the clock does.
+    // they stand until a document that forming them read is written. An
+    // evaluation that writes nothing moves the clock and no key.
     const clock = this.clock;
     const formed = `${id} ${JSON.stringify(fields)}`;
     const known = this.#keys.get(formed);
     if (
-      !reentered && copies === undefined && known?.clock === clock &&
-      known.held === held
+      !reentered && known !== undefined && known.held === held &&
+      (known.clock === clock ||
+        !this.changedSince(known.clock, known.documents))
     ) {
       return known.keys;
     }
     this.#keying.add(id);
     this.keyings += 1;
+    const reads: Position[] = [];
     try {
       const keys = keysOfParts(held.map((member, index): ElementPart => {
         if (isLink(member)) {
@@ -846,19 +855,35 @@ export class Store {
           const { named } = this.locate(
             new Ref(member.$link.doc, member.$link.path),
             true,
-            undefined,
+            reads,
             true,
           );
           return this.addressOf(named);
         }
         if (reentered) return { position: index };
         return this.partOf(
-          copies === undefined ? this.read(at.key(`${index}`)) : copies[index],
+          copies === undefined
+            ? this.read(at.key(`${index}`), reads)
+            : copies[index],
           fields,
         );
       }));
       if (!reentered && copies === undefined && this.clock === clock) {
-        this.#keys.set(formed, { clock, held, keys });
+        // What was read: the array, and each other document whole. A
+        // write to one of them forms the keys again.
+        const array = this.locate(at, true).ref;
+        const documents: Position[] = [{ doc: array.doc, path: array.path }];
+        for (const { doc, path } of reads) {
+          if (doc === array.doc && isPrefix(array.path, path)) continue;
+          if (
+            !documents.some((known) =>
+              known.doc === doc && known !== documents[0]
+            )
+          ) {
+            documents.push({ doc, path: [] });
+          }
+        }
+        this.#keys.set(formed, { clock, held, keys, documents });
       }
       return keys;
     } finally {
