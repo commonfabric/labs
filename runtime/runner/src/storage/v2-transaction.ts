@@ -53,6 +53,7 @@ import {
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope } from "../scope.ts";
 import { type ArrayEditHunk, shortestEditHunks } from "./array-edit-script.ts";
+import { commitReadActivities } from "./commit-read-activities.ts";
 import { getCommitLocalSeq, getCommitSeq } from "./commit-identity.ts";
 import { createTransactionCommitReceipt } from "./commit-receipt.ts";
 import { diagnosticPrefix, type PendingCommitContext } from "./diagnostics.ts";
@@ -629,8 +630,11 @@ const POSITIONAL_REPLACE_LIMIT = 64;
  * Two arrays without holes are diffed by `arraySpliceHunks()`, and sent as
  * the splices it returns. Otherwise, and where `positional` is set, they are
  * diffed index by index (`buildPositionalArrayPatchCandidates()`). The caller
- * sets `positional` where a mergeable op's suppression reaches the array,
- * since the suppression is written against the per-index diff.
+ * sets `positional` where the commit's reads do not pin the array, since a
+ * splice names positions and lands on whatever array the store then holds,
+ * and where a mergeable op's suppression reaches the array, since the
+ * suppression is written against the per-index diff
+ * (`V2StorageTransaction.#buildPatchOperation()`).
  */
 const buildArrayPatchCandidates = (
   path: readonly string[],
@@ -690,11 +694,13 @@ const buildArrayPatchCandidates = (
  * per-index diff instead.
  *
  * The runs are those of a shortest edit script, found within
- * `ARRAY_DIFF_MAX_EDITS` edits between the arrays' common prefix and suffix,
- * or, where none is that short, one run spanning everything between them.
- * Splices carry the elements the runs add, where the per-index diff carries
- * every element that changed or shifted, and the change is sent as splices
- * only where they carry fewer.
+ * `ARRAY_DIFF_MAX_EDITS` edits between the arrays' common prefix and suffix.
+ * Where none is that short, the change goes index by index: one run spanning
+ * everything between the prefix and the suffix would carry every element
+ * there, changed or not, which can be many times the bytes of the elements
+ * the per-index diff carries. Splices carry the elements the runs add, where
+ * the per-index diff carries every element that changed or shifted, and the
+ * change is sent as splices only where they carry fewer.
  *
  * A change to the array's length is sent as splices on that condition alone.
  * The per-index diff of one ends in a splice at the array's path too, so
@@ -703,7 +709,9 @@ const buildArrayPatchCandidates = (
  * A change that keeps the length is sent as splices only where the per-index
  * diff would also replace more than `POSITIONAL_REPLACE_LIMIT` elements. Its
  * per-index diff is replaces alone, each touching its own element, which
- * conflict with fewer readers than a splice, which touches the array.
+ * conflict with fewer readers than a splice, which touches the array. That
+ * is decided first, by a count that stops past the limit, so a sparse edit of
+ * a long array hashes nothing.
  */
 const arraySpliceHunks = (
   before: readonly FabricValue[],
@@ -724,16 +732,29 @@ const arraySpliceHunks = (
   ) {
     suffix += 1;
   }
+  const sameLength = before.length === after.length;
+  if (
+    sameLength &&
+    countChangedIndices(
+        before,
+        after,
+        prefix,
+        before.length - suffix,
+        POSITIONAL_REPLACE_LIMIT + 1,
+      ) <= POSITIONAL_REPLACE_LIMIT
+  ) {
+    return undefined;
+  }
+
   const between: ArrayEditHunk = {
     start: prefix,
     remove: before.length - prefix - suffix,
     addStart: prefix,
     add: after.length - prefix - suffix,
   };
-
-  let script: ArrayEditHunk[] | undefined;
+  let runs: ArrayEditHunk[] | undefined;
   if (between.remove === 0 || between.add === 0) {
-    script = [between];
+    runs = [between];
   } else {
     // Every pair of elements between the prefix and the suffix may be
     // compared, so each is keyed once by the content hash `valueEqual()`
@@ -742,7 +763,7 @@ const arraySpliceHunks = (
       .map((value) => hashStringOf(value));
     const afterKeys = after.slice(prefix, prefix + between.add)
       .map((value) => hashStringOf(value));
-    script = shortestEditHunks(
+    runs = shortestEditHunks(
       between.remove,
       between.add,
       (beforeIndex, afterIndex) =>
@@ -754,35 +775,35 @@ const arraySpliceHunks = (
       addStart: hunk.addStart + prefix,
     }));
   }
-  const runs = script ?? [between];
+  if (runs === undefined) {
+    return undefined;
+  }
 
   // Where the length holds, a script of substitutions alone replaces the
   // elements the per-index diff does, and nothing is gained.
-  const sameLength = before.length === after.length;
   if (sameLength && runs.every((hunk) => hunk.remove === hunk.add)) {
     return undefined;
   }
   const carried = runs.reduce((total, hunk) => total + hunk.add, 0);
   const replaced = countChangedIndices(before, after, prefix, shorter) +
     after.length - shorter;
-  if (sameLength && replaced <= POSITIONAL_REPLACE_LIMIT) {
-    return undefined;
-  }
   return carried < replaced ? runs : undefined;
 };
 
 /**
  * Counts the indices from `start` up to `end` at which `before` and `after`
- * hold different values: the elements a per-index diff replaces there.
+ * hold different values: the elements a per-index diff replaces there. The
+ * count stops once it reaches `stopAt`.
  */
 const countChangedIndices = (
   before: readonly FabricValue[],
   after: readonly FabricValue[],
   start: number,
   end: number,
+  stopAt = Infinity,
 ): number => {
   let changed = 0;
-  for (let index = start; index < end; index += 1) {
+  for (let index = start; index < end && changed < stopAt; index += 1) {
     if (!valueEqual(before[index]!, after[index]!)) {
       changed += 1;
     }
@@ -1840,6 +1861,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const operations: NativeStorageCommitOperation[] = [];
+    const pinsArray = this.#arrayPinning(space);
     // Unconfirmed schema documents whose staged write nets to no visible
     // change (#mustDeliverSchemaDoc; the visible copy sits on a layer the
     // wire never carries, such as a client speculation overlay entry).
@@ -1957,6 +1979,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           doc,
           base,
           mergeable.suppress,
+          (arrayPath) => pinsArray(id, scope, arrayPath),
           patchedValue,
         );
         if (mergeable.ops.length > 0) {
@@ -4356,6 +4379,44 @@ export class V2StorageTransaction implements IStorageTransaction {
    * differs. No patch expresses a write to the document root, so `doc` must
    * hold none (see `#writesDocumentRoot()`).
    */
+  /**
+   * Returns whether the commit this transaction sends to `space` pins the
+   * array at `arrayPath` of a document: carries a recursive read of the
+   * array or of a path above it, which the store refuses the commit over
+   * where anything beneath it changed since. The reads are the commit's own
+   * (`commitReadActivities()`), worked out once, on the first question.
+   * Abandoning a mergeable intent while the commit is built only adds reads
+   * to the commit, so working them out before that never claims a read the
+   * commit leaves out.
+   */
+  #arrayPinning(
+    space: MemorySpace,
+  ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
+    let reads: readonly IReadActivity[] | undefined;
+    return (id, scope, arrayPath) => {
+      reads ??= commitReadActivities(space, this, this.#readActivities);
+      const instance = normalizeCellScope(scope);
+      return reads.some((read) =>
+        read.id === id && read.nonRecursive !== true &&
+        normalizeCellScope(read.scope) === instance &&
+        isPrefixPath(read.path, arrayPath)
+      );
+    };
+  }
+
+  /**
+   * Builds the patch that takes `doc` from `base` to `patchedValue`, or
+   * returns `null` where it has no base to patch.
+   *
+   * A change to an array goes as splices only where `pinsArray` says the
+   * commit's reads pin the array, and no op in `suppress` reaches it. A
+   * splice names positions, and the store applies it to whatever array it
+   * holds then. A pinning read makes the store refuse the commit where
+   * anything beneath the array moved since the transaction read it, so the
+   * splices land on exactly the array they were diffed from. Without one,
+   * the per-index diff keeps each written index's value however the array
+   * moved.
+   */
   #buildPatchOperation(
     id: URI,
     type: MediaType,
@@ -4363,6 +4424,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     doc: WritableDocumentEntry,
     base: FabricValue | undefined,
     suppress: readonly OpSuppression[],
+    pinsArray: (arrayPath: readonly string[]) => boolean,
     patchedValue: FabricValue | undefined = doc.current.value,
   ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
     if (base === undefined || patchedValue === undefined) {
@@ -4465,9 +4527,10 @@ export class V2StorageTransaction implements IStorageTransaction {
           hasValueAtPath(patchedValue, arrayPath, {
             allowArrayLength: true,
           }),
-          suppress.some((suppression) =>
-            pathsOverlap(suppression.path, arrayPath)
-          ),
+          !pinsArray(arrayPath) ||
+            suppress.some((suppression) =>
+              pathsOverlap(suppression.path, arrayPath)
+            ),
         )
       ) {
         if (candidate.coversDescendants) {

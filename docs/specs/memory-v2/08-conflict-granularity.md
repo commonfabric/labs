@@ -89,10 +89,24 @@ reader-dirty index handle conservatively:
 - **insertion, removal, or a long move anywhere in the array** → a `splice`
   whose path **is the array** (`arr`) for each run of a shortest edit script
   between the two arrays, which prefix-matches every index reader below it. A
-  tail grow or shrink is the one-splice case. The splices are sent where they
-  carry fewer elements than the per-index shape would; and
+  tail grow or shrink is the one-splice case. The runs come from a script of
+  at most 64 edits, and the splices are sent where they carry fewer elements
+  than the per-index shape would; otherwise the change goes per index, a
+  `replace` at each index whose element changed or shifted and a tail
+  `splice`; and
 - **messy cases** (an array with a hole in it) → a whole-array `replace` at
   `arr` (same conservative coverage).
+
+A splice names positions, and the engine applies it to whatever array it
+holds when the commit lands. So a change goes as edit-script splices only
+where the commit carries a recursive read of the array or of a path above it
+(the reads `commitReadActivities()` in runner
+`storage/commit-read-activities.ts` keeps): that read makes the engine refuse
+the commit where anything beneath the array moved since, so the splices land
+on exactly the array they were diffed from and stand for the per-index writes
+they replace. A commit without such a read, a blind UI-input write among
+them, goes per index, which leaves each index it wrote holding its value
+however the array moved.
 
 A length change already puts a splice on the array's path, so sending it as
 splices throughout costs no conflict precision; a change that keeps the length

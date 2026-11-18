@@ -4395,15 +4395,29 @@ ORDER BY seq, op_index
 };
 
 /**
- * The value paths that one session's authored commits overwrote in one doc
- * instance after `sinceSeq`, the session being `sessionId` opened by
- * `principal`. This is the input to the wave commit step's supersession of an
- * event consequence by a later write of the session that fired the event
- * (serving-loop.md §3d). Only writes that replace what sits at their path
- * count: a `set` or `delete` revision reports the root path, and a `patch`
- * revision reports the paths of its `replace`, `add` and `remove` patches and
- * both paths of a `move`. A patch that merges into existing content — an
- * append, a splice, an increment — overwrites nothing and is left out.
+ * Where a session's write overwrote a document: a value path, standing for
+ * the value there and everything beneath it, or `{ array, fromIndex }`,
+ * standing for every element of the array at `array` from index `fromIndex`
+ * on and everything beneath them. A splice that changes an array's length
+ * moves every element from its index on, so a write addressed to one of
+ * those indices before the splice now names a different element.
+ */
+export type SessionOverwrite =
+  | readonly string[]
+  | { readonly array: readonly string[]; readonly fromIndex: number };
+
+/**
+ * Where one session's authored commits overwrote one doc instance after
+ * `sinceSeq`, the session being `sessionId` opened by `principal`. This is
+ * the input to the wave commit step's supersession of an event consequence
+ * by a later write of the session that fired the event (serving-loop.md
+ * §3d). Only writes that replace what sits at their path count: a `set` or
+ * `delete` revision reports the root path, and a `patch` revision reports
+ * the paths of its `replace`, `add` and `remove` patches and both paths of a
+ * `move`. A `splice` that keeps the array's length reports the indices it
+ * replaced, and one that changes it reports the elements from its index on
+ * (`SessionOverwrite`), which it moved. A patch that merges into existing
+ * content — an append, an increment — overwrites nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4415,7 +4429,7 @@ export const selectSessionOverwritePathsSince = (
     principal: string;
     sessionId: SessionId;
   },
-): Array<readonly string[]> => {
+): Array<SessionOverwrite> => {
   const rows = engine.prepare(`
 SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
@@ -4429,7 +4443,7 @@ ORDER BY r.seq, r.op_index
       since_seq: options.sinceSeq,
       session_id: resolveCommitSessionKey(options.sessionId, options.principal),
     }) as Array<{ op: string; data: string | null }>;
-  const paths: Array<readonly string[]> = [];
+  const paths: Array<SessionOverwrite> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
       const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
@@ -4441,6 +4455,15 @@ ORDER BY r.seq, r.op_index
         } else if (patch.op === "move") {
           paths.push(parsePointer(patch.from));
           paths.push(parsePointer(patch.path));
+        } else if (patch.op === "splice") {
+          const array = parsePointer(patch.path);
+          if (patch.remove === patch.add.length) {
+            for (let offset = 0; offset < patch.remove; offset += 1) {
+              paths.push([...array, String(patch.index + offset)]);
+            }
+          } else {
+            paths.push({ array, fromIndex: patch.index });
+          }
         }
       }
     } else if (row.op === "set" || row.op === "delete") {

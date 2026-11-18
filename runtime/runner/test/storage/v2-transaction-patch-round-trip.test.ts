@@ -16,6 +16,11 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
+import {
+  markUiInputBlindWriteTx,
+  setBlindStructuralTarget,
+  unmarkUiInputBlindWriteTx,
+} from "../../src/storage/reactivity-log.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
 
@@ -820,6 +825,153 @@ describe("v2-transaction", () => {
       ]);
       expect(await storedValue("edit-and-push")).toStrictEqual({
         list: ["b", "a", "c"],
+      });
+    });
+
+    it("sends a change that no edit script within 64 edits makes index by index", async () => {
+      // Seventy elements change and one is removed, past the bound where the
+      // search for a shortest edit script stops. One splice spanning the
+      // changed range would carry every element in it, the unchanged one
+      // among them, so the change travels index by index, carrying only the
+      // elements that changed or shifted.
+      const writer = connect();
+      const list = items(120);
+      await commit(writer, "unscripted", (cell) => cell.set({ list }));
+      const changed = list
+        .map((value, index) =>
+          index <= 70 && index !== 60 ? `${value}-edited` : value
+        )
+        .filter((_, index) => index !== 80);
+
+      const sent = await commitOps(
+        writer,
+        "unscripted",
+        (cell) => cell.key("list").set(changed),
+      );
+
+      expect(sent.filter((op) => op.op === "splice")).toEqual([
+        { op: "splice", path: "/value/list", index: 119, remove: 1, add: [] },
+      ]);
+      expect(sent.map(kindAndPath)).not.toContain("replace /value/list/60");
+      expect(await storedValue("unscripted")).toStrictEqual({ list: changed });
+    });
+
+    describe("written by a commit that does not read the whole list", () => {
+      // A splice names positions, and the server applies it to whatever list
+      // it holds then. A commit that read the whole list is refused where the
+      // list moved since, so its splices land on the list they were diffed
+      // from. A blind UI-input write reads no more than the shape of the
+      // list's parent, so its change travels index by index, and each index
+      // it wrote holds its value however the list moved.
+
+      /**
+       * Builds a transaction that writes `next` to the list of `doc` the way
+       * the UI's input does: blind, its one read the shape of the list's
+       * parent.
+       */
+      const blindWrite = (session: Session, doc: string, next: string[]) => {
+        const tx = session.runtime.edit();
+        const list = session.runtime
+          .getCell<FabricValue>(space, doc, undefined, tx)
+          .key("list");
+        markUiInputBlindWriteTx(tx);
+        const link = list.resolveAsCell().getAsNormalizedFullLink();
+        setBlindStructuralTarget(tx, {
+          id: link.id,
+          space: link.space,
+          scope: link.scope,
+          path: link.path.slice(0, -1),
+        });
+        list.set(next);
+        unmarkUiInputBlindWriteTx(tx);
+        session.runtime.prepareTxForCommit(tx);
+        return tx;
+      };
+
+      /** Builds a transaction that changes element 1 of the list of `doc`. */
+      const peerEdit = (session: Session, doc: string) => {
+        const tx = session.runtime.edit();
+        session.runtime.getCell<FabricValue>(space, doc, undefined, tx)
+          .key("list").key(1).set("peer");
+        return tx;
+      };
+
+      it("sends a blind head insertion index by index", async () => {
+        const writer = connect();
+        await commit(writer, "blind", (cell) => cell.set({ list: ["a", "b"] }));
+
+        const alreadySent = sentPatches.length;
+        const result = await blindWrite(writer, "blind", ["x", "a", "b"])
+          .commit().settled;
+
+        expect(result.error).toBeUndefined();
+        expect(sentPatches.slice(alreadySent).map(kindAndPath)).toEqual([
+          "replace /value/list/0",
+          "replace /value/list/1",
+          "splice /value/list",
+        ]);
+        expect(await storedValue("blind")).toStrictEqual({
+          list: ["x", "a", "b"],
+        });
+      });
+
+      it("keeps each index a blind write wrote where another session changed the list first", async () => {
+        const writer = connect();
+        const peer = connect();
+        await commit(
+          writer,
+          "blind-race",
+          (cell) => cell.set({ list: ["a", "b"] }),
+        );
+        await peer.runtime.getCell<FabricValue>(space, "blind-race").sync();
+
+        // Both commits are built before either reaches the server, which
+        // takes the peer's first.
+        const blind = blindWrite(writer, "blind-race", ["x", "a", "b"]);
+        const edit = peerEdit(peer, "blind-race");
+        const [edited, written] = await Promise.all([
+          edit.commit().settled,
+          blind.commit().settled,
+        ]);
+
+        expect(edited.error).toBeUndefined();
+        expect(written.error).toBeUndefined();
+        expect(await storedValue("blind-race")).toStrictEqual({
+          list: ["x", "a", "b"],
+        });
+      });
+
+      it("refuses a head insertion that read the list where another session changed the list first", async () => {
+        const writer = connect();
+        const peer = connect();
+        await commit(
+          writer,
+          "read-race",
+          (cell) => cell.set({ list: ["a", "b"] }),
+        );
+        await peer.runtime.getCell<FabricValue>(space, "read-race").sync();
+
+        const insertion = writer.runtime.edit();
+        const list = writer.runtime
+          .getCell<FabricValue>(space, "read-race", undefined, insertion)
+          .key("list");
+        list.set(["x", ...(list.get() as string[])]);
+        const edit = peerEdit(peer, "read-race");
+        const alreadySent = sentPatches.length;
+        const [edited, inserted] = await Promise.all([
+          edit.commit().settled,
+          insertion.commit().settled,
+        ]);
+
+        expect(sentPatches.slice(alreadySent).map(kindAndPath)).toEqual([
+          "replace /value/list/1",
+          "splice /value/list",
+        ]);
+        expect(edited.error).toBeUndefined();
+        expect(inserted.error?.name).toBe("ConflictError");
+        expect(await storedValue("read-race")).toStrictEqual({
+          list: ["a", "peer"],
+        });
       });
     });
   });

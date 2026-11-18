@@ -122,10 +122,64 @@ describe("selectSessionOverwritePathsSince()", () => {
       patch(
         { op: "append", path: "/value/tags", values: ["a"] },
         { op: "increment", path: "/value/count", by: 1 },
-        { op: "splice", path: "/value/tags", index: 0, remove: 0, add: ["b"] },
       ),
     );
     expect(overwritten(seeded)).toEqual([]);
+  });
+
+  describe("for a `splice`", () => {
+    // The seeder fills the list, so the session's splices land inside it.
+    let filled = 0;
+    beforeEach(() => {
+      filled = commit(
+        patch({
+          op: "replace",
+          path: "/value/tags",
+          value: ["a", "b", "c", "d"],
+        }),
+        { principal: "did:key:seeder", sessionId: "seeder-session" },
+      );
+    });
+
+    it("returns the elements from its index on where it inserts, which it moved", () => {
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 1,
+        remove: 0,
+        add: ["x"],
+      }));
+      expect(overwritten(filled)).toEqual([
+        { array: ["value", "tags"], fromIndex: 1 },
+      ]);
+    });
+
+    it("returns the elements from its index on where it removes more than it adds", () => {
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 0,
+        remove: 2,
+        add: ["x"],
+      }));
+      expect(overwritten(filled)).toEqual([
+        { array: ["value", "tags"], fromIndex: 0 },
+      ]);
+    });
+
+    it("returns the indices it replaced where it keeps the length", () => {
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 1,
+        remove: 2,
+        add: ["x", "y"],
+      }));
+      expect(overwritten(filled)).toEqual([
+        ["value", "tags", "1"],
+        ["value", "tags", "2"],
+      ]);
+    });
   });
 
   it("returns an empty list for another session's writes after the seq", () => {

@@ -1750,8 +1750,13 @@ as — after the entry's seq. A patch at or below a path one of those
 commits overwrote is DROPPED from the consequence, and so is a whole-doc
 `set` or `delete` that one of them rewrote whole. A commit overwrites a
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
-`remove` patch; a write that merges into existing content (`append`,
-`splice`, `increment`, and the like) overwrites nothing. The rule holds
+`remove` patch. A `splice` that keeps the array's length overwrites the
+indices it replaced, and one that changes the length overwrites every
+element from its index on: it stands for a write of each element it moved
+(memory-v2 08-conflict-granularity.md, "Array writes and the leaf-only
+matcher"), and a consequence write addressed to one of those indices before
+it names a different element after it. A write that merges into existing
+content (`append`, `increment`, and the like) overwrites nothing. The rule holds
 wherever the session's write fell: below the wave's basis, which is
 where a requeued or late-drained handler finds it — a run that read the
 doc before the write reached its replica is requeued on the stale read,

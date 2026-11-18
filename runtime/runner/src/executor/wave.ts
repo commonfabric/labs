@@ -44,6 +44,7 @@ import {
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
+import type { SessionOverwrite } from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type {
   ServedAclChange,
@@ -73,6 +74,7 @@ import {
   pathsOverlap,
 } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -816,19 +818,20 @@ export interface WaveCommitSink {
   ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>>;
 
   /**
-   * The value paths that the authored commits of `session` overwrote in a
-   * doc-instance after `sinceSeq` — §3d's supersession of an event
-   * consequence by a later write of the session that fired the event.
-   * Writes that merge into existing content (appends, splices, increments)
-   * overwrite nothing and are not reported. A sink that cannot answer omits
-   * it, and no consequence is superseded.
+   * Where the authored commits of `session` overwrote a doc-instance after
+   * `sinceSeq` — §3d's supersession of an event consequence by a later write
+   * of the session that fired the event. A splice that changes an array's
+   * length overwrites the elements from its index on, which it moved
+   * (`SessionOverwrite`). Writes that merge into existing content (appends,
+   * increments) overwrite nothing and are not reported. A sink that cannot
+   * answer omits it, and no consequence is superseded.
    */
   sessionOverwritePathsSince?(
     space: MemorySpace,
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>>;
+  ): Promise<ReadonlyArray<SessionOverwrite>>;
 
   commitWave(
     batch: WaveSpaceCommit,
@@ -1124,6 +1127,20 @@ export const warmWritesOf = (
     if (!writes.has(key)) writes.set(key, { id: op.id, scopeKey });
   }
   return [...writes.values()];
+};
+
+/** Whether the value path `path` lies where `overwrite` overwrote: at or
+ * beneath its value path, or at or beneath an element of its array at an
+ * index at or past its `fromIndex` (`SessionOverwrite`). */
+const overwriteCovers = (
+  overwrite: SessionOverwrite,
+  path: readonly string[],
+): boolean => {
+  if (!("fromIndex" in overwrite)) return isPrefixPath(overwrite, path);
+  const { array, fromIndex } = overwrite;
+  if (path.length <= array.length || !isPrefixPath(array, path)) return false;
+  const segment = path[array.length]!;
+  return isArrayIndexPropertyName(segment) && Number(segment) >= fromIndex;
 };
 
 /** The eventIds of the seq-LESS stream entries one sealed op appends —
@@ -2592,7 +2609,9 @@ export class WaveAccumulator
       if (overwritten.length === 0) return undefined;
       const covered = (path: string): boolean => {
         const parsed = parsePointer(path);
-        return overwritten.some((prefix) => isPrefixPath(prefix, parsed));
+        return overwritten.some((overwrite) =>
+          overwriteCovers(overwrite, parsed)
+        );
       };
       const patches = new Set<PatchOp>();
       let whole = true;
