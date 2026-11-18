@@ -24,6 +24,7 @@ import {
   keysOfParts,
   markerOf,
   memberKey,
+  OUTPUT,
   type Position,
   Ref,
   rekeyed,
@@ -2556,6 +2557,12 @@ export class Instance {
         }
       }
       if (held instanceof Ref) return this.#stored(held, host, keyFields);
+      if (source.output !== undefined && Array.isArray(held)) {
+        const place = this.#generated(source.output, held, host.context);
+        if (place !== undefined) {
+          return this.#stored(place, host, keyFields ?? []);
+        }
+      }
       members = (Array.isArray(held) ? held : []).map((member) =>
         member instanceof Ref ? member : { value: member }
       );
@@ -2575,6 +2582,52 @@ export class Instance {
       index,
       source: member,
     }));
+  }
+
+  /**
+   * The place of a plain array generated from scratch, what the body of
+   * a `lift` or a `computed` returned whole for an output: a document
+   * that holds the array, so that an element of it has a reference by
+   * key with the address of the output as its collection, as an
+   * element of an array of plain values in place has (ruling Z53). The
+   * document is stored again when the array is another one. None for
+   * an output that no function body computes whole.
+   */
+  #generated(
+    output: number,
+    held: readonly unknown[],
+    context: Context,
+  ): Ref | undefined {
+    const record = this.plan.outputs[output];
+    if (
+      record.path.length > 0 ||
+      this.plan.cones[record.cone].bodies.length === 0
+    ) {
+      return undefined;
+    }
+    const within = this.collectionsOf(record.cone);
+    const id = this.doc(
+      `output:${output}:${
+        canonical(within.map((collection) => context.get(collection)?.key))
+      }`,
+    );
+    const store = (array: readonly unknown[]) => {
+      const stored = this.stored(array);
+      if (canonical(this.store.docs.get(id)?.value) !== canonical(stored)) {
+        this.store.create(id, OUTPUT, stored);
+      }
+    };
+    store(held);
+    // An output outside every element body is brought up to date by a
+    // read that reaches its document through a link stored elsewhere.
+    const value = this.valueOfOutput.get(output);
+    if (within.length === 0 && value !== undefined) {
+      this.store.sources.set(id, () => {
+        const now = this.evaluated(value)(new Map()).value;
+        if (Array.isArray(now)) store(now);
+      });
+    }
+    return new Ref(id, []);
   }
 
   /**

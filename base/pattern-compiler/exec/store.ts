@@ -439,6 +439,16 @@ export class MissingKey extends Error {
   }
 }
 
+/** A write to the document of a computed output, which refuses writes. */
+export class ComputedOutput extends Error {
+  constructor() {
+    super("a write to a computed output");
+  }
+}
+
+/** The kind of the document that holds what a computed output returned. */
+export const OUTPUT = "output";
+
 /** The longest chain of links a read follows before it gives up. */
 const MAX_LINKS = 64;
 
@@ -512,6 +522,30 @@ export class Store {
     walk(value, [...path]);
     if (kept.length === 0) this.streams.delete(doc);
     else this.streams.set(doc, kept);
+  }
+
+  /**
+   * For the document of a computed output: what brings the output up to
+   * date and stores it, which a read that reaches the document runs
+   * first. A reference by key to an element of the output that is
+   * stored elsewhere then reads what the computation returns now
+   * (ruling Z53).
+   */
+  readonly sources = new Map<string, () => void>();
+
+  /** The documents whose source is being run. */
+  readonly #refreshing = new Set<string>();
+
+  /** Brings the document of a computed output up to date. */
+  #refresh(id: string): void {
+    const source = this.sources.get(id);
+    if (source === undefined || this.#refreshing.has(id)) return;
+    this.#refreshing.add(id);
+    try {
+      source();
+    } finally {
+      this.#refreshing.delete(id);
+    }
   }
 
   create(id: string, kind: string, value: unknown): void {
@@ -646,6 +680,7 @@ export class Store {
     names = false,
   ): Located {
     let doc = ref.doc;
+    this.#refresh(doc);
     let value = this.#held(doc);
     let at: string[] = [];
     let named_: string[] = [];
@@ -695,6 +730,7 @@ export class Store {
         named_ = [];
         inPlace = false;
         crossed = [];
+        this.#refresh(doc);
         value = this.#held(doc);
       }
       const segment = rest.shift();
@@ -1054,6 +1090,7 @@ export class Store {
     if (located.missing) throw new MissingKey();
     const { doc, path } = located.ref;
     let document = this.docs.get(doc);
+    if (document?.kind === OUTPUT) throw new ComputedOutput();
     if (document === undefined) {
       // The first write of a declared place makes its document. A write
       // below the root starts from the default the place read as.

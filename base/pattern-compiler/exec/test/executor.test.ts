@@ -8,6 +8,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type Artifact, Handle, Host, Instance } from "../executor.ts";
 import {
+  ComputedOutput,
   fieldsOfKey,
   keySegment,
   memberKey,
@@ -4858,16 +4859,36 @@ describe("a key field declared with `ArrayByKey`", () => {
     ).toBe("new-owner");
   });
 
-  // The element of an array that a `lift` returns has no place in the
-  // executor, so a handler of a body over the result of a `filter` of
-  // it is given the value.
-  it("stores the value of an element of a plain array generated from scratch, which has no place", async () => {
+  // Ruling Z53, over the result of a `filter` of a plain array generated
+  // from scratch: the element has a reference by key whose collection is
+  // the address of the output.
+  it("stores a reference by key to an element of a plain array generated from scratch, with the output as its collection", async () => {
     const instance = await start();
 
     expect(instance.send(PICK_FOUND, {}, [0]).committed).toBe(true);
 
-    expect(cell(instance, PICKED)).toEqual(repo(2, "cde", 3));
-    expect(cell(instance, OWNER)).toEqual({ login: "cde-owner" });
+    const key = keySegment(byFields(instance, { id: 2 }));
+    expect(cell(instance, PICKED)).toEqual({
+      $link: { doc: "output:0:[]", path: [key] },
+    });
+    expect(cell(instance, OWNER)).toEqual({
+      $link: { doc: "output:0:[]", path: [key, "owner"] },
+    });
+    expect(instance.result()).toMatchObject({
+      pickedName: "cde",
+      ownerLogin: "cde-owner",
+    });
+    // The computation returns a new array, whose element with the same
+    // `id` has another name: the references name that element.
+    instance.writeArgument(["names"], ["ab", "wxyz"]);
+    expect(instance.result()).toMatchObject({
+      pickedName: "wxyz",
+      ownerLogin: "wxyz-owner",
+    });
+    // A computed output refuses a write through the reference.
+    expect(() =>
+      instance.store.write(new Ref("output:0:[]", [key, "name"]), "edited")
+    ).toThrow(ComputedOutput);
   });
 
   it("changes nothing over an array of references, where the key is the cell", async () => {
@@ -5514,14 +5535,124 @@ describe("the form of a key with declared fields, over a `filter` and a `map`", 
     expect(instance.result() as Result).toMatchObject({ centerLat: 77 });
   });
 
-  // The element of an array that a `lift` returns has no place in the
-  // executor, so the handler is given the value and stores a copy.
-  it("stores a copy of the element and of a member below it, over a plain array generated from scratch", async () => {
+  // Ruling Z53: the same over a plain array generated from scratch,
+  // whose collection is the address of the output.
+  it("resolves a stored reference to the element and to a member below it from the key alone, over a plain array generated from scratch", async () => {
     const instance = await start();
 
+    // The row of the string `7`.
     expect(instance.send(PICK_FOUND, {}, [1]).committed).toBe(true);
 
-    expect(cell(instance, PICKED)).toEqual(entry("7", "x", 2));
-    expect(cell(instance, CENTER)).toEqual({ lat: 20 });
+    const key = keySegment(keyOf("7", "x"));
+    expect(cell(instance, PICKED)).toEqual({
+      $link: { doc: "output:0:[]", path: [key] },
+    });
+    expect(cell(instance, CENTER)).toEqual({
+      $link: { doc: "output:0:[]", path: [key, "position"] },
+    });
+    expect(instance.result() as Result).toMatchObject({
+      pickedTag: "x",
+      centerLat: 20,
+    });
+    // The computation returns a new array in another order, with
+    // another value of the member below the element: the references
+    // name the element of the string `7` and not that of the number 7.
+    instance.writeArgument(["seeds"], [
+      { ...entry("7", "x", 2), position: { lat: 77 } },
+      ...entries().filter((held) => held["a:b"] !== "7"),
+    ]);
+    expect(instance.result() as Result).toMatchObject({ centerLat: 77 });
+  });
+});
+
+// Ruling Z53 on `fixtures/generated-reference.tsx`: an element of a plain
+// array generated from scratch, with no declared key, has a reference by
+// key whose collection is the address of the output. Today's runtime
+// stores no such reference, so these tests are of the executor alone.
+describe("an element of a plain array generated from scratch that declares no key", () => {
+  const start = async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/generated-reference.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const artifacts = (id: string) =>
+      patterns.find((pattern) => pattern.plan.patterns?.[0] === id);
+    const main = patterns.find((pattern) => pattern.name === "default")!;
+    const instance = new Instance(main, { titles: ["ab", "cde"], bonus: 0 }, {
+      artifacts,
+    });
+    instance.result();
+    return instance;
+  };
+  const item = (title: string, bonus = 0) => ({
+    title,
+    stars: title.length + bonus,
+  });
+  const OUTPUT = "output:0:[]";
+  const PICK = 0;
+  type Result = { picked?: unknown; pickedTitle?: string };
+
+  it("is stored in a document of the output, which the rows read by key", async () => {
+    const instance = await start();
+
+    expect(instance.store.docs.get(OUTPUT)).toEqual({
+      kind: "output",
+      value: [item("ab"), item("cde")],
+    });
+    const rows = (instance.store.docs.get("result")?.value as {
+      rows: { title: unknown }[];
+    }).rows;
+    expect(rows.map(({ title }) => title)).toMatchObject(
+      ["ab", "cde"].map((title) => ({
+        $link: {
+          doc: OUTPUT,
+          path: [keySegment(whole(instance, item(title))), "title"],
+        },
+      })),
+    );
+  });
+
+  it("is stored by a handler as a reference by key of its whole value, which reads nothing once the element changes", async () => {
+    const instance = await start();
+
+    expect(instance.send(PICK, {}, [1]).committed).toBe(true);
+
+    const key = keySegment(whole(instance, item("cde")));
+    expect(instance.store.docs.get("state:0:[]")?.value).toEqual({
+      $link: { doc: OUTPUT, path: [key] },
+    });
+    expect(instance.result() as Result).toMatchObject({
+      picked: item("cde"),
+      pickedTitle: "cde",
+    });
+    // Another element is added, and the reference names the same one.
+    instance.writeArgument(["titles"], ["z", "ab", "cde"]);
+    expect((instance.result() as Result).pickedTitle).toBe("cde");
+    // Every element has another value, so no element has the key.
+    instance.writeArgument(["bonus"], 2);
+    const after = instance.result() as Result;
+    expect(after.picked).toBe(undefined);
+    expect(after.pickedTitle).toBe(undefined);
+    // No write repairs it: the output refuses writes.
+    expect(() =>
+      instance.store.write(
+        new Ref(OUTPUT, [keySegment(whole(instance, item("cde", 2))), "title"]),
+        "edited",
+      )
+    ).toThrow(ComputedOutput);
+  });
+
+  it("is given to an instance called through `asInstance()` as a copy in its argument", async () => {
+    const instance = await start();
+
+    expect(
+      instance.childInstances().map(({ instance: made }) =>
+        instance.store.docs.get(made.doc("argument"))?.value
+      ),
+    ).toEqual([{ item: item("ab") }, { item: item("cde") }]);
   });
 });
