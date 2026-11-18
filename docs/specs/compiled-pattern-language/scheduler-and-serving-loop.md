@@ -4231,6 +4231,106 @@ space, and no space runs the builder path beside the compiled path
     the space's mark, with the per-space event order of question 10. The
     alternative has a client speculate only in switched spaces during the
     validation period.
+43. **The memo entry of a cone instance that failed at the bound, after
+    its side-writes are withdrawn** (sections 3.5, 8.1 and 8.2). By
+    ruling such a cone instance is not evaluated again until one of its
+    inputs changes. Section 8.2 withdraws its side-writes. In a cycle
+    through a side-write its last reads were of values that the
+    transaction staged, so what is stored after the withdrawal differs
+    from what its entry recorded, and by the check of
+    `execution-and-storage.md` §3.3 the entry is not current. Section
+    3.5 drops the entry of a cone instance whose side-write was
+    withdrawn, and names a conflict and a handler's write as the
+    reasons. The ruling governs the outcome. *Assumed:* the entry of a
+    cone instance that failed at the bound is kept, and it is taken as
+    current against what is stored after the withdrawal, so that only a
+    change after that transaction evaluates the cone instance again. It
+    is question 224 of the continuation plan.
+44. **A `navigateTo` of the reactive tier behind a batch of events of
+    several sessions** (section 6.2). Such a request is demanded
+    whenever its instance is, and is refused where it is not a
+    consequence of an event that a client session fired. It is staged by
+    a derivation transaction, and one derivation transaction runs behind
+    a batch that can hold events of several sessions, with the changes
+    drained from storage (section 10.2). No section says how that
+    transaction, or the request transaction after it, finds the session
+    whose event the request is a consequence of. Nothing is assumed. It
+    is question 226 of the continuation plan.
+45. **A speculative handler that holds a reference by key** (section
+    11.1). A client does not resolve a reference by key, and a read
+    through it is pending, which is assumed. No section says what a
+    speculative handler does where it writes through such a reference or
+    compares one with a handle by position: whether its whole
+    transaction is abandoned, the one write is left out of the overlay
+    entry, or nothing is shown until the server's result arrives. The
+    case is an element body over an array of plain values in place, and
+    over the result of another per-element construct where the upstream
+    position holds a value; over an array of references the element is a
+    link, which a client resolves. Nothing is assumed. It is question
+    227 of the continuation plan.
+46. **What "pending" is for value code on a client** (sections 6.7 and
+    11.1). The word is used of a cone instance, of the result of an
+    effect, of a stream, and of a read through a reference by key. No
+    section says what value code receives from the host for a pending
+    input, whether a cone instance with a pending input is evaluated, or
+    whether such an evaluation counts toward the bound of section 8.1.
+    For a row of an element body over an array of plain values in place,
+    whose cones a client can evaluate and whose handler's stream it
+    cannot derive, no section says whether the whole kept path of the
+    row is pending. Nothing is assumed beyond section 11.1. It is
+    question 228 of the continuation plan.
+47. **Which transaction evaluates what became demanded since the last
+    cycle** (section 10.2). The cycle runs the derivation transaction
+    behind the batch for a demanded output that is stale, and then one
+    derivation transaction for each change of demand.
+    `execution-and-storage.md` §1.1 has the transaction behind the batch
+    evaluate "where the demand already stands". *Assumed:* demand that
+    changed since the last cycle does not stand for the transaction
+    behind the batch, and what it reaches is evaluated in the
+    transaction of the change of demand, as the demanding principal
+    (section 4.5). It is question 230 of the continuation plan.
+48. **A request of the reactive tier that is refused** (sections 6.2 and
+    6.3). The operation's result takes the refusal as an error state "in
+    a following transaction". No section says which transaction that is
+    or whether its commit is a cause, where for a refused later send it
+    is the completion transaction. And no section says whether the
+    refusal shows as a value of the field `error` of the result or as an
+    error state in the sense of `plan-and-label-templates.md` §5.2,
+    which fails every cone instance that reads it. Nothing is assumed.
+    It is question 231 of the continuation plan.
+49. **The batch on a runtime without a serving loop** (sections 5.1 and
+    10.7). There a batch is the events queued when the runtime begins to
+    handle them, and no section says whether an event that a handler of
+    the batch sends joins it. *Assumed:* it does, as with a serving
+    loop. It is question 233 of the continuation plan.
+50. **When a write that was withdrawn for a conflict on its target is
+    stored again** (sections 3.5 and 5.5). It is stored again from the
+    memo by the next transaction that demands it. *Assumed:* once the
+    replica holds the commit that it conflicted with, as a requeued
+    event waits for that commit. It is question 234 of the continuation
+    plan.
+51. **The requeue of an event whose handler read something that is stale
+    at the commit** (section 5.5). The rule is proposed in the
+    serving-loop specification and awaits a ruling there, and the
+    requeue after a withdrawal that reaches a handler's own writes rests
+    on it. *Assumed:* the proposal. It is question 235 of the
+    continuation plan.
+52. **How an overlay entry holds a change of membership** (section
+    11.6). An entry carries each kept path that its transaction wrote as
+    a whole value, and an insertion is a `splice` of the stored array
+    (`execution-and-storage.md` §4.2). Where the kept path of an
+    insertion is the collection, the entry holds the whole array and
+    hides a committed change of membership that arrives meanwhile. Where
+    it is the row, the entry needs a position. Nothing is assumed. It is
+    question 237 of the continuation plan.
+53. **The batches for another space behind a derivation transaction that
+    evaluates for several scope keys** (section 9.3). A batch for
+    another space is authored under the acting principal of the
+    requesting evaluation, and one derivation transaction can hold
+    evaluations for several scope keys. No section says whether a wave
+    then carries one batch for each principal for one target space, or
+    in which order. Nothing is assumed. It is question 238 of the
+    continuation plan, and extends question 34.
 
 ### For another document or the prototype
 

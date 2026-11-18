@@ -2122,7 +2122,10 @@ it is promoted.
 ### 6.2 What promotion preserves
 
 A promoted `computed` computes the same value as the unpromoted one. Four
-things differ, none of them in the value.
+things differ, none of them in the value. *Assumed*
+([§13](#13-open-questions), question 45): two forms are exceptions, in
+which the value differs as well: a template literal with a handle among
+its substitutions, and a JSX element with a `$` attribute.
 
 - **Labels.** The unpromoted result has one label, the join over the body's
   footprint. The promoted result has a label template per output path, a
@@ -5119,3 +5122,32 @@ use, so that the other numbers stay as other documents cite them.
     another per-element construct where the upstream position holds a
     value. On an array of references the declaration has no effect
     (question 43), and neither is reported for what the array holds.
+45. **A `computed` that meets the criterion of promotion and whose body
+    computes another value as a function body** (to the project owner;
+    from the prototype). §6.2 says that a promoted `computed` computes
+    the same value as the unpromoted one. Two bodies of the corpus meet
+    the criterion of §6.1 and do not. A template literal with a handle
+    among its substitutions, as `` `Double counter: ${state.value}` ``
+    with `state.value` a `Writable<number>`, converts the handle to a
+    string as a function body and reads the value where it is promoted.
+    A JSX element with a `$` attribute, as `<cf-input $value={name} />`,
+    binds the attribute both ways where it is promoted, and as a
+    function body the JSX factory of today throws. *Assumed:* such a
+    `computed` is promoted and has the value of tier R, which is what
+    the criterion gives as it is written, and the first sentence of §6.2
+    does not hold for these two forms. The alternatives leave such a
+    `computed` in tier F, or refuse it. It is question 217 of the
+    continuation plan.
+46. **A write through a handle to a path that the call of a pattern
+    compiled in leaves out** (to the project owner; from the prototype).
+    `binding:write-to-computed` (§10.2) does not report a property that
+    the argument leaves out. By ruling such a path is the callee's
+    default, held as a constant, and a write through a handle to a
+    constant is refused (`plan-and-label-templates.md` §1.1;
+    `execution-and-storage.md` §2.4). So `Counter({})`, whose `value`
+    the callee declares as a handle and increments in a handler, is
+    accepted, and every increment is refused. With a plan of its own the
+    same pattern writes the path of its argument document. *Assumed:*
+    the rules as they stand. The alternatives report the call, or give
+    the path a place so that the write lands. It is question 219 of the
+    continuation plan.

@@ -5657,11 +5657,14 @@ the path `*`, and the template there is the join of the template of each
 spread operand at `*`, of the templates of the members written after the
 first spread, and of the array's `enumeration`, which says where each
 landed. An element that comes from a spread operand is passed by
-reference. A spread of a value of tuple type has static positions and is
-the members written out. A spread attribute in JSX
-(`language-subset.md` §4.5) is a spread in the object literal of the
-attributes. The children of a view node are not such an array literal:
-a collection among them is one child ("A JSX element", below).
+reference. *Assumed* (section 8, question 159): over an array of plain
+values in place that is a reference by key, as for every node of the
+reactive tier that passes an element on. A spread of a value of tuple
+type has static positions and is the members written out. A spread
+attribute in JSX (`language-subset.md` §4.5) is a spread in the object
+literal of the attributes. The children of a view node are not such an
+array literal: a collection among them is one child ("A JSX element",
+below).
 
 **A hole.** `[a, , b]` has a constant key set. The position of the hole
 holds nothing, has no template, and contributes nothing to a `fold` over
@@ -13613,3 +13616,74 @@ this document made.
      per-element construct applied to it. With a declared key a write
      to another member changes no key, and over an array of references
      no write changes a key.
+159. **A member of a spread in the reactive tier, over an array of plain
+     values in place** (for the project owner; from the prototype).
+     Section 3.4 ("A spread in an array literal") says that an element
+     that comes from a spread operand is passed by reference, and names
+     no case. Over an array of references the member is the link to the
+     cell of its position. Over the result of another per-element
+     construct the members are what the construct assembled. Over an
+     array of plain values in place no rule of these documents says
+     whether a member that is a record is stored as a reference by key
+     to the element or as a copy of its value. *Assumed:* a reference by
+     key, which is what the sentence of section 3.4 gives where it is
+     read with the ruling that a node of the reactive tier that passes
+     an element on holds a reference by key (section 1.3). The
+     prototype's executor stores a copy of the record. The same for a
+     JSX spread child. The runtime of today runs neither form in a
+     pattern body, so nothing of this is compared with it. It is
+     question 221 of the continuation plan.
+160. **The label template of an output that reads another output** (for
+     the project owner; from the prototype). The type `Template` of
+     section 1.1 has no node that stands for the template of another
+     output: a `derive` holds the whole template of each of its inputs,
+     and the template of an interim value is a sub-template of every
+     kept output that depends on it (section 4.1). Where an output reads
+     two outputs that each read two more, the template of each is
+     written once for every way that leads to it, so the size of a plan
+     grows with the number of ways through its outputs and not with
+     their number. In a fixture of the prototype, twenty-five values
+     that each read the two before them gave a plan of 31 MB, nearly all
+     of it templates. *Assumed:* the type as section 1.1 has it, with
+     each input's template in place. The alternative is a node that
+     names an output of the plan. This document then has to say how such
+     a node is instantiated, with which selections and picks, and how
+     the slot-free hash of a template and the instantiation key (section
+     4.1) cover the template that is named. Not about a per-element
+     construct. It is question 222 of the continuation plan.
+161. **`asScope` on a call that is compiled into the surrounding
+     instance** (for the project owner). `Child.scope` holds the scope
+     of a call through `asScope` (section 1.1), and a statically
+     resolved pattern that is called in the reactive tier without
+     `asInstance()` or `inSpace` is compiled into the surrounding
+     instance and has no `Child` (`language-subset.md` §4.4.2).
+     `builtin-inventory.md` ("FabriChat") has such a call in the body of
+     a `map`, `FoundRoom.asScope("user")({...})`, and says that the
+     modifier sets the scope of the state that the sub-pattern declares.
+     No record is named for the scope of such a call. *Assumed:* the
+     compiler writes the scope of the modifier into `StateCell.scope` of
+     each state cell that the callee declares with a broader scope, and
+     a state cell that the callee declares with a narrower scope keeps
+     its own, as `execution-and-storage.md` §4.6 assumes for the state
+     cell documents of a child (its question 52). No member of the plan
+     then says that the call had the modifier. The same for a call in an
+     element body over an array of references, over an array of plain
+     values in place, and over the result of another per-element
+     construct, and for a call outside every element body. It is
+     question 225 of the continuation plan.
+162. **The label of an interim output that is stored in a document of
+     its own** (for the project owner). Section 3.15 ("Labels going in")
+     says that what a child reads through the link to a stored output
+     resolves to the labels stored at the output. Section 4.1 says that
+     an interim value that is not kept is never labeled, and
+     `execution-and-storage.md` §1.6 and §7 say that an interim value is
+     not instantiated and has no stored provenance. An output document
+     holds an interim output (question 157). *Assumed:* the sentence of
+     section 3.15 holds for an output document: such an output is
+     instantiated when its document is written, and the document holds
+     its label entries, because a reader in another instance reaches the
+     values through the link and has no other label for them. Whether
+     such an output has a provenance record is not assumed. The case is
+     a plain array generated from scratch that is given whole to an
+     instance of its own, or into which a reference by key is stored
+     elsewhere. It is question 236 of the continuation plan.

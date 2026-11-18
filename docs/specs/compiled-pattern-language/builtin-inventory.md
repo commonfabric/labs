@@ -3822,3 +3822,13 @@ with the project owner names its entry in the
     position in the key, and a state cell in an element body is legal
     whatever else the body does ([Element keys](#element-keys)). The
     entry keeps its number.
+15. **Where a compiled artifact holds the files that `dataFile` names.**
+    The entry of `dataFile(path)` has the result as a constant of the
+    program and assumes that the path is a string literal. No document
+    says where a compiled artifact holds the text of such a file,
+    whether the text is a part of what identifies the compiled pattern,
+    or which diagnostic a call with another argument gets. *Assumed:*
+    the artifact holds the text of each file beside the value code, as
+    the prototype's artifact does in a member `dataFiles`. Nothing is
+    assumed for the other two parts. It is question 223 of the
+    continuation plan.

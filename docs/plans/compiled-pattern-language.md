@@ -133,16 +133,17 @@ next.
   lists the places where it found the documents ambiguous. Its notes through
   272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
   to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414,
-  notes 419 to 426, notes 432 to 443, and notes 446 to 458 are
-  written into the documents.
+  notes 419 to 426, notes 432 to 443, notes 446 to 458, and notes
+  461 to 474 and 478 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
   below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
-  383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, and
-  459 and 460, the results of the value comparison and the later runs of the
+  383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, 459
+  and 460, and 475 to 477, the results of the value comparison and the
+  later runs of the
   label comparison and the cost measurement, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `682b918ed1`. From commit
+  The latest prototype commit read is `abd965cc37`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -215,7 +216,14 @@ next.
   identifiers and the names of several parts in the record forms of
   the documents, they are 799 of 800 in the fixtures and, over the
   same 196 modules, 5,414 of 5,498 against a fresh seeded run, every
-  line of the report as at `a4b4612b3b`. No
+  line of the report as at `a4b4612b3b`. At `abd965cc37`, with the
+  defects fixed that the prototype's author found among the modules
+  that were not executed, the events that were not handled and the
+  values that differed, they are 829 of 830 in the fixtures and, over
+  212 modules, 5,813 of 5,907 against a fresh seeded run. The
+  comparison of labels was run again at that commit: of 1,454 outputs
+  and 241 write edges compared, none is looser than today's or
+  incomparable with it. No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -648,7 +656,15 @@ identifier is the hash of a cause and holds no text of a key. And a
 name of several parts in a plan is a record. Those are notes 446 to
 458, which are written into the documents, and notes 459 and 460, which
 run the fixtures and the comparison of values again and say what the
-round did not verify. Each
+round did not verify. At commit `abd965cc37` the prototype's author
+has classed every module that the executor did not run at the commit
+before, every committed event that it did not handle, and every value
+that differed, and has fixed the defects of the crate and the executor
+among them. Those are notes 461 to 474, with note 478 on the size of a
+plan; what they show the documents not to decide is questions 217
+to 223. Notes 475 to 477 run the fixtures, the comparison of values and
+the comparison of labels again and say what the round did not verify.
+Each
 part below gives the figures of each commit, the earliest first.
 
 Notes 281 to 302 say what the executor needed that the
@@ -728,14 +744,18 @@ part that its entry names: what an instance of its own is given for a
 plain array generated from scratch, the key that the type of a `map`
 result keeps, a reference into such an array that an element body
 computes, and the record that a salted hash is formed from. Questions
-211 to 216 are what notes 446 to 458 leave undetermined. The parts
+211 to 216 are what notes 446 to 458 leave undetermined. Questions 217
+to 223 are what notes 461 to 478 leave undetermined, and questions 224
+to 238 are places where two statements of the documents conflict or
+where the documents state nothing, found by a reading for what the
+prototype's executor does not exercise. The parts
 below that name `KeyedBy`, a key field declared in the element type,
 a key that holds the value of its field, or a key written as a string
 with separators describe the prototype at
 the commit they name, and not the design.
 Notes 303 to 306, 321 to 323, 342, 364 and 365, 383 and 384, 403
-and 404, 416 and 417, 429 and 430, 444, and 459 are the results
-here.
+and 404, 416 and 417, 429 and 430, 444, 459, and 475 and 476 are the
+results here.
 The executor was not timed. Note 428 times today's runtime and the
 crate's compile again, on a machine that was not idle.
 
@@ -930,6 +950,38 @@ date was not measured. The coordinator of this work ran the prototype's
 tests and fixtures at that commit and not the corpus: 475 tests of the
 crate and 87 tests under Deno passed, and the fixtures gave 49 of 49
 runs and 799 of 800 values.
+
+Note 477 says the same of the round of commit `abd965cc37`. The table of
+what was not executed, not handled and not equal was written before any
+fix, and entered into the notes after the fixes, with a column for what
+each is now. The tests of `dataFile`, of the `const` of a block, of the
+memo checks, of the debug renderers, of the names in a schema, of the
+captured types and constants, of a built-in at module scope, of the
+computed key and the whole argument, of the method `equals`, of
+`navigateTo`, of the spread, and of a handle or `undefined` were written
+first and failed, most on an assertion and four on the error that the
+missing piece threw before the assertion. The test of the keys that the
+store keeps was written after the code and was seen to fail with the
+kept keys switched off. The executor's tests on
+`fixtures/action-constant.tsx`, the second test on
+`fixtures/shared-values.tsx` and the second test of `navigateTo` passed
+when they were written, so they describe what existed. The commit of the
+`const` of a block was made from a version of the test file that held
+its test alone, so its tree was not run as committed. Not done: the
+points of class (a) that are not fixed ([The corpus at commit
+`abd965cc37`](#the-corpus-at-commit-abd965cc37)), the limits of the
+generator and the harness, a comparison of the label run module by
+module with an earlier one, and the cost measurement. Not verified: the
+causes that the notes mark as read from the source and the two values;
+that today's runtime gives the members of every stored record in the
+order of their names, which rests on one module; the spread in the
+reactive tier against today's runtime, which runs none of its forms; and
+the times of the memo checks, which are of one run. Note 478, on the
+size of a plan, was found by the size of a file and not by a test. The
+coordinator of this work ran the prototype's tests and fixtures at that
+commit and not the corpus: 486 tests of the crate and 97 tests under
+Deno, with 384 steps, passed, and the fixtures gave 57 of 57 runs and
+829 of 830 values.
 
 ### What is compared, and what is not
 
@@ -1631,6 +1683,47 @@ executor's tests alone: the fifteen of the earlier commit and
   member that is no key field changes (question 212). Given whole the
   result of a `filter` over an array of references, the argument holds
   the links, as before.
+
+At commit `abd965cc37`, 49 of the 67 fixtures are run, in 57 runs, and
+829 of 830 compared values are equal. The runs are the 49 of the earlier
+commit and eight more: `block-const` twice, `debug-strings`,
+`action-constant`, `body-constant`, `module-policy`, `whole-argument`
+and `handle-or-undefined`. The one value that differs is the one that
+differed before, in `callee-default`. The prototype's author puts it in
+class (b) of [The corpus at commit
+`abd965cc37`](#the-corpus-at-commit-abd965cc37) on an assumption:
+`plan-and-label-templates.md` §2.5 assumes that a property that is
+absent reads the same default in a read of the whole object as in a read
+addressed at it, and today's read of the whole result gives nothing
+there. Eighteen fixtures are run by the executor's tests alone,
+`data-file` and `shared-values` among them.
+
+- **`block-const`.** A `const` of the block body of a promoted
+  `computed` that a per-element construct inside the block names: as its
+  receiver, in its callback, and in the expression of its receiver. 6 of
+  6 values equal today's. The three forms are over arrays of plain
+  values in place. An array of references and the result of another
+  per-element construct as the receiver were not tried; the code that
+  changed does not read which of the three the receiver is.
+- **`action-constant` and `body-constant`.** A name that an `action` or
+  a sandboxed body of a pattern compiled in captures, which the callee
+  declares as a handle and the call binds to a literal or leaves out. 12
+  of 12 and 2 of 2 values equal today's, on reads through the handles
+  alone. A write through such a handle is refused (question 219).
+- **`whole-argument`, `handle-or-undefined`, `module-policy` and
+  `debug-strings`.** A callee that names its whole argument, 1 of 1
+  values equal; a state path that a handler declares as a handle or
+  `undefined`, 6 of 6; a declaration of policy at module scope that uses
+  a name the executor does not have; and the debug renderers.
+- **`data-file`,** which reads a file with `dataFile` in the reactive
+  tier and in a function body, and **`shared-values`,** eleven values
+  each of which reads the two before it, whose test bounds one pass over
+  a settled instance at 12 checks of a memo entry. Both are run by the
+  executor's tests alone.
+- **`spread-child`.** One test reads the stored result document and
+  finds the links of a spread of an array of references, where it found
+  the records. Nothing of it is compared with today's runtime, which
+  runs none of these forms in a pattern body.
 
 ### The corpus
 
@@ -2494,6 +2587,181 @@ in every member, and 8 modules have another record.
 - **Events and modules not executed** are those of the earlier commits.
 - **The comparison of labels and the cost measurement were not run
   again.** Their figures stay those of commit `7774ba208c`, above.
+
+### The corpus at commit `abd965cc37`
+
+The figures of this section are from the prototype author's run, as the
+prototype's notes 475 and 476 give them. They were not computed again
+for this plan; the coordinator of this work ran the prototype's tests
+and fixtures again and not the corpus. The run is a fresh seeded run of
+today's runtime over all 272 modules (`values-corpus.ts run`), with the
+crate and the executor of this commit. Before it, the prototype's author
+took every module that the executor did not run at commit `682b918ed1`,
+every committed event that it did not handle, and every value that
+differed, and put each in one of five classes: (a) a defect or a missing
+piece of the crate or the executor; (b) a behavior of today's runtime
+that the design deliberately does not have; (c) a behavior of today's
+runtime that the documents do not decide; (d) a limit of the comparison;
+(e) not determined. The classes were written down before any fix (notes
+461 to 464). The defects of class (a) were then fixed, except those that
+the last item below lists.
+
+| | `682b918ed1` | `abd965cc37` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 196 | 212 |
+| Every value equal and every event handled | 171 | 191 |
+| Values compared | 5,498 | 5,907 |
+| Values equal | 5,414 | 5,813 |
+| Values that differ | 84 | 94 |
+| Modules with a difference | 22 | 21 |
+| Committed events the executor does not handle | 10 of 486 | 3 of 531 |
+| Positions of the results that hold a stream | 726 | 894 |
+| Evaluations the executor counted | 4,202 | 7,090 |
+| Documents the executor stored | 814 | 887 |
+
+The notes give no count of assemblies and none of evaluations stale by
+their own write for this commit. `values-corpus.ts again` on the results
+file of the run gives the same report and the same record of the
+comparison for each of the 272 modules. The prototype's author read the
+results file module by module against that of the run at `682b918ed1`:
+31 modules have another outcome and 241 the same. No module has a value
+that differs at a position where it was equal before, an event that is
+not handled where it was, or is no longer executed.
+
+- **What was classed at commit `682b918ed1`.** The 19 modules that were
+  not executed are all class (a). Of the 10 events that were not
+  handled, 7 are class (a), 2 are class (a) and, with the defect fixed,
+  class (b), and 1 is class (b). Of the 84 values that differed, 18 are
+  class (a) alone, 30 are class (a) with (d), 19 are class (b), 10 are
+  class (c), and 7 are class (d) alone. None is class (e).
+- **Sixteen modules are executed where they were not.** Five needed the
+  debug renderers, five a value function for a `const` of the block body
+  of a promoted `computed`, two a name of `commonfabric/cfc` at module
+  scope, and one each the method form of `equals`, a handle for a
+  captured name that the call leaves out, `dataFile`, and a computed key
+  that is a string literal ([What the run conformed
+  to](#what-the-run-conformed-to)). Ten of them have every value equal.
+  Six have values that differ: `apps/budget-tracker/confidential.tsx`
+  and `main.tsx` (13 of 20 equal each),
+  `apps/budget-tracker/expense-form.tsx` (79 of 80),
+  `dev/gideon-tests/test-idempotent-side-effects.tsx` (15 of 22),
+  `dev/gideon-tests/test-record-key-set-56.tsx` (29 of 35), and
+  `showcase/battleship/multiplayer/room.tsx` (4 of 5).
+- **Fifteen more modules have another outcome.** Three have every event
+  handled where one was not: `apps/contacts/contact-book.tsx` and
+  `showcase/battleship/multiplayer/repro-minimal.tsx`, for `navigateTo`
+  in a handler, and `showcase/battleship/pass-and-play/main.tsx`. Seven
+  are fully equal where a value differed: six modules that read a file
+  with `dataFile`, and `system/fabrichat/adapter.tsx`. Two have fewer
+  differences: `apps/base/contacts.tsx`, 11 where it had 17, and
+  `product/primitives/demo/atoms-demo.tsx`, 11 where it had 15, with one
+  event not handled where it had four. Three have the same counts with
+  another record: `apps/base/person.tsx`, `apps/base/family-member.tsx`,
+  and `examples/ui-variants/ui-variants-host.tsx`.
+- **Three modules are not executed.** In
+  `apps/weekly-calendar/event.tsx` and
+  `dev/test/silent-computed-crash.tsx` a body of the pattern throws. The
+  design gives the failed cone an error state and commits the rest
+  (`plan-and-label-templates.md` §5.2), and the executor has no error
+  state. `system/profile-picker/profile-picker.tsx` calls `linksOf`,
+  which the executor does not have.
+- **Three committed events are not handled,** and each is a write
+  through a handle to a constant, which `execution-and-storage.md` §2.4
+  refuses. `clearCompleted` of `product/primitives/demo/atoms-demo.tsx`
+  writes `items`, a literal of the call. `boundIncrement` and
+  `decrement` of `examples/ui-variants/ui-variants-host.tsx` write
+  `value`, a path that the call leaves out (question 219). Today the
+  callee of each is an instance with an argument document, and the write
+  lands there.
+- **The 94 values that differ, in 21 modules, by class:** 8 are class
+  (a) alone, 24 are class (a) with (d), 34 are class (b), 16 are class
+  (c), and 12 are class (d) alone.
+- **Class (b), 34 values: what the design deliberately does not do.** 15
+  are in the three `budget-tracker` modules, where a handler of a row
+  over an array of plain values in place compares its element, a
+  reference by key, with the copies that `budgets.get()` returns, finds
+  none equal and removes nothing (question 220). 11 are in `atoms-demo`,
+  after `sortByColumn` writes `rows`, a literal of the call, and is
+  refused; `language-subset.md` reports such a call with
+  `binding:write-to-computed`, and the crate does not report it for a
+  write that an `action` makes. 2 are what the refused write of
+  `ui-variants-host` leaves. 5 are in
+  `dev/gideon-tests/test-ifelse-both-branches.tsx`, which counts its
+  evaluations: a branch that is not selected is not evaluated
+  (`execution-and-storage.md` §2.2), and today's runtime evaluates both.
+  1 is in `examples/scoped-group-chat/main-plain-inputs.tsx`, where a
+  row over the messages of the per-session room, an array of plain
+  values in place, reads the per-user `name`. Today's runtime resolves
+  that read to `undefined`. The design evaluates the cone instance in
+  the narrowest scope of what it reads (`execution-and-storage.md`
+  §1.8); the executor has no scopes and reads the name.
+- **Class (c), 16 values: what the documents do not decide.** 7 are of a
+  promoted `computed` whose body computes another value as a function
+  body (question 217), 6 of the order of the members of a stored record
+  (question 218), and 3 of a read through the name bound to `[SELF]`
+  (question 157).
+- **Class (a), 32 values: defects and missing pieces that are not
+  fixed.** 24 are class (a) with (d), in `apps/base/contacts.tsx` (11),
+  `person.tsx` (7) and `family-member.tsx` (6): the crate's schema of a
+  type that refers to itself has `{}` at the reference, the generator
+  gives a text there, today's read under its schema gives nothing, and
+  the executor validates no read against its schema and reads the data.
+  The cause is read from the source for `contacts.tsx`. 5 are in
+  `examples/array-in-cell-with-remove-editable`, whose result holds a
+  handler factory that is not bound: the executor stores nothing for a
+  function, and today's runtime a record with `$implRef`. 2 are a debug
+  string of an `unknown[]` in `test-idempotent-side-effects.tsx`:
+  `language-subset.md` §7.8 has a position of type `unknown` as a
+  reference that is not read, and the executor reads the content. 1 is
+  the count of a `computed` that writes a cell it reads, in the same
+  module: the executor evaluates such a cone once.
+- **Class (d), 12 values alone: limits of the comparison.** The
+  generator gives no value for a required member of type `unknown` and a
+  text for one of type `FabricBytes`: `system/agent-run/agent-run.tsx`
+  (4), `system/profile-create/profile-create.tsx` (1) and
+  `battleship/multiplayer/room.tsx` (1). The harness demands no path
+  below a `$cell` attribute: `examples/cfc-spec-gallery/main.tsx` (1).
+  And it reads a state cell under today's schema:
+  `dev/self-reference-test/self-reference-test.tsx` (1) and
+  `test-idempotent-side-effects.tsx` (4).
+- **Not verified.** The causes that the notes mark as read from the
+  source and the two values, in `budget-tracker/confidential.tsx` and
+  `main.tsx`, `contacts.tsx`, `agent-run` and `profile-create`.
+
+**The comparison of labels** (`compare/corpus.ts run` and `report`) was
+run again at this commit, in the default order of the events, with the
+executor beside today's run (note 476). The left column is the last run
+before it ([The comparison of labels and the cost measurement at commit
+`7774ba208c`](#the-comparison-of-labels-and-the-cost-measurement-at-commit-7774ba208c)).
+
+| | `7774ba208c` | `abd965cc37` |
+| --- | ---: | ---: |
+| Modules run | 215 | 215 |
+| Outputs compared | 1,453, 156 bounds | 1,454, 156 bounds |
+| With the atom of a kept output: tighter | 1,330 | 1,331 |
+| With it: the atom names the pattern | 123 | 123 |
+| With it: looser, incomparable | 0, 0 | 0, 0 |
+| Write edges compared | 224, 1 bound | 241, 1 bound |
+| Equal | 214 | 229 |
+| Tighter | 10 | 12 |
+| Looser, incomparable | 0, 0 | 0, 0 |
+| Events committed | 486 | 531 |
+| Events refused | 49 in 10 modules | 50 in 11 modules |
+| Bindings that got no event | 127 | 81 |
+
+No output and no write edge is looser than today's or incomparable with
+it. Of the 12 tighter write edges, 9 are of handlers bound in no element
+body and 3 of handlers of an element body, 2 of those by the join of the
+`map` coordinator's transaction. The one more event that is refused is
+`fireShot` of `showcase/battleship/multiplayer/room.tsx`, whose handler
+throws in today's runtime on the generated state. No results file of the
+run at commit `7774ba208c` exists, so the two columns were not compared
+module by module. The plan does not tell an element body over an array
+of references from one over an array of plain values in place, so the 3
+write edges of an element body are of both, and of bodies over the
+result of another per-element construct. The cost measurement was not
+run again; its figures stay those of commit `7774ba208c`.
 
 ### What the run conformed to
 
@@ -3553,6 +3821,90 @@ except the `set` of the item before the last.
   that are implemented in part. One test has the three with their
   severities and statuses.
 
+At commit `abd965cc37` the plan and the run have the following (notes
+465 to 472 and 478). Each item that is about a per-element construct
+names the case.
+
+- **`dataFile` is a constant that the artifact holds.** The crate
+  rewrites a `dataFile("./path")` call to a read by an index and lists
+  the file in `code.dataFiles`, with its path resolved against the
+  module as an import is. The `emit` command reads the text of each file
+  and puts it beside the path, and the executor gives the text. The
+  member is the prototype's; the documents do not say where an artifact
+  holds the files (question 223).
+- **A `const` of the block body of a promoted `computed` that another
+  cone reads.** Value code holds such a `const` in a variable of the
+  block. A per-element construct inside the block is a cone of its own,
+  and it read the `const` as an output that no value function computed.
+  The crate registers a value function for a `const` whose value another
+  cone reads, from its initializer, and code that is registered outside
+  the block reads the names of the block as outputs. The block still
+  computes the `const` in its variable, so the initializer is evaluated
+  in two places. The plan did not change. Tried over arrays of plain
+  values in place alone.
+- **A check of a memo entry is made once while the clock of the store
+  stands.** A check of an entry checked each of its dependencies again
+  by every way that leads to it. On the fixture of shared values with
+  twenty-five values, one pass over a settled instance made 300,099
+  checks and makes 26. A read through a reference by key formed the keys
+  of its array again, with a salted hash for each member, for every
+  element that it resolved; the store keeps the keys that it formed for
+  a stored array until the clock moves. That is about an array of plain
+  values in place, a plain array generated from scratch included. One
+  read of the result of `showcase/battleship/multiplayer/room.tsx` took
+  13 seconds and takes 0.17, by one run. Neither changes a value or a
+  count of evaluations.
+- **The debug renderers.** `toCompactDebugString`,
+  `toIndentedDebugString` and the `debugStr` tag are those of
+  `@commonfabric/data-model` in the executor. Footprint analysis reads
+  the operand of a renderer as a conversion to a string, `value` over
+  the operand with widening W2 for a container (`footprint-analysis.md`
+  §3.4), where it read it as passed on. Value code gives each operand as
+  its value, so a record that the code builds, whose members are
+  references, is rendered with what they hold.
+- **A property written with a well-known key.** The schema of a type
+  that writes `[NAME]: string` names the property `$NAME`, as the value
+  is stored and as a path of the plan says, where it named it `[NAME]`.
+- **A captured name has the type it is declared with.** The slot of root
+  `binding` of a name that an `action` or an inline handler captures has
+  the schema of the type that the name is declared with: a handle where
+  a pattern declares one for the property of its parameter, with the
+  declared default. The state path of such a name holds the literal that
+  the call of a pattern compiled in writes, or the default of the callee
+  for a path that the call leaves out, where it held `null`. A constant
+  at a position of handle type is handed to the body as a handle that
+  reads it and refuses a write (`execution-and-storage.md` §2.4). A
+  captured name of plain type that is bound to a constant is still read
+  from the scope, and a constant that the crate cannot evaluate is still
+  `null` in the plan.
+- **Six smaller defects are fixed.** A built-in that the executor does
+  not have gives, while the modules are evaluated, a value whose members
+  can be read and called, and a call of it in a function body still
+  throws. A computed key that is a string literal names a path of the
+  argument of a pattern compiled in. A pattern compiled in that names
+  its whole argument reads every path that the call binds. The method
+  form `h.equals(x)` in the reactive tier is the comparison that
+  `equals(h, x)` is. `navigateTo` in a function body is a request of an
+  effect: the handler commits, the instance holds the request with its
+  target, and the executor answers no effect. And a state path that a
+  handler declares as a handle or `undefined` is handed to the body as a
+  handle.
+- **A spread in the reactive tier gives each member as what its position
+  holds.** That is for a spread in an array literal and for a JSX spread
+  child. Over an array of references each member is the reference to the
+  cell of its position, and the nested array stores the links. Over an
+  array of plain values in place each member is the value, and a record
+  is stored as a copy and not as a reference by key (question 221). Over
+  the result of another per-element construct the members are what the
+  construct assembled, a reference where its body passes the element on.
+  Today's runtime runs none of these forms in a pattern body, so nothing
+  of this is compared with it.
+- **The label template of an output repeats the template of each output
+  that it reads** (question 222). The crate writes the whole template of
+  each input into a `derive` node, so a value that two others read is
+  written out once for each. The size of a plan follows the number of
+  ways through its outputs. No test bounds the size of a plan.
+
 ### Documents
 
 The executor stores an argument document, a result document, and one
@@ -3596,9 +3948,11 @@ same modules and scenarios, it stores 814 documents. The 12 more are
 documents of an output, in ten modules: one per plain array generated
 from scratch that a per-element construct is over and per combination
 of the element keys around it. At commit `682b918ed1` it stores 814
-documents again. The notes
+documents again. At commit `abd965cc37` it stores 887 documents, over
+212 modules and the scenarios of a fresh run that commits 531 events.
+The notes
 give no
-other row of the table for those five commits. The prototype's cost model
+other row of the table for those six commits. The prototype's cost model
 still counts one document per state cell, which is an upper bound under
 the ruling, and the derived figures of [Storage](#storage) are not
 computed again.
@@ -5209,7 +5563,14 @@ unless the entry says otherwise.
      question 108). By ruling the name is a reference to the result
      cell of the instance ([Decided](#decided)). Open: what a read
      through it is, of a path of the result that a cone of the
-     instance computes; no record of the plan holds it. Question 170
+     instance computes; no record of the plan holds it. At commit
+     `abd965cc37` 3 values of the prototype's corpus run differ for it
+     (its note 473): 2 in `dev/self-reference-test/self-reference-test.tsx`,
+     at `parent`, and 1 in `dev/test/input-self/subjects.tsx`. A read
+     of the whole result that enters the result again gives nothing
+     there in the prototype's executor, and today's read follows the
+     link at each level, to the depth that the comparison reads.
+     Question 170
      has what a handler binding that captures the name holds. Not
      about a per-element construct.
 
@@ -6343,6 +6704,506 @@ ruling.
      changes no key, and over an array of references no write changes
      a key.
 
+**From the prototype's notes 461 to 478.** At commit `abd965cc37` the
+prototype's author classed every module that the executor did not run,
+every committed event that it did not handle, and every value that
+differed at commit `682b918ed1`, and fixed the defects of the crate and
+the executor among them. Questions 217 to 223 are what those notes show
+the documents not to decide, or to decide in a way that the owner should
+see. Each is written into the documents as an assumption. Where the
+coordinator of this work has a recommendation, the entry gives it; it is
+a recommendation and no ruling. The coordinator has one on question 218
+alone.
+
+217. **A `computed` that meets the criterion of promotion and whose body
+     computes another value as a function body** (LS question 45; note
+     473). `language-subset.md` §6.1 promotes a `computed` whose body is
+     an expression of the reactive tier, and §6.2 says that a promoted
+     `computed` computes the same value as the unpromoted one. Two
+     modules of the corpus have a body for which that does not hold. In
+     `examples/nested-counter/nested-counter.tsx`, ``computed(() =>
+     `Double counter: ${state.value}`)``, where `state.value` is a
+     `Writable<number>`: as a function body the template string converts
+     the handle to a string, which is `[object Object]` in today's
+     runtime, and promoted it reads the value, `3`. In
+     `dev/scope-bug-computed-vnode-blank/main.tsx`, `computed(() =>
+     <cf-input $value={name} />)`: as a function body today's JSX
+     factory throws, because the name is a plain value there, and
+     promoted the attribute is bound to the input both ways. There are
+     three answers: such a `computed` is promoted and has the value of
+     the reactive tier; it is not promoted and keeps the value of the
+     function body; or the compiler refuses it. *Assumed:* the first,
+     which is what the criterion of §6.1 gives as it is written and what
+     the prototype does. The sentence of §6.2 then does not hold for a
+     body that converts a handle to a string or that writes a `$`
+     attribute. The coordinator has made no recommendation. 7 values of
+     the corpus run differ for it, 5 in the first module and 2 in the
+     second. No per-element construct is involved.
+218. **The order in which a read gives the members of a stored record**
+     (ES question 94; note 473). `execution-and-storage.md` §2.4 gives a
+     body, for an entry of class `enumeration`, "the stored keys in the
+     stored order", and no document says what the stored order of a
+     record is. In `dev/gideon-tests/test-record-key-set-56.tsx` a
+     handler writes `{ value: "test-a", count: 1 }` and a debug string
+     renders the record. Today's runtime renders
+     `{count:1,value:"test-a"}`, the members in the order of their
+     names, and the prototype's executor renders them in the order in
+     which the handler wrote them. A record that a body builds and
+     renders without storing it has the written order in both. The order
+     shows wherever a body enumerates a record that it read:
+     `Object.keys`, `JSON.stringify`, a debug string. *Assumed,* as the
+     coordinator recommends, and not ruled: a read gives the members of
+     a stored record in the order in which the serialization of a fabric
+     value by `base/data-model` writes them. That is the order of the
+     UTF-8 bytes of their names (`encodePlainObject` of `JsonEncodeAct`
+     in `base/data-model/src/codec-json/JsonEncodeAct.ts`, which takes
+     the names from `utf8SortedKeysOf`). It is consistent with the
+     ruling that this design takes every written form from the helpers
+     of that package ([Decided](#decided)). That method does not yet
+     write that order for a member whose name reads as an integer, and
+     which order such a member has is part of the question. The
+     alternative gives the members in the order in which they were
+     written, which the prototype's executor does. 6 values of the
+     corpus run differ for it. That today's runtime gives the order of
+     the names for every stored record rests on that one module. Not
+     about a per-element construct.
+219. **A write through a handle to a path that the call of a pattern
+     compiled in leaves out** (LS question 46; note 473). The case is
+     `Counter({})`, where `Counter` declares `value` as a handle that
+     can write, with the default `0`, and binds it to a handler that
+     increments it. By ruling a path that the call leaves out is the
+     callee's default, held as a constant (`plan-and-label-templates.md`
+     §1.1, "A constant of the argument, and a path the call leaves out";
+     [Decided](#decided)). `execution-and-storage.md` §2.4 refuses a
+     write through a handle to a constant. `language-subset.md` §10.2
+     says of `binding:write-to-computed` that "A property that the
+     argument leaves out is not a literal and is not reported". So the
+     call compiles with no diagnostic and every increment is refused,
+     where today the callee is an instance with an argument document and
+     keeps the count there. The same pattern with a plan of its own has
+     a handle to that path of its argument document, and the write lands
+     (`plan-and-label-templates.md` §2.5, "A handle to a position that
+     holds nothing"). The documents decide each part and the prototype
+     follows each. Together the parts accept a program whose handler
+     writes nothing. There are three answers: that is intended; the
+     compiler reports the call; or the path gets a place, so that the
+     write lands. *Assumed:* the documents as they stand, so the call is
+     accepted and the write is refused when the handler runs. The
+     coordinator has made no recommendation. Two modules of the corpus
+     call a pattern so: `examples/ui-variants/ui-variants-host.tsx`, and
+     `showcase/wordsearch/main.tsx` through `$checked`. Two of the three
+     committed events that the executor does not handle at commit
+     `abd965cc37` are such writes, both in the first module, and 2
+     values differ for them. Not about a per-element construct.
+220. **`equals` of a reference by key with a copy of the same element,
+     in a function body** (ES question 95; note 475). This is not open
+     by the letter. It follows from two rulings, and is recorded so that
+     the owner sees what they give together. In the three
+     `budget-tracker` modules of the corpus a handler of a row finds its
+     element with `current.findIndex((b) => equals(budget, b))`, where
+     `current` is `budgets.get()`. The case is an array of plain values
+     in place: `budgets` holds its records in place. So `budget`, which
+     the handler is given for its element, is a reference by key, and
+     each member of `current` is a copy that carries no address, by the
+     ruling that a function body that reads a plain value holds a copy
+     ([Decided](#decided)). A reference and a value that carries no
+     address do not name one thing, so `equals` is false for every
+     member, and the handler finds nothing and removes nothing. Today
+     each record of the list is a cell, and the handler finds it. 15
+     values of the corpus run differ for it, in
+     `apps/budget-tracker/expense-form.tsx`, `confidential.tsx` and
+     `main.tsx`; the prototype's author read the cause for the last two
+     from their source, which has the form of the first. The question
+     for the owner is whether `equals` of a reference by key with a copy
+     of the element that the key names, read from the element's own
+     array, should hold. *Assumed:* it does not, as the rulings give it.
+     For it to hold, either the comparison takes the value of the copy,
+     or a member of an array that a body reads through a handle carries
+     the address it was read from, which the ruling on a copy excludes.
+     The coordinator has made no recommendation. The `findIndex` here is
+     the JavaScript method on the array that `get()` returned, in a
+     function body, and no per-element construct of the reactive tier.
+     Over an array of references each member of `current` is the value
+     of its cell and carries that cell's address, and the prototype's
+     executor finds the element.
+221. **A member of a spread in the reactive tier, over an array of plain
+     values in place** (PL question 159; note 472). The forms are an
+     array literal with a spread, as `[head, ...xs]`, and a JSX spread
+     child, `{...xs}`, in a pattern body. `plan-and-label-templates.md`
+     §3.4 ("A spread in an array literal") says that "An element that
+     comes from a spread operand is passed by reference", and names no
+     case. Over an array of references each member is the link to the
+     cell of its position, and the prototype stores the links. Over the
+     result of another per-element construct the members are what the
+     construct assembled, a reference where its body passes the element
+     on. Over an array of plain values in place no document says whether
+     a member that is a record is stored as a reference by key to the
+     element or as a copy of its value. *Assumed:* a reference by key.
+     That is what the sentence of §3.4 gives where it is read with the
+     ruling that a node of the reactive tier that passes an element on
+     holds a reference by key ([Decided](#decided)); neither names this
+     case. The prototype stores a copy of the record. The coordinator
+     has made no recommendation. Today's runtime runs neither form in a
+     pattern body, so nothing of this is compared with it.
+222. **The label template of an output that reads another output** (PL
+     question 160; note 478). The type `Template` of
+     `plan-and-label-templates.md` §1.1 has no node that stands for the
+     template of another output: a `derive` holds the whole template of
+     each of its inputs, down to the slots. Its §4.1 says of an interim
+     value that its template "is a sub-template of every kept output
+     that depends on it". So where an output reads two outputs that each
+     read two more, the template of each is written once for every way
+     that leads to it, and the size of a plan grows with the number of
+     ways and not with the number of outputs. In the prototype's fixture
+     `shared-values` twenty-five values each read the two before them.
+     Its plan was 31 MB as compact JSON, all but 8 kB of it in
+     `outputs[].template`, and the template of the last value alone was
+     12 MB. The sizes follow the Fibonacci numbers along the chain. The
+     cones, the edges and the value code of the same plan grow with the
+     number of values. *Assumed:* the documents as they stand, so a
+     template holds the template of each input in place. The alternative
+     gives `Template` a node that names an output of the plan. The
+     document then has to say how the node is instantiated, with which
+     selections and picks, and how the slot-free hash of a template and
+     the instantiation key cover the template that is named. The
+     coordinator has made no recommendation. The fixture holds eleven
+     values at commit `abd965cc37`, because its generated files could
+     not be pushed at twenty-five. The notes do not say whether a plan
+     of the corpus is large for this reason, and no test bounds the size
+     of a plan. Not about a per-element construct.
+223. **Where a compiled artifact holds the files that `dataFile` names**
+     (BI question 15; note 465). `builtin-inventory.md` has the result
+     of `dataFile(path)` as "a constant of the program" and *assumes*
+     that the path is a string literal, and `language-subset.md` §4.4.4
+     assumes the same. No document says where a compiled artifact holds
+     the text of such a file, whether the text is a part of what
+     identifies the compiled pattern, or which diagnostic a call with
+     another argument gets. The prototype's crate rewrites the call to a
+     read by an index and lists the files in a member `code.dataFiles`
+     of the artifact, each with its path resolved against its module as
+     an import is. The `emit` command puts the text of each file beside
+     its path. An artifact that holds no text for a file fails when the
+     instance starts, and a call whose argument is no string literal is
+     left as it is written and fails when it runs. *Assumed:* the
+     artifact holds the text of each file beside the value code, as the
+     prototype has it. Nothing is assumed for the other two parts. The
+     coordinator has made no recommendation. One module of the corpus is
+     executed for it and six more have every value equal. Not about a
+     per-element construct.
+
+**From a reading of the documents for what the prototype's executor does
+not exercise.** A read-only analysis listed the statements of the
+documents on effects, the serving loop, storage, clients, and spaces and
+scopes that a test could check, and the places where two statements
+conflict or where nothing is stated. Questions 224 to 238 are those
+places, each checked against the text of the documents for this plan.
+Each names the statements with their sections and what is assumed until
+the owner rules. Where the documents state nothing and an assumption
+would be a new rule, the entry says that nothing is assumed. The
+coordinator has made no recommendation on any of them. The places of
+that analysis that are no question are named after question 238.
+
+224. **The memo entry of a cone instance that failed at the bound, after
+     its side-writes are withdrawn** (SS question 43). By ruling a cone
+     instance that failed at the bound of ten evaluations is not
+     evaluated again until one of its inputs changes
+     ([Decided](#decided)). `scheduler-and-serving-loop.md` §8.1 and
+     `execution-and-storage.md` §2.7 state it, and
+     `execution-and-storage.md` §1.7 says that the memo entry of a
+     failed cone instance "holds the error state and the reads made up
+     to the failure" and that the cone instance "is evaluated again when
+     something it read changes". `scheduler-and-serving-loop.md` §8.2
+     withdraws the side-writes of the cone instance that failed at the
+     bound, so that each target "keeps the value and the label it had
+     before the transaction". In a cycle through a side-write the last
+     reads of the failed cone instance were of values that the
+     transaction staged and that are then withdrawn. What is stored then
+     differs from what the entry recorded. By the check of
+     `execution-and-storage.md` §3.3, which reads the marked addresses
+     again and compares fingerprints, the entry is not current, and the
+     cone instance would be evaluated, and would fail at the bound, on
+     every later cause. `scheduler-and-serving-loop.md` §3.5 also says
+     that a cone instance whose side-write was withdrawn has its memo
+     entry dropped and is stale; it names a conflict and a handler's
+     write as the reasons, and not the bound. The ruling governs the
+     outcome: the cone instance is not evaluated again. No document says
+     which reads its entry records so that the check agrees with the
+     ruling. *Assumed:* the entry of a cone instance that failed at the
+     bound is kept, and it is taken as current against what is stored
+     after the withdrawal, so that only a change after that transaction
+     evaluates the cone instance again. Not about a per-element
+     construct, except that an element cone has one count for each key.
+225. **`asScope` on a call that is compiled into the surrounding
+     instance** (PL question 161). The case is `savedRooms.map((entry)
+     => FoundRoom.asScope("user")({...}))` in the pattern body of
+     `patterns/system/fabrichat/manager.tsx`, as `builtin-inventory.md`
+     ("FabriChat") quotes it. By `language-subset.md` §4.4.2 a
+     statically resolved pattern that is called in the reactive tier is
+     compiled into the surrounding instance, and of the three modifiers
+     `asInstance()` and `inSpace` alone make the call an instance of its
+     own. `builtin-inventory.md` says of this call: "The `asScope`
+     modifier inside a `map` body is a modifier of the anonymous
+     sub-pattern: it sets the scope of the state the sub-pattern
+     declares." The one member of the plan that holds the scope of a
+     call is `Child.scope` (`plan-and-label-templates.md` §1.1), and
+     `execution-and-storage.md` §4.6 states its rule for "A child with a
+     scope". A call that is compiled in has no `Child`. So no record is
+     named for the scope of such a call, and the rule of §4.6, which is
+     itself assumed (question 65), is stated for a child alone.
+     *Assumed:* the compiler writes the scope of the modifier into
+     `StateCell.scope` of each state cell that the callee declares with
+     a broader scope, and a state cell that the callee declares with a
+     narrower scope keeps its own, which is what §4.6 assumes for the
+     state cell documents of a child. No member of the plan then says
+     that the call had the modifier. The question is the same for a call
+     in an element body over an array of references, over an array of
+     plain values in place, and over the result of another per-element
+     construct, and for a call outside every element body.
+226. **A `navigateTo` of the reactive tier behind a batch of events of
+     several sessions** (SS question 44).
+     `scheduler-and-serving-loop.md` §6.2 says that a `navigateTo`
+     written in the reactive tier "is demanded whenever its instance
+     is", that the operation has session scope, and that "A request that
+     is not a consequence of an event a client session fired is
+     refused". `builtin-inventory.md` ("The requester of a request")
+     appends the intent to the effects document of the session that
+     fired the event. A request of the reactive tier is staged by a
+     derivation transaction. By ruling one derivation transaction runs
+     behind a batch of several events ([Decided](#decided)), which can
+     be events of several sessions, and by the assumption of question
+     232 the changes that the cycle drained from storage are in the same
+     transaction. No document says how the derivation transaction, or
+     the request transaction of the operation after it, finds the
+     session whose event the request is a consequence of, or what is
+     done where the request follows from a change from storage and from
+     no event. Nothing is assumed. On a client the question does not
+     arise: a client enacts the `navigateTo` of its own speculative run
+     (`scheduler-and-serving-loop.md` §6.7). Not about a per-element
+     construct.
+227. **A speculative handler that holds a reference by key** (SS
+     question 45). `scheduler-and-serving-loop.md` §11.1 *assumes* that
+     a client does not resolve a reference by key, because resolving the
+     key to a position needs the salt, and that "a read through it is
+     pending on the client" (question 113 of
+     `plan-and-label-templates.md` §8). The overview says that `equals`,
+     a member bound both ways, and a write through the element work over
+     an array of plain values in place. No document says what a handler
+     that a client runs speculatively does where it writes through such
+     a reference, or where it compares one with a handle by position,
+     which resolves the key (`execution-and-storage.md` §2.2): whether
+     the whole speculative transaction is abandoned, the one write is
+     left out of the overlay entry, or the client sends the event and
+     shows nothing until the server's result arrives. Every handler
+     bound in an element body that writes through its element is in this
+     case, where the body is over an array of plain values in place, or
+     over the result of another per-element construct whose upstream
+     position holds a value. Nothing is assumed. `equals` of two
+     references by key resolves no key. Over an array of references the
+     element is a link, which a client resolves.
+228. **What "pending" is for value code on a client** (SS question 46).
+     `scheduler-and-serving-loop.md` uses "pending" for a cone instance
+     that reads an input that the client has not replicated or cannot
+     name (§11.1), for the result of an effect whose request differs
+     from the stored one (§6.7), for a stream whose identifier a client
+     cannot derive (§11.1, the table), and for a read through a
+     reference by key (question 227). No document says what value code
+     receives from the host for a pending input, whether a cone instance
+     with a pending input is evaluated at all, or whether such an
+     evaluation counts toward the bound of ten. One case is undetermined
+     in more: a row of an element body over an array of plain values in
+     place. By `execution-and-storage.md` §5.3 the memo and the element
+     table need no salt, so a client can evaluate the cones of such a
+     body, and it cannot derive the stream of a handler bound there. No
+     document says whether the whole kept path of such a row is pending,
+     or the row is rendered with the committed link or with nothing
+     where the stream is placed. Nothing is assumed beyond the sentences
+     of §11.1: the cone instances that read an input that a client
+     cannot name are pending, "and what they feed renders its committed
+     value or its loading state". Over an array of references a client
+     derives the stream.
+229. **Part documents: which split points the rule on the size of a
+     document takes, and which size is measured** (ES question 96).
+     `execution-and-storage.md` §4.10, rule 3: when the content of a
+     document exceeds `DOCUMENT_MAX_BYTES`, "every split point directly
+     below it that is stored in place becomes a part, whatever its
+     size". The same section, "A row": "A list of many small rows stays
+     in the document that stores the array until that document exceeds
+     `DOCUMENT_MAX_BYTES`, and then rule 3 makes each of those rows a
+     part." Where the array is a kept output that is stored in place in
+     the result document, the root of that output is a split point and
+     stands between the document and the rows. By rule 3 as it is
+     written the array becomes one part and its rows stay in it; by the
+     sentence on a row the rows become parts. Second, the size of a
+     split point is "the length in bytes of the stored encoding of its
+     subtree", with the stored label entries and provenance records of
+     its paths, and no document names the encoding. *Assumed:* rule 3 as
+     it is written. The array becomes a part, and its rows become parts
+     when that part exceeds the number in turn, since rule 3 is stated
+     for a part as for the result document. Nothing is assumed for the
+     encoding. The three numbers are placeholders (question 41). The
+     rows are those of a kept collection over an array of references,
+     over an array of plain values in place, or over the result of
+     another per-element construct alike.
+230. **Which transaction evaluates what became demanded since the last
+     cycle** (SS question 47). The cycle of
+     `scheduler-and-serving-loop.md` §10.2 runs one derivation
+     transaction "if a demanded output is stale, unstored, or reached by
+     a label-dirty slot", for the changes drained and the batch, and
+     after it one derivation transaction "for each change of demand
+     since the last cycle", as the demanding principal.
+     `execution-and-storage.md` §1.1 says that the cone instances of an
+     instance are evaluated in one derivation transaction, "that of the
+     change of demand, or the one behind the batch where the demand
+     already stands". No document says whether demand that changed since
+     the last cycle already stands for the first of the two
+     transactions. The two readings give an evaluation of user or
+     session scope another acting principal, and give another number of
+     transactions. *Assumed:* such demand does not stand for the
+     transaction behind the batch, and what it reaches is evaluated in
+     the transaction of the change of demand, as the ruling that a
+     change of demand is a cause with a transaction of its own has it
+     ([Decided](#decided)). Not about a per-element construct.
+231. **A request of the reactive tier that is refused** (SS question
+     48). `scheduler-and-serving-loop.md` §6.3: "The request is not
+     made, and the operation's result takes the refusal as an error
+     state in a following transaction, under the joined label", and §6.2
+     says the same of a request that has no requester. For a later send
+     that is refused the same section names the transaction: the
+     completion transaction of the operation, whose commit is a cause of
+     the third kind. For a refused request no document says which
+     transaction stores the refusal, or whether its commit is a cause.
+     Second, `builtin-inventory.md` ("The refused globals") has the
+     result of an effect read as the fields `pending`, `result` and
+     `error`, and `plan-and-label-templates.md` §5.2 defines an error
+     state as what the outputs of a failed cone take, which fails every
+     cone instance that reads it. No document says whether a refusal
+     shows as a value of the field `error`, which a reader can test, or
+     as an error state in the sense of §5.2. §6.3 says that it settles
+     "as a built-in's rejected staging settles today". Nothing is
+     assumed for either part. Not about a per-element construct.
+232. **Whether the changes that a cycle drains from storage join the
+     derivation behind the batch** (SS question 3; ES §1.1). By ruling
+     the derivations that the events of a batch made stale settle once
+     behind the batch ([Decided](#decided)). `execution-and-storage.md`
+     §1.1 marks as *assumed* that the changes one cycle drains from
+     storage and the writes of the events of that cycle form one set of
+     changes, with one derivation transaction.
+     `scheduler-and-serving-loop.md` §12, question 3, calls the same
+     "this document's decision" and lists it among the questions for the
+     owner. Neither is a ruling, and this plan did not list it.
+     *Assumed:* one set of changes and one derivation transaction, as
+     both documents have it.
+233. **The batch on a runtime without a serving loop** (SS question 49).
+     `scheduler-and-serving-loop.md` §5.1: the batch of a cycle is the
+     events in the queue "together with the events that their handlers
+     send to streams of the same space". The same paragraph, and §10.7:
+     "On a runtime with no serving loop a batch is the events queued
+     when the runtime begins to handle them", which does not say whether
+     an event that a handler of the batch sends joins the batch. The
+     prototype's executor is such a runtime, and it handles one event at
+     a time. *Assumed:* such an event joins the batch, as with a serving
+     loop, because §10.7 says that such a runtime "is the same scheduler
+     with sealing equal to committing".
+234. **When a write that was withdrawn for a conflict on its target is
+     stored again** (SS question 50). `scheduler-and-serving-loop.md`
+     §5.5: "A write withdrawn for a conflict on its target alone is
+     stored again from the memo", and its §3.5: "The next transaction
+     that demands an unstored output stores it from the memo, without an
+     evaluation". Neither says that the write waits until the replica
+     holds the commit that it conflicted with. Before that, the write is
+     staged against the same state of the target and conflicts again. Of
+     a requeued event the same section says that it "runs again once the
+     replica holds the commit that made the read stale". *Assumed:* the
+     write is stored again once the replica holds that commit, as a
+     requeued event waits for it.
+235. **The requeue of an event whose handler read something that is
+     stale at the commit** (SS question 51).
+     `scheduler-and-serving-loop.md` §5.5 and `execution-and-storage.md`
+     §1.7 state that a recorded read of the handler that is stale when
+     the wave commits requeues the event whole. §5.5 cites the
+     serving-loop specification for it, "where the rule is proposed and
+     awaits a ruling". The rule that a withdrawal that reaches a
+     handler's own writes requeues the event rests on it. No ruling of
+     this plan covers it. *Assumed:* the proposal, as both documents
+     state it.
+236. **The label of an interim output that is stored in a document of
+     its own** (PL question 162). `plan-and-label-templates.md` §3.15
+     ("Labels going in") gives a plain array generated from scratch
+     whole to an instance of its own as a link to the stored output, and
+     says that what the child reads through the link "resolves to the
+     labels stored at the output, as a read through any link does". Its
+     §4.1 says: "An interim value that is not kept is never labeled".
+     `execution-and-storage.md` §1.6 says that an interim value is not
+     instantiated, and its §7 that it has no stored provenance. An
+     output document holds an interim output (`execution-and-storage.md`
+     §4.1; question 215). So the one statement has a reader find labels
+     where the other three store none. *Assumed:* §3.15 holds for an
+     output document. Such an output is instantiated when its document
+     is written, and the document holds its label entries, because a
+     reader in another instance reaches the values through the link and
+     has no other label for them. Whether it has a provenance record is
+     not assumed. The case is a plain array generated from scratch that
+     is given whole to an instance of its own, or into which a reference
+     by key is stored elsewhere. An array of plain values in place and
+     an array of references are stored with their labels already, and
+     the assembled result of another per-element construct is question
+     212.
+237. **How an overlay entry holds a change of membership** (SS question
+     52). `scheduler-and-serving-loop.md` §11.6: "An entry of this
+     design carries each kept path its transaction wrote, as a whole
+     value", and "An entry for one row therefore hides no other row and
+     no other path". `execution-and-storage.md` §4.2: an insertion or a
+     reorder is "a `splice` of the stored array". Where a speculative
+     handler inserts a row, the kept path that its transaction wrote is
+     either the collection or the row. As the collection, the entry
+     holds the whole array and hides a committed change of membership
+     that arrives meanwhile, and a change of another row that is stored
+     in place. As the row, the entry needs a position, which the server
+     can assign otherwise. Nothing is assumed. The same over an array of
+     references, over an array of plain values in place, and over the
+     result of another per-element construct.
+238. **The batches for another space behind a derivation transaction
+     that evaluates for several scope keys** (SS question 53).
+     `scheduler-and-serving-loop.md` §9.3 carries an `inSpace`
+     instantiation by "An authored batch per target space, under the
+     acting principal of the requesting evaluation or handler", and for
+     a computation that principal is the one of the scope key that the
+     making cone instance is evaluated for. `execution-and-storage.md`
+     §1.8: "One derivation transaction may hold the evaluations for
+     several scope keys". No document says whether a wave then carries
+     one batch for each principal for the same target space, or in which
+     order; `scheduler-and-serving-loop.md` §9.4 orders the steps by the
+     order in which the transactions sealed, and these evaluations are
+     of one transaction. Nothing is assumed. It extends question 45
+     and question 61.
+
+Six places of that analysis are no question, because the documents
+decide them. `streamData` and `llm` are removed ([Decided](#decided)),
+so nothing of them runs. After a recovery the stored hash of a handler's
+request is the hash of the content as it is then: the recovery's request
+transaction "writes the hash it computed with the pending mark"
+(`scheduler-and-serving-loop.md` §2.3). The parts of a `wish` "are
+evaluated on demand like any cone" (`builtin-inventory.md`, "When an
+effect is demanded, and its time gates"), so a derivation transaction
+resolves it. The overview's sentence that a move takes the stored
+results of a key with it does not conflict with the deletion of the part
+document of a removed row: "A part document holds kept paths of the
+result and nothing that is stored under the key"
+(`execution-and-storage.md` §4.10). A kept path with an empty label and
+no dynamic part has no provenance record, since the envelope holds a
+record "for the path where it has a label entry or a dynamic part"
+(`execution-and-storage.md` §7.2). And that a handler with an anonymous
+`inSpace` target is never speculated follows from
+`scheduler-and-serving-loop.md` §9.4 and `execution-and-storage.md`
+§5.6. Seven more places are open already: the order of the genesis
+commit and the allocation record of a created space (question 15), what
+a withdrawn write takes with it (question 39), the gates that a client
+evaluates (question 33), demand across spaces (question 16), the acting
+principal of an evaluation of space scope (questions 45 and 61), the
+transaction of a first value that is not a constant (question 83 of
+`execution-and-storage.md`), and which cone with side-writes is a
+materializer (question 80 of `execution-and-storage.md`).
+
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
 constant is written, the prototype does the alternative: it computes
@@ -6554,6 +7415,11 @@ is when the key enters the element table, in all three cases.
   overwrites the record that the link names as the executor does.
   What differs from the documents at that commit is under [Known
   limits](#known-limits-of-what-exists).
+  At commit `abd965cc37` the executor runs 212 of the 215 modules that
+  today's runtime runs, and every value that differs and every event
+  that is not handled has a class and a cause ([The corpus at commit
+  `abd965cc37`](#the-corpus-at-commit-abd965cc37)). What the executor
+  still lacks is under [Known limits](#known-limits-of-what-exists).
 
 The open questions each document ends with stay where they are.
 
@@ -6769,6 +7635,60 @@ The open questions each document ends with stay where they are.
   have the rows of `language-subset.md` for them. The first two are
   tested on snippets alone, and the crate does not report the third,
   which needs footprint analysis.
+- **At commit `abd965cc37` the prototype's executor lacks eight things
+  that the documents have** (its note 474), and 32 values of the corpus
+  run and three modules that are not executed are for them ([The corpus
+  at commit `abd965cc37`](#the-corpus-at-commit-abd965cc37)). It has no
+  error state, so a body that throws stops the instance
+  (`plan-and-label-templates.md` §5.2). It has no `linksOf`. It stores
+  nothing for a handler factory that is a value
+  (`plan-and-label-templates.md` §3.21). It reads the content of a
+  position of type `unknown`, which `language-subset.md` §7.8 has as a
+  reference that is not read. It evaluates a cone that writes a cell it
+  reads once (`execution-and-storage.md` §2.7). It validates no read
+  against its schema, where under the documents a read of data that does
+  not match gives `undefined` where the type admits it and fails the
+  cone otherwise. The crate's schema of a type that refers to itself has
+  `{}` at the reference. And the crate does not report
+  `binding:write-to-computed` for a write that an `action` makes. None
+  of this is about a per-element construct.
+- **Seven questions come from the differences of the corpus run that the
+  prototype's notes could not put down to a defect or to a deliberate
+  difference** (questions 217 to 223). For each the prototype does one
+  of the answers: it promotes a `computed` whose body computes another
+  value as a function body; it gives the members of a stored record in
+  the order in which they were written; it accepts a call that leaves
+  out a path that a handler writes, and refuses the write; `equals` of a
+  reference by key with a copy of the same element is false, over an
+  array of plain values in place; a record that is a member of a spread
+  in the reactive tier over an array of plain values in place is stored
+  as a copy; a label template holds the template of each input in place;
+  and an artifact holds the text of each file that `dataFile` names.
+- **The size of a plan is not bounded by the number of its outputs**
+  (its note 478; question 222). A value that two outputs read has its
+  template written once in each, so a chain of values that each read the
+  two before them has templates whose sizes follow the Fibonacci
+  numbers. The fixture that showed it holds eleven values, and no test
+  bounds the size of a plan. Whether a plan of the corpus is large for
+  this reason was not examined.
+- **At commit `abd965cc37` the corpus was run by the prototype's author,
+  for the comparison of values and the comparison of labels.** The
+  coordinator of this work ran the tests and the fixtures. Neither run
+  was compared module by module with an earlier run of the comparison of
+  labels, and the cost measurement was not run. The times that the
+  prototype's note 467 gives for the checks of the memo are of one run.
+  The spread in the reactive tier is compared with nothing, because
+  today's runtime runs none of its forms in a pattern body. That today's
+  runtime gives the members of every stored record in the order of their
+  names rests on one module.
+- **Fifteen questions come from a reading of the documents, and no test
+  of the prototype bears on them** (questions 224 to 238). They are
+  about what the prototype's executor does not have: the bound of ten
+  evaluations with the withdrawal of side-writes, scopes, effects and
+  their requests, a client, part documents, the cycle of the serving
+  loop, and a second space. The reading did not cover
+  `plan-and-label-templates.md`, `footprint-analysis.md` and
+  `language-subset.md` in full, so it is no review of those.
 - **At the commits before `a4b4612b3b` the prototype followed the
   rulings on a key in part.** At commit `7774ba208c` the key names its
   declared key fields, a reference by key is resolved from the key
@@ -6805,8 +7725,9 @@ The open questions each document ends with stay where they are.
   state path of plain type, and on what a re-key moves. The figures of
   this plan that count listed paths or failed checks are of commit
   `e4f2fb3431` and earlier.
-- **The comparison of labels and the cost measurement were run over
-  the corpus once, at commit `7774ba208c`, and not compared with an
+- **The cost measurement was run over the corpus once, at commit
+  `7774ba208c`, and the comparison of labels there and at commit
+  `abd965cc37`, and neither was compared module by module with an
   earlier run.** Both read the crate's `emit` output and run the
   executor beside today's run to find the streams. No results file
   of either at commit `a462df710a` exists, the figures this plan
@@ -6851,19 +7772,27 @@ The open questions each document ends with stay where they are.
 3. **Post the drafted description to specs pull request #91** and ask for
    its review, when the owner decides it leaves draft.
 4. **In the prototype:** compare the label comparison and the cost
-   measurement over the corpus, which ran once at commit
-   `7774ba208c`, module by module with a run of the same crate and
-   corpus, and take the times on an idle machine; bring the
+   measurement over the corpus module by module with a run of the same
+   crate and corpus, which no run so far was, run the cost measurement
+   at the commit of the last comparison of values, and take the times
+   on an idle machine; bring the
    crate's diagnostic catalog to that of `language-subset.md`, which
    has `element-body:result-stored-outside`,
    `array-by-key:declaration` and `array-by-key:mismatch`, all three
    of which the crate holds as provisional until the rows of that
    document reach the crate's tree; report the first, which needs
-   footprint analysis; give the
-   slot of a captured name the
-   handle type that the callee declares; and have value code keep the
-   links of an array of references that is spread among the children
-   of a view node.
+   footprint analysis; and give the executor what its note 474 lists
+   as not fixed at commit `abd965cc37`: an error state, with a stored
+   form that the comparison reads as today's "nothing stored";
+   `linksOf`; a stored form of a handler factory that is a value; a
+   position of type `unknown` as a reference that is not read; the
+   bounded iteration of a cone that writes a cell it reads; the
+   validation of a read against its schema; `$defs` in the schema of a
+   type that refers to itself; and the report of
+   `binding:write-to-computed` for a write that an `action` makes.
+   Also bound the size of a plan in a test, which waits on question
+   222, and have the generator of the comparison give a value for a
+   member of type `unknown` or `FabricBytes`.
 5. **In the prototype, for the rulings of 2026-11-17 on keys.** The
    prototype at commit `682b918ed1` has the rulings, the four on
    questions 207 to 210 included, and the record forms of the documents
@@ -6901,9 +7830,18 @@ The open questions each document ends with stay where they are.
    instance has, with the one made later under the key it left. Open
    from before, and for the owner as well: how a reader that is
    compiled in learns the key fields, and which key the type of a
-   `flatMap` result declares (questions 207 and 208). Also run the
-   comparison of labels and the cost measurement over the corpus at
-   this commit.
+   `flatMap` result declares (questions 207 and 208). The comparison
+   of labels was run over the corpus at commit `abd965cc37`, and the
+   cost measurement was not. After the owner rules on questions 217
+   to 223: whether a `computed` whose body computes another value as a
+   function body is promoted; the order in which a read gives the
+   members of a stored record; what a call that leaves out a path
+   that a handler writes is; what a record that is a member of a
+   spread in the reactive tier holds, over an array of plain values in
+   place; whether a label template names another output; and where an
+   artifact holds the files that `dataFile` names. Questions 224 to
+   238 are about parts that the prototype's executor does not have,
+   and each has to be ruled before a test of its part means anything.
 
 ### Briefing an author
 

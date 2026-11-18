@@ -6173,6 +6173,56 @@ Added by the ruling that the scheduler is switched per space (section 9):
     or the result of another per-element construct where the upstream
     position holds such a value. Over an array of references the body
     pushes the link, and no document is made.
+94. **The order in which a read gives the members of a stored record**
+    (section 2.4). An entry of class `enumeration` gives the body "the
+    stored keys in the stored order", and no section says what the
+    stored order of a record is. By the prototype's comparison the
+    runtime of today gives the members of a record that a handler wrote
+    in the order of their names, in the one module that shows it, and
+    the prototype's executor gives them in the order in which they were
+    written. *Assumed,* as the coordinator of this work recommends, and
+    not ruled: a read gives the members in the order in which the
+    serialization of a fabric value by `base/data-model` writes them,
+    the order of the UTF-8 bytes of their names (`encodePlainObject` of
+    `JsonEncodeAct` in
+    `base/data-model/src/codec-json/JsonEncodeAct.ts`). That method does
+    not write that order for a member whose name reads as an integer,
+    and which order such a member has is part of the question. The
+    alternative is the order in which the members were written. Not
+    about a per-element construct. It is question 218 of the
+    continuation plan.
+95. **`equals` of a reference by key with a copy of the same element, in
+    a function body** (sections 2.2 and 2.4). A handler bound in an
+    element body over an array of plain values in place is given a
+    reference by key for its element, and a member of the array that it
+    reads through a handle, as with `items.get()`, is a copy that
+    carries no address, by ruling. So `items.get().findIndex((x) =>
+    equals(element, x))` finds nothing: a reference and a value that
+    carries no address do not name one thing. Today each record of such
+    a list is a cell in the modules of the corpus that do this, and the
+    handler finds its element. This follows from the rulings and is
+    recorded for the owner to see. *Assumed:* the comparison is false,
+    as the rulings give it. The `findIndex` is the JavaScript method on
+    the array that `get()` returned, and no per-element construct of the
+    reactive tier. Over an array of references each member carries the
+    address of its cell, and the comparison holds for the element. It is
+    question 220 of the continuation plan.
+96. **Which split points the rule on the size of a document takes, and
+    which size is measured** (section 4.10). Rule 3 makes a part of
+    every split point directly below a document that exceeds
+    `DOCUMENT_MAX_BYTES`. The paragraph "A row" says that rule 3 then
+    makes each row of a list a part. Where the array is a kept output
+    that is stored in place in the result document, the root of that
+    output is a split point between the document and the rows, so rule 3
+    as it is written makes the array one part, and the paragraph makes
+    the rows parts. *Assumed:* rule 3 as it is written: the array
+    becomes a part, and its rows become parts when that part exceeds the
+    number in turn. The size of a split point is the length of "the
+    stored encoding of its subtree", and no section names the encoding;
+    nothing is assumed for it. The same for the rows of a kept
+    collection over an array of references, over an array of plain
+    values in place, and over the result of another per-element
+    construct. It is question 229 of the continuation plan.
 
 ### 11.2 For another document or the prototype
 
