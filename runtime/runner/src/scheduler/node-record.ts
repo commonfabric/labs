@@ -48,6 +48,10 @@ export interface SchedulerNode {
   readonly action: Action;
   /** Whether this registration has an accepted result to retain while gated. */
   hasCommittedResult?: boolean;
+  /** Whether a run of this registration has finished without being withdrawn
+   * for a read it could not take as state: its output, absent or not, is what
+   * it produced. */
+  produced?: boolean;
   /** The latest sealed run that can still owe dependency-withdrawal recovery. */
   pendingWaveRun?: object;
 
@@ -305,6 +309,7 @@ export class NodeRegistry {
     endLocalReadValidationStretch();
     record.registrationToken = {};
     delete record.hasCommittedResult;
+    delete record.produced;
     delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;

@@ -22,6 +22,7 @@ import { backtickQuote } from "@commonfabric/text/markdown";
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import {
+  localReadFailure,
   requireLocalReadCondition,
   restrictToLocalReads,
   usesLocalReads,
@@ -15356,6 +15357,9 @@ export class Runner {
         // untouched so the scheduler re-runs the action instead of writing an
         // error result into the binding.
         if (error instanceof RetryImmediately) throw error;
+        // Unavailable local inputs poison the attempt even when the body
+        // replaces the signal. The scheduler discards its writes and parks it.
+        if (localReadFailure(tx) !== undefined) throw error;
         if (
           error !== null &&
           (typeof error === "object" || typeof error === "function")
@@ -15371,6 +15375,9 @@ export class Runner {
             undefined,
           );
         } catch (bindingError) {
+          // Resolving the output binding can itself find unavailable data.
+          // That attempt takes the same parked disposition as a missing input.
+          if (localReadFailure(tx) !== undefined) throw error;
           logger.error(
             "runner",
             "Failed to write undefined to binding on error",

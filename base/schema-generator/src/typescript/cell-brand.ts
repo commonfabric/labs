@@ -27,16 +27,17 @@ export interface CellWrapperInfo {
   typeRef: ts.TypeReference;
 }
 
-export function isCellInternalMarkerName(name: string): boolean {
-  return name === "CELL_BRAND" ||
-    name === "CELL_INNER_TYPE" ||
-    name.startsWith("__@CELL_BRAND") ||
+/**
+ * Whether `name` is the name of a member keyed by one of the `unique symbol`s
+ * `CELL_BRAND` and `CELL_INNER_TYPE` that `BrandedCell` declares.
+ */
+function isCellInternalMarkerName(name: string): boolean {
+  return name.startsWith("__@CELL_BRAND") ||
     name.startsWith("__@CELL_INNER_TYPE");
 }
 
 function isCellBrandSymbol(symbol: ts.Symbol): boolean {
-  const name = symbol.getName();
-  if (isCellInternalMarkerName(name)) {
+  if (isCellInternalMarkerName(symbol.getName())) {
     return true;
   }
 
@@ -128,14 +129,6 @@ export function isCellType(type: ts.Type, checker: ts.TypeChecker): boolean {
   return getCellBrand(type, checker) !== undefined;
 }
 
-export function isCellBrand(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-  brand: CellBrand,
-): boolean {
-  return getCellBrand(type, checker) === brand;
-}
-
 /**
  * It's possible we'll support different brands and cellkind values,
  * but for now, these are the same.
@@ -168,9 +161,7 @@ function brandToWrapperKind(brand: CellBrand): CellWrapperKind | undefined {
   }
 }
 
-export function wrapperKindToBrand(
-  wrapperKind: CellWrapperKind,
-): CellBrand | undefined {
+export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
   switch (wrapperKind) {
     case "OpaqueCell":
     case "Reactive":
@@ -187,8 +178,6 @@ export function wrapperKindToBrand(
       return "writeonly";
     case "SqliteDb":
       return "sqlite";
-    default:
-      return undefined;
   }
 }
 

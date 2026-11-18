@@ -73,8 +73,10 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
+  drawnCharacters,
   drawsAsPictures,
   hasNonPrintable,
+  shownCells,
   sourceColumnOf,
 } from "./display.ts";
 import {
@@ -147,14 +149,15 @@ export interface PushedFrame {
   readonly view: ViewState;
 }
 
-/** A `git blame` the session asks its driver to run, which the driver hands
- * back with the result to {@link Session.finishBlameLoad}. */
+/** The blame of a file or a commit that the session asks its driver to run,
+ * which the driver hands back with the result to
+ * {@link Session.finishBlameLoad}. */
 export interface BlameLoad {
   readonly request: BlameRequest;
 }
 
-/** A file's blame: the load that fetches it, and its lines once it has
- * finished. */
+/** A file's or a commit's blame: the load that fetches it, and its lines
+ * once it has finished. */
 interface BlameEntry {
   readonly load: BlameLoad;
   lines: readonly BlameLine[] | null;
@@ -380,19 +383,21 @@ export class Session {
   /** The clock the blame column's ages are measured by. */
   #now: () => number;
 
-  /** Each file's blame, by {@link blameKey}. */
+  /** Each file's and commit's blame, by {@link blameKey}. */
   #blames = new Map<string, BlameEntry>();
 
   /** Loads the viewport needs that the driver has not yet taken. */
   #blameWanted: BlameLoad[] = [];
 
-  /** The {@link blameKey}s of files git could not blame. */
+  /** The {@link blameKey}s of files and commits git could not blame. */
   #blameFailures = new Set<string>();
 
-  /** The source's blame targets, and the source and text they are for. */
+  /** The source's blame targets, and the source, text, and baseline they are
+   * for. */
   #blameTargetCache?: {
     source: EditableSource;
     text: string;
+    baseline: string;
     targets: readonly (BlameTarget | null)[];
   };
 
@@ -1486,22 +1491,28 @@ export class Session {
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
     const wrap = (line: string): TaskRow[] => {
       const text = line.trimEnd();
-      const chars = [...text];
+      const chars = drawnCharacters(text);
+      // The code points before each character, and before the end.
+      const offsets = [0];
+      for (const char of chars) {
+        offsets.push(offsets[offsets.length - 1] + cpLen(char));
+      }
       const addresses = Array.from(webAddresses(text), (match) => {
         const from = cpLen(text.slice(0, match.index));
         return { from, to: from + cpLen(match[0]), url: match[0] };
       });
       const rowsOfLine: TaskRow[] = [];
       let at = 0;
-      const take = (length: number, next: number) => {
-        const end = at + length;
+      const take = (end: number, next: number) => {
+        const first = offsets[at];
+        const last = offsets[end];
         rowsOfLine.push({
           text: chars.slice(at, end).join(""),
           links: addresses.flatMap(({ from, to, url }) =>
-            from < end && to > at
+            from < last && to > first
               ? [{
-                from: Math.max(from, at) - at,
-                to: Math.min(to, end) - at,
+                from: Math.max(from, first) - first,
+                to: Math.min(to, last) - first,
                 url,
               }]
               : []
@@ -1509,15 +1520,22 @@ export class Session {
         });
         at = next;
       };
-      while (chars.length - at > columns) {
-        const space = chars.lastIndexOf(" ", at + columns);
-        const words = space < at
-          ? 0
-          : cpLen(chars.slice(at, space + 1).join("").trimEnd());
-        if (words > 0) take(words, space + 1);
-        else take(columns, at + columns);
+      for (;;) {
+        let fit = at;
+        for (let used = 0; fit < chars.length; fit++) {
+          used += shownCells(chars[fit]).length;
+          if (used > columns) break;
+        }
+        if (fit === chars.length) break;
+        // A character wider than the box takes a row of its own.
+        fit = Math.max(at + 1, fit);
+        const space = chars.lastIndexOf(" ", fit);
+        let words = space + 1;
+        while (words > at && /\s/.test(chars[words - 1])) words--;
+        if (space >= at && words > at) take(words, space + 1);
+        else take(fit, fit);
       }
-      take(chars.length - at, chars.length);
+      take(chars.length, chars.length);
       return rowsOfLine;
     };
     // The output keeps at least one row, and what the dialog says about the
@@ -3004,13 +3022,17 @@ export class Session {
     this.#wrapMode = "off";
     this.#cursorOn = true;
     this.#selectedIndex = null;
-    // Editing relies on every source column mapping to one display column, which
-    // only "pictures" guarantees (it hides nothing and collapses nothing).
+    // Editing relies on every source column having a display column of its own
+    // or sharing one with the rest of its character, which only "pictures"
+    // guarantees (it hides nothing and collapses nothing).
     const picturesAppear = this.#currentDoc.lines.some((line) =>
       !drawsAsPictures(line.text, this.#displayMode)
     );
     this.#displayMode = "pictures";
-    if (anchor) this.left = cursorCol;
+    const topLine = this.#currentDoc.lines[topDoc];
+    if (anchor && topLine) {
+      this.left = displayColumnOf(topLine, "pictures", cursorCol);
+    }
     // Editing works on the full text, so expand every folded file; the top
     // display row becomes its document line.
     this.#clearFolds();
@@ -4106,7 +4128,7 @@ export class Session {
   #cursorPage(dir: number): void {
     const b = this.#buffer!;
     const step = Math.max(1, this.#contentRows() - 1);
-    b.place(b.row + dir * step, b.col);
+    b.moveRows(dir * step);
     this.top = clamp(
       this.top + dir * step,
       0,
@@ -4123,8 +4145,18 @@ export class Session {
     else if (b.row >= this.top + rows) this.top = b.row - rows + 1;
     this.top = clamp(this.top, 0, maxTop(this.doc.lines.length, this.height));
     const cw = this.#contentWidth();
-    if (b.col < this.left) this.left = b.col;
-    else if (b.col >= this.left + cw) this.left = b.col - cw + 1;
+    // The cursor's whole character comes into view, both its columns when it
+    // is wide.
+    const line = this.#foldPlan().displayLines[this.#toFolded(b.row)];
+    const col = line ? displayColumnOf(line, this.#displayMode, b.col) : 0;
+    const last = line
+      ? Math.max(
+        col,
+        displayColumnOf(line, this.#displayMode, b.characterEnd) - 1,
+      )
+      : 0;
+    if (col < this.left) this.left = col;
+    else if (last >= this.left + cw) this.left = last - cw + 1;
     this.left = clamp(this.left, 0, this.#maxLeft());
   }
 
@@ -4316,23 +4348,26 @@ export class Session {
   }
 
   /** Turn the blame column on or off, keeping the viewport's top line. It
-   * stays off when no line comes from a file git can blame. */
+   * stays off when no line can be blamed. */
   #toggleBlame(): void {
     const source = this.#source;
     if (
       !this.#blameOn &&
       !(source && this.#blameTargets(source).some((target) => target !== null))
     ) {
-      this.#message = "No line here comes from a file git can blame";
+      this.#message = "No line here can be blamed";
       return;
     }
     const anchor = this.#wrapLines ? this.#viewportAnchor() : null;
     this.#blameOn = !this.#blameOn;
     if (anchor) this.#restoreWrappedAnchor(anchor);
+    const shown = this.#blameSource();
     this.#message = !this.#blameOn
       ? "Blame off"
-      : this.#blameShown()
-      ? "Blame on"
+      : shown
+      ? this.#blameTargetsInView(shown).some((target) => target !== null)
+        ? "Blame on"
+        : "Blame on; no line in view can be blamed"
       : blameColumnWidth(this.width, true) === 0
       ? "Blame on; the screen is too narrow to show it"
       : "Blame on; it shows in the source view";
@@ -4356,13 +4391,23 @@ export class Session {
       : null;
   }
 
-  /** The source's blame targets for the current text, cached against both. */
+  /** The source's blame targets for the current text and the text as last
+   * loaded or saved, cached against all three. */
   #blameTargets(source: EditableSource): readonly (BlameTarget | null)[] {
     if (!source.blameTargets) return [];
     const text = this.#sourceDoc.text;
+    const baseline = this.#buffer?.baseline() ?? text;
     let cache = this.#blameTargetCache;
-    if (cache?.source !== source || cache.text !== text) {
-      cache = { source, text, targets: source.blameTargets(text) };
+    if (
+      cache?.source !== source || cache.text !== text ||
+      cache.baseline !== baseline
+    ) {
+      cache = {
+        source,
+        text,
+        baseline,
+        targets: source.blameTargets(text, baseline),
+      };
       this.#blameTargetCache = cache;
     }
     return cache.targets;
@@ -4370,28 +4415,38 @@ export class Session {
 
   /** The blame column: the attribution it shows on each display line in view,
    * or null where it shows none, and the current time; null when the column
-   * is hidden. Asks for the blame of any file in view that it does not have
-   * yet. */
+   * is hidden. Asks for the blame of any file or commit in view that it does
+   * not have yet. */
   #blameColumn(): ViewState["blame"] {
     const source = this.#blameSource();
     if (!source) return null;
+    return {
+      lines: this.#blameTargetsInView(source).map((target) =>
+        target && this.#blameFor(target)
+      ),
+      now: this.#now(),
+    };
+  }
+
+  /** The source's blame target for each display line, null outside the
+   * view. */
+  #blameTargetsInView(source: EditableSource): (BlameTarget | null)[] {
     const targets = this.#blameTargets(source);
     const plan = this.#foldPlan();
-    const column = new Array<BlameLine | null>(plan.displayLines.length)
-      .fill(null);
     const first = this.#toFolded(this.#toDoc(this.top));
     const last = this.#toFolded(
       this.#toDoc(this.top + this.#contentRows() - 1),
     );
-    for (let row = first; row <= last; row++) {
-      const target = targets[plan.displayToDoc(row)];
-      if (target) column[row] = this.#blameFor(target);
-    }
-    return { lines: column, now: this.#now() };
+    return plan.displayLines.map((_, row) =>
+      row >= first && row <= last
+        ? targets[plan.displayToDoc(row)] ?? null
+        : null
+    );
   }
 
   /** The attribution of `target`'s line, or null while it is unknown. Loads
-   * the blame of a file that has none, or has one taken of other text. */
+   * the blame of a file or commit that has none, or of a file that has one
+   * taken of other text. */
   #blameFor(target: BlameTarget): BlameLine | null {
     const key = blameKey(target.request);
     if (this.#blameFailures.has(key)) return null;
@@ -4427,8 +4482,8 @@ export class Session {
     if (entry?.load === load) entry.lines = lines;
   }
 
-  /** Record that git could not blame a load's file, which is not tried
-   * again, and say why. */
+  /** Record that git could not blame a load's file or commit, which is not
+   * tried again, and say why. */
   failBlameLoad(load: BlameLoad, reason: string): void {
     const key = blameKey(load.request);
     if (this.#blames.get(key)?.load !== load) return;

@@ -216,7 +216,8 @@ Deno.test("session: lines without diff annotations use the full width", () => {
 
 Deno.test("session: full-width lines count displayed cells", () => {
   const cases = [
-    { text: "😀😀😀😀😀", expected: "😀😀😀😀😀  " },
+    // Each emoji takes two columns.
+    { text: "😀😀😀", expected: "😀😀😀 " },
     { text: "\x1b[31mabcde\x1b[0m", expected: "abcde  " },
     { text: "a\bab\bbc\bcd\bde\be", expected: "abcde  " },
   ];

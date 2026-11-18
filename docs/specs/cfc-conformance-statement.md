@@ -948,6 +948,28 @@ append, and the keep rule's matching and its admission, carry its `SPEC-PENDING`
 marker, and the kernel manifest carries no row for `mergeWritePolicy` until a
 regenerated snapshot defines it.
 
+**The restatement waiver across a release.** A setup that carries a protected
+argument slot over unchanged has its writer refusal deferred and then waived
+where the envelope it would store declares the same policy throughout the
+document ([specs#67](https://github.com/commonfabric/specs/pull/67), §8.15.4,
+which the pin does not have). A release that appends an alternative changes the
+policy at that position, so the waiver's comparison would refuse every release
+of a piece whose argument holds a value under a lone writer claim beside the
+extended policy. In a release, the comparison that stores the derived envelope
+counts such a position as unchanged where the stored alternatives begin the
+derived list, element for element and in order, stamps and files included, each
+further alternative is one `writePolicyAlternativeAdmissible` admits, and every
+other claim there is the same (`ifcDiffersOnlyByReleaseAppend` in
+`cfc/schema-merge.ts`). A position whose logical path the comparison cannot
+tell, or that is at, above or beneath a deferred field, is compared exactly.
+That is specs#67 as amended (§8.15.4, the replayed-setup restatement), which
+decides the deferred paths against the stored envelope's requirements alone;
+the runtime decides them against every schema the write answers to, the
+stored envelope among them, so it compares at least the positions the
+amendment compares exactly. Against the pin the runtime admits more; @danfuzz
+ruled on 2026-11-17 that this lands at the strict default with no dial, ahead
+of specs#67's ruling, under its `SPEC-PENDING` marker.
+
 **Residuals.**
 
 - The merge also requires an appended alternative to hold the same keys as the

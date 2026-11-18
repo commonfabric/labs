@@ -11,6 +11,8 @@
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -237,4 +239,35 @@ Deno.test("a handler declaring its result is legal", async () => {
     );
   `);
   assertEquals(errors.length, 0);
+});
+
+describe("verb-return-validation", () => {
+  describe("conditional returns", () => {
+    it("reports a conditional whose branches are both plain-shaped", async () => {
+      const errors = await errorsIn(`
+        const verb = action((id: string) => {
+          return id ? { picked: id } : "none";
+        });
+      `);
+      expect(errors).toHaveLength(1);
+    });
+
+    it("reports nothing for a conditional with a call in one branch", async () => {
+      const errors = await errorsIn(`
+        const verb = action((id: string) => {
+          return id ? { picked: id } : navigateTo(selected);
+        });
+      `);
+      expect(errors).toEqual([]);
+    });
+  });
+
+  it("reports nothing for a comparison over plain operands", async () => {
+    const errors = await errorsIn(`
+      const verb = action((id: string) => {
+        return id + "!" === "x!";
+      });
+    `);
+    expect(errors).toEqual([]);
+  });
 });

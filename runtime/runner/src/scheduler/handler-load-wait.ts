@@ -24,15 +24,6 @@ import { entityKey } from "./keys.ts";
  * and a document that does not exist withdraws the handler at most until its
  * absence is confirmed. A reactive computation needs none of this, since the
  * load's arrival runs it again.
- *
- * TODO(danfuzz): A served handler that reads a per-user value whose instance
- * for the event's principal no run has computed yet, such as a FabriFile
- * store's `#profile` wish before that principal's client has read the store,
- * runs against the absent value rather than waiting for it, and the next
- * event finds it computed. The site where a served handler's run should
- * first make those instances current is not pinned; this withdrawal is the
- * mechanism a fix would extend. `fabrichat-file-store-multi-runtime.test.ts`
- * asserts the refusal that results, under the same tag.
  */
 export function withdrawHandlerWhileLoading(
   runtime: Runtime,

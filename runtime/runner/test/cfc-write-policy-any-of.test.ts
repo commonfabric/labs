@@ -12,6 +12,7 @@ import {
 } from "../src/cfc/prepare.ts";
 import { cfcSchemaEntries } from "../src/cfc/schema-label-view.ts";
 import {
+  ifcDiffersOnlyByReleaseAppend,
   mergeCfcSchemaEnvelopes,
   type WritePolicyRelease,
 } from "../src/cfc/schema-merge.ts";
@@ -2217,6 +2218,91 @@ describe("cfc-write-policy-any-of", () => {
       it("returns a refusal for a merged policy that drops a stored alternative", () => {
         expect(kept([STORED[0], alternative("reply", "Send", "new")]))
           .toContain("drops the stored writePolicyAnyOf");
+      });
+    });
+
+    describe("the restatement waiver's position comparison", () => {
+      // `ifcDiffersOnlyByReleaseAppend()` says whether a position's merged
+      // policy is the stored one but for alternatives the release appended,
+      // which the restatement waiver then takes for no change.
+
+      const appended = alternative("reply", "Send", "new");
+
+      it("returns `true` for the stored policy followed by an admissible appended alternative", () => {
+        expect(
+          ifcDiffersOnlyByReleaseAppend(
+            { writePolicyAnyOf: STORED },
+            { writePolicyAnyOf: [...STORED, appended] },
+            RELEASE,
+          ),
+        ).toBe(true);
+      });
+
+      it("returns `false` for an appended alternative the release may not append", () => {
+        expect(
+          ifcDiffersOnlyByReleaseAppend(
+            { writePolicyAnyOf: STORED },
+            {
+              writePolicyAnyOf: [
+                ...STORED,
+                alternative("reply", "Send", "other"),
+              ],
+            },
+            RELEASE,
+          ),
+        ).toBe(false);
+      });
+
+      it("returns `false` where the stored alternatives are reordered, one is dropped, or one is stamped again", () => {
+        for (
+          const merged of [
+            [STORED[1], STORED[0], appended],
+            [STORED[0], appended],
+            [STORED[0], alternative("edit", "Edit", "new"), appended],
+          ]
+        ) {
+          expect(
+            ifcDiffersOnlyByReleaseAppend(
+              { writePolicyAnyOf: STORED },
+              { writePolicyAnyOf: merged },
+              RELEASE,
+            ),
+          ).toBe(false);
+        }
+      });
+
+      it("returns `false` for an appended alternative beside another difference at the position", () => {
+        const integrity = [{ kind: "authored-by" }];
+        expect(
+          ifcDiffersOnlyByReleaseAppend(
+            { writePolicyAnyOf: STORED },
+            {
+              writePolicyAnyOf: [...STORED, appended],
+              addIntegrity: integrity,
+            },
+            RELEASE,
+          ),
+        ).toBe(false);
+        expect(
+          ifcDiffersOnlyByReleaseAppend(
+            { writePolicyAnyOf: STORED, uiContract: contract("Send") },
+            {
+              writePolicyAnyOf: [...STORED, appended],
+              uiContract: contract("Edit"),
+            },
+            RELEASE,
+          ),
+        ).toBe(false);
+      });
+
+      it("returns `false` for a position with no write policy that the merge changed", () => {
+        expect(
+          ifcDiffersOnlyByReleaseAppend(
+            { writeAuthorizedBy: STORED[0].writeAuthorizedBy },
+            { writeAuthorizedBy: appended.writeAuthorizedBy },
+            RELEASE,
+          ),
+        ).toBe(false);
       });
     });
 

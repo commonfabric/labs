@@ -5,12 +5,15 @@
  * session wraps it (mapping the cursor to the view and re-parsing for live
  * highlighting); persistence and the diff/file plumbing live elsewhere.
  *
- * Columns are code points, matching the renderer's display columns: a line is
- * handled as its code-point array so the cursor never lands inside a surrogate
- * pair. Cursor moves step whole characters; edits splice whole characters.
+ * Columns are code points: a line is handled as its code-point array so the
+ * cursor never lands inside a surrogate pair. Moving the cursor left or right,
+ * and deleting the character before or after it, step over a whole character
+ * as a reader sees it, such as a letter and its combining marks, and moving it
+ * up or down keeps its display column and puts it at the start of one.
  */
 
 import { spliceAll } from "@commonfabric/collections/splice";
+import { characterAt, displayColumnOf, sourceColumnOf } from "./display.ts";
 
 /** What a kill operation appends to: tracks consecutive kills for accretion. */
 type LastKill = "none" | "append" | "prepend";
@@ -31,7 +34,8 @@ export class EditBuffer {
   col = 0;
 
   /** The "goal" column for vertical motion, so up/down keep the column over
-   * short lines (Emacs/most editors). -1 means "track the current column". */
+   * short lines (Emacs/most editors), as a display column, so that they keep
+   * it over wide characters too. -1 means "track the current column". */
   #goalCol = -1;
 
   /** Mark for region operations (C-Space … C-w), or null. */
@@ -66,6 +70,12 @@ export class EditBuffer {
   //
   // state
   //
+
+  /** The column at which the character after the one at the cursor starts,
+   * or the line's length at its end. */
+  get characterEnd(): number {
+    return this.#characterAt(this.row, this.col).end;
+  }
 
   text(): string {
     return this.lines.join("\n");
@@ -173,6 +183,12 @@ export class EditBuffer {
     return this.#chars(row).length;
   }
 
+  /** The columns at which the character of row `row` that holds column
+   * `col` starts and ends, as {@link characterAt} finds them. */
+  #characterAt(row: number, col: number): { start: number; end: number } {
+    return characterAt(this.#chars(row), col);
+  }
+
   /** Code-point length of the cursor's current line. */
   currentLineLength(): number {
     return this.#lineLen(this.row);
@@ -209,8 +225,9 @@ export class EditBuffer {
     this.#resetGoal();
     this.#endKill();
     this.#endYank();
-    if (this.col > 0) this.col -= 1;
-    else if (this.row > 0) {
+    if (this.col > 0) {
+      this.col = this.#characterAt(this.row, this.col - 1).start;
+    } else if (this.row > 0) {
       this.row -= 1;
       this.col = this.#lineLen(this.row);
     }
@@ -220,31 +237,34 @@ export class EditBuffer {
     this.#resetGoal();
     this.#endKill();
     this.#endYank();
-    if (this.col < this.#lineLen(this.row)) this.col += 1;
-    else if (this.row < this.lines.length - 1) {
+    if (this.col < this.#lineLen(this.row)) {
+      this.col = this.#characterAt(this.row, this.col).end;
+    } else if (this.row < this.lines.length - 1) {
       this.row += 1;
       this.col = 0;
     }
   }
 
   moveUp(): void {
-    this.#endKill();
-    this.#endYank();
-    if (this.#goalCol < 0) this.#goalCol = this.col;
-    if (this.row > 0) {
-      this.row -= 1;
-      this.col = Math.min(this.#goalCol, this.#lineLen(this.row));
-    }
+    this.moveRows(-1);
   }
 
   moveDown(): void {
+    this.moveRows(1);
+  }
+
+  /** Move the cursor `delta` rows down, or up when it is negative, no further
+   * than the first and last rows, keeping its display column. */
+  moveRows(delta: number): void {
     this.#endKill();
     this.#endYank();
-    if (this.#goalCol < 0) this.#goalCol = this.col;
-    if (this.row < this.lines.length - 1) {
-      this.row += 1;
-      this.col = Math.min(this.#goalCol, this.#lineLen(this.row));
+    if (this.#goalCol < 0) {
+      const text = this.lines[this.row] ?? "";
+      this.#goalCol = displayColumnOf({ text }, "pictures", this.col);
     }
+    this.row = clamp(this.row + delta, 0, this.lines.length - 1);
+    const text = this.lines[this.row] ?? "";
+    this.col = sourceColumnOf({ text }, "pictures", this.#goalCol);
   }
 
   moveLineStart(): void { // C-a
@@ -368,9 +388,12 @@ export class EditBuffer {
     this.#endYank();
     if (this.col > 0) {
       const cps = this.#chars(this.row);
-      cps.splice(this.col - 1, 1);
+      // The whole character before the cursor goes, even when the cursor was
+      // put inside it.
+      const { start, end } = this.#characterAt(this.row, this.col - 1);
+      cps.splice(start, end - start);
       this.lines[this.row] = cps.join("");
-      this.col -= 1;
+      this.col = start;
     } else if (this.row > 0) {
       const previous = this.#chars(this.row - 1);
       const previousEnd = clamp(
@@ -395,7 +418,8 @@ export class EditBuffer {
     const cps = this.#chars(this.row);
     const end = clamp(endColumn ?? cps.length, 0, cps.length);
     if (this.col < end) {
-      cps.splice(this.col, 1);
+      const next = this.#characterAt(this.row, this.col).end;
+      cps.splice(this.col, Math.min(next, end) - this.col);
       this.lines[this.row] = cps.join("");
     } else if (this.col === end && this.row < this.lines.length - 1) {
       this.lines[this.row] = cps.slice(0, end).join("") +

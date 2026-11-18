@@ -86,7 +86,7 @@ export function rewriteUiHelperElement(
   ]);
   const hint = createUiContractHint(spec, attrs);
 
-  if (ts.isJsxSelfClosingElement(visited) && !hasJsxChildren(node)) {
+  if (ts.isJsxSelfClosingElement(visited)) {
     return {
       node: preserveSourceMapRange(
         context.factory.createJsxSelfClosingElement(
@@ -100,27 +100,23 @@ export function rewriteUiHelperElement(
     };
   }
 
-  if (ts.isJsxElement(visited)) {
-    return {
-      node: preserveSourceMapRange(
-        context.factory.createJsxElement(
-          context.factory.createJsxOpeningElement(
-            context.factory.createIdentifier(tagName),
-            visited.openingElement.typeArguments,
-            nextAttributes,
-          ),
-          visited.children,
-          context.factory.createJsxClosingElement(
-            context.factory.createIdentifier(tagName),
-          ),
+  return {
+    node: preserveSourceMapRange(
+      context.factory.createJsxElement(
+        context.factory.createJsxOpeningElement(
+          context.factory.createIdentifier(tagName),
+          visited.openingElement.typeArguments,
+          nextAttributes,
         ),
-        visited,
+        visited.children,
+        context.factory.createJsxClosingElement(
+          context.factory.createIdentifier(tagName),
+        ),
       ),
-      hint,
-    };
-  }
-
-  return undefined;
+      visited,
+    ),
+    hint,
+  };
 }
 
 function getUiHelperSpec(
@@ -216,12 +212,6 @@ function isHelperOnlyAttribute(
   }
   return ts.isIdentifier(attribute.name) &&
     spec.helperProps.includes(attribute.name.text);
-}
-
-function hasJsxChildren(
-  node: ts.JsxElement | ts.JsxSelfClosingElement,
-): boolean {
-  return ts.isJsxElement(node) && node.children.length > 0;
 }
 
 function createUiContractHint(

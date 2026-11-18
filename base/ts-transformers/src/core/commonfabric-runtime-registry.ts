@@ -10,7 +10,6 @@ export type CommonFabricRuntimeExportSpec =
     category: "call";
     callKind:
       | "cell-factory"
-      | "lift-applied"
       | "ifElse"
       | "when"
       | "unless"

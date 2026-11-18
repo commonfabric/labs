@@ -242,9 +242,11 @@ import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
   cfcSchemaPoliciesEqual,
+  ifcDiffersOnlyByReleaseAppend,
   type MergeCfcSchemaEnvelopeOptions,
   mergeCfcSchemaEnvelopes,
   withoutUndefinedMembers,
+  type WritePolicyRelease,
   writerClaimStamp,
 } from "./schema-merge.ts";
 import {
@@ -14826,7 +14828,10 @@ export function* prepareBoundaryCommitSteps(
     // at or beneath: they govern a value the setup initializes. Where any are
     // left out, the merged envelope, which declares them, is stored in place
     // of the stored one; in a release it re-describes the claims beneath
-    // links too, as any release's merged envelope does.
+    // links too, as any release's merged envelope does. In the comparison
+    // that leaves those out, in a release, a position whose write policy the
+    // release extended with alternatives it may append counts as unchanged
+    // too, and the merged envelope, which holds them, is stored.
     let keepsStoredSchema = false;
     // TODO(danfuzz): Leaving out the positions beneath links applies the
     // link-position rule of commonfabric/specs pull request 52, in its
@@ -14856,8 +14861,15 @@ export function* prepareBoundaryCommitSteps(
       // differently — a rest claim is a label position only beside no named
       // property — so the positions both schemas declare are compared whole,
       // not at the deferred paths alone.
+      //
+      // Given `release`, a position whose policy differs from the stored one
+      // only by write-policy alternatives that release appended counts as
+      // unchanged (`ifcDiffersOnlyByReleaseAppend()`), except a position
+      // whose path is unknown, or that is at, above or beneath a deferred
+      // path, which is compared exactly.
       const leavesDeferredPaths = (
         omitted: (path: readonly string[]) => boolean,
+        release?: WritePolicyRelease,
       ): boolean => {
         const declaredPositions = (schema: JSONSchema) =>
           cfcSchemaEntries(schema).filter((entry) => !omitted(entry.path))
@@ -14866,16 +14878,35 @@ export function* prepareBoundaryCommitSteps(
               ifc: withoutUndefinedMembers(
                 entry.schema.ifc,
               ),
+              at: entry.path,
             })).sort((left, right) => utf8Compare(left.path, right.path));
+        const storedPositions = declaredPositions(storedSchema);
+        const derivedPositions = declaredPositions(schemaAndHash.schema);
+        // A position whose path is unknown, or that overlaps a deferred
+        // path, is compared exactly.
+        const samePolicy = release === undefined ? undefined : (
+          left: unknown,
+          right: unknown,
+          path: readonly string[] | undefined,
+        ) =>
+          path === undefined ||
+            deferredWriterPaths.some((deferred) => pathsOverlap(path, deferred))
+            ? deepEqual(left, right)
+            : ifcDiffersOnlyByReleaseAppend(left, right, release);
         return cfcSchemaPoliciesEqual(
           storedSchema,
           schemaAndHash.schema,
           omitted,
+          samePolicy,
         ) &&
-          deepEqual(
-            declaredPositions(storedSchema),
-            declaredPositions(schemaAndHash.schema),
-          ) &&
+          storedPositions.length === derivedPositions.length &&
+          storedPositions.every((position, i) => {
+            const derived = derivedPositions[i];
+            return position.path === derived.path &&
+              (samePolicy === undefined
+                ? deepEqual(position.ifc, derived.ifc)
+                : samePolicy(position.ifc, derived.ifc, position.at));
+          }) &&
           deferredWriterPaths.every((path) =>
             deepEqual(
               entriesAt(storedEntries, path),
@@ -14893,9 +14924,19 @@ export function* prepareBoundaryCommitSteps(
           storedSchema,
           deferredWriterPaths,
         );
+        // TODO(danfuzz): Taking a position whose policy differs only by the
+        // write-policy alternatives this transaction's release appended for
+        // an unchanged one (commonfabric/specs pull request 96, "Release")
+        // admits more than §8.15.4 permits. It is commonfabric/specs pull
+        // request 67 as amended, in §8.15.4's replayed-setup restatement, and
+        // waits on that ruling through the marker at the restatement deferral
+        // this waiver discharges, running by default ahead of it by Dan's
+        // decision of 2026-11-17. The stored envelope is not kept then: the
+        // merged one, which holds the appended alternatives, is stored.
         if (
-          leavesDeferredPaths((path) =>
-            governsNothingHere(path) || newField(path)
+          leavesDeferredPaths(
+            (path) => governsNothingHere(path) || newField(path),
+            release?.writePolicyRelease,
           )
         ) {
           deferredWriterRefusal = undefined;

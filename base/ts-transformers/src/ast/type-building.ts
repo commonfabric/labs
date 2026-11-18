@@ -283,15 +283,9 @@ export function qualifyCommonFabricTypeRefs(
     const property = type.getProperty(propertyName);
     if (!property) return undefined;
     const decl = property.valueDeclaration ?? property.declarations?.[0];
-    if (!decl) {
-      // Property has no declaration we can locate (anonymous object). Use the
-      // generic getTypeOfSymbol via a SourceFile fallback if available.
-      const ofSym = (context.checker as unknown as {
-        getTypeOfSymbol?: (sym: ts.Symbol) => ts.Type;
-      }).getTypeOfSymbol;
-      return ofSym ? ofSym.call(context.checker, property) : undefined;
-    }
-    return context.checker.getTypeOfSymbolAtLocation(property, decl);
+    return decl
+      ? context.checker.getTypeOfSymbolAtLocation(property, decl)
+      : context.checker.getTypeOfSymbol(property);
   };
 
   // For an array Type (T[] or Array<T>), get its element Type.
@@ -1212,10 +1206,7 @@ function getInstantiatedBindingType(
     if (known && known !== argument) ambiguous.add(parameter);
     substitutions.set(parameter, argument);
   };
-  const visited = new Set<ts.Type>();
   const collect = (type: ts.Type) => {
-    if (visited.has(type)) return;
-    visited.add(type);
     if (type.aliasTypeArguments) {
       const alias = type.aliasSymbol?.declarations?.find(
         ts.isTypeAliasDeclaration,
@@ -1490,9 +1481,8 @@ export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
   state: CrossStageState | undefined,
 ): T {
   const nullContext = (ts as typeof ts & {
-    nullTransformationContext?: ts.TransformationContext;
+    nullTransformationContext: ts.TransformationContext;
   }).nullTransformationContext;
-  if (!nullContext) return typeNode;
   const cloneShallow = (ts.factory as typeof ts.factory & {
     cloneNode<TNode extends ts.Node>(node: TNode): TNode;
   }).cloneNode;
