@@ -464,7 +464,11 @@ cause of every state cell and durable operation the body declares.
 element by the identity the slot resolves to (`cellIdentityKey` in
 `builtins/scope-policy.ts`) and the count of earlier occurrences of that
 identity, so the same identity twice gets two instances. For a slot that
-holds a link the identity is that of the link's target. For a slot that
+holds a link the identity is the address the link resolves to: the
+space, the document, the scope, and the path within the document. The
+result cell of an element is named from the construct's result
+container and the key (`listElementResultCell` in
+`builtins/list-coordinator-plan.ts`). For a slot that
 holds a plain value in place it is the slot's own address in the list's
 document, the path of the position included
 (`listSlotResolutions` in `builtins/list-coordinator-plan.ts`), so such an
@@ -476,15 +480,87 @@ requirement. The goal is that an entry that moves does not cause the map to
 be recomputed, and that its state moves with it.
 
 - An element that is a plain value, stored in the list itself, is keyed by
-  its value.
+  its value. By ruling the array may declare a key field with the
+  array type `ArrayByKey<T, "field">`, or several as a union of
+  their names, and the key of an element of it then names the fields
+  and holds one salted hash of their values. A reference that holds
+  such a key is resolved from the key alone, with no schema. By ruling
+  a key is a fabric value, a record of its parts, and nothing in it is
+  joined with separators of this design; `hashOf`
+  (`base/data-model/src/value-hash/impl.ts`) hashes it and
+  `jsonFromFabricValue` (`base/data-model/src/codecs.ts`) writes it
+  where a string is needed (`plan-and-label-templates.md` §1.2,
+  "Written forms"). The key
+  belongs to the array, so an element put into a second array has
+  that array's key, or none. The declaration is for an
+  array of
+  plain values in place, in particular a plain array that one
+  computation generates from scratch, as the `result` of `fetchJson`
+  is. An array of references does not need it, and the result of
+  another per-element construct carries the declared key through the
+  upstream key (`plan-and-label-templates.md` §1.3, "A declared key
+  field").
 - An element that is not a fixed value, a link to a cell, is keyed by the
-  identity of that cell.
+  identity of that cell. By ruling that identity is the address the
+  link resolves to, the path within the document included, so two
+  links into two paths of one document are two elements.
+- What an element body holds is named from the enclosing instance and
+  the key, as the result cell of an element is named today from the
+  result container and the key. The design does not need the links
+  that the runtime of today stores from a result container to the
+  result cell of each element. The causes are computed as they were,
+  which is assumed to mean the same inputs and structure of derivation
+  and not equal identifiers (`plan-and-label-templates.md` §1.3; its
+  §8, question 105).
+- A rule, an assumption or a question about a per-element construct
+  says which case it is about: an array of references, an array of
+  plain values in place, or the result of another per-element
+  construct. The first three rules of this list are those cases in
+  the order plain values, references, and, below, the result of
+  another construct.
 - In both cases the key also holds the count of earlier occurrences of the
   same value or identity in the collection. Two equal elements have two
   keys, and no two positions have one key.
 - The position is never in the key, also where the callback takes the
   index and uses it. The index is given to the nodes of the body that
   read it.
+- An element of a collection that is the result of a per-element
+  construct is keyed by the key of the upstream element it came from.
+  An element of a `filter` result has the key it has in the source, and
+  an element of a `map` result the key of the source element the
+  callback was evaluated for. A change of one upstream element then
+  evaluates that element's nodes through a chain of such constructs,
+  and no other element's.
+- An element that a `flatMap` contributes is keyed by the member
+  itself, by the rule for any array, together with the key of the
+  source element: the cell identity for a member that is a reference
+  and the value for a member that is a plain value, with the count of
+  earlier equal members of that source element's segment. Two members
+  of one segment that change places then evaluate nothing, as for
+  `map` (`plan-and-label-templates.md` §1.3).
+- An output that passes the result of a per-element construct on
+  unchanged, as a `computed` that returns the result of a `filter`
+  does, is the same collection for keying, and the plan marks the
+  output (`Output.passesCollection`). A construct applied to it has
+  the keys of that collection, over an upstream array of references
+  and over an upstream array of plain values in place alike.
+- When an element moves, the runtime moves what its key holds, its
+  stored results included, to the new position, and evaluates nothing
+  for it except the nodes that read the index. Evaluating again is
+  permitted, and moving is preferred.
+- Where the source is plain values that one computation produces as a
+  whole array, an implementation may evaluate the whole collection
+  again on each change in place of keeping results per element. The
+  observable result is the same.
+- An element that is a plain value in place is named by its collection
+  and its key. A reference to it, or to a member of it, holds the
+  collection, the key, and the path below the element, and resolves to
+  the position that holds the key at each read and each write. A cone
+  that passes such an element on stores that reference, and no copy.
+  The case is an array of plain values in place, and the result of
+  another per-element construct where the upstream position holds a
+  value. A reference to an element of an array of references is the
+  link to its cell (`plan-and-label-templates.md` §1.3).
 
 For a linked slot this is the key of today. For a plain value it differs:
 the value takes the place of the position.
@@ -492,10 +568,17 @@ the value takes the place of the position.
 Which elements are plain values follows from how lists are written.
 `diffAndUpdate` in `runtime/runner/src/data-updating.ts` gives a plain
 object written into an array by `set`, `push`, or `addUnique` a document of
-its own and stores a link (`nextAnchorId`). A list of records built by
-handlers therefore holds links, and its elements are keyed by identity.
-Plain-value elements are primitives, and records in an array that a
-computation built, which are stored inline. A record that a computation
+its own and stores a link (`nextAnchorId`, `anchorValueAsEntity`). A list
+of records built by handlers therefore holds links, and its elements are
+keyed by identity: it is an array of references, today and in this
+design. Plain-value elements are primitives; records of the argument
+that an instance is created with, or of a default, which
+`Runner.#updateArgument` in `runtime/runner/src/runner.ts` writes with
+no source of anchor ids; and records in an array that a computation
+built. All of them are stored inline, and today each is keyed by its
+position. Which writes give a record a document in this design, and
+how the document is named, is assumed
+(`plan-and-label-templates.md` §8, question 118). A record that a computation
 read and passes on unchanged is a reference
 ([What the plan records](#what-the-plan-records-for-calls-in-bodies),
 "References"): the array holds a link to where the record was read, and
@@ -529,20 +612,83 @@ the element is keyed by the identity of that cell.
   moves with its element
   (`plan-and-label-templates.md` §1.3). A statically resolved pattern
   called in the body is compiled into the body and is no child, and a
-  state cell it declares is a state cell of the body.
+  state cell it declares is a state cell of the body. Called through
+  `asInstance()`, it is a child that stays when its element leaves the
+  collection, in each of the three cases of a source
+  (`language-subset.md` §4.4.2).
 - *The same cell twice is two elements.* Two positions that link to one
   cell have the same identity and different occurrence counts, as today,
   and share nothing.
 - *Equal elements are told apart by their order.* Where two equal values
   stand in a collection and the first is removed, the one that remains
-  is occurrence 0 and has the state of the first occurrence. The state
-  dropped is that of the last occurrence. A move that changes the order
-  of two equal elements changes no key.
+  is occurrence 0 and has the state of the first occurrence. The key
+  that left is that of the last occurrence. A move that changes the
+  order of two equal elements changes no key.
+- *A key that left keeps what is stored under it.* By ruling the
+  removal of an element drops the cone instances of its key and
+  deletes no state cell and no operation state of the key. An element
+  that returns under the same key reads what its state cells held, as
+  an element of today finds the result cell that is named from its key
+  (`listElementResultCell` in `builtins/list-coordinator-plan.ts`).
+  The rule is the same over an array of references, over an array of
+  plain values in place, and over the result of another per-element
+  construct. Nothing in the design reclaims that storage
+  (`execution-and-storage.md` §2.6).
 - *A link to a plain value is keyed by the link's target.* Two cells that
   hold equal values are two elements. When the value behind the link
   changes, the cone is dirtied and the key, and with it the state, stays.
-- *A plain value edited in place is a new element.* Its old cone and state
-  are released.
+- *A plain value edited in place is a new element.* The cone instances
+  of its old key are dropped, and what is stored under the old key
+  stays, as for a removal. One edit is excepted by ruling: a write
+  through a reference by key to the element re-keys it in the same
+  transaction, and what the old key holds moves to the new key.
+  Provisional (P21 of the continuation plan, as replaced): where the
+  body of a per-element construct over such an array holds per-element
+  state and the array declares no key, the runtime reports
+  `array-by-key:state-under-value-key` at the first such edit, once for
+  each collection in a session (`execution-and-storage.md` §2.5), and
+  names `ArrayByKey` and an array of references as the corrections. The
+  compiler reports nothing for it (`language-subset.md` §4.4.1).
+- *A reference to a plain value in place follows the element.* Over an
+  array of plain values in place, `equals` finds two references to one
+  element equal: they name the same collection, key and path. A member
+  bound both ways and a handler's write through the element land at
+  the position that holds the key. A move changes nothing the
+  reference holds. By ruling a write through the reference that
+  changes the value re-keys the element in the same transaction: what
+  the body holds under the old key moves to the new key, and the
+  writer's reference is updated. After the element is removed, or
+  edited so, no position holds the old key, and a reference stored
+  elsewhere reads as
+  nothing. That differs from today, deliberately: today a reference
+  to a value stored in place names its position, and reads whatever
+  stands there. A record that a handler wrote into a list with `set`,
+  `push` or `addUnique` is not this case. It is a cell of its own,
+  today and in this design, and a reference to it reads the record
+  after the list no longer holds it. By ruling a function body that
+  reads such a value through a handle holds a copy and stores the
+  value where it writes it elsewhere, and `key(i)` on the array is a
+  handle by position that nothing rewrites to a reference to the
+  element. How
+  the reference is stored and labeled is assumed
+  (`plan-and-label-templates.md` §8, questions 113 and 114). Ruled as
+  well: a handler that declares a data type for the element in its
+  state, as `stop: Stop`, is given a reference by key, and a member read
+  from it carries the reference with the member's path, so a write of
+  the member elsewhere stores a reference by key; and a re-key moves an
+  instance that a computation of the body made, replaces what is stored
+  under the new key, moves nothing for another element whose occurrence
+  count it changed, and does not happen for a write that is not made
+  through a reference by key. Over an
+  array of references none of this applies.
+- *A list of keyed records is an array of references.* The record
+  that `elementById` yields a handle of is, by ruling, a cell of its
+  own, named by the address of the list and the key, and no member of
+  the list until a reference to it is added. A per-element construct
+  over such a list keys an element by the address the reference
+  resolves to, as for any array of references, and never by the key
+  the caller passed to `elementById` (`execution-and-storage.md`
+  §2.4).
 - *A hole has no key.* It has neither a value nor an identity, gets no
   cone, and stays a hole in the output, as today. An explicit `undefined`
   is a plain value and is keyed as one.
@@ -570,7 +716,9 @@ the element is keyed by the identity of that cell.
   before it enters an identifier, as `sqliteQuery` does for row documents
   (`SQLITE_ROW_SALT`, `resultRowKeys`).
 - *A client cannot read the salt.* A client therefore cannot derive an
-  identifier that holds a value-derived key. It cannot name per-element
+  identifier that holds a value-derived key, and cannot form the key
+  of a plain value, with declared key fields or without. It cannot
+  name per-element
   state over plain values, the stream of a handler bound in a body over
   plain values, or a
   handler binding with a copied path, before the server stores a link to
@@ -1021,6 +1169,26 @@ uses these facts in two places.
 These paragraphs state what is read when the request is made. The
 `streamData` and `llm` entries have no such paragraph, because both are
 removed.
+
+**The request, the state document, and what a reader reads.** Three points that
+the entries below leave open are provisional decisions of the continuation plan.
+
+- **The request and the state document** (provisional, P14; open question 17).
+  The stored request is the one argument of the call, or the arguments in the
+  order they are written. The state document of the operation holds it under
+  `request`, the hash under `requestHash`, and under `outcome` the record that a
+  reader reads (`execution-and-storage.md` §6.4). The prototype follows every
+  reference of the request. Where a **Request operands** paragraph declares an
+  operand a reference that is not followed, or followed to a depth, the
+  paragraph governs.
+- **`pending`, `result` and `error`** (provisional, P12; open question 16).
+  Before the first request transaction of an operation the three read as
+  nothing. From the request transaction on, `pending` is `true` until the
+  completion. While a newer request is outstanding, the result or the error of
+  the request before it stays readable (`scheduler-and-serving-loop.md` §6.2).
+- **A request whose cone failed** (provisional, P16). The stored request holds
+  one error state for the whole request, the request is not made, and the result
+  of the operation is that error state.
 
 **What a language-model built-in sends after its request.** A
 language-model built-in sends content that no request held: the result of
@@ -1799,7 +1967,11 @@ counterpart in this inventory.
 - **New design:** class A. `wish` is not an effect. Everything it creates is
   created idempotently under an identifier derived from its cause, so a
   reader cannot tell a target the wish created from one that already
-  existed. Its parts read as follows.
+  existed. Provisional (P15; open question 18): a `wish` is resolved in the
+  evaluation that stages its operands, in the derivation transaction of its
+  reader, and makes no request: it has no request transaction and nothing of it
+  is handed to the outbox, although its entry stands in this section. Its parts
+  read as follows.
   - Path and well-known-target resolution is a reference whose identity
     depends on the query and, for home targets, on the acting user.
   - Hashtag search is a filter over a collection that lives in another
@@ -1954,6 +2126,8 @@ Three facts about the builder explain most of the entries.
 | --- | --- | --- |
 | `pattern(fn)` | Runs `fn` eagerly to build a graph and returns a `PatternFactory` (`builder/pattern.ts`). | C. The callback is the reactive tier. |
 | `PatternFactory.asScope(scope)`, `.inSpace(space, options)` | Derived copies of a pattern factory that set the instance's scope, or its target space with grants (`noteDerivedCopy`). | C, as modifiers of an instantiation. |
+| `ArrayByKey<T, "field">` | Does not exist. A plain value in place is keyed by its position, and no declaration changes that. The method `keyBy` is unrelated: it builds an index ([`collectionIndex`](#collectionindex-collectionindexmember-collectionindexkeys)). | C, a type-level declaration with no run-time call, by ruling. It is an array type: `ArrayByKey<Repo, "id">` is a `Repo[]` whose elements are plain `Repo`. Written as the type of an array of plain values in place, a plain array generated from scratch included, it makes the element key name the property and hold a salted hash of its value. The second argument can be a union of property names, as `ArrayByKey<Repo, "owner" \| "name">`, and the element then has one key across them. A reference by key is resolved from the key alone, with no schema. The compiler writes the key fields into the schema of the array, beside `items` (*assumed:* under the name `keyFields`). An array of references does not need it, and the result of another per-element construct has the upstream key (`language-subset.md` §4.4.1; [Element keys](#element-keys)). |
+| `PatternFactory.asInstance()` | Does not exist. A pattern called in a pattern body, and each run of a `map` callback, is an instance with a result document of its own. | C, a modifier of an instantiation, by ruling: the call is an instance of its own and is not compiled into the surrounding instance. In an element body it stays when its element leaves the collection (`language-subset.md` §4.4.2). |
 | `handler(fn)` | Mints a `javascript` module with `wrapper: "handler"` (`handlerInternal` in `builder/module.ts`). Applying the factory to its state creates a stream and a node, and returns the stream. | C. Binding a handler to state is legal in the reactive tier and in function bodies. |
 | `action(fn)` | Throws at run time. The transformer lowers it to `handler(fn)(captures)` (`base/ts-transformers/src/closures/utils/capture-scaffold.ts`). | C. A handler whose state is its captures. |
 | `computed(fn)` | The transformer lowers it to `lift(fn)(captures)` (`base/ts-transformers/src/lift/transformer.ts`). | C. Promoted to the reactive tier when its body meets the criterion of `language-subset.md` §6.1: a pure expression that, among other conditions, instantiates no pattern and binds no handler. |
@@ -2000,7 +2174,20 @@ export it and the pattern corpus does not call it.
   already set unless the second argument is true, which the transformer
   always passes.
 - **New design:** class C. A cell declaration in the reactive tier is a state
-  cell of the plan with the identifier the overview specifies. Creating a
+  cell of the plan with the identifier the overview specifies. By ruling,
+  a first value that is a constant is the default of the cell's schema,
+  as it is today: nothing is written when the cell is created, a read
+  of a cell that holds nothing reads the default, with the empty
+  integrity of a default, and the cell has no document until something
+  writes it. A first value that is not a constant is computed by a cone
+  and written once, when the cell is first created, through a write
+  edge with target `state`, under that edge's template. It is always
+  stored as a value and never as a reference, so a write to the cell
+  does not land in an input the value came from. A write below the
+  root of a cell that holds nothing creates the document from the
+  default with the write applied, and the members taken from the
+  default keep the label of a default, with the empty integrity
+  (`plan-and-label-templates.md` §1.3). Creating a
   cell in a function body is one of the calls that remain legal, and the two
   regimes stay:
   - A handler invocation is a new frame for each event. A cell it creates
@@ -3096,7 +3283,7 @@ result pattern and runs as it would in a pattern body.
 | `spaceAccess`, `spaceMembers` | The acting principal's level in the space's access list; the list itself | Yes | A read of the space's access-list document through the call's transaction. The answer depends on who asks, so a computation's read scope narrows to the user (`ownCall` in `builder/space-access.ts`) |
 | `spaceAccessOf` | A named principal's level in the access list | Yes | The same read; the answer does not depend on who asks |
 | `spaceDeleted` | Whether the memory server refused this runtime the space as deleted | Yes, by the read that opens the space | The result is runtime state, from what the server answered (`runtime.spaceAccessWatch`), not a document. Every call also reads the space's access list through the call's transaction, which is what opens a space the runtime has not opened, and that journaled read carries a label (`spaceDeleted` and `aclOf` in `builder/space-access.ts`). The result is the same for every principal, so a computation's read scope stays as it is |
-| `equals` | Whether two cells or values name the same cell, after the links both hold are resolved | Pointer labels only | Link resolution through the frame's transaction (`areLinksSame` in `runtime/runner/src/link-equality.ts`). No target is read |
+| `equals` | Whether two cells or values name the same cell, after the links both hold are resolved. Two references to an element that is a plain value in place of an array are equal where they name the same collection, key and path (`plan-and-label-templates.md` §1.3) | Pointer labels only | Link resolution through the frame's transaction (`areLinksSame` in `runtime/runner/src/link-equality.ts`). No target is read |
 | `equalLinks` | Whether two cells or values hold the same link as it is stored | Pointer labels only | No read at the call. The label is that of the reads that handed the body the two references (`equalLinks` in `runtime/runner/src/cell.ts`) |
 | `getPatternEnvironment()` | A frozen `{ apiUrl }` | No | A constant of the runtime |
 
@@ -3373,7 +3560,8 @@ all.
 | Entry | Class |
 | --- | --- |
 | `pattern`, `handler`, `action`, `computed`, `lift`, `assert`, inline JSX handlers, JSX | C |
-| `asScope`, `inSpace` | C (instantiation modifiers) |
+| `asInstance`, `asScope`, `inSpace` | C (instantiation modifiers) |
+| `ArrayByKey` | C (a type-level declaration) |
 | Cell constructors, scoped constructors, `.for(...)` | C |
 | `map`, `filter`, `flatMap`, `reduce`, `findIndex`, `some`, `every`, `find`, `count`, `sum`, `min`, `max`, `minBy`, `maxBy`, `groupBy`, `keyBy`, `lookup`, `keys`, `keyEntries` | A |
 | The eight `WithPattern` methods | D |
@@ -3455,7 +3643,13 @@ above already reflect them.
 - **Element keys.** A plain value is keyed by its value, anything else by
   the identity of its cell, and in both cases by the count of earlier
   occurrences of the same value or identity, so two equal elements have
-  two keys. The position is never in the key, also where the callback
+  two keys. A plain value of an array that declares a key field with
+  `ArrayByKey<T, "field">`, or several as a union of their names, has
+  a key that names the fields and holds one salted hash of their
+  values; the declaration is for an array of plain values in place
+  and is not needed over an array of references. The position is
+  never in the key, also where
+  the callback
   uses the index: the index is given to the nodes of the body that read
   it, and a move evaluates those nodes alone. Stored per-element state
   need not stay compatible. Everything an element body holds is per element key,
@@ -3516,10 +3710,19 @@ above already reflect them.
 - **`asScope` and `inSpace`** are part of the instantiation syntax. This
   entry is stated by the documents (`language-subset.md` §4.4 and
   `plan-and-label-templates.md` §3.14) and is not a ruling of the project
-  owner. Where the two modifiers are legal is open in two cases: on a
-  statically resolved callee in the reactive tier (the continuation plan,
-  question 17) and on an instantiation in a computation (its question
-  50).
+  owner. Where the two modifiers are legal is open on an instantiation
+  in a computation (the continuation plan, question 50). On a
+  statically resolved callee in the reactive tier a call through
+  `inSpace` is an instance of its own, by the ruling on `asInstance()`
+  (its question 17).
+- **`asInstance()`** is a third modifier of a pattern factory, by
+  ruling. A call through it is an instance of its own, with its own
+  argument and result documents. In the body of a per-element
+  construct, over an array of references, an array of plain values in
+  place, or the result of another per-element construct, the instance
+  is identified by the site, the collection and the element key, stays
+  when the element leaves, and is the same instance when the key
+  returns (`language-subset.md` §4.4.2).
 - **Migration is out of scope** for this document.
 
 ## Open questions
@@ -3650,3 +3853,44 @@ with the project owner names its entry in the
     position in the key, and a state cell in an element body is legal
     whatever else the body does ([Element keys](#element-keys)). The
     entry keeps its number.
+15. **Where a compiled artifact holds the files that `dataFile` names.**
+    The entry of `dataFile(path)` has the result as a constant of the
+    program and assumes that the path is a string literal. No document
+    says where a compiled artifact holds the text of such a file,
+    whether the text is a part of what identifies the compiled pattern,
+    or which diagnostic a call with another argument gets. *Assumed:*
+    the artifact holds the text of each file beside the value code, as
+    the prototype's artifact does in a member `dataFiles`. Nothing is
+    assumed for the other two parts. It is question 223 of the
+    continuation plan.
+16. **What `pending`, `result` and `error` read as before the first request
+    transaction, and while a newer request is outstanding.** This inventory says
+    that the result of an effect is read as those three fields and no more.
+    *Assumed,* provisional (P12 of the continuation plan): nothing before the
+    first request transaction, and the earlier result stays readable while a
+    newer request is outstanding. The alternative and the tests are in
+    `scheduler-and-serving-loop.md` (its question 56). It is question 279 of the
+    continuation plan.
+17. **The shape of a request with several arguments, the schema in a `fetchJson`
+    request, and how far a reference is followed.** *Assumed,* provisional (P14
+    of the continuation plan): a request is the one argument of the call or the
+    arguments in order, and the prototype follows every reference. The entry of
+    `fetchJson` has the schema that today's compiler adds as part of the request
+    and of its hash, and the request of the prototype holds no schema. The
+    **Request operands** paragraphs give a depth for each operand, which the
+    prototype does not have. Nothing is assumed for the schema. It is question
+    281 of the continuation plan.
+18. **Which transaction resolves a `wish`.** The overview has `wish` among the
+    structural operations, this inventory has its entry under the effectful
+    built-ins and classes it A, and `execution-and-storage.md` §4.1 gives it a
+    state document with the stored operands. `plan-and-label-templates.md` §1.1
+    says that it has no request transaction and is resolved in the transaction
+    that evaluates a reader of its result. *Assumed,* provisional (P15 of the
+    continuation plan): that sentence holds. The evaluation that stages the
+    operands resolves the wish and makes no request. The alternative: a
+    transaction of the operation, with the request transaction and the outbox of
+    an effect. The prototype has three tests of the first on
+    `fixtures/wishes.tsx`, with a target from a table and a clock that a test
+    writes; hashtag search, the sidecars and the home space are not built. It is
+    question 282 of the continuation plan.
+
