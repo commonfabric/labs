@@ -721,7 +721,13 @@ const stageRevisedVersion = async (
         : description !== undefined && description !== ""
         ? { directQuery: description }
         : {}),
-      dependencies: patternIndexDependencies(revision.program.files),
+      // A data file is stored uninterpreted, so an import its text spells is
+      // no dependency, as the index reads the same program.
+      dependencies: patternIndexDependencies(
+        revision.program.files.filter((file) =>
+          !revision.program.dataFiles?.includes(file.name)
+        ),
+      ),
       nonDiscoverable: {
         reason: PATTERN_DISCOVERABILITY_REASONS["recorded-automatically"],
       },
