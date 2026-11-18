@@ -857,6 +857,46 @@ what the copies of one callee in the plans of the corpus differ in. Notes 505 on
 of `SPEC-NOTES.md` have the figures, what the documents' rules make follow the
 length of a list, and the provisional choices.
 
+## The executor on the runtime's storage
+
+Milestone 1 of
+[`compiled-pattern-language-integration.md`](../../docs/plans/compiled-pattern-language-integration.md)
+runs the executor with its documents in the runtime's storage. The executor
+tells a store outside it of each transaction through `TransactionHooks`
+(`exec/executor.ts`, option `transactions` of `Instance`): when a transaction
+begins and with which cause, each position it reads (`Store.onRead`), each
+change it makes, and whether it committed. The append of an event sent from
+outside and the watermark that passes an event are writes outside the executor's
+transactions, and the hooks are told of each as a transaction of its own, of
+cause `send` and `watermark`. The option `documents` makes documents that exist
+before the instance, outside any transaction, such as the input cells an
+argument links to.
+
+`compare/runtime-transactions.ts` implements the hooks with the runtime's own
+transactions (`Runtime.edit()`): each read is read through the transaction, each
+change is written into it as it is made, and the transaction commits with the
+runtime's commit and its CFC preparation, or is aborted where the executor did
+not commit. A document of the executor is the entity `of:<identifier>`, and a
+link is written as the runtime's link. `RuntimeTransactions.stored()` reads the
+documents back, and `compare/test/runtime-transactions.test.ts` checks that they
+are the executor's, that one runtime transaction commits for each of the
+executor's, and that a handler that reads a labeled input commits labels on what
+it writes.
+
+`compare/integrated.ts` runs each module of a values run three ways on the
+argument and the committed events of today's run: in memory, in storage with the
+argument in place, and in storage with each input a labeled cell. It checks that
+the runs in storage compute the values of the run in memory, and reports the
+times with the commits and CFC preparations the runtime counted, beside
+`cost.ts run`:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts run values.jsonl
+deno run -A --no-check base/pattern-compiler/compare/cost.ts run run.jsonl
+deno run -A --no-check base/pattern-compiler/compare/integrated.ts run values.jsonl integrated.jsonl
+deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integrated.jsonl run.jsonl
+```
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize
