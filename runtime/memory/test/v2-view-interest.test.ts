@@ -1440,14 +1440,18 @@ describe("view interests", () => {
     expect(added.ok?.sync.upserts).toEqual([]);
     expect(evaluations.calls).toHaveLength(0);
     expect(session.graphs.size).toBe(graphs.size);
-    // The added root is covered by the record its query already made, so
-    // the graph tracks and delivers what it did; only the root's
-    // attribution to that record is new.
+    // The added watch names the root and selector the first one does, so the
+    // graph tracks and delivers what it did, and the root's record keeps the
+    // one walker the two watches share rather than gaining a cover.
     for (const [branch, graph] of graphs) {
       const reused = session.graphs.get(branch)!;
       expect([...reused.entities]).toEqual([...graph.entities]);
       expect([...reused.tracker]).toEqual([...graph.tracker]);
-      expect(reused.coveredBy.size).toBe(1);
+      expect(reused.coveredBy.size).toBe(0);
+      const rootRecords = [...reused.trackedBy].filter(([entry]) =>
+        entry.includes("/of:ordinary\0")
+      );
+      expect(rootRecords.map(([, referrers]) => referrers.size)).toEqual([1]);
     }
     expect(server.viewInterestsForSpace(space)).toHaveLength(1);
     expect(
