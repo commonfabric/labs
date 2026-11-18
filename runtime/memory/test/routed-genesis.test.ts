@@ -516,6 +516,25 @@ describe("Mode A space creation", () => {
       }
     });
 
+    it("refuses its open without the owner binding of a space whose store its owner-bound open created", async () => {
+      const peer = await did(70);
+      const mode = modeA({ delegatingDids: [peer] });
+      try {
+        const space = await did(71);
+        const bound = await (await connectDirect(mode.server, peer)).open(
+          space,
+          actingAsOwner,
+        );
+        expect(bound.error).toBeUndefined();
+        const plain = await (await connectDirect(mode.server, peer)).open(
+          space,
+        );
+        expect(plain.error?.name).toBe("AuthorizationError");
+      } finally {
+        await mode.close();
+      }
+    });
+
     it("admits its open of a space whose store exists before the genesis ACL lands", async () => {
       const peer = await did(66);
       const mode = modeA({ delegatingDids: [peer] });

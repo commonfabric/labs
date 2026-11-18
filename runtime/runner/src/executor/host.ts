@@ -576,9 +576,12 @@ export class ExecutorHost {
     // serving runtime is told, not just this space's: the session that
     // starves is typically a CROSS-SPACE replica — a served dispatch's
     // argument link into another space, whose session the change revoked,
-    // such as one bound to an owner the list no longer names. (The genesis
-    // ACL revokes no serving session: the memory server binds a pre-genesis
-    // one to the owner it names, `Server.#bindToNewOwner`.) Latch-only and
+    // such as one bound to an owner the list no longer names. (A home
+    // space's genesis ACL revokes no serving session: the memory server
+    // binds a pre-genesis one to the owner it names,
+    // `Server.#bindToNewOwner`. A genesis whose owner the binding cannot
+    // stand for, such as a profile's own DID, binds nothing and can still
+    // revoke it.) Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
     // space, so the fan-out costs one map walk per ACL-doc admission. Only
     // this server's admissions reach here; a list that changes on another

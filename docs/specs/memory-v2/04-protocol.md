@@ -1087,9 +1087,10 @@ opening the session again. A connection whose peer did not advertise
 `admissionNotice` records nothing, and neither does a routed connection
 ([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
 a session opened `actingAs: "space-owner"`, which only a serving runtime opens.
-An access-list change that gives the session's space an owner, such as the
-genesis ACL of a space created after the session opened, binds the session to
-that owner in place rather than revoking it, because a serving runtime in
+An access-list change that gives the session's space an owner the binding can
+stand for, such as the genesis ACL of a home space created after the session
+opened, binds the session to that owner in place rather than revoking it (a
+profile's own DID is not one), because a serving runtime in
 another process hears of no access-list commit on this server. A co-hosted
 serving runtime whose session a change does revoke hears of the commit in
 process, after which its next read of the space opens the session again.

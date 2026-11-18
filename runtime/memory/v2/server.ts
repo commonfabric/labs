@@ -4435,12 +4435,14 @@ export class Server {
   /** Evaluate the ACL policy for a message. Returns `null` when the message
    *  may proceed and a typed error when it must be rejected. In `observe`, an
    *  ordinary capability shortfall is counted and logged; invalid ACL state
-   *  still fails closed. */
+   *  still fails closed. `servingBinding` says the message comes from a
+   *  session opened `actingAs: "space-owner"`, or is that open. */
   #authorizeMessageWithEngine(
     engine: Engine.Engine,
     space: string,
     principal: string | undefined,
     requirement: Capability,
+    servingBinding = false,
   ): V2Error | null {
     if (
       this.options.ownsSpace !== undefined && !this.options.ownsSpace(space)
@@ -4467,14 +4469,14 @@ export class Server {
       // document, so its space has history too.
       const operator = principal !== undefined &&
         this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
-      // Serving: a delegating principal reads a space with no history, as
-      // every principal may outside Mode A. A serving runtime can reach a
-      // space while its creator is still making it; its session reads the
-      // empty space and binds to the owner the genesis ACL names
-      // (`#bindToNewOwner`). It writes nothing until then.
-      const serving = kind === "missing" && requirement === "READ" &&
-        Engine.serverSeq(engine) === 0 && principal !== undefined &&
-        this.#isDelegatingPrincipal(principal);
+      // Serving: a delegating principal's owner-bound session reads a space
+      // with no history, as every principal may outside Mode A. A serving
+      // runtime can reach a space while its creator is still making it; its
+      // session reads the empty space and binds to the owner the genesis
+      // ACL names (`#bindToNewOwner`). It writes nothing until then.
+      const serving = servingBinding && kind === "missing" &&
+        requirement === "READ" && Engine.serverSeq(engine) === 0 &&
+        principal !== undefined && this.#isDelegatingPrincipal(principal);
       if (kind !== "valid" && !genesis && !operator && !serving) {
         return toError("AuthorizationError", "Routed memory request denied");
       }
@@ -4575,6 +4577,7 @@ export class Server {
       space,
       principal,
       requirement,
+      session.servingBinding === true,
     );
   }
 
@@ -6846,6 +6849,7 @@ export class Server {
         message.space,
         capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
+        actingAs === "space-owner",
       );
       if (deny) {
         // No admission wait for a chain, as for the binding: the grant it

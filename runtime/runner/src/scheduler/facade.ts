@@ -4264,8 +4264,11 @@ export class Scheduler {
    * re-delivering it. What makes the deferral converge is the session
    * remount: an admitted commit touching the space's ACL document re-arms
    * the session (storage/v2.ts `consumeOwedSessionRemount`, triggered by
-   * executor/host.ts). A load whose ACL never changes, or whose re-open
-   * is denied, defers indefinitely, which is OW54's territory. The
+   * executor/host.ts). The host hears only the commits its own memory
+   * server admits, so a session that an owner in another process revoked,
+   * as an ownership move there revokes a bound one, is re-armed by nothing.
+   * Such a load, like one whose ACL never changes or whose re-open is
+   * denied, defers indefinitely, which is OW54's territory. The
    * deferral carries the drain's arrival-order BARRIER with it (events.md
    * §2, mirroring the sidecar-sync-failure arm): every later-arrived
    * durable served entry behind it IN THE SAME SPACE defers too, or a
