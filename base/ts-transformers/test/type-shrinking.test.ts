@@ -677,16 +677,15 @@ export default pattern<{ v: any }>(({ v }) => ({ m: l(v) }));`,
       });
 
       it("reports the head neither array holds on two arrays that are each other's element", async () => {
-        // Only the access is pinned: the type the message names is read off an
-        // element node, which an alias of an array does not yet yield.
-
-        const messages = await liftDiagnostics(
-          "type A = B[]; type B = A[];",
-          "(r: A & { x: string }) => r.missing",
-        );
-
-        expect(messages.length).toBe(1);
-        expect(messages[0]).toContain("'.missing'");
+        expect(
+          await liftDiagnostics(
+            "type A = B[]; type B = A[];",
+            "(r: A & { x: string }) => r.missing",
+          ),
+        ).toEqual([
+          "Parameter 'r' accesses '.missing' but type 'A' does not include " +
+          "it. Add the missing property to the type.",
+        ]);
       });
 
       it("names the element type an alias of an array of arrays holds when reporting a head it lacks", async () => {
