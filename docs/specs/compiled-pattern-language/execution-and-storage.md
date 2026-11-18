@@ -1952,8 +1952,8 @@ child without the modifier.
   key, so what changes a key differs by case
   (`plan-and-label-templates.md` §3.15, "A change of the key, by
   case"). Over an array of references an edit of the element changes
-  no key. Over an array of plain values in place whose element type
-  declares a key field with `KeyedBy<T, "field">`, an edit of another
+  no key. Over an array of plain values in place that declares a key
+  field with `ArrayByKey<T, "field">`, an edit of another
   member, and a new array with the same value of the field, keep the
   key and the instance. Over an array of plain values in place with
   no declared key, an edit through a reference by key re-keys the
@@ -2001,7 +2001,7 @@ row's pattern through `asInstance()`.
 | The value behind a linked element changes | That element's cone instances; the key is unchanged | That element | Its changed kept paths |
 | A plain value with no declared key field is edited in place, other than through a reference by key | Membership: the old key leaves and a new key enters | The new key | The position |
 | A plain value with no declared key field is edited through a reference by key | The element is re-keyed: what the old key holds moves to the new key (section 2.5) | The cone instances of the row that read the changed value | The position |
-| A plain value whose element type declares a key field (`KeyedBy<T, "field">`) changes in another member, by a write of any kind or by a new array from the computation that produces it | The cone instances of the element's key that read the changed member; the key is unchanged, and state cells, streams, operation state and children stay | Those cone instances | The position, and their changed kept paths |
+| A plain value of an array that declares a key field (`ArrayByKey<T, "field">`) changes in another member, by a write of any kind or by a new array from the computation that produces it | The cone instances of the element's key that read the changed member; the key is unchanged, and state cells, streams, operation state and children stay | Those cone instances | The position, and their changed kept paths |
 
 A cone downstream of a collection, such as a `count` or a `filter` over the
 result of a `map`, is made stale through its own slots and upstream outputs
@@ -2221,14 +2221,14 @@ operation state and children stay per key. Such an array is the one
 case where no upstream cause identifies an element, where by ruling
 the key of an element of an array of references, and of the result of
 another per-element construct, derives from upstream causes and stays
-stable. By ruling the author declares the key of such an array in the
-element type, with the type marker `KeyedBy<T, "field">`, and the key
-of each element then names that field and holds its value, with the
-occurrence count where two elements have the same value of it. By
-ruling the marker can name several fields, as a union of their names,
-and the element then has one key across them
+stable. By ruling the author declares the key of such an array on the
+array, with the array type `ArrayByKey<T, "field">`, and the key of
+each element then names that field and holds a salted hash of its
+value, with the occurrence count where two elements have the same
+value of it. By ruling the declaration can name several fields, as a
+union of their names, and the element then has one key across them
 (`plan-and-label-templates.md` §1.3, "A declared key field"). Without
-the marker the key of each is its whole value with the occurrence
+the declaration the key of each is its whole value with the occurrence
 count, and an element whose value changes in one member is a new
 element.
 
@@ -2287,13 +2287,13 @@ result is filtered and mapped, and each row is an instance of its own.
 
 ```tsx
 // Shown for illustration only.
-// `KeyedBy` is the type marker of this design. `commonfabric` does not
-// export it yet.
+// `ArrayByKey` is an array type of this design. `commonfabric` does
+// not export it yet.
 type Repo = { id: number; name: string; stars: number };
 
 const RepoSearch = pattern<{ url: string; minStars: number }>(
   ({ url, minStars }) => {
-    const response = fetchJson<{ items: KeyedBy<Repo, "id">[] }>({ url });
+    const response = fetchJson<{ items: ArrayByKey<Repo, "id"> }>({ url });
     const rows = response.result.items
       .filter((repo) => repo.stars >= minStars)
       .map((repo) => RepoRow.asInstance()({ repo }));
@@ -2306,14 +2306,26 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   (`builtin-inventory.md`, `fetchJson`), and each response replaces
   `result.items` whole. So `response.result.items` is an array of
   plain values in place that is generated from scratch. The schema of
-  its items has `keyFields: ["id"]`; the keyword is *assumed*
+  the array has `keyFields: ["id"]` beside `items`, and the schema of
+  its items is that of `Repo`. That the keyword is on the schema of
+  the array is ruled, and its name is *assumed*
   (`plan-and-label-templates.md` §8, question 139).
 - **The key** of an element of `response.result.items` names the
-  field `id` and holds its value, with the occurrence count, which is
-  0 unless a response holds one `id` twice. For the repository whose
-  `id` is 7 the element part is written `id=#7`; the written form is
-  *assumed* (its question 140). It is not the key of an element whose
+  field `id` and holds one salted hash of its value, with the
+  occurrence count, which is 0 unless a response holds one `id`
+  twice. For the repository whose `id` is 7 the element part is
+  written `id:<hash>`, where the hash is the salted hash of the array
+  `[7]`; the exact written form is *assumed* (its question 142). The
+  key does not hold the 7. It is not the key of an element whose
   whole value is 7, which names no field.
+- **What a link shows, and what a client can form.** A stored
+  reference by key to a repository shows the name `id` and a hash. It
+  does not show the value of `id` to a reader of the link who cannot
+  read the salt. A client cannot read the salt (section 5.3), so it
+  cannot form the key of a repository from the response, and cannot
+  name the state of a row, a stream bound in the row, or the instance
+  of `RepoRow` before the server stores a link to it. That is as for
+  an array of plain values in place with no declared key.
 - **The result of the `filter`** is the result of another per-element
   construct: an element has the key it has in
   `response.result.items`. **The result of the `map`** is the same
@@ -2340,10 +2352,24 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   member, a string, and not that of the items. A reader of `selected`
   resolves it from the key alone: in the collection that the
   reference names it finds the element whose `id` is 7, and reads
-  `name` there. No reader needs to know that the array was declared
-  with `KeyedBy`, and the runtime keeps no record of the schema the
-  array is stored under for this.
-- **Without the marker** the key of an element is the hash of its
+  `name` there. To find the element it combines the `id` of each
+  element of the array as the key was formed, hashes with the salt,
+  and compares with the hash in the key. No reader needs to know
+  that the array was declared with `ArrayByKey`, and the runtime
+  keeps no record of the schema the array is stored under for this.
+- **An element put into a second array.** By ruling the key belongs
+  to the array. A `computed` that returns some of the repositories in
+  a new array of type `Repo[]` returns a plain array generated from
+  scratch with no declared key, and a `map` over it keys each element
+  by its whole value. Declared as `ArrayByKey<Repo, "id">`, the new
+  array has a key of its own. The result of the `filter` above is
+  not such an array: it has the upstream keys.
+- **A reader typed `Repo[]`.** *Assumed*
+  (`plan-and-label-templates.md` §8, question 143): a pattern whose
+  input is typed `repos: Repo[]`, given `response.result.items`,
+  forms the keys of a `map` over `repos` with the key field `id` of
+  the array it is given, so a row there has the key it has here.
+- **Without the declaration** the key of an element is the hash of its
   whole value. A response in which `stars` changed is then a new key
   and a new instance, and the instance of the old key stays with the
   old value.
@@ -2353,14 +2379,14 @@ no `id` of their own identifies one by its owner and its name.
 
 ```tsx
 // Shown for illustration only.
-// `KeyedBy` is the type marker of this design. `commonfabric` does not
-// export it yet.
+// `ArrayByKey` is an array type of this design. `commonfabric` does
+// not export it yet.
 type Repo = { owner: string; name: string; stars: number };
 
 const RepoSearch = pattern<{ url: string; minStars: number }>(
   ({ url, minStars }) => {
     const response = fetchJson<{
-      items: KeyedBy<Repo, "owner" | "name">[];
+      items: ArrayByKey<Repo, "owner" | "name">;
     }>({ url });
     const rows = response.result.items
       .filter((repo) => repo.stars >= minStars)
@@ -2371,15 +2397,19 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
 ```
 
 - **The stored form** is as above, an array of plain values in place
-  that is generated from scratch. The schema of its items has
-  `keyFields: ["name", "owner"]`, the names in the order of the names
-  (*assumed*, `plan-and-label-templates.md` §8, questions 137 and
-  139).
+  that is generated from scratch. The schema of the array has
+  `keyFields: ["name", "owner"]`, the names in the order of the names.
+  The order is ruled, and the name of the keyword is *assumed*
+  (`plan-and-label-templates.md` §8, question 139).
 - **The key** of an element is one key, formed across the two fields.
   For the repository `labs` of the owner `commonfabric` the element
-  part is written `name=labs,owner=commonfabric` (*assumed*, its
-  question 140). Two repositories named `labs` of two owners have two
-  keys with the occurrence count 0, and two rows.
+  part is written `name,owner:<hash>`, where the hash is the salted
+  hash of the array `["labs", "commonfabric"]`, the values in the
+  order of the names (the exact form is *assumed*, its question 142).
+  Two repositories named `labs` of two owners have two keys with the
+  occurrence count 0, and two rows. The two keys have the names in
+  common and two unrelated hashes, so neither a link nor a pair of
+  links shows that the two repositories share a name.
 - **The results of the `filter` and of the `map`** are the result of
   another per-element construct, and their elements have that key.
 - **A new response** that holds the same `owner` and `name` with
@@ -2389,34 +2419,40 @@ const RepoSearch = pattern<{ url: string; minStars: number }>(
   stays.
 - **A reference by key** to such an element, or to a member of it, is
   resolved by finding the element of the array whose `name` and
-  `owner` have the values that the key holds.
+  `owner`, combined and hashed with the salt, give the hash that the
+  key holds.
 - **An array of references** with the same element type would be
-  keyed by its cells, and the marker would change nothing there.
+  keyed by its cells, and the declaration would change nothing there.
 
 The prototype's executor has the second case in a fixture, with a
 `lift` in the place of `fetchJson`: each element has the key of its
 `id`, a state cell of its row stays when every element has another
 `stars`, and the instance of a row is the same when its element has
 another `stars`, leaves the result of the `filter`, and enters it
-again. Its key holds the value of the field with no salt and no hash,
-and no name of the field, and its store resolves a reference by key
-through the schema that the array is stored under. By ruling the key
-names its fields and is resolved with no schema, so the prototype
-does not follow the ruling there, and it has no key of several fields
+again. It reads the declaration of the key from the type of the
+element. Its key holds the value of the field with no salt and no
+hash, and no name of the field, and its store resolves a reference by
+key through the schema that the array is stored under. By ruling the
+key is declared on the array, names its fields, holds one salted hash
+of their values and is resolved with no schema, so the prototype does
+not follow the rulings there, and it has no key of several fields
 (`plan-and-label-templates.md` §1.3, "A declared key field"). The
-runtime of today has no such marker, so nothing of this is compared
-with it.
+runtime of today has no such declaration, so nothing of this is
+compared with it.
 
 Three points are open for a declared key: a write to the key field
 itself (`plan-and-label-templates.md` §8, question 129), the document
-of a keyed plain value that a body pushes elsewhere (section 11,
-question 93), and the marker on an array of references
-(`language-subset.md` §13, question 43). Five points about the
-declaration and the form of a key that names its fields are assumed:
-the order of the fields, which properties can be key fields, the
-schema keyword, the written form of the element part, and a value
-passed where another key is declared (`plan-and-label-templates.md`
-§8, questions 137 to 141).
+of a plain value of a keyed array that a body pushes elsewhere
+(section 11, question 93), and the declaration on an array of
+references (`language-subset.md` §13, question 43). The order of the
+fields and what the element part holds are ruled. Five points about
+the declaration and the form of a key that names its fields are
+assumed: which properties can be key fields beyond the deferred
+extension, the name of the schema keyword, an array passed where
+another key is declared, the exact written form of the element part,
+and a reader whose type is a plain array type
+(`plan-and-label-templates.md` §8, questions 138, 139 and 141 to
+143).
 
 ### 2.7 Side-writes and bounded iteration
 
@@ -4089,16 +4125,19 @@ count.
   link's scope.
 - The element part for a position that holds a plain value is the hash of
   a secret of the space and the canonical form of the value. Where the
-  element type declares key fields with the type marker
-  `KeyedBy<T, "field">`, by ruling the element part names each field
-  and holds the canonical form of its value, and a reference by key
-  that holds it is resolved from the key alone
+  array declares key fields with the array type
+  `ArrayByKey<T, "field">`, by ruling the element part holds the list
+  of the field names and one hash of the same secret and the combined
+  values of those fields, as `name,owner:<hash>`. It does not hold the
+  values, and a reference by key that holds it is resolved from the
+  key alone: the resolver reads the names, combines those fields of
+  each element of the array, hashes, and compares
   (`plan-and-label-templates.md` §1.3, "A declared key field").
-  *Assumed* (its §8, question 140): the values are held as they are,
-  with no hash, and an identifier of a document that is derived from
-  such a key is salted as one derived from a whole value is. The
-  case is an array of plain values in place, a plain array generated
-  from scratch included.
+  *Assumed* (its §8, question 142): the names are joined with `,` in
+  the order of the names, with a `\` before a `\`, `,` or `:` of a
+  name, and the hashed value is the array of the values of the fields
+  in that order. The case is an array of plain values in place, a
+  plain array generated from scratch included.
 - The occurrence count is the number of earlier positions of the
   collection that have the same element part. It is in every key, so no
   two positions of a collection have one key.
@@ -4130,7 +4169,10 @@ Two consequences.
   there.
 - **A client cannot read the secret**, by ruling. A reader who could would be
   able to confirm a guess at a confidential value from an identifier, which is
-  what the salt prevents. A client therefore cannot name per-element state over
+  what the salt prevents. By ruling the key of a plain value with declared key
+  fields holds a hash under the same secret, so what follows holds alike for a
+  key formed from a whole value and for a key that names its fields. A client
+  therefore cannot name per-element state over
   plain values, a stream bound in an element body at a key that holds a value
   hash, a child under such a key, or a binding with copied paths before the
   server stores a link to it, and it learns such an identifier from the stored
@@ -5656,11 +5698,12 @@ bound by reference reads it through the schema the link holds (2.2, 4.4,
 object whole keeps the object's integrity where a default fills one of
 its properties (2.2); a write through a handle bound to a value the
 instance produced is refused, and one bound to a reference lands at the
-reference's target (2.4); the element type of an array of plain
-values may declare a key field with `KeyedBy<T, "field">`, or several
-as a union of their names, and the key of an element then names the
-fields and holds their values, and is resolved with no schema (2.6,
-5.3). The ruling
+reference's target (2.4); an array of plain values may declare a key
+field with the array type `ArrayByKey<T, "field">`, or several as a
+union of their names, and the key of an element then names the
+fields and holds one salted hash of their values, and is resolved
+with no schema; the key belongs to the array, so an element put into
+a second array has that array's key, or none (2.6, 5.3). The ruling
 on the keep set
 answers what was question 1 of this list, the size of a result document.
 
@@ -5994,14 +6037,18 @@ Added by the ruling that the scheduler is switched per space (section 9):
     same for a
     handle in an element body in each of the three cases of a
     per-element source. The entry keeps its number.
-93. **The document of a keyed plain value that a function body pushes
-    elsewhere** (sections 2.6 and 5.4). A handler that reads an
-    element whose type declares a key field with `KeyedBy<T, "field">`
-    holds a copy, by ruling, and a push of it to another list without
-    `asInstance()`, as `saved.push(repo)`, stores the copy as a
-    document of its own with a link in the list (section 4.8). The
-    ruling on the marker does not say whether the identity of that
-    document derives from the key, and the owner gave no assumption.
+93. **The document of a plain value of a keyed array that a function
+    body pushes elsewhere** (sections 2.6 and 5.4). A handler that
+    reads an element of an array that declares a key field with
+    `ArrayByKey<T, "field">` holds a copy, by ruling, and a push of
+    it to another list without `asInstance()`, as
+    `saved.push(repo)`, stores the copy as a document of its own with
+    a link in the list (section 4.8). By ruling the key belongs to
+    the array, and an element put into a second array has that
+    array's key, or none; here the second list holds a link and is
+    keyed by the cell. The rulings do not say whether the identity of
+    that document derives from the key, and the owner gave no
+    assumption.
     *Assumed* by this document: it does not. The document is named as
     a cell that the body creates with no explicit cause is (section
     5.4; `plan-and-label-templates.md` §8, question 118), so two

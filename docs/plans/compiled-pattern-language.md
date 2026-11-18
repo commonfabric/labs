@@ -182,7 +182,12 @@ next.
   forms a key with no field name and resolves it through a schema,
   by a ruling that is withdrawn. It does not have the rulings that
   followed: that a key names its declared fields and is resolved
-  with no schema, and that `KeyedBy` can name several fields. No
+  with no schema, and that `KeyedBy` can name several fields. Nor
+  does it have the rulings after those: that the key is declared on
+  the array, with the array type `ArrayByKey`, in the place of
+  `KeyedBy` on the element type, and that the element part of such a
+  key holds the names of the fields and one salted hash of their
+  values. No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -640,7 +645,14 @@ prototype at the commit they name, and not the design. The ruling on
 question 191 is withdrawn and replaced: a key names its declared
 fields and is resolved with no schema, and `KeyedBy` can name several
 fields, as a union of their names. That answers what note 411 asked,
-and questions 194 to 198 are what it leaves undetermined.
+and questions 194 to 198 are what it leaves undetermined. Three
+rulings after it settle questions 194 and 197, and put the
+declaration on the array: the array type `ArrayByKey<T, "field">`
+replaces `KeyedBy` on the element type ([Decided](#decided)).
+Questions 199 to 201 are what those leave undetermined. The parts
+below that name `KeyedBy`, a key field declared in the element type,
+or a key that holds the value of its field describe the prototype at
+the commit they name, and not the design.
 Notes 303 to 306, 321 to 323, 342, 364 and 365, 383 and 384, 403
 and 404, and 416 and 417 are the results here.
 Nothing was timed.
@@ -2885,9 +2897,9 @@ is relitigated.
   same handler succeed. References stored elsewhere under the old key
   still read as nothing, because the runtime cannot find them all.
   The case is an array of plain values in place; nothing of it arises
-  over an array of references. Where the items of such an array
-  declare a key field with `KeyedBy<T, "field">`, a write to another
-  member changes no key, and nothing is re-keyed.
+  over an array of references. Where such an array declares a key
+  field with `ArrayByKey<T, "field">`, a write to another member
+  changes no key, and nothing is re-keyed.
 - On a re-key, an instance that a `lift` or a `computed` of the
   element body made moves as a child does, and nothing moves for a
   binding that a function body made. What is moved replaces what is
@@ -2944,32 +2956,60 @@ is relitigated.
   the item, as where a handler instantiates a pattern and pushes the
   result. An edit of the item, a rename included, changes no key, and
   such an array needs no declared key.
-- The element type of a collection may be written
-  `KeyedBy<T, "field">`. It is a type-level marker with no run-time
-  call, and the compiler writes the key field into the schema of the
-  array's items. It applies to plain values: a plain array that is
-  generated from scratch, where one computation produces the whole
-  array each time, as the result of an API call is, and an array of
-  plain values in place. The key of such an element is formed from
-  the value of the field, with the occurrence count where two
-  elements have the same value of it. The result of another
-  per-element construct is keyed by the upstream key, so a declared
-  key is carried through the downstream constructs. An array of
-  references does not need the marker. The marker is not the
-  collection method `keyBy`, which builds an index and changes the
-  key of no element.
-- `KeyedBy` can name several fields. The element still has one key,
-  which is formed across them. The syntax is a union of field names,
-  as `KeyedBy<Repo, "owner" | "name">`. The case is that of the
-  marker: an array of plain values in place, a plain array generated
-  from scratch included, with the key carried through the result of
-  another per-element construct; an array of references is keyed by
-  its cells.
+- The key of the elements of an array is declared on the array, with
+  the array type `ArrayByKey<T, "field">`. `ArrayByKey<Repo, "id">`
+  is a `Repo[]` whose elements are plain `Repo`, as in
+  `fetchJson<{ items: ArrayByKey<Repo, "id"> }>({ url })`. It is a
+  type-level declaration with no run-time call, and the compiler
+  writes the key field into the schema of the array: the schema
+  keyword is on the array schema, and not on the items schema. It
+  applies to plain values: a plain array that is generated from
+  scratch, where one computation produces the whole array each time,
+  as the result of an API call is, and an array of plain values in
+  place. The key of such an element is formed from the value of the
+  field, with the occurrence count where two elements have the same
+  value of it. The result of another per-element construct is keyed
+  by the upstream key, so a declared key is carried through the
+  downstream constructs. An array of references does not need the
+  declaration. `ArrayByKey` is not the collection method `keyBy`,
+  which builds an index and changes the key of no element. This
+  ruling replaces the syntax of two earlier ones, and that syntax
+  governs nothing: a type marker `KeyedBy<T, "field">` on the
+  element type, with a union of field names for several fields.
+  `KeyedBy` does not exist. The rest of those rulings stands: a
+  plain value can have a declared key, the key is carried
+  downstream, and several fields are written as a union.
+- The key belongs to the array and not to the element. An element
+  that is put into a second array has the key that the second array
+  declares, or none: the two arrays hold two copies, or the second
+  array has a key of its own. The case is an array of plain values
+  in place and a plain array generated from scratch; the result of
+  another per-element construct has the upstream key, and an array
+  of references is keyed by its cells.
+- `ArrayByKey` can name several fields. The element still has one
+  key, which is formed across them. The syntax is a union of field
+  names, as `ArrayByKey<Repo, "owner" | "name">`. The fields are
+  ordered by name when the key is formed, so the order in which the
+  union is written changes no key. The case is that of the
+  declaration: an array of plain values in place, a plain array
+  generated from scratch included, with the key carried through the
+  result of another per-element construct; an array of references is
+  keyed by its cells.
 - The key of a plain value that has declared key fields names the
-  fields: its element part holds each field name with the canonical
-  form of the field's value. A reference by key is resolved from the
-  key alone, with no schema: the resolver finds the element of the
-  array whose named fields have those values. That holds for a
+  fields: its element part holds the list of the field names and one
+  salted hash of the combined values of those fields, as
+  `name,owner:<hash>`. It does not hold the values. A reference by
+  key is resolved from the key alone, with no schema: the resolver
+  reads the names from the key, combines those fields of each
+  element of the array, hashes, and compares. The salt is the one
+  that the element key of a whole value is hashed with, which a
+  client cannot read, so a client cannot form such a key before the
+  server stores a link, and a stored reference does not show the
+  values of the key fields. Two keys that share the value of one
+  field have nothing in common. The exact written form, with its
+  separators, the escaping of a field name, and how the values are
+  combined before they are hashed, is the documents' to define
+  (question 199). Resolving from the key alone holds for a
   reference to a member below the element, as the one that
   `center.set(repo.position)` stores, and for every reader, whatever
   key the reader's type declares. A key formed from a field `id`
@@ -2985,7 +3025,10 @@ is relitigated.
   is keyed by its cells and is not affected. This ruling withdraws
   an earlier one, which governs nothing: that a key does not say how
   it was formed, and that whoever resolves a key takes the key field
-  from the schema.
+  from the schema. It also replaces one part of the ruling that it
+  extends, and that part governs nothing: that the element part
+  holds each field name with the canonical form of the field's
+  value.
 - The key of an element that a `flatMap` contributes is formed from
   the member itself, by the same rule as for any array, together with
   the source element's key: the cell identity for a member that is a
@@ -4111,11 +4154,12 @@ undetermined, written into the documents as an assumption.
      over the result of another per-element construct, and a declared
      key field would matter only for an array of plain values that
      one computation produces whole each time. Settled by the ruling
-     on the type marker `KeyedBy<T, "field">`: the author declares
-     the key in the element type, and the key of a plain value then
-     names that field and holds its value; the marker can name
-     several fields ([Decided](#decided)). Without the
-     marker the elements of such an array are keyed by their whole
+     on the array type `ArrayByKey<T, "field">`: the author declares
+     the key on the array, and the key of a plain value of it then
+     names that field and holds a salted hash of its value; the
+     declaration can name several fields ([Decided](#decided)).
+     Without the
+     declaration the elements of such an array are keyed by their whole
      value with the occurrence count. The ruling is about an array of
      plain values in place, a plain array generated from scratch
      included. The entry keeps its number.
@@ -4145,7 +4189,7 @@ undetermined, written into the documents as an assumption.
      array of references it does not arise: the key is the identity
      of the element's cell, tied to the cause of adding the item, and
      an edit does not change it. Over an array of plain values in
-     place whose items declare a key field with `KeyedBy<T, "field">`
+     place that declares a key field with `ArrayByKey<T, "field">`
      it is avoided: an edit of another member, and a new array that
      holds an element with the same value of the field, keep the key
      and the instance. Open is an array of plain values in place with
@@ -4227,13 +4271,16 @@ undetermined, written into the documents as an assumption.
      factory value is used for a factory value received as data. Not
      about a per-element construct.
 
-**From the rulings of 2026-11-17 on a declared key.** The ruling on
-`KeyedBy<T, "field">` settles question 175 and two of the three cases
-of the re-key in question 178. These three points it does not rule.
+**From the rulings of 2026-11-17 on a declared key.** The ruling
+that a plain value can have a declared key, which is declared with
+`ArrayByKey<T, "field">`, settles question 175 and two of the three
+cases of the re-key in question 178. These three points it does not
+rule.
 
 184. **A write to the key field itself of a plain value in place**
-     (PL question 129). The key of a plain value whose items declare
-     a key field is formed from the value of that field, so a write
+     (PL question 129). The key of a plain value in an array that
+     declares a key field is formed from the value of that field, so
+     a write
      to the field, or to any one of several key fields, through a
      reference by key changes the key. *Assumed:* it is the
      re-key that is ruled for a write that changes the value of a
@@ -4244,13 +4291,17 @@ of the re-key in question 178. These three points it does not rule.
      it arises over an array of references, and over the result of
      another per-element construct it is the case of the upstream
      source.
-185. **The document of a keyed plain value that a function body
-     pushes elsewhere** (ES question 93). A handler that reads an
-     element whose type declares a key field and pushes it to another
-     list without `asInstance()`, as `saved.push(repo)` does, stores
-     a copy as a document of its own. Whether that document's
-     identity derives from the key is not ruled, and the owner gave
-     no assumption. *Assumed* by the documents: it does not; the
+185. **The document of a plain value of a keyed array that a
+     function body pushes elsewhere** (ES question 93). A handler
+     that reads an element of an array that declares a key field and
+     pushes it to another list without `asInstance()`, as
+     `saved.push(repo)` does, stores a copy as a document of its own.
+     By ruling the key belongs to the array, and an element put into
+     a second array has that array's key, or none; the second list
+     here holds a link and is keyed by the cell. Whether the
+     identity of the copy's document derives from the key is not
+     ruled, and the owner gave no assumption. *Assumed* by the
+     documents: it does not; the
      document is named as any record that a body writes into a list
      is (question 168), so two pushes of one
      element make two documents. The alternative derives the
@@ -4260,10 +4311,10 @@ of the re-key in question 178. These three points it does not rule.
      per-element construct where the upstream position holds such a
      value; over an array of references the body pushes the link and
      no document is made.
-186. **`KeyedBy` on an array of references** (LS question 43). By
-     ruling an array of references does not need the marker. Whether
-     the marker written on one is ignored or is an error is not
-     ruled, and the owner gave no assumption. *Assumed* by the
+186. **`ArrayByKey` on an array of references** (LS question 43). By
+     ruling an array of references does not need the declaration.
+     Whether the declaration written on one is ignored or is an error
+     is not ruled, and the owner gave no assumption. *Assumed* by the
      documents: it is accepted and ignored, because whether a
      position holds a link or a plain value is a fact of the stored
      array that the checker does not always know; a position that
@@ -4329,7 +4380,8 @@ assumption.
      array of references. The entry keeps its number.
 191. **Whether a key says how it was formed** (PL question 134; notes
      399 and 411). Settled by ruling: the key of a plain value that has
-     declared key fields names the fields and holds the value of each, a
+     declared key fields names the fields and, by a later ruling, holds
+     one salted hash of their values (question 197), a
      key formed from the whole value names no field, and a reference by
      key is resolved from the key alone, with no schema
      ([Decided](#decided)). The ruling that the key does not say how it
@@ -4382,78 +4434,143 @@ The ruling settles question 188 and makes questions 125, 130, 164 and
 
 **From the rulings of 2026-11-17 on a key that names its fields and on
 several key fields.** The rulings settle question 191 again and answer
-the prototype's note 411. These five points they do not rule. Each was
-proposed by the coordinator of this work and is written into the
-documents as an assumption.
+the prototype's note 411. They left these five points, each proposed
+by the coordinator of this work and written into the documents as an
+assumption. Questions 194 and 197 are ruled since, and the rulings
+that followed are under the next heading.
 
 194. **The order of the fields of a key with several fields** (PL
-     question 137). By ruling the fields are written as a union of field
-     names, which has no order. *Assumed:* the fields enter the key in
-     the order of their names, so the order in which the author writes
-     the union changes no key. The alternative takes the order in which
-     the element type declares the properties, and a reordering of the
-     declaration then changes every key. The question is about plain
-     values: an array of plain values in place, a plain array generated
-     from scratch included, and the result of another per-element
-     construct where the upstream position holds a value. An array of
-     references is keyed by its cells and is not affected.
-195. **Which properties can be key fields** (PL question 138).
-     *Assumed:* each field is a required property of the element type at
-     the top level, of type `string` or `number`, and the compiler
-     refuses anything else (`keyed-by:declaration`). The alternatives
-     allow another scalar type, an optional property, or a path to a
-     nested member. The question is about plain values: an array of
-     plain values in place, a plain array generated from scratch
-     included, and the result of another per-element construct where the
-     upstream position holds a value. An array of references is keyed by
-     its cells and is not affected.
-196. **The schema keyword of the key fields** (PL question 139).
-     *Assumed:* the keyword is `keyFields`, an array of the names in the
-     order of the names, also where the marker names one field, with a
-     copy in `Collection.keyFields` of the plan record. It is read where
-     a key is formed and by no resolver. The alternative is a keyword
-     `keyField` that holds one name or an array of names. The question
-     is about plain values: an array of plain values in place, a plain
+     question 137). Settled by ruling: the fields are ordered by name
+     when the key is formed, so the order in which the author writes
+     the union changes no key ([Decided](#decided)). The ruling is
+     about plain values: an array of plain values in place, a plain
      array generated from scratch included, and the result of another
-     per-element construct where the upstream position holds a value. An
-     array of references is keyed by its cells and is not affected.
-197. **The written form of the element part of a key that names its
-     fields** (PL question 140). By ruling the element part holds each
-     field name with the canonical form of the field's value. *Assumed:*
-     the fields in the order of their names, each as the name, `=` and
-     the value, joined with `,`, as `name=labs,owner=commonfabric`. A
-     `\` stands before each `\`, `,` and `=` of a name and of a string
-     value. A number is written as `#` and its canonical form, as
-     `id=#7`, and a `#` that starts a string value has a `\` before it,
-     so the number 7 and the string `7` have two keys. The escaping is
-     the documents' choice; the coordinator proposed the form and left
-     the escaping to them. Also assumed: the values are held as they
-     are, with no hash. A link that holds such a key then shows the
-     values of the key fields to whoever can see the link, and a client
-     can form the key, which it cannot for a key formed from a whole
-     value; an identifier of a document derived from the key is salted
-     as before. This replaces the documents' earlier assumption that the
-     value of a declared key field is salted in the key. The
-     alternatives write each value in its JSON form, or hold the salted
-     hash of each value beside its name, which a resolver that has the
-     salt can match. The question is about plain values: an array of
+     per-element construct where the upstream position holds a value.
+     An array of references is keyed by its cells and is not affected.
+     The entry keeps its number.
+195. **Which properties can be key fields** (PL question 138). Each
+     field is a required property of the element type at the top
+     level, of type `string` or `number`, and the compiler refuses
+     anything else (`array-by-key:declaration`). The owner deferred
+     one extension, with priority 2: a key field that holds a
+     reference, whose identity goes into the hash in the place of a
+     value ("in principle references to other keyed things could work
+     as well"). It is not part of the design until it is taken up. The
+     other alternatives, which are not ruled, allow another scalar
+     type, an optional property, or a path to a nested member. The
+     question is about plain values: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected.
+196. **The schema keyword of the key fields** (PL question 139). By
+     ruling the keyword is on the schema of the array, and not on the
+     schema of the items. Its name is not ruled. *Assumed:* the
+     keyword is `keyFields`, an array of the names in the order of
+     the names, also where the declaration names one field, with a
+     copy in `Collection.keyFields` of the plan record. It is read
+     where a key is formed and by no resolver. The alternative is a
+     keyword `keyField` that holds one name or an array of names.
+     Prior art that the coordinator named from memory, not verified:
+     the Kubernetes OpenAPI extension `x-kubernetes-list-map-keys`
+     beside `x-kubernetes-list-type: map`, `primaryKey` of the
+     Frictionless Table Schema, `key` of a YANG `list`, and `xs:key`
+     of XML Schema. The question is about plain values: an array of
      plain values in place, a plain array generated from scratch
-     included, and the result of another per-element construct where the
-     upstream position holds a value. An array of references is keyed by
-     its cells and is not affected.
-198. **A value whose type declares one key, passed where another key is
-     declared** (PL question 141). By ruling a key is resolved whatever
-     key the reader's type declares, and keys are formed with the key
-     fields that the collection or the read declares, so two readers
-     whose types declare different keys form two keys for one element.
-     *Assumed:* a value whose type declares one key, passed to a
-     parameter whose type declares another key, is a compile error
-     (`keyed-by:mismatch`), and a parameter whose type declares no key
-     accepts it. The alternative reports nothing. The question is about
-     plain values: an array of plain values in place, a plain array
+     included, and the result of another per-element construct where
+     the upstream position holds a value. An array of references is
+     keyed by its cells and is not affected.
+197. **What the element part of a key that names its fields holds**
+     (PL question 140). Settled by ruling: the element part holds the
+     list of the field names and one salted hash of the combined
+     values of those fields, as `name,owner:<hash>`, and does not
+     hold the values ([Decided](#decided)). The documents' earlier
+     assumption, the plain values written as
+     `name=labs,owner=commonfabric`, governs nothing. The exact
+     written form is question 199. The ruling is about plain values:
+     an array of plain values in place, a plain array generated from
+     scratch included, and the result of another per-element
+     construct where the upstream position holds a value. An array of
+     references is keyed by its cells and is not affected. The entry
+     keeps its number.
+198. **An array whose type declares one key, passed where another key
+     is declared** (PL question 141). By ruling a key is resolved
+     whatever key the reader's type declares, and keys are formed with
+     the key fields that the collection or the read declares, so two
+     readers whose types declare different keys form two keys for one
+     element. *Assumed:* an array whose type declares one key, passed
+     to a parameter whose type declares another key, is a compile
+     error where the compiler sees both types
+     (`array-by-key:mismatch`), and a parameter whose type declares no
+     key accepts it (question 200). The owner said yes to the
+     proposal, and it is not ruled. The alternative reports nothing.
+     The question is about plain values: an array of plain values in
+     place, a plain array generated from scratch included, and the
+     result of another per-element construct where the upstream
+     position holds a value. An array of references is keyed by its
+     cells and is not affected.
+
+**From the rulings of 2026-11-17 on the form of a key and where it is
+declared.** The rulings settle questions 194 and 197 and replace the
+syntax of the declaration: the key is declared on the array, with
+`ArrayByKey<T, "field">`. These three points they do not rule. The
+owner said yes to the coordinator's proposal for each, and each is
+written into the documents as an assumption.
+
+199. **The written form of the element part of a key that names its
+     fields** (PL question 142). By ruling the element part is the
+     list of the field names and one salted hash of the combined
+     values, as `name,owner:<hash>`, and the exact form is the
+     documents' to define. *Assumed:* the names in the order of the
+     names, joined with `,`, then `:`, then the hash, as `id:<hash>`
+     and `name,owner:<hash>`. A `\` stands before each `\`, `,` and
+     `:` of a name. The hash is of one value, the array of the values
+     of the key fields in the order of the names, as
+     `["labs", "commonfabric"]` and `[7]`, hashed as a whole value
+     is; the hasher puts a byte for the type in front of each part,
+     so the number 7 and the string `7` have two keys, and two
+     different lists of values never combine to one input. The salt
+     is the secret of the space that the element key of a whole value
+     is hashed with. Also assumed, because no document fixes how the
+     hash of an element part is written: the digest in base64url with
+     no algorithm tag in front, so that an element part with a `:`
+     names fields and one without is formed from a whole value. The
+     alternatives put the names into the hashed value as well, or
+     hash a list of name and value pairs. The question is about plain
+     values: an array of plain values in place, a plain array
      generated from scratch included, and the result of another
-     per-element construct where the upstream position holds a value. An
-     array of references is keyed by its cells and is not affected.
+     per-element construct where the upstream position holds a value.
+     An array of references is keyed by its cells and is not
+     affected.
+200. **A reader whose type is a plain array type, given an array with
+     a declared key** (PL question 143). By ruling
+     `ArrayByKey<Repo, "id">` is a `Repo[]`, so a parameter typed
+     `Repo[]` accepts it.
+     *Assumed:* the reader forms keys with the key fields of the
+     array it is given, so the key is carried forward. It takes the
+     fields from the schema that the array is stored under, for an
+     array of plain values in place, and from the upstream
+     collection, for a plain array generated from scratch and for the
+     result of another per-element construct. For an array in place
+     that needs the stored schema of the array where a key is formed.
+     *Assumed* with it: the link through which the reader reaches
+     the array holds that schema. Resolving a key reads no schema
+     under either answer. The alternative forms the keys of such a
+     reader from the whole value. Over an array of references nothing
+     of it arises.
+201. **The diagnostics of `ArrayByKey`** (LS question 44). *Assumed:*
+     a declaration whose second argument does not name required
+     top-level properties of type `string` or `number` is an error
+     named `array-by-key:declaration`, and the error of question 198
+     is named `array-by-key:mismatch`. The two keep the meaning that
+     the documents gave them under the earlier syntax, and the names
+     follow the type name. The alternative for the first is a type
+     error of the checker with no name of its own. Both concern plain
+     values: an array of plain values in place, a plain array
+     generated from scratch included, and the result of another
+     per-element construct where the upstream position holds a value.
+     On an array of references the declaration has no effect
+     (question 186).
 
 One question above is restated by the notes 307 to 320. For the
 assumption of ES question 83, in which transaction a first value that is not a
@@ -4574,9 +4691,11 @@ is when the key enters the element table, in all three cases.
   `e4f2fb3431` the crate and the executor have those rulings. The
   crate lists `*/*` with two kinds `element` for a handler bound in
   an inner `map` whose result the callback of a `flatMap` returns;
-  does not report `element-body:result-stored-outside` or
-  `keyed-by:declaration`, because it follows the diagnostic catalog
-  of `language-subset.md` at an earlier commit; does not check that
+  does not report `element-body:result-stored-outside` or the
+  diagnostic of a wrong declaration of a key, which that commit's
+  documents named `keyed-by:declaration` and the catalog names
+  `array-by-key:declaration`, because it follows the diagnostic
+  catalog of `language-subset.md` at an earlier commit; does not check that
   a declared key field is a required property of type `string` or
   `number`; writes a placeholder for the hash of an `asInstance()`
   callee, with no schemas, and neither scope nor space where the
@@ -4610,8 +4729,13 @@ is when the key enters the element table, in all three cases.
   the array is stored under, and keeps a record of that schema,
   where by ruling the key names its fields and is resolved with no
   schema; and the crate and the executor have one key field and the
-  keyword `keyField`, where by ruling the marker can name several
-  fields. The executor's value code reads the spread of an array of
+  keyword `keyField`, where by ruling the declaration can name
+  several fields; and the crate reads the key from a marker
+  `KeyedBy` on the element type and the executor holds the value of
+  the field in the key, where by ruling the key is declared on the
+  array with `ArrayByKey` and the element part holds the names of
+  the fields and one salted hash of their values. The executor's
+  value code reads the spread of an array of
   references as values, so a spread child over such an array holds
   no links; and nothing removes an instance that a re-key replaced,
   or the stream of a binding that the run of the old key made.
@@ -4670,8 +4794,10 @@ The open questions each document ends with stay where they are.
   that `scheduler-and-serving-loop.md` relies on source for, such as the
   name of the run budget and a fourth node status. That specification is
   outside this work and is not corrected here.
-- **The rulings on `asInstance()` and `KeyedBy` are tested by the
-  prototype's executor alone.** Today's runtime has neither, so the
+- **The rulings on `asInstance()` and on a declared key are tested by
+  the prototype's executor alone,** and the declared key in the form
+  of `KeyedBy` on the element type, which the ruling on `ArrayByKey`
+  replaces. Today's runtime has neither, so the
   value comparison has no row for them, and no pattern of the corpus
   uses either. The nested layout of the children of a view node is
   compared with today's runtime through the paths that the events
@@ -4686,7 +4812,13 @@ The open questions each document ends with stay where they are.
   reader and the place declare different keys it follows the place.
   Its crate and its executor have one key field, with the keyword
   `keyField`. By ruling the key names its fields, is resolved with
-  no schema, and can be formed across several fields. The case is an
+  no schema, and can be formed across several fields. At that commit
+  and after it the prototype has the marker `KeyedBy` on the element
+  type and the plain form of the key, which holds the value of the
+  field. By the rulings since, the key is declared on the array with
+  `ArrayByKey<T, "field">`, the schema keyword is on the array
+  schema, and the element part holds the names of the fields and one
+  salted hash of their combined values. The case is an
   array of plain values in place, a plain array generated from
   scratch included, and the result of another per-element construct
   where the upstream position holds a value. The prototype follows
@@ -4724,21 +4856,32 @@ The open questions each document ends with stay where they are.
    measurement over the corpus, with the nested paths of the children
    of a view node and with the executor beside today's run; bring the
    crate's diagnostic catalog to that of `language-subset.md`, which
-   has `element-body:result-stored-outside`, `keyed-by:declaration`
-   and `keyed-by:mismatch`; give the slot of a captured name the
+   has `element-body:result-stored-outside`,
+   `array-by-key:declaration` and `array-by-key:mismatch`; give the
+   slot of a captured name the
    handle type that the callee declares; and have value code keep the
    links of an array of references that is spread among the children
    of a view node.
-5. **In the prototype, for the rulings of 2026-11-17 on keys:** write
-   the name of each declared key field into the element part of the
-   key, with the value of the field; resolve a reference by key from
-   the key alone, by finding the element whose named fields have the
-   values, and remove the record of the schema that each document is
-   stored under; accept a union of field names in `KeyedBy` and form
-   one key across the fields; and, under the assumptions of
-   questions 194 to 198, order the fields by name, write the keyword
-   `keyFields` and `Collection.keyFields`, write the element part in
-   the assumed form, and report `keyed-by:mismatch`.
+5. **In the prototype, for the rulings of 2026-11-17 on keys.** The
+   prototype at commit `a462df710a` and after has `KeyedBy` on the
+   element type and the plain form of the key. To do: replace the
+   marker `KeyedBy` on the element type by the array type
+   `ArrayByKey<T, "field">`, accept a union of field names in it,
+   and write the keyword into the schema of the array in the place
+   of the schema of the items; write the names of the declared key
+   fields, ordered by name, and one salted hash of their combined
+   values into the element part of the key, in the place of the
+   value of the field; resolve a reference by key from the key
+   alone, by reading the names, combining those fields of each
+   element, hashing, and comparing, and remove the record of the
+   schema that each document is stored under; key an element that is
+   put into a second array by the key of that array, or by its whole
+   value; and, under the assumptions of questions 195, 196 and 198
+   to 201, write the keyword as `keyFields` with
+   `Collection.keyFields`, write the element part in the assumed
+   form, form the keys of a reader of plain array type with the key
+   fields of the array it is given, and report
+   `array-by-key:declaration` and `array-by-key:mismatch`.
 
 ### Briefing an author
 

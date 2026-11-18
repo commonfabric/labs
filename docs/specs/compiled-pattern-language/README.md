@@ -449,15 +449,19 @@ which element keys what they hold is kept
   the collection, so two equal elements have two keys. Over an array
   of plain values in place, in particular a plain array that one
   computation generates from scratch, as the result of an API call
-  is, the author can declare the key in the element type with the
-  type marker `KeyedBy<T, "field">`: the key then names that field
-  and holds its value, and an element of a new array with the same
-  value of the field is the same element. The marker can name
-  several fields, as `KeyedBy<Repo, "owner" | "name">`, and the
-  element then has one key across them. A reference that holds such
-  a key is resolved from the key alone, with no schema. An array of
+  is, the author can declare the key on the array with the array
+  type `ArrayByKey<T, "field">`, which is a `T[]` whose elements are
+  plain `T`: the key then names that field and holds a salted hash of
+  its value, and an element of a new array with the same value of
+  the field is the same element. The declaration can name several
+  fields, as `ArrayByKey<Repo, "owner" | "name">`, and the element
+  then has one key across them, with the names and one hash of the
+  combined values. A reference that holds such a key is resolved
+  from the key alone, with no schema, and does not show the values.
+  The key belongs to the array: an element that is put into a second
+  array has the key that array declares, or none. An array of
   references does not
-  need the marker, because the key is the identity of the element's
+  need the declaration, because the key is the identity of the element's
   cell and an edit does not change it, and the result of another
   per-element construct carries a declared key through the upstream
   key. The position is never in the key, also where the callback
@@ -859,8 +863,8 @@ its argument holds the reference to the element; over an array of
 plain values in place, and over the result of another per-element
 construct whose upstream position holds a value, it holds the value,
 written again when the element changes while it is in the
-collection. Over an array of plain values in place whose element
-type declares a key with `KeyedBy<T, "field">`, a new array that
+collection. Over an array of plain values in place that declares a
+key with `ArrayByKey<T, "field">`, a new array that
 holds an element with the same value of the field has the same
 instance. An event for a stream of an element body without the
 modifier is refused once the element has left. Cleanup of instances
@@ -1204,8 +1208,9 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   stored under the new key, moves nothing for another element whose
   occurrence count it changed, and does not happen for a write that is
   not made through a reference by key; a key formed from declared key
-  fields names the fields and holds their values, a key formed from
-  the whole value names no field, and a reference by key is resolved
+  fields names the fields and holds one salted hash of their values,
+  a key formed from the whole value names no field, and a reference
+  by key is resolved
   from the key alone, with no schema; and
   `items.key(i)` is a handle by position that nothing rewrites, equal to
   the reference of the element that stands at `i` at the moment of the
@@ -1228,17 +1233,26 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   that the modifier is legal outside a per-element body
   ([language subset](language-subset.md), §13, questions 41 and 42).
   Each is the same over the three cases of a source. That an author
-  declares the key of an array of plain values in place with the type
-  marker `KeyedBy<T, "field">` is ruled, and so is that the marker
-  names several fields as a union of their names. Nine things about
-  it are assumed. Five are about the declaration and the form of the
-  key: the fields enter the key in the order of their names, each is
-  a required top-level property of type `string` or `number`, the
-  schema keyword is `keyFields`, the element part is written as in
-  `name=labs,owner=commonfabric`, and a value whose type declares one
-  key is not accepted where another key is declared
+  declares the key of an array of plain values in place on the array,
+  with the array type `ArrayByKey<T, "field">`, is ruled. So is that
+  the declaration names several fields as a union of their names,
+  that the fields enter the key in the order of their names, that the
+  schema keyword is on the schema of the array, that the element part
+  holds the names and one salted hash of the combined values, as
+  `name,owner:<hash>`, and that an element put into a second array
+  has that array's key, or none. Nine things about it are assumed.
+  Five are about the declaration and the form of the key: each field
+  is a required top-level property of type `string` or `number`, with
+  a key field that holds a reference deferred; the schema keyword is
+  named `keyFields`; an array whose type declares one key is not
+  accepted where the compiler sees that another key is declared; the
+  exact written form of the element part, with its escaping and how
+  the values are combined; and a reader whose type is a plain array
+  type forms keys with the key fields of the array it is given
   ([plan format and label templates](plan-and-label-templates.md), §8,
-  questions 137 to 141). The other four follow. Over an array of
+  questions 138, 139 and 141 to 143; the names of the two diagnostics
+  are question 44 of [language subset](language-subset.md), §13). The
+  other four follow. Over an array of
   plain values in place with no declared
   key, an instance called through `asInstance()` is re-keyed with its
   element when a write through a reference by key changes the value;
@@ -1246,11 +1260,11 @@ in the [continuation plan](../../plans/compiled-pattern-language.md).
   key avoids the case
   ([plan format and label templates](plan-and-label-templates.md), §8,
   question 123). A write to the key field itself is the same re-key
-  (its question 129). A keyed plain value that a function body pushes
-  to another list is stored in a document whose identity does not
+  (its question 129). A plain value of a keyed array that a function
+  body pushes to another list is stored in a document whose identity does not
   derive from the key
   ([execution and storage](execution-and-storage.md), §11, question
-  93). And the marker written on an array of references is accepted
+  93). And the declaration written on an array of references is accepted
   and has no effect
   ([language subset](language-subset.md), §13, question 43).
 - **Element bodies and equal elements.** The rulings leave five things
