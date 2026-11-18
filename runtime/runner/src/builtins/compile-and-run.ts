@@ -352,6 +352,12 @@ export function compileAndRun(
       });
     };
 
+    // The child's argument is read here, inside the action, and detached
+    // from the input view: the instantiation below runs after this
+    // transaction has ended, and a live view read then is not a value the
+    // child's argument document can hold.
+    const argument = snapshotQueryResult(input.get());
+
     const compilePromise = runtime.patternManager
       .compileOrGetPattern(program, parentCell.space)
       .catch(reportCompileFailure)
@@ -370,10 +376,10 @@ export function compileAndRun(
         // The instantiation is the builtin's, in a continuation of its
         // action: no principal's act attributes what its setup initializes,
         // and its transaction holds none of the reads that chose the program.
-        runtime.runSynced(result, pattern, input.get(), {
+        runtime.runSynced(result, pattern, argument, {
           attributeInitialization: false,
           runtimeStarted: true,
-        });
+        }).catch(reportCompileFailure);
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
         });

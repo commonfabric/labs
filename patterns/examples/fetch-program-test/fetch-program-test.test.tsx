@@ -46,6 +46,10 @@ export default pattern(() => {
     hasText(subject[UI], "Successfully compiled pattern!") &&
     !hasText(subject[UI], "error")
   );
+  // The compiled piece runs with the input the pattern hands compileAndRun.
+  const assert_compiled_piece_got_input = assert(() =>
+    subject.result?.value === 10
+  );
   const assert_compile_error_shown = assert(() =>
     hasText(subject[UI], "Compile error:") &&
     hasText(subject[UI], "'}' expected.") &&
@@ -63,6 +67,7 @@ export default pattern(() => {
       { settle: true },
       { assertion: assert_fetched_program },
       { assertion: assert_compiled },
+      { assertion: assert_compiled_piece_got_input },
       { action: action_fetch_broken },
       { settle: true },
       { assertion: assert_compile_error_shown },
