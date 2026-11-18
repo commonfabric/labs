@@ -334,6 +334,40 @@ function contractReading(
   return reading;
 }
 
+/**
+ * The node a cell's value is read from: the value type node the cell's
+ * authored node writes, or, for a cell whose wrapper no node writes out, such
+ * as one reached through a generic alias or a printed one, its value type
+ * printed. A printed node is not taken apart: its value is printed from its
+ * type. `undefined` where `node` is not a cell.
+ */
+function cellValueTypeNode(
+  node: ts.TypeNode,
+  type: ts.Type | undefined,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  context: TransformationContext,
+): ts.TypeNode | undefined {
+  const authored = context.state.printedFrom(node)
+    ? undefined
+    : getAuthoredCellValueTypeNode(node, checker);
+  if (authored || !type || !isCellLikeType(type, checker)) return authored;
+  // Schema generation can read some prints only from the type behind them — a
+  // name the emitting module does not import, the brand arm of an expanded
+  // `Default` — so the node is registered with its type.
+  const valueType = unwrapCellLikeType(type, checker);
+  const printed = typeToSchemaTypeNode(
+    valueType,
+    checker,
+    sourceFile,
+    context.state,
+  );
+  if (printed && valueType) {
+    context.state.typeRegistry.set(printed, valueType);
+  }
+  return printed;
+}
+
 function applyCapabilitySummaryToArgument(
   fn: ts.ArrowFunction | ts.FunctionExpression,
   argumentNode: ts.TypeNode,
@@ -367,28 +401,13 @@ function applyCapabilitySummaryToArgument(
       fn,
     );
   }
-  // A printed node is not taken apart: its value is printed from its type.
-  let innerTypeNode = context.state.printedFrom(argumentNode)
-    ? undefined
-    : getAuthoredCellValueTypeNode(argumentNode, checker);
-  if (!innerTypeNode && argumentType && isCellLikeType(argumentType, checker)) {
-    // A cell whose wrapper no node writes out, such as one reached through a
-    // generic alias, or a printed one, has no authored value node, so its
-    // value type is printed.
-    // Schema generation can read some prints only from the type behind them —
-    // a name the emitting module does not import, the brand arm of an expanded
-    // `Default` — so the node is registered with its type.
-    const valueType = unwrapCellLikeType(argumentType, checker);
-    innerTypeNode = typeToSchemaTypeNode(
-      valueType,
-      checker,
-      sourceFile,
-      context.state,
-    );
-    if (innerTypeNode && valueType) {
-      context.state.typeRegistry.set(innerTypeNode, valueType);
-    }
-  }
+  const innerTypeNode = cellValueTypeNode(
+    argumentNode,
+    argumentType,
+    checker,
+    sourceFile,
+    context,
+  );
   const shouldWrap = !!innerTypeNode;
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(argumentNode, argumentType, checker)
@@ -455,7 +474,13 @@ function applyCapabilitySummaryToParameter(
     );
   }
 
-  const innerTypeNode = getAuthoredCellValueTypeNode(parameterNode, checker);
+  const innerTypeNode = cellValueTypeNode(
+    parameterNode,
+    parameterType,
+    checker,
+    sourceFile,
+    context,
+  );
   const shouldWrap = !!innerTypeNode;
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(parameterNode, parameterType, checker)

@@ -295,6 +295,26 @@ export const h = ${declaration};`;
       ]);
     });
 
+    it("emits a cell state schema for a state the callback is asserted to be a cell", async () => {
+      // The asserted parameter type is printed, and a printed node is read
+      // whole: the cell's value type is printed from its type. The schema is
+      // the one the same parameter gets written as an annotation.
+
+      const asserted = await transform(handlers(
+        `handler(((e, state) => { console.log(e.n); }) as (e: { n: number }, state: Writable<number>) => void)`,
+      ));
+      const annotated = await transform(handlers(
+        `handler((e: { n: number }, state: Writable<number>) => { console.log(e.n); })`,
+      ));
+
+      expect(argumentValues(callOf(asserted, "h"))[1]).toEqual(
+        argumentValues(callOf(annotated, "h"))[1],
+      );
+      expect(argumentValues(callOf(asserted, "h"))[1]).toMatchObject({
+        type: "number",
+      });
+    });
+
     it("emits `unknown` for an untyped state parameter", async () => {
       const root = await transform(handlers(
         `handler((e, state) => { state.count.set(1); })`,
