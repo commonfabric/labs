@@ -1567,10 +1567,17 @@ export type TransactionHooks = {
   /**
    * The transaction in progress changed a path of a document, which
    * `store` holds as it is after the change. A splice is a change of the
-   * array's path, and a document that was removed is a change of its
-   * root.
+   * array's path, a document that was removed is a change of its root, and
+   * a write below a value that held no container is a change of the
+   * shortest path whose value it replaced. `schema` is the schema of the
+   * reference the write was made through, where it has one.
    */
-  change(doc: string, path: readonly string[], store: Store): void;
+  change(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    schema?: Schema,
+  ): void;
 
   /**
    * The transaction ended. Where it commits, `changes` holds every change
@@ -2067,11 +2074,18 @@ export class Instance {
       old: unknown;
       splice?: { start: number; removed: number; inserted: number };
       keyed: { array: object; keys?: readonly string[]; now?: object }[];
+      covers?: readonly string[];
+      schema?: Schema;
     },
   ): void {
     const open = this.#tx;
     if (open !== undefined || this.#outside) {
-      this.options.transactions?.change(change.doc, change.path, this.store);
+      this.options.transactions?.change(
+        change.doc,
+        change.covers ?? change.path,
+        this.store,
+        change.schema,
+      );
     }
     if (open !== undefined) {
       const { store } = this;

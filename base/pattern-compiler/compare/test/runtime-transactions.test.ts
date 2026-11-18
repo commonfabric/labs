@@ -12,7 +12,7 @@ import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metada
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
-import { identifierOf, isLink } from "../../exec/store.ts";
+import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
 import { inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
@@ -136,6 +136,53 @@ describe("RuntimeTransactions", () => {
       text: "t",
       tags: ["new"],
     });
+  });
+
+  it("holds a member written below a stored value that held no container", async () => {
+    // Two transactions of the store: the first stores a document whose
+    // root holds no container, and the second writes below that root.
+    const hooks = new RuntimeTransactions(runtime, space);
+    const store = new Store({ parts: false });
+    store.onChange = ({ doc, path, covers, schema }) =>
+      hooks.change(doc, covers ?? path, store, schema);
+    hooks.begin("derivation");
+    store.create("fid1:below", "state", undefined);
+    hooks.end({ committed: true });
+    hooks.begin("derivation");
+    store.write(new Ref("fid1:below", ["a", "b"]), 1);
+    hooks.end({ committed: true });
+    expect(await hooks.settled()).toEqual([]);
+
+    expect(hooks.stored().get("fid1:below")).toEqual({ a: { b: 1 } });
+  });
+
+  it("stores the clause that the declared type of a write gives, where the handler read no labeled input", async () => {
+    // `fixtures/declared-writes.tsx`: `overwrite` sets `mine`, whose type
+    // is `Confidential<string, ["alice"]>`.
+    const hooks = new RuntimeTransactions(runtime, space);
+    const instance = new Instance(
+      await artifactOf("declared-writes"),
+      { mine: "m", sealed: [] },
+      {
+        space,
+        id: identifierOf({ test: "runtime-transactions" }),
+        transactions: hooks,
+      },
+    );
+    instance.send(bindingOf(instance, "overwrite"), {});
+    expect(await hooks.settled()).toEqual([]);
+
+    const read = runtime.edit();
+    try {
+      const metadata = readStoredCfcMetadata(read, {
+        space,
+        id: hooks.entityOf(instance.argument),
+        scope: "space",
+      });
+      expect(JSON.stringify(metadata ?? {})).toContain("alice");
+    } finally {
+      read.abort();
+    }
   });
 
   it("commits one transaction of the runtime for each transaction the executor commits", async () => {

@@ -854,6 +854,14 @@ export class Store {
         old: unknown;
         splice?: { start: number; removed: number; inserted: number };
         keyed: { array: object; keys?: readonly string[]; now?: object }[];
+        /**
+         * The shortest path the change covers, where it is shorter than
+         * `path`: a write below a value that held no container replaced that
+         * value with one.
+         */
+        covers?: readonly string[];
+        /** The schema of the reference a write or a splice was made through. */
+        schema?: Schema;
       },
     ) => void)
     | undefined;
@@ -880,6 +888,7 @@ export class Store {
     path: readonly string[],
     old: unknown,
     splice?: { start: number; removed: number; inserted: number },
+    reported: { covers?: readonly string[]; schema?: Schema } = {},
   ): void {
     this.clock += 1;
     this.log.push({ doc, path, at: this.clock });
@@ -891,6 +900,8 @@ export class Store {
       old,
       ...(splice === undefined ? {} : { splice }),
       keyed,
+      ...(reported.covers === undefined ? {} : { covers: reported.covers }),
+      ...(reported.schema === undefined ? {} : { schema: reported.schema }),
     });
   }
 
@@ -2062,9 +2073,12 @@ export class Store {
       this.journal?.push({ doc, path, old });
       document.value = value;
     } else {
+      // The shortest path whose value the write replaced with a container.
+      let covers: readonly string[] | undefined;
       if (!isRecord(document.value) && !Array.isArray(document.value)) {
         this.journal?.push({ doc, path: [], old: document.value });
         document.value = {};
+        covers = [];
       }
       let holder = document.value as Record<string, unknown>;
       for (let index = 0; index < path.length - 1; index++) {
@@ -2076,9 +2090,16 @@ export class Store {
             old: next,
           });
           holder[path[index]] = /^\d+$/.test(path[index + 1]) ? [] : {};
+          covers ??= path.slice(0, index + 1);
         }
         holder = holder[path[index]] as Record<string, unknown>;
       }
+      const reported = {
+        ...(covers === undefined ? {} : { covers }),
+        ...(located.ref.schema === undefined
+          ? {}
+          : { schema: located.ref.schema }),
+      };
       const last = path[path.length - 1];
       if (Array.isArray(holder) && last === "length") {
         // The array is stored without the positions past the length.
@@ -2097,15 +2118,23 @@ export class Store {
           start: length,
           removed: taken.length,
           inserted: 0,
-        });
+        }, reported);
       } else {
         old = holder[last];
         this.journal?.push({ doc, path, old });
         holder[last] = value;
-        this.#changed(doc, path, old);
+        this.#changed(doc, path, old, undefined, reported);
       }
     }
-    if (path.length === 0) this.#changed(doc, path, old);
+    if (path.length === 0) {
+      this.#changed(
+        doc,
+        path,
+        old,
+        undefined,
+        located.ref.schema === undefined ? {} : { schema: located.ref.schema },
+      );
+    }
     // A position the write went through by key that holds another key
     // now is re-keyed (ruling Z24).
     for (const { array, key, position } of located.crossed) {
@@ -2164,7 +2193,7 @@ export class Store {
       start,
       removed: taken.length,
       inserted: members.length,
-    });
+    }, located.ref.schema === undefined ? {} : { schema: located.ref.schema });
   }
 
   /**

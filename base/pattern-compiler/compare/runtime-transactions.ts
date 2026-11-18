@@ -36,7 +36,10 @@ import {
   type NormalizedFullLink,
 } from "../../../runtime/runner/src/link-types.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
-import type { MemorySpace } from "../../../runtime/runner/src/cell.ts";
+import {
+  type MemorySpace,
+  recordRelevantSchemaWritePolicyInput,
+} from "../../../runtime/runner/src/cell.ts";
 import type { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type {
@@ -116,7 +119,12 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /** @inheritDoc */
-  change(doc: string, path: readonly string[], store: Store): void {
+  change(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    schema?: Schema,
+  ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
     const document = store.docs.get(doc);
@@ -125,33 +133,42 @@ export class RuntimeTransactions implements TransactionHooks {
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
         delete: true,
       });
-      return;
-    }
-    // A document the storage does not hold yet is written whole: the first
-    // write below the root of a declared place makes the document from the
-    // place's default, and the change names only the path written.
-    if (!this.#documents.has(doc)) {
+    } else if (!this.#documents.has(doc)) {
+      // A document the storage does not hold yet is written whole: the
+      // first write below the root of a declared place makes the document
+      // from the place's default, and the change names only the path
+      // written.
       this.#documents.add(doc);
       tx.writeValueOrThrow(
         this.#address(doc, []),
         this.#encode(document.value),
       );
-      return;
+    } else {
+      const parent = path.length === 0
+        ? undefined
+        : store.peek(doc, path.slice(0, -1));
+      const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
+        !Object.hasOwn(parent, path[path.length - 1]);
+      if (absent) {
+        tx.writeValueOrThrow(this.#address(doc, path), undefined, {
+          delete: true,
+        });
+      } else {
+        tx.writeValueOrThrow(
+          this.#address(doc, path),
+          this.#encode(store.peek(doc, path)),
+        );
+      }
     }
-    const parent = path.length === 0
-      ? undefined
-      : store.peek(doc, path.slice(0, -1));
-    const absent = path.length > 0 && isWalkableObjectNotArray(parent) &&
-      !Object.hasOwn(parent, path[path.length - 1]);
-    if (absent) {
-      tx.writeValueOrThrow(this.#address(doc, path), undefined, {
-        delete: true,
-      });
-      return;
-    }
-    tx.writeValueOrThrow(
+    // The write policy of the write, as a cell's write records it
+    // (`Cell.set`): the schema the write was made under where it declares
+    // labels, and otherwise the schema the document's stored labels name.
+    // A schema of a plan is a JSON schema with the members the executor
+    // reads typed (`Schema` of `exec/store.ts`).
+    recordRelevantSchemaWritePolicyInput(
+      tx,
       this.#address(doc, path),
-      this.#encode(store.peek(doc, path)),
+      schema as JSONSchema | undefined,
     );
   }
 
