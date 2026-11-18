@@ -5020,10 +5020,12 @@ export class Server {
    * neither does one whose peer did not advertise `admissionNotice`.
    *
    * The callers in this file record nothing for a session opened
-   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
-   * and it already hears of every access-list commit in process
-   * (`noteSpaceAclChanged()`), after which its next load of the space opens
-   * the session again through ordinary admission.
+   * `actingAs: "space-owner"`. Only a serving runtime opens one. An
+   * access-list change that gives its space an owner binds it in place
+   * ({@link #bindToNewOwner}), so a serving runtime in another process,
+   * which hears of no commit here, reads on. One a change does revoke, a
+   * co-hosted serving runtime opens again through ordinary admission once
+   * its host tells it of the commit (`noteSpaceAclChanged()`).
    */
   #awaitAdmission(
     connectionId: string | null,

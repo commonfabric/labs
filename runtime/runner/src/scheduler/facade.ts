@@ -4250,11 +4250,11 @@ export class Scheduler {
    *
    * events.md §5's T3 drop predicate is "no runnable handler", never
    * "the run raced" — and a load failure is the second: the document the
-   * closure reads exists durably, only the read path failed. The live
-   * shape (verification-coverage.md's OW45 residue member) is a serving
-   * session revoked by the genesis ACL landing after activation —
-   * `unauthorized` on a cross-space read of a document the server itself
-   * wrote a moment earlier. Sealing §5's dropped-event notice for that
+   * closure reads exists durably, only the read path failed. The shape
+   * first seen live (verification-coverage.md's OW45 residue member) is a
+   * serving session an access-list change revoked — `unauthorized` on a
+   * cross-space read of a document the server itself wrote a moment
+   * earlier. Sealing §5's dropped-event notice for that
    * discharges at-least-once on a healthy trusted user action and
    * advances the watermark past it, so nothing ever re-runs it: the click
    * is silently lost.

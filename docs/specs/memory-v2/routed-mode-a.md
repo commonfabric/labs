@@ -575,9 +575,15 @@ or delegation ACL entries. A space is created by its own key, as
 `StorageManager.createSpace` does, and only on the toolshed the `unlisted` rule
 places it on: a routed open of a DID with no store is refused, before a store is
 created, unless the space's own DID opens it there, so a listed space whose
-store has not arrived is never re-created empty. Until its genesis ACL lands,
-that DID is the space's only principal and may commit only the ACL, carrying the
-genesis declarations (`genesisRoot`, `spaceKind`) its signed open declared. A
+store has not arrived is never re-created empty. The one other open that may
+create a store is a delegating principal's `actingAs: "space-owner"` open, which
+arrives on a toolshed's own connection rather than a routed one, and only where
+the `unlisted` rule places the space: a serving loop can reach a space before
+its creator has made it, and the empty store holds its session until then.
+Until its genesis ACL lands, that DID is the only principal that may write
+there, and it may commit only the ACL, carrying the genesis declarations
+(`genesisRoot`, `spaceKind`) its signed open declared; a delegating principal
+may read the empty space. A
 space with history but no valid ACL is refused to everyone but a service DID,
 which may give it an ACL or repair an invalid one, as in direct mode, so legacy
 spaces can be given ACLs after cutover. Routed connections refuse
@@ -688,7 +694,11 @@ crossing can come from. The list is read from the current snapshot on each
 decision; an unreadable or invalid snapshot lists no toolshed, and each
 toolshed then admits its own identity alone. A router's identity is never of
 the delegating class: a directory that lists a router's DID as a toolshed is
-invalid.
+invalid. A crossing can reach a user's space while the user's client is still
+creating it. The owner admits the crossing's session to the empty space and,
+when the genesis ACL lands, binds it to the owner that ACL names, so its
+watches then deliver the space; the serving toolshed hears of no commit on the
+owner, so a session revoked there would stay refused.
 
 Enabled nested limits must be ordered from context to router to toolshed, a
 context's proofs must cover its principal history and a renewal for each active

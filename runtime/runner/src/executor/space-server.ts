@@ -2287,12 +2287,11 @@ export class SpaceServer implements TransactionSealDestination {
    *
    * `space` is usually NOT this server's own. The session that starves is
    * typically a CROSS-SPACE replica: a served dispatch whose argument set
-   * links into the viewer's HOME space (ProfileCreateSurface's
-   * `["defaultPattern","profiles"]` link is the store-proven case), where
-   * the serving plane's pre-genesis session was de-authorized by that
-   * space's genesis ACL. That is why this is a host fan-out rather than
-   * this server's own `enqueueCommit`: the ACL commit and the starved
-   * session are in different spaces.
+   * links into another space, where an access-list change revoked the
+   * serving plane's session, such as one bound to an owner the list no
+   * longer names. That is why this is a host fan-out rather than this
+   * server's own `enqueueCommit`: the ACL commit and the starved session
+   * are in different spaces.
    *
    * Sibling, not a duplicate, of `#rootEnsureAwaitingOwner`'s re-arm
    * below — the same boot order, the same trigger, one layer down (that
