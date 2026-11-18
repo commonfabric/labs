@@ -893,6 +893,11 @@ Diagnostics emitted in all modes:
     non-lowerable computation sites still report this error (so `items[0].name`,
     `name.toUpperCase()` at lowerable top-level sites, and dynamic keys inside
     supported contexts validate clean)
+  - a destructuring default on or around a computed key in a collection
+    callback's element parameter, as in `rows.map(([{ [k]: v } = d]) => v)` or
+    `records.map(({ [k]: v = 0 }) => v)`: the key is read through an alias
+    lifted from the element and the key, which no default reaches
+    (`test/closures/array-method-utils.test.ts`)
 - **Error** `pattern-context:callback-container`
   - a callback passed to an **unsupported container** in pattern-facing JSX
     (the callback-boundary decision is `unsupported` with
