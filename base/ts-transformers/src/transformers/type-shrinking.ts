@@ -1552,24 +1552,52 @@ export function scopedCellParts(
 ): ScopedCellParts | undefined {
   const printedType = state?.printedFrom(node);
   if (!printedType) return scopedCellNode(node, checker, typeRegistry);
-  const scoped = getScopedCell(printedType, checker);
+  return scopedCellPartsOfType(
+    printedType,
+    optional,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
+    state,
+  );
+}
+
+/**
+ * Returns the parts of the scope wrapper around a cell that `type` is, with its
+ * cell and the `null` or `undefined` beside it printed from the type, or
+ * `undefined` for any other type. This reads a scoped cell no node writes the
+ * wrapper of: a print of one, or an alias such as
+ * `type MyState = PerUser<Writable<number>>`. An `optional` property's type
+ * holds the `undefined` its optionality adds, which the parts leave out.
+ */
+export function scopedCellPartsOfType(
+  type: ts.Type,
+  optional: boolean,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
+): ScopedCellParts | undefined {
+  const scoped = getScopedCell(type, checker);
   if (!scoped) return undefined;
-  const print = (type: ts.Type) =>
+  const print = (printable: ts.Type) =>
     typeToTypeNodeWithRegistry(
-      type,
+      printable,
       { checker, factory, sourceFile, state },
       typeRegistry,
     );
   const nullish = optional
-    ? scoped.nullish.filter((type) =>
-      (type.flags & ts.TypeFlags.Undefined) === 0
+    ? scoped.nullish.filter((member) =>
+      (member.flags & ts.TypeFlags.Undefined) === 0
     )
     : scoped.nullish;
   return {
     name: scoped.name,
     cell: print(scoped.cell),
     nullish: nullish.map(print),
-    type: printedType,
+    type,
   };
 }
 

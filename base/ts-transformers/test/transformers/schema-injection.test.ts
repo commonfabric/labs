@@ -442,6 +442,10 @@ export function make(count: Writable<number>) {
       `/// <cts-enable />
 import { handler, lift, type PerUser, Writable } from "commonfabric";
 type Slot<T> = Writable<T>;
+type MyState = PerUser<Writable<number>>;
+type Cfc<T, Meta> = T & { readonly __ct_cfc__?: { readonly meta?: Meta; readonly of?: T } };
+type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+type Owned = Confidential<Writable<string>, ["owner"]>;
 export const x = ${declaration};`;
 
     /**
@@ -471,6 +475,44 @@ export const x = ${declaration};`;
       ).toEqual({
         type: "number",
         asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a handler state cell's scope when an alias writes the scope wrapper", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: MyState) => { console.log(e.n, s.get()); })",
+        ),
+      ).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a lift argument cell's scope when an alias writes the scope wrapper", async () => {
+      expect(await cellSchema("lift((s: MyState) => s.get())")).toEqual({
+        type: "number",
+        asCell: [{ kind: "readonly", scope: "user" }],
+      });
+    });
+
+    it("keeps a handler state cell's confidentiality label on its readonly narrowing", async () => {
+      expect(
+        await cellSchema(
+          "handler((e: { n: number }, s: Owned) => { console.log(e.n, s.get()); })",
+        ),
+      ).toMatchObject({
+        type: "string",
+        asCell: ["readonly"],
+        ifc: { confidentiality: ["owner"] },
+      });
+    });
+
+    it("keeps a lift argument cell's confidentiality label on its readonly narrowing", async () => {
+      expect(await cellSchema("lift((s: Owned) => s.get())")).toMatchObject({
+        type: "string",
+        asCell: ["readonly"],
+        ifc: { confidentiality: ["owner"] },
       });
     });
 
