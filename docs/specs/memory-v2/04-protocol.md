@@ -1988,7 +1988,7 @@ side of
 [owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
-session to the owner, open as the deployment's service identity.
+session to the owner, open as the identity of the host's process.
 
 ```typescript
 // Shown at module scope.
@@ -2070,9 +2070,15 @@ Semantics:
   `payload-too-large`. A client refuses before sending a request whose
   encoding takes more than that, or more than its connection takes in one
   request
-- the session's principal must be of the access list's delegating class
-  (`acl.delegatingDids`, the deployment's service identity); any other
-  session is refused with `forbidden`. The crossing then runs under the actor
+- the session's principal must be of the access list's delegating class;
+  any other session is refused with `forbidden`. The class is the identities
+  of the deployment's serving processes: the server's own process identity
+  (`acl.delegatingDids`), which is the whole class where every process shares
+  one identity, and, behind the memory router, where each toolshed has an
+  identity of its own, every toolshed identity the deployment's directory
+  lists (`acl.isDelegatingPeer`; `routed-mode-a.md`, "Toolshed deployment
+  inputs"). The directory is read on each decision, so a toolshed removed
+  from it is refused from the next request. The crossing then runs under the actor
   its body carries, as the delegated carriage does on the host's own server
   (`protocol.md` §2): the deployment's processes trust each other's carried
   actor claims, and admissibility comes from the validated grant
