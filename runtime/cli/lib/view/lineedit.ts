@@ -106,7 +106,7 @@ export class LineEdit {
   handleKey(key: Key, width: number): boolean {
     const text = key.name === "paste"
       ? key.text?.replace(/[\r\n]+/g, "")
-      : key.char !== undefined && key.char >= " " && !key.ctrl && !key.alt
+      : key.char !== undefined && key.char >= " " && !key.ctrl
       ? key.char
       : undefined;
     const deletes = key.name === "backspace" || key.name === "delete" ||

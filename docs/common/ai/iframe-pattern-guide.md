@@ -537,8 +537,11 @@ is the asset `glazed`. `dataFile.url("./logo.svg")` reads one file, for a record
 written out by hand: `assets={{ logo: dataFile.url("./logo.svg") }}`. The
 extensions both read, and how such a file is attached and stored, are in
 [the tutorial](../../tutorial/06-workflow.md). An asset's name is letters,
-digits, `_`, and `-`. Each piece shares one stored copy of each asset with every
-other piece in its space, as it does `guest.html` and `guest.js`.
+digits, `_`, and `-`, other than `__proto__` and `constructor`, which setup
+refuses as keys of the record it stores. An asset whose URL runs to 1,024
+characters or more is stored once in the space and shared by every piece in
+it, as `guest.html` and `guest.js` are; a smaller one is stored inline in each
+piece.
 
 The guest's document refers to an asset as `cf-asset:<name>`. The host replaces
 each reference with the asset's URL before the document is parsed, so a

@@ -143,6 +143,14 @@ describe("data-file-strings", () => {
           expect((value as unknown[]).length).toBe(3);
         });
 
+        it("leaves inline a string longer than everything it holds together", () => {
+          const strings = new DataFileStrings();
+          const huge = "glaze".repeat(7 * 1024 * 1024);
+          strings.record(huge);
+
+          expect(strings.linkInto([huge], space).documents).toEqual([]);
+        });
+
         it("leaves inline a string it dropped once full", () => {
           // The set holds at most 32 Mi characters, so the 33rd string of
           // 1 Mi characters drops the one used least recently, the first.

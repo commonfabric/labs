@@ -118,10 +118,9 @@ export async function attachDeclaredDataFiles(
  * A module whose `dataFile()` call names a data file owns the edge to that
  * file, and one whose `dataFile.urls()` call names a directory owns the edge
  * to each asset the program carries there, so the module's identity covers
- * the bytes it reads and its stored
- * documents link to them. A load entered at that module by its own identity,
- * as a sub-pattern referenced by `{ identity, symbol }` is loaded, then
- * reaches the file. The entry owns every attached source root, and every data
+ * the bytes it reads and its stored documents link to them. A load entered at
+ * that module by its own identity, as a sub-pattern referenced by
+ * `{ identity, symbol }` is loaded, then reaches the file. The entry owns every attached source root, and every data
  * file no module's source names: one read by a computed path, or one nothing
  * reads. Those are the only edges whose owner depends on which module is the
  * entry, so a module compiled as the entry and as a child gets one identity

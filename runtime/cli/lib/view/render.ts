@@ -431,12 +431,9 @@ export interface DialogState {
    * rather than being centered. */
   readonly output?: boolean;
 
-  /** The indexes of the body's rows that are drawn emphasized, brighter
-   * than the rest. */
-  readonly emphasized?: readonly number[];
-
-  /** The links on each of the body's rows, by row. */
-  readonly links?: readonly (readonly DialogLink[])[];
+  /** How the pieces of each of the body's rows are drawn, by row. A piece
+   * no span covers is drawn plain. */
+  readonly spans?: readonly (readonly DialogSpan[])[];
 
   /** The width the box gives the body, in columns, when that is fixed rather
    * than fitted to the body's lines. */
@@ -458,18 +455,31 @@ export interface DialogState {
   readonly fieldFocus?: number;
 }
 
-/** A link to `url` on the columns of a row of text from `from` up to `to`,
- * counted in code points. */
-export interface DialogLink {
+/** How a piece of a dialog's row is drawn: plain, as the dialog's text is;
+ * bright, as the viewer's own words in the task dialog are; as a name those
+ * words interpolate; or as the spinner of a step that is running, or the mark
+ * of one that is done or that ended without being done. */
+export type DialogTone =
+  | "plain"
+  | "bright"
+  | "name"
+  | "busy"
+  | "done"
+  | "failed";
+
+/** The part of a row of text from code point `from` up to code point `to`,
+ * drawn as `tone` says, and linking to `url` when there is one. */
+export interface DialogSpan {
   readonly from: number;
   readonly to: number;
-  readonly url: string;
+  readonly tone: DialogTone;
+  readonly url?: string;
 }
 
 /** Returns the web addresses in `text`, each of which ends before
  * punctuation that ends a clause or a sentence. */
 export function webAddresses(text: string): IterableIterator<RegExpExecArray> {
-  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g);
+  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"…]/g);
 }
 
 /** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
@@ -1901,6 +1911,16 @@ function hotkeyFaceIndex(b: DialogButton): number {
   return idx < 0 ? -1 : idx + 1;
 }
 
+/** The style of each tone a piece of a dialog's row can be drawn in. */
+const DIALOG_TONES: Readonly<Record<DialogTone, Style>> = {
+  plain: ui.dialogText,
+  bright: ui.dialogEmphasis,
+  name: ui.dialogName,
+  busy: ui.dialogBusy,
+  done: ui.dialogDone,
+  failed: ui.dialogFailed,
+};
+
 function applyDialog(
   rows: string[],
   view: ViewState,
@@ -1914,9 +1934,8 @@ function applyDialog(
     : EMPTY_STYLE;
   const panelBg: Style = { bg: ui.overlayBg };
   const textStyle = view.color ? mergeBg(ui.dialogText, panelBg) : panelBg;
-  const emphasisStyle = view.color
-    ? mergeBg(ui.dialogEmphasis, panelBg)
-    : panelBg;
+  const toneStyle = (tone: DialogTone) =>
+    view.color ? mergeBg(DIALOG_TONES[tone], panelBg) : panelBg;
 
   const top = `╔${titleBar(dialog.title, boxW - 2)}╗`;
   const bottom = `╚${"═".repeat(Math.max(0, boxW - 2))}╝`;
@@ -1948,9 +1967,10 @@ function applyDialog(
       placeText(
         cells,
         dialog.body[bodyIdx],
-        dialog.emphasized?.includes(bodyIdx) ? emphasisStyle : textStyle,
+        textStyle,
         dialog.output,
-        dialog.links?.[bodyIdx],
+        dialog.spans?.[bodyIdx],
+        toneStyle,
       );
     } else if (field && fieldRow < fieldHeight(field)) {
       placeField(
@@ -1989,34 +2009,41 @@ function putCells(
 }
 
 /** Write `text` in `cells`, centered or starting after the dialog's margin,
- * and clipped to leave one blank column inside each edge, with `links` on
- * it. */
+ * and clipped to leave one blank column inside each edge, in `style` but for
+ * the pieces `spans` cover, which are drawn in the style `toneStyle` gives
+ * their tone, with their links. */
 function placeText(
   cells: Cell[],
   text: string,
   style: Style,
   leftAligned = false,
-  links: readonly DialogLink[] = [],
+  spans: readonly DialogSpan[] = [],
+  toneStyle: (tone: DialogTone) => Style = () => style,
 ): void {
   const innerW = cells.length;
   const chars = shownCells(text);
   const start = leftAligned
     ? DIALOG_HMARGIN
     : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
-  putCells(cells, start, innerW - 1, chars, () => style);
-  // Each cell links where the code point of `text` it draws does.
+  // Each cell is drawn as the span covering the code point of `text` it
+  // draws says, and links where it does.
+  const covering: Array<DialogSpan | undefined> = [];
   let at = 0;
-  let cell = start;
   for (const char of drawnCharacters(text)) {
-    const link = links.find(({ from, to }) => from <= at && at < to)?.url;
-    for (const _ of shownCells(char)) {
-      if (link !== undefined && cell >= 1 && cell < innerW - 1) {
-        cells[cell] = { ...cells[cell], link };
-      }
-      cell++;
-    }
+    const span = spans.find(({ from, to }) => from <= at && at < to);
+    for (const _ of shownCells(char)) covering.push(span);
     at += cpLen(char);
   }
+  putCells(cells, start, innerW - 1, chars, (j) => {
+    const span = covering[j];
+    return span === undefined ? style : toneStyle(span.tone);
+  });
+  covering.forEach((span, j) => {
+    const cell = start + j;
+    if (span?.url !== undefined && cell >= 1 && cell < innerW - 1) {
+      cells[cell] = { ...cells[cell], link: span.url };
+    }
+  });
 }
 
 /**

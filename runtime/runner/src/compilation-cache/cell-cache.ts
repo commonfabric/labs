@@ -163,7 +163,8 @@ export interface SourceDoc extends ModuleDocBase {
  *
  * `kind` separates the two things this set holds. A `"compiled"` document's
  * `code` is an emitted module body, built into a record and executed. A
- * `"data"` document's `code` is the verbatim bytes of an attached data file:
+ * `"data"` document's `code` is the stored text of an attached data file (a
+ * binary media file's base64 `data:` URL; see `decodeDataFile`):
  * the compiled set carries them so a warm load has everything the pattern
  * needs without reading the source set, and nothing ever parses, verifies, or
  * executes them.

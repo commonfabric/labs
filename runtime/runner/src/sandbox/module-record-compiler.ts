@@ -543,8 +543,9 @@ export interface CompiledModuleGraph {
   registrationApproved: Set<string>;
 
   /**
-   * Verbatim bytes of every attached data file in this graph, keyed by the
-   * data entry's authored path. These are carried alongside the records rather
+   * The stored text of every attached data file in this graph (a binary media
+   * file's base64 `data:` URL; see `decodeDataFile`), keyed by the data
+   * entry's authored path. These are carried alongside the records rather
    * than as records: a data file is never a module, so it has no specifier, no
    * exports, and nothing to execute. The graph carries them so the bytes a
    * pattern reads come from the same content-addressed closure its code came
@@ -783,9 +784,9 @@ type NamespaceBinder = (
  * contents as a base64 `data:` URL, which is how a binary media file is read:
  * the plain reader refuses one, whose stored contents are that URL already.
  * Its `urls` member returns the URL of each asset attached in a directory, by
- * asset name (see `dataFileAssets`).
- * Each string either returns is recorded in `dataFileStrings`, when one is
- * given, so that setup can store it by reference.
+ * asset name (see `dataFileAssets`). Each string any of the three returns is
+ * recorded in `dataFileStrings`, when one is given, so that setup can store it
+ * by reference.
  *
  * A graph carrying no data files hands every namespace straight through, and a
  * read reaches the builder's placeholder, which reports that the load attached
@@ -1139,14 +1140,14 @@ export interface CachedCompiledModule {
   /** Normalized authored path (e.g. `/main.tsx`); used for the eval sourceURL. */
   filename: string;
 
-  /** Compiled CommonJS body, or the verbatim bytes of a data entry. */
+  /** Compiled CommonJS body, or the stored text of a data entry. */
   code: string;
 
   /** Internal import edges: require specifier → dependency module identity. */
   imports: { specifier: string; targetIdentity: string }[];
 
   /**
-   * This entry carries data rather than code, so `code` is its authored bytes.
+   * This entry carries data rather than code, so `code` is its stored text.
    * A data entry never becomes a module record and is never parsed as one.
    */
   isData?: boolean;

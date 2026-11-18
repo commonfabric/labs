@@ -47,6 +47,12 @@ describe("data-file", () => {
       ]);
     });
 
+    it("leaves out a hidden file", () => {
+      expect([
+        ...dataFileAssets("/a", ["/a/._glaze.png", "/a/.png", "/a/glaze.png"]),
+      ]).toEqual([["glaze", "/a/glaze.png"]]);
+    });
+
     it("throws for a file whose name is not an asset name", () => {
       expect(() => dataFileAssets("/a", ["/a/glaze.small.png"])).toThrow(
         "Data file `/a/glaze.small.png` has no asset name: `glaze.small` " +
@@ -162,6 +168,15 @@ describe("data-file", () => {
       expect(() => dataFileUrl("not a url", "glaze.png")).toThrow(
         "Data file `glaze.png` does not hold an `image/png` `data:` URL.",
       );
+    });
+
+    it("throws for a binary media file whose `data:` URL holds no base64", () => {
+      expect(() =>
+        dataFileUrl("data:image/png;base64,not base64!", "glaze.png")
+      )
+        .toThrow(
+          "Data file `glaze.png` does not hold an `image/png` `data:` URL.",
+        );
     });
 
     it("throws listing the table for a file outside it", () => {

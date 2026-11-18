@@ -309,16 +309,12 @@ export class CFIframe extends BaseElement {
   }
 
   private dismissError() {
-    const retryContext = this._errorDetails?.source === "cf-iframe context";
-    this._errorDetails = null;
-    if (retryContext) this.prepareContextBridge();
+    this.#clearError();
   }
 
   private fixError() {
     this.emit("fix", this._errorDetails);
-    const retryContext = this._errorDetails?.source === "cf-iframe context";
-    this._errorDetails = null;
-    if (retryContext) this.prepareContextBridge();
+    this.#clearError();
   }
 
   private prepareContextBridge() {
@@ -326,6 +322,7 @@ export class CFIframe extends BaseElement {
     this.#contextSetup = undefined;
     if (this._errorDetails?.source === "cf-iframe context") {
       this._errorDetails = null;
+      this.#reportHeldAssets();
     }
     if (this.bridge || !this.context) {
       this._contextBridge = { resources: {} };
@@ -375,8 +372,10 @@ export class CFIframe extends BaseElement {
 
   /**
    * Checks `assets`, refusing it while it is not a record from a name to a
-   * base64 `data:` URL: the error says why, and the guest is held closed. A
-   * check that passes clears the error an earlier one raised.
+   * base64 `data:` URL: the guest is held closed, and the error says why
+   * unless an error from another source is showing, which dismissing reports
+   * this one after. A check that passes clears the error an earlier one
+   * raised.
    */
   #checkAssets() {
     if (this._errorDetails?.source === ASSETS_ERROR_SOURCE) {
@@ -386,6 +385,9 @@ export class CFIframe extends BaseElement {
       this.#checkedAssets = toAssetRecord(this.assets ?? NO_ASSETS);
     } catch (error) {
       this.#checkedAssets = undefined;
+      // An error from another source stays: dismissing a context failure
+      // retries the context, which writing over it would lose.
+      if (this._errorDetails !== null) return;
       const description = describeFailure(error);
       this._errorDetails = {
         description,
@@ -394,6 +396,29 @@ export class CFIframe extends BaseElement {
         colno: 0,
         stacktrace: description,
       };
+    }
+  }
+
+  /**
+   * Helper for the dismiss and fix handlers, which clears the error showing:
+   * a context failure retries the context, and assets still refused are
+   * reported in its place.
+   */
+  #clearError() {
+    const source = this._errorDetails?.source;
+    this._errorDetails = null;
+    if (source === "cf-iframe context") this.prepareContextBridge();
+    if (source !== ASSETS_ERROR_SOURCE) this.#reportHeldAssets();
+  }
+
+  /**
+   * Helper for the members above that clear an error from another source,
+   * which reports the refusal of assets `#checkAssets()` held back while that
+   * error showed.
+   */
+  #reportHeldAssets() {
+    if (this._errorDetails === null && this.#checkedAssets === undefined) {
+      this.#checkAssets();
     }
   }
 

@@ -189,9 +189,9 @@ const URLS_READER = "urls";
  * and only where the argument is a string literal. The binding is followed
  * through a renaming import and through a namespace import, so
  * `df("./x.json")`, `cf.dataFile("./x.json")`, and `df.url("./x.png")` are the
- * same declaration as the plain call. A
- * type-only import binds no value and so declares nothing. A computed path
- * cannot be read from the source at all, and stays the caller's to name.
+ * same declaration as the plain call. A type-only import binds no value and so
+ * declares nothing. A computed path cannot be read from the source at all, and
+ * stays the caller's to name.
  */
 export function collectDataFileNames(
   source: Source,

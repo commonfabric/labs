@@ -138,8 +138,9 @@ export function isAssetName(name: string): boolean {
  * Returns the assets the directory `directory` holds, among the root-relative
  * file names `names`: each name directly inside `directory` whose extension
  * the table has, keyed by its file name without the extension, so
- * `/donuts/glaze.png` is `glaze` in `/donuts`. Names in subdirectories, and
- * files the table has no media type for, are left out.
+ * `/donuts/glaze.png` is `glaze` in `/donuts`. Names in subdirectories, hidden
+ * files (a name starting with `.`, such as macOS's `._glaze.png`), and files
+ * the table has no media type for are left out.
  *
  * Throws for a file whose name without its extension is not an asset name
  * (letters, digits, `_`, and `-`), and for two files that would share a name,
@@ -154,8 +155,9 @@ export function dataFileAssets(
   for (const name of names) {
     const slash = name.lastIndexOf("/");
     if (name.slice(0, slash) !== parent) continue;
-    if (mediaTypeEntry(name) === undefined) continue;
     const base = name.slice(slash + 1);
+    if (base.startsWith(".")) continue;
+    if (mediaTypeEntry(name) === undefined) continue;
     const asset = base.slice(0, base.lastIndexOf("."));
     if (!isAssetName(asset)) {
       throw new Error(
@@ -186,17 +188,25 @@ function mediaTypeEntry(name: string): MediaTypeEntry | undefined {
 /**
  * Helper for the functions above, which returns the base64 that `contents`, a
  * binary media file's stored contents, carries after its `data:` URL prefix.
- * Throws, naming the file, when `contents` is not a `data:` URL of `mediaType`.
+ * Throws, naming the file, when `contents` is not a `data:` URL of `mediaType`
+ * holding padded base64.
  */
 function base64Of(contents: string, name: string, mediaType: string): string {
   const prefix = dataUrlPrefix(mediaType);
-  if (!contents.startsWith(prefix)) {
+  if (
+    !contents.startsWith(prefix) ||
+    (contents.length - prefix.length) % 4 !== 0 ||
+    !BASE64.test(contents.slice(prefix.length))
+  ) {
     throw new Error(
       `Data file \`${name}\` does not hold an \`${mediaType}\` \`data:\` URL.`,
     );
   }
   return contents.slice(prefix.length);
 }
+
+/** Padded standard base64, as `encodeBase64()` writes it. */
+const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
 /** Helper for the functions above, which starts a base64 `data:` URL. */
 function dataUrlPrefix(mediaType: string): string {

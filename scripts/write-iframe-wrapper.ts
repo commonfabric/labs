@@ -18,10 +18,18 @@ import {
 } from "@std/path";
 
 import { build } from "@commonfabric/felt";
-import { dataFileMediaType, isAssetName } from "@commonfabric/text/data-file";
+import { isPlainObject } from "@commonfabric/js-values/types";
+import {
+  dataFileAssets,
+  dataFileMediaType,
+  isAssetName,
+} from "@commonfabric/text/data-file";
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const RESERVED_RESOURCES = new Set(["input", "state", "output"]);
+
+/** The asset names setup refuses as keys of the record it stores. */
+const RESERVED_ASSET_NAMES = new Set(["__proto__", "constructor"]);
 
 /** The file the guest's bundle is written to, beside the wrapper. */
 const GUEST_SCRIPT_FILE = "guest.js";
@@ -121,14 +129,11 @@ function parseArgs(args: string[]): Options {
   return options;
 }
 
-/** Whether `value` is an object written as a literal, not an array or class. */
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" &&
-    !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
-}
-
-function record(value: unknown, label: string): Record<string, unknown> {
-  if (!isPlainObject(value)) {
+function record(
+  value: unknown,
+  label: string,
+): Readonly<Record<string, unknown>> {
+  if (!isPlainObject(value, false)) {
     throw new TypeError(`${label} must be a plain object.`);
   }
   return value;
@@ -150,7 +155,7 @@ function scope(value: unknown, label: string): Scope {
 function assetsConfig(value: unknown): AssetsConfig | undefined {
   if (value === undefined) return undefined;
   if (typeof value === "string" && value.trim() !== "") return value;
-  if (!isPlainObject(value)) {
+  if (!isPlainObject(value, false)) {
     throw new TypeError(
       "IFRAME_PATTERN.assets must be a directory path or a record from an asset name to a file path.",
     );
@@ -164,6 +169,7 @@ function assetsConfig(value: unknown): AssetsConfig | undefined {
         } must be made of letters, digits, "_", and "-", such as glaze.`,
       );
     }
+    refuseReservedAssetName(name);
     if (typeof path !== "string" || path.trim() === "") {
       throw new TypeError(
         `Asset ${JSON.stringify(name)} must have a file path string.`,
@@ -181,6 +187,17 @@ function assetsConfig(value: unknown): AssetsConfig | undefined {
     files[name] = path;
   }
   return files;
+}
+
+/** Throws for an asset name setup refuses as a record key. */
+function refuseReservedAssetName(name: string): void {
+  if (RESERVED_ASSET_NAMES.has(name)) {
+    throw new TypeError(
+      `Asset name ${
+        JSON.stringify(name)
+      } is reserved: setup refuses "__proto__" and "constructor" as keys of the record it stores.`,
+    );
+  }
 }
 
 /**
@@ -723,6 +740,24 @@ async function wrapperAssets(
         `IFRAME_PATTERN.assets names ${directory}, which is not a directory.`,
       );
     }
+    // The build reads the directory by `dataFileAssets()`, so its refusals
+    // are raised here, before anything is written.
+    const names: string[] = [];
+    for await (const entry of Deno.readDir(directory)) {
+      const path = `${directory}/${entry.name}`;
+      if (entry.isFile || (entry.isSymlink && await isEntry(path, "file"))) {
+        names.push(path);
+      }
+    }
+    let held: Map<string, string>;
+    try {
+      held = dataFileAssets(directory, names);
+    } catch (error) {
+      throw new TypeError(
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    for (const name of held.keys()) refuseReservedAssetName(name);
     return relativePath(outPath, directory);
   }
   const files: Record<string, string> = Object.create(null);

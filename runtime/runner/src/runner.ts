@@ -4430,11 +4430,11 @@ export class Runner {
    * stores, with each string a data-file reader returned written as a link to
    * a code document, and `codeDocuments` the strings those links name, whose
    * documents a write stages; and `changed` is whether that differs from what
-   * is stored, which is the one condition under which setup writes it. `nameCarried` is
-   * whether the projection's name is the one stored rather than the
-   * pattern's. `argumentCellLink` is the argument link the projection binds
-   * to, which setup has staged under `pattern`'s argument schema by the time
-   * it writes. Reads only.
+   * is stored, which is the one condition under which setup writes it.
+   * `nameCarried` is whether the projection's name is the one stored rather
+   * than the pattern's. `argumentCellLink` is the argument link the projection
+   * binds to, which setup has staged under `pattern`'s argument schema by the
+   * time it writes. Reads only.
    */
   #nextResultProjection<R>(
     tx: IExtendedStorageTransaction,
