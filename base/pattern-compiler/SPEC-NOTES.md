@@ -7380,13 +7380,12 @@ scratch), or the result of another per-element construct.
      each input in place, and a value that two others read is written out once
      for each. The size follows the Fibonacci numbers along the chain. The
      cones, the edges and the value code of the same plan are linear. The two
-     generated files could not be pushed, so the fixture now holds eleven
-     values (`v0` to `v10`), with which the files are 0.25 MB each, and the
-     test bounds one pass at 12 checks. The 300,099 checks of note 467 are of
-     the fixture with twenty-five values and were not measured again. Not
-     decided here: whether a template names another output's template by
-     reference (PL would have to say how a reader of one output's label
-     resolves it), or whether the crate is wrong to write the template of a
-     named `const` in place where PL already gives it a place of its own. This
-     was found by the size of a file and not by a test; no test bounds the
-     size of a plan.
+     generated files could not be pushed, so the fixture now holds eleven values
+     (`v0` to `v10`), with which the files are 0.25 MB each, and the test bounds
+     one pass at 12 checks. The 300,099 checks of note 467 are of the fixture
+     with twenty-five values and were not measured again. Not decided here:
+     whether a template names another output's template by reference (PL would
+     have to say how a reader of one output's label resolves it), or whether the
+     crate is wrong to write the template of a named `const` in place where PL
+     already gives it a place of its own. This was found by the size of a file
+     and not by a test; no test bounds the size of a plan.
