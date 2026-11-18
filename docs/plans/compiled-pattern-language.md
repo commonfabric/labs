@@ -283,6 +283,10 @@ next.
   one by section and chapter file only, as
   [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
   requires.
+- **Integration:** [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  is the strategy for measuring the design inside the real runtime
+  (provisional decision P30), with its milestones and the first figures of
+  milestone 1.
 - **Merged branches:** `claude/pattern-language-subset-spec`,
   `claude/pattern-language-plan-labels-spec`, and
   `claude/pattern-language-builtin-inventory` are fully merged into the branch
@@ -6289,6 +6293,12 @@ pointer to its entry.
 6. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
+7. **P30,** how the design is validated from here on: the prototype's
+   executor runs inside the runtime, on its storage transactions, its CFC
+   preparation, and later its scheduler and sandbox, while the prototype
+   stays the reference for semantics.
+   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+   has the options, the milestones, and the first figures.
 
 Beside these, question 285 is no provisional decision: the documents said that
 today's runtime commits none of the writes of a node that throws, and it commits
@@ -7134,6 +7144,29 @@ today.
   keys of its rows; and a collection that P22 has a cone place at two
   paths, which has two indexes. *Tests:* none; the prototype builds no
   index. *If decided otherwise:* that paragraph is removed.
+- **P30. The design is validated by running the prototype's executor inside
+  the runtime, and the prototype stays the reference for semantics.** The
+  coordinator's decision, on the owner's request of 2026-11-18 for a
+  strategy. *The case:* the prototype's run times (0.3 s to settle the
+  corpus against 14.2 s today, 1.6 s for 541 events against 43.7 s) leave
+  out the CFC preparation at commit, storage transactions, a scheduler
+  across instances, a network and a sandbox, so they say little about a
+  finished runtime. *Decision:* one executor, the prototype's, which
+  reaches the runtime through a small interface: its transactions are the
+  runtime's transactions, with the runtime's commit and CFC preparation, and in later
+  milestones its events come through the scheduler and its value code runs
+  in the sandbox. The in-memory store and the comparison harness stay, and a
+  question of semantics is settled there first. *Alternatives:* building
+  the missing pieces into the prototype, which writes again in `base/` the
+  storage, encoding, labels and commit that `runtime/` has and gives
+  synthetic figures; and a second executor written for the runtime, which
+  is two implementations of one semantics. *How it is written:*
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  with five milestones, what each measures, and what stays in the
+  prototype. *Built:* milestone 1, in the prototype's tree
+  (`exec/executor.ts` `TransactionHooks`, `compare/runtime-transactions.ts`,
+  `compare/integrated.ts`). *If decided otherwise:* those three stay as a
+  measurement, and the missing pieces are built into the prototype.
 
 ## Open, and needing the owner
 
@@ -12467,6 +12500,12 @@ The open questions each document ends with stay where they are.
       closes, `S` sessions over one list, a cycle that does not settle,
       and `E` pending insertions (questions 271 to 274 and 237), and the
       smaller sizes of question 275 and the rounds of question 253.
+
+8. **In the runtime, the milestones of the integration**
+   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
+   after milestone 1, a compiled piece in the runner behind an experimental
+   option, labels from templates at commit, value code in the sandbox, and
+   server execution with the network.
 
 ### Briefing an author
 
