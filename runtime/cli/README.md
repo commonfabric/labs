@@ -3475,6 +3475,11 @@ edit loop never waits on the index (`--json` reports `skipped`). A
 `--from-index` deploy still reads the index for its source, and keeps no version
 either way.
 
+`--version-entry <path>` on `piece new` and `piece setsrc` keeps the version in
+the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
+of it (a snapshot in a temporary directory), so the copy continues the
+original's history.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
 only while their sharing setting (kept by the index; `cf index sharing` and
