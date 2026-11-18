@@ -3469,6 +3469,12 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`--index-version` on `piece new` and `piece setsrc` changes that for one deploy.
+`none` keeps no version and makes no index call, so a deploy in a tight edit
+loop never waits on the index. `private` keeps a version the sharing setting
+never shares on its own (a checkpoint), which only `cf pattern share` hands to
+anyone. `auto`, the default, is the behavior above.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
 index shares a version once it settles, when its owner opens it in a loom, and
 only while their sharing setting (kept by the index; `cf index sharing` and
