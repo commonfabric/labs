@@ -599,7 +599,13 @@ Detection occurs in `applyShrinkAndWrap` and `validateShrinkCoverage` (both in
 into them), including the `defaults_only` branch of
 `applyCapabilitySummaryToArgument`. After shrinking completes,
 `validateShrinkCoverage` compares requested top-level path heads against what
-was materialized in the shrunk result.
+was materialized in the shrunk result. On an array, a path whose head the
+array itself has is checked against the array, and every other path against
+its element. A path whose head is no index reaches the element unchanged, so
+an element that leads back to the array, as in `type R = R[]` or
+`type A = A[][]`, is not descended into where it is the array or was already
+handed the same paths on the way down; those paths are checked against the
+array (`test/type-shrinking.test.ts`).
 
 Path extraction (`extractAccessPath` in capability-analysis.ts) sees through the
 non-semantic wrappers `unwrapExpression` strips — parenthesization, `as`
