@@ -1,7 +1,7 @@
 # What a served view's references cost
 
 Under server execution, a browser that only shows a reference to a piece can
-make the serving loop start that piece, with a set of session documents, for
+make the serving loop start that piece and seed a set of session documents for
 every viewer. This plan sets out where that happens, what the specifications
 say about it, the questions it leaves for the owner of the serving loop, the
 memory protocol and scoped instances, and the order in which to change it.
@@ -14,11 +14,20 @@ The measurements below were taken on a copy of that space's store, with labs
 
 Opening the board in one browser, before any change:
 
-- Every Topic program on the board is started for the viewer's session, and
-  again for the serving worker's own session.
-- **Session documents.** Each start writes the Topic's nine `PerSession` cells
-  as documents holding their declared defaults: 29,386 for the viewer, about
-  29,400 for the worker. The viewer's set came in one 11.7 MB derived commit.
+- **Starts and seeds are separate events.** A structure load starts each Topic
+  once, whoever demands it: the demand pass runs it per key
+  (`runtime/runner/src/executor/space-server.ts`, around line 6097). The
+  demand loop separately seeds each demanding session's owned defaults.
+  `space-server-structure-load-arms.test.ts` checks the shape: a second viewer
+  gets seeds of its own, and there is still one start.
+- **What was counted is the seeds.** Each demanding session got every Topic's
+  nine `PerSession` cells written as documents holding their declared
+  defaults: 29,386 for the viewer, and about 29,400 under the serving worker's
+  own session. The viewer's set came in one 11.7 MB derived commit.
+- **Not counted separately:** structure starts, and per-node instances for a
+  session (fan-out). A reload raised the heap by about 1.7 GB, so a further
+  session costs more than its documents, but this measurement does not say
+  how that splits.
 - **Heap.** The board's worker holds 7,104 MB after a full collection, and
   8,808 MB after a reload. The open takes about four minutes of waves.
 
@@ -55,17 +64,17 @@ Read from the code at `c15a766611`; the browser end is verified by the bisect.
    - The demand pass (`runtime/runner/src/executor/space-server.ts`, around
      lines 5990–6080) treats such a key as a structure-load root.
    - `#attemptStructureLoad` (around line 6822) calls
-     `ensurePieceRunningVerdict`, which instantiates the whole piece for the
-     demanding (principal, session) pair: every node, its UI, its handlers.
-4. **The start seeds that viewer's session cells.**
+     `ensurePieceRunningVerdict`, which starts the piece: its whole graph,
+     every node, its UI and its handlers, once per key.
+4. **Each demanding session's owned defaults are seeded.**
    - `#materializeDerivedInternalCells` (`runtime/runner/src/runner.ts`,
      around line 4535) writes two things into each owned cell narrower than
      the piece's result: the cell's `result` backlink (`setResultCell`) and
      its schema default.
-   - For a later actor it does this "in transactions of their own, before
-     setup consumes the piece's other values". The serving loop's arrival
-     seed (`ownedDefaultSeeds`) does the same for a demander who arrives after
-     the start.
+   - The start does this for the session it runs in. For a later actor it is
+     done "in transactions of their own, before setup consumes the piece's
+     other values". The serving loop's arrival seed (`ownedDefaultSeeds`) does
+     it for each demanding pair, including one that arrives after the start.
    - That is the stored `{ result: <link to the piece>, value: "" }` shape the
      Topics documents have.
 
@@ -79,8 +88,9 @@ Read from the code at `c15a766611`; the browser end is verified by the bisect.
   document's own shape, not the piece's computed values.
   - Starting the piece is a defensible reading of "structure sufficient to
     resolve" that document, since its writer is the piece's setup.
-  - The cost comes from what a start includes: the piece's whole graph, and
-    session instances for the demander. Nothing the watch reads needs either.
+  - The cost comes from what follows: the piece's whole graph, started once,
+    and a seed of each demanding session's owned defaults. Nothing the watch
+    reads needs either.
 - **`docs/specs/scoped-cell-instances.md`** (around lines 392–412): "A
   pattern-owned cell narrower than its result starts from its declared
   default for each actor instance", filled before execution. One exception
@@ -107,8 +117,24 @@ lands. Three ways to stop it starting the piece:
   - The server would leave its roots and its delivered entries out of the
     session's demand rows, while still delivering updates.
   - A document another watch demands stays demanded.
-  - This covers unlabelled `cf-cell-link`s, profile badges and drag sources:
-    every component that resolves a reference and reads nothing behind it.
+  - **Shared coverage is the hard part.** `kickDocPull` also serves ordinary
+    value reads, and the replica skips a new watch when a cached selector
+    already covers a read. A passive watch could therefore warm the cache and
+    stop a later computed-value read from ever registering demand. So:
+    - the caller's intent has to travel through watch acquisition;
+    - coverage a passive watch holds is promoted to demand when a demanding
+      owner arrives;
+    - the promotion survives a reconnect.
+
+    The delivery-only view watches are the reference, including how they
+    handle traversal misses.
+  - **Only reference-only consumers gain**, such as a drag source, or a
+    labelled link (handled now by #9993). An unlabelled `cf-cell-link` also
+    subscribes to the target's `[NAME]`, and `cf-profile-badge` subscribes to
+    profile fields such as the name and image. Those subscriptions stay
+    ordinary demand under (a), so neither component stops starting the
+    target. Measure the saving with a reference-only consumer, and test name
+    and profile freshness separately.
   - A component that renders the target (`cf-render`) still demands it, as it
     should.
 - **(b) Structure load by what the demand reads.** A key whose only rows come
@@ -143,39 +169,68 @@ Options:
 - **(b) Seed only for the actor who acts.** Keep seeding for an event's actor
   (the transient demander of `scopes.md` §2) and stop seeding for view demand.
 
-### 3. What should a start for view demand instantiate?
+**Either option has to cover a first direct field write.** A bound input can
+write one field, `draft.title`, without a handler running. Today the arrival
+seed makes that write land beside the other defaults: in
+`runtime/runner/test/executor-fan-out.test.ts` case (n), the late viewer's
+draft reads `{ title: "B", members: "" }`.
+- Under (a), that first descendant write has to materialize the declared
+  defaults and the backlink in the same transaction.
+- A read of a default not yet written has to carry the owner's initialization
+  label.
+- Under (b), a viewer who types into a bound input without ever sending an
+  event hits exactly this case: the partial document can no longer supply the
+  full draft.
 
-A piece started because a session watches its result document gets that
-session's instances of every node beneath it, before any session-scoped read
-reaches them. Fan-out (`scopes.md` §2) says a node runs per demander once a
-run discovers a narrower scope. Should a view-demand start create session
-instances at all before such a discovery?
+### 3. What should view demand cause, counted part by part?
+
+Three things follow a session's demand on a piece today, and they should be
+counted apart:
+- the structure start, once per piece;
+- the seed of each demanding session's owned defaults;
+- per-node instances for the session, once a run discovers a narrower scope
+  (fan-out, `scopes.md` §2).
+
+The question is which of the last two a demand that reads nothing scoped
+should cause.
 
 ## Suggested order
 
 1. **Done as a mitigation:** labs #9993, labelled links.
 2. **1(a), the narrowest general change.** It is one watch marking, client
-   and server, and every reference-resolving component stops starting pieces.
+   and server, with shared coverage handled as above. A consumer that reads
+   nothing behind a reference stops starting pieces; one that reads the
+   target's name or fields still demands them.
 3. **2(a), defence in depth** for the pieces that do start, as when a viewer
    opens a Topic: today that writes 9 session documents for the viewer and 9
    for the worker.
 4. **1(c), the long arc,** sequenced with the #9911 ruling.
 
-## The test to add first
+## Acceptance tests
 
-Whatever the design, this property should hold:
+Whatever the design, these should hold. They belong in
+`runtime/runner/test/executor/`, with real client `Runtime`s over
+`EmulatedStorageManager` as in `space-server-root-preload.test.ts`. Stubbed
+`demandForSpace()` rows will not do: the rows cannot yet express a watch that
+only resolves.
 
-- Under server execution, a client runtime that resolves a link to a piece's
-  result document (`resolveAsCell()` on a cell that holds the link), and
-  reads nothing else, causes no structure load of that piece. It writes none
-  of the piece's session-scoped documents.
-- A client that then reads one of the piece's computed values, under a schema
-  that reaches it, gets it computed and current.
-
-It belongs in `runtime/runner/test/executor/`. The client has to be a real
-`Runtime` over `EmulatedStorageManager`, as in
-`space-server-root-preload.test.ts`, not stubbed `demandForSpace()` rows: the
-rows cannot yet express a watch that only resolves.
+1. **Resolution.** Under server execution, a client that resolves a link to a
+   piece's result document (`resolveAsCell()` on a cell that holds the link),
+   and reads nothing else, causes no structure load of that piece and writes
+   none of its session-scoped documents. A client that then reads one of the
+   piece's computed values, under a schema that reaches it, gets it computed
+   and current.
+2. **Shared selectors.** Read the same selector passive then active, and
+   active then passive. In both orders the computed value becomes current,
+   and the passive read alone causes nothing.
+3. **Two viewers.** Structure starts, seeds and per-node instances are each
+   counted, and each comes out as the design intends.
+4. **A first blind field write**, as in `executor-fan-out.test.ts` case (n).
+   The late viewer's draft still reads the full set of defaults beside the
+   field it wrote.
+5. **Name and profile freshness.** An unlabelled link's name and a profile
+   badge's fields stay current, separately from the saving measured with a
+   reference-only consumer.
 
 ## Related
 
