@@ -106,6 +106,27 @@ export function serverMessageSync(
 }
 
 /**
+ * The encoding of `message`, or `undefined` when it would be longer than the
+ * longest string the JavaScript engine makes: V8 refuses text of more than
+ * 2^29 - 24 UTF-16 units (about 512 MiB) with a `RangeError`. A sync that
+ * long can still go in parts, each encoded alone, so a sender that splits
+ * takes `undefined` for a message that does not fit whole. Any other failure
+ * is the message's own and is thrown.
+ */
+export function encodeUnlessTooLong(
+  message: ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): string | undefined {
+  try {
+    return encode(message);
+  } catch (error) {
+    if (error instanceof RangeError) return undefined;
+    throw error;
+  }
+}
+
+/**
  * Whether `payload`, an encoded message, fits `limits`. A character takes at
  * most three UTF-8 bytes, so text of at most a third of the byte bound fits
  * it unmeasured. JSON text of `n` characters holds at most `(n + 1) / 2`

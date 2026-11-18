@@ -8,6 +8,7 @@ import {
   type EncodedMemoryMessage,
   encodeMemoryCompressionControlMessage,
   isMemoryMessageFrame,
+  MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
   MemoryMessageCompressionChannel,
   type MemoryMessageFrame,
   memoryMessageFrameBytes,
@@ -226,9 +227,36 @@ export const warnOnOversizedOutboundFrame = (
   ]);
 };
 
+/** The bounds a memory server splits a sync to (`Server.connect()`). */
+type SyncPartLimits = NonNullable<
+  Parameters<MemoryServer.Server["connect"]>[1]
+>;
+
+/**
+ * The bounds a sync sent on a memory socket is split to, for a client that
+ * takes a sync in parts (`syncPartsV1`); a client that does not is sent every
+ * sync whole, as before.
+ *
+ * A sync goes whole up to `whole`, the most the compression encoder still
+ * compresses (`MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES`, in the same UTF-8
+ * bytes): past that the encoder sends text, and the frame grows several times
+ * over at once. One longer is split into parts of at most `bytes`, each
+ * compressed on its own, and a sync too long for the engine to encode whole
+ * still goes, in parts. Splitting costs the server a second encode, so a sync
+ * that would go compressed whole is never split.
+ */
+export const MEMORY_SOCKET_SYNC_PARTS: SyncPartLimits = {
+  bytes: 32 * 1024 * 1024,
+  values: null,
+  whole: MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
+};
+
 /** The part of a memory server that a socket's pipeline talks to. */
 export interface MemorySocketServer {
-  connect(send: (message: ServerMessage) => void): {
+  connect(
+    send: (message: ServerMessage, payload?: string) => void,
+    syncParts?: SyncPartLimits,
+  ): {
     readonly id: string;
     receive(payload: string): Promise<void>;
     close(): void;
@@ -281,8 +309,10 @@ export const attachMemorySocketPipeline = (
       closeConnection();
     },
   );
-  const connection = server.connect((message) => {
-    const encoded = encodeMemoryBoundary(message);
+  const connection = server.connect((message, payload) => {
+    // A message the server encoded to measure it against its bounds comes
+    // with that encoding, which is sent as it is rather than made again.
+    const encoded = payload ?? encodeMemoryBoundary(message);
     channel.send(
       encoded,
       (frame) => warnOnOversizedOutboundFrame(frame, message),
@@ -290,7 +320,7 @@ export const attachMemorySocketPipeline = (
     if (compressionNegotiated && message.type === "hello.ok") {
       channel.enable();
     }
-  });
+  }, MEMORY_SOCKET_SYNC_PARTS);
   function closeConnection(): void {
     if (closed) return;
     closed = true;

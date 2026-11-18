@@ -29,6 +29,7 @@ import {
 } from "../v2.ts";
 import {
   appendWatchSetPart,
+  encodeUnlessTooLong,
   halveSyncPart,
   type PartLimits,
   payloadFits,
@@ -278,6 +279,34 @@ Deno.test("the assembler refuses a split sync's parts out of sequence", () => {
   >;
   odd.ok!.sync.more = false;
   refuses([odd as ServerMessage]);
+});
+
+describe("encodeUnlessTooLong()", () => {
+  const message = {
+    type: "response",
+    requestId: "too-long",
+    ok: {},
+  } as unknown as ServerMessage;
+
+  it("returns the message's encoding", () => {
+    assertEquals(encodeUnlessTooLong(message), encodeMemoryBoundary(message));
+  });
+
+  it("returns `undefined` when the encoding is longer than the engine's longest string", () => {
+    // What V8 throws past 2^29 - 24 UTF-16 units, made here without
+    // building half a gigabyte of text.
+    const tooLong = () => {
+      throw new RangeError("Invalid string length");
+    };
+    assertEquals(encodeUnlessTooLong(message, tooLong), undefined);
+  });
+
+  it("throws any other failure to encode", () => {
+    const failing = () => {
+      throw new TypeError("Do not know how to serialize a BigInt");
+    };
+    assertThrows(() => encodeUnlessTooLong(message, failing), TypeError);
+  });
 });
 
 Deno.test("payloadFits counts the values of text long enough to exceed the bound", () => {

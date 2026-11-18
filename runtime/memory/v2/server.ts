@@ -257,6 +257,7 @@ import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts"
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
+  encodeUnlessTooLong,
   halveSyncPart,
   type PartLimits,
   payloadFits,
@@ -1532,8 +1533,11 @@ class Connection {
       }
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
-      const payload = encodeMemoryBoundary(prepared);
-      const fits = payloadFits(payload, wholeLimits(limits));
+      // A sync too long to encode whole is not yet undeliverable: its parts
+      // are encoded alone, below, and only an entry that cannot be is.
+      const payload = encodeUnlessTooLong(prepared);
+      const fits = payload !== undefined &&
+        payloadFits(payload, wholeLimits(limits));
       timing.time(encodeStart, "memory", "response", "encode");
       if (fits) {
         this.#transmit(prepared, payload);
@@ -1563,7 +1567,7 @@ class Connection {
   #syncParts(
     message: ServerMessage,
     prepared: ServerMessage,
-    payload: string,
+    payload: string | undefined,
     target: SyncPartSession,
     limits: PartLimits,
   ): [ServerMessage, string][] {

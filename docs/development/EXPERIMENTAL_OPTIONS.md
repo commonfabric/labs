@@ -1959,8 +1959,11 @@ the per-epic implementation notes).
 >   chapter's section 4.2.3), and a server splits a sync for such a client on
 >   a connection whose transport bounds its messages: the routed host splits a
 >   sync past the routed frame cap or the bytes a message may take (16 MiB
->   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
->   sends every sync whole. A peer that omits it parses as `false`, and is
+>   expanded when compressed, 8 MiB as text), in parts of 1 MiB. The
+>   toolshed's direct memory socket splits a sync past the most its
+>   compression encoder still compresses (256 MiB expanded), or too long for
+>   the JavaScript engine to encode whole, in parts of 32 MiB
+>   (`MEMORY_SOCKET_SYNC_PARTS`). A peer that omits it parses as `false`, and is
 >   sent every sync whole. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server applies a `session.watch.set` staged
