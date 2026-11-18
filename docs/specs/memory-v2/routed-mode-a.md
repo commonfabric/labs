@@ -675,6 +675,21 @@ counting, and a positive safe integer sets the cap. Disabling it skips the slot
 counter while preserving byte, nesting, duplicate-key and DID checks. The
 `limits` object itself cannot be `null`.
 
+The directory's `toolsheds` list gives each toolshed's identity, and with
+server execution on it also decides which serving processes a toolshed
+trusts. A toolshed's serving loop reaches a space another toolshed owns
+through that owner
+([owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally)),
+on a session it opens as its own identity. The owner's memory server admits
+that session to the delegating class (`04-protocol.md` §4.3.12) when the
+directory lists the identity as a toolshed. The directory already decides
+which process owns each space, so the processes it names are the ones a
+crossing can come from. The list is read from the current snapshot on each
+decision; an unreadable or invalid snapshot lists no toolshed, and each
+toolshed then admits its own identity alone. A router's identity is never of
+the delegating class: a directory that lists a router's DID as a toolshed is
+invalid.
+
 Enabled nested limits must be ordered from context to router to toolshed, a
 context's proofs must cover its principal history and a renewal for each active
 principal, and every allowed router's contexts must fit the sockets and tickets

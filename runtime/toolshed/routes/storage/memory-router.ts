@@ -121,6 +121,8 @@ export class MemoryRouterPolicy {
   #owners = new Map<string, number>();
   /** Every DID the directory lists, whichever toolshed it names. */
   #listed = new Set<string>();
+  /** The identity of each toolshed the directory lists, this one included. */
+  #toolsheds = new Set<string>();
   /** This toolshed's index in the directory. */
   #here = -1;
   #unlisted: UnlistedPlacement | undefined;
@@ -188,6 +190,9 @@ export class MemoryRouterPolicy {
       return shed.did;
     });
     requireRouted(sheds.filter((did) => did === identity.did()).length === 1);
+    // A toolshed's identity is of the delegating class and a router's must
+    // not be, so a directory that lists a router as a toolshed is refused.
+    requireRouted(sheds.every((did) => !this.config.routers.has(did)));
     const here = sheds.indexOf(identity.did());
     const unlisted = parseUnlistedPlacement(directory.unlisted, sheds.length);
     const topology = unlisted === undefined
@@ -228,6 +233,7 @@ export class MemoryRouterPolicy {
       [...this.#listed].some((did) => !listed.has(did) && claimed(did));
     this.#owners = owners;
     this.#listed = listed;
+    this.#toolsheds = new Set(sheds);
     this.#here = here;
     this.#unlisted = unlisted;
     this.#source = source;
@@ -296,13 +302,31 @@ export class MemoryRouterPolicy {
       isCanonicalEd25519DID(space);
   }
 
-  /** Refreshes ownership; an unreadable or invalid snapshot owns nothing. */
+  /**
+   * Whether the directory lists `did` as the identity of one of the
+   * deployment's toolsheds, this one included. Each toolshed serves the
+   * spaces it owns and sends its crossings into other spaces to their
+   * owners as itself, so the listed identities are the ones a memory server
+   * here admits as delegating principals. Read from the current snapshot, so
+   * a toolshed added to or removed from the directory is admitted or refused
+   * from the next decision. An unavailable snapshot lists none.
+   */
+  listsToolshed(did: string): boolean {
+    this.#current();
+    return this.#toolsheds.has(did);
+  }
+
+  /**
+   * Refreshes ownership; an unreadable or invalid snapshot owns nothing and
+   * lists no toolshed.
+   */
   #current(): void {
     try {
       this.#refresh();
     } catch {
       this.#owners.clear();
       this.#listed.clear();
+      this.#toolsheds.clear();
       this.#unlisted = undefined;
       this.#source = undefined;
       this.#stamp = undefined;

@@ -403,6 +403,29 @@ export const IFRAME_PATTERN = { name: "SymlinkSafe" } as const;
     }
   });
 
+  it("writes nothing, even with --force, when --out names a directory", async () => {
+    await inTemporaryDirectory(
+      "pattern-iframe-out-directory-",
+      async (directory) => {
+        const fixture = await writeFixture(directory, `{ name: "Blocked" }`);
+        await Deno.mkdir(fixture.out);
+
+        const result = await generate(
+          fixture.contract,
+          fixture.guest,
+          fixture.out,
+          "--force",
+        );
+
+        expect(result.code).not.toBe(0);
+        expect(decoder.decode(result.stderr)).toContain(
+          `--out names ${fixture.out}, which is a directory.`,
+        );
+        await expectAbsent(fixture.script, fixture.html);
+      },
+    );
+  });
+
   it("replaces a forced output hardlink without overwriting its source", async () => {
     // Each file the generator writes is a link to the guest's source here.
 
