@@ -141,7 +141,7 @@ describe("selectSessionOverwritePathsSince()", () => {
       );
     });
 
-    it("returns the elements from its index on where it inserts, which it moved", () => {
+    it("returns the elements it moved where it inserts", () => {
       commit(patch({
         op: "splice",
         path: "/value/tags",
@@ -150,11 +150,11 @@ describe("selectSessionOverwritePathsSince()", () => {
         add: ["x"],
       }));
       expect(overwritten(filled)).toEqual([
-        { array: ["value", "tags"], fromIndex: 1 },
+        { array: ["value", "tags"], fromIndex: 1, toIndex: 4 },
       ]);
     });
 
-    it("returns the elements from its index on where it removes more than it adds", () => {
+    it("returns the elements it replaced or moved where it removes more than it adds", () => {
       commit(patch({
         op: "splice",
         path: "/value/tags",
@@ -163,7 +163,7 @@ describe("selectSessionOverwritePathsSince()", () => {
         add: ["x"],
       }));
       expect(overwritten(filled)).toEqual([
-        { array: ["value", "tags"], fromIndex: 0 },
+        { array: ["value", "tags"], fromIndex: 0, toIndex: 3 },
       ]);
     });
 
@@ -176,8 +176,30 @@ describe("selectSessionOverwritePathsSince()", () => {
         add: ["x", "y"],
       }));
       expect(overwritten(filled)).toEqual([
-        ["value", "tags", "1"],
-        ["value", "tags", "2"],
+        { array: ["value", "tags"], fromIndex: 1, toIndex: 3 },
+      ]);
+    });
+
+    it("returns nothing for a splice that appends past the end", () => {
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 4,
+        remove: 0,
+        add: ["e"],
+      }));
+      expect(overwritten(filled)).toEqual([]);
+    });
+
+    it("leaves out the elements a move's splices leave where they were", () => {
+      // `c` moves to the head: an insertion, then the removal of its old
+      // place, which leaves `d` at index 3.
+      commit(patch(
+        { op: "splice", path: "/value/tags", index: 0, remove: 0, add: ["c"] },
+        { op: "splice", path: "/value/tags", index: 3, remove: 1, add: [] },
+      ));
+      expect(overwritten(filled)).toEqual([
+        { array: ["value", "tags"], fromIndex: 0, toIndex: 3 },
       ]);
     });
   });

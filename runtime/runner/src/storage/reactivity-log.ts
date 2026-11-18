@@ -341,6 +341,28 @@ export function isServedDerivationTx(tx: object): boolean {
   return false;
 }
 
+const servedEventHandlerTxs = new WeakSet<object>();
+
+/**
+ * Marks a transaction a serving loop runs an event handler in. The wave judges
+ * each patch of its commit against the later writes of the session that fired
+ * the event, and drops the ones those writes overwrote (serving-loop.md §3d),
+ * so its array changes go index by index: a splice that both replaces an
+ * element and inserts beside it cannot be dropped in part
+ * (`V2StorageTransaction.#arraySpliceGate()`).
+ */
+export function markServedEventHandlerTx(tx: object): void {
+  for (const layer of transactionLayers(tx)) servedEventHandlerTxs.add(layer);
+}
+
+/** Whether `tx` is one a serving loop runs an event handler in. */
+export function isServedEventHandlerTx(tx: object): boolean {
+  for (const layer of transactionLayers(tx)) {
+    if (servedEventHandlerTxs.has(layer)) return true;
+  }
+  return false;
+}
+
 const lazyMaterializationTxs = new WeakSet<object>();
 
 /**

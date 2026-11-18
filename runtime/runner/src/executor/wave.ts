@@ -87,7 +87,10 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
-import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import {
+  markServedDerivationTx,
+  markServedEventHandlerTx,
+} from "../storage/reactivity-log.ts";
 import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
@@ -339,6 +342,7 @@ export function stampWaveRunContext(
 ): void {
   waveRunContexts.set(tx, context);
   if (context.kind === "derivation") markServedDerivationTx(tx);
+  if (context.kind === "event-handler") markServedEventHandlerTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
@@ -820,11 +824,11 @@ export interface WaveCommitSink {
   /**
    * Where the authored commits of `session` overwrote a doc-instance after
    * `sinceSeq` — §3d's supersession of an event consequence by a later write
-   * of the session that fired the event. A splice that changes an array's
-   * length overwrites the elements from its index on, which it moved
-   * (`SessionOverwrite`). Writes that merge into existing content (appends,
-   * increments) overwrite nothing and are not reported. A sink that cannot
-   * answer omits it, and no consequence is superseded.
+   * of the session that fired the event. Splices overwrite the elements they
+   * replaced or moved, as ranges of an array (`SessionOverwrite`). Writes
+   * that merge into existing content (appends, increments) overwrite nothing
+   * and are not reported. A sink that cannot answer omits it, and no
+   * consequence is superseded.
    */
   sessionOverwritePathsSince?(
     space: MemorySpace,
@@ -1131,16 +1135,18 @@ export const warmWritesOf = (
 
 /** Whether the value path `path` lies where `overwrite` overwrote: at or
  * beneath its value path, or at or beneath an element of its array at an
- * index at or past its `fromIndex` (`SessionOverwrite`). */
+ * index from its `fromIndex` up to its `toIndex` (`SessionOverwrite`). */
 const overwriteCovers = (
   overwrite: SessionOverwrite,
   path: readonly string[],
 ): boolean => {
   if (!("fromIndex" in overwrite)) return isPrefixPath(overwrite, path);
-  const { array, fromIndex } = overwrite;
+  const { array, fromIndex, toIndex = Infinity } = overwrite;
   if (path.length <= array.length || !isPrefixPath(array, path)) return false;
   const segment = path[array.length]!;
-  return isArrayIndexPropertyName(segment) && Number(segment) >= fromIndex;
+  if (!isArrayIndexPropertyName(segment)) return false;
+  const index = Number(segment);
+  return index >= fromIndex && index < toIndex;
 };
 
 /** The eventIds of the seq-LESS stream entries one sealed op appends —

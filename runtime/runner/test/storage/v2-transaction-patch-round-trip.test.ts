@@ -17,6 +17,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import {
+  markServedEventHandlerTx,
   markUiInputBlindWriteTx,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
@@ -854,6 +855,58 @@ describe("v2-transaction", () => {
       ]);
       expect(sent.map(kindAndPath)).not.toContain("replace /value/list/60");
       expect(await storedValue("unscripted")).toStrictEqual({ list: changed });
+    });
+
+    it("sends index by index a change whose edit script adds an element back where it was", async () => {
+      // The shortest script keeps `c`, `d` and `e`, so it removes `h` and adds
+      // it back at the index it held. The per-index diff leaves `h` alone,
+      // and an element can be any size.
+      const writer = connect();
+      const h = "h".repeat(4096);
+      await commit(
+        writer,
+        "readded",
+        (cell) => cell.set({ list: ["a", "b", h, "c", "d", "e"] }),
+      );
+      const changed = ["c", "d", h, "e", "f"];
+
+      const sent = await commitOps(
+        writer,
+        "readded",
+        (cell) => cell.key("list").set(changed),
+      );
+
+      expect(
+        sent.some((op) => op.op === "splice" && op.add.includes(h)),
+      ).toBe(false);
+      expect(sent.map(kindAndPath)).not.toContain("replace /value/list/2");
+      expect(await storedValue("readded")).toStrictEqual({ list: changed });
+    });
+
+    it("sends a served event handler's head insertion index by index", async () => {
+      // The wave drops each of a served handler's patches that the firing
+      // session's later writes overwrote, which a splice cannot be in part.
+      const writer = connect();
+      await commit(writer, "served", (cell) => cell.set({ list: ["a", "b"] }));
+
+      const tx = writer.runtime.edit();
+      markServedEventHandlerTx(tx);
+      const list = writer.runtime
+        .getCell<FabricValue>(space, "served", undefined, tx)
+        .key("list");
+      list.set(["x", ...(list.get() as string[])]);
+      const alreadySent = sentPatches.length;
+      const result = await tx.commit().settled;
+
+      expect(result.error).toBeUndefined();
+      expect(sentPatches.slice(alreadySent).map(kindAndPath)).toEqual([
+        "replace /value/list/0",
+        "replace /value/list/1",
+        "splice /value/list",
+      ]);
+      expect(await storedValue("served")).toStrictEqual({
+        list: ["x", "a", "b"],
+      });
     });
 
     describe("written by a commit that does not read the whole list", () => {

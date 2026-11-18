@@ -91,7 +91,8 @@ reader-dirty index handle conservatively:
   between the two arrays, which prefix-matches every index reader below it. A
   tail grow or shrink is the one-splice case. The runs come from a script of
   at most 64 edits, and the splices are sent where they carry fewer elements
-  than the per-index shape would; otherwise the change goes per index, a
+  than the per-index shape would, none of them one that shape leaves in
+  place; otherwise the change goes per index, a
   `replace` at each index whose element changed or shifted and a tail
   `splice`; and
 - **messy cases** (an array with a hole in it) → a whole-array `replace` at
@@ -106,7 +107,11 @@ the commit where anything beneath the array moved since, so the splices land
 on exactly the array they were diffed from and stand for the per-index writes
 they replace. A commit without such a read, a blind UI-input write among
 them, goes per index, which leaves each index it wrote holding its value
-however the array moved.
+however the array moved. So does a transaction a serving loop runs an event
+handler in: the wave judges each of its patches against the later writes of
+the session that fired the event, and drops the ones they overwrote
+(server-side-execution serving-loop.md §3d), which it cannot do to part of a
+splice.
 
 A length change already puts a splice on the array's path, so sending it as
 splices throughout costs no conflict precision; a change that keeps the length

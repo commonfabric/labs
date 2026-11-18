@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/memory/v2/execution-lease";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import { stampWaveRunContext, WaveAccumulator } from "../src/executor/wave.ts";
+import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -138,17 +139,21 @@ describe("WaveAccumulator", () => {
   };
 
   /**
-   * Seeds a list, has the firing session apply `splice` to it straight in
-   * the store, and commits a wave under the space's lease holding the handler
-   * run of the event `e-list`, which writes the list's first element, and a
-   * derivation that writes another document. Returns the wave's outcome and
-   * the list as the store then holds it.
+   * Seeds a list with `seeded`, has the firing session apply `patches` to it
+   * straight in the store, and commits a wave under the space's lease holding
+   * the handler run of the event `e-list`, which does `write` to the list,
+   * and a derivation that writes another document. Returns the wave's outcome
+   * and the list as the store then holds it.
    */
-  const commitSplicedRun = async (splice: PatchOp) => {
+  const commitListRun = async (
+    seeded: string[],
+    patches: PatchOp[],
+    write: (list: Cell<string[]>) => void,
+  ) => {
     const list = runtime.getCell<string[]>(space, "wave-list", undefined);
     const other = runtime.getCell<number>(space, "wave-list-other", undefined);
     const seed = runtime.edit();
-    list.withTx(seed).set(["a", "b", "c", "d"]);
+    list.withTx(seed).set(seeded);
     other.withTx(seed).set(0);
     expect((await seed.commit().settled).error).toBeUndefined();
     const eventSeq = Engine.serverSeq(engine);
@@ -161,7 +166,7 @@ describe("WaveAccumulator", () => {
         operations: [{
           op: "patch",
           id: list.getAsNormalizedFullLink().id,
-          patches: [splice],
+          patches,
         }],
       },
     });
@@ -196,7 +201,7 @@ describe("WaveAccumulator", () => {
         acting: firing,
         streamEntry: { sidecarId: "stream-list", index: 0, seq: eventSeq },
       });
-      list.withTx(handler).key(0).set("handler");
+      write(list.withTx(handler));
       expect((await handler.commit().settled).error).toBeUndefined();
       const derivation = runtime.edit();
       stampWaveRunContext(derivation, {
@@ -236,13 +241,17 @@ describe("WaveAccumulator", () => {
     });
 
     it("drops an event consequence at an element the firing session's later splice moved", async () => {
-      const { outcome, stored } = await commitSplicedRun({
-        op: "splice",
-        path: "/value",
-        index: 0,
-        remove: 1,
-        add: ["typed", "x"],
-      });
+      const { outcome, stored } = await commitListRun(
+        ["a", "b", "c", "d"],
+        [{
+          op: "splice",
+          path: "/value",
+          index: 0,
+          remove: 1,
+          add: ["typed", "x"],
+        }],
+        (list) => list.key(0).set("handler"),
+      );
 
       expect(stored).toEqual({ value: ["typed", "x", "b", "c", "d"] });
       expect(outcome.dispositions).toEqual([
@@ -253,17 +262,57 @@ describe("WaveAccumulator", () => {
     });
 
     it("keeps an event consequence at an element before the firing session's later splice", async () => {
-      const { outcome, stored } = await commitSplicedRun({
-        op: "splice",
-        path: "/value",
-        index: 2,
-        remove: 0,
-        add: ["x"],
-      });
+      const { outcome, stored } = await commitListRun(
+        ["a", "b", "c", "d"],
+        [{ op: "splice", path: "/value", index: 2, remove: 0, add: ["x"] }],
+        (list) => list.key(0).set("handler"),
+      );
 
       expect(stored).toEqual({ value: ["handler", "b", "x", "c", "d"] });
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },
+        { kind: "committed" },
+      ]);
+    });
+
+    it("keeps an event consequence at an element the firing session's move left in place", async () => {
+      // `c` moves to the head as an insertion and a removal; `e` ends where it
+      // started.
+      const { outcome, stored } = await commitListRun(
+        ["a", "b", "c", "d", "e", "f"],
+        [
+          { op: "splice", path: "/value", index: 0, remove: 0, add: ["c"] },
+          { op: "splice", path: "/value", index: 3, remove: 1, add: [] },
+        ],
+        (list) => list.key(4).set("handler"),
+      );
+
+      expect(stored).toEqual({
+        value: ["c", "a", "b", "d", "handler", "f"],
+      });
+      expect(outcome.dispositions).toEqual([
+        { kind: "committed" },
+        { kind: "committed" },
+      ]);
+    });
+
+    it("drops only the overwritten element of a consequence that replaces it and inserts beside it", async () => {
+      // The handler's change would be one splice that replaces element 0 and
+      // inserts after it. It goes index by index, so the wave can drop the
+      // write to element 0 that the firing session overwrote, and keep the
+      // rest.
+      const { outcome, stored } = await commitListRun(
+        ["a", "b", "c", "d"],
+        [{ op: "replace", path: "/value/0", value: "typed" }],
+        (list) => {
+          const current = list.get() as string[];
+          list.set(["handler", "x", ...current.slice(1)]);
+        },
+      );
+
+      expect(stored).toEqual({ value: ["typed", "x", "b", "c", "d"] });
+      expect(outcome.dispositions).toEqual([
+        { kind: "partially-dropped", droppedOps: 1 },
         { kind: "committed" },
       ]);
     });

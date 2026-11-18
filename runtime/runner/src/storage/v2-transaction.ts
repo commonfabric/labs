@@ -124,6 +124,7 @@ import {
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
   isServedDerivationTx,
+  isServedEventHandlerTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -630,11 +631,10 @@ const POSITIONAL_REPLACE_LIMIT = 64;
  * Two arrays without holes are diffed by `arraySpliceHunks()`, and sent as
  * the splices it returns. Otherwise, and where `positional` is set, they are
  * diffed index by index (`buildPositionalArrayPatchCandidates()`). The caller
- * sets `positional` where the commit's reads do not pin the array, since a
- * splice names positions and lands on whatever array the store then holds,
- * and where a mergeable op's suppression reaches the array, since the
- * suppression is written against the per-index diff
- * (`V2StorageTransaction.#buildPatchOperation()`).
+ * sets `positional` where the commit may not send the array splices
+ * (`V2StorageTransaction.#arraySpliceGate()`), and where a mergeable op's
+ * suppression reaches the array, since the suppression is written against the
+ * per-index diff.
  */
 const buildArrayPatchCandidates = (
   path: readonly string[],
@@ -700,7 +700,8 @@ const buildArrayPatchCandidates = (
  * there, changed or not, which can be many times the bytes of the elements
  * the per-index diff carries. Splices carry the elements the runs add, where
  * the per-index diff carries every element that changed or shifted, and the
- * change is sent as splices only where they carry fewer.
+ * change is sent as splices only where they carry fewer, none of them one the
+ * per-index diff leaves in place.
  *
  * A change to the array's length is sent as splices on that condition alone.
  * The per-index diff of one ends in a splice at the array's path too, so
@@ -782,6 +783,26 @@ const arraySpliceHunks = (
   // Where the length holds, a script of substitutions alone replaces the
   // elements the per-index diff does, and nothing is gained.
   if (sameLength && runs.every((hunk) => hunk.remove === hunk.add)) {
+    return undefined;
+  }
+  // A shortest script can remove an element and add it back where it was,
+  // the same value at the same index, which the per-index diff leaves out.
+  // An element can be any size, so a count of elements says nothing of what
+  // carrying it costs, and the change goes index by index.
+  if (
+    runs.some((hunk) => {
+      for (
+        let index = hunk.addStart;
+        index < hunk.addStart + hunk.add;
+        index++
+      ) {
+        if (index < shorter && valueEqual(before[index]!, after[index]!)) {
+          return true;
+        }
+      }
+      return false;
+    })
+  ) {
     return undefined;
   }
   const carried = runs.reduce((total, hunk) => total + hunk.add, 0);
@@ -1861,7 +1882,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const operations: NativeStorageCommitOperation[] = [];
-    const pinsArray = this.#arrayPinning(space);
+    const splicesArray = this.#arraySpliceGate(space);
     // Unconfirmed schema documents whose staged write nets to no visible
     // change (#mustDeliverSchemaDoc; the visible copy sits on a layer the
     // wire never carries, such as a client speculation overlay entry).
@@ -1979,7 +2000,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           doc,
           base,
           mergeable.suppress,
-          (arrayPath) => pinsArray(id, scope, arrayPath),
+          (arrayPath) => splicesArray(id, scope, arrayPath),
           patchedValue,
         );
         if (mergeable.ops.length > 0) {
@@ -4371,6 +4392,49 @@ export class V2StorageTransaction implements IStorageTransaction {
   }
 
   /**
+   * Returns whether a change to the array at `arrayPath` of a document may go
+   * as edit-script splices in the commit this transaction sends to `space`.
+   *
+   * A splice names positions, and the store applies it to whatever array it
+   * holds when the commit lands. So the commit must pin the array: carry a
+   * recursive read of it or of a path above it, which makes the store refuse
+   * the commit where anything beneath the array moved since, and the splices
+   * land on exactly the array they were diffed from. The reads are the
+   * commit's own (`commitReadActivities()`), indexed by document once, on
+   * the first question. Abandoning a mergeable intent while the commit is
+   * built only adds reads to the commit, so working them out before that
+   * never claims a read the commit leaves out.
+   *
+   * A transaction a serving loop runs an event handler in sends none: the
+   * wave drops each of its patches that the firing session's later writes
+   * overwrote (serving-loop.md §3d), and a splice that both replaces an
+   * element and inserts beside it cannot be dropped in part.
+   */
+  #arraySpliceGate(
+    space: MemorySpace,
+  ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
+    if (isServedEventHandlerTx(this)) return () => false;
+    let pinning: Map<string, (readonly string[])[]> | undefined;
+    return (id, scope, arrayPath) => {
+      if (pinning === undefined) {
+        pinning = new Map();
+        for (
+          const read of commitReadActivities(space, this, this.#readActivities)
+        ) {
+          if (read.nonRecursive === true) continue;
+          const key = this.#docKey(read);
+          const paths = pinning.get(key);
+          if (paths === undefined) pinning.set(key, [read.path]);
+          else paths.push(read.path);
+        }
+      }
+      return pinning.get(this.#docKey({ id, scope }))?.some((path) =>
+        isPrefixPath(path, arrayPath)
+      ) === true;
+    };
+  }
+
+  /**
    * Builds the patch operation carrying a document's writes as a diff of
    * `patchedValue`, its working value unless the caller holds some writes back,
    * against `base`, leaving out the candidates `suppress` names. The
@@ -4378,44 +4442,11 @@ export class V2StorageTransaction implements IStorageTransaction {
    * there is no patch to send: `base` or `patchedValue` is absent, or nothing
    * differs. No patch expresses a write to the document root, so `doc` must
    * hold none (see `#writesDocumentRoot()`).
-   */
-  /**
-   * Returns whether the commit this transaction sends to `space` pins the
-   * array at `arrayPath` of a document: carries a recursive read of the
-   * array or of a path above it, which the store refuses the commit over
-   * where anything beneath it changed since. The reads are the commit's own
-   * (`commitReadActivities()`), worked out once, on the first question.
-   * Abandoning a mergeable intent while the commit is built only adds reads
-   * to the commit, so working them out before that never claims a read the
-   * commit leaves out.
-   */
-  #arrayPinning(
-    space: MemorySpace,
-  ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
-    let reads: readonly IReadActivity[] | undefined;
-    return (id, scope, arrayPath) => {
-      reads ??= commitReadActivities(space, this, this.#readActivities);
-      const instance = normalizeCellScope(scope);
-      return reads.some((read) =>
-        read.id === id && read.nonRecursive !== true &&
-        normalizeCellScope(read.scope) === instance &&
-        isPrefixPath(read.path, arrayPath)
-      );
-    };
-  }
-
-  /**
-   * Builds the patch that takes `doc` from `base` to `patchedValue`, or
-   * returns `null` where it has no base to patch.
    *
-   * A change to an array goes as splices only where `pinsArray` says the
-   * commit's reads pin the array, and no op in `suppress` reaches it. A
-   * splice names positions, and the store applies it to whatever array it
-   * holds then. A pinning read makes the store refuse the commit where
-   * anything beneath the array moved since the transaction read it, so the
-   * splices land on exactly the array they were diffed from. Without one,
-   * the per-index diff keeps each written index's value however the array
-   * moved.
+   * A change to an array goes as edit-script splices only where
+   * `splicesArray` allows it (`#arraySpliceGate()`) and no op in `suppress`
+   * reaches the array. Otherwise it goes index by index, which keeps each
+   * written index's value however the array moved.
    */
   #buildPatchOperation(
     id: URI,
@@ -4424,7 +4455,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     doc: WritableDocumentEntry,
     base: FabricValue | undefined,
     suppress: readonly OpSuppression[],
-    pinsArray: (arrayPath: readonly string[]) => boolean,
+    splicesArray: (arrayPath: readonly string[]) => boolean,
     patchedValue: FabricValue | undefined = doc.current.value,
   ): Extract<NativeStorageCommitOperation, { op: "patch" }> | null {
     if (base === undefined || patchedValue === undefined) {
@@ -4527,7 +4558,7 @@ export class V2StorageTransaction implements IStorageTransaction {
           hasValueAtPath(patchedValue, arrayPath, {
             allowArrayLength: true,
           }),
-          !pinsArray(arrayPath) ||
+          !splicesArray(arrayPath) ||
             suppress.some((suppression) =>
               pathsOverlap(suppression.path, arrayPath)
             ),
