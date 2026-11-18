@@ -12,10 +12,17 @@ import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import type { Pattern } from "../../src/builder/types.ts";
 import { compileAndRun } from "../../src/builtins/compile-and-run.ts";
+import { enrollRuntimeOwnedStore } from "../../src/builtins/runtime-owned-store.ts";
 import type { Cell } from "../../src/cell.ts";
+import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("compile-and-run local");
@@ -80,21 +87,38 @@ describe("compile-and-run", () => {
       `${name}-inputs`,
     );
     const parent = runtime.getCell(space, `${name}-parent`);
+    const binding = runtime.getCell<unknown>(space, `${name}-binding`);
+    // These stand in for the node input and output documents that piece setup
+    // normally enrolls. This fixture invokes the builtin without that setup.
+    const enrollment = runtime.edit();
+    enrollRuntimeOwnedStore(enrollment, parent, inputs);
+    enrollRuntimeOwnedStore(enrollment, parent, binding);
+    enrollment.abort("Fixture stores enrolled");
     let outputs: Outputs | undefined;
     const cancels: Array<() => void> = [];
     const { action } = compileAndRun(
       inputs,
-      (_tx, announced: Outputs) => outputs = announced,
+      (tx, announced: Outputs) => {
+        outputs = announced;
+        binding.withTx(tx).set(announced);
+      },
       (cancel) => cancels.push(cancel),
       name,
       parent,
       runtime,
     );
+    function stage(program: RuntimeProgram, input?: unknown) {
+      const tx = runtime.edit();
+      inputs.withTx(tx).set({ ...program, input });
+      action(tx);
+      return tx;
+    }
     return {
-      async run(program: RuntimeProgram) {
-        const tx = runtime.edit();
-        inputs.withTx(tx).set(program);
-        action(tx);
+      binding,
+      stage,
+      async run(program: RuntimeProgram, input?: unknown) {
+        const tx = stage(program, input);
+        runtime.prepareTxForCommit(tx);
         expect((await tx.commit().settled).error).toBeUndefined();
       },
       stop: () => cancels.forEach((cancel) => cancel()),
@@ -197,6 +221,120 @@ describe("compile-and-run", () => {
   });
 
   describe("a finished compilation", () => {
+    it("republishes the child binding after its first transaction aborts", async () => {
+      const n = node("aborted-binding");
+      n.stage(PROGRAM).abort("the first binding was not committed");
+      expect(n.binding.getRaw()).toBeUndefined();
+
+      await n.run(PROGRAM);
+      compilations[0].resolve(childPattern());
+      await drain();
+
+      expect(created).toHaveLength(1);
+      expect(n.binding.key("result").key("answer").get()).toBe(1);
+    });
+
+    it("runs with a live input without copying its lazy view", async () => {
+      const n = node("live-input");
+      const source = runtime.getCell<{ value: number }>(space, "live-source");
+      await runtime.editWithRetry((tx) => source.withTx(tx).set({ value: 7 }));
+      await n.run(PROGRAM, source);
+      const pattern = createTrustedBuilder(runtime).commonfabric.pattern<{
+        value: number;
+      }>(({ value }) => ({ answer: value }));
+      compilations[0].resolve(pattern);
+      await drain();
+
+      expect(n.outputs.result.key("answer").get()).toBe(7);
+      await runtime.editWithRetry((tx) =>
+        source.withTx(tx).key("value").set(9)
+      );
+      await drain();
+      expect(n.outputs.result.key("answer").get()).toBe(9);
+      expect(compilations).toHaveLength(1);
+    });
+
+    it("retains source confidentiality on a compiled child's derived value", async () => {
+      await runtime.dispose({ closeStorage: false });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcFlowLabels: "persist",
+        pieceCreatedCallback: (piece) => created.push(piece),
+      });
+      runtime.patternManager.compileOrGetPattern = () => {
+        const compilation = Promise.withResolvers<Pattern>();
+        compilations.push(compilation);
+        return compilation.promise;
+      };
+      const child = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents: `
+            import { computed, pattern } from "commonfabric";
+            export default pattern<{ secret: string }>(({ secret }) => ({
+              out: computed(() => secret + "!"),
+            }));
+          `,
+        }],
+      }, { space });
+      for (const atoms of [[], ["compiled-child-secret"]]) {
+        const name = atoms.length ? "classified-child" : "public-child";
+        const source = runtime.getCell<{ secret: string }>(
+          space,
+          `${name}-source`,
+        );
+        const tx = runtime.edit();
+        writeSeedEnvelopeDoc(tx, space);
+        seedStoredEnvelope(tx, {
+          ...source.getAsNormalizedFullLink(),
+          path: [],
+        }, {
+          value: { secret: "payload" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["secret"],
+                label: { confidentiality: atoms },
+                origin: "derived",
+              }],
+            },
+          },
+        });
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const n = node(name);
+        await n.run(PROGRAM, source);
+        compilations.at(-1)!.resolve(child);
+        await drain();
+        await n.outputs.result.key("out").pull();
+        await drain();
+        const output = n.outputs.result.key("out").resolveAsCell();
+        expect(output.get()).toBe("payload!");
+        const inspection = runtime.edit();
+        try {
+          const metadata = readStoredCfcMetadata(
+            inspection,
+            output.getAsNormalizedFullLink(),
+          );
+          const confidentiality = (metadata?.labelMap.entries ?? []).flatMap(
+            (entry) => entry.label.confidentiality ?? [],
+          );
+          if (atoms.length) {
+            expect(confidentiality).toContain("compiled-child-secret");
+          } else {
+            expect(confidentiality).toEqual([]);
+          }
+        } finally {
+          inspection.abort("Child label inspection complete");
+        }
+      }
+    });
+
     it("runs no pattern for a compilation a newer program superseded", async () => {
       const n = node("superseded-success");
       await n.run(PROGRAM);

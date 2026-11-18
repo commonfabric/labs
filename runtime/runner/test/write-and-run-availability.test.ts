@@ -29,6 +29,7 @@ describe("Write and Run availability", () => {
       const program = await resolveLocalProgram(
         (resolver) => runtime.harness.resolve(resolver),
         {
+          root: fromFileUrl(new URL("../../../patterns/", import.meta.url)),
           main: fromFileUrl(
             new URL(
               "../../../patterns/examples/write-and-run/write-and-run.tsx",

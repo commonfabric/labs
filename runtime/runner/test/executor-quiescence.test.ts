@@ -52,10 +52,11 @@ export default pattern(() => {
 
 /** A fetch the loop makes, whose answer it writes. */
 const FETCH_SOURCE = `
-import { fetchJson, pattern } from "commonfabric";
+import { fetchJson, pattern, resultOf } from "commonfabric";
 export default pattern(() => {
   const fetched = fetchJson<{ v: number }>({ url: "https://example.test/v" });
-  return { v: fetched.result.v };
+  const value = resultOf(fetched);
+  return { v: value.v };
 });
 `;
 

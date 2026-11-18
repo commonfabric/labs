@@ -1232,8 +1232,14 @@ async function startTopicsLifts(
             tx,
             lifts.backlinksOf,
             unbound
-              ? { table, self: topic, shortName: topic.key("shortName") }
+              ? {
+                tableReady: table,
+                table,
+                self: topic,
+                shortName: topic.key("shortName"),
+              }
               : {
+                tableReady: table,
                 table,
                 index,
                 self: topic,

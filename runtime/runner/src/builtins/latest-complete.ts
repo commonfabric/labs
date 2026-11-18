@@ -25,7 +25,7 @@ import {
   internalVerifierRead,
   linkResolutionProbe,
 } from "../storage/reactivity-log.ts";
-import { scopedCell } from "./scope-policy.ts";
+import { ownedCell } from "./runtime-owned-store.ts";
 
 type LatestCompleteInputs = {
   value: unknown;
@@ -101,13 +101,14 @@ export function latestComplete(
       tx.getNarrowestReadScope(),
     ]);
     if (result === undefined || resultScope !== outputScope) {
-      const base = runtime.getCell<unknown>(
-        parentCell.space,
+      result = ownedCell<unknown>(
+        runtime,
+        tx,
+        parentCell,
         { latestComplete: cause },
         schema,
-        tx,
+        outputScope,
       );
-      result = scopedCell(runtime, tx, base, outputScope);
       result.sync();
       resultScope = outputScope;
     }

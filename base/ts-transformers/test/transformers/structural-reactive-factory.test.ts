@@ -54,6 +54,12 @@ describe("structural-reactive-factory", () => {
     const [name, helper, call] of [
       ["identity getter", identity, "identity(request)"],
       [
+        "overloaded identity getter",
+        `function identity(v: WishState<string>): WishState<string>;
+        function identity(v: WishState<string>): WishState<string> { return v; }`,
+        "identity(request)",
+      ],
+      [
         "constant arrow getter",
         "const identity = (v: WishState<string>): WishState<string> => v;",
         "identity(request)",
@@ -260,6 +266,37 @@ describe("structural-reactive-factory", () => {
       )
         .toEqual(mutatesGetter ? ["compute-context:local-reactive-use"] : []);
     });
+  }
+
+  for (const mutation of ["assignment", "for-of"]) {
+    for (const mutatesGetter of [true, false]) {
+      it(`${mutatesGetter ? "rejects" : "allows"} a Wish getter after ${mutation} destructures into ${mutatesGetter ? "that getter" : "another callable"}`, async () => {
+        const target = mutatesGetter ? "identity" : "other";
+        const write = mutation === "assignment"
+          ? `({ target: ${target} } = { target: make });`
+          : `for ({ target: ${target} } of [{ target: make }]) {}`;
+        const { diagnostics } = await validateSource(
+          `
+          import { pattern, computed, handler, wish, type WishState } from "commonfabric";
+          ${identity}
+          ${factory}
+          function other(v: WishState<string>): WishState<string> { return v; }
+          const update = handler<void, {}>(() => { ${write} });
+          export default pattern(() => {
+            const request = wish<string>({ query: "#outer" });
+            return { value: computed(() => identity(request).result) };
+          });
+          `,
+          { types: { "commonfabric.d.ts": commonfabricTypes } },
+        );
+        expect(
+          diagnostics.filter(({ severity }) => severity === "error")
+            .map(({ type }) => type),
+        ).toEqual(
+          mutatesGetter ? ["compute-context:local-reactive-use"] : [],
+        );
+      });
+    }
   }
   describe("returnsReactiveResult()", () => {
     it("returns true for a call whose result type is a cell", () => {

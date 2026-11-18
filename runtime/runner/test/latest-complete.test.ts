@@ -15,11 +15,18 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { latestComplete as latestCompleteBuiltin } from "../src/builtins/latest-complete.ts";
+import { enrollRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
 import { type Cell, createCell, isCell } from "../src/cell.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("latest complete test");
@@ -164,6 +171,92 @@ describe("latestComplete", () => {
       expect((await tx.commit().settled).ok).toBeDefined();
       tx = runtime.edit();
       expect(snapshot!.withTx(tx).getRaw()).toBe(UNAVAILABLE_PENDING);
+    }
+  });
+
+  it("retains source confidentiality on its durable snapshot", async () => {
+    const labeledStorage = StorageManager.emulate({ as: signer });
+    const labeledRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: labeledStorage,
+      cfcFlowLabels: "persist",
+      cfcEnforcementMode: "enforce-strict",
+    });
+    try {
+      const parent = labeledRuntime.getCell(space, "labeled snapshot parent");
+      const inputs = labeledRuntime.getCell<{
+        value: unknown;
+        schema: JSONSchema;
+      }>(space, "labeled snapshot inputs");
+      const source = labeledRuntime.getCell(space, "labeled snapshot source");
+      const binding = labeledRuntime.getCell(space, "labeled snapshot binding");
+      const seed = labeledRuntime.edit();
+      enrollRuntimeOwnedStore(seed, parent, inputs);
+      enrollRuntimeOwnedStore(seed, parent, binding);
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        ...source.getAsNormalizedFullLink(),
+        path: [],
+      }, {
+        value: 7,
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: ["retained-secret"] },
+              origin: "derived",
+            }],
+          },
+        },
+      });
+      inputs.withTx(seed).set({
+        value: source.getAsLink(),
+        schema: numberSchema,
+      });
+      labeledRuntime.prepareTxForCommit(seed);
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      let snapshot: Cell<unknown> | undefined;
+      const action = latestCompleteBuiltin(
+        inputs,
+        (tx, result) => {
+          snapshot = result as Cell<unknown>;
+          binding.withTx(tx).set(result);
+        },
+        () => {},
+        "labeled snapshot",
+        parent,
+        labeledRuntime,
+        binding.getAsNormalizedFullLink(),
+      );
+      const update = labeledRuntime.edit();
+      await action(update);
+      labeledRuntime.prepareTxForCommit(update);
+      expect((await update.commit().settled).error).toBeUndefined();
+      expect(snapshot!.get()).toBe(7);
+
+      const inspect = labeledRuntime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(
+          inspect,
+          snapshot!.getAsNormalizedFullLink(),
+        );
+        for (const observes of ["shape", "value"] as const) {
+          expect(metadata?.labelMap.entries).toContainEqual({
+            path: [],
+            label: { confidentiality: ["retained-secret"] },
+            origin: "derived",
+            observes,
+          });
+        }
+      } finally {
+        inspect.abort("Snapshot label inspection complete");
+      }
+    } finally {
+      await labeledRuntime.dispose();
     }
   });
 

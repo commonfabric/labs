@@ -131,10 +131,9 @@ function profileValue(name: string) {
   };
 }
 
-/** Moves logical time past the wish debounce and drains the scheduler. */
+/** Waits for source loads and their reactive consequences. */
 async function settle(runtime: Runtime): Promise<void> {
-  await clock.tick(100);
-  await runtime.idle();
+  await runtime.settled();
 }
 
 const nameOf = (found: Cell<unknown>) =>

@@ -2019,6 +2019,28 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
 // inferred input schema falls back to reading its input whole, while a `lift`'s
 // declared parameter is a ceiling that no opaque helper in its body can widen.
 
+/** The pivot's readiness and the handles a backlinks lookup reads narrowly. */
+interface BacklinksInput {
+  /** The pivot root's availability, without reading its rows. */
+  tableReady: unknown;
+
+  table: ReadonlyCell<
+    { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
+  >;
+  index: ReadonlyCell<
+    Default<{
+      source?: ComparableCell<unknown>;
+      byName: Record<
+        string,
+        { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
+      >;
+      // deno-lint-ignore ban-types
+    }, { byName: {} }>
+  >;
+  self: ComparableCell<unknown>;
+  shortName: string | undefined;
+}
+
 /**
  * This topic's INBOUND references: its own row of the board's pivot.
  *
@@ -2044,62 +2066,52 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
  * references, which is why the parameter declares them `unknown`: `topic` is
  * compared by identity and `mentionedBy` is passed through as links, so
  * surveying the whole table expands no topic at all.
+ * The root-only `tableReady` value names the same pivot as `table`, so an
+ * unavailable pivot propagates before this callback reads its handle.
  *
  * HACK, as elsewhere in this pattern: reads `unknown[]`, publishes
  * `TopicSummary[]`. A reference through a lift is a link and resolves to the
  * whole topic however little the lift declared, so the assertion states what a
  * consumer receives while the narrow parameter bounds what this reads.
  */
-const backlinksOf = lift((
-  { table, index, self, shortName }: {
-    table: ReadonlyCell<
-      { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
-    >;
-    index: ReadonlyCell<
-      Default<{
-        source?: ComparableCell<unknown>;
-        byName: Record<
-          string,
-          { topic: ComparableCell<unknown>; mentionedBy: unknown[] }[]
-        >;
-        // deno-lint-ignore ban-types
-      }, { byName: {} }>
-    >;
-    self: ComparableCell<unknown>;
-    shortName: string | undefined;
-  },
-): TopicSummary[] => {
-  if (
-    typeof shortName === "string" && isMemberName(shortName) &&
-    equals(table, index.key("source"))
-  ) {
-    const bucket = index.key("byName").key(shortName);
-    const count = bucket.get()?.length ?? 0;
-    // A position past the end of a pivot that has since shrunk holds nothing,
-    // and reading its value is refused by the row schema, so each element is
-    // compared as a cell and only the element that is this topic's row is
-    // read.
-    let found = false;
-    const mentioners: unknown[] = [];
-    for (let at = 0; at < count; at++) {
-      if (equals(self, bucket.key(at).key("topic"))) {
-        found = true;
-        for (const mention of bucket.key(at).key("mentionedBy").get() ?? []) {
-          mentioners.push(mention);
+const backlinksOf = lift(
+  (
+    { table, index, self, shortName }: BacklinksInput,
+  ): TopicSummary[] => {
+    if (
+      typeof shortName === "string" && isMemberName(shortName) &&
+      equals(table, index.key("source"))
+    ) {
+      const bucket = index.key("byName").key(shortName);
+      const count = bucket.get()?.length ?? 0;
+      // A position past the end of a pivot that has since shrunk holds nothing,
+      // and reading its value is refused by the row schema, so each element is
+      // compared as a cell and only the element that is this topic's row is
+      // read.
+      let found = false;
+      const mentioners: unknown[] = [];
+      for (let at = 0; at < count; at++) {
+        if (equals(self, bucket.key(at).key("topic"))) {
+          found = true;
+          for (const mention of bucket.key(at).key("mentionedBy").get() ?? []) {
+            mentioners.push(mention);
+          }
         }
       }
+      if (found) return mentioners as TopicSummary[];
     }
-    if (found) return mentioners as TopicSummary[];
-  }
-  // `filter` + `flatMap` rather than `find`, so a topic with no row on the
-  // table — no board wired in — yields an empty array from the shape of the
-  // expression instead of from a `?? []` bolted onto a miss. At most one row
-  // matches: the board's pivot builds one row per distinct topic, compared by
-  // `equals` as this lookup compares.
-  return (table.get() ?? [])
-    .filter((row) => equals(self, row.topic))
-    .flatMap((row) => row.mentionedBy) as TopicSummary[];
-});
+    // `filter` + `flatMap` rather than `find`, so a topic with no row on the
+    // table — no board wired in — yields an empty array from the shape of the
+    // expression instead of from a `?? []` bolted onto a miss. At most one row
+    // matches: the board's pivot builds one row per distinct topic, compared by
+    // `equals` as this lookup compares.
+    return (table.get() ?? [])
+      .filter((row) => equals(self, row.topic))
+      .flatMap((row) => row.mentionedBy) as TopicSummary[];
+  },
+  toSchema<BacklinksInput>(),
+  toSchema<TopicSummary[]>(),
+);
 
 /**
  * Every piece this topic points at, from both places a reference can come from:
@@ -2750,7 +2762,8 @@ export default pattern<TopicInput, TopicOutput>(
     // any session that has not run the topic finds no backlinks. A document
     // under this name has no such link, and the run stores the lookup in it at
     // space scope, where every reader finds it.
-    const backlinks = backlinksOf({
+    const backlinks: TopicSummary[] = backlinksOf({
+      tableReady: boardCrossrefs,
       table: boardCrossrefs,
       index: boardCrossrefIndex,
       self,

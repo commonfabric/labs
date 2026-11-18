@@ -404,6 +404,15 @@ reactive callbacks and inline operations on the accessor result produce
 `availability:unsupported-compile-diagnostics-source`. The diagnostics cell
 must be exposed separately when composing patterns.
 
+Availability guards reached through local helpers require a stable caller
+capture path to the same value. Object-rest bindings map retained properties
+back to that path, but excluded keys and dynamic exclusions cannot grant guard
+policy to the source object. The rest object itself is a fresh object, not the
+source native marker, so a guard of that object cannot grant source-root policy
+either. Such paths report
+`availability:unobserved-compute-guard` rather than accepting an unrelated
+source marker.
+
 ### 6.1 Cast validation
 
 Validates `as` and angle-bracket assertions:

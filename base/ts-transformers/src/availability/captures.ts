@@ -718,12 +718,19 @@ export function mergeAvailabilityCaptureOverrides(
 interface BindingPath {
   readonly path: readonly string[];
   readonly arrayRestOffset?: number;
+  readonly objectRestExcluded?: readonly string[];
+  readonly objectRestHasDynamicExclusion?: boolean;
 }
 
 function applyBindingPath(
   binding: BindingPath,
   tail: readonly string[],
 ): readonly string[] | undefined {
+  if (
+    binding.objectRestHasDynamicExclusion ||
+    binding.objectRestExcluded !== undefined &&
+      (tail.length === 0 || binding.objectRestExcluded.includes(tail[0]!))
+  ) return undefined;
   if (binding.arrayRestOffset === undefined) {
     return [...binding.path, ...tail];
   }
@@ -770,6 +777,16 @@ function bindingPathForIdentifier(
       nestedPath,
     );
     if (nested) {
+      if (isObjectBinding && isRest) {
+        const excluded = elements
+          .filter((other) => other !== element && !other.dotDotDotToken)
+          .map((other) => propertyNameText(other.propertyName ?? other.name));
+        return {
+          ...nested,
+          objectRestExcluded: excluded.filter((key) => key !== undefined),
+          objectRestHasDynamicExclusion: excluded.includes(undefined),
+        };
+      }
       return !isObjectBinding && isRest
         ? { ...nested, arrayRestOffset: index }
         : nested;

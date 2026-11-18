@@ -400,7 +400,7 @@ describe("compile-and-run-served", () => {
       );
       expect(value).toMatchObject({
         reason: "error",
-        errorKind: "compile",
+        errorKind: "general",
         message: "compileAndRun request was refused before it started",
       });
     } finally {
@@ -625,7 +625,7 @@ describe("compile-and-run-served", () => {
       );
       expect(f.outputs.result.get()).toMatchObject({
         reason: "error",
-        errorKind: "compile",
+        errorKind: "general",
         message: "compileAndRun request was refused before it started",
       });
       expect(f.memo.get()?.requestHash).toBe(hashOf(PROGRAM).toString());

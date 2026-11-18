@@ -268,15 +268,17 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   reads one row however large the board. When that fails — no index, an index of
   another pivot, no number or a malformed one, or no row of its own among those
   positions — it scans the pivot. The pivot holds one row per topic, so both
-  find the same row, or none: the number only decides how much is read. An index
-  element is a position of the pivot rather than a copy of a row, so an index
-  the board has stopped updating still reads the pivot as it is now, and a
-  position past the end of a pivot that has shrunk reads as nothing. The
-  comparison is of a field nested inside a row, and what lets it is that row's
-  declaration — the field is declared a `ComparableCell`, the annotation that
-  makes it arrive as something `equals` can follow rather than a value to look
-  at. The published row declares both sides `unknown` instead, so a consumer
-  that only carries the graph onward expands neither.
+  find the same row, or none: the number only decides how much is read. Each
+  lookup also receives the same pivot as a root-only readiness value, so native
+  unavailable state propagates before the callback reads its handle without
+  reading any other row. An index element is a position of the pivot rather than
+  a copy of a row, so an index the board has stopped updating still reads the
+  pivot as it is now, and a position past the end of a pivot that has shrunk
+  reads as nothing. The comparison is of a field nested inside a row, and what
+  lets it is that row's declaration — the field is declared a `ComparableCell`,
+  the annotation that makes it arrive as something `equals` can follow rather
+  than a value to look at. The published row declares both sides `unknown`
+  instead, so a consumer that only carries the graph onward expands neither.
 
   The pivot works over the board's distinct topics, with distinctness decided by
   the same `equals`: a topic the board lists at two entries, whether as the same

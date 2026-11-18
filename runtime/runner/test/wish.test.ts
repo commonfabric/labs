@@ -2868,14 +2868,14 @@ describe("wish built-in", () => {
     it("reports a favorites search it could not make as failed, not no-match", async () => {
       runtime.homeSpacePrincipalFor = () => undefined;
       const resolved = await searchHashtag("no-identity");
-      expect(resolved?.result).toBeUndefined();
+      expectUnavailableReason(resolved?.result, "error");
       expect(resolved?.error).toContain("User identity DID not available");
       expect(resolved?.errorCode).toBe("failed");
     });
 
     it("reports a favorites search that found nothing as no-match", async () => {
       const resolved = await searchHashtag("with-identity");
-      expect(resolved?.result).toBeUndefined();
+      expectUnavailableReason(resolved?.result, "error");
       expect(resolved?.error).toMatch(/No favorites found matching/);
       expect(resolved?.errorCode).toBe("no-match");
     });

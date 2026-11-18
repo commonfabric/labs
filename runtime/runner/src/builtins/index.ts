@@ -43,8 +43,6 @@ import { when } from "./when.ts";
 import { wish } from "./wish.ts";
 import { latestComplete } from "./latest-complete.ts";
 
-const WISH_DEBOUNCE_MS = 50;
-
 /**
  * Register all built-in modules with a runtime's module registry
  *
@@ -159,8 +157,9 @@ export function registerBuiltins(runtime: Runtime) {
     "anchorsOf",
     raw(anchorsOf),
   );
+  // Source availability reaches consumers in the current reactive settlement.
   moduleRegistry.addModuleByRef(
     "wish",
-    raw(wish, { debounce: WISH_DEBOUNCE_MS }),
+    raw(wish, { noDebounce: true }),
   );
 }

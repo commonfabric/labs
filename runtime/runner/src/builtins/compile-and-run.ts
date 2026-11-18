@@ -16,6 +16,7 @@ import type {
 
 import type { CellScope } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
+import { KeepAsCell } from "../link-utils.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
   effectTargetKey,
@@ -237,16 +238,15 @@ export function compileAndRun(
         );
         internal.sync();
       }
-      if (!served) sendResult(tx, { pending, result, error, errors });
       cellsInitialized = true;
       cellScope = outputScope;
     }
 
-    if (served) {
-      // Each acting instance owns its output binding, even when the node
-      // shares initialized cells with another instance of the same scope.
-      sendResult(tx, { pending, result, error, errors });
+    // A parked transaction may initialize the handles without committing the
+    // binding. Every acting instance publishes it in its own transaction.
+    sendResult(tx, { pending, result, error, errors });
 
+    if (served) {
       const announce = (settleTx: IExtendedStorageTransaction) =>
         sendResult(settleTx, { pending, result, error, errors });
 
@@ -275,6 +275,13 @@ export function compileAndRun(
         reportCreated,
       );
     }
+
+    // Pass the source, not a detached snapshot: child reads retain its labels
+    // and subscribe to later input changes. An omitted input still uses the
+    // runner's default and stored-argument behavior.
+    const argument = input.getRaw() === undefined
+      ? undefined
+      : input.getAsLink({ includeSchema: true, keepAsCell: KeepAsCell.All });
 
     const pendingWithLog = pending.withTx(tx);
     const resultWithLog = result.withTx(tx);
@@ -396,24 +403,20 @@ export function compileAndRun(
       .catch(reportCompileFailure)
       .finally(clearPending);
 
-    const work = compilePromise.then((pattern) => {
+    const work = compilePromise.then(async (pattern) => {
       // Only run the result if this is still the current request
       if (requestId !== thisRequestId) return;
       if (abortController?.signal.aborted) return;
 
       if (pattern) {
-        // TODO(ja): to support editting of existing pieces / running with
-        // inputs from other pieces, we will need to think more about
-        // how we pass input into the builtin.
-
         // The instantiation is the builtin's, in a continuation of its
         // action: no principal's act attributes what its setup initializes,
         // and its transaction holds none of the reads that chose the program.
-        runtime.runSynced(result, pattern, input.get(), {
+        await runtime.runSynced(result, pattern, argument, {
           attributeInitialization: false,
           runtimeStarted: true,
         });
-        runtime.editWithRetry((asyncTx) => {
+        await runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
         });
         runtime.pieceCreatedCallback?.(result);
@@ -683,7 +686,7 @@ function compileAndRunServed(
               }
               pending.withTx(settleTx).set(false);
               result.withTx(settleTx).setRawUntyped(
-                compileUnavailable(rejection.message),
+                unavailableError(rejection.message),
                 true,
               );
               error.withTx(settleTx).set(rejection.message);

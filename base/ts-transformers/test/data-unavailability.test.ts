@@ -1775,6 +1775,108 @@ Deno.test("object-rest guard paths map back to the source object", async () => {
   assertEquals(output.includes('path: ["rest", "request"]'), false);
 });
 
+for (const key of ["excluded", "other"]) {
+  Deno.test(`a helper guard ${key === "excluded" ? "refuses an excluded" : "preserves a retained"} object-rest key`, async () => {
+    const { diagnostics, output } = await validateSource(
+      `
+      import { type AsyncResult, computed, hasError, pattern } from "commonfabric";
+      interface Requests {
+        excluded: AsyncResult<string>;
+        other: AsyncResult<string>;
+        [key: string]: AsyncResult<string>;
+      }
+      function failed({ excluded, ...rest }: Requests) {
+        return hasError(rest.${key});
+      }
+      export default pattern((input: { requests: Requests }) => ({
+        failed: computed(() => failed(input.requests)),
+      }));
+      `,
+      { types: { "commonfabric.d.ts": commonfabricTypes } },
+    );
+    if (key === "excluded") {
+      expect(diagnostics.map(({ type }) => type)).toContain(
+        "availability:unobserved-compute-guard",
+      );
+      const policies = collect(parseModule(output), ts.isPropertyAssignment)
+        .filter((property) =>
+          ts.isIdentifier(property.name) &&
+          property.name.text === "unavailableInputPolicy"
+        )
+        .flatMap((property) =>
+          literalToValue(property.initializer) as unknown[]
+        );
+      expect(policies).not.toContainEqual({
+        path: ["input", "requests", "excluded"],
+        reasons: ["error"],
+      });
+    } else {
+      expect(diagnostics.map(({ type }) => type)).toEqual([]);
+      const policies = collect(parseModule(output), ts.isPropertyAssignment)
+        .filter((property) =>
+          ts.isIdentifier(property.name) &&
+          property.name.text === "unavailableInputPolicy"
+        )
+        .map((property) => literalToValue(property.initializer));
+      expect(policies).toContainEqual([{
+        path: ["input", "requests", "other"],
+        reasons: ["error"],
+      }]);
+    }
+  });
+}
+
+Deno.test("a helper guard cannot authorize a dynamically excluded object-rest key", async () => {
+  const { diagnostics } = await validateSource(
+    `
+    import { type AsyncResult, computed, hasError, pattern } from "commonfabric";
+    interface Requests {
+      other: AsyncResult<string>;
+      [key: string]: AsyncResult<string>;
+    }
+    function failed(key: string, { [key]: excluded, ...rest }: Requests) {
+      return hasError(rest.other);
+    }
+    export default pattern((input: { requests: Requests; excludedKey: string }) => ({
+      failed: computed(() => failed(input.excludedKey, input.requests)),
+    }));
+    `,
+    { types: { "commonfabric.d.ts": commonfabricTypes } },
+  );
+  expect(diagnostics.map(({ type }) => type)).toContain(
+    "availability:unobserved-compute-guard",
+  );
+});
+
+for (const binding of ["...rest", "tag, ...rest"]) {
+  Deno.test(`a helper guard cannot authorize the source marker through { ${binding} }`, async () => {
+    const { diagnostics, output } = await validateSource(
+      `
+      import { type AsyncResult, computed, hasError, pattern } from "commonfabric";
+      type Request = AsyncResult<{ name: string }> & { tag?: string };
+      function failed({ ${binding} }: Request) { return hasError(rest); }
+      export default pattern((input: { request: Request }) => ({
+        failed: computed(() => failed(input.request)),
+      }));
+      `,
+      { types: { "commonfabric.d.ts": commonfabricTypes } },
+    );
+    expect(diagnostics.map(({ type }) => type)).toContain(
+      "availability:unobserved-compute-guard",
+    );
+    const policies = collect(parseModule(output), ts.isPropertyAssignment)
+      .filter((property) =>
+        ts.isIdentifier(property.name) &&
+        property.name.text === "unavailableInputPolicy"
+      )
+      .flatMap((property) => literalToValue(property.initializer) as unknown[]);
+    expect(policies).not.toContainEqual({
+      path: ["input", "request"],
+      reasons: ["error"],
+    });
+  });
+}
+
 Deno.test("array-rest guard indices map back to source tuple positions", async () => {
   const output = await transformSource(
     `
