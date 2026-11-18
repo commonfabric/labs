@@ -641,7 +641,11 @@ document, and part documents. A kept subtree, such as a row of a kept
 collection or a node of the rendered tree, can be stored in a part document
 of its own, with a link to it at its place in the result, so that a reader
 loads and subscribes to the parts it uses. The runtime decides which
-subtrees are split off by a rule about size. A reader names the result cell
+subtrees are split off by a rule about size. Provisional (P20 of the
+continuation plan): a subtree is a part only from a minimum size on, and
+an array that is too large for one document is stored in chunk documents,
+each a contiguous run of its entries, so that one change of one row
+writes one chunk at any length of the list. A reader names the result cell
 and a path, whichever document stores the path, and a split changes no value
 and no label. One evaluation writes every document it changed in one
 transaction. [Execution and storage](execution-and-storage.md) §4.10 owns the
@@ -1133,7 +1137,8 @@ Each stage can be checked before the next begins.
    write policy, and per-row instances together. This stage measures two
    sets of placeholder numbers in
    [execution and storage](execution-and-storage.md): the sizes at which a
-   kept subtree becomes a part document (§4.10), and the constants of cache
+   kept subtree becomes a part document and an array is stored in chunks
+   (§4.10), and the constants of cache
    promotion (§8).
 5. Move the remaining scheduler into the serving loop. The scheduler is
    switched per space: a space runs the builder path or the compiled path,

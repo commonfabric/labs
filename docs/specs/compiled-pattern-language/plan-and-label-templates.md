@@ -1931,13 +1931,62 @@ instance, which is per chain of sites and keys in the written-out form as well.
 | A cycle of side-writes through a cell that a site binds | Site | Whether two argument slots of a callee name one cell, or a cell that the caller writes, is a fact of the binding |
 | The keep set: which outputs are stored, and at which path (section 1.1) | Chain of sites | An output of a callee is kept, at a site, where an entry of `CallSite.result` covers its path and the holding record's result reaches that place |
 | `Output.scope` (section 1.4) | Callee for the record, and site for the value | The member holds what the callee's own state cells, children and operations give. At a site the scope is the narrowest among that member, the `scope` of the sites on the chain, and the scope of what each bound place holds. The runtime takes the narrowest scope of the addresses a cone instance is bound to in any case |
-| The evaluation of a template on declared labels (`cfc-flow:writer-fit`, `cfc-flow:write-floor`, `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`; sections 1.5 and 4.4) | Not determined (section 8, question 170) | Bound to a slot, an argument slot has the `declared` member of the callee's type at every site. Bound to an output, the written-out form evaluates the caller's template there, which differs by site |
+| The evaluation of a template on declared labels (`cfc-flow:writer-fit`, `cfc-flow:write-floor`, `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`; sections 1.5 and 4.4) | Callee, and site for the binding alone (provisional, P19; "The checks on declared labels are modular", below) | In the callee's record an argument slot has the `declared` member of the callee's type, whatever a site binds it to. A site is checked for what it binds to each argument slot and for where it puts each result, and no check follows an argument slot into the caller's template |
 | `cfc-flow:ui-contract` (section 4.4) | Site, for a callee compiled in by a tag; callee, for one compiled in by a call | The chain of an element continues at the position of a tag and ends at the root of the tree of a call |
 | `binding:write-to-computed` (`language-subset.md` §10.2) for a path of a callee's argument | Site | Whether the callee writes through the path is found once per callee, through the sites of the callee in turn. Whether the call binds the path to a value that can hold no reference is a fact of the site |
 | The input constraints that an output lists (section 1.5) | Callee for the list, cone instance for the check | A list holds the constraints of the bodies of its own record. The constraints of a body upstream across a site apply through the `output` node with `site`, or through the binding of the argument slot, and are checked at instantiation |
 | The label of a template, the instantiation key and the memo key (sections 4.1 to 4.3) | Cone instance | As in the written-out form. Two sites share a memo entry where the slot-free hashes and the labels of the inputs are equal |
 | What makes a demanded output due when a slot's label alone changed (section 4.1) | Cone instance | The slots that a template reaches are found once per callee, and each is bound per site |
 | The binding of slots to addresses, the element tables, the selections, the provenance records (`execution-and-storage.md`) | Cone instance | As in the written-out form |
+
+*The checks on declared labels are modular.* Provisional (P19 of the
+continuation plan; section 8, question 170, point a). The four diagnostics
+that evaluate a template on declared labels, `cfc-flow:writer-fit`,
+`cfc-flow:write-floor`, `cfc-flow:max-confidentiality` and
+`cfc-flow:required-integrity`, are evaluated in two places and nowhere else.
+
+- **Once for a callee,** over the templates and the constraints of its record,
+  by the rule of section 4.4. A `slot` node of root `argument` has the
+  `declared` member that the callee's own type gives the path, and where the
+  type declares nothing there the node has none, so a check that reaches it
+  is not decided and is left to instantiation, as for any slot with no
+  declared label.
+- **Once for a call site, for the binding alone.** For each entry of
+  `CallSite.argument` whose path has a declared label in the callee: what the
+  site binds there is checked against that label as a write edge to a target
+  that declares it is checked. The value written is what the site binds: the
+  `declared` member of a slot of the caller, or the template of an output of
+  the caller evaluated on declared labels, which is made once per output and
+  reused (section 3.2, "A rule over a template"). `cfc-flow:writer-fit` is
+  decided on its confidentiality and `cfc-flow:write-floor` on its integrity.
+  For each entry of `CallSite.result`: the template of the callee's output,
+  evaluated on declared labels once for the callee, is checked in the same
+  way against what the caller declares at the place that holds it, where
+  the caller declares anything there.
+- **Not per chain of sites.** No check follows an `output` node with `site`,
+  or an argument slot, from one record into another. The work at compile
+  time is one evaluation for each template of each record and one for each
+  entry of each call site, which is linear in the source.
+
+Enforcement at run time is unchanged: every constraint is checked at
+instantiation for the cone instance, on the labels that the binding of the
+site gives, so no label, no value and no decision of a transaction differs
+from the written-out form. What differs is which reports the compiler makes.
+A flow that the written-out form reports only by following an output of the
+caller through the callee to a constraint inside the callee is reported at
+the site's binding, where the callee declares a label on the argument path,
+and at run time where it declares none. A flow that the written-out form
+passes at one site because of what that site binds, and that the callee's
+annotation alone cannot pass, is reported for the callee. *Assumed:* the
+report at a site names the call, the argument path and the two declarations,
+and has the name of the diagnostic that a write edge would have. The
+alternative is to evaluate the checks per chain of sites: the reports are
+then those of the written-out form, and the work at compile time is `k` to
+the power `D` for `k` sites per level and `D` levels. The prototype has
+neither, since it writes a callee out at each site. The rule is the same for
+a site in an element body over an array of references, over an array of
+plain values in place, and over the result of another per-element
+construct.
 
 *The size that results.* A plan holds one record for each pattern whose code it
 holds, and one call-site record for each call that is written in source, with
@@ -1963,9 +2012,10 @@ is the hash of a function that is given the constants of a call, where the
 written-out form has a function per call that holds them, so what a store keys
 by `Cone.code` (the cache documents and the basis rows of
 `execution-and-storage.md` and `scheduler-and-serving-loop.md`) is keyed by
-another hash. And a compile-time diagnostic that follows an argument into the
-caller's template is either evaluated per chain of sites or not reported, which
-the table leaves not determined.
+another hash. And a compile-time diagnostic that the written-out form makes by
+following an argument into the caller's template is made at the binding of the
+site or left to instantiation (provisional, P19; "The checks on declared labels
+are modular", above).
 
 The same holds for a site in an element body over an array of references, over
 an array of plain values in place, and over the result of another per-element
@@ -2789,6 +2839,15 @@ question of section 8.
   reference by key resolves all the same, because a key names its
   fields. That is about forming a key. Resolving one reads no schema,
   as ruled. Over an array of references nothing of it arises.
+- **Per-element state with no declared key.** Provisional (P21 of the
+  continuation plan). Where the body of a per-element construct over an
+  array of plain record values in place, whose type declares no key,
+  holds per-element state, the compiler reports the warning
+  `array-by-key:state-without-key` (`language-subset.md` §4.4.1 and its
+  §13, question 47). Each edit of such a row is a new key, which moves
+  what the old key holds and leaves its documents stored. The warning
+  changes no rule of this section. Over an array of references and over
+  an array with a declared key it is not reported.
 - **Two declared keys for one array** (question 141). *Assumed:* the
   compiler reports an error where an array whose type declares one key
   is passed to a parameter whose type declares another key, where it
@@ -3822,7 +3881,12 @@ entry.
 - A JSX tree that is not the initializer of a declaration is one cone.
 - An element construct is not part of the cone of the expression it is
   written in. Its callback is cones by the rules of the next paragraph.
-  The enclosing cone uses the assembled result (below).
+  The enclosing cone uses the assembled result (below). Provisional
+  (P22 of the continuation plan; section 8, question 175): where the
+  enclosing cone places the result of a `map`, a `filter` or a `flatMap`
+  and observes nothing of it, it holds a reference to the collection and
+  not the rows, and it is not evaluated for a change of a row or of the
+  membership ("The assembled result of an element construct", below).
 - A declaration written inside a promoted `computed` whose body is a
   block (`language-subset.md` §6.1) is no declaration of the reactive
   tier for this rule. It is part of the initializer the `computed` is
@@ -3989,6 +4053,24 @@ entry of `Plan.outputs` concern such a construct.
   step. `host.output` of the entry returns the assembled array, after the
   runtime has brought those cone instances up to date
   (`execution-and-storage.md` §2.5).
+
+- **Placed, and not observed.** Provisional (P22). A cone outside the
+  construct that places the assembled result at a path of the value it
+  constructs, and observes nothing of it, is given a reference to the
+  collection by `host.output`, and the runtime gives it the array only
+  when its value code asks something of the collection
+  (`execution-and-storage.md` §2.2, "A collection that a cone places").
+  The rows are stored by the collection, at the kept paths of the
+  per-element entries. The edge of kind `output` from the last cone of
+  the body to the placing cone stays in the plan: it orders the cones,
+  and it makes the placing cone instance stale only where that instance
+  observed the collection. No template changes. The template of the
+  assembled entry is the membership template, those of the rows are the
+  per-element entries', and the placing cone's template for its own
+  paths holds neither, since placing consumes nothing of what is placed
+  (section 5.3). The case is the result of a `map`, a `filter` or a
+  `flatMap` over an array of references, over an array of plain values
+  in place, and over the result of another per-element construct.
 
 **Scope.** `Output.scope` is the narrowest scope the plan can show for the
 value, in the order `space`, `user`, `session`. It is the narrowest among:
@@ -4844,8 +4926,14 @@ collection or a part of the rendered tree, can be stored in a document of
 its own, a **part document**, with the place it has in the result holding a
 link to it. Which subtrees are split off, how a part document is
 identified, and what a reader of a part demands belong to
-`execution-and-storage.md` (§4.10). A split changes neither a value nor a
-label when the following hold.
+`execution-and-storage.md` (§4.10). Provisional (P20 of the continuation
+plan): by the same section an array that is too large for one document is
+stored as chunk documents, each a contiguous run of its entries, with a
+list of storage links to the chunks at the place of the array. A chunk
+list and a link to a chunk are storage links, a chunk's envelope is
+complete for its paths as a part's is, and what follows holds for them as
+for a part. A split changes neither a value nor a label when the following
+hold.
 
 - **The link is not a reference of the language.** The link from the result,
   or from one part to another, is a **storage link**, which the runtime
@@ -15129,8 +15217,18 @@ this document made.
        chain of sites, the diagnostics are those of the written-out form, and
        the compile-time work follows the number of chains, which is the growth
        that the decision removes from the plan. No label and no run-time
-       decision differs between the two. Nothing is assumed. It is question 288
-       of the continuation plan.
+       decision differs between the two. *Assumed,* provisional (P19 of the
+       continuation plan, the coordinator's decision, and not ruled): the
+       checks are modular. They run once for a callee, against the declared
+       labels of its argument slots, and once for each call site for the
+       binding alone, and they do not follow an argument into the caller's
+       template (section 1.1, "The checks on declared labels are modular").
+       If the owner decides for checks per chain of sites, that paragraph
+       and the row of the table are replaced, the reports are those of the
+       written-out form, and the work at compile time returns to `k` to the
+       power `D`. The prototype built neither P18 nor P19, so no diagnostic
+       of the corpus was compared under the decision. It is question 288 of
+       the continuation plan.
      - **(b) What a site binds a path to.** Section 1.1 names a slot, an output
        and a constant. *Assumed:* also the stream of a binding of the holding
        record and the result of the instance, as `Binding.state` has them,
@@ -15168,12 +15266,36 @@ this document made.
      - **(i) What is keyed by `Cone.code`.** The value function of a cone of a
        callee is one function for every site, so its hash is no hash of the
        written-out form. It changes no result.
+     - **(j) Whether the binding decides which records a callee has.** Section
+       1.1 has "A callee record depends on nothing of its call sites". The
+       prototype, which writes a callee out at each site, compared the copies
+       of one callee in the plans of the corpus: of 82 pairs of copies, 44 are
+       equal but for the numbers in them, and 38 differ, 33 of those in how
+       many records they have. In `dev/experimental/folksonomy-demo.tsx` a
+       cone lists a slot at one site and none at the other, and in
+       `examples/suggestion-test/suggestion-test.tsx` the write edges of a
+       request have the path `context` at one site and `context/content` at
+       the other. So in the written-out form what a call binds decides which
+       records exist. The count is from a script that paired records by their
+       place in the lists and was not checked record by record. Not
+       determined: whether a callee record that holds what any site needs,
+       with the binding resolved when a cone instance is bound, gives at each
+       site the slots, the edges and the paths that the written-out form
+       has there, or whether some of those records have to be per site.
+       Nothing is assumed beyond the sentence of section 1.1.
+
+     The decision is designed and not built: the prototype writes the callee
+     out at every site, so no point of this question is tested. Over the plans
+     of the corpus the prototype's author estimates that the decision makes
+     them 1.4% smaller, 5,870,726 bytes for 5,956,178, because a pattern is
+     seldom compiled in at more than one site there. The decision bounds the
+     worst case and does not change the corpus.
 
      The decision is the same for a site in an element body over an array of
      references, over an array of plain values in place, and over the result of
      another per-element construct. It is question 247 of the continuation plan,
      with its question 288 for point (a) and its question 289 for points (b) to
-     (i), and it settles the `site` steps of question 250 there.
+     (j), and it settles the `site` steps of question 250 there.
 171. **The form of an error state, and whether placing a failed value is reading
      it** (for the project owner). Section 5.2 gives an error state a label and
      a place and no form, and section 5.3 says that a cone that reads an errored
@@ -15228,4 +15350,23 @@ this document made.
      The cause on today's side is not established. *Assumed:* section 5.3
      stands. Not about a per-element construct. It is question 287 of the
      continuation plan.
+175. **A cone that places the result of a per-element construct and observes
+     nothing of it** (for the project owner; sections 1.4 and 5.3). Section 1.4
+     has "The enclosing cone uses the assembled result", and with the rules of
+     `execution-and-storage.md` on a memo entry and on what a value function
+     returns, a change of one row makes the enclosing cone and the `result`
+     cone stale and each returns a value of every row. The worked example of
+     that document's §10.1 evaluates no such cone. *Assumed,* provisional (P22
+     of the continuation plan, the choice of the prototype's author, adopted by
+     the coordinator and not ruled): the placing cone holds a reference to the
+     collection, the rows are stored by the collection, and no template
+     changes (section 1.4, "Placed, and not observed"). The alternative is
+     that the cone returns the rows. The prototype measured 2 and 4
+     evaluations for one change with the reference, against 3 and 5, and 2 to
+     26 bytes put into the documents against 238,904 for a list of 10,000. It
+     applies to the result of a `map`, a `filter` and a `flatMap` over an
+     array of references, over an array of plain values in place, and over the
+     result of another per-element construct. The open points are in
+     `execution-and-storage.md` (its question 104). It is questions 259 and 292
+     of the continuation plan.
 

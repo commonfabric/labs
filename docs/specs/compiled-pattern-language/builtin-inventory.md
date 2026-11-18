@@ -642,6 +642,11 @@ the element is keyed by the identity of that cell.
   stays, as for a removal. One edit is excepted by ruling: a write
   through a reference by key to the element re-keys it in the same
   transaction, and what the old key holds moves to the new key.
+  Provisional (P21 of the continuation plan): where the body of a
+  per-element construct over such an array holds per-element state and
+  the array type declares no key, the compiler reports the warning
+  `array-by-key:state-without-key` (`language-subset.md` §4.4.1), which
+  names `ArrayByKey` and an array of references as the corrections.
 - *A reference to a plain value in place follows the element.* Over an
   array of plain values in place, `equals` finds two references to one
   element equal: they name the same collection, key and path. A member

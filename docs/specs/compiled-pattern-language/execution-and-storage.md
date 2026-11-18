@@ -82,6 +82,13 @@ This document adds the following.
   changes. Section 3 says what it is made of.
 - A **split point** is a kept path at which a part document can begin
   (section 4.10).
+- A **chunk document** holds a contiguous run of the entries of an array
+  whose content is too large for one document, and a **chunk list** at
+  the place of the array holds the storage links to the chunks (section
+  4.10).
+- A **collection reference** is what a cone holds of the assembled
+  result of a per-element construct that it places and does not observe
+  (section 2.2).
 
 ## 1. One transaction per cause
 
@@ -1100,6 +1107,98 @@ runtime stores from it the kept paths that no entry of another cone
 covers. `ConeResult.outputs` has no index for that record. The
 interface above stays as it is until the question is decided.
 
+**A collection that a cone places.** Provisional (P22 of the continuation
+plan; section 11, question 104). A cone that places the assembled result
+of a `map`, a `filter` or a `flatMap` at a path of the value it
+constructs, and observes nothing of the collection, holds a reference to
+the collection at that path and not the rows. `host.output` of the
+assembled entry (`plan-and-label-templates.md` §1.4) gives the value
+function a **collection reference**: a value of the runtime that names
+the entry of `Plan.outputs` and the cone instance context it was pulled
+in, which is the keys of the enclosing collections, the chain of call
+sites and the scope key. It is one value whatever the rows hold and
+however many there are. The rows are stored by the collection. This is
+the same for a collection over an array of references, over an array of
+plain values in place, and over the result of another per-element
+construct. Over a plain array generated from scratch it is *assumed*
+the same, and the prototype did not build that case.
+
+- **Placing and observing.** A cone places the collection when it writes
+  the reference as a child of a node, as a member of a record or an
+  entry of an array literal that it returns, as its whole value, or as
+  the chosen branch of a `select`. It observes the collection when its
+  value code asks anything of it: an entry, the length, an iteration, a
+  spread, a method, `equals`, or a call of a function body with the
+  collection in its argument. The runtime gives the assembled array at
+  the first such request, as it supplies a slot when the slot is first
+  read, and the cone instance then depends on the assembly as on any
+  upstream output (section 3.3). A reference is placed by expression
+  code of the reactive tier alone, since handing it to a function body
+  is observing. So the plan shows every kept path at which a collection
+  can stand: the paths of the per-element entries, with `*` at the
+  position of the collection.
+- **What makes the placing cone stale.** Its memo entry records the pull
+  under `upstream` with a fingerprint of the reference: the entry and
+  the context. A change of a row, an append, an insertion, a removal
+  and a reorder change no such fingerprint. So the placing cone instance
+  is not stale, and neither is a cone that pulls its output and places
+  it in turn, nor the `result` cone. One change of one row evaluates the
+  element cone instances of the row and brings the assembly up to date,
+  and evaluates no enclosing cone.
+- **What is stored, and by whom.** The store step stores the collection
+  at each kept path where a reference to it stands in a value that is
+  stored: the row of each key whose cone instances returned another
+  value, and a `splice` of the stored array for the keys that left or
+  entered, in the layout of section 4.10. The value of the placing cone
+  is not written for it, since that value did not change. *Assumed:*
+  where one collection is placed at two kept paths, its rows are stored
+  at both, and a change of one row writes both.
+- **Reading through the place.** A cone or a body that reads a path
+  through the output of the placing cone and reaches the reference
+  reads on into the collection: it depends on the assembled entry, or
+  through a `pick` on the row it chose, and not on the placing cone for
+  what is below the reference. A slot of a handler whose path passes
+  the place reads the stored rows by address. Before the body runs, the
+  stale element cone instances and the assembly are evaluated as
+  section 1.3 has it, and the placing cone is not evaluated on their
+  account.
+- **Labels.** No label differs. A kept path below the collection has the
+  template of the per-element entry, and the path of the collection the
+  membership template (`plan-and-label-templates.md` §1.4 and §2.3).
+  Placing consumes nothing of what is placed (its §5.3), so the template
+  of the placing cone's own paths never held the content of the rows.
+  The instantiation key of a row's kept paths changes where that row's
+  labels change and for no other row.
+- **Demand.** Demand is held per kept output path
+  (`scheduler-and-serving-loop.md` §4.2). A demanded path below the
+  collection demands the element cones of its key and the collection's
+  membership; a demanded path of the container demands the placing
+  cone. A reader of one row therefore causes neither the placing cone
+  nor another row's cones to be evaluated.
+- **The keep set** holds the same paths as it does where the cone
+  returns the rows: the container's paths from the placing cone, and
+  the rows' paths from the per-element entries.
+- **A client that renders one row** reads the kept paths of the row,
+  loads the documents on the path, which are the chunk or the part of
+  the row (section 4.10), and demands the cones of that key. A change of
+  another row reaches it only where both rows are stored in one chunk,
+  as a write that leaves its paths unchanged.
+- **An errored row** is the error state of that row at its position, as
+  for any failed value that is placed
+  (`plan-and-label-templates.md` §5.3).
+
+The alternative is that the cone returns the whole value: the first
+assumption of this section's question 82 read for a collection as well,
+with `plan-and-label-templates.md` §1.4 ("The enclosing cone uses the
+assembled result") and the paragraph "Upstream" of section 3.3. Then a
+change of one row makes every enclosing cone and the `result` cone
+stale, each returns a value of every row, and the store step compares
+or writes the result whole. The prototype measured both on a `map` in
+the result: 3 evaluations for one change of one row and 5 for a `map`
+over the result of a `filter`, with 238,904 bytes put into the
+documents for a list of 10,000, against 2 and 4 evaluations and 2 to 26
+bytes with the reference, at every length.
+
 Six rules hold for an invocation.
 
 - **Slots are materialized by the runtime, when they are first read.** A
@@ -1702,6 +1801,10 @@ the keys of the array's positions as step 2 below does, which needs
 the salt of the space (section 5.3). The reader is registered at the
 collection's membership and at the path below the position it resolved
 to, so a move, a removal, and a change at the path each make it stale.
+Provisional (P24 of the continuation plan): a write below the array
+marks the readers through the keys that the write touched, and not
+every reader through a key of the array
+(`scheduler-and-serving-loop.md` §3.2).
 A reference whose key no position holds reads as nothing. How the
 reference is stored, and what a client does that cannot read the
 salt, are assumed (`plan-and-label-templates.md` §8, question 113).
@@ -1904,7 +2007,46 @@ No cone computes the assembled collection: the runtime assembles it in
 step 6. Which entry of `Plan.outputs` stands for it, and what that
 entry's `cone` is, is in `plan-and-label-templates.md` §1.4. A cone that
 uses the assembled collection pulls that entry with `host.output`, and it
-is stored when it is kept.
+is stored when it is kept. Provisional (P22): a cone that places the
+collection and observes nothing of it is given a collection reference,
+and the rows are stored by the collection (section 2.2, "A collection
+that a cone places").
+
+**The steps state the result, and not an algorithm.** Provisional (P23
+of the continuation plan; section 11, question 105). A runtime may keep
+what a change did not touch, where the table and the assembled result
+it then holds are those that steps 1 to 6 give.
+
+- **A kept key.** The key of a position is a function of what the
+  position holds, so the key that a runtime kept for a position that no
+  write touched is the key that step 2 computes. A write below one
+  element forms the key of that element. A `splice` forms the keys of
+  the entries it put in. An array that is written whole keeps the keys
+  of the entries that are equal at its start and at its end, compared
+  with no hash, and forms those between. Where an element part that left
+  or entered is one that another position has, the occurrence counts
+  are formed again from the kept element parts, with no hash.
+- **An assembly brought up to date.** The runtime applies the splices of
+  the source to the element table and to the assembled result:
+  it creates and evaluates the cone instances of the keys that entered
+  (step 3), evaluates those of the keys whose entries are marked (step
+  4), and drops those of the keys that left (step 5). For a construct
+  over the result of another per-element construct the splices are those
+  that the upstream assembly reports.
+- **What still follows the length.** A key whose position changed has a
+  new value of its slot of root `index`, so an insertion or a removal
+  that is not at the end gives every later key another position, which
+  is one number written per later key and no evaluation except of the
+  cones that list the slot. And an array that a writer replaces by a
+  `set` of a whole new array is compared entry by entry.
+
+The case of the first bullet is an array of plain values in place, with
+a declared key and without, where the prototype measured 1 salted hash
+for one append, insertion or edit and none for a removal at a length of
+10,000, against 10,000 with every key formed again. Over an array of
+references no key is hashed in either way. Over the result of another
+per-element construct the keys are the upstream keys and the second
+bullet applies.
 
 The element table is built by evaluation and not when an instance is
 loaded: a plain value's key is a hash of the value, and a collection
@@ -2897,7 +3039,9 @@ export interface MemoEntry {
   /**
    * The upstream outputs the evaluation pulled, by output index, each
    * with the fingerprint of its value. An output the cone reaches only
-   * through picks has no entry here.
+   * through picks has no entry here. Provisional (P22): for a collection
+   * that the cone placed and did not observe, the fingerprint is that of
+   * the collection reference.
    */
   readonly upstream: Readonly<Record<Index, string>>;
   /**
@@ -3002,7 +3146,13 @@ changes the fingerprint as well.
 - **Upstream.** An entry is not current when an upstream output it pulled
   has a different value from the one recorded. The check is made when the
   entry is needed, after the upstream cone instance has been brought up to
-  date. An upstream output that the cone reaches only through picks, which
+  date. Provisional (P22): for the assembled result of a per-element
+  construct that the cone placed and did not observe, the value recorded
+  is the collection reference, which no change of a row and no change of
+  membership alters, so the entry stays current and the assembly is not
+  brought up to date for the check (section 2.2, "A collection that a
+  cone places"). An upstream output that the cone reaches only through
+  picks, which
   the plan shows, is compared by the children the picks chose and not as a
   whole: the entry records, per choice point, the fingerprint of the chosen
   child (`MemoEntry.picked`), and the entry is not current when the child
@@ -3173,6 +3323,7 @@ says how many scope instances exist.
 | --- | --- | --- | --- |
 | Result document | The kept outputs that are not stored in a part document, their labels, their provenance, and a storage link in the place of each part | The result cell's, assigned when the instance is created | The space's, and one per user or session that a kept output of that scope was evaluated for |
 | Part document | One kept subtree that the rule of section 4.10 stores by itself, with its labels and provenance | Section 4.10 | As the result document |
+| Chunk document | One contiguous run of the entries of an array that is too large for one document, with the labels and provenance of the run (provisional, P20) | Section 4.10 | As the result document |
 | Argument document | The instance's argument, as the creator wrote it | Derived from the result cell, linked from it | As today |
 | Parameters document | The private parameters of an instance whose callee is an inline pattern written at an instantiation in a function body (section 4.6) | Derived from the result cell, linked from it | As the argument document |
 | State cell document | The value of one state cell | Section 5.2 | By the cell's declared scope |
@@ -3376,7 +3527,10 @@ indexes, so an insertion or a reorder changes which index a row is stored
 at even though no row is evaluated. The write is a `splice` of the stored
 array (`PatchOp` in `runtime/memory/v2.ts`), not a rewrite of the document.
 What moves is a storage link where the row is a part, and the row's value
-where it is stored in place.
+where it is stored in place. Where the array is stored in chunks
+(section 4.10; provisional, P20), the `splice` is of the run of one
+chunk, no stored document holds a position, and the rows of the other
+chunks are not written.
 
 The root of the result document holds, beside `value`:
 
@@ -3932,42 +4086,257 @@ scalar, a link, the `props` of a node and the `children` array of a node
 are not split points. They are stored with the node or the record that
 holds them.
 
-**The rule about size.** The size of a split point is the length in bytes
-of the stored encoding of its subtree, with each part below it counted as
-its storage link, plus the stored label entries and provenance records of
-the paths in it. The three numbers below are placeholders. Stage 4 of the
-overview's staging has to measure them (section 11, question 32).
+**The rule about size.** Provisional (P20 of the continuation plan;
+section 11, question 103). The size of a split point is the length in
+bytes of the stored encoding of its subtree, with each part below it
+counted as its storage link and each array below it that is stored in
+chunks counted as its chunk list (below), plus the stored label entries
+and provenance records of the paths that are counted. The numbers are
+placeholders. Stage 4 of the overview's staging has to measure them
+(section 11, question 32).
 
-1. A split point whose size is at least `PART_SPLIT_BYTES`, 1,024, is
-   stored in a part document.
-2. A part whose size is at most `PART_MERGE_BYTES`, 512, is stored in place
-   again. Between the two numbers a split point stays as it is, so that a
-   subtree near one number does not alternate.
-3. When the content of a document, the result document or a part, exceeds
-   `DOCUMENT_MAX_BYTES`, 65,536, every split point directly below it that
-   is stored in place becomes a part, whatever its size. Such a part is
-   stored in place again only when rule 2 holds for it and the document it
-   returns to would then hold at most half of `DOCUMENT_MAX_BYTES`. A
-   document can still exceed the number where its content has no split
-   point, such as one long string.
+| Constant | Value | What it is |
+| --- | ---: | --- |
+| `PART_MIN_BYTES` | 1,024 | The least size at which a split point is a part of its own. *Assumed* several times the size of a storage link, which is 61 bytes in the encoding of the prototype: about 17 links |
+| `DOCUMENT_MAX_BYTES` | 65,536 | The most that the content of one document holds, where the content can be divided: the result document, a part, and a chunk |
 
-The rule is applied when a transaction seals, to the split points on the
-paths the transaction wrote, from the innermost outward. A subtree no write
-touched keeps its arrangement. Sizes are computed from the documents being
-written and are not stored.
+1. A split point whose size is at least `PART_MIN_BYTES` is stored in a
+   part document. A smaller split point is stored in place, whatever the
+   size of the document that holds it.
+2. A part whose size falls under half of `PART_MIN_BYTES` is stored in
+   place again. Between the two numbers a split point stays as it is, so
+   that a subtree near one number does not alternate.
+3. An array whose content would exceed `DOCUMENT_MAX_BYTES` where it is
+   stored in place is stored in chunk documents ("A long array is stored
+   in chunks", below). The content of an array is the stored encoding of
+   its entries, each a value in place or a storage link to a part, with
+   the label entries and provenance records of the paths in them.
+4. A document can still exceed `DOCUMENT_MAX_BYTES` where its content has
+   no split point of at least `PART_MIN_BYTES` and no array that exceeds
+   the number by itself: one long string; a record of many members that
+   are each under `PART_MIN_BYTES`, whose number is bounded by the source
+   where the members are declared; several arrays that are each under
+   the number and are no split points; and one entry of an array that is
+   larger than the number and is no split point.
 
-- **A row.** Rule 1 applies to each row by itself. A list of many small
-  rows stays in the document that stores the array until that document
-  exceeds `DOCUMENT_MAX_BYTES`, and then rule 3 makes each of those rows a
-  part.
+The rule is applied when a transaction seals, to the split points and
+the arrays on the paths the transaction wrote, from the innermost
+outward. A subtree no write touched keeps its arrangement. Sizes are
+computed from the documents being written and are not stored. With each
+part and each chunk counted as its link, a split point whose size a
+write can change lies in a document that the transaction writes, so
+measuring encodes no document that the transaction does not write. A
+runtime may keep the sizes of the split points of a loaded instance in
+memory and add the difference that each write makes.
+
+- **A row.** Rule 1 applies to each row by itself. A row under
+  `PART_MIN_BYTES` stays in the array, at any length of the list, and
+  rule 3 bounds the document that holds it. No number of small rows
+  makes one of them a part.
 - **The rendered tree.** Every node is a split point, so a large subtree of
   a tree is split where it is large: a row's node, a panel inside it, a
   long list inside that. Static structure whose labels are empty is stored
   like any other: in place when small, and once, in a part, when large.
+  The `children` array of a node is no split point and is an array of
+  rule 3.
 - **Another kept output.** A record or an array that one opaque call
   returns is one split point at the output's root. Nothing inside it is a
   split point unless it is itself the root of an `Output` or a row of a
-  kept collection.
+  kept collection. An array inside it is an array of rule 3.
+- **The root of a kept collection** is the root of an `Output` and so a
+  split point: by rule 1 the array is a part of its own from
+  `PART_MIN_BYTES` on, and its rows are in that part, in place or as
+  storage links, until rule 3 stores the array in chunks.
+
+**A long array is stored in chunks.** Provisional (P20). Rule 3 applies
+to every array that a result document or a part stores: the array of a
+kept collection, over an array of references, over an array of plain
+values in place, over a plain array generated from scratch, and over the
+result of another per-element construct alike; the `children` array of
+a node; and an array inside a value that an opaque call returns. It
+does not apply to the array of an argument document or of a state cell,
+which a handler or a client writes and this section does not lay out
+(section 11, question 103).
+
+- **A chunk document** holds a contiguous run of the entries of one
+  array, in their order, with the label entries and provenance records
+  of the paths in the run. Its content is at most `DOCUMENT_MAX_BYTES`,
+  except where it holds one entry that is larger by itself.
+- **The chunk list.** The place of the array holds a chunk list: the
+  storage links to the chunks, in the order of their runs, and the
+  serial number that names the next chunk (below). *Assumed:* its stored
+  form is a record with the tag of a storage link and a member that
+  marks it as a list, so that what is stored tells it from an array of
+  the pattern, and a value of that form written by pattern code or by a
+  client is refused. A chunk list holds no position, no count of
+  entries and no key (section 11, question 103, has the alternative).
+- **A tree.** A chunk list is an array of storage links, and rule 3
+  applies to it: a list whose content exceeds `DOCUMENT_MAX_BYTES` is
+  stored in chunk documents that hold runs of links to chunks, and the
+  place of the array holds the list of links to those. With a storage
+  link of 61 bytes a document holds 1,074 links, so one list serves
+  1,074 chunks and a tree of two levels 1,074 times 1,074.
+- **The first division.** When the content of an array first exceeds
+  `DOCUMENT_MAX_BYTES`, the entries are divided in two runs at the
+  boundary between entries that is nearest half of the bytes, and each
+  run is divided again while it exceeds the number.
+- **A split.** A chunk whose content exceeds `DOCUMENT_MAX_BYTES` when a
+  transaction seals is divided in two the same way. The transaction
+  creates one chunk document for the second run and writes the list
+  above, which gains one link behind the link of the chunk that was
+  divided. A list that then exceeds the number is divided in turn.
+- **A merge.** Two chunks that are adjacent in one list and whose
+  contents together fall under half of `DOCUMENT_MAX_BYTES` become one:
+  the transaction writes the first with both runs, deletes the second,
+  and writes the list above, which loses one link. A chunk whose run is
+  empty is deleted in the same way. A list of an inner level that holds
+  one link is replaced by that link. When the list at the place of the
+  array holds one chunk whose content is under half of
+  `DOCUMENT_MAX_BYTES`, the array is stored in place again and the chunk
+  is deleted. A chunk between half of the number and the number stays
+  as it is, so an array near one number does not alternate.
+- **How a chunk document is identified.** *Assumed:* by the record of a
+  part document (below) with `type: "chunk"`, the kept path of the
+  array as `cause`, and a member `serial`, the number that the chunk
+  list at the place of the array held when the chunk was created. A
+  split increments the number in that list, so a split writes that
+  list also where it is not the list directly above the chunk. The
+  identifier holds no position and no key of an entry: an insertion, a
+  removal, a reorder and a re-key rename no chunk. A chunk document
+  takes the `computed:` scheme and has scope instances as a part has.
+- **What a chunk document holds.** At its root: `value`, the run; a
+  `result` meta link back to the result cell; the `within` steps, the
+  path and the serial number it was named from; and its `cfc` envelope.
+  Nothing but the storage link in the list above names it.
+
+**How a position is derived.** No stored document holds the position of
+an entry of an array that is stored in chunks. The position of an entry
+is the number of entries in the chunks before its chunk, in the order of
+the lists, plus its offset in the run of its chunk. An insertion or a
+removal therefore changes the position of every later entry and writes
+none of them: no later chunk, no storage link, and no part. The runtime
+that has loaded the instance keeps the number of entries of each chunk
+in memory, beside the element table of a kept collection (section 2.5),
+and finds the chunk of a position from those numbers. A reader that
+holds no such numbers reads the lists and the chunks before the
+position, and counts.
+
+**How a path, a reference by key and a storage link resolve through
+chunks.**
+
+- **A path.** Where resolution reaches the place of the array and finds
+  a chunk list, the next segment is a position. The runtime finds the
+  chunk and the offset as above and continues at the entry. Where the
+  entry is a storage link to a part, it continues in the part. A chunk
+  list and a link to a chunk are storage links in every property that
+  `plan-and-label-templates.md` §2.3 gives one: resolution passes
+  through them without observing them, they are on no chain, they carry
+  no label, and they give a row no cell identity.
+- **A reference by key** names the collection and the key (section 2.5).
+  The runtime takes the position of the key from the element table and
+  resolves the path below that position as above. Where no loaded
+  instance iterates the array, it forms the keys of the entries by
+  reading the chunks in order until the key is found, which is the cost
+  that the paragraph "Resolving a reference by key" of section 2.5
+  states, with the chunks as the unit that is loaded. Where the row of
+  the key is a part, the runtime can form the identifier of the part
+  from the path and the key (below) and read the part with no chunk:
+  the part document exists exactly while the key is in the collection
+  ("A removed row", below).
+- **A storage link to a part** names the part document and nothing
+  else. Neither the link nor the part holds a chunk, a position or a
+  serial number, so a split or a merge that moves the link to another
+  chunk writes no part. A reference to a kept path names the result
+  cell and the path, whichever chunk stores the path.
+
+**What one change of an array writes.**
+
+| Change | Documents written |
+| --- | --- |
+| A member of a row stored in place changes | The chunk that holds the row, or the document that holds the array where it is not stored in chunks |
+| A member of a row that is a part changes | The part document alone |
+| A row under `PART_MIN_BYTES` is appended or inserted | The chunk that holds the position. On a split: the new chunk and the lists above |
+| A row of at least `PART_MIN_BYTES` is appended or inserted | The part document, created, and the chunk that receives its storage link, with the same on a split |
+| A row is removed | The chunk that held it, and the part document of the row, deleted, where it had one. On a merge: the chunk merged into and the lists above |
+| A row crosses `PART_MIN_BYTES`, or falls under half of it | The part document, created or deleted, and the chunk that holds the row |
+| Rows are reordered | The chunks that hold a position whose entry changed |
+| The array is replaced by another of other rows | Every chunk whose run changed |
+
+The bytes of the documents that one change of one row writes are at most
+those of one chunk, and on a split or a merge those of two chunks and of
+one list for each level of the tree, at any length of the array. The
+write of a chunk is a `splice` of its run or a write below a path of it
+(section 4.2). Whether storage takes the second as a patch, so that the
+bytes sent are those of the change and not those of the chunk, is not
+decided (section 11, question 103).
+
+**How label entries and provenance records are counted, and where they
+are stored.**
+
+- The size of a row, of a chunk and of an array counts the label entries
+  and the provenance records that are stored for its paths, in the
+  encoding the envelope stores them in. An entry that covers several
+  paths is counted once in each document that stores it.
+- A chunk's envelope is complete for its paths, as a part's is ("How the
+  labels of a part relate to the templates of the outputs", below). It
+  holds the `enumerate` entry of the array and, while every position
+  instantiates to one label, the `*`-child entry, each once for the
+  chunk and not once for each row; and the entries of a row whose label
+  differs from that of the other rows, at paths relative to the run.
+  The same entries stand at the place of the array, for a read of the
+  membership that loads no chunk.
+- A change of the label of the membership, or of a label that every row
+  shares, therefore writes every chunk of the array and no part: the
+  number of documents is the number of chunks. A row that is a part
+  repeats the entries in its own envelope, and is written for such a
+  change.
+- The entries of a path inside a run are at paths relative to the run,
+  so an insertion at position `i` renumbers the entries of the later
+  rows of one chunk, and of no other chunk.
+
+**A re-key of an element of an array of plain values in place.** By
+ruling a plain value with no declared key that is edited in place is
+another element, with another key (`plan-and-label-templates.md` §1.3).
+The identifier of a chunk holds no key, so for a row stored in place
+the edit writes the chunk that holds the row and nothing else of the
+layout. The identifier of a part holds the key, so for a row that is a
+part the edit deletes the part document of the old key, creates one
+under the new key, and writes the chunk that holds the storage link.
+With a declared key (`ArrayByKey`) the key is unchanged and the edit
+writes the chunk or the part alone. Over an array of references the
+key is the identity of the cell and no edit of the cell's content
+changes it. What is stored under the key outside the result, the state
+cells, streams, operation state and children, is moved as section 2.5
+has it and is not part of this layout.
+
+**Worked sizes.** The prototype measured the layout with every row a
+part once the document exceeds `DOCUMENT_MAX_BYTES`, for a `map` over an
+array of plain values in place whose rows are 23 bytes and whose storage
+links are 61 bytes, with no label entry and no provenance record in any
+size (the first two columns of figures). The last column is derived
+from the same sizes by the rule of this section and is not measured.
+
+| Rows | Change | Measured, every small row a part: documents and their bytes | Derived, by rules 1 to 3 |
+| ---: | --- | --- | --- |
+| 2,000 | settle | 2 documents: the result and one part of 46,960 bytes that holds the array | The same |
+| 2,000 | edit one field | 1 document of 46,895 bytes, 14 bytes put in | The same |
+| 2,600, 200 rows appended | append | 2,800 part documents created in the one transaction, and the array of links, about 171,000 bytes | The array of 2,800 rows is about 65,700 bytes and is divided once: 2 chunks of about 32,900 bytes and a list of 2 links |
+| 3,000 | settle | 3,002 documents, 250,960 bytes | 4 documents: the result, the part that holds the list, and 2 chunks of about 35,200 bytes |
+| 10,000 | settle | 10,002 documents, 838,960 bytes | 6 documents: the result, the part that holds the list of 4 links, and 4 chunks of about 58,700 bytes |
+| 10,000 | append | 2 documents, 610,081 bytes, for 98 bytes put in | 1 chunk of at most 65,536 bytes, for about 24 bytes put in |
+| 10,000 | edit one field, `ArrayByKey` | 1 part document of 24 bytes | 1 chunk of at most 65,536 bytes, 14 bytes put in |
+| 10,000 | edit one field, no declared key | 2 documents, 610,025 bytes, one part deleted and one created | 1 chunk of at most 65,536 bytes, and no part |
+| 10,000 | remove first | 1 document of 609,940 bytes, one part deleted | 1 chunk of at most 65,536 bytes |
+
+A list that is built by appends has chunks that are half full: each
+split leaves a first run of about half of `DOCUMENT_MAX_BYTES` that no
+later append reaches, so 10,000 rows of 23 bytes built that way are
+about 7 chunks of 1,400 rows. For rows of 2,000 bytes each row is a
+part, the array holds 10,000 storage links, 610,000 bytes, and is 16
+chunks of 625 links with a list of 16 links; an append creates one part
+and writes one chunk of links. The row with a declared key shows what
+the rule gives up: an edit of a small row writes its chunk, where a row
+that is a part by itself is one document of 24 bytes.
 
 **What stands in the place of a part.** The path holds a **storage link**
 to the part document. A storage link is written by the runtime and held by
@@ -4048,16 +4417,26 @@ Nothing but the storage link in its parent names a part document.
 
 - **Addressing.** A reader names the result cell and a path. The runtime
   resolves the path from the result document and, at each storage link on
-  the way, continues in the part document it names.
+  the way, continues in the part document it names, and at a chunk list
+  in the chunk of the position ("How a path, a reference by key and a
+  storage link resolve through chunks", above).
 - **Loading.** The reader loads the documents the path passes through and,
   for a read of a subtree, the part documents below the path that its
   schema reaches. It loads no other part. A session that lists rooms by
-  name loads each room's result document and no row.
+  name loads each room's result document and no row. A reader of one
+  row of an array that is stored in chunks loads the lists and the
+  chunk of the row, and where it holds no numbers of entries, the
+  chunks before it. A reader of the whole array loads every chunk and
+  the parts its schema reaches.
 - **Subscribing.** The reader subscribes to the same documents. A change
   inside one row is a write to that row's part document and reaches the
-  readers of that row. A change of membership is a write to the document
-  that stores the array and reaches its readers, who find the moved storage
-  links. A runtime that has resolved a path may hold the part document's
+  readers of that row; for a row stored in place it is a write to the
+  chunk, or to the document that stores the array, and reaches the
+  readers of the other rows stored there, each of which finds the paths
+  it reads unchanged. A change of membership is a write to the chunk of
+  the position, or to the document that stores the array, and reaches
+  its readers, who find the moved entries. A runtime that has resolved
+  a path may hold the part document's
   address for its own subscription. What it stores or passes on stays the
   result cell and the path.
 - **Demand** is held on kept output paths
@@ -4070,15 +4449,18 @@ Nothing but the storage link in its parent names a part document.
   section has it.
 
 **Writing.** One evaluation writes every document it changed in one
-transaction: the result document, each part document a changed path is
-stored in, and the document that holds a storage link that was added,
-removed or moved. No reader sees a value in one document beside a value
+transaction: the result document, each part document and each chunk
+document a changed path is stored in, and the document that holds a
+storage link that was added, removed or moved. No reader sees a value
+in one document beside a value
 or a label from another state in a second one. A part document of which no
 path changed is not written.
 
-**Crossing a number.** A split point that reaches `PART_SPLIT_BYTES`, or
-falls to `PART_MERGE_BYTES`, changes its arrangement in the transaction
-whose write changed its size.
+**Crossing a number.** A split point that reaches `PART_MIN_BYTES`, or
+falls under half of it, changes its arrangement in the transaction whose
+write changed its size. So does an array or a chunk that crosses
+`DOCUMENT_MAX_BYTES` or half of it ("A long array is stored in chunks",
+above).
 
 - **Into a part.** The transaction creates the part document with the
   subtree and replaces the subtree in its parent by a storage link. The
@@ -4098,8 +4480,10 @@ whose write changed its size.
   who can list the documents of a space. `plan-and-label-templates.md`
   §5.5 lists that with the residual channels.
 - **A removed row.** When a key leaves a kept collection, the transaction
-  removes the position from the array and deletes the row's part document,
-  with the part documents below it. A part document holds kept paths
+  removes the position from the array, in the chunk that holds it where
+  the array is stored in chunks, and deletes the row's part document,
+  with the part documents and the chunk documents below it. A part
+  document holds kept paths
   of the result and nothing that is stored under the key, so this
   agrees with the ruling that a removal deletes no state cell and no
   operation state of the key (section 2.6).
@@ -4127,7 +4511,8 @@ any kept path (section 1.6).
   served under a label that only another document holds.
 - **The repeated entry and the `*`-child entry agree.** The `*`-child
   entry stays in the collection's document, where it covers the positions
-  stored in place. It is stored only while every position instantiates to
+  stored in place, and it is repeated in each chunk of an array that is
+  stored in chunks. It is stored only while every position instantiates to
   its label, the positions that are parts included, and one transaction
   writes it and the entries of the parts. A read through the result that
   consumes both consumes one label twice, which a join absorbs. The
@@ -4268,7 +4653,8 @@ Three consequences of the naming rule for what is stored.
 
 A part document is named by the same record with type `part`, a path in
 place of the name, and every element key hashed under the secret of the
-space (section 4.10).
+space (section 4.10). A chunk document is named the same way with type
+`chunk` and a serial number (section 4.10; provisional, P20).
 
 An output document is named by the same record with type `output`, the
 `within` of the output's cone, and as the cause the name of the interim
@@ -5831,6 +6217,12 @@ address that `B2` read as changed, and records it as a trigger read of that
 | The 30 existing rows | No | No | Their keys are their message cells' identities, their element slots did not change, and each reaches the room's records, such as `facts.places`, only through a `pick` of its own entry. That output gained an entry, and the entry each row chose is equal to the one before, so no row's memo entry stops being current (section 3.3) |
 | The new row | New key | Yes, once: the row body's cones for the new message | Step 3 of section 2.5 |
 
+No cone of the rendered tree is in the table. The cone that places the
+main list among the children of its node holds a collection reference
+(section 2.2, "A collection that a cone places"; provisional, P22), so
+the new row makes neither that cone nor the `result` cone stale, and the
+row is stored by the collection.
+
 By a syntactic count, the body of `FabriChatMessageRow` in `message-row.tsx`
 has 14 `computed` calls, 7 actions and 12 applications of a handler to
 state. `language-subset.md` §11.5 counts 109 of FabriChat's 112 `computed`
@@ -5855,7 +6247,7 @@ As deployed, every one of these labels is empty, so no entry is written.
 | Document | Write |
 | --- | --- |
 | The room's result document, the space's scope instance | One element appended to the `messages` output |
-| The document that stores the main list under `[UI]`: the result document, or the part document of a node that encloses the list | One storage link appended |
+| The document that stores the main list under `[UI]`: the result document, the part document of a node that encloses the list, or the last chunk of the list where it is stored in chunks (section 4.10) | One storage link appended |
 | The new row's part document, the space's scope instance | Created, with the row's subtree |
 | The new row's part document, the session's scope instance | The row's session-scoped paths |
 
@@ -5974,9 +6366,10 @@ computation makes:
     the rule about size to this document. *Assumed:* a part document
     begins only at the root of a kept output, at a row of a kept
     collection, or at a node of the rendered tree; a split point becomes a
-    part at 1,024 bytes and returns in place at 512; and a document over
-    65,536 bytes makes parts of the split points directly below it. The
-    three numbers are placeholders for stage 4 to measure. One choice in
+    part at `PART_MIN_BYTES`, 1,024 bytes, and returns in place under
+    half of it; and an array whose content exceeds 65,536 bytes is
+    stored in chunks (provisional, P20; question 103). The two numbers
+    are placeholders for stage 4 to measure. One choice in
     the rule is not about numbers: that the `props` of a node are stored
     with the node and are not a part of their own, although the renderer
     subscribes to them separately today.
@@ -6337,9 +6730,11 @@ Added by the ruling that the scheduler is switched per space (section 9):
     that is stored in place in the result document, the root of that
     output is a split point between the document and the rows, so rule 3
     as it is written makes the array one part, and the paragraph makes
-    the rows parts. *Assumed:* rule 3 as it is written: the array
-    becomes a part, and its rows become parts when that part exceeds the
-    number in turn. The size of a split point is the length of "the
+    the rows parts. Under the provisional rule of section 4.10 (P20;
+    question 103) the first half has no case: no rule makes a part of a
+    split point for the size of the document that holds it, the array
+    is a part by rule 1, and a row is a part by its own size alone. The
+    second half stands: the size of a split point is the length of "the
     stored encoding of its subtree", and no section names the encoding;
     nothing is assumed for it. The same for the rows of a kept
     collection over an array of references, over an array of plain
@@ -6418,6 +6813,117 @@ Added by the ruling that the scheduler is switched per space (section 9):
      Not determined: how a handler that is written in place in a callee, and
      that captures names of the callee's scope, is registered once for all
      sites. It is part of question 247 of the continuation plan.
+103. **Part documents: a row is a part by its own size alone, and a long
+     array is stored in chunks** (section 4.10). *Assumed,* provisional
+     (P20 of the continuation plan, the coordinator's decision, and not
+     ruled): rules 1 to 4 of the section and the paragraphs on chunks.
+     The alternative is a rule that makes every split point directly
+     below a document a part, whatever its size, when the document
+     exceeds `DOCUMENT_MAX_BYTES`. The prototype measured that rule on a
+     `map` over an array of plain values in place with rows of 23 bytes:
+     2,800 part documents created in the transaction that crosses the
+     number; an array of storage links of 61 bytes each that is larger
+     than the rows it replaced, exceeds the number and has no split
+     point; and at 10,000 rows 610,081 bytes of documents written for
+     an append that puts 98 bytes in. If the owner decides for that
+     rule, the constants `PART_MIN_BYTES` and the paragraphs "A long
+     array is stored in chunks" to "Worked sizes" of section 4.10 are
+     removed with the sentences that name a chunk in sections 2.2, 4.1,
+     4.2 and 10.1, and the measured cost stands. Four points under the
+     decision are open.
+     - **(a) Whether storage takes a patch below a path of a document.**
+       Section 4.2 has the write of a kept collection as a `splice` of
+       the stored array. No document says that a write of one member
+       below a path of a document is sent and stored as that change and
+       not as the document. With it, one change of one small row sends
+       the bytes of the change. Without it, the unit sent is the chunk,
+       at most 65,536 bytes, where it was measured as 46,895 bytes for a
+       list of 2,000 small rows in one document. Nothing is assumed.
+     - **(b) A chunk list holds no count of entries.** As the decision
+       has it, a list above is written only on a split or a merge, so
+       it can hold no number that an insertion changes. A reader of one
+       position that holds no numbers then reads every chunk before the
+       position. The alternative: each link in a list carries the
+       number of entries below it. A position is then found by reading
+       one document for each level, and each insertion or removal
+       writes one list for each level beside the chunk, each a document
+       of at most 65,536 bytes of which one number changes. *Assumed:*
+       no count, as the decision states it.
+     - **(c) Which arrays.** *Assumed:* every array that a result
+       document or a part stores, and not the array of an argument
+       document or of a state cell. An array of plain values in place
+       that a handler or a client writes is then one document at any
+       length: 676,691 bytes for the 10,000 small records that the
+       prototype measured.
+     - **(d) The stored form of a chunk list and the serial number in the
+       identifier of a chunk.** Both are assumed in section 4.10. With
+       the serial number in the list at the place of the array, a split
+       writes that list.
+     The numbers are placeholders (question 32), and the encoding that a
+     size is measured in is question 96. The same for an array over an
+     array of references, over an array of plain values in place, over a
+     plain array generated from scratch, and over the result of another
+     per-element construct. It is questions 229, 264 and 290 of the
+     continuation plan.
+104. **A cone that places the result of a per-element construct and
+     observes nothing of it** (sections 2.2, 2.5, 3.3 and 10.1). Three
+     sentences made such a cone stale for a change of one row:
+     `plan-and-label-templates.md` §1.4, "The enclosing cone uses the
+     assembled result"; section 3.3, "An entry is not current when an
+     upstream output it pulled has a different value from the one
+     recorded"; and the first assumption of question 82, that a value
+     function returns the whole constructed value. The worked example of
+     section 10.1 lists no cone of the tree among the cone instances
+     evaluated behind a send. *Assumed,* provisional (P22 of the
+     continuation plan, the choice of the prototype's author): the cone
+     holds a collection reference, the rows are stored by the
+     collection, and the enclosing cone and the `result` cone are not
+     evaluated for a change of one row, which is the reading of section
+     10.1 (section 2.2, "A collection that a cone places"). It applies
+     to the result of a `map`, a `filter` and a `flatMap` over an array
+     of references, over an array of plain values in place, and over the
+     result of another per-element construct. If the owner decides
+     otherwise, that paragraph and the provisional sentences of sections
+     2.5, 3.1, 3.3 and 10.1 are removed, a cone returns the rows, and
+     the work and the bytes of one change follow the list at every
+     enclosing cone. Three points under the decision are open. (a) One
+     collection placed at two kept paths: *assumed* stored at both.
+     (b) A per-element construct over a plain array generated from
+     scratch: *assumed* the same; the prototype forms the assembly of
+     such a construct whole and did not test it. (c) What a path of a
+     child's argument or of a request holds where a derived collection
+     is passed on is not changed by the decision and is as
+     `plan-and-label-templates.md` has it. It is questions 259 and 292
+     of the continuation plan.
+105. **Whether the steps of section 2.5 prescribe an algorithm** (section
+     2.5). Step 2 reads "Compute the key of every position", and
+     `scheduler-and-serving-loop.md` §3.2 has the evaluation rebuild the
+     table. *Assumed,* provisional (P23 of the continuation plan, the
+     choice of the prototype's author): the steps state the result, and
+     a runtime may keep the key of a position that no write touched and
+     bring the table and the assembled result up to date from the
+     splices of the source. The prototype measured, at 10,000 elements
+     of an array of plain values in place, 1 salted hash for one change
+     with the keys kept and 10,000 with every key formed. No value and
+     no key differs. If the owner decides that the steps are the
+     algorithm, the paragraph "The steps state the result" is removed
+     and each change of membership costs the length of the list. It is
+     question 256 of the continuation plan.
+106. **What a re-key does with the stream documents of the old key**
+     (section 2.5, "A write that changes the value re-keys the
+     element"). The case is an array of plain values in place with no
+     declared key; it does not arise with `ArrayByKey` or over an array
+     of references. The section has the runtime move "the state cells,
+     the streams, the operation state and the children", by writing
+     them under the identifiers of the new key and retiring those of
+     the old key. A stream has a document from its first event (section
+     4.7). The prototype makes no document for the stream of the new
+     key until an event arrives for it and leaves the stream document
+     of the old key: 20 edits of one row, each followed by an event for
+     the row, leave 20 stream documents. Not determined: whether the
+     move writes a stream document under the new key, and when a
+     document that the move retired is deleted. Nothing is assumed. It
+     is question 295 of the continuation plan.
 
 
 ### 11.2 For another document or the prototype
@@ -6792,6 +7298,10 @@ From the prototype's executor, for this document to decide:
     and for the `result` cone the whole returned record, constants
     included. The alternatives return each member under its own index
     as well, and hold the constant paths of the result in the plan.
+    Provisional (P22 of the continuation plan; section 11.1, question
+    104): where the value holds the assembled result of a per-element
+    construct that the cone placed and did not observe, it holds a
+    collection reference there and not the rows.
 83. **In which transaction a first value that is not a constant is
     written** (section 4.1). By ruling a state cell whose first value
     is a constant, or that is declared with no value, has no document

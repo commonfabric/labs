@@ -134,18 +134,19 @@ next.
   272, notes 281 to 302, notes 307 to 320, notes 325 to 341, notes 344
   to 363, notes 367 to 382, notes 387 to 402, notes 406 to 414,
   notes 419 to 426, notes 432 to 443, notes 446 to 458, notes
-  461 to 474 and 478, and notes 479 to 497, 499 and 502 are written
-  into the documents.
+  461 to 474 and 478, notes 479 to 497, 499 and 502, and notes 506 to
+  509, 511, 513, 517 and 520 are written into the documents.
   Notes 273 to 280, which measure cost, are written into
   [What compiling, running, and storing cost](#what-compiling-running-and-storing-cost)
   below, and notes 303 to 306, 321 to 324, 342 and 343, 364 to 366,
   383 to 386, 403 to 405, 415 to 418, 427 to 431, 444 and 445, 459
-  and 460, 475 to 477, and 498, 500, 501, 503 and 504, the results of
+  and 460, 475 to 477, 498, 500, 501, 503 and 504, and 505, 510, 512,
+  514 to 516, 518, 519, 521 and 522, the results of
   the value comparison, the measurements of growth and the
   later runs of the
   label comparison and the cost measurement, into
   [What the prototype's executor computes](#what-the-prototypes-executor-computes).
-  The latest prototype commit read is `a84264daf2`. From commit
+  The latest prototype commit read is `e63851c1ee`. From commit
   `3e518147df` on the crate also emits value code and an executor runs
   a plan with it. At `3e518147df`, in the fixtures 122 of 122 compared
   values equal those of today's runtime, and in the corpus 4,472 of
@@ -234,7 +235,22 @@ next.
   than today's or incomparable with it. The plans of the corpus are 5,956,178
   bytes together, where they were 9,826,792. The sizes and costs that the round
   measured, the ones it fixed and the ones it did not, are first in [The corpus
-  at commit `a84264daf2`](#the-corpus-at-commit-a84264daf2). No
+  at commit `a84264daf2`](#the-corpus-at-commit-a84264daf2). At
+  `e63851c1ee` the crate is unchanged and the executor marks what a write
+  reaches, keeps the keys of the positions that a write did not touch, has a
+  cone that places a collection hold a reference to it, brings an assembly up
+  to date from the change, and keeps the layout of a stored result in part
+  documents as an accounting. The fixtures are 1,004 of 1,013 and the corpus
+  6,013 of 6,107 over 214 modules, as before, and no output or write edge is
+  looser than today's. One change of a list of 10,000 elements costs 1 to 4
+  evaluations, at most 1 salted hash, 1 or 2 checks and 2 to 26 bytes put
+  into the documents, where it cost 3 to 5 evaluations, 10,000 hashes over
+  plain values, 30,000 to 70,000 checks and 238,904 bytes. The provisional
+  decisions P18 and P19 are not built. What the round measured, with the same
+  lists on today's runtime, the part documents, a keystroke in a row that has
+  state, a list that is replaced again and again, and run times beside
+  today's runtime, is in [The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee). No
   compared row of the
   corpus evaluates the label of an
   index: the 54 index slots of the corpus plans are read by outputs
@@ -1778,7 +1794,8 @@ there. Eighteen fixtures are run by the executor's tests alone,
   the records. Nothing of it is compared with today's runtime, which
   runs none of these forms in a pattern body.
 
-At commit `a84264daf2` the fixtures are run in 59 runs, the 57 of the earlier
+At commit `a84264daf2`, and at commit `e63851c1ee` after it, the fixtures are
+run in 59 runs, the 57 of the earlier
 commit with `batch` and `failing`, and 1,004 of 1,013 compared values are equal.
 The 9 that differ are the one of `callee-default`, 2 of `batch` and 6 of
 `failing`. The fixtures `bound`, `effects`, `handler-effect`, `wishes` and
@@ -3092,6 +3109,598 @@ named output and of a shared template once for the element bindings and the
 position it is read at, in one evaluation. It keeps no memo across evaluations,
 so a label is formed once per evaluation of a template and not once per
 transaction. The cost measurement was not run again.
+
+
+### The corpus at commit `e63851c1ee`
+
+The figures of this section are from the prototype author's runs, as the
+prototype's notes 505 to 522 and the author's report of the round give them.
+The coordinator of this work ran, at that commit, the tests of the crate (496
+pass), the tests under Deno (116 tests with 477 steps pass) and the fixtures
+(59 of 59 runs, 1,004 of 1,013 values equal), and not the corpus, the
+measurements of growth or the times. No file of the crate changed in the
+round: every change is in the executor and in the measurement scripts. Each
+time is of one run, or the median or mean that its table names, on one
+machine: the counts are exact and the times are not.
+
+Four cases are measured, and each figure below names its case: a `map` over
+an array of references; a `map` over an array of plain values in place with
+no declared key; the same with a key declared by `ArrayByKey`; and a `map`
+over the result of a `filter` of plain values in place. Nothing in this
+section was measured over a plain array generated from scratch, over a
+`flatMap`, or over the result of a `filter` of an array of references.
+
+#### First: the growth that was measured, what is fixed and what is not
+
+**One change of a list, before and after.** The lists are those of
+`fixtures/lists.tsx` (`compare/growth.ts`). A change is made by a writer
+outside the instance: an edit is a write of one member, and an append, a
+prepend and a removal are a `splice` of the array. The counts are of the
+derivation transaction that follows. "Before" is the table of [The corpus at
+commit `a84264daf2`](#the-corpus-at-commit-a84264daf2), where the bytes are
+those of the result document written whole and the time is of one change.
+"After" is this commit, where the bytes are those put into the documents and
+the time is the mean of 40 later changes of the same kind on one instance.
+The counts after are the same at 100, 1,000 and 10,000 elements.
+
+| Case | Change | Evaluations, before and after | Salted hashes at 1,000 / 10,000 before, and after | Checks at 1,000 / 10,000 before, and after | Bytes at 1,000 / 10,000 before, and after | Milliseconds at 1,000 / 10,000 before | Milliseconds at 100 / 1,000 / 10,000 after |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| References | append | 3, 2 | 0 / 0, 0 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 26 / 927 | 0.037 / 0.033 / 0.081 |
+| References | edit one field | 3, 2 | 0 / 0, 0 | 3,005 / 30,005, 2 | 22,904 / 238,904, 14 | 19 / 971 | 0.020 / 0.018 / 0.023 |
+| References | remove first | 2, 1 | 0 / 0, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 19 / 967 | 0.015 / 0.020 / 0.122 |
+| Plain values, no key | append | 3, 2 | 1,001 / 10,001, 1 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 58 / 1,264 | 0.058 / 0.065 / 0.100 |
+| Plain values, no key | edit one field | 3, 2 | 1,000 / 10,000, 1 | 3,004 / 30,004, 1 | 22,904 / 238,904, 26 | 66 / 1,163 | 0.098 / 0.054 / 0.056 |
+| Plain values, no key | remove first | 2, 1 | 999 / 9,999, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 60 / 1,219 | 0.016 / 0.020 / 0.132 |
+| Plain values, `ArrayByKey` | append | 3, 2 | 1,001 / 10,001, 1 | 3,007 / 30,007, 1 | 22,924 / 238,925, 24 to 26 | 67 / 1,423 | 0.061 / 0.104 / 0.115 |
+| Plain values, `ArrayByKey` | edit one field | 3, 2 | 1,000 / 10,000, 1 | 3,005 / 30,005, 2 | 22,904 / 238,904, 14 | 64 / 1,405 | 0.058 / 0.055 / 0.058 |
+| Plain values, `ArrayByKey` | remove first | 2, 1 | 999 / 9,999, 0 | 3,002 / 30,002, 1 | 22,879 / 238,879, 2 | 65 / 1,549 | 0.012 / 0.019 / 0.093 |
+| Result of a `filter` | append | 5, 4 | 1,001 / 10,001, 1 | 7,014 / 70,014, 2 | 22,924 / 238,925, 24 to 26 | 112 / 2,753 | 0.112 / 0.085 / 0.382 |
+| Result of a `filter` | edit one field | 5, 4 | 1,000 / 10,000, 1 | 7,007 / 70,007, 2 | 22,904 / 238,904, 26 | 107 / 2,675 | 0.111 / 0.112 / 0.324 |
+| Result of a `filter` | remove first | 3, 2 | 999 / 9,999, 0 | 7,002 / 70,002, 2 | 22,879 / 238,879, 2 | 104 / 2,591 | 0.013 / 0.039 / 0.366 |
+
+Every row at this commit, with the time of the first change after an instance
+settled (the median of 7 instances), which builds once an index from a key to
+its position and so follows the length:
+
+| Case | Change | Evaluations | Salted hashes | Checks | Bytes put into the documents, at 100 / 1,000 / 10,000 | First change, ms, at 100 / 1,000 / 10,000 | Later, ms, at 100 | at 1,000 | at 10,000 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| References | settle | 102 / 1,002 / 10,002 | 0 / 0 / 0 | 0 | 15,680 / 161,480 / 1,664,480 | 9.1 / 14.9 / 165.5 | | | |
+| References | append | 2 | 0 | 1 | 24 / 25 / 26 | 0.13 / 0.11 / 0.32 | 0.037 | 0.033 | 0.081 |
+| References | append, array written whole | 2 | 0 | 1 | 24 / 25 / 26 | 0.21 / 0.84 / 11.31 | 0.223 | 0.851 | 9.111 |
+| References | prepend | 2 | 0 | 1 | 24 / 25 / 26 | 0.06 / 0.12 / 0.70 | 0.064 | 0.095 | 0.389 |
+| References | edit one field | 2 | 0 | 2 | 14 / 14 / 14 | 0.05 / 0.07 / 0.12 | 0.020 | 0.018 | 0.023 |
+| References | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.04 / 0.07 / 0.23 | 0.015 | 0.020 | 0.122 |
+| References | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.05 / 0.12 | 0.013 | 0.012 | 0.017 |
+| Plain values, no key | settle | 102 / 1,002 / 10,002 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 8.2 / 44.7 / 420.4 | | | |
+| Plain values, no key | append | 2 | 1 | 1 | 24 / 25 / 26 | 0.11 / 0.20 / 0.90 | 0.058 | 0.065 | 0.100 |
+| Plain values, no key | append, array written whole | 2 | 1 | 1 | 24 / 25 / 26 | 0.17 / 0.52 / 6.11 | 0.157 | 0.483 | 4.266 |
+| Plain values, no key | prepend | 2 | 1 | 1 | 24 / 25 / 26 | 0.10 / 0.24 / 1.59 | 0.104 | 0.152 | 0.673 |
+| Plain values, no key | edit one field | 2 | 1 | 1 | 26 / 26 / 26 | 0.10 / 0.15 / 0.38 | 0.098 | 0.054 | 0.056 |
+| Plain values, no key | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.04 / 0.07 / 0.21 | 0.016 | 0.020 | 0.132 |
+| Plain values, no key | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.06 / 0.10 | 0.014 | 0.012 | 0.016 |
+| Plain values, `ArrayByKey` | settle | 102 / 1,002 / 10,002 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 5.0 / 51.4 / 470.0 | | | |
+| Plain values, `ArrayByKey` | append | 2 | 1 | 1 | 24 / 25 / 26 | 0.09 / 0.15 / 1.37 | 0.061 | 0.104 | 0.115 |
+| Plain values, `ArrayByKey` | append, array written whole | 2 | 1 | 1 | 24 / 25 / 26 | 0.14 / 0.51 / 6.02 | 0.104 | 0.453 | 4.514 |
+| Plain values, `ArrayByKey` | prepend | 2 | 1 | 1 | 24 / 25 / 26 | 0.09 / 0.19 / 1.43 | 0.060 | 0.096 | 0.616 |
+| Plain values, `ArrayByKey` | edit one field | 2 | 1 | 2 | 14 / 14 / 14 | 0.11 / 0.14 / 0.81 | 0.058 | 0.055 | 0.058 |
+| Plain values, `ArrayByKey` | remove first | 1 | 0 | 1 | 2 / 2 / 2 | 0.03 / 0.06 / 0.18 | 0.012 | 0.019 | 0.093 |
+| Plain values, `ArrayByKey` | remove last | 1 | 0 | 1 | 2 / 2 / 2 | 0.02 / 0.05 / 0.08 | 0.010 | 0.012 | 0.014 |
+| Result of a `filter` | settle | 203 / 2,003 / 20,003 | 100 / 1,000 / 10,000 | 0 | 6,191 / 64,691 / 676,691 | 6.8 / 49.7 / 557.0 | | | |
+| Result of a `filter` | append | 4 | 1 | 2 | 24 / 25 / 26 | 0.11 / 0.18 / 1.32 | 0.112 | 0.085 | 0.382 |
+| Result of a `filter` | append, array written whole | 4 | 1 | 2 | 24 / 25 / 26 | 0.13 / 0.56 / 5.71 | 0.154 | 0.464 | 3.909 |
+| Result of a `filter` | prepend | 4 | 1 | 2 | 24 / 25 / 26 | 0.09 / 0.26 / 3.25 | 0.116 | 0.179 | 0.964 |
+| Result of a `filter` | edit one field | 4 | 1 | 2 | 26 / 26 / 26 | 0.09 / 0.21 / 1.31 | 0.111 | 0.112 | 0.324 |
+| Result of a `filter` | remove first | 2 | 0 | 2 | 2 / 2 / 2 | 0.03 / 0.10 / 0.40 | 0.013 | 0.039 | 0.366 |
+| Result of a `filter` | remove last | 2 | 0 | 2 | 2 / 2 / 2 | 0.03 / 0.08 / 0.38 | 0.012 | 0.029 | 0.280 |
+
+The time of a later change at 10,000 elements, against that at 100: 0.6 to
+2.2 times for an append, an edit and a removal of the last element over a
+stored array, which is the first three cases; 2.9 and 3.4 times for an edit
+and an append over the result of a `filter`; 6 to 10 times for a prepend and
+a removal of the first element, which give every later position another
+number (question 260); and 23 to 28 times for a removal over the result of a
+`filter`, whose kept list the executor forms again when its membership
+changes. An append that writes the array whole, as a `set` of a new array
+does, has the same counts and a time that follows the length, 25 to 43
+times: the store compares the entries of the old and the new array to keep
+their keys, and the write itself is the length of the list.
+
+**What was changed, and whose each cause was.**
+
+| What followed the list | Cause | Whose | What was done |
+| --- | --- | --- | --- |
+| The time of one change, 20 to 35 times for 10 times the list (note 505) | The element of a key was found by a scan of the element table, once for each element when an assembly was evaluated and once more when its memo entry was compared: the length times the length. 35% of 1,259 ms for one edit at 10,000 | The executor's | An index from a key to its element. The cause that the earlier section left open is found |
+| The checks of memo entries, 3 `N` to 7 `N` (note 506; question 271) | Each pull compared every demanded entry with what it had read | The executor's: the documents have the scheduler mark what a write reaches | Each entry is registered as a reader of the positions it read, and a write marks its readers. 1 or 2 checks per change |
+| The same, for a reader through a reference by key into an array of plain values in place (note 506) | Such a reader has no address of its own, so marking by the path of the write marks every reader through a key of the array | The documents did not say how a write is mapped to a key | The store reports the keys that a write touched. Provisional decision P24 |
+| The salted hashes, one for each position at every write (note 507; question 256) | The key of every position was formed again | The wording of `execution-and-storage.md` §2.5, step 2, and of `scheduler-and-serving-loop.md` §3.2, which states an algorithm | The key of a position that a write did not touch is kept. Provisional decision P23 |
+| The evaluations of the enclosing cone and of `result`, and the result written whole (note 508; question 259) | Three rules of the documents make the cone that holds the collection stale for a change of one row, against the worked example of `execution-and-storage.md` §10.1 | The documents', which conflict with themselves | A cone that places a collection holds a reference to it, and the rows are stored by the collection. Provisional decision P22 |
+| The assembly: an element record made and an entry pulled for every position (note 509) | The assembly was formed whole at each change | The wording "rebuilds the table" | The splices of the source are applied to the table and to the result. Part of P23 |
+| A copy of each document that a transaction writes (note 510) | The executor copied a document before the first write to it | The executor's | A transaction keeps what each change replaced |
+
+**The same changes as the documents word them.** With the option
+`keys: "formed"` the keys of an array are dropped at each write to it and
+formed whole when they are next asked for, and with `assembly: "formed"`
+every assembly is formed whole. Both give the same result as the default
+(`exec/test/growth.test.ts`). At 10,000 elements:
+
+| Case | Change | Salted hashes | Checks | Milliseconds |
+| --- | --- | ---: | ---: | ---: |
+| References | append | 0 | 1 | 32.6 |
+| References | append, array written whole | 0 | 1 | 38.2 |
+| References | prepend | 0 | 1 | 34.8 |
+| References | edit one field | 0 | 2 | 32.0 |
+| References | remove first | 0 | 1 | 33.7 |
+| References | remove last | 0 | 1 | 33.8 |
+| Plain values, no key | append | 10,001 | 10,001 | 178.3 |
+| Plain values, no key | append, array written whole | 10,001 | 10,001 | 185.1 |
+| Plain values, no key | prepend | 10,001 | 10,001 | 180.6 |
+| Plain values, no key | edit one field | 10,000 | 10,000 | 176.2 |
+| Plain values, no key | remove first | 9,999 | 10,000 | 173.7 |
+| Plain values, no key | remove last | 9,999 | 10,000 | 176.0 |
+| Plain values, `ArrayByKey` | append | 10,001 | 10,001 | 218.8 |
+| Plain values, `ArrayByKey` | append, array written whole | 10,001 | 10,001 | 231.1 |
+| Plain values, `ArrayByKey` | prepend | 10,001 | 10,001 | 245.3 |
+| Plain values, `ArrayByKey` | edit one field | 10,000 | 10,001 | 221.0 |
+| Plain values, `ArrayByKey` | remove first | 9,999 | 10,000 | 226.8 |
+| Plain values, `ArrayByKey` | remove last | 9,999 | 10,000 | 232.2 |
+| Result of a `filter` | append | 10,001 | 20,002 | 320.5 |
+| Result of a `filter` | append, array written whole | 10,001 | 20,002 | 311.7 |
+| Result of a `filter` | prepend | 10,001 | 20,002 | 319.8 |
+| Result of a `filter` | edit one field | 10,000 | 20,000 | 308.9 |
+| Result of a `filter` | remove first | 9,999 | 20,000 | 299.1 |
+| Result of a `filter` | remove last | 9,999 | 20,000 | 281.0 |
+
+So with the reading that provisional decision P23 sets aside, one change of
+a list of 10,000 plain values in place costs 10,000 salted hashes and 10,000
+to 20,000 checks, and 174 to 321 ms, where it costs at most 1 hash, 1 or 2
+checks and 0.06 to 0.4 ms with the keys kept and the assembly applied.
+
+**Today's runtime on the same lists** (`compare/growth-today.ts`, note 514).
+Today's runtime has no `ArrayByKey`, and it keys a plain value in place by
+its position. A change is a write to the argument cell in a transaction of
+its own: `push` for an append, a `set` of one member for the edit, and for a
+prepend and a removal a `set` of the array, as a handler writes it. The
+counts are of everything up to the next time the runtime is idle with the
+result read: the runs of a scheduler action, the commits, the documents that
+those commits changed, and the bytes of those documents, each whole. One run
+for each row.
+
+| Case | Length | Change | Actions | Commits | Documents changed | Bytes of those documents | Milliseconds |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| References | 100 | settle | 4 | 2 | 310 | 170,688 | 183.33 |
+| References | 100 | append | 3 | 2 | 5 | 19,862 | 27.23 |
+| References | 100 | prepend | 3 | 2 | 5 | 28,162 | 40.2 |
+| References | 100 | edit one field | 1 | 1 | 1 | 51 | 7.35 |
+| References | 100 | remove first | 3 | 2 | 2 | 26,225 | 37.17 |
+| References | 100 | remove last | 3 | 2 | 2 | 18,008 | 22.6 |
+| References | 1,000 | settle | 4 | 2 | 3,010 | 1,680,888 | 1011.23 |
+| References | 1,000 | append | 3 | 2 | 5 | 178,264 | 143.07 |
+| References | 1,000 | prepend | 3 | 2 | 5 | 261,264 | 302.16 |
+| References | 1,000 | edit one field | 1 | 1 | 1 | 51 | 40.92 |
+| References | 1,000 | remove first | 3 | 2 | 2 | 259,325 | 263.5 |
+| References | 1,000 | remove last | 3 | 2 | 2 | 176,408 | 169.58 |
+| Plain values in place, keyed by position | 100 | settle | 4 | 2 | 210 | 169,478 | 78.12 |
+| Plain values in place, keyed by position | 100 | append | 3 | 2 | 5 | 15,042 | 16.62 |
+| Plain values in place, keyed by position | 100 | prepend | 3 | 2 | 205 | 174,452 | 97.29 |
+| Plain values in place, keyed by position | 100 | edit one field | 2 | 1 | 1 | 4,281 | 9.87 |
+| Plain values in place, keyed by position | 100 | remove first | 3 | 2 | 198 | 170,778 | 98.74 |
+| Plain values in place, keyed by position | 100 | remove last | 3 | 2 | 2 | 13,236 | 16.07 |
+| Plain values in place, keyed by position | 1,000 | settle | 4 | 2 | 2,010 | 1,669,778 | 830.48 |
+| Plain values in place, keyed by position | 1,000 | append | 3 | 2 | 5 | 132,044 | 120.45 |
+| Plain values in place, keyed by position | 1,000 | prepend | 2 | 1 | 2 | 184,328 | 1022.69 |
+| Plain values in place, keyed by position | 1,000 | edit one field | 2 | 1 | 1 | 42,081 | 74.74 |
+| Plain values in place, keyed by position | 1,000 | remove first | 2 | 1 | 1 | 184,005 | 934.11 |
+| Plain values in place, keyed by position | 1,000 | remove last | 3 | 2 | 2 | 130,234 | 120.77 |
+| Result of a `filter` | 100 | settle | 108 | 105 | 514 | 418,176 | 259.08 |
+| Result of a `filter` | 100 | append | 6 | 5 | 9 | 34,926 | 46.98 |
+| Result of a `filter` | 100 | prepend | 210 | 110 | 511 | 415,600 | 434.83 |
+| Result of a `filter` | 100 | edit one field | 2 | 1 | 1 | 4,281 | 17.33 |
+| Result of a `filter` | 100 | remove first | 205 | 105 | 595 | 416,109 | 390.48 |
+| Result of a `filter` | 100 | remove last | 5 | 4 | 4 | 30,917 | 37.54 |
+| Result of a `filter` | 1,000 | settle | 1,008 | 1,005 | 5,014 | 4,149,576 | 2537.24 |
+| Result of a `filter` | 1,000 | append | 6 | 5 | 9 | 308,528 | 365.69 |
+| Result of a `filter` | 1,000 | prepend | 1,003 | 903 | 904 | 434,182 | 4370.35 |
+| Result of a `filter` | 1,000 | edit one field | 2 | 1 | 1 | 42,081 | 149.25 |
+| Result of a `filter` | 1,000 | remove first | 1,003 | 1,001 | 1,001 | 461,005 | 2574.5 |
+| Result of a `filter` | 1,000 | remove last | 5 | 4 | 4 | 304,514 | 297.19 |
+
+Today's runtime runs 1 to 3 actions for an append or an edit at every length
+over an array of references and over an array of plain values in place, as
+the executor evaluates 2 cone instances. A prepend or a removal of the first
+element over plain values in place, keyed by position, runs an action and
+changes documents for every element behind it, and over the result of a
+`filter` every element is run again. The time of every change follows the
+length: over plain values in place an edit takes 9.9 ms at 100 elements and
+74.7 ms at 1,000. At 10,000 elements the first settle of today's runtime had
+not ended after 100 seconds, where it took 1.0 s at 1,000, and the run was
+stopped; the executor settles the same list of plain values in place in 8,
+45 and 420 ms at 100, 1,000 and 10,000. At 1,000 plain values in place the
+prepend and the removal of the first element logged
+`Link resolution iteration limit reached` in today's runtime, so those two
+rows are of a run that failed. The two sides do not measure the same thing:
+today's runtime checks labels, commits to a store with a journal, and
+schedules, and the executor does none of the three.
+
+**What still follows the list in the executor.**
+
+- An insertion or a removal that is not at the end gives every later position
+  another number: one number for each later key, with a small constant
+  (question 260).
+- A `filter` whose membership changed forms its kept list again.
+- A `flatMap`, a `some`, an `every`, a `find`, a `findIndex`, a `filter` whose
+  body returns a record, and every construct over a plain array generated
+  from scratch form their assembly whole at each change.
+- A memo entry that called `equals`, that demanded a cone with a static
+  side-write, or that read through a key into the document of a computed
+  output, and every entry that used one, is compared at every pull, and an
+  instance with such an entry is visited by every derivation transaction
+  (question 294). Over a plain array generated from scratch the checks of a
+  change therefore follow the list as before.
+- A `set` of a whole new array, by the length of the array.
+- The first change after an instance settled, which builds the index from a
+  key to its position.
+
+**The documents of a stored result** (note 513; questions 229 and 264). The
+executor keeps the layout of `execution-and-storage.md` §4.10 as an
+accounting beside one document that every read goes to: which split points
+are parts, the bytes of each, and the documents of the layout that each
+transaction wrote. The rule on size is the one that the section had before
+provisional decision P20, under the assumption of question 229. The list is
+the `map` over an array of plain values in place, with a declared key and
+with none; a row is 23 bytes and a storage link 61. "Bytes of those
+documents" is what the documents written hold when the transaction ends, and
+"Bytes put into them" what the changes of the transaction wrote. No label
+entry and no provenance record is in any size.
+
+| Key | Rows | Change | Documents written | Bytes of those documents | Bytes put into them | Parts created | Parts deleted |
+| --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
+| `ArrayByKey` | 100 | settle (2 documents) | 2 | 2,260 | 4,451 | 1 | 0 |
+|  |  | edit one field | 1 | 2,195 | 14 | 0 | 0 |
+|  |  | append | 1 | 2,211 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 2,170 | 0 | 0 | 0 |
+| `ArrayByKey` | 1,000 | settle (2 documents) | 2 | 22,960 | 45,851 | 1 | 0 |
+|  |  | edit one field | 1 | 22,895 | 14 | 0 | 0 |
+|  |  | append | 1 | 22,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 22,870 | 0 | 0 | 0 |
+| `ArrayByKey` | 2,000 | settle (2 documents) | 2 | 46,960 | 93,851 | 1 | 0 |
+|  |  | edit one field | 1 | 46,895 | 14 | 0 | 0 |
+|  |  | append | 1 | 46,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 46,870 | 0 | 0 | 0 |
+| `ArrayByKey` | 3,000 | settle (3,002 documents) | 3,002 | 250,960 | 389,741 | 3,001 | 0 |
+|  |  | edit one field | 1 | 24 | 14 | 0 | 0 |
+|  |  | append | 2 | 183,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 182,940 | 0 | 0 | 1 |
+| `ArrayByKey` | 10,000 | settle (10,002 documents) | 10,002 | 838,960 | 1,306,741 | 10,001 | 0 |
+|  |  | edit one field | 1 | 24 | 14 | 0 | 0 |
+|  |  | append | 2 | 610,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 609,940 | 0 | 0 | 1 |
+| no declared key | 100 | settle (2 documents) | 2 | 2,260 | 4,451 | 1 | 0 |
+|  |  | edit one field | 1 | 2,195 | 24 | 0 | 0 |
+|  |  | append | 1 | 2,211 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 2,170 | 0 | 0 | 0 |
+| no declared key | 1,000 | settle (2 documents) | 2 | 22,960 | 45,851 | 1 | 0 |
+|  |  | edit one field | 1 | 22,895 | 24 | 0 | 0 |
+|  |  | append | 1 | 22,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 22,870 | 0 | 0 | 0 |
+| no declared key | 2,000 | settle (2 documents) | 2 | 46,960 | 93,851 | 1 | 0 |
+|  |  | edit one field | 1 | 46,895 | 24 | 0 | 0 |
+|  |  | append | 1 | 46,911 | 19 | 0 | 0 |
+|  |  | remove first | 1 | 46,870 | 0 | 0 | 0 |
+| no declared key | 3,000 | settle (3,002 documents) | 3,002 | 250,960 | 389,741 | 3,001 | 0 |
+|  |  | edit one field | 2 | 183,025 | 108 | 1 | 1 |
+|  |  | append | 2 | 183,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 182,940 | 0 | 0 | 1 |
+| no declared key | 10,000 | settle (10,002 documents) | 10,002 | 838,960 | 1,306,741 | 10,001 | 0 |
+|  |  | edit one field | 2 | 610,025 | 108 | 1 | 1 |
+|  |  | append | 2 | 610,081 | 98 | 1 | 0 |
+|  |  | remove first | 1 | 609,940 | 0 | 0 | 1 |
+
+The bytes put into the documents follow the change. The bytes of the
+documents written do not, by three rules of that section.
+
+- **A list of small rows is one document until it passes 65,536 bytes.** The
+  array of 2,000 rows is one part of 46,960 bytes, and an edit of one row
+  puts 14 or 24 bytes into it. Whether that is a cost depends on whether
+  storage takes a patch below a path of a document, which no document says
+  (question 290).
+- **Crossing the size makes every row a part in one transaction, and the
+  array is then larger than before.** A list of 2,600 rows that 200 more are
+  appended to creates 2,800 part documents in that transaction. A row of 23
+  bytes is replaced in the array by a storage link of 61 bytes, so the array
+  grows from about 61,000 bytes to about 171,000, exceeds the maximum, and has
+  no split point left. At 10,000 rows it is 610,000 bytes, and each append
+  and each removal writes it: 98 bytes put in and 610,081 bytes of documents
+  written. A reader of the whole list loads every part.
+- **An edit of a plain value with no declared key renames the part of its
+  row.** The identifier of a part holds the key of the row, and the edit gives
+  the row another key. So the edit deletes one part document, creates one,
+  and writes the array for the new link: at 10,000 rows 2 documents, of which
+  one is the array of 610,000 bytes. With a declared key it writes one
+  document of 24 bytes.
+
+Provisional decision P20 replaces the rule: a row is a part only from a
+minimum size on, and a long array is stored in chunks.
+`execution-and-storage.md` §4.10 has the sizes that the new rule gives for
+this list, derived and not measured. Not measured in either: the label
+entries and provenance records that the section counts in a size and repeats
+in each part, the bytes that the rule encodes where sizes are measured from
+the documents, and a list that shrinks.
+
+**A keystroke in a row that has state** (note 515; question 254).
+`compare/rekey-cost.ts keystrokes`, on `fixtures/rows-state.tsx`: each row
+has a state cell, a handler binding with a stream, a `lift` in the body, and
+an instance called through `asInstance()`. A keystroke is an event for the
+handler `rename` of one row, which writes the `title` of its element through
+the reference to the element. The figures are the mean of 20 keystrokes in
+one row.
+
+| Case | Rows | Documents written | Places moved | Stream documents added | Bytes put into the documents | Part documents created and deleted | Salted hashes | Evaluations | Milliseconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 100 | 3 | 1 | 1 | 609.5 | 0 and 0 | 1 | 3 | 0.459 |
+| Plain values in place, no declared key | 1,000 | 3 | 1 | 1 | 610.5 | 0 and 0.05 | 1 | 3 | 0.686 |
+| Plain values in place, no declared key | 10,000 | 3 | 1 | 1 | 611.5 | 1 and 1 | 1 | 3 | 5.395 |
+| Plain values in place, `ArrayByKey` | 100 | 3 | 0 | 0.05 | 80.5 | 0 and 0 | 1 | 3 | 0.244 |
+| Plain values in place, `ArrayByKey` | 1,000 | 3 | 0 | 0.05 | 81.5 | 0 and 0 | 1 | 3 | 0.343 |
+| Plain values in place, `ArrayByKey` | 10,000 | 3 | 0 | 0.05 | 82.5 | 0 and 0 | 1 | 3 | 0.429 |
+| References | 100 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.074 |
+| References | 1,000 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.071 |
+| References | 10,000 | 2 | 0 | 0.05 | 25 | 0 and 0 | 0 | 2 | 0.131 |
+
+- **Over an array of plain values in place with no declared key** each
+  keystroke gives the element another key, by the ruling that a plain value
+  edited in place is a new element. The executor moves the place of the
+  row's state cell to the new key, re-keys the instance of the row, forms 1
+  salted hash, evaluates 3 cone instances, and writes 3 documents: the
+  argument, the argument of the row's instance, and the result. The state
+  cell has no document in this fixture, since nothing wrote it; a cell that
+  was written would be one document moved for each keystroke. The row is
+  stored again whole, about 610 bytes, because the links to its streams and
+  to its state cell hold the key. And each keystroke leaves one more
+  document: the event of the next keystroke is for the stream of the new
+  key, and a stream has a document from its first event, so 20 keystrokes
+  leave 20 stream documents (question 295). Where the rows are parts, each
+  keystroke deletes the part of the row and creates one under the new key.
+  The counts are the same at 100, 1,000 and 10,000 rows.
+- **With `ArrayByKey`** no key changes: 3 documents written, 81 bytes,
+  nothing moved, and one stream document for all 20 keystrokes. One salted
+  hash is formed, of the key fields, to find that the key is the same.
+- **Over an array of references** the write is to the cell of the element: 2
+  documents, 25 bytes, no hash.
+- **Today's runtime,** on the same pattern with the child called in the body,
+  since it has no `asInstance()`, over plain values in place keyed by
+  position: 4 runs of an action, 2 commits and 3 documents changed for each
+  keystroke at 100 and at 1,000 rows, and nothing moves. Its time for a
+  keystroke is 60 ms at 100 rows and 579 ms at 1,000. It was not measured at
+  10,000.
+- **The time of the executor** for a keystroke with no declared key follows
+  the number of rows, 0.46 ms at 100 and 5.4 ms at 10,000, because it finds
+  what is stored under the old key by passing over the state cells and the
+  instances of the pattern. That is the executor's, and an index by key
+  would end it.
+
+**A list that is replaced again and again** (note 516; question 255).
+`compare/rekey-cost.ts polled 100 100`, on the same fixture: a writer outside
+the instance replaces all 100 elements with new values, 100 times. The
+documents that the executor holds:
+
+| Case | Start | After 1 round | After 10 | After 100 |
+| --- | ---: | ---: | ---: | ---: |
+| Plain values in place, no declared key | 202 | 402 | 2,202 | 20,202 |
+| Plain values in place, `ArrayByKey` | 202 | 202 | 202 | 202 |
+| References | 202 | 202 | 202 | 202 |
+
+With no declared key each round makes 100 keys, and 100 instances with an
+argument and a result document each, which stay when their keys leave, by the
+ruling that the removal of an element deletes nothing stored under its key
+and the ruling that an instance called through `asInstance()` is not torn
+down: 10,100 instances after 100 rounds. No state cell was written and no
+row received an event in this run; a row that was used would leave its state
+cell documents and its stream documents as well. With a declared key, and
+over an array of references, where the write is to the cell of each element,
+nothing is added.
+
+The costs of the last two measurements follow from owner rulings and no
+change of the executor removes them. Provisional decision P21 adds a
+compile-time warning, and questions 254 and 255 carry the measurements with
+the coordinator's recommendation.
+
+**Measured and not fixed, in the size of a plan.**
+
+- **A pattern that is compiled in is still written out at every call site**
+  (note 517; question 247). Provisional decisions P18 and P19 are not built.
+  With two sites per level the plans are 3,175, 7,632, 16,652, 34,975, 72,491
+  and 149,595 bytes for 1 to 6 levels at this commit. From the written-out
+  plans the prototype's author estimates what P18 would give
+  (`compare/sites.ts`, with 200 bytes taken for a call-site record): 3,055,
+  5,365, 7,979, 11,101, 15,291 and 21,445 bytes. The estimate still grows by
+  more at each level, because it keeps the `within` of the deepest copy,
+  which holds the whole chain of sites, and the plan's one template table.
+  Over the 382 plans of the corpus, 5,956,178 bytes, there are 364 copies of
+  282 callees that hold 1,691,163 bytes, and the estimate is 5,870,726
+  bytes, 1.4% less: a pattern is seldom compiled in at more than one site
+  in the corpus. Of the 82 pairs of copies of one callee in those plans, 44
+  are equal but for the numbers in them and 38 differ, 33 of those in how
+  many records they have (question 289).
+- **A `Body` record per use** (note 518; question 248). One `lift` with `R`
+  reads called at `U` places: `Plan.bodies` is 2,006 bytes for `R` 10 and
+  `U` 5, 8,052 for 10 and 20, 5,756 for 40 and 5, and 23,052 for 40 and 20,
+  which is the product. The slots do not grow with `U`.
+- **`within` repeats the chain** (question 250). With one call site per level
+  the `within` members of a plan are 89 bytes at 3 levels and 302 at 6. With
+  two sites per level they are 36, 212, 788, 2,388, 6,484 and 16,468 bytes
+  for 1 to 6 levels.
+- **Entries per position of a type written out** (question 252). For a type
+  that each level uses twice, to a depth of 10, with a handle at the bottom,
+  and one `lift` that reads a value of the type whole, the plan has 1 slot
+  and 1,136 bytes at every depth. `footprint-analysis.md` §2.2 has one
+  `identity` entry for each such position, 1,024 at depth 10, and the crate
+  records the read as one `value` entry. The growth is not measured, and the
+  crate does not conform to that section there.
+
+**Which questions on growth the round bears on:** 229, 247, 248, 250, 252,
+254 to 257, 259, 260, 264 and 271. Each of those entries has the measurement
+and says whether the finding is confirmed, refuted, fixed or unchanged. Not
+measured: questions 249, 251, the callee analyzed per call of question 252,
+and 253, which needs labels at run time; and questions 258, 261 to 263, 265
+to 270 and 272 to 275.
+
+#### Run times: the executor beside today's runtime
+
+The method (note 519), for each module of the corpus that today's runtime
+runs in the comparison, on the scenario of `compare/generate.ts`:
+
+- **Compile, crate:** the median of 20 runs, in one process, of the crate's
+  analysis of the files of the module's program and the plans as JSON text
+  (the `time` command). It does not include writing the value code or
+  starting a process.
+- **Compile, today:** `cost.ts compile`, the first compile of the module in a
+  new runtime, one run, measured earlier on the same day at an earlier commit
+  of the prototype's branch; today's compiler is not changed by that branch.
+- **Settle, executor:** from the artifact, read and parsed, to the settled
+  instance: the evaluation of the module texts with `new Function`, the
+  creation, and the first derivation transaction. One run, in the process
+  that ran every module before it (`values-corpus.ts again` with
+  `PATTERN_COMPILER_MEASURE=patches`).
+- **Settle, today:** `cost.ts run`: from the compiled pattern to every kept
+  output read and the runtime idle, one run.
+- **Per event:** the mean over the events of the scenario that today's run
+  committed, with their number in parentheses. For the executor an event is
+  the event's transaction and the derivation transaction behind it. For
+  today's runtime it is the time from the send to the runtime idle with each
+  kept output read, and it includes the reads of labels that the harness of
+  the comparison makes between events.
+
+All on one machine, under macOS, which ran the measurement and nothing else
+of this work at the time; other processes of the machine were not
+controlled. All figures are milliseconds. A module with no figure per event
+has no event in its scenario.
+
+| Module | Source bytes | Compile, crate | Compile, today | Settle, executor | Settle, today | Per event, executor (events) | Per event, today (events) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `examples/pattern-index/pattern-index.tsx` | 505 | 0.05 | 109 | 0.10 | 8.67 | | |
+| `dev/catalog/stories/cf-heading-story.tsx` | 1,054 | 0.03 | 121 | 0.10 | 5.70 | | |
+| `examples/cfc-input-cell-demo/briefing.tsx` | 1,325 | 0.08 | 115 | 0.12 | 11.1 | | |
+| `dev/catalog/stories/cf-field-story.tsx` | 1,510 | 0.04 | 96.3 | 0.13 | 5.04 | | |
+| `dev/catalog/stories/cf-tabs-story.tsx` | 1,624 | 0.04 | 114 | 0.14 | 6.53 | | |
+| `examples/phonetic-speller/phonetic-speller.tsx` | 2,263 | 0.12 | 138 | 0.55 | 12.1 | | |
+| `apps/project-list/main.tsx` | 2,556 | 0.34 | 139 | 0.48 | 42.5 | 0.14 (3) | 20.2 (3) |
+| `system/cfc/trusted-surfaces/fact-check-gate.tsx` | 3,016 | 0.15 | 99.7 | 0.18 | 14.3 | 0.03 (1) | 6.33 (1) |
+| `dev/gideon-tests/test-onclick-ifelse-simple-cell-working.tsx` | 3,270 | 0.11 | 99.4 | 0.15 | 34.5 | 0.03 (1) | 7.71 (1) |
+| `system/cfc/trusted-surfaces/recipient-confirm.tsx` | 3,631 | 0.18 | 89.8 | 0.18 | 82.5 | 0.03 (1) | 11.2 (1) |
+| `examples/multi-option-selection/multi-option-selection.tsx` | 4,041 | 0.17 | 212 | 0.42 | 31.4 | | |
+| `examples/router/main.tsx` | 5,128 | 0.80 | 184 | 0.58 | 26.1 | | |
+| `dev/catalog/stories/cf-render-story.tsx` | 5,874 | 0.22 | 182 | 0.60 | 49.1 | | |
+| `dev/catalog/stories/cf-textarea-story.tsx` | 7,272 | 0.40 | 697 | 0.24 | 15.2 | | |
+| `examples/cfc-render-policy-demo/main.tsx` | 7,675 | 0.78 | 193 | 0.76 | 44.4 | 0.25 (2) | 16.3 (2) |
+| `dev/catalog/stories/cf-calendar-story.tsx` | 8,554 | 0.58 | 226 | 0.68 | 38.2 | | |
+| `dev/catalog/stories/cf-svg-story.tsx` | 9,376 | 0.44 | 184 | 0.46 | 16.7 | | |
+| `apps/book-recommendations/view.tsx` | 10,647 | 2.51 | 228 | 0.91 | 48.3 | | |
+| `dev/catalog/stories/cf-vstack-story.tsx` | 12,657 | 0.53 | 311 | 0.47 | 42.6 | | |
+| `apps/recommend-a-book/views.tsx` | 15,542 | 2.33 | 315 | 0.61 | 64.4 | 0.05 (2) | 9.42 (2) |
+| `showcase/battleship/pass-and-play/main.tsx` | 25,874 | 5.96 | 308 | 3.02 | 87.6 | 7.64 (4) | 5.64 (4) |
+| `system/shared-space/shared-space-collection.tsx` | 49,974 | 27.6 | 546 | 0.67 | 109 | | |
+| `system/fabrichat/adapter.tsx` | 119,743 | 20.6 | 877 | 0.53 | 41.9 | | |
+| `apps/work-snapshot/main.tsx` | 150,468 | 50.1 | 1,160 | 1.92 | 155 | 0.43 (2) | 34.8 (2) |
+| `system/fabrichat/room-test-fixture.ts` | 481,259 | 640 | 3,241 | 0.11 | 16.9 | | |
+
+Over the 214 modules that have every figure: compile 1,357 ms by the crate
+and 64,480 ms today; to the settled result 318 ms by the executor and 14,210
+ms today; 541 events in 1,587 ms by the executor and in 43,690 ms today. In
+one listed module the executor is slower per event than today's runtime,
+`showcase/battleship/pass-and-play/main.tsx`, 7.64 against 5.64 ms; that was
+not investigated.
+
+`system/home/home.tsx` is not in the table because it is not executed: the
+crate lists four constructs of it that it does not emit, the first a call
+form in the reactive tier. Of `system/fabrichat/`, `adapter.tsx` and
+`room-test-fixture.ts` are in the table; `placement.tsx` is not executed,
+for the built-in `spaceDeleted`; `message-row.tsx` has `resolveAsCell` in
+the reactive tier, which the crate does not emit; and the crate emits no
+plan for the other modules of the directory.
+
+**What this comparison can show, and what it cannot.** It shows that value
+code driven by a plan settles the corpus modules and handles their events in
+times of the order of a millisecond, in an executor that was written to be
+read and not to be fast. It does not show how a compiled runtime would
+compare with today's. The executor instantiates no label and checks no
+constraint, where today's runtime prepares a commit with the CFC checks for
+every transaction. It has no storage transaction: its documents are
+JavaScript values in one process, with no journal of reads, no commit, no
+encoding, and no notification of a subscriber. It has no scheduler across
+instances, no network, and no sandbox for a function body, which today's
+runtime runs under SES. Today's times include the harness of the comparison.
+Each figure is of one run. The compile times compare the crate's front end
+and plan emission with today's whole compile, which also type-checks with
+the TypeScript compiler and bundles.
+
+#### The comparison of values and of labels
+
+`values-fixtures.ts` runs 59 runs, and 1,004 of 1,013 compared values are
+equal, with the same 9 that differ as at commit `a84264daf2`. A seeded run of
+today's runtime over the 272 modules (`values-corpus.ts run`), beside that
+commit:
+
+| | `a84264daf2` | `e63851c1ee` |
+| --- | ---: | ---: |
+| Modules run by today's runtime | 215 | 215 |
+| Executed | 214 | 214 |
+| Every value equal and every event handled | 193 | 193 |
+| Values compared | 6,107 | 6,107 |
+| Values equal | 6,013 | 6,013 |
+| Values that differ | 94 | 94 |
+| Modules with a difference | 21 | 21 |
+| Committed events the executor does not handle | 3 of 541 | 3 of 541 |
+| Evaluations the executor counted | 7,118 | 6,673 |
+| Positions of the results that hold a stream | 909 | 909 |
+| Documents the executor stored | 1,444 | 1,444 |
+
+No module has another outcome. The 445 evaluations fewer are those of the
+cones that placed a collection (provisional decision P22). The 47 modules
+that need `wish` or request an effect, with stubbed answers
+(`values-corpus.ts stubbed`): 45 run by today's runtime, 42 executed, 16 with
+every value equal and every event handled, 1,484 of 1,584 values equal, and 4
+of 94 committed events not handled, each figure as before. Two of those
+modules, `dev/loom-chat-room-fixture/main.tsx` and
+`dev/loom-overlay-fixture/main.tsx`, store one document of kind `output`
+fewer, 10,289 documents in all for 10,291. By a reading that was not
+verified, an output whose value is the assembled result of a construct was
+stored in a document of its own where a function body of its cone gave it to
+an instance, and is given as the values at this commit. On the executor alone
+(`values-corpus.ts alone`): 44 executed, 3 not, and 13 of 106 events not
+handled, as before. The first such run after the reference to a collection
+was built had one event more not handled, in `apps/cozy-poll/main.tsx`: a
+row that left and entered its collection in one change was stored with a
+mark in the place of the rows of the collection inside it. That was
+corrected, and a test has the case; the test was written after the
+correction and was not seen to fail.
+
+The comparison of labels over the corpus (`compare/corpus.ts`): 1,462 outputs
+compared and 148 bounds, 1,332 tighter and 130 whose atom names the pattern,
+none looser or incomparable; 249 write edges compared, 237 equal and 12
+tighter. The report is the same text as that of commit `a84264daf2`, line for
+line: the crate is not changed, and the harness reads the executor's streams
+alone.
+
+Which commit each run was made on: the seeded run with today's runtime, the
+stubbed run and the label run used the executor of commit `9e16d9e054` with
+the first of the two later performance changes. The replay of the seeded run
+on the executor alone, the run of the 47 modules on the executor alone, the
+fixtures, and every measurement of growth and of the keystroke were repeated
+on the final code and give the same figures. The runs with today's runtime
+were not repeated after the last two commits, which change the renumbering
+of positions in an assembly and the accounting of the layout.
+
+**What the round's author did not keep or verify** (note 522). Most tests
+were written after the code or after the measurement they bound: those of
+one change of a list, those of the layout, of which two failed first and led
+to changes, and those of the keystroke and of the polled list, which passed
+when they were written. Marking, the kept keys, the journal, the reference
+to a collection and the applied assembly were written with the existing
+tests, the fixtures and the corpus comparison as their check, and no test of
+their own first. Three tests that stated the earlier behavior were replaced.
+Not verified: that marking is exact for every plan beyond what the fixtures,
+the executor's tests and the corpus exercise; the times; and that today's
+figures are free of the harness.
 
 
 ### What the run conformed to
@@ -5247,16 +5856,39 @@ decides otherwise. The question stays in
 [Open, and needing the owner](#open-and-needing-the-owner) with a
 pointer to its entry.
 
-**To look at first.** P9 is flagged. With it a batch of events and the same
-events handled one at a time can store different values, and today's runtime,
-which runs the writer again, stores the same value in both. The coordinator
-adopted it only so that the work continues. After it: P18, which changes the
-records of a plan and is written in full into `plan-and-label-templates.md`
-§1.1, with one point at which the written-out form is not preserved outside the
-result (question 288); and question 285, which is no provisional decision: the
-documents said that today's runtime commits none of the writes of a node that
-throws, and it commits them, so the withdrawal of a failed cone's side-write is
-a difference from today.
+**To look at first,** in this order.
+
+1. **P9** is flagged. With it a batch of events and the same events handled one
+   at a time can store different values, and today's runtime, which runs the
+   writer again, stores the same value in both. The coordinator adopted it only
+   so that the work continues.
+2. **Questions 254 and 255,** on keys that are formed from plain values. Over
+   an array of plain values in place with no declared key, each keystroke in a
+   row that has state re-keys the row, moves its state, stores the row again
+   and leaves one new stream document, and a list of 100 records that is
+   replaced 100 times leaves 20,202 documents where the same list with
+   `ArrayByKey` or as an array of references holds 202. Both costs follow from
+   owner rulings, that a plain value edited in place is a new element and that
+   nothing stored under a key is deleted, and only the owner can change them.
+   P21 adds a warning and changes neither.
+3. **P20,** which replaces the rule on part documents of
+   `execution-and-storage.md` §4.10: a row is a part only from a minimum size
+   on, and a long array is stored in chunks. The rule it replaces turned 2,600
+   small rows into 2,800 documents in one transaction and wrote 610,081 bytes
+   of documents for an append to a list of 10,000.
+4. **P18 with P19.** P18 changes the records of a plan and is written in full
+   into `plan-and-label-templates.md` §1.1. It is designed and not built. P19
+   makes the compile-time checks on declared labels modular under it, which is
+   the one point at which the written-out form is not preserved outside the
+   result (question 288).
+5. **P22,** which resolves a conflict of the documents with themselves: a cone
+   that places the result of a per-element construct holds a reference to the
+   collection, so one row's change evaluates no enclosing cone.
+
+Beside these, question 285 is no provisional decision: the documents said that
+today's runtime commits none of the writes of a node that throws, and it commits
+them, so the withdrawal of a failed cone's side-write is a difference from
+today.
 
 - **P1. A read gives the members of a stored record in the order of the
   `base/data-model` codec** (question 218). A read gives the members of
@@ -5643,7 +6275,20 @@ a difference from today.
   preserve the written-out form,* neither in a label, a value, an identifier or
   a stored document of a result: `Cone.code` of a callee's cone is the hash of
   one function for every site, so what is keyed by it is keyed by another hash;
-  and the compile-time diagnostics of question 288. *Alternative:* the
+  and the compile-time diagnostics of question 288, which P19 decides
+  provisionally. *Status:* designed and not built. At prototype commit
+  `e63851c1ee` the crate still writes a callee out at every site, the plans of
+  two sites per level are 3,175 to 149,595 bytes for 1 to 6 levels, and none of
+  the points of question 289 is tested. *Two facts from that round* (its note
+  517). Over the corpus the prototype's author estimates, from the written-out
+  plans, that the decision makes the plans 1.4% smaller, 5,870,726 bytes for
+  5,956,178: a pattern is seldom compiled in at more than one site today, so
+  P18 bounds the worst case and does not change the corpus. And of 82 pairs of
+  copies of one callee in the corpus plans, 38 differ in more than numbers, 33
+  of them in how many records they have, so the binding decides which records
+  the written-out form has, against the design's sentence that a callee record
+  depends on nothing of its call sites; that is the ninth point of question
+  289. *Alternative:* the
   written-out form as the format. *If decided otherwise:* those records and
   members leave `plan-and-label-templates.md` §1.1, with the provisional
   sentences of its §1.4, §3.2 and §4.4, of `execution-and-storage.md` §2.1 and
@@ -5653,6 +6298,188 @@ a difference from today.
   same for a site in an element body over an array of references, over an array
   of plain values in place, and over the result of another per-element
   construct.
+- **P19. Under P18, the compile-time checks on declared labels are modular**
+  (question 288). The coordinator's decision. *The case:* the four `cfc-flow`
+  diagnostics that evaluate a template on declared labels, `writer-fit`,
+  `write-floor`, `max-confidentiality` and `required-integrity`. With a callee
+  written out at each call, a path of its argument that the call binds to an
+  output of the caller is a node that names that output, and the check follows
+  it into the caller's template, once per chain of call sites. *Decision:* the
+  checks run once per callee, against the declared labels of the callee's
+  argument slots, and once per call site for the binding alone: that what the
+  site binds to each argument slot fits that slot's declared label, and that
+  each result of the callee fits the place the site gives it. They do not
+  follow an argument into the caller's template. The work at compile time is
+  linear in the source. Enforcement at run time is unchanged, so no label, no
+  value and no run-time decision differs. What differs is which compile-time
+  reports are made: a flow that the written-out form reports only by following
+  a caller's output through the callee is reported at the site's binding, or at
+  run time. *Alternative:* checks per chain of sites, with the reports of the
+  written-out form and work that is `k` to the power `D`. *Reason:* the
+  alternative returns to compile time the growth that P18 removes from the
+  plan. *Tests:* none. The prototype has neither P18 nor P19, and no
+  diagnostic of the corpus was compared under it. *How it is written:* the
+  paragraph "The checks on declared labels are modular" and the row of the
+  table of `plan-and-label-templates.md` §1.1, its question 170, point (a),
+  and the row of `language-subset.md` §10 on what each diagnostic is computed
+  from. `footprint-analysis.md` describes none of these checks and is not
+  changed. *Assumed in the writing:* a binding is checked as a write edge to a
+  target that declares the slot's label is checked, and where the callee
+  declares no label on an argument path nothing is checked at the site. *If
+  decided otherwise:* that paragraph, the row and the two sentences are
+  replaced, and compile-time work returns to `k` to the power `D`. The rule is
+  the same for a site in an element body over an array of references, over an
+  array of plain values in place, and over the result of another per-element
+  construct.
+- **P20. Part documents: a row is a part only from a minimum size on, and a
+  long array is stored in chunks** (questions 229 and 264, with question 290
+  for what stays open). The coordinator's decision. *Measured* (prototype notes
+  511 and 513), on a `map` over an array of plain values in place with rows of
+  23 bytes, with a declared key and with none: the rule of
+  `execution-and-storage.md` §4.10 that made every split point directly below a
+  document a part, whatever its size, when the document exceeds
+  `DOCUMENT_MAX_BYTES`, turns 2,600 rows into 2,800 documents in the one
+  transaction that crosses the number; a storage link is 61 bytes, so the array
+  of links is larger than the rows it replaced, exceeds the number itself, and
+  has no split point left; and at 10,000 rows every append writes 610,081 bytes
+  of documents for 98 bytes of change. *Decision:* (a) a split point becomes a
+  part of its own only where its stored size is at least `PART_MIN_BYTES`, and
+  a smaller row stays in place; (b) an array whose content in place would
+  exceed `DOCUMENT_MAX_BYTES` is stored as chunk documents, each a contiguous
+  run of the array's entries, with an ordered list of links to the chunks at
+  the place of the array, which is itself stored in chunks when it exceeds the
+  number, so that the chunks form a tree. A chunk that exceeds the number is
+  divided in two, and two adjacent chunks that together fall under half of it
+  become one. An insertion, a removal or an edit of one row writes the chunk
+  that holds it and, only on a split or a merge, the list above. No row is
+  renumbered in storage by an insertion elsewhere: a position is derived from
+  the order of the chunks and the offset in the chunk. (c) A part returns in
+  place only where its size falls under half of `PART_MIN_BYTES`. A read sees
+  the same array, so no meaning changes. The bytes of the documents written
+  for one change of one row are bounded by the size of a chunk and the depth of
+  the tree, at any length. *How it is written:* `execution-and-storage.md`
+  §4.10, the paragraphs "The rule about size" to "Worked sizes", with
+  `PART_MIN_BYTES` proposed as 1,024 bytes, a placeholder that takes the place
+  and the value of the split number the section had, about 17 storage links.
+  The section says how a chunk is identified, how a position is derived, how a
+  path, a reference by key and a storage link resolve through chunks, what each
+  kind of change writes, how label entries and provenance records are counted
+  and where they are stored, what a re-key of an element of an array of plain
+  values in place writes, and the sizes that the rule gives for the measured
+  list, which are derived and not measured: 6 documents for 10,000 rows of 23
+  bytes where the old rule gave 10,002, and one chunk of at most 65,536 bytes
+  for an append where it wrote 610,081. The sections that cite the rule follow:
+  its sections 2.2, 4.1, 4.2, 5.2 and 10.1, `plan-and-label-templates.md` §2.3,
+  `scheduler-and-serving-loop.md` §3.1 and §4.2, and the overview. *What the
+  decision gives up:* an edit of a small row with a declared key writes its
+  chunk, where a row that is a part by itself was one document of 24 bytes.
+  *Open under it* (question 290): whether storage takes a patch below a path
+  of a document, which is not decided; whether a chunk list holds the number
+  of entries below each link; which arrays are stored in chunks; and the
+  stored form of a chunk list. *Alternative:* the rule as it was, with the
+  measured cost. *Tests:* none. The prototype has the old rule as an
+  accounting, and its reads do not go through part documents. *If decided
+  otherwise:* those paragraphs and the sentences that name a chunk are
+  removed. The rule is the same for the rows of a kept collection over an array
+  of references, over an array of plain values in place, over a plain array
+  generated from scratch, and over the result of another per-element
+  construct.
+- **P21. A diagnostic for per-element state under a key formed from the
+  value** (question 291; it bears on questions 254 and 255 and decides neither).
+  The coordinator's decision. *Measured* (prototype notes 515 and 516): over an
+  array of plain values in place with no declared key, each keystroke-sized
+  edit of a row that has state re-keys the row, moves its state, stores the row
+  again and leaves one new stream document, 20 stream documents for 20
+  keystrokes; and a polled list of 100 records replaced 100 times leaves 20,202
+  documents, where it holds 202 with `ArrayByKey` or as an array of references.
+  These follow from owner rulings, that a plain value edited in place is a new
+  element and that nothing under a key is deleted, and are not changed.
+  *Decision:* the compiler reports a warning,
+  `array-by-key:state-without-key`, the name assumed, where the body of a
+  per-element construct over an array of plain record values in place, whose
+  array type declares no key, holds per-element state: a handler binding, a
+  state cell, an operation, an instance of a `lift` or a `computed`, or a child
+  called through `asInstance()`. The message names `ArrayByKey` and an array of
+  references as the corrections. *Alternative:* no diagnostic. *Reason:* the
+  cost is invisible in the source and a declared key removes it. *How it is
+  written:* `language-subset.md` §4.4.1 ("Per-element state with no declared
+  key"), its catalog of diagnostics and its question 47, and a sentence each in
+  `plan-and-label-templates.md` §1.3 and in `builtin-inventory.md` ("Element
+  keys"). *Assumed in the writing:* it is reported for a plain array generated
+  from scratch with no declared key as well, and for a construct over the
+  result of another per-element construct whose first source is such an array;
+  it is not reported over an array of references, over an array with a declared
+  key, or over an array of scalars. *Tests:* none; the crate does not report
+  it. *If decided otherwise:* those sentences and the row of the catalog are
+  removed.
+- **P22. A cone that places the result of a per-element construct and observes
+  nothing of it holds a reference to the collection** (question 259, with
+  question 292 for what stays open). The choice of the prototype's author, its
+  provisional choice 1 of the round. *The case:* the documents conflicted with
+  themselves. `plan-and-label-templates.md` §1.4, "The enclosing cone uses the
+  assembled result"; `execution-and-storage.md` §3.3, "An entry is not current
+  when an upstream output it pulled has a different value from the one
+  recorded"; and its §2.2, assumed there, "the function returns the whole
+  constructed value once". By the three a change of one row makes the cone
+  that holds the collection, each cone that pulls it, and the `result` cone
+  stale, and each returns a value of every row. Against them the worked example
+  of its §10.1 lists the cone instances of a send with no cone of the tree
+  among them. *Decision:* in favor of §10.1. Such a cone holds a reference to
+  the collection, the rows are stored by the collection, and the enclosing cone
+  and the `result` cone are not evaluated for a change of one row. It applies
+  to the result of a `map`, a `filter` or a `flatMap` over an array of
+  references, over an array of plain values in place, and over the result of
+  another per-element construct. *Measured:* evaluations per change 2 and 4 in
+  the place of 3 and 5, and 2 to 26 bytes put into the documents in the place
+  of 238,904 at 10,000 rows; over the corpus 445 evaluations fewer, and no
+  value changed. *How it is written:* `execution-and-storage.md` §2.2 ("A
+  collection that a cone places"), which says what placing and observing are,
+  what makes the placing cone stale, who stores the rows, how a reader and a
+  handler read through the place, and that the labels of the result, demand
+  per kept path, the keep set and a client that renders one row are as they
+  were; its sections 2.5, 3.1, 3.3 and 10.1; and
+  `plan-and-label-templates.md` §1.4. *Open under it* (question 292): one
+  collection placed at two kept paths; and a construct over a plain array
+  generated from scratch, which the decision does not name. *Alternative:* the
+  cone returns the whole value. *Tests:* the executor's growth tests bound the
+  evaluations and the bytes, and the corpus comparison is unchanged. *If
+  decided otherwise:* those paragraphs are removed, the cone returns the whole
+  value, and the writes follow the list.
+- **P23. Keys are kept for the positions a write did not touch, and an assembly
+  is brought up to date from the splices of its source** (question 256). The
+  choice of the prototype's author, its choice 2. *The case:*
+  `execution-and-storage.md` §2.5, step 2, "Compute the key of every position",
+  and `scheduler-and-serving-loop.md` §3.2, "rebuilds the table". *Decision:*
+  both describe the result and not the algorithm: a runtime may keep the key of
+  a position that no write touched and apply the change to the table and to
+  the assembled result. *Measured* at 10,000 elements of an array of plain
+  values in place: 1 salted hash per change in the place of 10,000, with the
+  same keys and the same result; the option that forms every key and every
+  assembly again is built and measured beside it. Over an array of references
+  no key is hashed either way, and over the result of another per-element
+  construct the keys are the upstream keys. *Alternative:* the two sentences
+  as an algorithm. *Reason:* a key is a function of what its position holds.
+  *How it is written:* the paragraph "The steps state the result, and not an
+  algorithm" of `execution-and-storage.md` §2.5 and a sentence of
+  `scheduler-and-serving-loop.md` §3.2. *If decided otherwise:* those are
+  removed and each change of membership costs the length of the list.
+- **P24. A reader through a reference by key is marked by the key that a write
+  touched** (question 293). The choice of the prototype's author, its choice 3.
+  *The case:* a reference by key into an array of plain values in place has no
+  address of its own, so marking by the path of a write marks every reader
+  through a key of the array for a write to one element. *Decision:* the store
+  reports with each write below such an array the keys that the write touched,
+  and the scheduler marks the readers registered under those keys.
+  `scheduler-and-serving-loop.md` §3.2 ("Which keys a write touched") says
+  which keys each kind of write reports. *Alternative:* marking by the array,
+  which is one check for each reader through a key of it. *Reason:* that
+  section tags the entries of element slots with the key. *Tests:* the
+  executor's growth tests: 1 or 2 checks per change at every length. *Open
+  under it* (question 293): in which record the keys are reported, and what a
+  client does, which cannot form a key of a plain value. *If decided
+  otherwise:* that paragraph is removed and the checks of one change are the
+  length of the list over plain values in place. Over an array of references a
+  reference to an element is a link and the question does not arise.
 
 
 ## Open, and needing the owner
@@ -5778,9 +6605,12 @@ assumption.
 41. **Where a result is split** (ES §4.10, question 32). *Assumed:* the
     split points are the root of a kept output, a row of a kept
     collection, and a node of the rendered tree at any depth; a part is
-    split off at 1,024 bytes and merged back at 512, and a document holds
-    at most 65,536; the properties of a rendered node stay with the node.
-    The numbers are placeholders for stage 4 to measure.
+    split off at 1,024 bytes and merged back under half of that, and a
+    document holds at most 65,536; the properties of a rendered node stay
+    with the node. Provisional (P20): the first number is the constant
+    `PART_MIN_BYTES`, no split point becomes a part for the size of the
+    document that holds it, and an array over the second number is stored
+    in chunks. The numbers are placeholders for stage 4 to measure.
 42. **An instance made again under the identity of one torn down** (ES
     §2.8, question 33). By ruling the removal of an element deletes
     nothing stored under its key, and an element that returns under the
@@ -7928,6 +8758,19 @@ that analysis that are no question are named after question 238.
      rows are those of a kept collection over an array of references,
      over an array of plain values in place, or over the result of
      another per-element construct alike.
+     *Measured* at prototype commit `e63851c1ee` (notes 511 and 513), with the
+     layout kept as an accounting under the assumption of this entry, on a
+     `map` over an array of plain values in place with rows of 23 bytes: the
+     array of 2,000 rows is one part of 46,960 bytes; the transaction in which
+     the part exceeds the number makes every row a part, 2,800 documents for
+     2,600 rows that 200 are appended to; and the array of storage links, 61
+     bytes each, is then about 171,000 bytes with no split point left. The
+     reading of the assumption is confirmed as costly. *Assumed,* provisional
+     (P20): no rule makes a part of a split point for the size of the document
+     that holds it, so the first half of this entry has no case; the array is
+     a part by its own size, a row is a part by its own size alone, and a long
+     array is stored in chunks. The second half, the encoding in which a size
+     is measured, is unchanged: the prototype measured JSON text.
 230. **Which transaction evaluates what became demanded since the last
      cycle** (SS question 47). The cycle of
      `scheduler-and-serving-loop.md` §10.2 runs one derivation
@@ -8294,9 +9137,11 @@ of the data, or that follow the number of paths: an audit of all seven
 documents, and a list made from `plan-and-label-templates.md` while the
 ruling on question 222 was written in. Each was found by reading. The
 prototype at commit `a84264daf2` measured six of them (questions 247,
-256, 257, 259, 271 and 274), and each of those entries ends with the
-measurement and with whether the finding is confirmed, refuted or
-unchanged; the others were not measured and are unchanged. They are in the order
+256, 257, 259, 271 and 274), and at commit `e63851c1ee` it measured
+questions 248, 250, 252, 254 to 256, 259, 260, 264 and 271, with question
+229. Each of those entries ends with the measurement and with whether the
+finding is confirmed, refuted, fixed or unchanged; the others were not
+measured and are unchanged. They are in the order
 of the audit's ranking, in its
 four groups, with the findings of the second list placed in the first
 group. Each entry quotes the rule with its section, says what grows and
@@ -8355,6 +9200,14 @@ there.
      the source for any nesting, and the cone instances and what they store stay
      per chain of sites. Questions 288 and 289 hold what the record design could
      not determine. The prototype does not have the decision.
+     At prototype commit `e63851c1ee` (note 517) the decision is still not
+     built. The plans of two sites per level are 3,175, 7,632, 16,652, 34,975,
+     72,491 and 149,595 bytes for 1 to 6 levels: the finding is confirmed and
+     unchanged. An estimate from the written-out plans, which is no measurement
+     of P18, gives 3,055, 5,365, 7,979, 11,101, 15,291 and 21,445 bytes for the
+     same six, and over the 382 plans of the corpus 5,870,726 bytes for
+     5,956,178, which is 1.4% less. P18 bounds the worst case and does not
+     change the corpus.
 248. **A `Body` record is written per use, with the whole footprint.**
      `plan-and-label-templates.md` §1.1 describes `Body` as "One use of
      a sandboxed function body and the result of footprint analysis",
@@ -8372,6 +9225,13 @@ there.
      change* a representation only. *Measurement:* one authored function
      with `R` reads called at `U` places, with `R` and `U` varied; the
      bytes of `Plan.bodies`. *Today:* no plan exists.
+     *Measured* at prototype commit `e63851c1ee` (note 518): for one `lift`
+     with `R` reads of members of its argument, called at `U` places of a
+     pattern body, `Plan.bodies` is 2,006 bytes for `R` 10 and `U` 5, 8,052
+     for 10 and 20, 5,756 for 40 and 5, and 23,052 for 40 and 20, which is the
+     product. The slots do not grow with `U`: 20 and 80 at both. The template
+     table of P6 does not reach the records, which differ by the slot of each
+     read. The finding is confirmed, and nothing was changed.
 249. **`Output.constraints` lists the input constraints of every body
      upstream.** `plan-and-label-templates.md` §1.5 ("At an input")
      lists the constraint of a body in the `constraints` "of every
@@ -8413,10 +9273,16 @@ there.
      The steps of an element body are the same over an array of
      references, over an array of plain values in place, and over the
      result of another per-element construct. *Today:* no plan exists.
-     Not measured. Under provisional decision P18 no record holds a `site` step:
+     Under provisional decision P18 no record holds a `site` step:
      the steps of a call site are formed from the chain of sites, so the part of
      this finding that is about compiled-in calls has no case. The `element`
      steps and a `Name` that holds the name of its body stay as they are.
+     *Measured* at prototype commit `e63851c1ee` (note 518), in the written-out
+     form, since P18 is not built: with one call site per level the `within`
+     members of a plan are 89 bytes at 3 levels and 302 at 6, for 4 and 7
+     cones, which is the depth times the records; with two sites per level they
+     are 36, 212, 788, 2,388, 6,484 and 16,468 bytes for 1 to 6 levels. The
+     finding is confirmed, and nothing was changed.
 251. **The reads of a unit are the reads of every cone upstream.**
      `execution-and-storage.md` §1.9: "What a derived write read from
      storage is the reads of the cone instance that computed it and of
@@ -8466,6 +9332,14 @@ there.
      references, over an array of plain values in place, and over the
      result of another per-element construct. *Today:* no footprint
      analysis exists.
+     At prototype commit `e63851c1ee` (note 518) the first part could not be
+     measured: for the type above to `T10`, with one `lift` that reads a value
+     of the type whole, the plan has 1 slot and 1,136 bytes at every depth,
+     and the schema document grows by 222 bytes a level, by P7. The crate
+     records the read as one `value` entry and writes no `identity` entry for
+     each position, so it does not conform to `footprint-analysis.md` §2.2
+     there, and the growth of 1,024 entries at depth 10 is neither confirmed
+     nor refuted. The callee analyzed per call was not measured. Unchanged.
 253. **The rounds of a cycle of side-writes.**
      `plan-and-label-templates.md` §4.5 ("Cycles"): "the round is
      repeated with the labels of the round before until no staged label
@@ -8520,6 +9394,36 @@ rule of meaning.
      stored in place by its position, so an edit moves nothing, and
      "today such a child stays and receives the new value as its
      argument" (`execution-and-storage.md` §2.5).
+     *Measured* at prototype commit `e63851c1ee` (note 515), on rows that each
+     have a state cell, a handler binding with a stream, a `lift` and an
+     `asInstance()` child, with 20 keystrokes in one row, each an event for a
+     handler that writes the `title` of its element through the reference to
+     the element. Over an array of plain values in place with no declared key,
+     per keystroke, the same at 100, 1,000 and 10,000 rows: 1 salted hash, 3
+     evaluations, 3 documents written (the argument, the argument of the row's
+     instance, and the result), the place of the state cell moved, the row
+     stored again whole, about 610 bytes, because its links to its streams and
+     its state cell hold the key, and one new stream document, since the next
+     event is for the stream of the new key: 20 keystrokes leave 20 stream
+     documents (question 295). Where the rows are parts, one part is deleted
+     and one created per keystroke. With `ArrayByKey`: 3 documents, 81 bytes,
+     nothing moved, one stream document in all. Over an array of references: 2
+     documents, 25 bytes, no hash. Today's runtime, with a plain value keyed by
+     position and the child called in the body: 4 runs of an action, 2 commits
+     and 3 documents changed per keystroke, nothing moved, in 60 ms at 100 rows
+     and 579 ms at 1,000. The finding is confirmed in kind: every keystroke
+     re-keys the row and leaves a document. It is smaller in amount than the
+     estimate above, because the prototype re-keys the instance of the child,
+     which keeps its two documents, where the assumption of PL question 112
+     writes them under the identifiers of the new key. The cost follows from
+     owner rulings, and only the owner can change it:
+     the coordinator recommends to keep the rulings, to adopt the warning of
+     provisional decision P21, and to decide a retention rule for the
+     documents under a key that no stored array holds any longer. Recommended
+     for that rule: they are deleted by the transaction that removes the last
+     element with that key, except where a reference by key to the element is
+     stored elsewhere. The retention rule is recommended and not adopted,
+     because it reverses a stated deferral.
 255. **Nothing that is stored under an element key is ever deleted.**
      `plan-and-label-templates.md` §1.3 and `execution-and-storage.md`
      §2.6: "By ruling the removal of an element deletes nothing that is
@@ -8544,6 +9448,24 @@ rule of meaning.
      `execution-and-storage.md` §2.6 today's runtime deletes no document
      of a removed element either, and with a plain value keyed by
      position the count is bounded by the largest length the array had.
+     *Measured* at prototype commit `e63851c1ee` (note 516): 100 plain records
+     with no declared key, each row with an `asInstance()` child, replaced 100
+     times by a writer outside the instance, over an array of plain values in
+     place. The executor holds 202 documents at the start, 402 after 1 round,
+     2,202 after 10 and 20,202 after 100, which is 10,100 instances with an
+     argument and a result document each. No state cell was written and no row
+     received an event; a row that was used would leave those documents as
+     well. With `ArrayByKey`, and over an array of references: 202 throughout.
+     A plain array generated from scratch was not measured. The finding is
+     confirmed. The cost follows from an owner ruling, and only the owner can
+     change it:
+     the coordinator recommends to keep the rulings, to adopt the warning of
+     provisional decision P21, and to decide a retention rule for the
+     documents under a key that no stored array holds any longer. Recommended
+     for that rule: they are deleted by the transaction that removes the last
+     element with that key, except where a reference by key to the element is
+     stored elsewhere. The retention rule is recommended and not adopted,
+     because it reverses a stated deferral.
 256. **A change of membership computes the key of every position.**
      `execution-and-storage.md` §2.5, step 2: "Compute the key of every
      position." `scheduler-and-serving-loop.md` §3.2: "The evaluation it
@@ -8580,6 +9502,24 @@ rule of meaning.
      each position that a write did not touch is a change of the executor alone
      and was not made. The chain of three constructs was not measured, and
      neither were link resolutions or bytes hashed.
+     *Measured* at prototype commit `e63851c1ee` (notes 507, 509 and 512), with
+     the key of a position that a write did not touch kept and the assembly
+     brought up to date from the splices: at 100, 1,000 and 10,000 elements of
+     an array of plain values in place, with a declared key and without, one
+     append, prepend or edit forms 1 salted hash and one removal none; over an
+     array of references none is formed; for a `map` over the result of a
+     `filter` of plain values in place the counts are those of the source.
+     With every key and every assembly formed again, which is the wording of
+     the two sentences quoted above, one change at 10,000 forms 10,000 or
+     10,001 hashes and takes 174 to 321 ms over plain values. The finding is
+     confirmed for the wording and fixed in the executor. *Assumed,*
+     provisional (P23): the two sentences state the result and not an
+     algorithm. What still follows the length: a `set` of a whole new array,
+     whose entries the store compares to keep their keys; the positions behind
+     an insertion or a removal (question 260); and a `flatMap`, the
+     aggregates that scan, and a construct over a plain array generated from
+     scratch, whose assembly the executor still forms whole. The chain of
+     three constructs, link resolutions and bytes hashed were not measured.
 257. **A reference by key is resolved by hashing every element where no
      element table exists.** `execution-and-storage.md` §2.5 ("Resolving
      a reference by key"): "Where it has none, because no loaded
@@ -8612,6 +9552,12 @@ rule of meaning.
      position for each list of keys it formed. That confirms the cost of a scan
      and removes it where a list of keys exists. The case of this entry, an
      array that no loaded instance iterates, was not measured and is unchanged.
+     At prototype commit `e63851c1ee` the case of this entry was again not
+     measured, and it is unchanged. One thing bears on it (note 506): a memo
+     entry that read through a key into the document of a computed output,
+     which is a plain array generated from scratch, is compared at every pull,
+     because the read itself brings the output up to date and no write
+     announces it (question 294).
 258. **Equal plain values: an edit or a removal changes the key of the
      later equal elements.** `plan-and-label-templates.md` §1.3: "An
      edit that makes the value equal to that of another element, or ends
@@ -8685,6 +9631,22 @@ rule of meaning.
      patch, so the measurement does not show what a store step that writes the
      changed paths would write, and the two levels of enclosing JSX were not
      measured.
+     *Measured* at prototype commit `e63851c1ee` (notes 508 and 512), with a
+     cone that places a collection holding a reference to it and the rows
+     stored by the collection: one change of one element costs 2 evaluations
+     for a `map`, the element and the assembly, and 4 for a `map` over the
+     result of a `filter`, at 100, 1,000 and 10,000 elements, where it cost 3
+     and 5; and 2 to 26 bytes are put into the documents, where 238,904 were
+     written at 10,000. Over the corpus the executor counts 6,673 evaluations
+     for 7,118, and no compared value changed. The finding is confirmed for
+     the three rules and fixed in the executor. *Assumed,* provisional (P22):
+     the conflict is resolved in favor of the worked example of
+     `execution-and-storage.md` §10.1 (its §2.2, "A collection that a cone
+     places"). It was measured over an array of references, over an array of
+     plain values in place, and over the result of a `filter` of plain values
+     in place. Two levels of enclosing JSX, a `flatMap`, and a construct over
+     a plain array generated from scratch were not measured. Question 292 has
+     what the decision leaves open.
 260. **Labels, bindings and stored results are held at positions.**
      `builtin-inventory.md` ("Element keys"): aggregates and indexes
      "keep, as part of their state, the position of each element key".
@@ -8706,6 +9668,18 @@ rule of meaning.
      provenance records and state entries written. *Today:*
      `normalizeAndDiff` (`runtime/runner/src/data-updating.ts`) visits
      every index of a written array.
+     *Measured* at prototype commit `e63851c1ee` (note 512), for the positions
+     that the executor holds in memory and not for stored entries, of which it
+     has none: a prepend and a removal of the first element have the same
+     counts as an append and a removal of the last, and take 6 to 10 times as
+     long at 10,000 elements as at 100, where an append takes 0.6 to 2.2
+     times, over an array of references and over an array of plain values in
+     place. Each later key gets another position, one number each. The finding
+     is confirmed with a small constant for the positions. The label entries,
+     provenance records and origin facts were not measured. Under provisional
+     decision P20 the stored entries of a row are at paths relative to the run
+     of its chunk, so an insertion renumbers those of one chunk
+     (`execution-and-storage.md` §4.10); that is derived and not measured.
 261. **A read of one element by index is a read of every element, with
      no diagnostic.** `footprint-analysis.md` §3.1: "An index into an
      array is not a widening", and "so `rows[0].price` is `rows/*/price`
@@ -8801,6 +9775,28 @@ rule of meaning.
      documents; a `map` element is an instance with several documents of
      its own, and a list of plain records that no `map` renders is one
      document (the statement of `execution-and-storage.md` §4.8).
+     *Measured* at prototype commit `e63851c1ee` (notes 511 and 513), on a
+     `map` over an array of plain values in place with rows of 23 bytes, with
+     a declared key and with none. The first part was not measured: the
+     executor keeps the bytes of each split point in memory and adds the
+     difference that a write makes, which the section did not allow for. The
+     second part is confirmed: a list of 2,600 rows that 200 are appended to
+     creates 2,800 part documents in that transaction, and 3,000 rows are
+     3,002 documents of 250,960 bytes where 2,000 rows are 2 documents of
+     46,960. The third part is confirmed and is worse than stated: a storage
+     link is 61 bytes and a row 23, so the array of links, about 171,000 bytes
+     at 2,800 rows and 610,000 at 10,000, is larger than the rows it replaced,
+     and every append and every removal writes it, 610,081 bytes of documents
+     for 98 bytes put in. An edit of a row with no declared key deletes one
+     part, creates one and writes that array. Label entries and provenance
+     records are in no measured size. *Assumed,* provisional (P20): a split
+     point is a part only from `PART_MIN_BYTES` on, and a long array is stored
+     in chunks, so that one change of one row writes one chunk of at most
+     `DOCUMENT_MAX_BYTES`; and with each part and each chunk counted as its
+     link, measuring encodes no document that the transaction does not write,
+     which bounds the first part. The decision is written into
+     `execution-and-storage.md` §4.10 and is not built. Question 290 has what
+     it leaves open.
 265. **An element body that reads the index, or that captures the whole
      collection.** `plan-and-label-templates.md` §1.3: "reordering a
      collection recomputes nothing but the cones that read the index".
@@ -8978,6 +9974,22 @@ rule of meaning.
      that is demanded, which is the second of the two ways this entry names. The
      finding is confirmed for that way: the checks grow with `N`. An index from
      a write to its readers was not built, so the first way is not measured.
+     *Measured* at prototype commit `e63851c1ee` (notes 506 and 512), with each
+     memo entry registered as a reader of the positions it read and as a user
+     of the entries it used, and a write marking its readers: one change of
+     one element is 1 or 2 checks at 100, 1,000 and 10,000 elements, over an
+     array of references, over an array of plain values in place with a
+     declared key and with none, and over the result of a `filter` of plain
+     values in place, where it was 3 `N` to 7 `N`. That is the first of the
+     two ways this entry names, and the finding is fixed for it in the
+     executor. Two things are left. A reader through a reference by key into
+     an array of plain values in place is marked by the key that the write
+     touched (provisional decision P24; question 293). And an entry that
+     depends on something the index does not hold is compared at every pull,
+     so that over a plain array generated from scratch the checks follow the
+     list as before (question 294). The executor does not hold demand per kept
+     output path or the address index of `scheduler-and-serving-loop.md` §3.1,
+     so the measurement is of its own marking.
 272. **A withdrawal of demand derives the counts again over the upstream
      region, for each path released.** `scheduler-and-serving-loop.md`
      §4.3: "a withdrawal derives the counts again over the region
@@ -9306,16 +10318,25 @@ over the result of another per-element construct.
      Evaluated per chain of call sites, the reports are those of the written-out
      form, and the work at compile time follows the number of chains, `k` to the
      power `D`, which is the growth that P18 removes from the plan. No label and
-     no run-time decision differs between the two. Nothing is assumed, and the
-     table of `plan-and-label-templates.md` §1.1 has the rule as not determined.
+     no run-time decision differs between the two. *Assumed,* provisional (P19):
+     the first reading, stated as a rule. The checks run once per callee,
+     against the declared labels of the callee's argument slots, and once per
+     call site for the binding alone, and do not follow an argument into the
+     caller's template (`plan-and-label-templates.md` §1.1, "The checks on
+     declared labels are modular"). A flow that the written-out form reports
+     only by following a caller's output through the callee is reported at the
+     site's binding or at run time. The prototype built neither P18 nor P19,
+     so no diagnostic of the corpus was compared under the decision.
      This is the one place where P18 does not give exactly what the written-out
      form gives without paying its cost. A path bound to a slot of the caller
      has no such case: its declared label is that of the callee's type in both
      forms. The same for a call site in an element body over an array of
      references, over an array of plain values in place, and over the result of
      another per-element construct.
-289. **Eight further points of the record of a compiled-in pattern** (PL
-     question 170, points b to i; SS question 59; ES question 102). Each is
+289. **Nine further points of the record of a compiled-in pattern** (PL
+     question 170, points b to j; SS question 59; ES question 102). P18 is
+     designed and not built: at prototype commit `e63851c1ee` the crate writes
+     a callee out at every site, so no point below is tested. Each is
      assumed in `plan-and-label-templates.md` §1.1 as stated here. (a) What a
      call site binds a path of the argument to: a slot, an output or a constant
      by the text, and *assumed* also the stream of a binding and the result of
@@ -9340,9 +10361,123 @@ over the result of another per-element construct.
      names a callee by the content address of that pattern's own plan: *assumed*
      not, and the plan holds the record. (h) How a handler written in place in a
      callee, which captures names of the callee's scope, is registered once for
-     all sites: not determined (`execution-and-storage.md` §2.1). Beside these,
+     all sites: not determined (`execution-and-storage.md` §2.1). (i) Whether
+     the binding decides which records a callee has. The design has "A callee
+     record depends on nothing of its call sites". Of 82 pairs of copies of one
+     callee in the written-out plans of the corpus, 44 are equal but for the
+     numbers in them and 38 differ, 33 of those in how many records they have:
+     in `dev/experimental/folksonomy-demo.tsx` a cone lists a slot at one site
+     and none at the other, and in
+     `examples/suggestion-test/suggestion-test.tsx` the write edges of a request
+     have the path `context` at one site and `context/content` at the other
+     (prototype note 517). So in the written-out form the binding decides which
+     records exist. The count is from a script that was not kept, which pairs
+     records by their place in the lists, and it was not checked record by
+     record. Not determined: whether a callee record that holds what any site
+     needs gives at each site what the written-out form has there, or whether
+     some records have to be per site. Beside these,
      `Cone.code` of a callee's cone is one hash for every site, which changes
-     the keys of the cache documents and the basis rows and no result.
+     the keys of the cache documents and the basis rows and no result. One
+     fact on what the decision is worth: over the corpus the estimate of the
+     prototype's author is plans 1.4% smaller, since a pattern is seldom
+     compiled in at more than one site today, so P18 bounds the worst case and
+     does not change the corpus.
+
+**From the prototype's notes 505 to 522.** At commit `e63851c1ee` the
+prototype's executor marks what a write reaches, keeps keys, has a cone hold a
+reference to a collection that it places, and keeps the layout of a stored
+result as an accounting. Questions 290 to 295 are what those notes, and the
+provisional decisions P20 to P24 that the coordinator took from them, leave
+undecided. The lists of these notes are a `map` over an array of references,
+over an array of plain values in place with a declared key and with none, and
+over the result of a `filter` of plain values in place; nothing was tried over
+a plain array generated from scratch or with a `flatMap`.
+
+290. **What the rule on chunks leaves open** (ES question 103). Provisional
+     decision P20 stores a long array in chunk documents. Five points under
+     it. (a) Whether storage takes a patch below a path of a document.
+     `execution-and-storage.md` §4.2 has the write of a kept collection as a
+     `splice` of the stored array, and no document says that a write of one
+     member below a path is sent and stored as that change. With it, one
+     change of one small row sends the bytes of the change; without it, the
+     unit sent is the chunk, at most 65,536 bytes. Not decided, and nothing is
+     assumed. (b) Whether a chunk list holds, beside each link, the number of
+     entries below it. P20 has the list above written only on a split or a
+     merge, so it holds no number, and a reader of one position that has no
+     numbers in memory reads every chunk before the position. With the
+     numbers, a position is found in one document for each level, and each
+     insertion or removal writes one list for each level beside the chunk.
+     *Assumed:* no numbers, as P20 states it. (c) Which arrays are stored in
+     chunks. *Assumed:* every array that a result document or a part stores,
+     and not the array of an argument document or of a state cell, so that an
+     array of plain values in place that a handler writes is one document at
+     any length, 676,691 bytes for the 10,000 small records measured. (d) The
+     stored form of a chunk list and the identifier of a chunk, which is
+     *assumed* to hold a serial number that the list at the place of the array
+     keeps. (e) A document can still exceed `DOCUMENT_MAX_BYTES` where it holds
+     many split points that are each under `PART_MIN_BYTES` and are not the
+     entries of one array, as a record of many small members; the number of
+     such members is bounded by the source where they are declared. *Assumed:*
+     nothing is done for it. The same for the rows of a kept collection over
+     an array of references, over an array of plain values in place, over a
+     plain array generated from scratch, and over the result of another
+     per-element construct.
+291. **The warning for per-element state under a key formed from the value**
+     (LS question 47). Provisional decision P21. *Assumed:* the name
+     `array-by-key:state-without-key`, the severity of a warning, and what
+     counts as per-element state: a handler binding, a state cell, an
+     operation, an instance of a `lift` or a `computed`, and a child called
+     through `asInstance()`. *Assumed* as well: it is reported for a plain
+     array generated from scratch with no declared key and for a construct
+     over the result of another per-element construct whose first source is
+     such an array, and it is not reported where the state is in a child
+     called through a factory value, which the compiler does not see. It is
+     never reported over an array of references.
+292. **What a reference to a placed collection leaves open** (ES question
+     104; PL question 175). Provisional decision P22. (a) One collection that
+     is placed at two kept paths of a result. *Assumed:* its rows are stored
+     at both, and a change of one row writes both. The alternative stores them
+     once and has the second path hold a storage link. (b) A per-element
+     construct over a plain array generated from scratch, which the decision
+     does not name. *Assumed:* the same rule. The prototype forms the assembly
+     of such a construct whole at each change and did not test it. (c) The
+     interface of a value function: the reference is a value of the runtime
+     inside the value that the function returns, and
+     `execution-and-storage.md` §2.2 does not give it a type in `ConeResult`.
+     *Assumed:* none is needed, since the function builds it with
+     `host.output` and never reads it.
+293. **How a write below an array of plain values in place reports the keys it
+     touched** (SS question 60). Provisional decision P24 has the store report
+     them with the write. Not determined: in which record of a commit they are
+     reported, and what a client does, which cannot read the salt and so
+     cannot form the key of a plain value. *Assumed:* the server's store
+     reports the keys to the scheduler of its own process, a commit carries
+     none of them, and a client marks every reader through a key of the
+     array. Over an array of references the question does not arise.
+294. **Three dependencies that the address index has no entry for** (SS
+     question 61; the prototype's provisional choice 7 of the round). The
+     executor compares at every pull a memo entry that called `equals` on two
+     references, that demanded a cone with a static side-write, or that read
+     through a key into the document of a computed output, which is a plain
+     array generated from scratch, and every entry that used one. An instance
+     with such an entry is visited by every derivation transaction.
+     `scheduler-and-serving-loop.md` §3.1 gives none of the three a place in
+     the index. *What grows:* the checks of one change, in the length of a
+     plain array generated from scratch that rows read by key. Not determined,
+     and nothing is assumed.
+295. **What a re-key does with the stream documents of the old key** (ES
+     question 106). The case is an array of plain values in place with no
+     declared key. `execution-and-storage.md` §2.5 has the runtime move "the
+     state cells, the streams, the operation state and the children" to the
+     new key, by writing them under the identifiers of the new key and
+     retiring those of the old (PL question 112, assumed). The prototype
+     writes no stream document at the re-key: the stream of the new key gets a
+     document from its first event, and the document of the old key stays. 20
+     keystrokes in one row leave 20 stream documents. Not determined: whether
+     the move writes a stream document under the new key, when a document that
+     the move retired is deleted, and whether the retention rule that the
+     coordinator recommends under questions 254 and 255 covers it. Nothing is
+     assumed.
 
 
 ## Open, and not needing the owner
@@ -9561,16 +10696,28 @@ over the result of another per-element construct.
   gives; it runs 214 of the 215 modules, and 44 of the 47 that need `wish` or an
   effect with stubbed answers ([The corpus at commit
   `a84264daf2`](#the-corpus-at-commit-a84264daf2)).
-- **Why the time of one change of a list grows faster than the list in the
-  prototype's executor.** On `fixtures/lists.tsx` the time of one change grows
-  20 to 35 times for 10 times the list, where every count that the executor
-  keeps grows 10 times (its note 501). Something in the executor is more than
-  linear, and it was not found. It is a question about the executor and not
-  about the design until it is found. Two changes of the executor that the
-  note names would remove the linear counts and were not made: an index from a
-  write to its readers, and a key kept for each position of an array that a
-  write did not touch. The lists are over an array of references, over an
-  array of plain values in place, and over the result of a `filter`.
+  At commit `e63851c1ee` the work of the executor for one change of a list
+  follows the change and not the list, in the four cases measured, with the
+  values and the labels of the corpus as before ([The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee)).
+- **What the round of prototype commit `e63851c1ee` left without a cause.**
+  Each is about the prototype or about today's runtime, and none is a question
+  of the design. In one module of the table of run times the executor is
+  slower per event than today's runtime,
+  `showcase/battleship/pass-and-play/main.tsx`,
+  7.64 ms against 5.64; it was not investigated. Two modules of the stubbed
+  comparison store one document of kind `output` fewer than before, and the
+  cause given for it is a reading that was not verified. Today's runtime
+  logged `Link resolution iteration limit reached` for a prepend and for a
+  removal of the first element of 1,000 plain values in place, and its first
+  settle of a list of 10,000 elements had not ended after 100 seconds; neither
+  is reduced to a test or reported against the runtime. The time of a
+  keystroke in a row with no declared key follows the number of rows in the
+  executor, 0.46 ms at 100 and 5.4 ms at 10,000, because it passes over every
+  state cell and instance to find what is stored under the old key. The cause
+  of the time that grew faster than the list at commit `a84264daf2` is found:
+  the element of a key was found by a scan of the element table (its note
+  505).
 
 The open questions each document ends with stay where they are.
 
@@ -9873,19 +11020,110 @@ The open questions each document ends with stay where they are.
   and P17 have no test that tells the readings apart. Every one of them was
   tried on fixtures with no per-element construct, or with one `map` over an
   array of plain values in place.
-- **The provisional decision P18 is written into the documents and built
-  nowhere.** The prototype's crate writes a pattern that is compiled in once for
-  each call site. The record design of `plan-and-label-templates.md` §1.1 was
+- **The provisional decisions P18 and P19 are written into the documents and
+  built nowhere.** At prototype commit `e63851c1ee` the crate still compiles a
+  call of a visible pattern by walking the body of the callee again for the
+  site, resolves the paths of the callee's argument to the slots and outputs of
+  the caller while the plan is built, and writes value code per site
+  (`inline_pattern` and `inline_argument` in its `src/plan.rs`). The records of
+  `plan-and-label-templates.md` §1.1 need the callee compiled by itself with
+  slots of root `argument`, the binding carried by a record and resolved when a
+  cone instance is bound, the identifier of a cone instance formed from the
+  chain of sites, value code registered once per callee and given the site,
+  and the comparison of labels, the template evaluator and the label-flow
+  checks taken through `CallSite.argument`. That is a rework of plan emission,
+  of the emitter, of the executor's instancing and of the comparison harness,
+  and it was not begun. So none of the points of question 289 is tested, no
+  diagnostic of the corpus was compared under P19, the test of two sites per
+  level bounded as linear does not exist, and the sizes of plans are
+  unchanged. The estimate of what P18 gives takes 200 bytes for a call-site
+  record and is no measurement.
+  The record design of `plan-and-label-templates.md` §1.1 was
   checked by reading the rules of that document against it, and by no test. Its
   worked example (§6.2) and the examples of the other documents show the
-  written-out form. `footprint-analysis.md` and `language-subset.md` were not
-  changed for it.
-- **The growth measurements at commit `a84264daf2` are of the prototype's
-  executor, one run each.** The executor writes a document whole and checks
-  every demanded memo entry, which the design does not prescribe, so the bytes
-  written and the checks per change are measurements of that executor. Today's
-  runtime was not measured on the same lists. Of the questions on growth, 248 to
-  255, 258, 260 to 270, 272, 273 and 275 have no measurement.
+  written-out form. `footprint-analysis.md` was not changed for either
+  decision, and `language-subset.md` has one row of its diagnostics catalog
+  for P19.
+- **The growth measurements at commit `e63851c1ee` are of the prototype's
+  executor, and each time is of one run, a median of 7 or a mean of 40.** The
+  executor instantiates no label, has no storage transaction and no scheduler
+  across instances, so its counts are of its own marking and its own store.
+  Four cases were measured: a `map` over an array of references, over an array
+  of plain values in place with a declared key and with none, and over the
+  result of a `filter` of plain values in place. Not measured: a plain array
+  generated from scratch, a `flatMap`, a `filter` over an array of references,
+  a chain of more than two constructs, two levels of enclosing JSX, today's
+  runtime at 10,000 elements, and today's keystroke at 10,000 rows. Of the
+  questions on growth, 249, 251, 253, 258, 261 to 263, 265 to 270, 272, 273
+  and 275 have no measurement. The runs with today's runtime beside the
+  executor (the seeded corpus, the stubbed corpus and the labels) were made
+  before the last two commits of the round and not repeated after them. Most
+  tests of the round were written after the code or the measurement they
+  bound.
+- **What still follows the length of a list in the prototype's executor.** An
+  insertion or a removal that is not at the end gives every later position
+  another number. A `filter` whose membership changed forms its kept list
+  again. A `flatMap`, a `some`, an `every`, a `find`, a `findIndex`, a `filter`
+  whose body returns a record, and every construct over a plain array generated
+  from scratch form their assembly whole. A memo entry that depends on
+  something no index holds is compared at every pull (question 294). A `set`
+  of a whole new array is compared entry by entry. A keystroke in a row with no
+  declared key passes over every state cell and instance. The first change
+  after a settle builds an index that follows the length.
+- **The prototype does not have the part documents of the design, and reads do
+  not go through any.** The executor keeps the result of an instance in one
+  logical document, written by path, and keeps the layout of
+  `execution-and-storage.md` §4.10 beside it as an accounting: which split
+  points are parts, the bytes of each, and the documents that each transaction
+  wrote. A test forms the documents and reads the result back through the
+  storage links. So the rule that every resolution of a path passes through a
+  storage link is not tested. The accounting follows the rule that the section
+  had before provisional decision P20: it has no chunk, and the sizes that the
+  section gives for P20 are derived from the measured row and link sizes and
+  not measured. No label entry and no provenance record is in any size. Nodes
+  of the rendered tree that are no rows, and a record that an opaque call
+  returns, are no split points in it.
+- **Four choices of the prototype's author in that round are prototype matters
+  and have no provisional decision** (its note 520, choices 4 to 7). The bytes
+  of a split point are kept in memory and not measured from the documents at
+  each seal, which `execution-and-storage.md` §4.10 permits as it stands. The
+  split points that the prototype builds are the rows and the array of a
+  collection that stands in the result; a part that the rule on the size of a
+  document made goes back in place only where its holder then holds at most
+  half of 65,536 bytes, and any other part where it falls to 512 bytes. A write
+  of the same keys at the same positions is a write of rows and no `splice` of
+  the stored array, so that an edit of a row with a declared key writes the
+  part of the row alone. And a memo entry that depends on something no index
+  holds, `equals`, a cone with a static side-write, or a read by key into the
+  document of a computed output, is compared at every pull; question 294 has
+  what the documents do not say for it.
+- **The provisional decisions P20 to P24 and their tests.** P20 and P21 have no
+  test: the prototype has neither the chunks nor the warning. P22, P23 and P24
+  are what the executor does, with tests of the executor that bound the
+  evaluations, the hashes, the checks and the bytes of one change at 100 and
+  1,000 elements; those tests were written after the measurements. For P23 the
+  other reading is built as an option and gives the same result. For P22 and
+  P24 the other reading is what the executor did at commit `a84264daf2`. None
+  was tried over a plain array generated from scratch or with a `flatMap`.
+- **The crate does not conform to `footprint-analysis.md` §2.2 on `identity`
+  entries per position.** For a read of a whole value whose type has handles
+  at many positions it writes one `value` entry, where the section has one
+  `identity` entry for each such position: 1 slot where the section gives
+  1,024 for the type of question 252 at depth 10. The growth of that question
+  cannot be measured until it does.
+- **`system/home/home.tsx` and most of FabriChat do not execute.** The crate
+  lists four constructs of `home.tsx` that it does not emit, the first a call
+  form in the reactive tier. Of `system/fabrichat/`, `adapter.tsx` and
+  `room-test-fixture.ts` are executed; `placement.tsx` is not, for the built-in
+  `spaceDeleted`; `message-row.tsx` has `resolveAsCell` in the reactive tier,
+  which the crate does not emit; and the crate emits no plan for the other
+  modules of the directory. So the table of run times has neither the largest
+  pattern of the corpus nor the reference pattern of the staging.
+- **The table of run times does not compare a compiled runtime with today's.**
+  The executor checks no label and no constraint, commits to no store, has no
+  scheduler across instances, no network and no sandbox, and today's figures
+  include the harness of the comparison; [The corpus at commit
+  `e63851c1ee`](#the-corpus-at-commit-e63851c1ee) has the paragraph in full.
 - **The two sides of the stubbed comparison were not given the same answers,**
   except for a fetch of JSON from an address outside `/api/` (its note 498), and
   the 100 values that differ there were classed by a reading of the two values
@@ -10054,34 +11292,61 @@ The open questions each document ends with stay where they are.
    238 are about parts that the prototype's executor does not have,
    and each has to be ruled before a test of its part means anything.
 
-6. **In the prototype, after commit `a84264daf2`.** Build provisional decision
-   P18: one record for each pattern that is compiled in, the call-site records,
-   value code registered once per callee, and the test of two sites per level
-   bounded as linear. Bring the two provisional choices that differ from the
-   documents in line once they are ruled: the request of an effect by path (P16)
-   and the depth to which each built-in follows its references (P14). Give the
-   executor a store step that writes the paths that changed and not the
-   document, an index from a write to its readers, and a key kept for each
-   position of an array that a write did not touch, and then measure the lists
-   of its note 501 again, with today's runtime beside them and with a `map` over
-   the result of a `filter` over an array of references. Find what makes the
-   time of one change grow faster than the list. Try every statement of its
-   notes 479 to 497 over an array of references and over the result of another
-   per-element construct, which the round did not. Compare two orders of
-   evaluation on the cycle of `fixtures/bound.tsx` (question 286). Make an error
-   state of a stack that ran out, which is a body that exceeds a budget. Stub
-   both sides of the comparison of the 47 modules equally. What stays out of
-   reach until labels, a second store and unloaded instances exist is under
-   [Known limits](#known-limits-of-what-exists).
+6. **In the prototype, after commit `e63851c1ee`.** In this order.
+   1. Build provisional decisions P18 and P19: one record for each pattern that
+      is compiled in, the call-site records, value code registered once per
+      callee, the label-flow checks once per callee and once per site for the
+      binding, and the test of two sites per level bounded as linear. Test
+      each point of question 289, the ninth first: whether a callee record
+      that holds what any site needs gives each site what the written-out
+      form has there. Compare the diagnostics of the corpus under P19 with
+      those of the written-out form.
+   2. Build provisional decision P20: `PART_MIN_BYTES`, the chunk documents and
+      the chunk lists of `execution-and-storage.md` §4.10, with every read
+      going through the storage links, and with a stand-in for label entries
+      and provenance records in the sizes. Measure the list of note 513 again,
+      and a list that shrinks, a list built by appends, rows over
+      `PART_MIN_BYTES`, and a read of one row by position with and without the
+      numbers of entries in the chunk lists (question 290).
+   3. Report the warning of P21 in the crate, and count how often it is
+      reported over the corpus.
+   4. Measure what the round did not: a construct over a plain array generated
+      from scratch, a `flatMap`, a `filter` over an array of references, two
+      levels of enclosing JSX around a `map`, and a collection that is placed
+      at two paths (question 292). Give the three dependencies of question 294
+      a place in the marking, form a `filter` result from the change, and keep
+      an index from a key to what is stored under it.
+   5. Write the `identity` entries of `footprint-analysis.md` §2.2 in the
+      crate, and then measure question 252.
+   6. Emit the constructs that keep `system/home/home.tsx` and the modules of
+      `system/fabrichat/` from executing, and add them to the table of run
+      times. Find why the executor is slower per event than today's runtime
+      on `showcase/battleship/pass-and-play/main.tsx`.
+   7. What stays from the round before: bring the two provisional choices that
+      differ from the documents in line once they are ruled, the request of an
+      effect by path (P16) and the depth to which each built-in follows its
+      references (P14); try every statement of the notes 479 to 497 over an
+      array of references and over the result of another per-element
+      construct; compare two orders of evaluation on the cycle of
+      `fixtures/bound.tsx` (question 286); make an error state of a stack that
+      ran out; and stub both sides of the comparison of the 47 modules
+      equally.
+
+   What stays out of reach until labels, a second store and unloaded instances
+   exist is under [Known limits](#known-limits-of-what-exists).
 7. **In the prototype, the measurements of the questions on growth**
    (questions 243, 244 and 247 to 275, with the growth of questions 212,
-   237 and 241). No test of the prototype bounds the size of a plan, the
-   count of stored documents or the bytes written per change yet. Every
+   237 and 241). No test of the prototype bounds the size of a plan or
+   the count of stored documents yet. Every
    fixture below reports those three counts beside its own, and a test
    holds each of them to a bound that is stated in the test. The
    provisional decisions P6 and P7 are built at commit `a84264daf2`,
    and that commit ran the first fixture, the second to a depth of 6,
-   and a part of the third. The fixtures, in
+   and a part of the third. Commit `e63851c1ee` ran the third in four
+   cases, with tests that bound the evaluations, the hashes, the checks
+   and the bytes of one change; the first and the third part of the
+   fourth; and fixtures of two sizes for questions 248, 250 and 252.
+   The fixtures, in
    the order of the audit's ranking:
    1. The fixture of twenty-five values that each read the two before
       them, with sandboxed bodies and with a child's arguments, for the

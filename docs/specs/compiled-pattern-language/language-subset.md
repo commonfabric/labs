@@ -661,6 +661,28 @@ and 150 of `plan-and-label-templates.md` §8 and question 44 of
   declares; and the result of another per-element construct that is
   given whole to a pattern called through `asInstance()` is given as the
   assembled values.
+- **Per-element state with no declared key.** Provisional (P21 of the
+  continuation plan; §13, question 47). The compiler reports a warning,
+  `array-by-key:state-without-key`, where the body of a per-element
+  construct holds per-element state and the construct is over an array
+  of plain record values in place whose type declares no key. Per-element
+  state is a handler binding, a state cell, an operation, an instance of
+  a `lift` or a `computed`, and a child called through `asInstance()`.
+  The reason is what the element key of such a value costs: the key is
+  formed from the whole value, so an edit of the row in place is a new
+  element. Each edit moves the state of the row to another key, stores
+  the row again, and leaves the documents of the old key stored, and an
+  array that is replaced by new values leaves the documents of every
+  key it held. The message names the two corrections: declare a key on
+  the array with `ArrayByKey`, or hold the rows as an array of
+  references. The warning is not reported over an array of references,
+  where the key is the identity of the cell; over an array with a
+  declared key; or over an array of scalars. *Assumed:* it is reported
+  for a plain array generated from scratch with no declared key as
+  well, and for a construct over the result of another per-element
+  construct whose first source is such an array, since the elements of
+  that result have the upstream keys. The rulings that make the cost
+  are not changed by the warning.
 - **Two declared keys for one array.** *Assumed:* an array whose type
   declares one key is not assignable to a parameter whose type
   declares another key, and the compiler reports it where it sees both
@@ -3901,7 +3923,7 @@ from the source, its types, and the calls between its functions.
 | `footprint:widened`, `footprint:dynamic-read`, `footprint:materializer`, `side-write:not-idempotent`, `mergeable-push:read-then-push` (§10.3) | The footprint analysis of one body, with the summaries of the authored functions it calls (`footprint-analysis.md` §5.3, §7.2, §6.3, §6.6, §6.4). No other body and nothing of the plan |
 | `binding:write-to-computed` (§10.2) | The write edges and write envelopes of the callee's record (`footprint-analysis.md` §6.2), and what the bound path resolves to in the enclosing plan: an output whose template passes no reference on (`plan-and-label-templates.md` §3.11) |
 | `side-write:cycle` (§10.3) | `Plan.edges`, the edges between the cones of an instance, which are built from the write edges of every body and the slots of every cone (`plan-and-label-templates.md` §3.11) |
-| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4) |
+| `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-policy`, `cfc-flow:write-floor`, `cfc-flow:writer-fit`, `cfc-flow:ui-contract` (§10.5) | The label templates of the plan and the declared labels of their slots (`plan-and-label-templates.md` §4.4). Provisional (P19 of the continuation plan): for a pattern that is compiled in, the four that evaluate a template on declared labels, `cfc-flow:max-confidentiality`, `cfc-flow:required-integrity`, `cfc-flow:write-floor` and `cfc-flow:writer-fit`, are computed once from the callee's record, against the declared labels of its argument, and once for each call site from what the site binds and where it puts the result; none follows an argument into the caller's template (its §1.1, "The checks on declared labels are modular") |
 
 A compiler that stops after footprint analysis reports the first five and
 none of the other eight.
@@ -4051,6 +4073,7 @@ none of the other eight.
 | `scope:union-member` | error | A scope wrapper on a member of a union that has a member other than `null` and `undefined` | Put the scope around the union: `PerUser<A \| B>` | new |
 | `array-by-key:declaration` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 138). An `ArrayByKey<T, "field">` whose second argument is not a string literal type, or a union of string literal types, each of which names a required top-level property of `T` of type `string` or `number`. The declaration concerns an array of plain values in place, a plain array generated from scratch included; on an array of references it is accepted and has no effect (§13, question 43) | Name required `string` or `number` properties of the element: `ArrayByKey<Repo, "id">`, or `ArrayByKey<Repo, "owner" \| "name">` | new |
 | `array-by-key:mismatch` | error | *Assumed*, the name included (§4.4.1, "A declared key"; §13, question 44; `plan-and-label-templates.md` §8, question 141). An array whose type declares one key with `ArrayByKey` is passed to a parameter, or assigned to a place, whose type declares another key, where the compiler sees both types. A place whose type is a plain array type accepts the array, and by ruling forms keys with the key fields that the schema traversed while the link to the array is resolved declares (`plan-and-label-templates.md` §8, questions 143 and 145). *Assumed:* an array whose type declares no key is accepted where a key is declared (its question 147). By ruling the type of the result of a `map` over an array with a declared key keeps the key of its receiver, as the type of the result of a `filter` does, so either result is reported; *assumed:* the type of a `flatMap` result declares no key, and nothing is reported for it (its question 150). The rule concerns plain values, in an array of plain values in place and in the result of another per-element construct where the upstream position holds a value; on an array of references nothing is reported | Declare the same key fields on both types, or declare a plain array type on the receiving side | new |
+| `array-by-key:state-without-key` | warning | Provisional (P21 of the continuation plan), the name *assumed* (§4.4.1, "Per-element state with no declared key"; §13, question 47). The body of a `map`, a `filter` or a `flatMap` over an array of plain record values in place, or over a plain array generated from scratch, whose array type declares no key, holds per-element state: a handler binding, a state cell, an operation, an instance of a `lift` or a `computed`, or a child called through `asInstance()`. The same for a construct over the result of another per-element construct whose first source is such an array. Not reported over an array of references, over an array with a declared key, or over an array of scalars | Declare the key fields on the array type with `ArrayByKey`, or hold the rows as an array of references | new |
 
 ## 11. Corpus evidence
 
@@ -5151,3 +5174,26 @@ use, so that the other numbers stay as other documents cite them.
     the rules as they stand. The alternatives report the call, or give
     the path a place so that the write lands. It is question 219 of the
     continuation plan.
+47. **A warning for per-element state under a key formed from the
+    value** (to the project owner). *Assumed,* provisional (P21 of the
+    continuation plan, the coordinator's decision, and not ruled): the
+    warning `array-by-key:state-without-key` of §4.4.1 and of the
+    catalog ([§10](#10-diagnostics-catalog)). The name, the severity
+    and the list of what counts as per-element state are this
+    document's. The prototype measured the cost that the warning names,
+    on a `map` over an array of plain values in place with no declared
+    key whose rows have a state cell, a handler binding, a `lift` and
+    an `asInstance()` child. Each edit of one row that a handler makes
+    through its reference to the element re-keys the row, moves its
+    state, stores the row again and leaves one new stream document: 20
+    edits leave 20 stream documents. A list of 100 records replaced 100
+    times leaves 20,202 documents, where the same list with
+    `ArrayByKey`, or as an array of references, holds 202 throughout.
+    Both follow from rulings, that a plain value edited in place is a
+    new element and that nothing stored under a key is deleted, which
+    the warning does not change. Open under it: whether the warning is
+    reported where the per-element state is in a pattern that the body
+    compiles in, which the compiler sees, and not where it is in a
+    child called through a factory value, which it does not see;
+    *assumed* so. The alternative is no diagnostic. It is questions 254,
+    255 and 291 of the continuation plan.

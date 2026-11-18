@@ -851,6 +851,12 @@ Three kinds of read have no entry.
   entry at the document that stores the path after the move. That is not a
   rebinding: the bound address names the result cell and the path, which
   did not change, and the slot is dirty only if what it observes changed.
+  The same holds for a chunk list and for the link to a chunk of an array
+  that is stored in chunks (`execution-and-storage.md` §4.10;
+  provisional, P20 of the continuation plan): an entry for a path of a
+  row is registered at the chunk that stores the row, and a split or a
+  merge of chunks registers it at the chunk that stores the row
+  afterwards.
 
 ### 3.2 Entries from the plan and the bindings
 
@@ -944,6 +950,41 @@ elsewhere under the old key is left unbound. A handle by position, as
 rewrites it, and a slot whose path crosses a stored one is bound at
 the position, whichever element stands there.
 
+**Which keys a write touched.** Provisional (P24 of the continuation
+plan; section 12, question 60). A reference by key into an array of
+plain values in place has no address of its own. Every element is at a
+path below the one array, and a write to the title of the element at
+position 3 is below what every reader through a key of that array
+read, so marking by the address alone marks all of them. The store
+therefore reports, with each write at or below such an array, the keys
+that the write touched, and the scheduler marks the readers that are
+registered under those keys and no reader through another key.
+
+| Write | Keys reported |
+| --- | --- |
+| Below one position | The key that the position held before the write, and the key it holds after where the write changed it |
+| A `splice` of the array | The keys of the entries it removed and of those it put in |
+| The array written whole | The keys that left and the keys that entered. The keys of entries that are equal before and after are not reported |
+
+A key is found from the position that was written and the key that the
+position held, which the element table or the kept keys of the array
+give (`execution-and-storage.md` §2.5). Where the array has neither,
+because no loaded instance iterates it and no key of it was formed, the
+store reports no key and the scheduler marks every reader through a key
+of the array. The entries of such readers
+are those "tagged with the element's key", below. A key that left,
+entered or moved is also a change of the collection's membership, and
+marks the readers registered there. Over an array of references a
+reference to an element is a link to its cell, the write is to that
+cell, and the address is enough. For a reference into the result of
+another per-element construct whose upstream position holds a plain
+value, the keys are those of the upstream array, and the report is that
+of the write to it. For a reference into a plain array generated from
+scratch, which a cone computes and stores as the document of an
+output, the report is made when that output is stored; the prototype
+does not build it and compares such a reader at every pull (section
+12, question 61).
+
 - After the first evaluation of a collection, and after each change of its
   membership, the scheduler registers one entry per key and element
   slot from the table, tagged with the element's key, and removes the
@@ -953,7 +994,16 @@ the position, whichever element stands there.
 - A membership change arrives as a change to the collection's `enumeration`
   slot, which is a slot of the plan and has its entry from load. The
   evaluation it causes rebuilds the table, and the scheduler then replaces
-  the entries of the positions that changed. An element that moved keeps
+  the entries of the positions that changed. Provisional (P23 of the
+  continuation plan; section 12, question 60): "rebuilds" states the
+  table that results and no algorithm. A runtime may keep the key of
+  each position that no write touched and bring the table up to date
+  from the splices of the source (`execution-and-storage.md` §2.5, "The
+  steps state the result, and not an algorithm"), so that the work of
+  one change of membership does not follow the length of the
+  collection, except for the positions behind an insertion or a
+  removal, whose slots of root `index` get another value. An element
+  that moved keeps
   its key, so its cone instances that read element slots alone are not
   stale, which is the property the element-key rule exists for. By
   ruling the runtime moves what the key holds, its stored results
@@ -1372,7 +1422,10 @@ not depend on it.
   link at the part's root gives the instance, and the `within` steps and
   the path stored there give the kept path of the part's root
   (`execution-and-storage.md` §4.10). The watch then demands the kept paths
-  below that root that its schema reaches. A part's envelope is complete
+  below that root that its schema reaches. A watch that names a chunk
+  document of an array that is stored in chunks (provisional, P20) is
+  mapped the same way, to the kept paths of the rows in its run. A part's
+  envelope is complete
   for its paths (`plan-and-label-templates.md` §2.3), so a session that is
   served a part document by its address is served every path under the
   label a read through the result consumes.
@@ -4502,6 +4555,44 @@ space, and no space runs the builder path beside the compiled path
     §1.1, provisional, P18), an output index names an output of a record and not
     of an instance. *Assumed:* the order is by the chain of call sites and then
     the index. It is part of question 247 of the continuation plan.
+60. **Keys kept for the positions a write did not touch, and readers
+    marked by the key a write touched** (section 3.2). Two provisional
+    decisions of the coordinator, each the choice of the prototype's
+    author, and neither ruled. P23: "The evaluation it causes rebuilds
+    the table" states the table that results, and a runtime may keep
+    keys and apply splices; the alternative is that every change of
+    membership forms the key of every position, which the prototype
+    measured at 10,000 salted hashes for one change of an array of
+    10,000 plain values in place, against 1. P24: the store reports
+    with each write below an array of plain values in place the keys
+    that the write touched, and a reader through a reference by key is
+    marked by its key; the alternative is to mark every reader through
+    a key of the array, which is one check for each of them for one
+    edit. No value differs under either. Open under P24: in which
+    record of a commit the store reports the keys, and whether a client,
+    which cannot form a key of a plain value because it cannot read the
+    salt, is told the keys or marks every reader of the array.
+    *Assumed:* the server's store reports them to the scheduler of the
+    same process and a commit carries none of them, so a client marks
+    by the array. If the owner decides against P23 or P24, the
+    provisional sentences of section 3.2 and of
+    `execution-and-storage.md` §2.5 are removed. It is questions 256
+    and 293 of the continuation plan.
+61. **Three dependencies that the address index has no entry for**
+    (section 3.1). The prototype marks what a write reaches and compares
+    nothing else, except for an entry of the memo that depends on one
+    of these, which it compares at every pull, with every entry that
+    used it: the result of `equals` on two references; a cone that has
+    a static side-write, which another writer of its target can
+    overtake (question 55); and a read through a key into the document
+    of a computed output, which is a plain array generated from
+    scratch, where the read itself brings the output up to date and no
+    write announces the change. An instance with such an entry is
+    visited by every derivation transaction, and over a plain array
+    generated from scratch the checks of one change follow the length
+    of the list. Not determined: what the index registers for each of
+    the three. Nothing is assumed. It is question 294 of the
+    continuation plan.
 
 
 ### For another document or the prototype
