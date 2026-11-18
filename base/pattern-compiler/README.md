@@ -437,7 +437,11 @@ and a view node that a function body builds flattens the arrays it is handed
 (`$rt.hf`), as the JSX factory of today does. An array literal with a spread is
 an array literal in value code, with the members of each spread operand read
 through `$rt.spread`. The comparison of values flattens the children of a view
-node on both sides.
+node on both sides. Today's runtime runs neither form in the body of a pattern:
+its transformer refuses a spread of a pattern value in an array literal, and its
+JSX factory throws at a spread child. `compare/fixtures/spread-stream.tsx`
+writes both in a `computed`, with a stream at a member after the spread and at a
+child after two spread children, and is compared with today's runtime.
 
 A stream that is an input of the pattern is a reference like any other input,
 and what passes it on stores a link to its place. A sandboxed body that is
@@ -465,10 +469,13 @@ On a re-key of a plain value in place (ruling Z24), what the old key holds moves
 to the new key: the state cells, the `asInstance()` instance, and the instance
 that a `lift` or a `computed` of the element body made, which moves as a child
 and keeps its documents (ruling Z41; `compare/fixtures/rekey-made.tsx`). What is
-moved replaces what is stored under the new key. Nothing moves for a binding
-that a function body made, and nothing for another element whose occurrence
-count the write changed. A write that is not through a reference by key re-keys
-nothing.
+moved replaces what is stored under the new key: the executor removes a state
+cell and an instance that a function body made that are named there, the
+instance with its documents and with what its own function bodies made. An
+`asInstance()` instance that is replaced stays in the store. Nothing moves for a
+binding that a function body made, and nothing for another element whose
+occurrence count the write changed. A write that is not through a reference by
+key re-keys nothing.
 
 A call of a pattern through the factory modifier `asInstance()`, as
 `Row.asInstance()({ item })`, is an instance of its own (rulings Z35 and Z36).
@@ -496,27 +503,54 @@ tests of it are of the executor alone. `Child` of the crate's plan has no
 was re-keyed keep the name of the key it was made under.
 
 The type marker `KeyedBy<T, "field">` declares the key of a plain value (rulings
-Z37 and Z38). The front end reads it as `T` with a key annotation, the schema of
-the items of the array has the keyword `keyField`, and the record of a
-collection whose source is a slot or an output holds a copy
-(`Collection.keyField`). The executor keys a plain value that holds the field by
-the value of the field, with the occurrence count. The key does not say how it
-was formed (ruling Z42): it has the form of a key formed from a whole value, and
-the store resolves a reference by key with the key field that the schema of the
-array declares for its items. The store keeps the schema each document is stored
-under (`Store.schemas`): the one it was made with, and for a document made with
-none the schema of the first position that links to it or of the first read of
-it. A change of another member changes no key: the cone instances that read the
-changed member are evaluated, and the state cells and the `asInstance()`
-instance of the key stay, for a new array from a computation, a `set` of the
-whole array, and a write through a reference by key, which then re-keys nothing.
-A position that holds a link is keyed by its cell, and a construct over the
-result of another construct has the upstream key.
-`compare/fixtures/keyed-by.tsx` has a plain array generated from scratch whose
-elements change another field between evaluations, a `filter` and a `map` over
-it, and an array of plain values in place. Today's runtime has no `KeyedBy`, so
-the tests of it are of the executor alone. The crate does not report
-`keyed-by:declaration`.
+Z37 and Z38), and `KeyedBy<T, "a" | "b">` declares several key fields, across
+which the element has one key (ruling Z45). The front end reads the marker as
+`T` with a key annotation. The schema of the items of the array has the keyword
+`keyFields`, the names of the fields in the order of their code points, and the
+record of a collection whose source is a slot or an output holds a copy
+(`Collection.keyFields`). The crate reports `keyed-by:declaration` where the
+second argument is not a string literal type or a union of them, or where a
+field is not a required top-level property of type `string` or `number`, and
+`keyed-by:mismatch` where a value whose type declares one key is given where the
+type declares another key. A type that declares no key, on either side, is no
+mismatch. Neither identifier is in the catalog of `language-subset.md` in this
+tree, so both are in `PROVISIONAL` of `src/catalog.rs`.
+
+The key of a plain value with declared key fields names the fields (ruling Z44).
+Its element part is `fields:`, then each field in the order of the names as the
+name, `=` and the value, joined with `,`, and the occurrence count follows as in
+any key: `fields:name=labs,owner=cf#0`. A `\` stands before each `\`, `,` and
+`=` of a name and of a string value. A number is written as `#` and its
+canonical form, as `id=#7`, and a string value that starts with `#` has a `\`
+before it, so the number 7 and the strings `7` and `#7` are three keys. A plain
+value with no declared key, and one that does not hold a string or a number at
+every declared field, is keyed whole, as `value:` and its canonical form, which
+names no field. So the key of a field `id` that holds 7 is not the key of a
+whole value 7.
+
+The store resolves a reference by key from the key alone (`Store.locate`,
+`fieldsOfKey` in `exec/store.ts`): it forms the keys of the array with the
+fields that the key names, and with none for a key that names none, and takes
+the position whose key is the key. It keeps no schema for a document. That is
+the same for a reference to a member below the element, as the one
+`owner.set(repo.owner)` stores, and for every reader, whatever key the reader's
+type declares. Forming a key uses a declaration: an element table is keyed with
+`Collection.keyFields`, and an array that is read whole gives each member a
+reference by key formed with the key fields that the schema of the read
+declares. A change of a member that is no key field changes no key: the cone
+instances that read the changed member are evaluated, and the state cells and
+the `asInstance()` instance of the key stay, for a new array from a computation,
+a `set` of the whole array in another order, and a write through a reference by
+key, which then re-keys nothing. A write to a key field through a reference by
+key re-keys the element. A position that holds a link is keyed by its cell, with
+or without declared fields, and a construct over the result of another construct
+has the upstream key. `compare/fixtures/keyed-by.tsx` has one key field and
+`compare/fixtures/keyed-by-fields.tsx` two, each over a plain array generated
+from scratch with a `filter` and a `map` after it and over an array of plain
+values in place. An element of an array that a `lift` returns has no place in
+the executor, so a handler of a body over it is given the value and stores no
+reference by key. Today's runtime has no `KeyedBy`, so the tests of both
+fixtures are of the executor alone.
 
 `compare/values.ts` compares the values the executor computes with those of
 today's runtime: the members of the result and the state cells of the pattern's

@@ -5849,3 +5849,411 @@ scratch), or the result of another per-element construct.
      replacement of a marker at a place other than the result is tested through
      the store's record and not for each place. The limits that notes 411 and
      413 name rest on a reading of the code where they name no test.
+
+## Rulings Z44 and Z45: a key that names its fields, several key fields, and a mismatched key
+
+Notes 419 to 431 are about the owner's rulings Z44 and Z45 of 2026-11-17, the
+coordinator's proposals beside them, and four points that note 418 left. Each
+note says what the crate and the executor do, which statement of an earlier note
+it replaces, and what a ruling leaves undetermined. A note that ends with
+**Needs a ruling** names something the owner has to decide. Every statement
+about a per-element construct says which case it is about: an array of
+references, an array of plain values in place (or a plain array generated from
+scratch), or the result of another per-element construct. Rulings Z44 and Z45
+are about plain values. An array of references is keyed by its cells and is not
+affected: a position that holds a link has the key of its cell with or without
+declared key fields, which one test of the store and one of
+`fixtures/keyed-by.tsx` pin, and both passed before the change and after it.
+
+419. **Z44: the key of a declared key field names the field** (replaces note 411
+     and withdraws its request, and replaces the last paragraph of note 399).
+     The element part of the key of a plain value that holds its declared key
+     fields is `fields:` and the fields, each as the name, `=` and the value
+     (`valuePart` in `exec/store.ts`; note 422 has the written form). A plain
+     value with no declared key is keyed whole, as `value:` and the canonical
+     form of the value, which names no field. So the key of a field `id` that
+     holds 7 is `fields:id=#7#0`, and the key of a whole value 7 is `value:7#0`.
+     The prefixes `fields:`, `value:` and `cell:` are the prototype's: the
+     documents have a hash for the whole value, which holds no `=`, and tell the
+     two forms apart by that. What ruling Z42 added is removed: `Store.schemas`,
+     `Store.learn()`, the schema parameter of `Store.create()` and
+     `Store.declare()`, and the members `place` and `keyField` of what
+     `Store.locate()` returns. The store keeps no schema for a document. By
+     case:
+     - **An array of plain values in place.** The tests of the store ("a key
+       formed from a declared key field"): the key of the field names an element
+       of an array of records and none of an array of numbers that holds the
+       same number, and the key of the whole value the reverse.
+     - **A plain array generated from scratch, with a `filter` and a `map` after
+       it.** `fixtures/keyed-by.tsx` has `rows` over elements whose `id` are 1
+       and 2 and `tallies` over the result of a `filter` of the numbers 1 and 2:
+       the state cells of the first have the keys `fields:id=#1#0` and
+       `fields:id=#2#0`, and those of the second `value:1#0` and `value:2#0`.
+       The stream of the handler of `found`, over the result of a `filter`, has
+       the upstream key, which names the field.
+     - **An array of references.** The key is the cell, as before.
+420. **Z44: a reference by key is resolved from the key alone.** `Store.locate`
+     forms the keys of the array with the fields that the key names
+     (`fieldsOfKey`), and with none for a key that names none, and takes the
+     position whose key is the key. No schema is read: not that of the
+     reference, not that of a link on the way, and none of the document. A write
+     through a reference by key decides whether it re-keyed the element with the
+     fields of the key it went through. Forming a key uses a declaration: an
+     element table is made with `Collection.keyFields`, and an array that is
+     read whole gives each member that is a container a reference by key formed
+     with the key fields that the schema of the read declares (`Store.read`,
+     `Handle` for a handle of handles). By case:
+     - **An array of plain values in place.** The tests of the store: a
+       reference to the element and one to a member below it
+       (`saved/<key>/position/lat`) resolve with no schema, after a write to
+       another member, which re-keys nothing, and after a move. A stored link by
+       key to the element, and one to a member below it, read the same element
+       through a reader whose schema declares no key, the key `id`, the key
+       `name`, and both fields. The array read under each of those four
+       declarations gives its first member four addresses, and each resolves to
+       that member. On `fixtures/keyed-by.tsx` the handler `pick` of a row of
+       `kept` stores `picked.set(repo)` as a link with the collection and the
+       key `fields:id=#8#0`, and `owner.set(repo.owner)` as that link with
+       `owner` after the key. `pickedName` and `ownerLogin`, which read the two
+       cells under types that declare no key, give the name and the owner, also
+       after the array is written whole in another order with other values of
+       both members. A read of the two cells under a schema that declares the
+       key `name` gives the same.
+     - **A plain array generated from scratch, with a `filter` and a `map` after
+       it.** The array is what a `lift` returns. Its elements have no place in
+       the executor (note 399), so the handler `pick` of a row of `found` is
+       given the value, and `picked` and `owner` store the value and no link.
+       That test passed when it was written: it pins what the executor did. The
+       documents have the result of `fetchJson` as one stored document, whose
+       elements are plain values in place with an address, and the executor
+       answers every effect as pending, so it runs no such array. **Needs a
+       ruling**: whether an element of a plain array that a `lift` or a
+       `computed` returns whole has a reference by key, with the address of the
+       output as its collection, so that a handler of a body over it stores a
+       reference as it does over plain values in place, or is a value with no
+       address, as the executor has it.
+     - **The result of another per-element construct.** An element has the
+       upstream key, so the key names the fields that the source collection
+       declares, and nothing is resolved by a key of the result: the executor
+       stores no assembled result at an address a reference could name.
+     - **An array of references.** A link to a cell holds no key.
+
+     One thing that the tests of this note showed and that is not about keys: a
+     `set` of a plain value on a cell that holds a link writes through the link
+     (`Store.write`), so `picked.set(value)` after `picked.set(reference)` wrote
+     the value into the element of `saved` that the reference named. Not
+     examined further, and not compared with what today's runtime does.
+421. **Z45: several key fields, in the front end and the plan** (replaces the
+     statements of note 398 on the keyword and on `keyed-by:declaration`). The
+     type checker reads the second argument of `KeyedBy` as a string literal
+     type or a union of them, and annotates `T` with the names, each once, in
+     the order of their code points (`Resolver::key_fields` in `src/types.rs`).
+     The schema of the items has the keyword `keyFields`, an array of the names,
+     in the place of `keyField`: `["id"]` for `KeyedBy<Repo, "id">` and
+     `["name", "owner"]` for `KeyedBy<Repo, "owner" | "name">`. The record of a
+     collection whose source is a slot or an output has `keyFields` with the
+     same array, and one whose source is another collection has none. The crate
+     reports `keyed-by:declaration`, an error at the marker, where the second
+     argument is missing or has a member that is no string literal type, and
+     where a field names no property of `T`, an optional property, or a property
+     whose type is not `string`, `number`, a literal of either, or a union of
+     those. Nothing is reported where `T` or a member of the union is a type the
+     checker does not evaluate. The identifier is not in the catalog of
+     `language-subset.md` in this tree, so it is an entry of `PROVISIONAL` in
+     `src/catalog.rs`, which `tests/catalog.rs` fails for once the document
+     names it. The type does not tell an array of plain values in place from an
+     array of references, and the crate accepts the marker on both. No type of
+     the corpus uses the marker.
+422. **Z45: one key across the fields, and its written form.** The element part
+     is `fields:`, then the fields in the order of their names, each as the
+     name, `=` and the value, joined with `,`, and the occurrence count after it
+     as in any key: `fields:name=labs,owner=cf#0`. This is the form the
+     documents propose (PL §1.3, "The written form of the element part"), with
+     its escaping: a `\` stands before each `\`, `,` and `=` of a name and of a
+     string value; a number is `#` and its canonical form, as `id=#7`; and a
+     string value that starts with `#` has a `\` before it. So the number 7 and
+     the strings `7` and `#7` are the three keys `id=#7`, `id=7` and `id=\#7`.
+     The names are ordered by code point, as the crate orders them, and not by
+     UTF-16 code unit. `fieldsOfKey` reads the names back from a key: it removes
+     the occurrence count, which is the digits after the last `#`, and takes
+     each name up to the first `=` that has no `\` before it, and each value up
+     to the next such `,`. The tests of the store, over arrays of plain values
+     in place: three elements that share `owner` or `name` have three keys; the
+     order in which the fields are given changes no key; each key resolves to
+     its element from the key alone; a write to a member that is no key field
+     re-keys nothing, and a write to one key field re-keys the element; two
+     elements with the same values of both fields have the occurrences 0 and 1;
+     and an element that lacks one field is keyed whole. Five elements whose
+     values hold `,`, `=`, `\`, a leading `#`, a trailing `#1`, and the number 7
+     beside the string `7` have five keys, each of which resolves to its own
+     element, and a name that holds `=` and `,` is written with the `\` and read
+     back. Two things are the executor's choice. An element is keyed whole where
+     a declared field holds a value that is neither a string nor a number, as it
+     is where it lacks the field. And the values are held as they are, with no
+     salt and no hash, as before.
+423. **Z45: the fixture.** `fixtures/keyed-by-fields.tsx` declares
+     `KeyedBy<Repo, "owner" | "name">`, and each row is an instance of a pattern
+     called through `asInstance()` that has a state cell.
+     - **A plain array generated from scratch, with a `filter` and a `map` after
+       it** (`starred`). A `lift` returns the whole array, an input gives every
+       element another `stars`, and another input reverses the order. The two
+       instances have the keys `fields:name=cde,owner=x#0` and
+       `fields:name=fghi,owner=cf#0`. After both inputs change, each row holds
+       the note it was given and the new `stars`, the two links of the result
+       are those of the same two instances in the other order, and the element
+       that passes the `filter` now has a third instance.
+     - **An array of plain values in place** (`kept`). Two elements with one
+       `name` and two `owner` are two keys. A write through the reference by key
+       to `stars` re-keys nothing, and a `set` of the whole array in the other
+       order with other `stars` leaves each instance with its element and its
+       note. An element with another `name` is another key, and the two
+       instances of the keys that left stay (ruling Z18).
+
+     Today's runtime has no `KeyedBy`, so the fixture is not compared with it.
+424. **`keyed-by:mismatch`: a value that declares one key, given where another
+     key is declared** (the coordinator's proposal; PL §1.3, "Two declared keys
+     for one value", assumed there). The crate reports it, an error at the
+     value, where a value is checked against a declared type
+     (`Resolver::key_mismatch` in `src/assign.rs`): an argument, an attribute of
+     a tag that names a pattern, a returned value under a written return type,
+     and an initializer under an annotation. The walk compares the two types
+     through handles, arrays, the properties that both declare, and the members
+     of a union, and reports the first position at which both declare key fields
+     and the two lists differ. A position at which one side declares no key is
+     no mismatch, in both directions, and the same fields written in another
+     order are one key. `KeyedBy` stays `T` for assignability, so the report is
+     beside `subset-type:mismatch` and not a case of it. It took about an hour.
+     By case, as the two tests of `tests/rules.rs` have it:
+     - **An array of plain values in place, or of references**, which the type
+       of a pattern input does not tell apart: `saved`, declared
+       `KeyedBy<Repo, "id">[]`, given to a pattern whose input declares
+       `KeyedBy<Repo, "name">[]` or `KeyedBy<Repo, "id" | "name">[]`, to the
+       state of a handler, to the argument of a `lift` result, and to an
+       authored function, is reported. Given where `Repo[]` or the same key is
+       declared, it is not.
+     - **A plain array generated from scratch**: the result of a `lift` whose
+       return type declares the key `id`, given where `name` is declared, is
+       reported.
+     - **The result of another per-element construct**: `saved.filter(...)` has
+       the element type of `saved` with its key, and is reported the same way.
+       Its elements have the upstream key, so this is the one reading that keeps
+       the key of the source and the key the callee forms from being two.
+
+     Four limits. The identifier is in `PROVISIONAL`, as `keyed-by:declaration`
+     is. An object literal or an array literal is checked member by member, so a
+     mismatch is reported at the member that is not a literal. An assignment and
+     the argument of a handle method are not checked, as assignability is not
+     applied there. And the walk stops at depth 6. One thing the proposal leaves
+     open: a value whose type declares no key is accepted where a key is
+     declared, and a value that declares a key is accepted where none is, so two
+     readers of one program can still form two keys for one stored array of
+     plain values in place. Both keys resolve to the element (note 420), and the
+     state that each reader keeps under its key is its own. **Needs a ruling**,
+     for an array of plain values in place and for a plain array generated from
+     scratch: whether a value whose type declares no key is accepted where a key
+     is declared, as the crate has it, or is refused as a mismatch is.
+425. **A stream after a spread, compared with today's runtime** (answers the
+     point of note 418). Today's runtime runs neither form where the pattern's
+     body writes it. For an array literal with a spread of a pattern value, as
+     `fixtures/member-kind.tsx` has it, today's run stores 50 positions for the
+     spread operand, the two rows first and 48 that hold nothing after them, and
+     the member at position 51, where the executor stores the two rows and the
+     member at position 3. For the same literal among the children of a view
+     node, today's transformer stops with "Spread traversal of opaque pattern
+     values is not lowerable. Move this expression into computed()". For a JSX
+     spread child of a pattern value, the evaluation of the pattern throws
+     "object is not iterable". So `fixtures/member-kind.tsx` and
+     `fixtures/spread-child.tsx` stay with the executor's tests.
+     `fixtures/spread-stream.tsx` writes each form in a `computed`, which
+     today's runtime runs: an array value with a spread and a stream at the
+     member after it, twice, and a view node with two JSX spread children and a
+     stream at a child after them. The arrays are plain values in place that
+     each `computed` reads whole, so no per-element construct of the plan is
+     over them, and the `map` in each is that of JavaScript. With an event for
+     each of the two streams, 15 of 15 values are equal: both events are
+     committed and handled, and the executor's result holds 3 links to a stream.
+     This is the function tier, where a view node flattens the arrays it is
+     handed on both sides. Ruling Z39, a spread child as one child at its
+     written position in the reactive tier, has no run of today's runtime to be
+     compared with. The test passed once the fixture existed, with no change to
+     the crate, the executor or the harness.
+426. **A re-key removes the instance that the moved one replaced** (answers the
+     last sentence of note 413). The case is an array of plain values in place
+     with no declared key, and an instance that a `lift` or a `computed` of the
+     element body made. Where the instance of the old key moves to a name that
+     an instance of a key that left has, `Instance.#moveKey` now removes that
+     instance (`Instance.#remove`, `Store.remove`): its argument document, its
+     result document and its state cells, the record of its stream links, the
+     instances and the bindings that its own function bodies made, and the names
+     that lead to them. A link to one of its documents that is stored elsewhere
+     reads as nothing, and an event for one of its streams finds no instance.
+     The test on `fixtures/rekey-made.tsx`: the instance of the key that left is
+     in the store until the re-key, as ruling Z18 has it; after the re-key no
+     document or declared place begins with its name, the documents of the store
+     are those of two rows again, and the instance that moved handles an event.
+     Over an array of references no key changes and nothing is replaced. Two
+     things are not removed. An `asInstance()` instance that is named under the
+     new key is replaced in the table of the instances and stays in the store,
+     since a link to it that a handler stored elsewhere reads it by rulings Z35
+     and Z36. And the stream of a binding that a function body made under the
+     old key stays: its run is named by the old key, which no element has, and
+     ruling Z18 deletes nothing when a key leaves. **Needs a ruling**, for an
+     array of plain values in place: whether an `asInstance()` instance that a
+     re-key replaces is removed, as a state cell and a made instance are, or
+     stays readable through a link stored elsewhere.
+427. **The comparison of labels over the corpus, after the harness change of
+     note 409** (answers the point of note 418). `compare/corpus.ts run` and
+     `report` ran over the corpus once, in the default order of the events, with
+     the executor beside today's run: 272 modules attempted and 215 run, with 33
+     that need `wish`, 14 that request an effect and 10 whose run fails on a CFC
+     refusal. Both commands work. The figures, beside those of note 272, the
+     last figures of this comparison over the corpus that these notes hold,
+     which are of an earlier state of the corpus, the crate and the harness:
+
+     |                                                   | Note 272, "after" |               Now |
+     | ------------------------------------------------- | ----------------: | ----------------: |
+     | Outputs compared                                  | 1,388, 125 bounds | 1,453, 156 bounds |
+     | With the atom of a kept output: tighter           |             1,267 |             1,330 |
+     | With it: the atom names the pattern               |               121 |               123 |
+     | With it: looser, incomparable                     |              0, 0 |              0, 0 |
+     | Write edges compared                              |      231, 1 bound |      224, 1 bound |
+     | Equal                                             |               219 |               214 |
+     | Tighter                                           |                12 |                10 |
+     | Looser, incomparable                              |              0, 0 |              0, 0 |
+     | Bindings of a handler: no step, `site`, `element` |      266, 314, 71 |      274, 314, 74 |
+     | Events committed                                  |               344 |               486 |
+     | Events refused                                    |                15 |                49 |
+     | Bindings that got no event                        |                18 |               127 |
+
+     No row is looser or incomparable. Of the 10 tighter write edges, 8 are of
+     handlers bound in no element body and 2 of handlers of an element body, by
+     the coordinator's join (note 272). The 127 bindings with no event are those
+     whose stream the executor's result does not hold: 64 bound in no element
+     body, 35 in a pattern compiled in and 28 in an element body (note 409). The
+     49 refused events are in 10 modules, 37 of them for a missing trusted-event
+     policy input. The two columns are not of the same crate and corpus, so they
+     are not a comparison module by module, and none was made: no results file
+     of this comparison at commit `a462df710a` exists. What each difference
+     between the columns comes from was not examined.
+428. **The cost measurement over the corpus, after the harness change of note
+     409** (answers the point of note 418). Every command of `compare/cost.ts`
+     ran once over the corpus, and `compare/cost-report.ts` printed its tables:
+     `run` (179 s), `scale` (48 s), `closures`, the crate's `time`, `compile`
+     and `processes`. All work. `run` and `scale` are the two that go through
+     the harness, and they run the executor beside today's run to find each
+     stream. The figures beside those of notes 274 to 277, which are of 270 and
+     213 modules of an earlier state of the corpus, the crate and the harness.
+     Times are wall time in milliseconds, totals over the modules:
+
+     |                                                        | Notes 274 to 277 |      Now |
+     | ------------------------------------------------------ | ---------------: | -------: |
+     | Modules compiled, and run                              |         270, 213 | 272, 215 |
+     | Compile in one process: the crate, median of 20        |            5,104 |    4,833 |
+     | Compile in one process: today, first compile           |           91,115 |  102,945 |
+     | Compile, one process per module: the crate             |            6,651 |    7,010 |
+     | Compile, one process per module: today                 |          381,950 |  436,953 |
+     | To settle, today: milliseconds                         |           21,566 |   17,520 |
+     | To settle, today: transactions committed               |            1,461 |    1,480 |
+     | To settle, today: runs of an action                    |            4,343 |    4,281 |
+     | To settle, derived for the compiled path: transactions |              426 |      430 |
+     | Committed events, and the modules that have one        |         344, 104 |  486, 96 |
+     | Per committed event, today: milliseconds, median       |               26 |     57.3 |
+     | Per committed event, today: transactions               |            1,175 |    1,221 |
+     | Per committed event, today: runs of an action          |            1,605 |    1,609 |
+
+     After the instance settled, today's run stored 5,926 documents of the
+     instances and 9,848 label entries for the 215 modules, and the derived
+     count for the compiled path is 470 documents at least and 1,700 at most,
+     with 215 label entries where every label is empty and 3,297 at most. The
+     median ratio of today's later compiles to the crate's, per module, is 262.
+     Three things about these figures. The events are 486, the number that the
+     comparison of values commits (note 430). `cost.ts` gives the executor no
+     artifact for a pattern that a function body instantiates, as note 418 says,
+     so a module with such a call is run beside an executor that cannot make the
+     instance. And nothing was done to keep the machine idle: a session that
+     edits the documents works in another tree of the repository at the same
+     time. So the times are not a repeat of the measurement of note 273, and no
+     conclusion about a change of a time is drawn from them. What each
+     difference between the columns comes from was not examined.
+429. **The fixtures.**
+     `deno run -A --no-check base/pattern-compiler/compare/values-fixtures.ts`
+     runs 41 of the 53 fixtures, 48 runs in all, and 767 of 768 compared values
+     are equal, where note 416 had 47 runs and 752 of 753. The added run is
+     `spread-stream` (15 values, note 425). The one value that differs is that
+     of note 360. Twelve fixtures are run by the executor's tests alone: the
+     eleven of note 416 and `keyed-by-fields`, which today's runtime has no
+     marker for.
+430. **The corpus.** A fresh seeded run of today's runtime over all 272 modules
+     (`values-corpus.ts run`), with the crate and the executor as they are, and
+     `values-corpus.ts again` on its file. The report of each is, line for line,
+     the report of the same command at commit `a462df710a` (note 417):
+
+     |                                               |  Note 417 |       Now |
+     | --------------------------------------------- | --------: | --------: |
+     | Modules run by today's runtime                |       215 |       215 |
+     | Executed                                      |       196 |       196 |
+     | Every value equal and every event handled     |       171 |       171 |
+     | Values compared                               |     5,498 |     5,498 |
+     | Values equal                                  |     5,414 |     5,414 |
+     | Values that differ                            |        84 |        84 |
+     | Modules with a difference                     |        22 |        22 |
+     | Committed events the executor does not handle | 10 of 486 | 10 of 486 |
+     | Positions of the results that hold a stream   |       726 |       726 |
+     | Documents the executor stored                 |       802 |       802 |
+
+     Read module by module against the results file of the run at `a462df710a`,
+     on every member of the comparison (the values compared and equal, each
+     difference with its path and both values, the events that are not handled
+     and not sent, the reason for not being executed, the executor's counts, its
+     documents by kind, and the stored streams), one module has another record,
+     `apps/base/contacts.tsx`, in neither direction: it has 17 differences in
+     both runs, and three of them, those of `$UI` after the first three events,
+     name another first path. The cause is not in the crate or the executor.
+     Today's run stores the records of the rows of that `map`, over an array of
+     references, with their members in another order in the runs of this round,
+     `children` before `props` where the earlier run had `props` first. The row
+     differs at its `style` and at a child, and the comparison names the first
+     of the two that it reads. The values that today's run recorded are the same
+     in both files once the members are put in one order. A run of that module
+     with the executor of `a462df710a` in place gives the new order too. And
+     `values-corpus.ts again` with the crate and the executor as they are, on
+     the results file of the run at `a462df710a`, gives every module the record
+     it had there, with no difference in any member. So rulings Z44 and Z45, the
+     two diagnostics and the removal of a replaced instance changed nothing in
+     the corpus, as expected: no plan of the corpus has a collection with
+     `keyFields` or a child with `asInstance`, and no type of the corpus uses
+     `KeyedBy`. Why today's run gives another order of the members was not
+     examined. `run` and `again` differ in the reason
+     `showcase/battleship/multiplayer/room.tsx` is not executed for, as in
+     note 417. The first run of this round was made while the comparison of
+     labels ran in a second process, and a second run was made alone: both have
+     the same report and the same record for every module.
+431. **Rules of the task not kept, and what is not verified.** The tests of the
+     store for ruling Z44 were written first and five of the six failed; the
+     sixth, that a position that holds a link is keyed by its cell with or
+     without a declared field, passed when it was written and pins what the
+     store did. The three tests of ruling Z44 on `fixtures/keyed-by.tsx` were
+     written after the store had changed. They were then run on the store and
+     the executor of commit `a462df710a`, put in place for that run: two failed,
+     and the third, that a handler over a plain array generated from scratch
+     stores the value, passed, so it pins what the executor did. The test of the
+     plan for ruling Z45 failed first. The two tests of `keyed-by:declaration`
+     in `tests/rules.rs` were written before the code and were not seen to fail:
+     `cargo test` stopped at the failing test of the plan, and the code was
+     written next. The executor's tests of ruling Z45 failed first by not
+     passing the type check, with no assertion reached. The two tests of
+     `keyed-by:mismatch` and the test of the removal of a replaced instance
+     failed first. The test of `fixtures/spread-stream.tsx` failed for the
+     missing fixture and passed once the fixture existed, with no change to the
+     code, so it pins what the crate, the executor and the harness did. The
+     written form of the element part is the one the documents propose in the
+     tree where they are being edited, and was not designed here. Not verified:
+     `keyed-by:declaration` and `keyed-by:mismatch` are tested on the snippets
+     of `tests/rules.rs` alone, since no pattern of the corpus uses the marker.
+     Nothing of rulings Z44 and Z45 is compared with today's runtime, which has
+     no `KeyedBy`. The members of a segment of a `flatMap` are keyed with no
+     declared field, as in note 399. A reference by key to an element of a plain
+     array generated from scratch is not tested, because the executor makes none
+     (note 420). The comparison of labels was not compared module by module with
+     an earlier run (note 427). The limits that notes 424 and 426 name rest on a
+     reading of the code where they name no test.
