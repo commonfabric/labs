@@ -6,6 +6,7 @@ import type {
   PatternIndexProgram,
   PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
+import { decodeDataFile } from "@commonfabric/text/data-file";
 import {
   entryHistory,
   historyLines,
@@ -108,8 +109,8 @@ describe("pattern-history", () => {
     const deps: RollbackDeps = {
       client,
       sources: SOURCES,
-      readTextFile: (path) => Deno.readTextFile(path),
-      writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+      readFile: (path) => Deno.readFile(path),
+      writeFile: (path, bytes) => Deno.writeFile(path, bytes),
     };
     return { deps, rollbacks };
   };
@@ -171,6 +172,43 @@ describe("pattern-history", () => {
       expect(rollbacks).toEqual([]);
     });
 
+    it("takes an image on disk as the version holding it, and restores its bytes", async () => {
+      // A source package holds an image as its `data:` URL, and the file on
+      // disk is the image's bytes; the two are one file.
+
+      const glaze = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+      const stored = decodeDataFile(glaze, "/glaze.png");
+      const image = join(dir, "glaze.png");
+      const { deps } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/glaze.png", contents: stored },
+          ],
+        },
+        "ver-2": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V2 },
+            { name: "/glaze.png", contents: stored },
+          ],
+        },
+      });
+      await Deno.writeFile(image, glaze);
+
+      const report = await rollbackEntry(entry, "1", {}, deps);
+
+      expect(report.written.some((path) => path.endsWith("glaze.png")))
+        .toBe(false);
+      expect(await Deno.readFile(image)).toEqual(glaze);
+
+      await Deno.remove(image);
+      await rollbackEntry(entry, "2", { force: true }, deps);
+
+      expect(await Deno.readFile(image)).toEqual(glaze);
+    });
+
     it("refuses a version naming a file outside the pattern's directory, writing nothing", async () => {
       const { deps, rollbacks } = await indexWith(entry, {
         "ver-1": {
@@ -216,7 +254,7 @@ describe("pattern-history", () => {
 
       await expect(rollbackEntry(entry, "1", {}, {
         ...deps,
-        readTextFile: () => Promise.reject(new Deno.errors.PermissionDenied()),
+        readFile: () => Promise.reject(new Deno.errors.PermissionDenied()),
       })).rejects.toThrow("could not be read");
       expect(await Deno.readTextFile(entry)).toBe(V2);
       expect(rollbacks).toEqual([]);
@@ -274,7 +312,7 @@ describe("pattern-history", () => {
 
       await expect(rollbackEntry(entry, "1", {}, {
         ...deps,
-        writeTextFile: () => Promise.reject(new Error("disk full")),
+        writeFile: () => Promise.reject(new Error("disk full")),
       })).rejects.toThrow("disk full");
       expect(rollbacks).toEqual([]);
     });

@@ -454,8 +454,8 @@ export async function rollback(
       {
         client,
         sources,
-        readTextFile: (path) => Deno.readTextFile(path),
-        writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+        readFile: (path) => Deno.readFile(path),
+        writeFile: (path, bytes) => Deno.writeFile(path, bytes),
       },
     );
     out(
