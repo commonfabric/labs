@@ -4457,6 +4457,48 @@ describe("a pattern called through `asInstance()` in an element body", () => {
     expect(instance.childInstances().length).toBe(children);
   });
 
+  // Ruling Z50, over plain values in place with no declared key.
+  it("drops an instance that a re-keyed instance replaces from the element table and keeps its documents, over plain values in place", async () => {
+    const instance = await start(inPlace());
+    const [first, second] = stored(instance).words;
+    note(instance, second, "old");
+    // The key of `y` leaves, and its instance stays (ruling Z35).
+    instance.writeArgument(["tags"], ["x"]);
+    note(instance, first, "moved");
+    const words = () =>
+      instance.childInstances().filter(({ child }) => child === WORDS);
+    expect(words().map(({ keys }) => keys)).toEqual([
+      [whole(instance, "x")],
+      [whole(instance, "y")],
+    ]);
+    const documents = instance.store.docs.size;
+
+    // A write through the reference by key re-keys `x` to the key that
+    // the instance of `y` is named by.
+    instance.store.write(
+      new Ref("argument", ["tags", keySegment(whole(instance, "x"))]),
+      "y",
+    );
+    instance.settle();
+
+    // The row has the instance that moved, and the element table names
+    // that one alone under the key.
+    expect(stored(instance).words).toEqual([first]);
+    expect(result(instance).words).toMatchObject([
+      { tag: "y", noted: "moved" },
+    ]);
+    expect(words().map(({ keys }) => keys)).toEqual([[whole(instance, "y")]]);
+    expect(words()[0].instance.doc("result")).toBe(first.$link.doc);
+    // The documents of the instance that was replaced stay, and a link
+    // to it that is stored elsewhere reads it.
+    expect(instance.store.docs.size).toBe(documents);
+    expect(valueOf(instance, docOf(second, "argument"))).toEqual({ tag: "y" });
+    expect(instance.store.read(new Ref(second.$link.doc, []))).toMatchObject({
+      tag: "y",
+      noted: "old",
+    });
+  });
+
   it("is an instance with no element key outside an element body, whose argument holds the reference", async () => {
     const instance = await start({ ...references(), lead: { title: "l" } });
     const lead = (instance.store.docs.get("result")?.value as { lead: Link })
@@ -5339,5 +5381,147 @@ describe("a reader typed as a plain array that is given an array with a declared
         ),
       ),
     );
+  });
+});
+
+// Rulings Z47, Z48 and Z51 on `fixtures/array-by-key-form.tsx`: what a
+// key with declared fields holds, over a plain array generated from
+// scratch followed by a `filter` and a `map` (`found`) and over plain
+// values in place followed by the same (`kept`). The secret of the space
+// is fixed, and each expected key is formed here with the helpers of the
+// data model. Today's runtime has no `ArrayByKey`, so these tests are of
+// the executor alone.
+describe("the form of a key with declared fields, over a `filter` and a `map`", () => {
+  const SECRET = "the secret of the space";
+  const entry = (code: string | number, tag: string, stars: number) => ({
+    "a:b": code,
+    tag,
+    stars,
+    position: { lat: stars * 10 },
+  });
+  // The number 7 and the string `7` with one `tag`, and a third element
+  // that shares the `tag` and one that shares the number.
+  const entries = () => [
+    entry(7, "x", 1),
+    entry("7", "x", 2),
+    entry(8, "x", 3),
+    entry(7, "y", 4),
+  ];
+  const start = async () => {
+    const instance = new Instance(await artifactOf("array-by-key-form"), {
+      seeds: entries(),
+      bonus: 0,
+      minStars: 0,
+      saved: entries(),
+    }, { secret: SECRET });
+    instance.result();
+    return instance;
+  };
+  const keyOf = (code: string | number, tag: string) =>
+    jsonFromFabricValue({
+      fields: ["a:b", "tag"],
+      hash: hashOf([SECRET, [code, tag]]),
+      count: 0,
+    });
+  const expected = () =>
+    sorted([keyOf(7, "x"), keyOf("7", "x"), keyOf(8, "x"), keyOf(7, "y")]);
+  const [PICK_FOUND, PICK_KEPT] = [1, 3];
+  const [PICKED, CENTER, FOUND_CELL, KEPT_CELL] = [0, 1, 2, 3];
+  const cell = (instance: Instance, index: number) =>
+    instance.store.docs.get(`state:${index}:[]`)?.value;
+  const keysOf = (instance: Instance, cell: number) =>
+    sorted(
+      [...instance.store.declared.keys()].filter((id) =>
+        id.startsWith(`state:${cell}:`)
+      ).map((id): string => JSON.parse(id.slice(`state:${cell}:`.length))[0]),
+    );
+  type Result = {
+    pickedTag: string;
+    centerLat: number;
+    found: { tag: string; stars: number }[];
+    kept: { tag: string; stars: number }[];
+  };
+
+  for (
+    const [name, stateCell] of [
+      ["a plain array generated from scratch", FOUND_CELL],
+      ["plain values in place", KEPT_CELL],
+    ] as const
+  ) {
+    it(`names the fields in name order and holds one salted hash of their values, over ${name}`, async () => {
+      const instance = await start();
+
+      const keys = keysOf(instance, stateCell);
+
+      // The number 7 and the string `7` have two keys, and so has each
+      // element that shares one of the two values with another.
+      expect(keys).toEqual(expected());
+      expect(new Set(keys).size).toBe(4);
+      // A name that holds a `:` is read back from the key as it is.
+      for (const key of keys) expect(fieldsOfKey(key)).toEqual(["a:b", "tag"]);
+      // Two keys that share the value of one field have the names and
+      // the count in common, and no part of the hash.
+      const parts = (key: string) => {
+        const { fields, count, hash } = fabricFromJsonValue(key) as Record<
+          string,
+          FabricValue
+        >;
+        return { fields, count, hash: jsonFromFabricValue(hash) };
+      };
+      const [first, second] = [parts(keyOf(7, "x")), parts(keyOf(8, "x"))];
+      expect(first.fields).toEqual(second.fields);
+      expect(first.count).toBe(second.count);
+      expect(first.hash).not.toBe(second.hash);
+      // No key holds a value of a key field.
+      for (const key of keys) expect(key).not.toContain('"x"');
+    });
+
+    it(`keeps every key when a member that is no key field changes, over ${name}`, async () => {
+      const instance = await start();
+
+      if (stateCell === FOUND_CELL) instance.writeArgument(["bonus"], 5);
+      else instance.writeArgument(["saved", "2", "stars"], 9);
+      instance.result();
+
+      expect(keysOf(instance, stateCell)).toEqual(expected());
+    });
+  }
+
+  it("resolves a stored reference to the element and to a member below it from the key alone, over plain values in place", async () => {
+    const instance = await start();
+
+    // The row of the string `7`.
+    expect(instance.send(PICK_KEPT, {}, [1]).committed).toBe(true);
+
+    const key = keySegment(keyOf("7", "x"));
+    expect(cell(instance, PICKED)).toEqual({
+      $link: { doc: "argument", path: ["saved", key] },
+    });
+    expect(cell(instance, CENTER)).toEqual({
+      $link: { doc: "argument", path: ["saved", key, "position"] },
+    });
+    expect(instance.result() as Result).toMatchObject({
+      pickedTag: "x",
+      centerLat: 20,
+    });
+    // The array is written whole in another order, with another value of
+    // the member below the element: the references name the element of
+    // the string `7` and not that of the number 7.
+    instance.writeArgument(["saved"], [
+      { ...entry("7", "x", 2), position: { lat: 77 } },
+      ...entries().filter((held) => held["a:b"] !== "7"),
+    ]);
+    expect(instance.result() as Result).toMatchObject({ centerLat: 77 });
+  });
+
+  // The element of an array that a `lift` returns has no place in the
+  // executor, so the handler is given the value and stores a copy.
+  it("stores a copy of the element and of a member below it, over a plain array generated from scratch", async () => {
+    const instance = await start();
+
+    expect(instance.send(PICK_FOUND, {}, [1]).committed).toBe(true);
+
+    expect(cell(instance, PICKED)).toEqual(entry("7", "x", 2));
+    expect(cell(instance, CENTER)).toEqual({ lat: 20 });
   });
 });
