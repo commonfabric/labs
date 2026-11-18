@@ -82,6 +82,38 @@ describe("nested-function-capture-schema", () => {
       expect(propertyNames(schema)).toEqual(["a", "b"]);
     });
 
+    it("is kept in an authored lift's input when read in a nested function's default parameter", async () => {
+      const schema = await liftArgumentSchema(
+        `const total = lift((input: { a: number; b: number }) => {
+  function f(x = input.b) {
+    return input.a + x;
+  }
+  return f();
+});
+export default pattern<{ a: number; b: number }>(({ a, b }) => ({
+  v: total({ a, b }),
+}));`,
+        "function f(",
+      );
+
+      expect(propertyNames(schema)).toEqual(["a", "b"]);
+    });
+
+    it("is kept in an authored lift's input when read in a destructured default of a nested arrow", async () => {
+      const schema = await liftArgumentSchema(
+        `const total = lift((input: { a: number; c: { y: number } }) => {
+  const g = ({ y } = input.c) => input.a + y;
+  return g();
+});
+export default pattern<{ a: number; c: { y: number } }>(({ a, c }) => ({
+  v: total({ a, c }),
+}));`,
+        "const g = ",
+      );
+
+      expect(propertyNames(schema)).toEqual(["a", "c"]);
+    });
+
     it("still narrows the input to the members the nested function reads", async () => {
       const schema = await liftArgumentSchema(
         `const pick = lift((input: { a: number; b: { x: number; y: number } }) =>
