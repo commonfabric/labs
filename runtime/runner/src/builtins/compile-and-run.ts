@@ -371,9 +371,9 @@ export function compileAndRun(
         // The instantiation is the builtin's, in a continuation of its
         // action: no principal's act attributes what its setup initializes,
         // and its transaction holds none of the reads that chose the program.
-        // A schema-bearing read carries its cell binding. Pass the handle
-        // through setup, including its label view, so dependency pre-sync
-        // can represent the binding in its immutable argument stand-in.
+        // A schema-bearing read carries its cell binding. Recover the handle
+        // so dependency pre-sync can represent that binding as a link in its
+        // immutable argument stand-in.
         const inputValue = input.get();
         runtime.runSynced(
           result,
