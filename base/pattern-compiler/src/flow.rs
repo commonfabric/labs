@@ -9,6 +9,9 @@
 //! patterns. Every value is in the canonical form of
 //! `language-subset.md` §8.5.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 /// The name of an atom's type: the last segment of the identifier the
@@ -238,11 +241,83 @@ pub fn declared_bound(slot: &Value) -> Option<&Value> {
     slot.get("declared")
 }
 
+/// What the reference nodes of the templates of the plan being checked
+/// name: the entries of `Plan.outputs`, whose template a node of `op`
+/// `output` names (ruling Z58), and the entries of `Plan.templates`,
+/// which a node of `op` `shared` names. It keeps what was found for each
+/// named template, so a template that many others name is evaluated
+/// once.
+#[derive(Default)]
+struct Named {
+    outputs: Vec<Value>,
+    shared: Vec<Value>,
+    confidentiality: HashMap<(bool, usize), Option<Vec<Value>>>,
+    integrity: HashMap<(bool, usize), Option<Integrity>>,
+}
+
+thread_local! {
+    static NAMED: RefCell<Named> = RefCell::new(Named::default());
+}
+
+/// Gives the checks of this module the templates that the reference
+/// nodes of a plan name, until `forget_named` is called.
+pub fn name_templates(outputs: &[Value], shared: &[Value]) {
+    NAMED.with(|named| {
+        *named.borrow_mut() = Named {
+            outputs: outputs.to_vec(),
+            shared: shared.to_vec(),
+            ..Named::default()
+        };
+    });
+}
+
+pub fn forget_named() {
+    NAMED.with(|named| *named.borrow_mut() = Named::default());
+}
+
+/// The key of a reference node: whether it names an output, and the
+/// index.
+fn reference_key(template: &Value) -> Option<(bool, usize)> {
+    match template["op"].as_str()? {
+        "output" => Some((true, template["output"].as_u64()? as usize)),
+        "shared" => Some((false, template["template"].as_u64()? as usize)),
+        _ => None,
+    }
+}
+
+/// The template that a reference node names.
+pub fn named_template(template: &Value) -> Option<Value> {
+    let (output, index) = reference_key(template)?;
+    NAMED.with(|named| {
+        let named = named.borrow();
+        if output {
+            named.outputs.get(index)?.get("template").cloned()
+        } else {
+            named.shared.get(index).cloned()
+        }
+    })
+}
+
 /// The lower bound of `C(template)` on declared labels, where the
 /// template is evaluated: "`const` is empty, a `slot` is its declared
 /// list, a `derive` is the union of its inputs, and a `select` is the
-/// union of its condition with the clauses that every branch has."
+/// union of its condition with the clauses that every branch has." A
+/// reference node has the bound of the template it names.
 pub fn confidentiality_bound(template: &Value, slots: &[Value]) -> Option<Vec<Value>> {
+    if let Some(key) = reference_key(template) {
+        if let Some(known) = NAMED.with(|named| named.borrow().confidentiality.get(&key).cloned()) {
+            return known;
+        }
+        let found =
+            named_template(template).and_then(|template| confidentiality_bound(&template, slots));
+        NAMED.with(|named| {
+            named
+                .borrow_mut()
+                .confidentiality
+                .insert(key, found.clone())
+        });
+        return found;
+    }
     match template["op"].as_str()? {
         "const" => Some(Vec::new()),
         "slot" => declared_bound(slots.get(template["slot"].as_u64()? as usize)?)?
@@ -290,6 +365,14 @@ pub struct Integrity {
 /// evaluated. A template that is `const` alone is neutral and has no
 /// list, so it is not evaluated.
 pub fn integrity_of(template: &Value, slots: &[Value]) -> Option<Integrity> {
+    if let Some(key) = reference_key(template) {
+        if let Some(known) = NAMED.with(|named| named.borrow().integrity.get(&key).cloned()) {
+            return known;
+        }
+        let found = named_template(template).and_then(|template| integrity_of(&template, slots));
+        NAMED.with(|named| named.borrow_mut().integrity.insert(key, found.clone()));
+        return found;
+    }
     match template["op"].as_str()? {
         "slot" => Some(Integrity {
             atoms: declared_bound(slots.get(template["slot"].as_u64()? as usize)?)?
@@ -302,6 +385,10 @@ pub fn integrity_of(template: &Value, slots: &[Value]) -> Option<Integrity> {
             let mut atoms: Option<Vec<Value>> = None;
             for input in template["inputs"].as_array()? {
                 if input["op"] == "const" {
+                    continue;
+                }
+                // A reference to a template that is a constant.
+                if named_template(input).is_some_and(|named| named["op"] == "const") {
                     continue;
                 }
                 let input = integrity_of(input, slots)?;

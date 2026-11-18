@@ -6682,16 +6682,25 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
             }
         }
+        // The checks follow a reference node to the template it names.
+        crate::flow::name_templates(
+            plan["outputs"].as_array().map_or(&[][..], Vec::as_slice),
+            plan["templates"].as_array().map_or(&[][..], Vec::as_slice),
+        );
         let flows = self.constraints(&mut plan);
+        crate::flow::forget_named();
         name_ordinals(&mut plan);
         // A state path that resolves to an output has the output's
         // template (PL §1.1, `Binding.state.place`).
         let outputs = plan["outputs"].clone();
         for binding in plan["bindings"].as_array_mut().into_iter().flatten() {
             for entry in binding["state"].as_array_mut().into_iter().flatten() {
-                let template = entry["place"]["output"]
-                    .as_u64()
-                    .and_then(|output| outputs[output as usize].get("template").cloned());
+                // The template of the output, by reference (ruling Z58).
+                let template = entry["place"]["output"].as_u64().and_then(|output| {
+                    outputs[output as usize]
+                        .get("template")
+                        .map(|_| json!({ "op": "output", "output": output }))
+                });
                 if let (Some(template), Some(entry)) = (template, entry.as_object_mut()) {
                     entry.insert("template".to_string(), template);
                 }
@@ -7158,10 +7167,27 @@ impl<'a> Emitter<'_, '_, 'a> {
     }
 }
 
-/// The bodies the `derive` nodes of a template are by.
+/// The bodies the `derive` nodes of a template are by, those of the
+/// templates that its reference nodes name included.
 fn derived_by(template: &Value, by: &mut Vec<usize>) {
+    derived_by_once(template, by, &mut HashSet::new());
+}
+
+fn derived_by_once(template: &Value, by: &mut Vec<usize>, seen: &mut HashSet<String>) {
     match template {
         Value::Object(node) => {
+            if matches!(
+                node.get("op").and_then(Value::as_str),
+                Some("output" | "shared")
+            ) {
+                // Each named template is walked once.
+                if seen.insert(template.to_string()) {
+                    if let Some(named) = crate::flow::named_template(template) {
+                        derived_by_once(&named, by, seen);
+                    }
+                }
+                return;
+            }
             if let (Some("derive"), Some(body)) = (
                 node.get("op").and_then(Value::as_str),
                 node.get("by")
@@ -7173,10 +7199,12 @@ fn derived_by(template: &Value, by: &mut Vec<usize>) {
                 }
             }
             for member in node.values() {
-                derived_by(member, by);
+                derived_by_once(member, by, seen);
             }
         }
-        Value::Array(members) => members.iter().for_each(|member| derived_by(member, by)),
+        Value::Array(members) => members
+            .iter()
+            .for_each(|member| derived_by_once(member, by, seen)),
         _ => {}
     }
 }

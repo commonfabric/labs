@@ -189,7 +189,12 @@ export const P = pattern<{ count: Cell<number>; a: number }>(({ count, a }) => {
     assert_eq!(at("go")["place"], json!({ "stream": 0 }));
     let output = at("total")["place"]["output"].as_u64().expect("an output") as usize;
     assert_eq!(plan["outputs"][output]["interim"], "total");
-    assert_eq!(at("total")["template"], plan["outputs"][output]["template"]);
+    // The entry names the template of the output by reference (ruling
+    // Z58).
+    assert_eq!(
+        at("total")["template"],
+        json!({ "op": "output", "output": output })
+    );
 }
 
 #[test]

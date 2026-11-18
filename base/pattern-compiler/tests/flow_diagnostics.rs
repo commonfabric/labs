@@ -486,3 +486,21 @@ export const P = pattern<{ n: Cell<number> }>(({ n }) => ({ gate: gate({ n }) })
         .iter()
         .any(|constraint| constraint["kind"] == "maxConfidentiality"));
 }
+
+#[test]
+fn writer_fit_is_decided_through_a_template_that_names_another_output() {
+    // The template of the first value of `shown` names the template of
+    // `upper` by reference (ruling Z58), and the bound of the reference
+    // is that of the template it names.
+    assert_eq!(
+        flows(
+            "export const P = pattern<{ secret: Sec<string> }>(({ secret }) => {
+  const upper = secret + \"!\";
+  const shown = Writable.of<Pub<string>>(upper + upper);
+  return { shown };
+});
+"
+        ),
+        ["cfc-flow:writer-fit"]
+    );
+}
