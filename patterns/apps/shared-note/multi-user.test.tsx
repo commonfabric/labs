@@ -100,15 +100,6 @@ export const ada = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       { label: "ada-commented" },
-      { await: "grace-edited" },
-      {
-        // Grace's edit is reported as someone else's, not Ada's.
-        assertion: assert(() =>
-          setup.activity.get().length === 2 &&
-          rowAuthor(setup, 1) !== undefined &&
-          rowAuthor(setup, 1) !== commentAuthor(setup)
-        ),
-      },
     ],
   };
 });

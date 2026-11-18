@@ -10,6 +10,7 @@ import {
   findElement,
   findNodeByProp,
   fireEvent,
+  setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SharedNote, {
   type ActivityRow,
@@ -23,6 +24,9 @@ import {
 } from "./test-profile.ts";
 
 const BODY = "# Plan\n\nShip it\n";
+
+/** 2020-09-13 in milliseconds: a row's time is well past it, in nanoseconds. */
+const LONG_AGO_MS = 1_600_000_000_000n;
 
 /** The words of each row in `rows`, oldest first. */
 const bodies = (rows: readonly (ActivityRow | undefined)[]): string[] =>
@@ -79,9 +83,11 @@ export default pattern(() => {
     bodies(activity.get()).join("|") ===
       'edited "Packing list"|edited "Packing list"'
   );
+  // The row's time is the handler's clock as it ran, in nanoseconds, not
+  // milliseconds.
   const assert_row_has_time = assert(() => {
-    const row = activity.get()[0];
-    return row !== undefined && row.doneAt !== undefined;
+    const at = activity.get()[0]?.doneAt?.value;
+    return at !== undefined && at > LONG_AGO_MS * 1_000_000n;
   });
 
   const action_retitle = action(() => title.set("  "));
@@ -114,12 +120,13 @@ export default pattern(() => {
 
   const assert_refusals_add_nothing = assert(() => activity.get().length === 8);
 
-  const action_type_title = action(() =>
+  const action_type_title = action(() => {
+    setBound(titleFieldOf(whole[UI]), "$value", "Groceries!");
     fireEvent(titleFieldOf(whole[UI]), "oncf-input", {
       type: "cf-input",
       detail: { value: "Groceries!" },
-    })
-  );
+    });
+  });
   const action_blur_title = action(() =>
     fireEvent(titleFieldOf(whole[UI]), "oncf-blur", {})
   );
@@ -127,7 +134,7 @@ export default pattern(() => {
     (whole["[ACTIVITY]"] ?? []).length === 0
   );
   const assert_title_edit = assert(() =>
-    bodies(whole["[ACTIVITY]"] ?? []).join("|") === 'edited "Groceries"'
+    bodies(whole["[ACTIVITY]"] ?? []).join("|") === 'edited "Groceries!"'
   );
 
   return {

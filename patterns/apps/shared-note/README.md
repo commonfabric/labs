@@ -165,9 +165,13 @@ author's.
 
 The note tells what its members did under the `"[ACTIVITY]"` key of its result,
 so a host can let the other members of a shared space hear about an edit without
-reading the note or diffing it. Each row is `{ body, doneAt }`: `body` says what
-was done to the note, by its title, and never who did it; `doneAt` is the
-handler's clock in nanoseconds since the epoch. The runtime labels each row
+reading the note or diffing it. The key is a plain string any pattern may use
+for the same purpose, not a runtime symbol like `[UI]` or `[NAME]`.
+
+Each row is `{ body, doneAt }`. `body` says what was done to the note, by its
+title as it stood then, and never who did it. `doneAt` is the handler's clock in
+nanoseconds since the epoch, a `FabricEpochNsec`; a comment's own `postedAt`
+predates that and stays in milliseconds. The runtime labels each row
 `authored-by` the person whose handler run wrote it, and only the handlers the
 row type's write policy names can write one, so a host reads who acted from the
 label rather than from the row.
@@ -183,11 +187,11 @@ An editing session is everything a viewer types into one field between giving it
 focus and taking focus away: the body's editor and the title field each keep a
 per-session flag that their own changes set, and losing focus reports one row if
 the flag is set and clears it. A burst of keystrokes is one row, and leaving a
-field unchanged reports nothing. Another member's typing reaches the editor as a
-remote change, which sets no flag. A session whose tab closes before the field
-loses focus is not reported. A comment's or a reply's words stay in the comment:
-the row only says one was written. Resolving, reopening and deleting a comment,
-and opening or discarding a draft, report nothing.
+field unchanged reports nothing. The editor and the title field tell only the
+viewer's own changes: another member's typing reaches the editor as a remote
+change, which it does not tell. A session whose tab closes before the field
+loses focus is not reported. Resolving, reopening and deleting a comment, and
+opening or discarding a draft, report nothing.
 
 The handlers that may write a row are fixed once a row is stored: a later
 version of the note can neither add a writer to the row type's policy nor drop
