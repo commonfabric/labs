@@ -42,8 +42,8 @@ const strict = lift((item: Item | undefined) => {
 // An effect written in the reactive tier (`scheduler-and-serving-loop.md`
 // §6). The request of `fetched` holds `address`, which a cone computes
 // from `site`, and `payload`, a cell that it passes on by reference.
-// `title`, `status` and `checked` read the result, and the body of
-// `checked` throws for one result. Nothing reads the result of `_unread`.
+// `title`, `status`, `checked` and `inBody` read the result, and the body
+// of `checked` throws for one result. Nothing reads the result of `_unread`.
 // The request of `guarded` holds a value whose cone fails for one
 // address. No per-element construct is here.
 export default pattern<{ note: string }>(({ note }) => {
@@ -60,6 +60,12 @@ export default pattern<{ note: string }>(({ note }) => {
     fetched.pending ? "pending" : fetched.error ? "failed" : "settled"
   );
   const checked = strict(fetched.result);
+  // A function body that names the record of the result.
+  const inBody = computed(() => {
+    let text = "nothing yet";
+    if (fetched.result) text = `got ${fetched.result.title}`;
+    return text;
+  });
   const guarded = fetchJson<Item>({ url: guard(address) });
   const guardedStatus = computed(() =>
     guarded.pending ? "pending" : "not pending"
@@ -69,6 +75,7 @@ export default pattern<{ note: string }>(({ note }) => {
     title,
     status,
     checked,
+    inBody,
     guardedStatus,
     setSite: setSite({ site }),
     setPayload: setPayload({ payload }),

@@ -9,7 +9,13 @@ import type { Cell } from "../../../runtime/runner/src/cell.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
 
-import { type Artifact, Instance, Unsupported } from "../exec/executor.ts";
+import {
+  type Artifact,
+  type Completion,
+  Instance,
+  type Outstanding,
+  Unsupported,
+} from "../exec/executor.ts";
 import { isErrorState, nameText } from "../exec/store.ts";
 import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
 import {
@@ -77,6 +83,18 @@ export type ValueComparison = {
   storedStreams?: number;
   /** The events the executor's handler did not run to its end for. */
   failedEvents: string[];
+  /**
+   * For a run with stubbed answers: the requests the executor made, by
+   * built-in, the requests that have no completion at the end, and the
+   * state documents of its `wish` operations and effects.
+   */
+  requests?: Record<string, number>;
+  outstanding?: number;
+  /**
+   * The evaluations of the executor that ended in an error state: the
+   * cone and the message, each once.
+   */
+  failures?: string[];
   /**
    * The events the harness did not send to today's runtime, each with the
    * binding's name and the reason: neither side handled them.
@@ -346,6 +364,15 @@ export const categoryOf = (
   return { category: "the value code throws", detail };
 };
 
+/**
+ * The answers a run of the executor gets in place of the network: the
+ * completion of each request, and what the clock holds.
+ */
+export type Stubs = {
+  completion: (request: Outstanding) => Completion | undefined;
+  now: number;
+};
+
 /** The outcome of an event of today's run, as a comparison reads it. */
 type Outcome = Pick<EventOutcome, "outcome" | "elements"> & {
   reason?: string;
@@ -364,6 +391,8 @@ export class ExecutorRun implements StreamRecord {
   readonly #artifact: Artifact;
   readonly #argument: Record<string, unknown>;
   readonly #artifacts: ((id: string) => Artifact | undefined) | undefined;
+  readonly #stubs: Stubs | undefined;
+  readonly #requests: Record<string, number> = {};
   #instance: Instance | undefined;
   #notExecuted: { category: string; detail: string } | undefined;
   #settled: Snapshot | undefined;
@@ -380,10 +409,26 @@ export class ExecutorRun implements StreamRecord {
     artifact: Artifact,
     argument: Record<string, unknown>,
     artifacts?: (id: string) => Artifact | undefined,
+    stubs?: Stubs,
   ) {
     this.#artifact = artifact;
     this.#argument = argument;
     this.#artifacts = artifacts;
+    this.#stubs = stubs;
+  }
+
+  /**
+   * Answers the requests of the instance from the table of the stubs,
+   * until none is outstanding that the table answers.
+   */
+  #answer(instance: Instance): void {
+    const stubs = this.#stubs;
+    if (stubs === undefined) return;
+    instance.answer((request) => {
+      this.#requests[request.builtin] = (this.#requests[request.builtin] ?? 0) +
+        1;
+      return stubs.completion(request);
+    });
   }
 
   /** @inheritDoc */
@@ -403,7 +448,9 @@ export class ExecutorRun implements StreamRecord {
         // a results file are those of the next run.
         secret: "the secret of the comparison",
         artifacts: this.#artifacts,
+        ...(this.#stubs === undefined ? {} : { now: this.#stubs.now }),
       });
+      this.#answer(this.#instance);
       this.#settled = this.#snapshot(this.#instance);
     } catch (error) {
       this.#notExecuted = categoryOf(error);
@@ -446,6 +493,7 @@ export class ExecutorRun implements StreamRecord {
       if (!handled.committed) {
         this.#failedEvents.push(`${name}: ${handled.error}`);
       }
+      this.#answer(instance);
       this.#events.set(index, this.#snapshot(instance));
     } catch (error) {
       const { category, detail } = categoryOf(error);
@@ -534,6 +582,17 @@ export class ExecutorRun implements StreamRecord {
       const mine = this.#events.get(index);
       if (mine !== undefined) compare(`event ${index}`, theirs, mine);
     });
+    if (this.#stubs !== undefined) {
+      comparison.requests = { ...this.#requests };
+      comparison.outstanding = instance.outbox.length;
+    }
+    if (instance.failed.length > 0) {
+      comparison.failures = [
+        ...new Set(
+          instance.failed.map(({ cone, message }) => `${cone}: ${message}`),
+        ),
+      ];
+    }
     comparison.storedStreams = instance.streams().length;
     comparison.runtimeDocuments = runtime.documents?.end;
     comparison.documents = instance.documents();
@@ -579,8 +638,9 @@ export const compareValues = (
    * function body instantiates.
    */
   artifacts?: (id: string) => Artifact | undefined,
+  stubs?: Stubs,
 ): ValueComparison => {
-  const run = new ExecutorRun(artifact, argument, artifacts);
+  const run = new ExecutorRun(artifact, argument, artifacts, stubs);
   run.start(runtime.space);
   events.forEach(({ binding, event }, index) => {
     const outcome = outcomes[index];

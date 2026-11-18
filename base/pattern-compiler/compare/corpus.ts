@@ -221,7 +221,7 @@ export const executorOf = (
 
 // What a pattern needs that a test process with no server does not have,
 // by the kind of the plan's operation.
-const NEEDS: Record<string, string> = {
+export const NEEDS: Record<string, string> = {
   wish: "needs `wish`",
   effect: "requests an effect",
 };
@@ -331,6 +331,11 @@ export const runModule = async (
   probe?: Probe,
   streams?: StreamRecord,
   artifacts?: (id: string) => Artifact | undefined,
+  /**
+   * Whether the run has answers in place of the network (`stubs.ts`): a
+   * module that needs `wish` or requests an effect is then run.
+   */
+  stubbed = false,
 ): Promise<ModuleResult> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -339,7 +344,7 @@ export const runModule = async (
   const { pattern, isDefault } = chosen;
   const { plan, schemas, name } = pattern;
   const base = { module: module.module, pattern: name };
-  for (const operation of plan.operations ?? []) {
+  for (const operation of stubbed ? [] : plan.operations ?? []) {
     const reason = NEEDS[operation.kind ?? ""];
     if (reason !== undefined) return { ...base, skipped: reason };
   }

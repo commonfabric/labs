@@ -19,6 +19,12 @@
  *
  * runs the executor alone on the crate's current output and compares it
  * with the values the earlier run read.
+ *
+ * `run` leaves out the modules that need `wish` or request an effect.
+ * `stubbed <results.jsonl>` runs those, with the answers of `stubs.ts` in
+ * place of the network on both sides, and `alone <results.jsonl>` runs
+ * them on the executor with no run of today's runtime beside it, so it
+ * compares no value. `report` reads the file of either.
  */
 import type { Artifact } from "../exec/executor.ts";
 import {
@@ -27,11 +33,13 @@ import {
   corpusModules,
   eventOrder,
   mainPattern,
+  NEEDS,
   runModule,
 } from "./corpus.ts";
 import { generateEvent, generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import type { EventOutcome } from "./harness.ts";
+import { stubCompletion, stubFetch } from "./stubs.ts";
 import {
   argumentOf,
   compareValues,
@@ -39,6 +47,7 @@ import {
   inFileForm,
   outOfFileForm,
   readingValues,
+  type Stubs,
   type ValueComparison,
   type Values,
 } from "./values.ts";
@@ -57,6 +66,8 @@ export type ModuleValues = {
   pattern?: string;
   /** Why today's runtime did not run the module, where it did not. */
   skipped?: string;
+  /** The module was run on the executor alone, with stubbed answers. */
+  alone?: true;
   comparison?: ValueComparison;
   /** The events today's runtime committed, of those sent. */
   events?: { sent: number; committed: number };
@@ -69,9 +80,66 @@ export type ModuleValues = {
   };
 };
 
+/** The stubs of a run: the table of `stubs.ts`, and the clock at now. */
+const stubsNow = (): Stubs => ({ completion: stubCompletion, now: Date.now() });
+
+/** Whether the main pattern of a module needs `wish` or an effect. */
+const needsStubs = async (module: EmittedModule): Promise<boolean> =>
+  ((await mainPattern(module))?.pattern.plan.operations ?? []).some((
+    operation,
+  ) => NEEDS[operation.kind ?? ""] !== undefined);
+
+/**
+ * Runs one module on the executor with stubbed answers and no run of
+ * today's runtime: each event is sent where the executor's result holds
+ * its stream, at the last element of each enclosing collection.
+ */
+const runAlone = async (
+  module: EmittedModule,
+  artifacts: (id: string) => Artifact | undefined,
+): Promise<ModuleValues> => {
+  const chosen = await mainPattern(module);
+  if (chosen === undefined) {
+    return { module: module.module, skipped: "exports no pattern" };
+  }
+  const artifact = chosen.pattern;
+  const { plan, schemas } = artifact;
+  const inputs = generateInputs(plan, schemas, await scenarioAudience());
+  const argument = argumentOf({ argument: {}, inputs });
+  const executor = new ExecutorRun(artifact, argument, artifacts, stubsNow());
+  executor.start(undefined);
+  const events = eventOrder(plan, "outside first").map((binding) => ({
+    binding,
+    event: generateEvent(plan, schemas, binding),
+  }));
+  const outcomes = events.map(({ binding, event }, index) => {
+    const [held] = executor.held(binding);
+    if (held === undefined) {
+      return {
+        outcome: "not sent" as const,
+        reason: "a binding whose stream the executor's result does not hold",
+      };
+    }
+    executor.committed(index, binding, event, held.elements);
+    return { outcome: "committed" as const };
+  });
+  return {
+    module: module.module,
+    pattern: artifact.name,
+    alone: true,
+    comparison: executor.compare(events, outcomes, { events: [] }),
+    events: {
+      sent: outcomes.filter(({ outcome }) => outcome === "committed").length,
+      committed: outcomes.filter(({ outcome }) => outcome === "committed")
+        .length,
+    },
+  };
+};
+
 const runOne = async (
   module: EmittedModule,
   artifacts: (id: string) => Artifact | undefined,
+  stubbed = false,
 ): Promise<ModuleValues> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -84,8 +152,26 @@ const runOne = async (
   const argument = argumentOf({ argument: {}, inputs });
   // The executor runs beside today's run, which finds each stream by
   // where the executor stored it (ruling Z43).
-  const executor = new ExecutorRun(artifact, argument, artifacts);
-  const result = await runModule(module, "outside first", probe, executor);
+  const executor = new ExecutorRun(
+    artifact,
+    argument,
+    artifacts,
+    stubbed ? stubsNow() : undefined,
+  );
+  const restoreFetch = stubbed ? stubFetch() : undefined;
+  let result: Awaited<ReturnType<typeof runModule>>;
+  try {
+    result = await runModule(
+      module,
+      "outside first",
+      probe,
+      executor,
+      undefined,
+      stubbed,
+    );
+  } finally {
+    restoreFetch?.();
+  }
   if (result.skipped !== undefined) {
     return {
       module: module.module,
@@ -184,14 +270,22 @@ const readResults = async (file: string): Promise<ModuleValues[]> => {
   return finished;
 };
 
-const run = async (file: string, only: string | undefined) => {
+const run = async (
+  file: string,
+  only: string | undefined,
+  mode: "all" | "stubbed" | "alone" = "all",
+) => {
   const emitted = await corpusArtifacts();
   const artifacts = artifactsOf(emitted);
-  const modules = emitted.filter((module) =>
+  const accepted = emitted.filter((module) =>
     module.patterns.length > 0 &&
     module.patterns.every((pattern) => pattern.unsupported.length === 0) &&
     (only === undefined || module.module.includes(only))
   );
+  const modules: EmittedModule[] = [];
+  for (const module of accepted) {
+    if (mode === "all" || await needsStubs(module)) modules.push(module);
+  }
   const earlier = await readResults(file);
   const done = new Set(earlier.map((result) => result.module));
   await Deno.writeTextFile(
@@ -206,7 +300,9 @@ const run = async (file: string, only: string | undefined) => {
       { append: true },
     );
     console.error(module.module);
-    const result = await runOne(module, artifacts);
+    const result = mode === "alone"
+      ? await runAlone(module, artifacts)
+      : await runOne(module, artifacts, mode === "stubbed");
     await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
       append: true,
     });
@@ -227,8 +323,13 @@ const report = async (file: string, verbose: boolean) => {
   const executed = ran.filter((result) =>
     result.comparison?.notExecuted === undefined
   );
+  const alone = results.some((result) => result.alone);
   console.log(`modules: ${results.length}`);
-  console.log(`  run by today's runtime: ${ran.length}`);
+  console.log(
+    alone
+      ? `  run on the executor alone, with no value compared: ${ran.length}`
+      : `  run by today's runtime: ${ran.length}`,
+  );
   for (
     const [reason, times] of count(
       results.filter((result) => result.skipped !== undefined),
@@ -336,9 +437,48 @@ const report = async (file: string, verbose: boolean) => {
       "writesNotCovered",
       "pendingOperations",
       "staleByOwnWrite",
+      "failures",
     ] as const
   ) {
     console.log(`  ${name}: ${total(name)}`);
+  }
+  const failures = executed.flatMap((result) =>
+    (result.comparison?.failures ?? []).map((failure) => ({
+      module: result.module,
+      failure,
+    }))
+  );
+  console.log(
+    `cones that took an error state, each once per module: ${failures.length}`,
+  );
+  if (verbose) {
+    for (const { module, failure } of failures) {
+      console.log(`    ${module}: ${failure}`);
+    }
+  }
+  const requests = new Map<string, number>();
+  for (const result of executed) {
+    for (
+      const [builtin, times] of Object.entries(
+        result.comparison?.requests ?? {},
+      )
+    ) {
+      requests.set(builtin, (requests.get(builtin) ?? 0) + times);
+    }
+  }
+  if (executed.some((result) => result.comparison?.requests !== undefined)) {
+    console.log("requests the executor made and the stubs answered:");
+    for (const [builtin, times] of requests) {
+      console.log(`  ${builtin}: ${times}`);
+    }
+    console.log(
+      `  with no completion at the end: ${
+        executed.reduce(
+          (sum, result) => sum + (result.comparison?.outstanding ?? 0),
+          0,
+        )
+      }`,
+    );
   }
   console.log(
     `positions of the stored results that hold the link to a stream: ${
@@ -388,6 +528,10 @@ if (import.meta.main) {
   if (command === "run" && file !== undefined) {
     await run(file, option);
   } else if (
+    (command === "stubbed" || command === "alone") && file !== undefined
+  ) {
+    await run(file, option, command);
+  } else if (
     command === "again" && file !== undefined && option !== undefined
   ) {
     await again(file, option);
@@ -395,7 +539,7 @@ if (import.meta.main) {
     await report(file, option === "--verbose");
   } else {
     console.error(
-      "usage: values-corpus.ts run <results.jsonl> [text] | " +
+      "usage: values-corpus.ts run|stubbed|alone <results.jsonl> [text] | " +
         "again <results.jsonl> <new.jsonl> | report <results.jsonl> [--verbose]",
     );
     Deno.exit(2);

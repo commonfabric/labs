@@ -82,6 +82,22 @@ describe("an effect of the reactive tier", () => {
     });
   });
 
+  it("hands a function body the record of its result while that holds nothing", async () => {
+    const instance = await start();
+
+    // The body names `fetched.result`: the record `fetched` is there,
+    // and its member holds nothing.
+    expect(instance.failed).toEqual([]);
+    expect(instance.result()).toMatchObject({ inBody: "nothing yet" });
+
+    instance.answer(({ request }) =>
+      (request as { options?: unknown }).options === undefined
+        ? undefined
+        : { result: { title: "T" } }
+    );
+    expect(instance.result()).toMatchObject({ inBody: "got T" });
+  });
+
   it("is not requested where nothing reads its result", async () => {
     const instance = await start();
 

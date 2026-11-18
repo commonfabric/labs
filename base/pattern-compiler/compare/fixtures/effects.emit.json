@@ -7,11 +7,11 @@
           "dataFiles": [],
           "elements": [],
           "handlers": {
-            "2": {
+            "3": {
               "captures": [],
               "named": true
             },
-            "3": {
+            "4": {
               "captures": [],
               "named": true
             }
@@ -21,7 +21,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/effects.tsx",
-              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst setSite = handler(\n  (event, { site }) => {\n    site.set(event.to);\n  },\n);\nconst setPayload = handler(\n  (event, { payload }) => {\n    payload.set({ id: event.id });\n  },\n);\nconst guard = lift((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n});\nconst strict = lift((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/effects.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n})($a));\n$rt.body(1, ($a) => ((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toLowerCase())));\n$rt.request(0, ($h) => ([({ url: $h.output(0), options: ({ method: (\"POST\"), body: $h.slot(1) }) })]));\n$rt.request(1, ($h) => ([({ url: $h.output(0) })]));\n$rt.value(3, ($h) => (($h.v($h.slot(4)) ?? (\"none\"))));\n$rt.value(6, ($h) => (($h.v($h.slot(5)) ? (\"pending\") : ($h.v($h.slot(6)) ? (\"failed\") : (\"settled\")))));\n$rt.value(7, ($h) => ($h.invoke(0, undefined)));\n$rt.request(2, ($h) => ([({ url: $h.invoke(1, $h.output(0)) })]));\n$rt.value(10, ($h) => (($h.v($h.slot(8)) ? (\"pending\") : (\"not pending\"))));\nreturn $rt.thunk(($h) => (({ note: $h.slot(14), title: $h.output(1), status: $h.output(2), checked: $h.output(3), guardedStatus: $h.output(4), setSite: $h.stream(0), setPayload: $h.stream(1) })));\n});\n$rt.body(2, ($e, $s) => ((event, { site }) => {\n    site.set(event.to);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((event, { payload }) => {\n    payload.set({ id: event.id });\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"fetchJson\": fetchJson, \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst setSite = handler(\n  (event, { site }) => {\n    site.set(event.to);\n  },\n);\nconst setPayload = handler(\n  (event, { payload }) => {\n    payload.set({ id: event.id });\n  },\n);\nconst guard = lift((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n});\nconst strict = lift((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n});\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/effects.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((item) => {\n  if (item !== undefined && item.title === \"\") throw new Error(\"no title\");\n  return item === undefined ? \"nothing\" : `titled ${item.title}`;\n})($a));\n$rt.body(1, ($a) => { const { fetched } = $a; return (() => {\n    let text = \"nothing yet\";\n    if (fetched.result) text = `got ${fetched.result.title}`;\n    return text;\n  })(); });\n$rt.body(2, ($a) => ((address) => {\n  if (address.startsWith(\"bad:\")) throw new Error(\"a bad address\");\n  return address;\n})($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toLowerCase())));\n$rt.request(0, ($h) => ([({ url: $h.output(0), options: ({ method: (\"POST\"), body: $h.slot(1) }) })]));\n$rt.request(1, ($h) => ([({ url: $h.output(0) })]));\n$rt.value(3, ($h) => (($h.v($h.slot(4)) ?? (\"none\"))));\n$rt.value(6, ($h) => (($h.v($h.slot(5)) ? (\"pending\") : ($h.v($h.slot(6)) ? (\"failed\") : (\"settled\")))));\n$rt.value(7, ($h) => ($h.invoke(0, undefined)));\n$rt.value(8, ($h) => ($h.invoke(1, {  })));\n$rt.request(2, ($h) => ([({ url: $h.invoke(2, $h.output(0)) })]));\n$rt.value(11, ($h) => (($h.v($h.slot(8)) ? (\"pending\") : (\"not pending\"))));\nreturn $rt.thunk(($h) => (({ note: $h.slot(14), title: $h.output(1), status: $h.output(2), checked: $h.output(3), inBody: $h.output(4), guardedStatus: $h.output(5), setSite: $h.stream(0), setPayload: $h.stream(1) })));\n});\n$rt.body(3, ($e, $s) => ((event, { site }) => {\n    site.set(event.to);\n  })($e, $s));\n$rt.body(4, ($e, $s) => ((event, { payload }) => {\n    payload.set({ id: event.id });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -88,15 +88,20 @@
               "output": 3
             },
             {
-              "cone": 6
+              "cone": 6,
+              "function": true,
+              "output": 4
             },
             {
               "cone": 7
             },
             {
-              "cone": 7,
+              "cone": 8
+            },
+            {
+              "cone": 8,
               "function": true,
-              "output": 4
+              "output": 5
             }
           ],
           "valuesWithoutOutput": []
@@ -109,7 +114,7 @@
             {
               "eventSchema": "unhashed:schema/5",
               "handler": {
-                "body": 2
+                "body": 3
               },
               "name": "setSite",
               "state": [
@@ -132,7 +137,7 @@
             {
               "eventSchema": "unhashed:schema/6",
               "handler": {
-                "body": 3
+                "body": 4
               },
               "name": "setPayload",
               "state": [
@@ -169,6 +174,35 @@
                 },
                 {
                   "at": [
+                    "title"
+                  ],
+                  "slot": 7
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "computed",
+              "name": "inBody",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "fetched",
+                    "result"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "fetched",
+                    "result",
                     "title"
                   ],
                   "slot": 7
@@ -244,7 +278,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 2
+                      "body": 3
                     },
                     "inputs": [
                       {
@@ -297,7 +331,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 3
+                      "body": 4
                     },
                     "inputs": [
                       {
@@ -322,7 +356,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1512
+                "start": 1522
               },
               "bodies": [],
               "entry": "address",
@@ -337,7 +371,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1572
+                "start": 1582
               },
               "bodies": [],
               "entry": "fetched",
@@ -410,7 +444,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1680
+                "start": 1690
               },
               "bodies": [],
               "entry": "_unread",
@@ -448,7 +482,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1731
+                "start": 1741
               },
               "bodies": [],
               "entry": "title",
@@ -467,7 +501,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1797
+                "start": 1807
               },
               "bodies": [],
               "entry": "status",
@@ -486,7 +520,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1906
+                "start": 1916
               },
               "bodies": [
                 0
@@ -504,10 +538,28 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1948
+                "start": 2015
               },
               "bodies": [
                 1
+              ],
+              "entry": "inBody",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2,
+                7
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/effects.tsx",
+                "start": 2165
+              },
+              "bodies": [
+                2
               ],
               "entry": "guarded",
               "picks": [],
@@ -528,7 +580,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 1
+                      "body": 2
                     },
                     "inputs": [
                       {
@@ -552,7 +604,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 2014
+                "start": 2231
               },
               "bodies": [],
               "entry": "guardedStatus",
@@ -603,7 +655,7 @@
             },
             {
               "from": 0,
-              "to": 6,
+              "to": 7,
               "via": {
                 "kind": "output",
                 "output": 0
@@ -669,7 +721,7 @@
               },
               "input": {
                 "by": {
-                  "body": 1
+                  "body": 2
                 },
                 "inputs": [
                   {
@@ -811,7 +863,31 @@
               }
             },
             {
-              "cone": 7,
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "inBody"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
               "constraints": [],
               "kept": true,
               "path": [
@@ -835,7 +911,7 @@
               }
             },
             {
-              "cone": 8,
+              "cone": 9,
               "constraints": [],
               "kept": true,
               "path": [
@@ -961,7 +1037,7 @@
                 "to"
               ],
               "root": {
-                "handler": 2,
+                "handler": 3,
                 "kind": "event"
               },
               "schema": "unhashed:schema/1"
@@ -972,7 +1048,7 @@
                 "site"
               ],
               "root": {
-                "handler": 2,
+                "handler": 3,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/2"
@@ -991,7 +1067,7 @@
                 "id"
               ],
               "root": {
-                "handler": 3,
+                "handler": 4,
                 "kind": "event"
               },
               "schema": "unhashed:schema/3"
@@ -1002,7 +1078,7 @@
                 "payload"
               ],
               "root": {
-                "handler": 3,
+                "handler": 4,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/4"

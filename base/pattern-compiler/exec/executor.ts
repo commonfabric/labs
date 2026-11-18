@@ -1028,7 +1028,20 @@ export class Host {
         ? instance.handleOf(read, this, slot)
         : read;
       if (instance.gives(observes, argument, at)) continue;
-      if (given === undefined) continue;
+      if (given === undefined) {
+        // The result of an operation is a record that is there while
+        // its members hold nothing: a body that names `fetched.result`
+        // is handed `fetched` (BI, "The refused globals").
+        const { root, path } = instance.plan.slots[slot];
+        const above = at.slice(0, at.length - path.length);
+        if (
+          root.kind === "operation" && above.length > 0 &&
+          this.at(argument, above) === undefined
+        ) {
+          argument = instance.placed(argument, above, {});
+        }
+        continue;
+      }
       argument = instance.placed(argument, at, given);
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
@@ -1455,6 +1468,12 @@ export class Instance {
    * `result` for the result, in the order the evaluations ended.
    */
   readonly trace: string[] = [];
+
+  /**
+   * On the root: each evaluation that ended in an error state, in order:
+   * the `entry` of the cone, and the message of the error state.
+   */
+  readonly failed: { cone: string; message: string }[] = [];
 
   /**
    * How many times the reads and the dependencies of a memo entry were
@@ -3046,6 +3065,7 @@ export class Instance {
     if (kind !== "assembly") open?.record.evaluated.push(entryName);
     if (failure !== undefined) {
       this.counts.failures += 1;
+      root.failed.push({ cone: entryName, message: failure });
       if (open !== undefined) {
         open.record.failed.push(entryName);
         // Its side-writes are withdrawn (PL §5.2).
@@ -3113,6 +3133,7 @@ export class Instance {
     }\` did not settle within ${MAX_EVALUATIONS} evaluations`;
     const value = errorState(message);
     this.counts.failures += 1;
+    this.root.failed.push({ cone: this.plan.cones[cone].entry, message });
     open.record.failed.push(this.plan.cones[cone].entry);
     this.root.#withdraw(open, name);
     this.store.clock += 1;

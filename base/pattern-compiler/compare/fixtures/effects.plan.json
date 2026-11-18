@@ -11,7 +11,7 @@
             {
               "eventSchema": "unhashed:schema/5",
               "handler": {
-                "body": 2
+                "body": 3
               },
               "name": "setSite",
               "state": [
@@ -34,7 +34,7 @@
             {
               "eventSchema": "unhashed:schema/6",
               "handler": {
-                "body": 3
+                "body": 4
               },
               "name": "setPayload",
               "state": [
@@ -71,6 +71,35 @@
                 },
                 {
                   "at": [
+                    "title"
+                  ],
+                  "slot": 7
+                }
+              ],
+              "widenings": [],
+              "within": [],
+              "writes": []
+            },
+            {
+              "calls": [],
+              "computed": [],
+              "envelopes": [],
+              "handles": [],
+              "kind": "computed",
+              "name": "inBody",
+              "outputs": [],
+              "reads": [
+                {
+                  "at": [
+                    "fetched",
+                    "result"
+                  ],
+                  "slot": 2
+                },
+                {
+                  "at": [
+                    "fetched",
+                    "result",
                     "title"
                   ],
                   "slot": 7
@@ -146,7 +175,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 2
+                      "body": 3
                     },
                     "inputs": [
                       {
@@ -199,7 +228,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 3
+                      "body": 4
                     },
                     "inputs": [
                       {
@@ -224,7 +253,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1512
+                "start": 1522
               },
               "bodies": [],
               "entry": "address",
@@ -239,7 +268,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1572
+                "start": 1582
               },
               "bodies": [],
               "entry": "fetched",
@@ -312,7 +341,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1680
+                "start": 1690
               },
               "bodies": [],
               "entry": "_unread",
@@ -350,7 +379,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1731
+                "start": 1741
               },
               "bodies": [],
               "entry": "title",
@@ -369,7 +398,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1797
+                "start": 1807
               },
               "bodies": [],
               "entry": "status",
@@ -388,7 +417,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1906
+                "start": 1916
               },
               "bodies": [
                 0
@@ -406,10 +435,28 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 1948
+                "start": 2015
               },
               "bodies": [
                 1
+              ],
+              "entry": "inBody",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                2,
+                7
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/effects.tsx",
+                "start": 2165
+              },
+              "bodies": [
+                2
               ],
               "entry": "guarded",
               "picks": [],
@@ -430,7 +477,7 @@
                   },
                   "template": {
                     "by": {
-                      "body": 1
+                      "body": 2
                     },
                     "inputs": [
                       {
@@ -454,7 +501,7 @@
             {
               "at": {
                 "file": "compare/fixtures/effects.tsx",
-                "start": 2014
+                "start": 2231
               },
               "bodies": [],
               "entry": "guardedStatus",
@@ -505,7 +552,7 @@
             },
             {
               "from": 0,
-              "to": 6,
+              "to": 7,
               "via": {
                 "kind": "output",
                 "output": 0
@@ -571,7 +618,7 @@
               },
               "input": {
                 "by": {
-                  "body": 1
+                  "body": 2
                 },
                 "inputs": [
                   {
@@ -713,7 +760,31 @@
               }
             },
             {
-              "cone": 7,
+              "cone": 6,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "inBody"
+              ],
+              "template": {
+                "by": {
+                  "body": 1
+                },
+                "inputs": [
+                  {
+                    "op": "slot",
+                    "slot": 2
+                  },
+                  {
+                    "op": "slot",
+                    "slot": 7
+                  }
+                ],
+                "op": "derive"
+              }
+            },
+            {
+              "cone": 8,
               "constraints": [],
               "kept": true,
               "path": [
@@ -737,7 +808,7 @@
               }
             },
             {
-              "cone": 8,
+              "cone": 9,
               "constraints": [],
               "kept": true,
               "path": [
@@ -863,7 +934,7 @@
                 "to"
               ],
               "root": {
-                "handler": 2,
+                "handler": 3,
                 "kind": "event"
               },
               "schema": "unhashed:schema/1"
@@ -874,7 +945,7 @@
                 "site"
               ],
               "root": {
-                "handler": 2,
+                "handler": 3,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/2"
@@ -893,7 +964,7 @@
                 "id"
               ],
               "root": {
-                "handler": 3,
+                "handler": 4,
                 "kind": "event"
               },
               "schema": "unhashed:schema/3"
@@ -904,7 +975,7 @@
                 "payload"
               ],
               "root": {
-                "handler": 3,
+                "handler": 4,
                 "kind": "binding"
               },
               "schema": "unhashed:schema/4"
