@@ -290,6 +290,16 @@ describe("iframe-guest", () => {
       expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
     });
 
+    it("leaves out a symbolic link that names nothing", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(join(path, "missing.png"), join(path, "menu.png"));
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
+    });
+
     it("throws for two files that would be the same asset", async () => {
       const directory = await directoryOf({
         "glaze.png": new Uint8Array([1, 2, 3]),

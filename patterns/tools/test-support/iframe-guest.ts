@@ -499,7 +499,8 @@ export class MemorySqlite {
  * `dataFile.urls()` reads them from that directory: each file directly inside
  * it whose extension has a media type, keyed by its file name without the
  * extension, as a base64 `data:` URL. A symbolic link to a file counts as the
- * file, as it does for `dataFile.urls()`.
+ * file, and one that names nothing is left out, as they are for
+ * `dataFile.urls()`.
  *
  * @throws Error for a file whose name without its extension is not an asset's
  *   name, and for two files that would share one, as `dataFile.urls()` does.
@@ -509,7 +510,7 @@ export async function readAssets(directory: URL): Promise<AssetRecord> {
   const names: string[] = [];
   for await (const entry of Deno.readDir(path)) {
     const isFile = entry.isFile ||
-      (entry.isSymlink && (await Deno.stat(join(path, entry.name))).isFile);
+      (entry.isSymlink && await linksToFile(join(path, entry.name)));
     if (isFile) names.push(`./${entry.name}`);
   }
   const entries: [string, string][] = [];
@@ -518,6 +519,19 @@ export async function readAssets(directory: URL): Promise<AssetRecord> {
     entries.push([name, dataFileUrl(decodeDataFile(bytes, file), file)]);
   }
   return toAssetRecord(Object.fromEntries(entries));
+}
+
+/**
+ * Helper for `readAssets()`, which returns whether the symbolic link `path`
+ * resolves to a file. One that resolves to nothing is not a file.
+ */
+async function linksToFile(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
 }
 
 //
