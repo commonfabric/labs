@@ -501,10 +501,23 @@ pub const CATALOG: &[Entry] = &[
     done("scope:union-member", Error),
 ];
 
-/// Entries the front end reports under an identifier the specification has
-/// not named yet. `tests/catalog.rs` fails once the specification has one of
-/// these, so that it moves into [`CATALOG`].
+/// The entries of the catalog that `language-subset.md` in this tree
+/// does not have, in the order of the table that has them:
+/// `element-body:result-stored-outside` follows
+/// `pattern-context:self-access`, and the two of `ArrayByKey` follow
+/// `scope:union-member`. `tests/catalog.rs` reads the document in this
+/// tree and fails once it has one of these, so that it moves into
+/// [`CATALOG`] and `catalog-ids.txt`.
 pub const PROVISIONAL: &[Entry] = &[
+    Entry {
+        id: "element-body:result-stored-outside",
+        severity: Some(Error),
+        status: Status::NeedsFootprint(
+            "not reported: needs, for each function body, whether what it stores outside \
+             the collection holds a reference to the result of a pattern call of an \
+             element body",
+        ),
+    },
     part(
         "array-by-key:declaration",
         Error,
@@ -515,7 +528,8 @@ pub const PROVISIONAL: &[Entry] = &[
         "array-by-key:mismatch",
         Error,
         "reported at the four sites where assignability is applied, for a value that is \
-         not a literal; an assignment and the argument of a handle method are not checked",
+         not a literal, the result of a `filter` or a `map` over an array with a declared \
+         key included; an assignment and the argument of a handle method are not checked",
     ),
 ];
 
