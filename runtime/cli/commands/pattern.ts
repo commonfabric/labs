@@ -479,6 +479,7 @@ export async function rollback(
 /** What `cf pattern checkpoint` reaches; the real piece and index by default. */
 export interface CheckpointDeps {
   readRunning?: typeof readRunningPattern;
+  readTextFile?: (path: string) => Promise<string>;
   recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
   render?: typeof render;
 }
@@ -495,19 +496,23 @@ export async function checkpoint(
   entry: string,
   {
     readRunning = readRunningPattern,
+    readTextFile = (path) => Deno.readTextFile(path),
     recordVersion,
     render: out = render,
   }: CheckpointDeps = {},
 ): Promise<void> {
   const config = parsePieceOptions(options);
   const running: RunningPattern = await readRunning(config);
-  // Only the entry's name ties it to the piece: the folder marker that will
-  // hold both makes the pairing sure, so this check stays this light.
-  if (basename(running.program.main) !== basename(entry)) {
+  // The entry names the lineage the version joins, so it must be the file
+  // the piece runs, as it was deployed: another file, or this one edited
+  // since, would file the piece's source under the wrong history.
+  const runningMain = running.program.files.find((file) =>
+    file.name === running.program.main
+  );
+  if (runningMain?.contents !== await readTextFile(absPath(entry))) {
     throw new ValidationError(
-      `The piece runs ${
-        basename(running.program.main)
-      }, not ${entry}; name the entry file the piece was deployed from.`,
+      `${entry} is not what the piece runs: deploy it first ` +
+        `(cf piece setsrc), or name the entry file the piece was deployed from.`,
       { exitCode: 1 },
     );
   }

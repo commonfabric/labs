@@ -60,6 +60,7 @@ describe("cf pattern checkpoint", () => {
         readFor = config;
         return Promise.resolve(running);
       },
+      readTextFile: () => Promise.resolve(PROGRAM.files[0].contents),
       recordVersion: (deployed) => {
         sent.push(deployed);
         return Promise.resolve(outcome);
@@ -128,19 +129,27 @@ describe("cf pattern checkpoint", () => {
     expect(Deno.exitCode).toBe(1);
   });
 
-  it("refuses an entry whose name is not the file the piece runs, keeping nothing", async () => {
+  it("refuses an entry that is not what the piece runs, keeping nothing", async () => {
     let sent = 0;
-    await expect(
-      checkpoint(OPTIONS, "./todo.tsx", {
+    const attempt = (contents: string) =>
+      checkpoint(OPTIONS, "./other/bins.tsx", {
         readRunning: () => Promise.resolve(RUNNING),
+        readTextFile: () => Promise.resolve(contents),
         recordVersion: () => {
           sent += 1;
           return Promise.resolve({ status: "skipped", reason: "x" });
         },
         render: () => {},
-      }),
-    ).rejects.toThrow(/The piece runs bins.tsx, not .\/todo.tsx/);
+      });
+
+    // Another file of the same name, or this one edited since its deploy.
+    await expect(attempt('export default () => "todo";\n')).rejects.toThrow(
+      /other\/bins.tsx is not what the piece runs/,
+    );
     expect(sent).toBe(0);
+
+    await attempt(PROGRAM.files[0].contents);
+    expect(sent).toBe(1);
   });
 
   it("reports the outcome as JSON", async () => {
