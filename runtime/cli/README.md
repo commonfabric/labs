@@ -845,10 +845,11 @@ request all the same. Quitting once the viewer creates or merges the pull
 request works the same way. Once the screen is restored, it prints the pull
 request's address on the terminal. The address is printed only when the viewer
 quit for it, so a quit after cancelling the save prompt it raised prints
-nothing. With the check box on, the dialog shows, under how the task ended, a
-step that connects to the relay and then one that waits for the pull request, or
-says why it is not watching: no relay is set, `origin` is not on GitHub, or the
-connection failed or ended. Closing the dialog stops the watch.
+nothing. When the viewer would watch the relay, in the cases above where it
+connects to it, the dialog shows, under how the task ended, a step that connects
+to the relay and then one that waits for the pull request, or says why it is not
+watching: no relay is set, `origin` is not on GitHub, or the connection failed
+or ended. Closing the dialog stops the watch.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
