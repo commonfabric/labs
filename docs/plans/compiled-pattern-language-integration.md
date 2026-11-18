@@ -107,7 +107,7 @@ pattern can run both ways in one runtime, under one harness.
     plan's templates (`execution-and-storage.md` §1.9, item 2). Until that
     is built into `prepareCfc()`, the runtime derives today's join over the
     reads of each transaction and stamps it on every written path. The
-    labels stored before milestone 3 are therefore today's rule applied to
+    labels stored before milestone 4 are therefore today's rule applied to
     the design's transactions, and the measurement is of its cost, not of
     the design's labels.
   - *The schema of a write.* A transaction relevant to Contextual Flow
@@ -116,9 +116,12 @@ pattern can run both ways in one runtime, under one harness.
     runtime's transaction, which today's `Cell.set` calls); otherwise the
     commit is refused with "missing schema write-policy input"
     (`runtime/runner/src/cfc/prepare.ts`). The executor writes values and
-    no schema. The plan has a schema for each state cell, slot and output,
-    so the adapter can record it; milestone 1 does not, and counts the
-    refusals.
+    no schema of its own. The executor's store now reports the schema of
+    the reference each write is made through, and the adapter records it
+    with the runtime's `recordRelevantSchemaWritePolicyInput`, which falls
+    back to the schema the document's stored labels name, as `Cell.set`
+    does. The first corpus run of milestone 1 had no such record and saw
+    176 commits refused.
   - *A conflict on a derived write.* By ruling, the commit withdraws that
     write alone and the rest commits. The memory server applies a commit
     whole or refuses it, and names what was stale: a direct commit with the
@@ -129,7 +132,7 @@ pattern can run both ways in one runtime, under one harness.
     contribution. So the ruling is implementable on today's storage as a
     second attempt that leaves the withdrawn units out, if each derived
     write is a contribution of its own, and not as one atomic commit. What
-    that second attempt costs is measured in milestone 5; the prototype
+    that second attempt costs is measured in milestone 6; the prototype
     has no conflict at all.
 
 ### C. A second executor written for the runtime
@@ -152,7 +155,7 @@ the runtime through the same kind of interface.
 
 How each part of the question is answered:
 
-- **The crate in the build.** Until milestone 4 the crate runs ahead of
+- **The crate in the build.** Until milestone 5 the crate runs ahead of
   time, as it does for every comparison: `pattern-compiler emit` writes the
   plans and the value code, and the harness loads them. When the runtime
   compiles on load, the crate runs as a native binary in the compile worker
@@ -162,7 +165,7 @@ How each part of the question is answered:
   build of the crate is needed only where no native binary can run; the
   ruling that the compiler emits no WebAssembly is about its output and is
   not affected. No continuous-integration job builds the crate today;
-  milestone 2 adds one, or checked-in artifacts for its tests.
+  milestone 3 adds one, or checked-in artifacts for its tests.
 - **Layering.** The executor reads and writes nothing but values from
   `@commonfabric/data-model`, so it belongs in `base/`. The adapter touches
   storage, CFC and the sandbox, so it belongs in `runtime/runner`, under
@@ -170,36 +173,71 @@ How each part of the question is answered:
   `base/pattern-compiler/compare/` beside the harness of today's runtime,
   which already imports the runner by relative path; the package is no
   workspace member, nothing in the runtime calls it, and it is a
-  measurement. Milestone 2 makes the executor a workspace package (its path
+  measurement. Milestone 3 makes the executor a workspace package (its path
   in the root `deno.jsonc`, a `test` task, a checked path in
   `tasks/typecheck.ts`) and moves the adapter into the runner. That move
   waits until the paused work on provisional decision P18, which changes
   the executor in another worktree, has landed.
 - **What is shared, not duplicated.** Hashing and identity: the executor's
   identifiers are `taggedHashStringOf()` of `base/data-model`, and the
-  adapter names the entity `of:<identifier>`; milestone 2 has the executor
+  adapter names the entity `of:<identifier>`; milestone 3 has the executor
   mint the runtime's entity identifiers itself, so that one scheme remains.
   Serialization: the runtime's transactions encode, the adapter does not.
   Links: the adapter writes the runtime's link with
   `createSigilLinkFromParsedLink()` and reads it with `parseLink()`. Labels:
-  milestone 3 instantiates templates with the runtime's label operations in
+  milestone 4 instantiates templates with the runtime's label operations in
   `runtime/runner/src/cfc/`, and the prototype's template evaluator
   (`compare/template.ts`) stays a test oracle only.
 - **The flag.** Milestone 1 needs none, because nothing in the runtime
-  reaches the adapter. Milestone 2 adds one experimental option, off by
+  reaches the adapter. Milestone 3 adds one experimental option, off by
   default, that lets the runner run a piece from a plan, registered in
   `docs/development/EXPERIMENTAL_OPTIONS.md` in the same change. The ruling
   that a space runs one path or the other becomes a mark of the space that
   the option permits.
-- **The CFC specification process.** Milestones 1 and 2 are a host
+- **The CFC specification process.** Milestones 1 to 3 are a host
   arrangement: the reads and writes go through
   `ExtendedStorageTransaction.commit()` and `prepareCfc()` unchanged, and
-  what differs is how work is grouped into transactions. Milestone 3, labels
+  what differs is how work is grouped into transactions. Milestone 4, labels
   from templates in place of the join, is a semantic gap: the rule is in
   specs pull request #91, which is a draft. Code lands behind the
-  milestone 2 option with a `SPEC-PENDING` marker at the deciding site, or
+  milestone 3 option with a `SPEC-PENDING` marker at the deciding site, or
   after that pull request merges; it changes what is stored, so it never
   runs at the default.
+
+## Two tracks, one target
+
+The owner chose on 2026-11-18 to continue on both sides at once, each with
+a goal of its own, and to take Topics (`patterns/apps/topics/`) as the
+target both work toward. Topics is a pattern of the product, it is slow at
+around 1,000 topics on today's runtime, and today's figures for it exist
+(`patterns/integration/topic-board-navigation.bench.ts`, and the record
+`docs/history/development/performance/2026-09-25-server-execution-topics-lunch-benchmarks.md`).
+It tests the design's central claim at the size where it matters: that the
+cost of one change does not grow with the length of a list.
+
+- **The prototype track is the reference for semantics.** Its goal: Topics
+  at 100, 1,000 and 2,000 topics runs on the executor, with the values of
+  today's runtime and no label looser. It reimplements nothing of the
+  runtime. In order: the crate emits the corpus of the main branch (it
+  stops on two failures today, which the method of the figures below
+  names); then Topics. Emitted with its imports on the main branch,
+  Topics' board (`main.tsx`) has no unsupported construct and three errors
+  of the subset type checker, and the pattern of one topic (`topic.tsx`)
+  has one call the emitter does not resolve, 73 writes through a handle
+  the emitter cannot name, and about 30 errors of the type checker, most
+  of them arguments of a handler that are not assignable. After Topics:
+  P18 and the reference patterns, FabriChat and `system/home/home.tsx`.
+- **The integration track is the reference for cost.** Its goal: one
+  honest figure for Topics at those sizes, beside today's runtime on the
+  same harness (milestone 2). It builds only what that figure needs, and
+  where the design replaces a mechanism of today's runtime, as templates
+  replace the write policy taken from a schema, it does the least that
+  makes the figure honest rather than port the mechanism.
+- **What decides whether to continue.** The cost of one change at 1,000
+  topics on the integrated path against today's, and how it grows from 100
+  to 2,000. If it is not clearly below today's, or grows with the size of
+  the board, both tracks stop and report before milestone 3. Otherwise the
+  scheduler comes next.
 
 ## Milestones
 
@@ -219,7 +257,19 @@ and reports what it measures beside the figures before it.
    storage is emulated. *Status:* built
    (`compare/runtime-transactions.ts`, `compare/integrated.ts`); the first
    figures are below.
-2. **A compiled piece in the runner.** Behind the experimental option the
+2. **Topics at scale on the runtime's storage.** The board and the topics
+   of `patterns/apps/topics/` at 100, 1,000 and 2,000 topics, run by the
+   executor on the runtime's storage with labeled inputs: the board's load,
+   the creation of one topic, and an edit of one topic, each beside today's
+   runtime on the same harness, with every commit accepted. Until the crate
+   emits Topics, the same claim is measured on the prototype's fixtures of
+   a list (`compare/growth.ts`, 100 to 10,000 rows over an array of
+   references, an array of plain values in place and the result of another
+   per-element construct) with the documents in the runtime's storage.
+   *Measures:* whether the cost of one change stays flat in the size of the
+   board on real storage, and how it compares with today's. *Decides:*
+   whether the work continues (see "Two tracks, one target").
+3. **A compiled piece in the runner.** Behind the experimental option the
    runner starts a piece from a plan. Its events come through stream cells
    and the scheduler, its store reads through the replica, and the change
    channel tells it of writes by others. One harness starts and drives both
@@ -228,19 +278,19 @@ and reports what it measures beside the figures before it.
    figure per event from send to settled that compares like with like.
    *Needs first:* a crate that emits the corpus of the main branch, which
    it does not today (the method of the figures below says where it
-   fails), and an adapter that records the plan's schema of each write.
-3. **Labels from templates at commit.** `prepareCfc()` instantiates the
+   fails), and the decision of milestone 2.
+4. **Labels from templates at commit.** `prepareCfc()` instantiates the
    template of each path the plan covers and checks the plan's constraints
    (`execution-and-storage.md` §1.9). The label comparison of
    `compare/corpus.ts` runs against the integrated path. *Measures:* the
    cost of instantiating templates against the join, and the labels the
    design stores, compared with today's from the same runtime.
-4. **Value code in the sandbox.** The module texts of value code are
+5. **Value code in the sandbox.** The module texts of value code are
    evaluated in an SES compartment under the runtime's module policy, and
    the runtime compiles on load with the crate in the compile worker.
    *Measures:* the cost of the sandbox at load and per call, and of
    compiling on the server.
-5. **Server execution and the network.** The serving loop, with its waves
+6. **Server execution and the network.** The serving loop, with its waves
    and seals, and a memory server reached over a socket. FabriChat, once
    the crate emits `room.tsx` and `manager.tsx`, and `system/home/home.tsx`.
    *Measures:* what the existing serving benchmarks measure for today's
@@ -248,7 +298,7 @@ and reports what it measures beside the figures before it.
 
 The design's storage changes, part documents and chunks, are in no
 milestone. If they become a requirement on storage, they are measured where
-storage builds them, with the harness of milestone 2.
+storage builds them, with the harness of milestone 3.
 
 ## What stays in the prototype
 
@@ -271,7 +321,7 @@ storage builds them, with the harness of milestone 2.
   documents in memory between transactions and replaces them when the
   change channel says another writer changed them; it does not read them
   again on every access.
-- **The executor assumes it is the only writer.** In milestone 2 a client,
+- **The executor assumes it is the only writer.** In milestone 3 a client,
   another instance, or a handler of another pattern can write what it reads.
   The marking of readers (`scheduler-and-serving-loop.md` §3) has to be
   driven by those changes as well as by its own.
@@ -280,7 +330,7 @@ storage builds them, with the harness of milestone 2.
   the runtime does not resolve, and it nests the children of a rendered
   tree differently from today's runtime, which the harness translates
   (`base/pattern-compiler/README.md`, "Value code and the executor").
-  Before the shell renders a compiled piece in milestone 2, the executor
+  Before the shell renders a compiled piece in milestone 3, the executor
   has to store the rendered tree in the form the renderer reads, and a link
   that the runtime can follow, or the readers of such a document have to be
   compiled too (`execution-and-storage.md` §9.9).
@@ -386,6 +436,26 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   modules; each of the other 7 reads the wall clock or calls
   `crypto.randomUUID()`, which the comparison does not make equal between
   two runs.
+- **With the schema of each write recorded, 13 commits are refused, in 5
+  modules** (a third pair of runs). 9 are conflicts of the store ("stale
+  confirmed read"), and 1 a "pending dependency not resolved": the
+  executor issues its commits one after another without waiting for one to
+  settle, and a later transaction read a version of a document that an
+  earlier commit of the same executor, not yet confirmed, had replaced.
+  Today's runtime tracks the dependencies between commits that are
+  pending; the adapter does not yet. 2 are "type changed incompatibly", a
+  labeled document whose root changed from an array to a record, and 1 is
+  the writer-fit misfit. The labeled runs then store the values of the run
+  in memory in 191 of 213 modules. Of the other 22, 5 have a refused
+  commit, 6 read the clock, and in 11 an element record that the run in
+  storage holds differs from the run in memory with no commit refused. A
+  run of one of the 11 alone (`apps/project-list/main.tsx`) stores the
+  same element records as the run in memory, and the cause was not found.
+  The same pair took 4,537 against 60,900 ms to settle and 25,085 against
+  191,688 ms for the events, with 434 CFC preparations for the events
+  against 2,067; every time of it is about three times those of the two
+  pairs above, on both sides, because the machine was busy with other work
+  then, and it is given for the ratio and the counts alone.
 - **`showcase/battleship/pass-and-play/main.tsx` is slower than today's
   runtime per event by the executor's own work:** 13.5 ms in memory
   against 7.7 to 9.7 ms for today's whole event. The prototype's last
@@ -396,10 +466,12 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
 - **The ratios overstate what a compiled runtime gains.** The executor runs
   no scheduler, no sandbox and no network, and today's figures include the
   harness reading labels between events. They are an upper bound on the
-  gain until milestones 2 to 5.
+  gain until milestones 3 to 6.
 
-**Not examined.** The failure of `witnessed-chain.tsx` in storage; the
-outlier of the labeled battleship run; how much of the wait for a commit to
+**Not examined.** The failure of `witnessed-chain.tsx` in storage, which
+the change to the covering path did not fix; the 11 labeled modules that
+store another element record with no commit refused; the outlier of the labeled
+battleship run; how much of the wait for a commit to
 settle is idle; and why the driver's own comparison with today's values,
 made in the same process after the runs, finds 5,637 of 6,053 equal where
 the values run finds 6,013 of 6,107.
