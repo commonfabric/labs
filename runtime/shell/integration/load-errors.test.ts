@@ -3,13 +3,16 @@ import { describe, it } from "@std/testing/bdd";
 
 import { type DID, Identity, legacySpaceDid } from "@commonfabric/identity";
 import {
+  awaitViewSettled,
   createLegacyTestSpace,
   createTestSpace,
   env,
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { PiecesController } from "@commonfabric/piece/ops";
 import {
+  ACLManager,
   experimentalOptionsFromEnv,
   Runtime,
   withServerExecutionDefault,
@@ -365,6 +368,56 @@ describe("shell load errors", () => {
       shell.page(),
       (probe) => probe.collect(".load-error").length === 0,
     );
+  });
+
+  it("says a space and a piece are deleted, in a page that held them and in one that did not", async () => {
+    const page = shell.page();
+    const identity = await Identity.generate({ implementation: "noble" });
+    const spaceDid = await createTestSpace(identity);
+    const pieces = await PiecesController.initialize({
+      apiUrl: new URL(API_URL),
+      identity,
+      space: spaceDid,
+    });
+    try {
+      const pieceId = (await pieces.ensureDefaultPattern()).id;
+      await pieces.runtime.idle();
+      await pieces.runtime.storageManager.synced();
+      await shell.goto({
+        frontendUrl: FRONTEND_URL,
+        view: { spaceDid, pieceId },
+        identity,
+      });
+      await waitForCondition(
+        page,
+        (probe) => probe.collect("cf-piece").length > 0,
+      );
+      await awaitViewSettled(page);
+
+      await new ACLManager(pieces.runtime, spaceDid).delete(identity.did());
+
+      // The page holding the piece has its content taken away where it stands.
+      await waitForCondition(
+        page,
+        (probe) => probe.collect("[data-space-deleted]").length > 0,
+      );
+
+      // A page that opens either address now is told the space is gone.
+      for (const view of [{ spaceDid, pieceId }, { spaceDid }]) {
+        await shell.goto({ frontendUrl: FRONTEND_URL, view, identity });
+        await waitForCondition(
+          page,
+          (probe) =>
+            probe.collect(".load-error").some((element) => {
+              const text = probe.deepText(element).replace(/\s+/g, " ").trim();
+              return text.includes("This space was deleted") &&
+                !text.includes("We could not load");
+            }),
+        );
+      }
+    } finally {
+      await pieces.dispose();
+    }
   });
 
   it("shows an asynchronous runtime failure for the selected piece", async () => {

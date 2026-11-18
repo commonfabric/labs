@@ -17,13 +17,26 @@
  * A move the repository decides to ship is declared in
  * `cause-assignments-accepted-moves.ts`.
  *
- * Usage: check-cause-assignments.ts [base-ref]   (default: origin/main)
+ * A comparison only protects the patterns it reaches, so the gate also fails
+ * on a pattern the base builds and the change compiles from the same source to
+ * no assignment, and on a run that compares no patterns at all.
+ *
+ * The patterns are compared in `CAUSE_ASSIGNMENT_PARTS` parts, each its own
+ * run, so that each fits in a lane: `--part K/N` compares every Nth pattern
+ * of the sorted list, starting from the Kth. A run with no `--part` compares
+ * them all.
+ *
+ * Usage: check-cause-assignments.ts [base-ref] [--part K/N]
+ *        (default base: origin/main)
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
-import { join, toFileUrl } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { collectAllPatternFiles } from "./pattern-files.ts";
+import { EXPERIMENTAL_ENV_VARS } from "../runtime/runner/src/experimental-posture.ts";
+import { collectAllPatternFiles, patternKey } from "./pattern-files.ts";
+import { type Git, git } from "./repository-files.ts";
+import { type CommandOutput, emit } from "./command-output.ts";
 import {
   type AmbiguousCells,
   ambiguousCells,
@@ -39,19 +52,22 @@ import {
 } from "./cause-assignments-accepted-moves.ts";
 
 /**
- * The trees a pattern's numbering is built by: the transformer that lowers
+ * The paths a pattern's numbering is built by: the transformer that lowers
  * pattern source, the compiler and harness driving it, the builder that
  * numbers the cells and classifies them, the builtins whose node factories
  * and result schemas the builder takes in (`sqliteQuery`'s factory runs
- * `lift()` as its module evaluates), and the schema generator that
- * classification reads. The gate passes a change touching none of them, or
- * its own files, without compiling anything; a change elsewhere that moves a
- * cell is one it does not see.
+ * `lift()` as its module evaluates), the schema generator that
+ * classification reads, and the local defaults of the experimental flags a
+ * runtime consumes itself, any of which can change what the compiler builds.
+ * The gate passes a change touching none of them, or its own files, without
+ * compiling anything; a change elsewhere that moves a cell is one it does not
+ * see.
  */
 export const COMPILER_PATHS: readonly string[] = [
   "base/js-compiler/",
   "runtime/runner/src/builder/",
   "runtime/runner/src/builtins/",
+  "runtime/runner/src/experimental-defaults.ts",
   "runtime/runner/src/harness/",
   "base/schema-generator/src/",
   "base/ts-transformers/src/",
@@ -68,9 +84,86 @@ export const GATE_PATHS: readonly string[] = [
   "tasks/cause-assignments-dump.ts",
   "tasks/cause-assignments-lib.ts",
   "tasks/check-cause-assignments.ts",
+  "tasks/command-output.ts",
   "tasks/pattern-compat-unevaluable.ts",
   "tasks/pattern-files.ts",
+  "tasks/repository-files.ts",
 ];
+
+/** How many parts continuous integration compares the patterns in. */
+export const CAUSE_ASSIGNMENT_PARTS = 3;
+
+/**
+ * One part of the patterns: the ones at `index`, `index + count`, and so on,
+ * counting from zero, in the sorted list.
+ */
+export interface Part {
+  index: number;
+  count: number;
+}
+
+/** What a run of the gate is asked to compare. */
+export interface Arguments {
+  baseRef: string;
+  part: Part;
+}
+
+/**
+ * The base revision and part `args` name. Throws on a `--part` that is not
+ * `K/N` with `1 <= K <= N`, on an argument it does not know, and on a second
+ * base revision.
+ */
+export function parseArguments(args: readonly string[]): Arguments {
+  let baseRef = "origin/main";
+  let part: Part = { index: 0, count: 1 };
+  let named = false;
+  for (let at = 0; at < args.length; at++) {
+    const arg = args[at]!;
+    if (arg === "--part") {
+      const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(args[++at] ?? "");
+      const [k, n] = match === null
+        ? [0, 0]
+        : [Number(match[1]), Number(match[2])];
+      if (!Number.isSafeInteger(n) || k < 1 || k > n) {
+        throw new Error(
+          `--part takes K/N with 1 <= K <= N, not ${args[at] ?? "nothing"}`,
+        );
+      }
+      part = { index: k - 1, count: n };
+    } else if (arg.startsWith("-")) {
+      throw new Error(`unknown argument ${arg}`);
+    } else if (named) {
+      throw new Error(`a second base revision, ${arg}`);
+    } else {
+      baseRef = arg;
+      named = true;
+    }
+  }
+  return { baseRef, part };
+}
+
+/** The entries of the sorted `items` that `part` holds. */
+export function inPart<T>(items: readonly T[], part: Part): T[] {
+  return items.filter((_, index) => index % part.count === part.index);
+}
+
+/**
+ * The accepted moves a run comparing `part` of `files` judges: those naming
+ * one of its patterns, and in the first part, those naming no pattern the
+ * tree holds, so that every entry is reported by some part as forgiving
+ * nothing once it does.
+ */
+export function acceptedInPart(
+  accepted: readonly AcceptedMove[],
+  files: readonly string[],
+  part: Part,
+): AcceptedMove[] {
+  const held = new Set(files.map((file) => patternKey(file)));
+  const mine = new Set(inPart(files, part).map((file) => patternKey(file)));
+  return accepted.filter(({ pattern }) =>
+    mine.has(pattern) || (part.index === 0 && !held.has(pattern))
+  );
+}
 
 /** The verdict on one comparison of two dumps. */
 export interface Comparison {
@@ -103,6 +196,16 @@ export interface Comparison {
   compared: number;
 
   /**
+   * The patterns the base built and the head compiled from the same source to
+   * no assignment. Such a pattern is not among `compared`, so it would
+   * otherwise pass unseen.
+   */
+  dropped: string[];
+
+  /** How many patterns each side's build gave an assignment. */
+  built: { base: number; head: number };
+
+  /**
    * The patterns either side failed to compile, less those that side's own
    * `UNEVALUABLE_PATTERNS` lists. Such a pattern is in neither side's
    * builds, so it would otherwise pass unseen.
@@ -132,11 +235,18 @@ export function compareDumps(
   const before = new Map(
     base.assignments.map((assignment) => [assignment.pattern, assignment]),
   );
+  const unassigned = new Map(
+    head.unassigned.map(({ pattern, source }) => [pattern, source]),
+  );
   const comparison: Comparison = {
     failing: [],
     forgiven: [],
     unused: [],
     compared: 0,
+    dropped: base.assignments
+      .filter(({ pattern, source }) => unassigned.get(pattern) === source)
+      .map(({ pattern }) => pattern),
+    built: { base: base.assignments.length, head: head.assignments.length },
     compileErrors: [
       ...base.errors
         .filter((error) => !unevaluable.base.has(error.pattern))
@@ -276,11 +386,56 @@ export function describeFailures(comparison: Comparison): string {
   return lines.join("\n");
 }
 
+/** The report of `comparison`'s dropped patterns. */
+export function describeDropped(comparison: Comparison): string {
+  return [
+    "The base build gives these patterns a cause assignment and this build " +
+    "compiles the same source to none, so their numbering could not be " +
+    "compared. `buildAssignment()` in tasks/cause-assignments-dump.ts found " +
+    "no pattern among what each module evaluated to:",
+    "",
+    ...comparison.dropped,
+  ].join("\n");
+}
+
+/** The report of a run that compared no patterns. */
+export function describeNothingCompared({ built }: Comparison): string {
+  return "This run compared no patterns, so it checked nothing. The base " +
+    `build gave ${built.base} patterns an assignment and this build ` +
+    `${built.head}, with no pattern on both sides from the same source. ` +
+    "Either a build yields nothing tasks/cause-assignments-dump.ts can read, " +
+    "or the change moves or edits every pattern, which has to land apart " +
+    "from a change to what numbers them.";
+}
+
+/**
+ * A report of each kind of failure in `comparison`. An empty list says the gate
+ * passes.
+ */
+export function failureReports(comparison: Comparison): string[] {
+  const reports: string[] = [];
+  if (comparison.compileErrors.length > 0) {
+    reports.push(describeCompileErrors(comparison));
+  }
+  if (comparison.failing.length > 0) {
+    reports.push(describeFailures(comparison));
+  }
+  if (comparison.dropped.length > 0) {
+    reports.push(describeDropped(comparison));
+  }
+  if (comparison.compared === 0) {
+    reports.push(describeNothingCompared(comparison));
+  }
+  return reports;
+}
+
 /**
  * The patterns the checkout at `root` lists as unevaluable, which is none
  * where it holds no such list.
  */
-async function unevaluableIn(root: string): Promise<ReadonlySet<string>> {
+export async function unevaluableIn(
+  root: string,
+): Promise<ReadonlySet<string>> {
   const list = join(root, "tasks/pattern-compat-unevaluable.ts");
   try {
     await Deno.stat(list);
@@ -289,23 +444,9 @@ async function unevaluableIn(root: string): Promise<ReadonlySet<string>> {
     throw error;
   }
   const { UNEVALUABLE_PATTERNS: listed } = await import(
-    new URL(`file://${list}`).href
+    toFileUrl(list).href
   );
   return listed;
-}
-
-async function git(...args: string[]): Promise<string> {
-  const { code, stdout, stderr } = await new Deno.Command("git", {
-    args,
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
-  if (code !== 0) {
-    throw new Error(
-      `git ${args.join(" ")} failed: ${new TextDecoder().decode(stderr)}`,
-    );
-  }
-  return new TextDecoder().decode(stdout);
 }
 
 /** What the dumper needs of a workspace package to load it by name. */
@@ -419,11 +560,37 @@ export async function dumperConfig(
 }
 
 /**
- * Helper for `main()`, which dumps the patterns `files` names with the
- * compiler of the checkout at `root`, in `shards` processes at once, running
- * the dumper under the configuration at `config`.
+ * The environment the dumper runs in: `env`, without the variables that set
+ * an experimental flag (`EXPERIMENTAL_ENV_VARS`), and with logging quieted.
+ * Each build is then compiled under its own revision's defaults. An inherited
+ * flag would set both builds alike, and so hide a change to its default from
+ * the comparison.
+ *
+ * `DENO_COVERAGE_DIR` goes too. The dumper runs under a configuration of its
+ * own, so a profile it wrote could not be converted, and a tracked file that
+ * will not convert fails the lane (docs/development/COVERAGE.md).
  */
-async function dumpTree(
+export function dumperEnvironment(
+  env: Readonly<Record<string, string>>,
+): Record<string, string> {
+  const leftOut = new Set<string>([
+    "DENO_COVERAGE_DIR",
+    ...Object.values(EXPERIMENTAL_ENV_VARS).filter((name) => name !== null),
+  ]);
+  return {
+    ...Object.fromEntries(
+      Object.entries(env).filter(([name]) => !leftOut.has(name)),
+    ),
+    LOG_LEVEL: "error",
+  };
+}
+
+/**
+ * Dumps the patterns `files` names with the compiler of the checkout at
+ * `root`, in `shards` processes at once, running the dumper under the
+ * configuration at `config`. Throws when a dumper fails.
+ */
+export async function dumpTree(
   root: string,
   config: string,
   files: readonly string[],
@@ -431,8 +598,9 @@ async function dumpTree(
   outDir: string,
   label: string,
 ): Promise<DumpOutput> {
-  const dumper = new URL("./cause-assignments-dump.ts", import.meta.url)
-    .pathname;
+  const dumper = fromFileUrl(
+    new URL("./cause-assignments-dump.ts", import.meta.url),
+  );
   const parts = Array.from(
     { length: shards },
     (_, shard) => files.filter((_, index) => index % shards === shard),
@@ -453,7 +621,8 @@ async function dumpTree(
         ...part,
       ],
       cwd: root,
-      env: { LOG_LEVEL: "error" },
+      env: dumperEnvironment(Deno.env.toObject()),
+      clearEnv: true,
       stdout: "inherit",
       stderr: "piped",
     }).output();
@@ -467,31 +636,63 @@ async function dumpTree(
   }));
   return {
     assignments: outputs.flatMap((output) => output.assignments),
+    unassigned: outputs.flatMap((output) => output.unassigned),
     errors: outputs.flatMap((output) => output.errors),
   };
 }
 
-async function main() {
-  const problems = acceptedMoveProblems(ACCEPTED_MOVES);
+/** What the gate asks of the checkout it runs in. */
+export interface GateCheckout {
+  /** Runs git in the working directory. */
+  git: Git;
+
+  /** Dumps one tree's patterns, as {@link dumpTree} does. */
+  dumpTree: typeof dumpTree;
+}
+
+const CHECKOUT: GateCheckout = { git, dumpTree };
+
+/**
+ * Runs the gate as `args` asks, against the merge base of its base revision
+ * and `HEAD` in `checkout`, forgiving each move `accepted` names, and returns
+ * what to say: exit code 0 where it passes, 1 where it fails, and 2 for an
+ * argument it cannot read or a merge base git cannot find.
+ */
+export async function main(
+  args: readonly string[],
+  checkout: GateCheckout = CHECKOUT,
+  accepted: readonly AcceptedMove[] = ACCEPTED_MOVES,
+): Promise<CommandOutput> {
+  const problems = acceptedMoveProblems(accepted);
   if (problems.length > 0) {
-    console.error(
-      "tasks/cause-assignments-accepted-moves.ts:\n" +
+    return {
+      err: "tasks/cause-assignments-accepted-moves.ts:\n" +
         problems.map((problem) => `  ${problem}`).join("\n"),
-    );
-    Deno.exit(1);
+      code: 1,
+    };
   }
-  const baseRef = Deno.args[0] ?? "origin/main";
+  let parsed: Arguments;
+  try {
+    parsed = parseArguments(args);
+  } catch (error) {
+    return {
+      err: `${String(error)}\n` +
+        "Usage: check-cause-assignments.ts [base-ref] [--part K/N]",
+      code: 2,
+    };
+  }
+  const { baseRef, part } = parsed;
   let mergeBase: string;
   try {
-    mergeBase = (await git("merge-base", baseRef, "HEAD")).trim();
+    mergeBase = (await checkout.git("merge-base", baseRef, "HEAD")).trim();
   } catch {
-    console.error(
-      `Could not resolve a merge base against ${baseRef}. This check needs ` +
-        "real history — CI must check out with fetch-depth: 0.",
-    );
-    Deno.exit(2);
+    return {
+      err: `Could not resolve a merge base against ${baseRef}. This check ` +
+        "needs real history — CI must check out with fetch-depth: 0.",
+      code: 2,
+    };
   }
-  const changed = (await git(
+  const changed = (await checkout.git(
     "diff",
     "--name-only",
     mergeBase,
@@ -500,19 +701,21 @@ async function main() {
     ...GATE_PATHS,
   )).trim();
   if (changed === "") {
-    console.log(
-      "check-cause-assignments: nothing a pattern's numbering is built by " +
-        `changed since ${mergeBase.slice(0, 10)}.`,
-    );
-    return;
+    return {
+      out: "check-cause-assignments: nothing a pattern's numbering is built " +
+        `by changed since ${mergeBase.slice(0, 10)}.`,
+      code: 0,
+    };
   }
 
-  const head = (await git("rev-parse", "--show-toplevel")).trim();
+  const head = (await checkout.git("rev-parse", "--show-toplevel")).trim();
   const scratch = await Deno.makeTempDir({ prefix: "cause-assignments-" });
   const baseTree = join(scratch, "base");
-  await git("worktree", "add", "--detach", baseTree, mergeBase);
+  await checkout.git("worktree", "add", "--detach", baseTree, mergeBase);
+  let found: CommandOutput;
   try {
-    const files = await collectAllPatternFiles();
+    const all = await collectAllPatternFiles(head);
+    const files = inPart(all, part);
     const inBase: string[] = [];
     for (const file of files) {
       try {
@@ -530,7 +733,7 @@ async function main() {
     );
     const started = performance.now();
     const [baseDump, headDump] = await Promise.all([
-      dumpTree(
+      checkout.dumpTree(
         baseTree,
         await dumperConfig(baseTree, head),
         inBase,
@@ -538,40 +741,71 @@ async function main() {
         scratch,
         "base",
       ),
-      dumpTree(head, join(head, "deno.jsonc"), files, shards, scratch, "head"),
+      checkout.dumpTree(
+        head,
+        join(head, "deno.jsonc"),
+        files,
+        shards,
+        scratch,
+        "head",
+      ),
     ]);
-    const comparison = compareDumps(baseDump, headDump, ACCEPTED_MOVES, {
-      base: await unevaluableIn(baseTree),
-      head: UNEVALUABLE_PATTERNS,
-    });
-    console.log(
-      `check-cause-assignments: compared ${comparison.compared} patterns ` +
-        `built from the same source by ${mergeBase.slice(0, 10)} and this ` +
-        `change, in ${Math.round((performance.now() - started) / 1000)}s.`,
+    const comparison = compareDumps(
+      baseDump,
+      headDump,
+      acceptedInPart(accepted, all, part),
+      { base: await unevaluableIn(baseTree), head: UNEVALUABLE_PATTERNS },
     );
-    for (const pattern of comparison.forgiven) {
-      console.log(`  ${pattern}: moves forgiven by an accepted entry`);
-    }
-    for (const entry of comparison.unused) {
-      console.log(
+    const out = [
+      `check-cause-assignments${
+        part.count === 1 ? "" : ` part ${part.index + 1} of ${part.count}`
+      }: compared ${comparison.compared} patterns ` +
+      `built from the same source by ${mergeBase.slice(0, 10)} and this ` +
+      `change, in ${Math.round((performance.now() - started) / 1000)}s.`,
+      ...comparison.forgiven.map((pattern) =>
+        `  ${pattern}: moves forgiven by an accepted entry`
+      ),
+      ...comparison.unused.map((entry) =>
         `  the accepted entry for ${entry.pattern} (${entry.base} -> ` +
-          `${entry.head}) forgives nothing in this run and can be removed`,
-      );
-    }
-    if (comparison.compileErrors.length > 0) {
-      console.error(describeCompileErrors(comparison));
-      Deno.exitCode = 1;
-    }
-    if (comparison.failing.length > 0) {
-      console.error(describeFailures(comparison));
-      Deno.exitCode = 1;
-    }
-  } finally {
-    await git("worktree", "remove", "--force", baseTree);
+        `${entry.head}) forgives nothing in this run and can be removed`
+      ),
+    ].join("\n");
+    const reports = failureReports(comparison);
+    found = reports.length > 0
+      ? { out, err: reports.join("\n"), code: 1 }
+      : { out, code: 0 };
+  } catch (error) {
+    // A removal that fails is reported beside the error that ended the run.
+    const leftBehind = await removeBase(checkout.git, baseTree, scratch);
+    if (leftBehind === undefined) throw error;
+    throw new Error(`${error}\n${leftBehind}`, { cause: error });
+  }
+  // What the run found stands whether or not the base checkout went.
+  const leftBehind = await removeBase(checkout.git, baseTree, scratch);
+  return leftBehind === undefined ? found : {
+    out: found.out,
+    err: [found.err, leftBehind].filter((text) => text !== undefined)
+      .join("\n"),
+    code: 1,
+  };
+}
+
+/**
+ * Removes the base checkout at `baseTree` and the scratch directory holding
+ * it, and returns what could not be removed, or nothing where both went.
+ */
+async function removeBase(
+  run: Git,
+  baseTree: string,
+  scratch: string,
+): Promise<string | undefined> {
+  try {
+    await run("worktree", "remove", "--force", baseTree);
     await Deno.remove(scratch, { recursive: true });
+    return undefined;
+  } catch (error) {
+    return `Could not clean up the base checkout at ${baseTree}: ${error}`;
   }
 }
 
-if (import.meta.main) {
-  await main();
-}
+if (import.meta.main) emit(await main(Deno.args));

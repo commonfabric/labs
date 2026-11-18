@@ -10,7 +10,7 @@
  */
 
 import { assertEquals } from "@std/assert";
-import { type DiffEdit, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import type { DiffEdit, DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 
 Deno.test("diffedit gate: save skips a verified hunk whose path parsed but has no captured base content", () => {

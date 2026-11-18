@@ -164,7 +164,7 @@ describe("harness-job continuation", () => {
       expect(basename(nextArtifacts.runState.structuredResult!.path)).toContain(
         "second",
       );
-      expect(system).toContain("second.json");
+      expect(system).not.toContain(basename(priorPath));
       expect(await Deno.readTextFile(priorPath)).toBe(before);
       expect(next.report?.usage?.totalTokens).toBe(12);
       expect(

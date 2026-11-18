@@ -200,6 +200,7 @@ export function cleanupFixtures() {
 export function render(
   src: string,
   context = new ContextShim(),
+  script = "",
 ): Promise<CommonIframeSandboxElement> {
   return new Promise((resolve) => {
     const parent = document.createElement("div");
@@ -213,6 +214,7 @@ export function render(
     });
     parent.appendChild(iframe);
     document.body.appendChild(parent);
+    iframe.script = script;
     // @ts-ignore This is a lit property.
     iframe.src = src;
   });

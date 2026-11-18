@@ -13,6 +13,7 @@ function topic(fields: Partial<Topic>): Topic {
     title: "Fryer",
     body: "Body.",
     createdAt: 100,
+    updatedAt: 100,
     createdBy: "Sol (agent)",
     lastActivityAt: 100,
     comments: [],
@@ -180,6 +181,33 @@ describe("events", () => {
         ["comment", 300],
       ]);
       expect(history(board, 2).map((e) => e.at)).toEqual([250, 300]);
+    });
+
+    it("leaves out a Topic, comment, or link withheld from this display, whatever its time", () => {
+      const link = {
+        kind: "web",
+        url: "",
+        label: "",
+        addedBy: "",
+        addedAt: 250,
+        removed: false,
+      };
+      const board = [
+        topic({
+          createdAt: 100,
+          withheld: true,
+          comments: [
+            comment({ sentAt: 300 }),
+            comment({ sentAt: 350, withheld: true }),
+          ],
+          links: [{ ...link, withheld: true as const }],
+        }),
+      ];
+
+      // A comment shown on a Topic withheld is still told of.
+      expect(history(board, 10).map((e) => [e.kind, e.at])).toEqual([
+        ["comment", 300],
+      ]);
     });
   });
 });

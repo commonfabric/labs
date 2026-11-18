@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { servingRuntimeFactory } from "../src/executor/serving-runtime.ts";
 import { Runtime } from "../src/runtime.ts";
+import { newLoopbackServer } from "../src/storage/v2-emulate.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 import type {
   CompiledModuleArtifact,
@@ -12,20 +15,15 @@ import type {
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 import {
   compiledDocKey,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadVerifiedSourceClosure,
   setCompileCacheRuntimeVersionForTesting,
   sourceDocKey,
 } from "../src/compilation-cache/cell-cache.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 
 const signer = await Identity.fromPassphrase("module byte cache test");
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 // Minimal in-memory cache implementing the injection interface — enough to
 // exercise the runtime's consult/populate behavior. The real implementation
@@ -135,6 +133,59 @@ describe("ModuleByteCache cross-runtime reuse", () => {
     }
   });
 
+  it("compiles a program once across serving runtimes that load it at the same time", async () => {
+    // A serving runtime yields while it compiles, so each of these reads the
+    // byte cache while another's compile is under way, and only the turns they
+    // share keep that read from being a miss.
+    const server = newLoopbackServer({
+      store: new URL(`memory://byte-cache-turns-${crypto.randomUUID()}`),
+    });
+    const emitsDuringLoads = async (spaceNames: string[]) => {
+      const createRuntime = servingRuntimeFactory({
+        server,
+        identity: signer,
+        apiUrl: new URL(import.meta.url),
+        moduleByteCache: new FakeByteCache(),
+      });
+      const spaces = await Promise.all(
+        spaceNames.map(async (name) =>
+          (await Identity.fromPassphrase(`byte-cache ${name}`)).did()
+        ),
+      );
+      const built = await Promise.all(
+        spaces.map((space) => createRuntime(space, {})),
+      );
+      const emits = () =>
+        getTimingStatsBreakdown()["js-compiler"]?.["phase/emitFile"]?.count ??
+          0;
+      const before = emits();
+      try {
+        await Promise.all(built.map(async ({ runtime }, index) => {
+          const tx = runtime.edit();
+          try {
+            await runtime.patternManager.compilePattern(PROGRAM, {
+              space: spaces[index],
+              tx,
+            });
+          } finally {
+            tx.abort();
+          }
+        }));
+        return emits() - before;
+      } finally {
+        await Promise.all(built.map(({ dispose }) => dispose()));
+      }
+    };
+    try {
+      const oneLoad = await emitsDuringLoads(["alone"]);
+      expect(oneLoad).toBeGreaterThan(0);
+
+      expect(await emitsDuringLoads(["one", "two", "three"])).toBe(oneLoad);
+    } finally {
+      await server.close();
+    }
+  });
+
   it("a fresh runtime + fresh space process-hits and persists the closure", async () => {
     const byteCache = new FakeByteCache();
     const spaceA = (await Identity.fromPassphrase("byte-cache space A")).did();
@@ -186,7 +237,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
         rtB,
         spaceB,
         entryIdentity,
-        { runtimeVersion },
+        { runtimeVersion: await compileCacheVersionOf(rtB) },
         readTx,
       );
       readTx.abort?.();
@@ -241,6 +292,7 @@ describe("ModuleByteCache cross-runtime reuse", () => {
     };
 
     try {
+      const runtimeVersion = await compileCacheVersionOf(rt);
       const entryIdentity = await compile();
       expect(persistenceWrites).toBe(1);
 

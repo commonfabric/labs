@@ -1,7 +1,11 @@
 import { sleep } from "@commonfabric/async/sleep";
 import { describeThrown } from "./describe-thrown.ts";
 import type { Page } from "./page.ts";
-import { readAndDescribeShellPage } from "./shell-page-probe.ts";
+import {
+  type ConditionElement,
+  describeTestProcessLoggerErrors,
+  readAndDescribeShellPage,
+} from "./shell-page-probe.ts";
 
 // Default poll interval between predicate calls. Polls are cheap (a CDP
 // evaluate round-trip), and a coarse interval quantizes every wall-clock
@@ -33,10 +37,36 @@ const WAIT_FOR_CONDITION_TIMEOUT = 300_000; // 5 minutes
  */
 function waitForConditionTimeout(): number {
   try {
-    const raw = Number(Deno.env.get("CF_WAIT_FOR_CONDITION_TIMEOUT_MS"));
+    const raw = Number(Deno.env.get(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE));
     return Number.isFinite(raw) && raw > 0 ? raw : WAIT_FOR_CONDITION_TIMEOUT;
   } catch {
     return WAIT_FOR_CONDITION_TIMEOUT;
+  }
+}
+
+/** The variable {@link waitForConditionTimeout} reads the net's length from. */
+const WAIT_FOR_CONDITION_TIMEOUT_VARIABLE = "CF_WAIT_FOR_CONDITION_TIMEOUT_MS";
+
+/**
+ * Runs `work` with every wait it starts given a safety net of `ms`
+ * milliseconds, so that a test can drive a stuck wait's failure without
+ * waiting five minutes for it, and returns what `work` returns. It puts back
+ * whatever the run was started with rather than removing it: somebody running
+ * a file with a net of their own chose that, and a test that dropped it would
+ * change every wait after itself.
+ */
+export async function withWaitForConditionTimeout<T>(
+  ms: number,
+  work: () => Promise<T>,
+): Promise<T> {
+  const before = Deno.env.get(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE);
+  Deno.env.set(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE, String(ms));
+  try {
+    return await work();
+  } finally {
+    if (before === undefined) {
+      Deno.env.delete(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE);
+    } else Deno.env.set(WAIT_FOR_CONDITION_TIMEOUT_VARIABLE, before);
   }
 }
 
@@ -54,7 +84,8 @@ function oneLine(value: string): string {
 }
 
 /**
- * Render what a wait was waiting for and what `page` held while it waited.
+ * Render what a wait was waiting for, what the test's own process logged as
+ * errors, and what `page` held while it waited.
  *
  * `predicateSource` is the source the page ran, and it is usually what names
  * the wait, waits carrying no names of their own. Where several waits share
@@ -65,12 +96,17 @@ function oneLine(value: string): string {
  * where it made one. A predicate that throws on every evaluation is stuck for
  * a reason nothing else in the report carries, since the page is exactly as it
  * would be for a predicate that is merely false.
+ *
+ * `waiter` names the {@link waitForCondition} running in the page, whose probe
+ * knows which elements the opaque predicate asked for, which is what says
+ * whether an awaited element exists.
  */
 export async function describeConditionWaitFailure(
   page: Page,
   predicateSource: string,
   args?: readonly unknown[],
   predicateError?: string,
+  waiter?: string,
 ): Promise<string> {
   const lines = [`  awaited condition: ${oneLine(predicateSource)}`];
   if (args !== undefined && args.length > 0) {
@@ -97,7 +133,8 @@ export async function describeConditionWaitFailure(
   if (predicateError !== undefined) {
     lines.push(`  predicate threw: ${oneLine(predicateError)}`);
   }
-  lines.push(await readAndDescribeShellPage(page));
+  for (const line of describeTestProcessLoggerErrors()) lines.push(line);
+  lines.push(await readAndDescribeShellPage(page, waiter));
   return lines.join("\n");
 }
 
@@ -200,6 +237,19 @@ export interface ProbeApi {
    * placed on the same element. Adding a token twice leaves one copy.
    */
   addToken(element: Element, attribute: string, token: string): void;
+
+  /**
+   * Resolves after one step of page progress. While the document is being
+   * rendered that step is an animation frame. A document that is not being
+   * rendered, such as a tab behind another, produces no frames, so waiting for
+   * one waits for something that will not arrive; the step there is one turn
+   * of the event loop, delivered through a message channel. It has to be a
+   * real turn rather than a resolved promise: what the page does next arrives
+   * by a timer or a task, and a loop that only yields to the microtask queue
+   * never lets either run. A document hidden while its frame is awaited ends
+   * the step then, since that frame will not come either.
+   */
+  nextFrame(): Promise<void>;
 }
 
 /**
@@ -232,6 +282,15 @@ export type PageCondition<
   ...args: A
 ) => boolean | R | Promise<boolean | R>;
 
+/** A {@link ProbeApi} that also says what it has been asked to collect. */
+interface RecordingProbeApi extends ProbeApi {
+  /**
+   * Each selector {@link ProbeApi.collect} has been given, oldest first, with
+   * what it matches now and the most it has matched.
+   */
+  collectedElements(): ConditionElement[];
+}
+
 /**
  * Builds the {@link ProbeApi} that a {@link waitForCondition} predicate and a
  * {@link readWithProbe} reader are handed, so a read and a wait judge the page
@@ -240,7 +299,7 @@ export type PageCondition<
  * Self-contained: its source is serialized and run in the page, so it closes
  * over none of the module scope.
  */
-function createProbe(): ProbeApi {
+function createProbe(): RecordingProbeApi {
   // The return type makes a method added to `ProbeApi` one this has to
   // implement. The annotation is erased before the source is serialized, so it
   // adds no runtime reference to module scope.
@@ -255,24 +314,70 @@ function createProbe(): ProbeApi {
     element.hasAttribute("disabled") ||
     element.getAttribute("aria-disabled") === "true";
 
+  const mostMatched = new Map<string, number>();
+
+  const find = (selector: string): Element[] => {
+    const out: Element[] = [];
+    const walk = (root: Document | ShadowRoot) => {
+      for (const el of root.querySelectorAll("*")) {
+        try {
+          if (el.matches(selector)) out.push(el);
+        } catch {
+          // An invalid selector matches nothing.
+        }
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(document);
+    return out;
+  };
+
   return {
     collect(selector) {
-      const out: Element[] = [];
-      const walk = (root: Document | ShadowRoot) => {
-        for (const el of root.querySelectorAll("*")) {
-          try {
-            if (el.matches(selector)) out.push(el);
-          } catch {
-            // An invalid selector matches nothing.
-          }
-          if (el.shadowRoot) walk(el.shadowRoot);
-        }
-      };
-      walk(document);
+      const out = find(selector);
+      mostMatched.set(
+        selector,
+        Math.max(mostMatched.get(selector) ?? 0, out.length),
+      );
       return out;
+    },
+    collectedElements() {
+      return [...mostMatched].map(([selector, most]) => {
+        const matched = find(selector);
+        return {
+          selector,
+          matched: matched.length,
+          rendered: matched.filter(isRendered).length,
+          mostMatched: most,
+        };
+      });
     },
     isRendered,
     isDisabled,
+    nextFrame() {
+      return new Promise((resolve) => {
+        if (document.visibilityState !== "hidden") {
+          const onHidden = () => {
+            if (document.visibilityState !== "hidden") return;
+            cancelAnimationFrame(frame);
+            document.removeEventListener("visibilitychange", onHidden);
+            resolve();
+          };
+          const frame = requestAnimationFrame(() => {
+            document.removeEventListener("visibilitychange", onHidden);
+            resolve();
+          });
+          document.addEventListener("visibilitychange", onHidden);
+          return;
+        }
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => {
+          channel.port1.close();
+          resolve();
+        };
+        channel.port2.postMessage(0);
+      });
+    },
     isVisible(element) {
       if (!isRendered(element)) return false;
       const rect = element.getBoundingClientRect();
@@ -436,6 +541,15 @@ function copyJsonAnswer(
   }
 }
 
+/** What the page keeps of a {@link waitForCondition} while it runs. */
+interface InstalledWaiter {
+  /** Ends the wait's observing. */
+  stop(): void;
+
+  /** Reads what the wait's predicate has collected, for its failure report. */
+  elements(): ConditionElement[];
+}
+
 /**
  * Installed in the page by {@link waitForCondition}. Re-evaluates `predicate`
  * whenever the UI could have changed — a shared pulse hub observes the document
@@ -461,8 +575,9 @@ function installWaiter(
   predicateArgs: unknown[],
   events: string[],
 ): void {
-  const probe =
-    (new Function("return (" + probeSource + ")")() as () => ProbeApi)();
+  const probe = (new Function(
+    "return (" + probeSource + ")",
+  )() as () => RecordingProbeApi)();
 
   const predicate = new Function("return (" + predicateSource + ")")() as (
     probe: ProbeApi,
@@ -527,11 +642,11 @@ function installWaiter(
   })());
 
   const registry = ((globalThis as typeof globalThis & {
-    __cfcWaiters?: Map<string, () => void>;
-  }).__cfcWaiters ??= new Map<string, () => void>());
+    __cfcWaiters?: Map<string, InstalledWaiter>;
+  }).__cfcWaiters ??= new Map<string, InstalledWaiter>());
   // A leftover waiter under this name would only exist after a name collision;
   // dispose it so its pulse stops running.
-  registry.get(bindingName)?.();
+  registry.get(bindingName)?.stop();
 
   let stopped = false;
   let signaled = false;
@@ -662,7 +777,10 @@ function installWaiter(
     evaluate();
   }
 
-  registry.set(bindingName, stop);
+  registry.set(bindingName, {
+    stop,
+    elements: () => probe.collectedElements(),
+  });
   hub.listeners.add(pulse);
   for (const event of events) globalThis.addEventListener(event, pulse);
   // Mutation pulses are the fast path, but a condition can flip true with no
@@ -773,6 +891,7 @@ export const waitForCondition = async <
           predicate.toString(),
           args,
           predicateError,
+          bindingName,
         )}`,
         { cause },
       );
@@ -790,8 +909,8 @@ export const waitForCondition = async <
     await page.removeBinding(bindingName).catch(() => {});
     await page.evaluate((name: string) => {
       (globalThis as typeof globalThis & {
-        __cfcWaiters?: Map<string, () => void>;
-      }).__cfcWaiters?.get(name)?.();
+        __cfcWaiters?: Map<string, InstalledWaiter>;
+      }).__cfcWaiters?.get(name)?.stop();
     }, { args: [bindingName] }).catch(() => {});
   }
 };

@@ -21,21 +21,14 @@
  * targets such as `.PHONY`, and the variables the file assigns.
  */
 
-import type {
-  Definition,
-  Document,
-  Line,
-  StructureNode,
-  TokenClass,
-} from "../../model.ts";
+import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
 import { flattenStructure } from "../../model.ts";
-import { computeLineStarts } from "../../lines.ts";
 import { linesFromClasses } from "../classes.ts";
 import { shellGrammar } from "../shell/shell.ts";
 import {
   type LocatedEntry,
   structureNode,
-  type StructureSource,
+  structureSource,
 } from "../structure.ts";
 import { tokenClasses } from "../treesitter/adapter.ts";
 
@@ -816,11 +809,7 @@ export function makeLines(text: string): Line[] {
 /** Colors `text` and lists the targets and variables it defines. */
 export function makeDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source: StructureSource = {
-    text,
-    lineStarts: computeLineStarts(text),
-    definitions: new Map<string, Definition[]>(),
-  };
+  const source = structureSource(text);
   const structure: StructureNode[] = scanner.entries.map((entry) =>
     structureNode(source, entry, 0, () => [])
   );

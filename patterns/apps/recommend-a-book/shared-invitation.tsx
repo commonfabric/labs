@@ -103,9 +103,10 @@ const ReaderInvitation = pattern<
     const isOwner: PerUser<boolean> | null = computed(
       (): PerUser<boolean> | null => ownerState.get(),
     );
-    const reading = computed((): PerUser<{ value?: LibrarySeed }> => ({
-      value: libraryCell.key("value").get(),
-    }));
+    const reading = computed((): PerUser<{ value?: LibrarySeed }> => {
+      const value = libraryCell.key("value").get();
+      return value === undefined ? {} : { value };
+    });
     const suggestions = computed(
       (): PerUser<{ value?: CandidateAgentOutput }> => {
         const published = libraryCell.key("value").get();

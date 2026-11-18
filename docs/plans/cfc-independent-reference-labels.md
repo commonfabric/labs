@@ -42,7 +42,7 @@ plus the entry's own path. The specification itself says what this proves:
 "Merely recording 'this reference was written' proves no semantic property"
 (§3.7.2). The runtime classifies it accordingly: its fields are
 "display/provenance only; nothing dereferences the persisted copy"
-(`cfc/label-field-classification.ts`), it never gates a `requiredIntegrity`
+(`runtime/memory/v2/cfc-label-fields.ts`), it never gates a `requiredIntegrity`
 write (`STRUCTURAL_LINK_PROVENANCE_ATOM_TYPES`), and it never enters the
 hereditary meet.
 
@@ -314,7 +314,7 @@ and 3. What it leaves behind:
   `STRUCTURAL_LINK_PROVENANCE_ATOM_TYPES`, so that a label stored before the
   retirement, whose integrity is the atom and a principal claim, still does
   not gate a `requiredIntegrity` write; and in `cfc/atom-classes.ts` and
-  `cfc/label-field-classification.ts`, so that a stored one keeps its class
+  `runtime/memory/v2/cfc-label-fields.ts`, so that a stored one keeps its class
   and its `source` and `target` are still committed when a label crosses
   spaces. `base/api/cfc.ts` keeps the constant, under which `cf label`
   shows a stored one, and the pattern-facing ambient type generated from it

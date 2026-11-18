@@ -16,13 +16,9 @@ import {
   type DependencyUpdateState,
   setSchedulerDependencies,
 } from "./dependency-updates.ts";
-import {
-  type NodeKind,
-  NodeRegistry,
-  type SchedulerNode,
-} from "./node-record.ts";
+import type { NodeKind, NodeRegistry, SchedulerNode } from "./node-record.ts";
 import { filterIgnoredAddresses } from "./reactivity.ts";
-import { type WriterIndexState } from "./scheduling-writes.ts";
+import type { WriterIndexState } from "./scheduling-writes.ts";
 import {
   applyActionReadDelta,
   ensureCancelForActionTriggers,
@@ -135,7 +131,7 @@ export function subscribePullSchedulerAction(
     options,
   );
 
-  const actionIsEffect = updateSchedulerActionType(
+  const record = updateSchedulerActionType(
     state.subscriptionState,
     action,
     isEffect,
@@ -144,6 +140,7 @@ export function subscribePullSchedulerAction(
       queueComputation: state.subscriptionState.getIdempotencyCheckMode(),
     },
   );
+  const actionIsEffect = record.kind === "effect";
   state.adoptGateConfig(action);
 
   if (debounce !== undefined) {
@@ -157,15 +154,11 @@ export function subscribePullSchedulerAction(
   }
 
   registerParentChildAction(state.subscriptionState, action);
-  const record = state.subscriptionState.nodes.get(action);
-  if (record) {
-    record.declaredReads = resolveDeclaredReads(action);
-  }
+  record.declaredReads = resolveDeclaredReads(action);
   const parentRecord = state.subscriptionState.nodes.parentOf(action);
   if (
     !actionIsEffect &&
     !options.deferUntilDemand &&
-    record &&
     parentRecord &&
     isLive(state.subscriptionState.dependencyGraphState, parentRecord)
   ) {
@@ -260,13 +253,17 @@ export function resolveDeclaredReads(action: Action): IMemorySpaceAddress[] {
   );
 }
 
+/**
+ * Re-subscribes `action` to the reads `log` records, without scheduling it,
+ * and returns its node.
+ */
 export function resubscribePullSchedulerAction(
   state: SchedulerSubscribeActionState,
   action: Action,
   log: ReactivityLog,
   options: SchedulerResubscribeOptions = {},
   liveness: SchedulerResubscribeLiveness = {},
-): void {
+): SchedulerNode {
   const { isEffect } = options;
   const existingRecord = state.subscriptionState.nodes.get(action);
   const wasLive = liveness.wasLiveBeforeRootRegistration ??
@@ -288,13 +285,12 @@ export function resubscribePullSchedulerAction(
     log,
   );
 
-  updateSchedulerActionType(
+  const record = updateSchedulerActionType(
     state.subscriptionState,
     action,
     isEffect,
   );
-  const record = state.subscriptionState.nodes.get(action);
-  if (record?.status === "never-ran") {
+  if (record.status === "never-ran") {
     state.subscriptionState.nodes.setStatus(action, "clean");
   }
   const actionId = state.getActionId(action);
@@ -331,7 +327,7 @@ export function resubscribePullSchedulerAction(
   // status observed between the completed run and this resubscribe; only the
   // never-ran sentinel above is normalized to clean.
   if (
-    !wasLive && record !== undefined &&
+    !wasLive &&
     isLive(state.subscriptionState.dependencyGraphState, record) &&
     (record.status === "invalid" ||
       hasInvalidUpstream(
@@ -341,14 +337,19 @@ export function resubscribePullSchedulerAction(
   ) {
     state.queueExecution();
   }
+  return record;
 }
 
+/**
+ * Registers `action` as an effect, where `isEffect` says so or it is one
+ * already, or as a computation otherwise, and returns its node.
+ */
 export function updateSchedulerActionType(
   state: SchedulerActionTypeState,
   action: Action,
   isEffect: boolean | undefined,
   options: { queueExecution?: boolean; queueComputation?: boolean } = {},
-): boolean {
+): SchedulerNode {
   const kind: NodeKind = isEffect === true ||
       state.nodes.isKnownEffect(action)
     ? "effect"
@@ -357,11 +358,10 @@ export function updateSchedulerActionType(
   const wasLive = existing
     ? isLive(state.dependencyGraphState, existing)
     : false;
-  state.nodes.register(action, kind);
+  const record = state.nodes.register(action, kind);
   notifyNodeLivenessChange(state.dependencyGraphState, action, wasLive);
-  const actionIsEffect = kind === "effect";
 
-  if (actionIsEffect) {
+  if (kind === "effect") {
     if (options.queueExecution) {
       state.queueExecution();
     }
@@ -374,7 +374,7 @@ export function updateSchedulerActionType(
     }
   }
 
-  return actionIsEffect;
+  return record;
 }
 
 export function updateSchedulerActionChangeGroup(

@@ -5,6 +5,7 @@
 export * from "./authorship.ts";
 export * from "./cell-handle.ts";
 export * from "./piece-handle.ts";
+export * from "./written-principal.ts";
 export * from "./runtime-client.ts";
 export * from "./favorites-manager.ts";
 export * from "./client/emitter.ts";
@@ -16,6 +17,7 @@ export * from "./vnode-types.ts";
 export * from "@commonfabric/runner/shared";
 export type {
   ApplyOpResolution,
+  FieldAnchors,
   IntegratedOperation,
   OpCursor,
   OperationFieldSnapshot,
@@ -23,4 +25,8 @@ export type {
   PresenceRecord,
 } from "@commonfabric/memory/v2";
 export type { PresenceEvent } from "@commonfabric/memory/v2/client";
-export { CODEMIRROR_CHANGESET_CODEC } from "@commonfabric/memory/v2/operation-codec";
+export {
+  CODEMIRROR_CHANGESET_CODEC,
+  mapFieldAnchors,
+  sameAnchors,
+} from "@commonfabric/memory/v2/operation-codec";

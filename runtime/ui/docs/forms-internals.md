@@ -19,7 +19,7 @@ pattern-author-facing view (usage, create/edit modes, the copy trap), see
 │        │                │                │                  │
 │        └────────────────┼────────────────┘                  │
 │                         │                                   │
-│               registerField() / getValue()                  │
+│                    registerField()                          │
 │                         │                                   │
 │                    ┌────▼────┐                              │
 │                    │ submit  │ → validate all → flush all   │
@@ -69,7 +69,7 @@ export class MyCustomInput extends BaseElement {
   // 4. Register with form in firstUpdated (after cell binding)
   override firstUpdated() {
     this._cellController.bind(this.value, stringSchema);
-    this._formField.register(this.name); // Pass field name for form submission
+    this._formField.register();
   }
 
   // 5. Cleanup is automatic via ReactiveController
@@ -95,7 +95,7 @@ class FormFieldController<T> {
   setValue(value: T): void;
 
   // Register with form (call in firstUpdated after cell binding)
-  register(name?: string): void;
+  register(): void;
 
   // Check if this field is inside a cf-form
   inFormContext: boolean;

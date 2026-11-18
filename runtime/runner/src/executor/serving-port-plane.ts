@@ -18,19 +18,29 @@ import type {
 } from "@commonfabric/memory/v2";
 import * as MemoryClient from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import type { ExecutionLeaseAccess } from "@commonfabric/memory/v2/execution-lease";
 import {
+  isServingSessionOf,
   resolveSpaceOwnerOf,
   type ServedAclChange,
   type ServerExecutionObserver,
   type SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
 import { getLogger } from "@commonfabric/logger";
+import type { CollectedMemory } from "../collected-memory.ts";
+import { markPlaceCompileFailure } from "../harness/compile-failure.ts";
+import {
+  decodeCompileFailure,
+  decodeModules,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
 import { DemandShareCache } from "./demand-shares.ts";
 import {
   EngineWaveCommitSink,
   waveCommitFailureResult,
 } from "./engine-wave-sink.ts";
+import type { HostOccupancy } from "./host.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import type { LoopbackPlane } from "./loopback-storage.ts";
 import {
@@ -42,14 +52,13 @@ import {
   type PlaneRequests,
   PortEndpoint,
   type PortLike,
-  type ServedAclChangeData,
   type ServingLoopDiagnostics,
 } from "./serving-port-protocol.ts";
+import { servedAclChangeData } from "./served-acl-change.ts";
 import type { WaveCommitSinkDeps } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { ViewInterestCache } from "./view-interests.ts";
 import type {
-  ListedServedAclChange,
   WaveCommitRejection,
   WaveCommitSink,
   WaveReadQuery,
@@ -78,35 +87,40 @@ export const servingPlaneEndpoint = (port: PortLike): ServingPlaneEndpoint =>
 /** What the worker's host answers the server's thread with. */
 export type ServingPlaneHost = {
   stats: () => ServingLoopStats;
+  counters: () => ServingLoopCounters;
   diagnostics: () => ServingLoopDiagnostics;
+  collectedMemory: () => CollectedMemory;
+
+  /**
+   * Writes the sampling heap profile of the worker's isolate into `directory`
+   * and returns the file's path.
+   */
+  heapProfile: (directory: string) => Promise<string>;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
   ) => Promise<LifecycleVerbRun>;
+
+  /** What the host holds, as `ExecutorHost.occupancy` reports it. */
+  occupancy: () => HostOccupancy;
+
+  /** @see ExecutorHost.noteSpaceAclChanged */
+  noteSpaceAclChanged: (space: MemorySpace) => void;
+
   close: () => Promise<void>;
 };
 
-/**
- * A served access-list change as data: the list its function applies in place
- * of the function. The wave attaches the list to every change it builds; a
- * change without one cannot cross.
- */
-const servedAclChangeData = (
-  change: ServedAclChange,
-): ServedAclChangeData => {
-  const { change: _apply, ...data } = change as ListedServedAclChange;
-  if (data.changes === undefined) {
-    throw new Error(
-      `the access-list change to ${change.space} carries no change list, ` +
-        "so it cannot cross to the memory server's thread",
-    );
-  }
-  return data;
-};
+/** The loopback plane this module builds: one that makes transports. */
+type TransportPlane = Extract<
+  LoopbackPlane,
+  { createTransport(): MemoryClient.Transport }
+>;
 
 /** A session as the mirror holds it. */
 type MirroredSession = {
   principal: string | undefined;
+  servingOwn?: true;
+  notDemand?: true;
   readCeiling: SessionReadCeiling | undefined;
   expiresAt: number | null;
 };
@@ -138,6 +152,8 @@ class SessionMirror {
       case "opened":
         sessions.set(event.sessionId, {
           principal: event.principal,
+          ...(event.servingOwn === true ? { servingOwn: true } : {}),
+          ...(event.notDemand === true ? { notDemand: true } : {}),
           readCeiling: event.readCeiling,
           expiresAt: null,
         });
@@ -222,15 +238,22 @@ type WaveCommitSinkReads = Required<
  * The tenure's wave commit sink on the worker: the reads run on the worker's
  * engines, and each commit crosses to the sink the server's thread keeps for
  * this session, carrying the number this side's counter minted for it.
+ * `reportCounters` runs just before each commit is posted.
  */
 class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
   readonly #endpoint: ServingPlaneEndpoint;
   readonly #deps: WaveCommitSinkDeps;
+  readonly #reportCounters: () => void;
   readonly #reads: EngineWaveCommitSink;
 
-  constructor(endpoint: ServingPlaneEndpoint, deps: WaveCommitSinkDeps) {
+  constructor(
+    endpoint: ServingPlaneEndpoint,
+    deps: WaveCommitSinkDeps,
+    reportCounters: () => void,
+  ) {
     this.#endpoint = endpoint;
     this.#deps = deps;
+    this.#reportCounters = reportCounters;
     // Its counter never advances: only the reads are called on it.
     this.#reads = new EngineWaveCommitSink({
       engineFor: (space) =>
@@ -300,19 +323,22 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     batch: WaveSpaceCommit,
   ): Promise<Result<{ seq: number }, WaveCommitRejection>> {
     const localSeq = ++this.#deps.localSeqRef.value;
+    // The counters cross ahead of the commit on the same port, whose
+    // messages the server's thread handles in order, so it holds what this
+    // wave counted before its commit by the time it applies the commit. A
+    // client that has seen the commit then reads counters that include those
+    // counts. What the wave counts for the commit itself, such as `waves` and
+    // `derivedCommits`, arrives with the next full post. The settle blocks
+    // stay behind: their series cost about as much to post as the commit
+    // itself.
+    this.#reportCounters();
     try {
-      const { result, homeRefused } = await this.#endpoint.request(
-        "sink.commitWave",
-        {
-          sessionId: this.#deps.sessionId,
-          localSeq,
-          batch: encodeMemoryBoundary(batch as unknown as FabricValue),
-        },
-      );
-      if (homeRefused) this.#deps.onHomeRefused();
-      return result;
+      return await this.#endpoint.request("sink.commitWave", {
+        sessionId: this.#deps.sessionId,
+        localSeq,
+        batch: encodeMemoryBoundary(batch as unknown as FabricValue),
+      });
     } catch (error) {
-      if (batch.home) this.#deps.onHomeRefused();
       return waveCommitFailureResult(error);
     }
   }
@@ -372,12 +398,7 @@ class PlaneMemoryServer implements HostMemoryServer {
     options: { excludePrincipal?: string } = {},
   ): boolean {
     for (const session of this.#sessions.live(space).values()) {
-      if (
-        options.excludePrincipal === undefined ||
-        session.principal !== options.excludePrincipal
-      ) {
-        return true;
-      }
+      if (!isServingSessionOf(session, options.excludePrincipal)) return true;
     }
     return false;
   }
@@ -420,11 +441,6 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
-  noteLeaseReacquired(notice: { space: string; principal: string }): void {
-    this.#endpoint.notify("server.noteLeaseReacquired", { notice });
-  }
-
-  /** @inheritDoc */
   checkServedAclChange(
     change: ServedAclChange,
   ): ReturnType<HostMemoryServer["checkServedAclChange"]> {
@@ -457,6 +473,31 @@ class PlaneMemoryServer implements HostMemoryServer {
   /** @inheritDoc */
   engineForSpace(space: string): Promise<Engine.Engine> {
     return this.#plane.engineForSpace(space);
+  }
+
+  /** @inheritDoc */
+  get executionLeases(): ExecutionLeaseAccess {
+    return {
+      acquire: (space, holder) =>
+        this.#endpoint.request("server.acquireExecutionLease", {
+          space,
+          holder,
+        }),
+      release: (space, holder) =>
+        this.#endpoint.request("server.releaseExecutionLease", {
+          space,
+          holder,
+        }),
+    };
+  }
+
+  /** @inheritDoc */
+  commitDeliveryFailureNotice(
+    notice: Parameters<HostMemoryServer["commitDeliveryFailureNotice"]>[0],
+  ): Promise<void> {
+    return this.#endpoint.request("server.commitDeliveryFailureNotice", {
+      notice,
+    });
   }
 
   /** @inheritDoc */
@@ -575,13 +616,20 @@ export class ServingPlane {
     MemoryClient.QueuedFrameTransport
   >();
   readonly #server: HostMemoryServer;
-  readonly #loopback: LoopbackPlane;
+  readonly #loopback: TransportPlane;
   #observer: ServerExecutionObserver | undefined;
+  #host: ServingPlaneHost | undefined;
   #nextTransport = 1;
   #closed = false;
 
+  /** Rejects once `stopCompiling()` is called; never resolves. */
+  readonly #compilerStopped = Promise.withResolvers<never>();
+
   constructor(endpoint: ServingPlaneEndpoint) {
     this.#endpoint = endpoint;
+    // A plane that stops compiling with no compile awaited rejects nothing
+    // anyone handles.
+    this.#compilerStopped.promise.catch(() => {});
     this.#server = new PlaneMemoryServer(
       this,
       endpoint,
@@ -598,9 +646,16 @@ export class ServingPlane {
     });
     endpoint.onNotice(
       "observer.demandChanged",
-      ({ space, reason, principal, sessionId }) => {
+      ({ space, reason, principal, sessionId, servingOwn, notDemand }) => {
         this.#demandShares.noteChanged(space, sessionId);
-        this.#observer?.demandChanged?.(space, reason, principal, sessionId);
+        this.#observer?.demandChanged?.(
+          space,
+          reason,
+          principal,
+          sessionId,
+          servingOwn,
+          notDemand,
+        );
       },
     );
     // The two things that move a space's view interests: a watch set that
@@ -629,8 +684,50 @@ export class ServingPlane {
   }
 
   /** The loopback plane, for the serving runtime factory. */
-  get loopback(): LoopbackPlane {
+  get loopback(): TransportPlane {
     return this.#loopback;
+  }
+
+  /**
+   * The compile workers the server's thread holds for the whole process,
+   * for the serving runtime factory (`ServingWorkerInit.compileOnHost`). A
+   * failure of the place a compile ran stays marked as one on this side.
+   */
+  get compiler(): ModuleCompiler {
+    const endpoint = this.#endpoint;
+    const stopped = this.#compilerStopped.promise;
+    return {
+      async compile(request) {
+        let answer;
+        try {
+          answer = await Promise.race([
+            endpoint.request("compiler.compile", { request }),
+            stopped,
+          ]);
+        } catch (error) {
+          // The port, not the compile, failed.
+          throw markPlaceCompileFailure(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+        }
+        if (answer.kind === "compiled") return decodeModules(answer.modules);
+        const error = decodeCompileFailure(answer.failure, request);
+        throw answer.place ? markPlaceCompileFailure(error) : error;
+      },
+    };
+  }
+
+  /**
+   * Fails every compile {@link compiler} still awaits, and each asked of it
+   * from here on, as a failure of the place it was to run. A worker's host
+   * calls this ahead of its close, so that an activation waiting for a
+   * compile fails at once rather than holding the close. The server's thread
+   * finishes a compile it had started; its answer is dropped.
+   */
+  stopCompiling(): void {
+    this.#compilerStopped.reject(
+      new Error("the serving worker stopped compiling"),
+    );
   }
 
   /**
@@ -652,18 +749,45 @@ export class ServingPlane {
 
   /** The tenure's sink; `ExecutorHostOptions.createWaveCommitSink`. */
   createWaveCommitSink(deps: WaveCommitSinkDeps): WaveCommitSink {
-    return new PlaneWaveCommitSink(this.#endpoint, deps);
+    return new PlaneWaveCommitSink(this.#endpoint, deps, () => {
+      if (this.#host === undefined) return;
+      this.#endpoint.notify("host.counters", {
+        counters: this.#host.counters(),
+      });
+    });
   }
 
   /** Installs what the server's thread may ask of the worker's host. */
   serve(host: ServingPlaneHost): void {
+    this.#host = host;
     this.#endpoint.onRequest("host.stats", () => host.stats());
     this.#endpoint.onRequest("host.diagnostics", () => host.diagnostics());
+    this.#endpoint.onRequest(
+      "host.collectedMemory",
+      () => host.collectedMemory(),
+    );
+    this.#endpoint.onRequest(
+      "host.heapProfile",
+      async ({ directory }) => ({ path: await host.heapProfile(directory) }),
+    );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",
       ({ space, verb }) => host.runLifecycleVerb(space, verb),
     );
     this.#endpoint.onRequest("host.close", () => host.close());
+    // The check and the start of the close run in this one turn, so no
+    // message read after this one finds a host that is neither.
+    this.#endpoint.onRequest("host.retire", async ({ evenIfParked }) => {
+      const occupancy = host.occupancy();
+      if (occupancy === "busy" || (occupancy === "parked" && !evenIfParked)) {
+        return null;
+      }
+      await host.close();
+      return { stats: host.stats(), diagnostics: host.diagnostics() };
+    });
+    this.#endpoint.onNotice("observer.spaceAclChanged", ({ space }) => {
+      host.noteSpaceAclChanged(space as MemorySpace);
+    });
   }
 
   /** Posts the host's counters for the server's thread to keep. */
@@ -682,6 +806,11 @@ export class ServingPlane {
   /** Posts a space's park and its reason for the server's thread to report. */
   reportSpaceParked(space: MemorySpace, reason: string): void {
     this.#endpoint.notify("host.spaceParked", { space, reason });
+  }
+
+  /** Posts what the host holds for the server's thread to decide by. */
+  reportOccupancy(occupancy: HostOccupancy): void {
+    this.#endpoint.notify("host.occupancy", { occupancy });
   }
 
   /**

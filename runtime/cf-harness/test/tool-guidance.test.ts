@@ -3,6 +3,8 @@
  * guidance a run's task tags load.
  */
 
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
@@ -12,11 +14,16 @@ import {
 } from "../src/contracts/subagent.ts";
 import type { BuiltinToolId } from "../src/contracts/tool-descriptor.ts";
 import { orientContextMessages } from "../src/session-assembly.ts";
-import type { HarnessTaskTag } from "../src/task-classification.ts";
+import {
+  HARNESS_TASK_TAGS,
+  type HarnessTaskTag,
+} from "../src/task-classification.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
+  COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
+  PIECE_SOURCE_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
   RESEARCH_TOOL_GUIDANCE,
   RESOLVE_PIECE_TOOL_GUIDANCE,
@@ -77,6 +84,7 @@ const guidanceFor = (...tags: HarnessTaskTag[]): string =>
       fabricSessionAvailable: true,
       loomCommandsAvailable: true,
       loomRetrievalAvailable: true,
+      subagentProfiles: HARNESS_SUBAGENT_PROFILES,
     }),
     { tags: new Set(tags), depth: "standard" },
   ).join("\n\n");
@@ -99,7 +107,7 @@ const RULES = [
   "untrusted external data",
   "withheld with a reason code",
   "one buildable piece",
-  "call resolve_piece before author delegation",
+  "resolve_piece resolves a slug",
 ];
 
 describe("tool-guidance", () => {
@@ -133,7 +141,7 @@ describe("tool-guidance", () => {
     const guidance = guidanceFor("find");
     expect(guidance).toContain(LOOM_COMMANDS_TOOL_GUIDANCE);
     expect(guidance).toContain(LOOM_RETRIEVAL_TOOL_GUIDANCE);
-    expect(guidance).toContain(RESOLVE_PIECE_TOOL_GUIDANCE);
+    expect(guidance).not.toContain(RESOLVE_PIECE_TOOL_GUIDANCE);
     expect(guidance).toContain(RESEARCH_TOOL_GUIDANCE);
     expect(guidance).not.toContain(AUTHOR_TOOL_GUIDANCE);
     expect(guidance).not.toContain(PIECES_TOOL_GUIDANCE);
@@ -177,6 +185,39 @@ describe("tool-guidance", () => {
     expect(guidanceFor("respond")).toEqual("");
   });
 
+  it("gives every task but a respond one the rule for changing a piece's source", () => {
+    // A run can come to hold a piece partway through, from a command's answer
+    // or a resolved slug, whatever its task was tagged at the start.
+    for (
+      const tag of [
+        "find",
+        "act",
+        "pieces",
+        "author",
+      ] satisfies HarnessTaskTag[]
+    ) {
+      expect(guidanceFor(tag), tag).toContain(PIECE_SOURCE_TOOL_GUIDANCE);
+    }
+    expect(guidanceFor("respond")).not.toContain(PIECE_SOURCE_TOOL_GUIDANCE);
+  });
+
+  it("keeps the rule for changing a piece's source where a respond tag sits beside a tag for work", () => {
+    // A classification that fails falls back to every tag, and a caller may
+    // name any mix, so a respond tag alone is what leaves the rule out.
+    expect(guidanceFor(...HARNESS_TASK_TAGS)).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+    expect(guidanceFor("respond", "find")).toContain(
+      PIECE_SOURCE_TOOL_GUIDANCE,
+    );
+  });
+
+  it("states the rule for changing a piece's source once, outside the handle rules", () => {
+    expect(PIECES_TOOL_GUIDANCE).not.toContain("pattern-author");
+    expect(guidanceFor("pieces").split(PIECE_SOURCE_TOOL_GUIDANCE))
+      .toHaveLength(2);
+  });
+
   it("guides only the tools a session's backings carry", () => {
     expect(toolGuidanceContextMessages({
       fabricSessionAvailable: false,
@@ -194,5 +235,172 @@ describe("tool-guidance", () => {
       RESOLVE_PIECE_TOOL_GUIDANCE,
       LOOM_RETRIEVAL_TOOL_GUIDANCE,
     ]);
+  });
+});
+
+describe("conditional host guidance", () => {
+  it("gives the rule for changing a piece's source only to a run that can delegate to the profile that changes it", () => {
+    const sourceRuleOf = (backing: {
+      fabricSessionAvailable: boolean;
+      allowedToolIds?: readonly BuiltinToolId[];
+      subagentProfiles?: readonly HarnessSubagentProfile[];
+    }): boolean =>
+      toolGuidanceContextMessages({
+        loomCommandsAvailable: false,
+        loomRetrievalAvailable: false,
+        ...backing,
+      }).includes(PIECE_SOURCE_TOOL_GUIDANCE);
+
+    for (
+      const allowedToolIds of [undefined, [
+        "delegate_task",
+      ]] satisfies (BuiltinToolId[] | undefined)[]
+    ) {
+      expect(sourceRuleOf({
+        fabricSessionAvailable: true,
+        allowedToolIds,
+        subagentProfiles: ["default", "pattern-author"],
+      })).toBe(true);
+    }
+    // The profile's source tools exist only over a fabric session.
+    expect(sourceRuleOf({
+      fabricSessionAvailable: false,
+      subagentProfiles: ["default", "pattern-author"],
+    })).toBe(false);
+    expect(sourceRuleOf({
+      fabricSessionAvailable: true,
+      allowedToolIds: ["describe_handle", "run_command"],
+      subagentProfiles: ["default", "pattern-author"],
+    })).toBe(false);
+    for (
+      const subagentProfiles of [undefined, [], [
+        "default",
+        "web_fetch",
+        "web_search",
+      ]] satisfies (HarnessSubagentProfile[] | undefined)[]
+    ) {
+      expect(sourceRuleOf({ fabricSessionAvailable: true, subagentProfiles }))
+        .toBe(false);
+    }
+  });
+
+  it("requires command backing and run_command in an explicit allow-list", () => {
+    for (
+      const allowedToolIds of [[], ["bash"], [
+        "list_commands",
+      ]] satisfies BuiltinToolId[][]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+    for (
+      const allowedToolIds of [undefined, [
+        "run_command",
+      ]] satisfies (BuiltinToolId[] | undefined)[]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([LOOM_COMMANDS_TOOL_GUIDANCE]);
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: false,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("distinguishes retrieval tools from Loom authoring tools", () => {
+    for (
+      const allowedToolIds of [[], [
+        "loom_compose",
+        "loom_inspect",
+        "loom_authoring_context",
+      ], ["run_command"]] satisfies BuiltinToolId[][]
+    ) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: true,
+          allowedToolIds,
+        }),
+      ).toEqual([]);
+    }
+    for (const tool of CARRY_TOOL_IDS.filter((id) => id.startsWith("loom_"))) {
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: true,
+          allowedToolIds: [tool],
+        }),
+      ).toEqual([LOOM_RETRIEVAL_TOOL_GUIDANCE]);
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: false,
+          loomRetrievalAvailable: false,
+          allowedToolIds: [tool],
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("emits enforcement guidance only for an enforcing command tool and retains it for find and act", () => {
+    for (
+      const cfcEnforcementMode of [
+        undefined,
+        "disabled",
+        "observe",
+        "enforce-explicit",
+        "enforce-strict",
+      ] satisfies (CfcEnforcementMode | undefined)[]
+    ) {
+      const enforcing = cfcEnforcementMode === "enforce-explicit" ||
+        cfcEnforcementMode === "enforce-strict";
+      const messages = toolGuidanceContextMessages({
+        fabricSessionAvailable: false,
+        loomCommandsAvailable: true,
+        loomRetrievalAvailable: false,
+        allowedToolIds: ["run_command"],
+        cfcEnforcementMode,
+      });
+      expect(messages).toEqual(
+        enforcing
+          ? [LOOM_COMMANDS_TOOL_GUIDANCE, COMMAND_ENFORCEMENT_GUIDANCE]
+          : [LOOM_COMMANDS_TOOL_GUIDANCE],
+      );
+      for (const tag of ["find", "act"] satisfies HarnessTaskTag[]) {
+        expect(
+          orientContextMessages(messages, {
+            tags: new Set([tag]),
+            depth: "standard",
+          }),
+        ).toEqual(messages);
+      }
+      expect(
+        toolGuidanceContextMessages({
+          fabricSessionAvailable: false,
+          loomCommandsAvailable: true,
+          loomRetrievalAvailable: false,
+          allowedToolIds: [],
+          cfcEnforcementMode,
+        }),
+      ).toEqual([]);
+    }
   });
 });

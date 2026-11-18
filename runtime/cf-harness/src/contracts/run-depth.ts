@@ -6,9 +6,10 @@
  * prompt sections and the opening research pass, and grants no authority.
  *
  * `quick` and `deep` each add strategy sections (`strategy.ts`) that a
- * `standard` run does not get: a quick run takes the shortest path to what was
- * asked, and a deep run searches exhaustively where its domains are, then reads
- * its result back. `deep` also gives a classified task in the `fabric` domain
+ * `standard` run does not get: a quick run stops when evidence answers the task
+ * and requested changes are verified, or a final refusal leaves no authorized
+ * route. A deep run searches exhaustively where its domains are, then reads its
+ * result back. `deep` also gives a classified task in the `fabric` domain
  * the opening research pass, which an `author` task gets at any depth and a
  * run that was never classified already gets.
  */

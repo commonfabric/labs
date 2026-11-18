@@ -8,6 +8,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -147,6 +148,7 @@ describe("document-release", () => {
     const lines = stdout.trim().split("\n");
     expect(JSON.parse(lines[lines.length - 1])).toEqual({
       keptWhileHeld: true,
+      keptByKey: true,
       keptOnceCollected: false,
     });
   });
@@ -164,6 +166,92 @@ describe("document-release", () => {
 
     // Not read since: the third pass releases it.
     await readerStorage.releaseUnreadDocuments();
+    expect(loaded(id)).toBe(false);
+  });
+
+  it("reports a document it keeps only for a recent load, which the next pass releases", async () => {
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+    expect(loaded(id)).toBe(true);
+
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(false);
+    expect(loaded(id)).toBe(false);
+  });
+
+  it("reports a document read while the pass waits to watch another on its own", async () => {
+    // A pass that releases a root first watches, on its own, a document
+    // something still reads only through that root's links. The counter is
+    // read while that watch is on its way, so the pass keeps it, and says
+    // so.
+
+    await write("child", 1);
+    const tx = writer.edit();
+    writer.getCell(space, "parent", parentSchema, tx).set({
+      child: writer.getCell(space, "child", counterSchema, tx),
+    });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await write("counter", 1);
+    const child = idOf("child");
+    const parent = idOf("parent");
+    const id = idOf("counter");
+    await load(parent, parentSchema);
+    await load(id);
+    const reading = readerStorage.addDocumentReader((address) =>
+      address.id === child
+    );
+    expect(await readerStorage.releaseUnreadDocuments()).toBe(true);
+
+    const watch = defer<void>();
+    const watching = defer<void>();
+    const watchAdd = server.watchAdd.bind(server);
+    server.watchAdd = async (message) => {
+      server.watchAdd = watchAdd;
+      watching.resolve();
+      await watch.promise;
+      return await watchAdd(message);
+    };
+    const pass = readerStorage.releaseUnreadDocuments();
+    await watching.promise;
+    expect(held(id)).toEqual({ value: { n: 1 } });
+    watch.resolve();
+
+    expect(await pass).toBe(true);
+    expect(held(parent)).toBeUndefined();
+    expect(loaded(id)).toBe(true);
+    reading();
+  });
+
+  it("releases what a stopped piece read in the pass after the one its stop asked for", async () => {
+    // The stop's own pass keeps what was loaded since the previous pass, as
+    // it keeps anything a read still under way may need; the pass that
+    // follows it, which nothing else asks for here, releases it.
+    await write("counter", 1);
+    const id = idOf("counter");
+    await load(id);
+
+    const { pattern, lift } = createTrustedBuilder(reader).commonfabric;
+    const doubled = pattern<{ n: number }>(({ n }) =>
+      lift((n: number) => n * 2, { type: "number" }, { type: "number" })(n)
+    );
+    const tx = reader.edit();
+    const piece = reader.run(
+      tx,
+      doubled,
+      { n: 2 },
+      reader.getCell<number>(space, "doubled-and-stopped", undefined, tx),
+    );
+    reader.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    expect(await piece.pull()).toBe(4);
+    expect(loaded(id)).toBe(true);
+
+    reader.runner.stop(piece);
+    // Shares the release the stop asked for, which is still waiting for the
+    // scheduler to be idle.
+    await reader.releaseUnreadDocuments();
     expect(loaded(id)).toBe(false);
   });
 
@@ -372,6 +460,35 @@ describe("document-release", () => {
     expect(failed()).toBe(before + 1);
   });
 
+  it("answers every call made while a pass is under way with one pass after it", async () => {
+    // Each call comes once the scheduler is idle again, as the unsubscribes of
+    // a closing pane arrive one message at a time.
+    const passBegan = defer();
+    const passMayEnd = defer();
+    const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+    let passes = 0;
+    readerStorage.releaseUnreadDocuments = async () => {
+      passes++;
+      if (passes === 1) {
+        passBegan.resolve();
+        await passMayEnd.promise;
+      }
+      return await release();
+    };
+
+    const first = reader.releaseUnreadDocuments();
+    await passBegan.promise;
+    const later: Promise<void>[] = [];
+    for (let call = 0; call < 10; call++) {
+      later.push(reader.releaseUnreadDocuments());
+      await reader.scheduler.idle();
+    }
+    expect(passes).toBe(1);
+    passMayEnd.resolve();
+    await Promise.all([first, ...later]);
+    expect(passes).toBe(2);
+  });
+
   it("keeps a document a refresh retracts while something reads it, unwatched, and drops it once nothing does", async () => {
     await write("child", 1);
     const tx = writer.edit();
@@ -526,6 +643,7 @@ describe("document-release", () => {
       create: async (space, signer) => {
         const client = await MemoryV2Client.connect({
           transport: MemoryV2Client.loopback(server),
+          instanceNames: namesInstancesByDefault(),
         });
         const session = await client.mount(
           space,
@@ -597,5 +715,265 @@ describe("document-release", () => {
     expect(held(idOf("counter"))).toEqual({ value: { n: 1 } });
     await write("counter", 2);
     expect(held(idOf("counter"))).toEqual({ value: { n: 2 } });
+  });
+
+  it("releases a document a pass kept for its cell once that cell has been collected, with no further request", async () => {
+    // Collection needs `--expose-gc` and the real clock, which this package's
+    // test task does not give, so the helper runs in a process of its own.
+    const helper = new URL(
+      "./document-release-collection-helper.ts",
+      import.meta.url,
+    );
+    // Spawned by name so the launch matches the task's `--allow-run=deno`
+    // grant, which resolves the name through PATH the same way.
+    const output = await new Deno.Command("deno", {
+      args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    const stdout = new TextDecoder().decode(output.stdout);
+    expect(
+      output.success,
+      `helper failed:\n${new TextDecoder().decode(output.stderr)}\n${stdout}`,
+    ).toBe(true);
+    // Loggers may write above the report; the report is the last line.
+    const lines = stdout.trim().split("\n");
+    expect(JSON.parse(lines[lines.length - 1])).toEqual({
+      droppedOnceCollected: true,
+      keptOnceHeldAgain: true,
+    });
+  });
+
+  describe("when the registry reports a hold token collected", () => {
+    /** Reports each token's collection, by the token. */
+    let collections: Map<object, () => void>;
+
+    beforeEach(async () => {
+      // The reader is built again, with a registry this test drives.
+      await reader.dispose();
+      collections = new Map();
+      readerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+        createHoldRegistry: <T>(cleanup: (held: T) => void) => ({
+          register: (token: object, held: T) => {
+            collections.set(token, () => cleanup(held));
+          },
+        }),
+      });
+      reader = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: readerStorage,
+      });
+    });
+
+    /**
+     * Reports `token` collected, as the registry would once it had been. The
+     * test may still hold it, which is what a cell that holds it again would
+     * do.
+     */
+    const collect = (token: object) => {
+      const report = collections.get(token);
+      expect(report).toBeDefined();
+      collections.delete(token);
+      report!();
+    };
+
+    /** The hold token of the document `id`, which a cell loading it took. */
+    const tokenOf = (id: URI) => readerStorage.holdDocument({ space, id });
+
+    /** Loads the counter document named `cause` through a cell. */
+    const loadCell = async (cause: string) => {
+      const cell = reader.getCell(space, cause, counterSchema);
+      await cell.sync();
+      return cell;
+    };
+
+    /** Counts the reports the reader's storage manager makes. */
+    const countReports = () => {
+      let reports = 0;
+      readerStorage.subscribeHoldsCollected(() => reports++);
+      return () => reports;
+    };
+
+    /**
+     * Counts the release passes the reader's storage manager runs, and
+     * returns the count so far and a promise of the next pass's end.
+     */
+    const countPasses = () => {
+      const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+      let passes = 0;
+      let ended = defer();
+      readerStorage.releaseUnreadDocuments = async (options) => {
+        passes++;
+        try {
+          return await release(options);
+        } finally {
+          ended.resolve();
+          ended = defer();
+        }
+      };
+      return { passes: () => passes, ended: () => ended.promise };
+    };
+
+    it("reports nothing for a token no pass something asked for has found live", async () => {
+      await write("counter", 1);
+      await loadCell("counter");
+      const token = tokenOf(idOf("counter"));
+      await releaseTwice();
+      const reports = countReports();
+
+      collect(token);
+      expect(reports()).toBe(0);
+    });
+
+    it("reports a token a pass something asked for found live", async () => {
+      await write("counter", 1);
+      await loadCell("counter");
+      const token = tokenOf(idOf("counter"));
+      await reader.releaseUnreadDocuments();
+      const reports = countReports();
+
+      collect(token);
+      expect(reports()).toBe(1);
+    });
+
+    it("asks for one pass for all the tokens one collection reports", async () => {
+      const causes = ["a", "b", "c", "d", "e"];
+      for (const [n, cause] of causes.entries()) await write(cause, n);
+      const cells = await Promise.all(causes.map(loadCell));
+      await reader.releaseUnreadDocuments();
+      const tokens = causes.map((cause) => tokenOf(idOf(cause)));
+      const reports = countReports();
+      const { passes, ended } = countPasses();
+
+      const passEnded = ended();
+      for (const token of tokens) collect(token);
+      expect(reports()).toBe(causes.length);
+      await passEnded;
+      await reader.scheduler.idle();
+      expect(passes()).toBe(1);
+      for (const [n, cell] of cells.entries()) {
+        expect(cell.get()).toEqual({ n });
+      }
+    });
+
+    it("keeps a document a cell still holds through the pass a report asks for", async () => {
+      await write("counter", 1);
+      const cell = await loadCell("counter");
+      const id = idOf("counter");
+      await reader.releaseUnreadDocuments();
+      const { passes, ended } = countPasses();
+
+      const passEnded = ended();
+      collect(tokenOf(id));
+      await passEnded;
+      expect(passes()).toBe(1);
+      expect(loaded(id)).toBe(true);
+      await write("counter", 2);
+      expect(cell.get()).toEqual({ n: 2 });
+    });
+
+    it("reports nothing for a token only a pass a report asked for found live", async () => {
+      await write("first", 1);
+      await write("second", 2);
+      await loadCell("first");
+      const first = tokenOf(idOf("first"));
+      await reader.releaseUnreadDocuments();
+      await loadCell("second");
+      const second = tokenOf(idOf("second"));
+      // Passes nothing asked for, so that the second document is neither
+      // recent nor followed up on.
+      await releaseTwice();
+      const { ended } = countPasses();
+
+      const passEnded = ended();
+      collect(first);
+      await passEnded;
+      await reader.scheduler.idle();
+      const reports = countReports();
+      collect(second);
+      expect(reports()).toBe(0);
+    });
+
+    it("reports a token found live by a pass a report and a request share", async () => {
+      await write("first", 1);
+      await write("second", 2);
+      await loadCell("first");
+      const first = tokenOf(idOf("first"));
+      await reader.releaseUnreadDocuments();
+      await loadCell("second");
+      const second = tokenOf(idOf("second"));
+      // Passes nothing asked for, so that the second document is neither
+      // recent nor followed up on.
+      await releaseTwice();
+      const { passes, ended } = countPasses();
+
+      const passEnded = ended();
+      collect(first);
+      const requested = reader.releaseUnreadDocuments();
+      await passEnded;
+      await requested;
+      expect(passes()).toBe(1);
+      const reports = countReports();
+      collect(second);
+      expect(reports()).toBe(1);
+    });
+
+    it("reports nothing for a token first held between the two passes one request runs", async () => {
+      await write("recent", 1);
+      await releaseTwice();
+      // Loaded since the previous pass, so the request's first pass keeps it
+      // and the runtime runs a second.
+      await load(idOf("recent"));
+      const release = readerStorage.releaseUnreadDocuments.bind(readerStorage);
+      let passes = 0;
+      let token: object | undefined;
+      readerStorage.releaseUnreadDocuments = async (options) => {
+        const deferred = await release(options);
+        passes++;
+        if (passes === 1) token = tokenOf(idOf("later"));
+        return deferred;
+      };
+
+      await reader.releaseUnreadDocuments();
+      expect(passes).toBe(2);
+      const reports = countReports();
+      collect(token!);
+      expect(reports()).toBe(0);
+    });
+
+    it("reports nothing for a token marked before the storage manager closed, once its space has opened again", async () => {
+      await write("counter", 1);
+      await loadCell("counter");
+      const token = tokenOf(idOf("counter"));
+      await reader.releaseUnreadDocuments();
+
+      await readerStorage.close();
+      readerStorage.open(space);
+      const reports = countReports();
+      collect(token);
+      expect(reports()).toBe(0);
+    });
+
+    it("stops listening for reports once the runtime has been disposed", async () => {
+      const observers = readerStorage.accessForTestingOnly
+        .holdsCollectedObservers;
+      expect(observers.size).toBe(1);
+
+      await reader.dispose({ closeStorage: false });
+      expect(observers.size).toBe(0);
+    });
+
+    it("reports nothing once the storage manager has been closed", async () => {
+      await write("counter", 1);
+      await loadCell("counter");
+      const token = tokenOf(idOf("counter"));
+      await reader.releaseUnreadDocuments();
+      const reports = countReports();
+
+      await readerStorage.close();
+      collect(token);
+      expect(reports()).toBe(0);
+    });
   });
 });

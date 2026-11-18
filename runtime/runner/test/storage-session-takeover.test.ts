@@ -12,6 +12,7 @@ import {
 import { Server } from "@commonfabric/memory/v2/server";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import {
@@ -150,7 +151,10 @@ describe("storage session takeover", () => {
         store: new URL(`memory://session-takeover-${crypto.randomUUID()}`),
         subscriptionRefreshDelayMs: "manual",
       });
-      const writer = await connect({ transport: loopback(server) });
+      const writer = await connect({
+        instanceNames: namesInstancesByDefault(),
+        transport: loopback(server),
+      });
       const writerSession = await writer.mount(
         space,
         {},
@@ -169,7 +173,10 @@ describe("storage session takeover", () => {
         });
       };
       const transport = new LostResumeTransport(server);
-      const reader = await connect({ transport });
+      const reader = await connect({
+        instanceNames: namesInstancesByDefault(),
+        transport,
+      });
       let session: SpaceSession | undefined;
       const factory: SessionFactory = {
         async create(target, _signer, options) {
@@ -210,7 +217,10 @@ describe("storage session takeover", () => {
         if (session === undefined) throw new Error("reader did not mount");
 
         if (cause === "server takeover") {
-          replacement = await connect({ transport: loopback(server) });
+          replacement = await connect({
+            instanceNames: namesInstancesByDefault(),
+            transport: loopback(server),
+          });
           await replacement.mount(space, {
             sessionId: session.sessionId,
             sessionToken: session.sessionToken,
@@ -275,7 +285,10 @@ describe("storage session takeover", () => {
       ...TEST_MEMORY_SERVER_AUTH,
       store: new URL(`memory://local-store-takeover-${crypto.randomUUID()}`),
     });
-    const reader = await connect({ transport: loopback(server) });
+    const reader = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(server),
+    });
     let session: SpaceSession | undefined;
     const factory: SessionFactory = {
       async create(target, _signer, options) {
@@ -333,7 +346,10 @@ describe("storage session takeover", () => {
           ),
           subscriptionRefreshDelayMs: "manual",
         });
-        const writer = await connect({ transport: loopback(server) });
+        const writer = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: loopback(server),
+        });
         const homeWriter = await writer.mount(
           home,
           {},
@@ -356,7 +372,10 @@ describe("storage session takeover", () => {
             }],
           });
         const transport = new LostResumeTransport(server);
-        const reader = await connect({ transport });
+        const reader = await connect({
+          instanceNames: namesInstancesByDefault(),
+          transport,
+        });
         const sessions = new Map<string, SpaceSession>();
         const factory: SessionFactory = {
           async create(target, _signer, options) {
@@ -427,7 +446,10 @@ describe("storage session takeover", () => {
             : unrelated;
           const session = sessions.get(victimSpace);
           if (session === undefined) throw new Error("reader did not mount");
-          replacement = await connect({ transport: loopback(server) });
+          replacement = await connect({
+            instanceNames: namesInstancesByDefault(),
+            transport: loopback(server),
+          });
           await replacement.mount(victimSpace, {
             sessionId: session.sessionId,
             sessionToken: session.sessionToken,

@@ -86,7 +86,12 @@ about one aspect of the runtime, are indexed in
   - One statement of each kind, kept adjacent:
     `import type { Foo } from "x";` above `import { bar } from "x";`.
 
-  A file uses whichever reads better; neither is preferred. What neither shape
+  A file uses whichever reads better; neither is preferred. A statement whose
+  every name is a type is written `import type`, which the
+  `cf-import-list/types-are-import-type` lint rule holds everywhere but
+  `patterns/` and `fixtures/` directories: Deno reads what a value statement names before it starts a
+  program, even where TypeScript erases the statement
+  ([`imports.md`](imports.md#what-starting-a-program-reads)). What neither shape
   allows is a second statement of the same kind — two value imports from one
   module, or two `import type`s from it. Those represent one dependency as
   though it were two, and the second is easy to miss when the first is being
@@ -677,11 +682,11 @@ which predicate it needs is the next section.
 ### Walking or comparing a value
 
 A value the runtime holds may be a `FabricSpecialObject` — a byte sequence, a
-temporal value, a content hash, a regular expression, an error, a link, a map,
-a set. Each of those keeps its state in private fields and has no own
-properties at all, so a walk that decides "may I read this by property name?"
-with `isObjectOrArray()`, `isReadonlyObjectOrArray()`, `isObjectNotArray()`, or
-a bare `typeof value === "object"` gets the wrong result: it sees an empty
+temporal value, a content hash, an error, a link, a map, a set. Each of those
+keeps its state in private fields and has no own properties at all, so a walk
+that decides "may I read this by property name?" with `isObjectOrArray()`,
+`isReadonlyObjectOrArray()`, `isObjectNotArray()`, or a bare
+`typeof value === "object"` gets the wrong result: it sees an empty
 record and then merges the value to `{}`, rebuilds it as `{}`, descends into it
 and finds nothing, or writes a property onto it. Two sites already carry a
 `TODO(danfuzz)` naming that defect against `isReadonlyObjectOrArray()` —
@@ -1063,6 +1068,28 @@ collection whose size the code fixes from one that grows with data. A spread
 that has to stay, such as one in a test that shows the overflow, sits under a
 `deno-lint-ignore` comment that says why.
 
+### Turning a file URL into a path
+
+Turn a file URL into a path with `fromFileUrl` from `@std/path`, as in
+`fromFileUrl(new URL("../..", import.meta.url))`. The `pathname` of a URL is
+percent-encoded: in a checkout under `/Users/me/my work/`, the `pathname` of a
+module's URL begins `/Users/me/my%20work/`, which names no directory, so a read
+of that path fails with `NotFound`. The same happens to every non-ASCII
+character, such as an emoji in a directory name. Where an API takes a URL, such
+as `Deno.readTextFile` or the `cwd` of `Deno.Command`, pass the URL itself. Turn
+a path into a URL with `toFileUrl` rather than by writing `file://` in front of
+it, which leaves a `#` or `?` in the path to be read as the start of a fragment
+or a query.
+
+The `cf-path/no-file-url-pathname` lint rule (`tasks/lint-file-url-pathname.ts`,
+registered in the root `deno.jsonc`) reports a read of `pathname`, by a member
+access or by destructuring in a variable declaration, directly off a URL that `new URL()` or `URL.parse()`
+builds in the same expression from `import.meta.url`, from
+`import.meta.resolve()`, or from a `file:` literal, and directly off the result
+of `toFileUrl`. It does not follow a URL through a variable or a parameter. The
+test lanes in continuous integration run from a checkout whose path holds a
+space and an emoji, which catches what the rule misses.
+
 ## Build & Test
 
 ### Running Tests
@@ -1101,14 +1128,15 @@ suite will break.
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
-   object with a `"test"` entry. The root test runner (`tasks/test.ts`) iterates
-   all workspace members and runs `deno task test` in each package directory. If
-   a package lacks a test task, Deno resolves the task name against the root
-   workspace instead, which would re-run the entire test suite recursively,
-   spawning processes exponentially. The runner reads every member's manifest
-   before it runs any of their test tasks, and refuses to start when one has no
-   `"test"` entry, naming the member; that check is what keeps a missing entry
-   to a message rather than a CI timeout.
+   object with a `"test"` entry. The root test runner
+   (`tasks/workspace-tests.ts`) iterates all workspace members and runs
+   `deno task test` in each package directory. If a package lacks a test task,
+   Deno resolves the task name against the root workspace instead, which would
+   re-run the entire test suite recursively, spawning processes exponentially.
+   The runner reads every member's manifest before it runs any of their test
+   tasks, and refuses to start when one has no `"test"` entry, naming the
+   member; that check is what keeps a missing entry to a message rather than a
+   CI timeout.
 
    For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
    the package's `"deno-test"` task, which runs the tests themselves — a

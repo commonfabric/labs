@@ -1,5 +1,5 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 
@@ -221,13 +221,9 @@ export class CFSwitch extends BaseElement {
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.updated(changedProperties);
-
-    if (
-      changedProperties.has("checked") ||
-      changedProperties.has("disabled")
-    ) {
-      this._updateAriaAttributes();
-    }
+    // A bound cell's value arrives without any property changing, so ARIA
+    // state follows every update rather than named ones.
+    this._updateAriaAttributes();
   }
 
   override render() {
@@ -302,19 +298,5 @@ export class CFSwitch extends BaseElement {
       event.preventDefault();
       this._handleClick(event);
     }
-  }
-
-  /**
-   * Focus the switch programmatically
-   */
-  override focus(): void {
-    super.focus();
-  }
-
-  /**
-   * Blur the switch programmatically
-   */
-  override blur(): void {
-    super.blur();
   }
 }

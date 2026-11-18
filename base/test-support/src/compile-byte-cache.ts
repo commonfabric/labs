@@ -200,12 +200,10 @@ export class ProcessModuleByteCache implements ModuleByteCache {
   }
 
   #evictToCap(): void {
-    while (this.#totalBytes > this.#maxBytes) {
-      const oldest = this.#entries.keys().next().value;
-      if (oldest === undefined) break;
-      const entry = this.#entries.get(oldest);
-      this.#entries.delete(oldest);
-      if (entry !== undefined) this.#totalBytes -= entry.size;
+    for (const [key, { size }] of this.#entries) {
+      if (this.#totalBytes <= this.#maxBytes) return;
+      this.#entries.delete(key);
+      this.#totalBytes -= size;
     }
   }
 
@@ -213,29 +211,24 @@ export class ProcessModuleByteCache implements ModuleByteCache {
   snapshot(): SerializedModuleBytes[] {
     const out: SerializedModuleBytes[] = [];
     for (const [key, { artifact }] of this.#entries) {
-      const serialized: SerializedModuleBytes = { key, js: artifact.js };
-      if (artifact.sourceMap !== undefined) {
-        serialized.sourceMap = artifact.sourceMap;
-      }
-      if (artifact.patternCoverageSpans !== undefined) {
-        serialized.patternCoverageSpans = artifact.patternCoverageSpans.map(
-          copyPatternCoverageSpan,
-        );
-      }
-      if (artifact.builderSourceSites !== undefined) {
-        serialized.builderSourceSites = copyBuilderSourceSites(
-          artifact.builderSourceSites,
-        );
-      }
-      if (artifact.policyManifests !== undefined) {
-        serialized.policyManifests = artifact.policyManifests;
-      }
-      if (artifact.importSpecs !== undefined) {
-        serialized.importSpecs = artifact.importSpecs;
-      }
-      out.push(serialized);
+      out.push(serializedModuleBytes(key, artifact));
     }
     return out;
+  }
+
+  /**
+   * One cached module, serializable, or `undefined` where none is cached.
+   * Pairs with {@link restore}, as one entry of a {@link snapshot} does.
+   */
+  serialized(
+    runtimeVersion: string,
+    identity: string,
+  ): SerializedModuleBytes | undefined {
+    const key = ProcessModuleByteCache.#key(runtimeVersion, identity);
+    const entry = this.#entries.get(key);
+    return entry === undefined
+      ? undefined
+      : serializedModuleBytes(key, entry.artifact);
   }
 
   /**
@@ -299,6 +292,34 @@ export class ProcessModuleByteCache implements ModuleByteCache {
   stats(): { entries: number; bytes: number } {
     return { entries: this.#entries.size, bytes: this.#totalBytes };
   }
+}
+
+/** Helper for `snapshot()` and `serialized()`, which serializes one entry. */
+function serializedModuleBytes(
+  key: string,
+  artifact: CompiledModuleArtifact,
+): SerializedModuleBytes {
+  const serialized: SerializedModuleBytes = { key, js: artifact.js };
+  if (artifact.sourceMap !== undefined) {
+    serialized.sourceMap = artifact.sourceMap;
+  }
+  if (artifact.patternCoverageSpans !== undefined) {
+    serialized.patternCoverageSpans = artifact.patternCoverageSpans.map(
+      copyPatternCoverageSpan,
+    );
+  }
+  if (artifact.builderSourceSites !== undefined) {
+    serialized.builderSourceSites = copyBuilderSourceSites(
+      artifact.builderSourceSites,
+    );
+  }
+  if (artifact.policyManifests !== undefined) {
+    serialized.policyManifests = artifact.policyManifests;
+  }
+  if (artifact.importSpecs !== undefined) {
+    serialized.importSpecs = artifact.importSpecs;
+  }
+  return serialized;
 }
 
 function artifactFromModule(
@@ -432,21 +453,33 @@ export function createCompileByteCache(): ModuleByteCache {
   }
 
   cacheFiles.set(cache, cacheFile);
-  globalThis.addEventListener("unload", () => {
-    try {
-      const written = flushCompileByteCache(cache);
-      console.log(
-        `[compile-byte-cache] wrote ${written} modules to ${cacheFile}`,
-      );
-    } catch (error) {
-      console.error(
-        `[compile-byte-cache] failed to write ${cacheFile}:`,
-        error,
-      );
-    }
-  });
+  globalThis.addEventListener(
+    "unload",
+    () => writeCompileByteCacheAtUnload(cache, cacheFile),
+  );
 
   return cache;
+}
+
+/**
+ * Writes `cache` to `cacheFile` as a process unloads, reporting the outcome
+ * on the console rather than throwing, since nothing remains to catch it.
+ */
+export function writeCompileByteCacheAtUnload(
+  cache: ProcessModuleByteCache,
+  cacheFile: string,
+): void {
+  try {
+    const written = writeCompileByteCache(cache, cacheFile);
+    console.log(
+      `[compile-byte-cache] wrote ${written} modules to ${cacheFile}`,
+    );
+  } catch (error) {
+    console.error(
+      `[compile-byte-cache] failed to write ${cacheFile}:`,
+      error,
+    );
+  }
 }
 
 export function flushCompileByteCache(

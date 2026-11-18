@@ -62,12 +62,21 @@ export type NodeBindingSubject = {
  *
  * The memo holds at most `capacity` entries, and at most `maxWeight` of key
  * length plus whatever `weigh` reports for a binding, dropping the least
- * recently used. A dropped entry costs a second computation and nothing
- * else. Every holder of a binding treats it as immutable, since the memo
- * hands the same one to each.
+ * recently used. The bindings held for a result document are dropped when
+ * the piece running there stops ({@link release}). A dropped entry costs a
+ * second computation and nothing else. Every holder of a binding treats it as
+ * immutable, since the memo hands the same one to each.
  */
 export class NodeBindingMemo<Binding> {
-  #entries: LRUCache<string, Binding>;
+  /** Each binding held, with the address of its result document. */
+  #entries: LRUCache<string, { binding: Binding; result: string }>;
+
+  /**
+   * The keys of the bindings held for each result document, by its address,
+   * so {@link release} finds them.
+   */
+  #keysByResult = new Map<string, Set<string>>();
+
   #epoch = schemaRegistryEpoch();
   #subjectIds = new WeakMap<object, number>();
   #nextSubjectId = 0;
@@ -81,11 +90,28 @@ export class NodeBindingMemo<Binding> {
     },
   ) {
     const weigh = options.weigh;
-    this.#entries = new LRUCache<string, Binding>({
+    this.#entries = new LRUCache({
       capacity: options.capacity,
       maxWeight: options.maxWeight,
-      weigh: (key, binding) => key.length + (weigh?.(binding) ?? 0),
+      weigh: (key, { binding }) => key.length + (weigh?.(binding) ?? 0),
+      onEvict: (key, { result }) => this.#unindex(key, result),
     });
+  }
+
+  /**
+   * The number of keys {@link release} could find, which is the number of
+   * bindings held.
+   */
+  get accessForTestingOnly(): { readonly indexedKeys: number } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      get indexedKeys() {
+        let count = 0;
+        for (const keys of outerThis.#keysByResult.values()) count += keys.size;
+        return count;
+      },
+    };
   }
 
   /** Number of bindings held. */
@@ -100,15 +126,47 @@ export class NodeBindingMemo<Binding> {
   bindingFor(subject: NodeBindingSubject, bind: () => Binding): Binding {
     const key = this.#currentKey(subject);
     const held = this.#entries.get(key);
-    if (held !== undefined) return held;
+    if (held !== undefined) return held.binding;
     const binding = bind();
-    this.#entries.put(key, binding);
+    const result = documentKey(subject.resultLink);
+    this.#entries.put(key, { binding, result });
+    let keys = this.#keysByResult.get(result);
+    if (keys === undefined) {
+      keys = new Set();
+      this.#keysByResult.set(result, keys);
+    }
+    keys.add(key);
     return binding;
   }
 
   /** Drops every binding held. */
   clear(): void {
     this.#entries.clear();
+    this.#keysByResult.clear();
+  }
+
+  /**
+   * Drops every binding held for a node bound on the document `resultLink`
+   * names, whatever path within it the link has, which a piece that stops no
+   * longer needs. The next plan of such a node, a restart's among them,
+   * computes its binding again.
+   */
+  release(resultLink: NormalizedFullLink): void {
+    const result = documentKey(resultLink);
+    const keys = this.#keysByResult.get(result);
+    if (keys === undefined) return;
+    this.#keysByResult.delete(result);
+    for (const key of keys) this.#entries.delete(key);
+  }
+
+  /**
+   * Forgets `key`, a key whose binding, held for the result document
+   * `result`, the cache has dropped.
+   */
+  #unindex(key: string, result: string): void {
+    const keys = this.#keysByResult.get(result);
+    keys?.delete(key);
+    if (keys?.size === 0) this.#keysByResult.delete(result);
   }
 
   /**
@@ -118,7 +176,7 @@ export class NodeBindingMemo<Binding> {
   #currentKey(subject: NodeBindingSubject): string {
     const epoch = schemaRegistryEpoch();
     if (epoch !== this.#epoch) {
-      this.#entries.clear();
+      this.clear();
       this.#epoch = epoch;
     }
     return this.#key(subject);
@@ -158,6 +216,11 @@ export class NodeBindingMemo<Binding> {
     }
     return `object:${id}`;
   }
+}
+
+/** The address of the document `link` names, whatever its path. */
+function documentKey(link: NormalizedFullLink): string {
+  return addressKey({ ...link, path: [] });
 }
 
 /**

@@ -1,21 +1,21 @@
-import {
-  type FabricArrayPlus,
-  type FabricContainerValuePlus,
-  type FabricInstancePlus,
-  type FabricPlainObjectPlus,
-  type FabricValuePlus,
+import type {
+  FabricArrayPlus,
+  FabricContainerValuePlus,
+  FabricInstancePlus,
+  FabricPlainObjectPlus,
+  FabricValuePlus,
 } from "@/interface.ts";
-import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
+import type { FabricContainerValueTag, FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
-import {
-  type MappedResult,
+import type {
+  MappedResult,
   ValueVisitor,
-  type VisitingEntryResult,
-  type VisitingGapResult,
-  type VisitingResult,
-  type VisitingStateResult,
-  type VisitResult,
+  VisitingEntryResult,
+  VisitingGapResult,
+  VisitingResult,
+  VisitingStateResult,
+  VisitResult,
 } from "./interface.ts";
 
 /**

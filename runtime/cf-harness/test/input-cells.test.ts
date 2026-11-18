@@ -24,6 +24,7 @@ import {
   mintInputCellHandles,
   parseInputCellArgument,
   parseNamedPieceAddress,
+  parseStoredPieceAddress,
 } from "../src/input-cells.ts";
 
 const SPACE_DID =
@@ -279,6 +280,41 @@ describe("input-cells", () => {
     });
   });
 
+  describe("parseStoredPieceAddress()", () => {
+    const PIECE_ID = `fid1:${"C".repeat(43)}`;
+
+    it("reads a stored piece address, with or without `of:` before the id", () => {
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/${PIECE_ID}`))
+        .toEqual({ space: SPACE_DID, id: PIECE_ID });
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/of:${PIECE_ID}`))
+        .toEqual({ space: SPACE_DID, id: PIECE_ID });
+    });
+
+    it("answers undefined for an address with no space before its piece", () => {
+      expect(parseStoredPieceAddress(`pattern:/${PIECE_ID}`)).toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${PIECE_ID}`)).toBeUndefined();
+    });
+
+    it("answers undefined for a slug or a malformed id after the space", () => {
+      expect(parseStoredPieceAddress("pattern:my-space/reading-list"))
+        .toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/fid1:short`))
+        .toBeUndefined();
+      expect(parseStoredPieceAddress(`${SPACE_DID}/${PIECE_ID}`))
+        .toBeUndefined();
+    });
+
+    it("answers undefined for an address reaching below the piece, or doubling `of:`", () => {
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/${PIECE_ID}/field`))
+        .toBeUndefined();
+      expect(
+        parseStoredPieceAddress(`pattern:${SPACE_DID}/of:${PIECE_ID}/field`),
+      ).toBeUndefined();
+      expect(parseStoredPieceAddress(`pattern:${SPACE_DID}/of:of:${PIECE_ID}`))
+        .toBeUndefined();
+    });
+  });
+
   describe("checkInputCellSpec() with a named piece address", () => {
     it("accepts an address naming the session's own space", () => {
       expect(() =>
@@ -494,10 +530,9 @@ describe("input-cells", () => {
   });
 
   describe("inputCellsContextMessage()", () => {
-    it("states that there are no attachments without discarding the conversation target", () => {
+    it("states that there are no attachments", () => {
       const message = inputCellsContextMessage([]);
       expect(message).toContain("No input cells are attached for this run");
-      expect(message).toContain("conversation can still be the target");
       expect(message).toContain(
         "registry or connector references are not attachments",
       );

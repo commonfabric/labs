@@ -230,4 +230,103 @@ describe("intersection-property-schema", () => {
         "Unsupported intersection pattern: index signature on constituent",
     });
   });
+
+  it("throws for a scope a member declares inside constituents that cannot be merged", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      export const schema = toSchema<{
+        a: { x: PerUser<string>; y: string } & string[];
+      }>();
+    `)).rejects.toThrow("cannot keep the scope `user` declared on `x`");
+  });
+
+  it("throws for a scope a member declares beside a declaration typed as `any`", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      export const schema = toSchema<
+        { a: { x: PerUser<string> } } & { a: any }
+      >();
+    `)).rejects.toThrow(
+      "A value intersected with `any` accepts any value and describes " +
+        "nothing inside what it is intersected with, so it cannot keep the " +
+        "scope `user` declared on `x`",
+    );
+  });
+
+  it("throws for a scope on an inner handle of a cell beside a declaration typed as `any`", async () => {
+    await expect(schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Cell, PerUser } from "commonfabric";
+      export const schema = toSchema<
+        { a: Cell<PerUser<Cell<string>>> } & { a: any }
+      >();
+    `)).rejects.toThrow(
+      "cannot keep the scope `user` declared inside a cell there. That data " +
+        "would be stored in the scope of the whole value instead, which " +
+        "without a scope of its own is one copy shared by everyone in the " +
+        "space. Declare that value without `any`.",
+    );
+  });
+
+  it("keeps a scope beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { PerUser } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<PerUser<Fallback> & { y: unknown }>();
+    `);
+
+    expect(schema?.scope).toEqual("user");
+  });
+
+  it("keeps a label beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<
+        Confidential<Fallback, readonly ["s"]> & { y: unknown }
+      >();
+    `);
+
+    expect(schema?.ifc).toEqual({ confidentiality: ["s"] });
+  });
+
+  it("adds no evidence beside a named fallback where the type holds `unknown`", async () => {
+    // Naming `unknown` changes the path the type goes down, and must not change
+    // what the result is trusted for.
+
+    const schemaOf = async (type: string) =>
+      (await schemasOf(`
+        import { toSchema } from "commonfabric";
+        import type { Integrity } from "commonfabric";
+        type Fallback = Record<number, string> & Record<string, string>;
+        export const schema = toSchema<${type}>();
+      `))[0];
+    const labeled = `Integrity<Fallback, readonly ["v"]> & string`;
+
+    expect((await schemaOf(labeled))?.ifc).toBeUndefined();
+    expect((await schemaOf(`${labeled} & unknown`))?.ifc).toBeUndefined();
+  });
+
+  it("keeps a label a union arm writes beside a named fallback in a type holding `unknown`", async () => {
+    // A type argument naming `any` or `unknown` goes down the node path.
+
+    const [schema] = await schemasOf(`
+      import { toSchema } from "commonfabric";
+      import type { Confidential } from "commonfabric";
+      type Fallback = { x: string } & string[];
+      export const schema = toSchema<
+        (Confidential<Fallback, readonly ["s"]> | null) & { y: unknown }
+      >();
+    `);
+
+    expect(schema?.ifc).toEqual({ confidentiality: ["s"] });
+  });
 });

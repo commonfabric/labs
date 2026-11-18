@@ -3,6 +3,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/async/defer";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isDeno } from "@commonfabric/platform/env";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
 import {
@@ -21,7 +22,6 @@ import {
   RuntimeTransportEvents,
 } from "@/client/transport.ts";
 import { EventEmitter } from "@/client/emitter.ts";
-import { describeFailure } from "@/shared/utils.ts";
 
 export interface WebWorkerRuntimeTransportOptions {
   // URL to hosted `backends/web-worker/index.ts`

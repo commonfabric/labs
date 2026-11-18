@@ -9,6 +9,7 @@
  * to the branch has been delivered since it was last read.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { GREEN_BRANCHES } from "./config.ts";
 import {
   Freshness,
@@ -78,11 +79,6 @@ export class GreenBranch {
     });
   }
 
-  /** The branch's name, such as `main-green`. */
-  get branch(): string {
-    return this.#branch;
-  }
-
   /** Returns whether a push to `ref` of `repo` updates the branch. */
   isPushedBy(repo: string, ref: string): boolean {
     return sameRepo(repo, this.#repo) && ref === `refs/heads/${this.#branch}`;
@@ -143,7 +139,7 @@ export class GreenBranch {
     } catch (error) {
       console.error(
         `updates of ${this.#repo} ${this.#branch} failed:`,
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       return;
     }

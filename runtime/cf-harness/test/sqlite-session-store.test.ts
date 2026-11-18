@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import {
@@ -1416,7 +1417,6 @@ Deno.test("sqlite session restore preserves partial batches later history and co
       normalized,
       "gpt-test",
       "openai-compatible-gateway",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map(
       (item) => item.call_id,
@@ -1575,7 +1575,6 @@ Deno.test("sqlite restore closes a missing sibling without moving a late real re
       normalized,
       "gpt-test",
       "openai-compatible-gateway",
-      "gateway Responses",
     );
     const calls = input.filter((item) => item.type === "function_call").map(
       (item) => item.call_id,
@@ -2376,4 +2375,160 @@ Deno.test("sqlite session restore refuses structural corruption without deleting
     store.close();
     await Deno.remove(path);
   }
+});
+
+describe("sqlite-session-store", () => {
+  describe("SqliteHarnessChatSessionStore", () => {
+    const SESSION_ID = "session-store-unit";
+    let path: string;
+    let store: Awaited<ReturnType<typeof openSqliteHarnessChatSessionStore>>;
+    const session = createHarnessChatSessionStatus({
+      sessionId: SESSION_ID,
+      createdAt: "2026-05-27T00:00:00.000Z",
+      workspace: { hostPath: "/workspace" },
+      metadata: { version: "before" },
+    });
+    const sessionEvent = (sequence: number) =>
+      createHarnessChatEventEnvelope({
+        sessionId: SESSION_ID,
+        sequence,
+        emittedAt: `2026-05-27T00:00:0${sequence}.000Z`,
+        event: { kind: "status_changed", session },
+      });
+    const turn = {
+      turnId: "turn-1",
+      status: "running" as const,
+      startedAt: "2026-05-27T00:00:05.000Z",
+      updatedAt: "2026-05-27T00:00:05.000Z",
+    };
+    const turnMutation = (sequence: number, version: string) => ({
+      session: {
+        session: { ...session, metadata: { version } },
+        transcript: [{ role: "user" as const, content: version }],
+      },
+      turn: {
+        sessionId: SESSION_ID,
+        turn,
+        input: { text: version },
+        policy: session.policy,
+      },
+      createTurn: true,
+      event: createHarnessChatEventEnvelope({
+        sessionId: SESSION_ID,
+        turnId: turn.turnId,
+        sequence,
+        emittedAt: "2026-05-27T00:00:05.000Z",
+        event: { kind: "turn_started", turn },
+      }),
+    });
+
+    /**
+     * Makes every event insert end the transaction it runs in, the way a
+     * storage failure SQLite answers with an automatic rollback does, so the
+     * store's own rollback finds no transaction left to end.
+     */
+    const failEventInsertsWithRollback = () => {
+      const database = new Database(path);
+      try {
+        database.exec(`
+          CREATE TRIGGER fail_event_insert BEFORE INSERT ON chat_event
+          BEGIN SELECT RAISE(ROLLBACK, 'event storage failed'); END;
+        `);
+      } finally {
+        database.close();
+      }
+    };
+
+    beforeEach(async () => {
+      path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      store = await openSqliteHarnessChatSessionStore({ url: toFileUrl(path) });
+      store.saveSessionAndAppendEvent(
+        { session, transcript: [] },
+        sessionEvent(1),
+      );
+    });
+
+    afterEach(async () => {
+      store.close();
+      await Deno.remove(path);
+    });
+
+    describe("instance members", () => {
+      describe("listEvents()", () => {
+        it("returns at most the limit of events, earliest first", () => {
+          store.appendEvent(sessionEvent(2));
+          store.appendEvent(sessionEvent(3));
+
+          expect(
+            store.listEvents({ limit: 2 }).map((event) => event.sequence),
+          ).toEqual([1, 2]);
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+            2,
+            3,
+          ]);
+          expect(
+            store.listEvents({ afterSequence: 1, limit: 1 }).map((event) =>
+              event.sequence
+            ),
+          ).toEqual([2]);
+        });
+      });
+
+      describe("saveSessionAndAppendEvent()", () => {
+        it("throws the storage failure rather than the failed rollback, keeping the prior session", () => {
+          failEventInsertsWithRollback();
+
+          expect(() =>
+            store.saveSessionAndAppendEvent(
+              {
+                session: { ...session, metadata: { version: "after" } },
+                transcript: [],
+              },
+              sessionEvent(2),
+            )
+          ).toThrow("event storage failed");
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "before",
+          });
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+          ]);
+        });
+      });
+
+      describe("saveSessionTurnAndAppendEvent()", () => {
+        it("returns `false` and writes nothing when creating a turn that already exists", () => {
+          expect(store.saveSessionTurnAndAppendEvent(turnMutation(2, "first")))
+            .toBe(true);
+
+          expect(
+            store.saveSessionTurnAndAppendEvent(turnMutation(3, "second")),
+          ).toBe(false);
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "first",
+          });
+          expect(store.getTurn(SESSION_ID, turn.turnId)?.input).toEqual({
+            text: "first",
+          });
+          expect(store.listEvents().map((event) => event.sequence)).toEqual([
+            1,
+            2,
+          ]);
+        });
+
+        it("throws the storage failure rather than the failed rollback, writing no turn", () => {
+          failEventInsertsWithRollback();
+
+          expect(() =>
+            store.saveSessionTurnAndAppendEvent(turnMutation(2, "first"))
+          ).toThrow("event storage failed");
+          expect(store.getTurn(SESSION_ID, turn.turnId)).toBe(undefined);
+          expect(store.getSession(SESSION_ID)?.session.metadata).toEqual({
+            version: "before",
+          });
+        });
+      });
+    });
+  });
 });

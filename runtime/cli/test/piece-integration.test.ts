@@ -273,6 +273,14 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
     expect(code, stderr.join("\n")).toBe(0);
     const json = JSON.parse(stdout.join(""));
     expect(json.stable).toBe("always-visible");
+    if (serverExecutionOn) {
+      // Under ON the member is reachable by design: a read is demand for the
+      // reading session's own instance of `sessionEcho`, which the serving
+      // loop derives from that session's `draft` ("Whose demand a broad
+      // subscription is" in docs/specs/server-side-execution/scopes.md).
+      expect(json.sessionEcho).toBe("session-only");
+      return;
+    }
     expect("sessionEcho" in json).toBe(false);
   });
 

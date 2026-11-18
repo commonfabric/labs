@@ -131,16 +131,11 @@ callable layer predates:
   (`runtime/runner/test/scheduler-event-receipts.test.ts`). `Cell.send` now
   takes that id as its third argument and `Cell.set`'s stream branch forwards
   it through `scopeCallerEventId` (`runtime/runner/src/cell.ts`), which binds
-  an opaque caller key to the specific stream so two verbs sharing input
-  bindings cannot collide on one receipt.
-- Every handling gets a **canonical per-invocation result cell** addressed
-  `{ resultFor: cause }`, where `cause = { $ctx: <bound closure>, $event:
-  <event id> }` — `Runner.#instantiateJavaScriptHandlerNode` builds the `cause`
-  (`$event: tx.dispatchedEventId ?? crypto.randomUUID()`) and
-  `Runner.#handleJavaScriptHandlerResult` mints the cell from it, both in
-  `runtime/runner/src/runner.ts`; the `$ctx`/`$event` argument shape comes
-  from `generateHandlerSchema` (`runtime/runner/src/schema.ts`). So the
-  address folds in the handler's binding, not the id alone. A return value
+  an opaque caller key to the specific stream.
+- Every handling gets a **canonical per-invocation result cell** addressed by
+  `handlingReceiptId()` (`runtime/runner/src/scheduler/event-identity.ts`): the
+  `receipt:` scheme over a hash of the event id and its stream, so the address
+  folds in neither the handler's binding nor the sender. A return value
   **containing reactives or cells** is run as a result pattern into that cell
   (`navigateTo` is the existing UI consumer); a **plain JSON return projects
   into the receipt** under the `plainResultReceipts` experimental option
@@ -658,22 +653,50 @@ deliberately open-world. The `Invocation` shape is the first schema this
 applies to — it must be authored open-world so protocol fields such as a
 payload digest or retention metadata can be added later.
 
-"Results may narrow freely" governs *values*, not *named fields*. Removing a
-named property from a **result** is rejected outright — `objectSubsetIssue`
-returns "existing result field was removed" whenever the comparison is an
-evolution, on the stated principle that a result's named fields are the
-contract consumers read (`objectSubsetIssue`,
-`runtime/piece/src/schema-compatibility.ts`). An argument's named fields are
-not held that way: dropping one gives up a demand, which the same function
-accepts wherever the candidate object can still hold the value the piece
-carries. The removed-field check recurses, so a nested removal is rejected on
-a nested path
+"Results may narrow freely" governs *values*; *named fields* follow `required`.
+Removing a **required** property from a result is rejected —
+`objectSubsetIssues` returns "existing result field was removed" — because a
+required field is a guarantee its readers were given
+(`runtime/piece/src/schema-compatibility.ts`). Removing an **optional** data
+field is allowed: every reader of it already handles its absence, and a durable
+link to it was admitted with that absence in the proof. What the candidate no
+longer names is outside the proof from then on, so a later update may name that
+field again with any shape the object's `patternProperties` and
+`additionalProperties` admit at that point: any shape when the object is open,
+none when it is closed. That freedom has a cost the gate does not see. A
+consumer linked before the removal was proved against the old type, and if the
+field returns with another one, its read gives `undefined` or a
+`SchemaMismatchError`. `setsrc` compares only the previous contract with the
+candidate, so it cannot notice; `deno task pattern-compat` does, for patterns
+in this repository, because it compares against every recorded baseline.
+
+The allowance has four limits. A candidate that still constrains the name, by a
+matching pattern or a typed index signature, has to hold to the field's old
+contract. An object carrying a whole-object constraint such as
+`dependentRequired`, or a field compared within a union branch, keeps the
+refusal, since there another part of the schema may still name the field. An
+optional verb, and a field that holds one at any depth, as an optional `ui`
+holds `ui.tick`, may go only where the previous pattern bound each verb, through
+named object properties, straight to a handler's stream, which a holder's object
+read then leaves out. One bound any other way is refused: a verb at a key of a
+builtin's own document, or one forwarded through a builtin, a computation or a
+sub-pattern, may stand for a document that records no owner to consult. So is a
+verb removal `deno task pattern-compat` judges against a recorded baseline,
+which carries no binding. A handle held in memory from before the update, or one
+`Cell.get()` or a read without a schema mints, still reads as itself, so a
+holder bound through one keeps sending, and each event waits for the producer's
+piece to start and is then dropped for want of a handler. And a field of a
+verb's event is refused even when optional, because a caller still sends it and
+the event would strip it without a refusal. An argument's named fields are held
+neither way: dropping one gives up a demand, which the same function accepts
+wherever the candidate object can still hold the value the piece carries. The
+removed-field check recurses, so a nested removal is judged on a nested path
 (`result.topic.title: existing result field was removed`) exactly as a flat one
 is. Adding a **required** field is rejected at any depth unless it carries a
-default; adding an **optional** one is allowed at any depth; narrowing a
-*value* type is allowed at any depth. Nesting a pattern's result under a single
-key therefore buys it nothing: "results may narrow freely" is true of values
-and never of names, at every depth.
+default; adding an **optional** one is allowed at any depth; narrowing a *value*
+type is allowed at any depth. Nesting a pattern's result under a single key
+therefore buys it nothing: whether a name may go is decided by `required` at its
+own depth.
 
 A verb's `asCell` marker is pinned the same way: it is a semantic extension key
 compared for exact equality (`SEMANTIC_EXTENSION_KEYS`,
@@ -1019,8 +1042,7 @@ design-level order.
    result cell's address to the caller. Standing fix, useful regardless.
 4. Plumb the id and the readback: pass a caller-supplied `eventId` from
    `cf piece call` through `cell.send()` to `queueEvent`; have `topics` verbs
-   return values; have the CLI reconstruct the cause and read the
-   `{ resultFor }` cell after commit (explicit sync — a cold plain read
+   return values; have the CLI read the receipt cell after commit (explicit sync — a cold plain read
    returns `undefined`), and reclassify `precondition: "receipt-exists"` as
    success-with-readback rather than failure. Plus the one runtime change from
    open question 3 if plain returns are to survive.

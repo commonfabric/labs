@@ -1,10 +1,11 @@
 import { assert, assertEquals } from "@std/assert";
 import { CompilerError, TransformerError } from "@commonfabric/js-compiler";
+import { IndexedPatternError } from "@commonfabric/pattern-index/deploy";
 import { SlugAssignedError } from "@commonfabric/piece";
 import { SlugResolutionError } from "@commonfabric/runner";
 import { ValidationError } from "@cliffy/command";
+import { renderCliError } from "../lib/cli-error.ts";
 import { IdentityKeyfileError } from "../lib/identity.ts";
-import { renderCliError } from "../mod.ts";
 
 Deno.test("renderCliError prints a TransformerError's message, not its stack", () => {
   const e = new TransformerError([], new Map());
@@ -51,6 +52,41 @@ Deno.test("renderCliError prints an IdentityKeyfileError's message, not its stac
   );
   assertEquals(renderCliError(e), e.message);
   assert(renderCliError(e) !== e.stack);
+});
+
+/** Renders `e` with `CF_LOG_LEVEL` set to `level`, restoring it after. */
+const renderAtLogLevel = (e: unknown, level: string): unknown => {
+  const before = Deno.env.get("CF_LOG_LEVEL");
+  Deno.env.set("CF_LOG_LEVEL", level);
+  try {
+    return renderCliError(e);
+  } finally {
+    if (before === undefined) Deno.env.delete("CF_LOG_LEVEL");
+    else Deno.env.set("CF_LOG_LEVEL", before);
+  }
+};
+
+Deno.test("renderCliError prints an IndexedPatternError's message, not its stack", () => {
+  const e = new IndexedPatternError("lookup", 'no program for "pat-1"');
+  assertEquals(renderAtLogLevel(e, "warn"), e.message);
+});
+
+Deno.test("renderCliError withholds an IndexedPatternError's detail below debug", () => {
+  // The detail can quote indexed source, and a deployer may relay what the
+  // command printed to a model that never wrote that source.
+  const e = new IndexedPatternError("compile", "did not compile", "SECRET");
+  const text = String(renderAtLogLevel(e, "warn"));
+  assert(text.startsWith("did not compile\n"));
+  assert(text.includes("--log-level debug"));
+  assert(!text.includes("SECRET"));
+});
+
+Deno.test("renderCliError prints an IndexedPatternError's detail at debug", () => {
+  const e = new IndexedPatternError("compile", "did not compile", "SECRET");
+  assertEquals(
+    renderAtLogLevel(e, "debug"),
+    "did not compile\n\nWithheld detail:\nSECRET",
+  );
 });
 
 Deno.test("renderCliError prints a plain Error's stack", () => {

@@ -4,12 +4,15 @@
  * of them commits anything more. Four sessions share the harness's space,
  * where the manager lives: the starter, who creates a group room, and a second
  * session of the starter's, as a second tab is; a member, named in it; and a
- * stranger, named in none, whose reads of the room's space are refused. A
- * value the manager derives from what the room's space holds, stored once for
- * every reader, is one the stranger's runtime computes differently from the
- * others', and the runtimes then overwrite each other's value without end. Read
- * access is the principal's, so the manager stores such a value once per user,
- * which both of the starter's sessions share.
+ * stranger, named in none, whose reads of the room's space are refused. The
+ * manager lists rooms from its own records, which every reader reads alike,
+ * so the stranger's list holds the room too, and the room refuses the
+ * stranger when they read it. A value the manager derives from what the
+ * room's space holds, stored once for every reader, is one the stranger's
+ * runtime computes differently from the others', and the runtimes then
+ * overwrite each other's value without end. Read access is the principal's,
+ * so the manager stores such a value once per user, which both of the
+ * starter's sessions share.
  *
  * Kept apart from `fabrichat-spaces-multi-runtime.test.ts`, whose test
  * selection record names that file's whole `describe()`, so that a lane
@@ -107,15 +110,16 @@ describe("fabrichat manager across runtimes", () => {
     await expect(stranger.read(["about", "title"], { piece: room })).rejects
       .toThrow(`lacks READ on space ${room.space}`);
 
-    // Each reader's `rooms` lists the room only where its space admits them,
-    // and a client that demands them as a plain array reads each reader's own.
+    // Each reader's `rooms` lists the room, the stranger's too: the list reads
+    // the manager's records, not the room, and a client that demands them as
+    // a plain array reads each reader's own.
     const demanded = async (session: MultiRuntimeSession) =>
       ((await session.readAs(ROOMS, ROOMS_DEMAND)) as { kind?: string }[])
         .map((entry) => entry.kind);
     expect(await demanded(starter)).toEqual(["group"]);
     expect(await demanded(starterTab)).toEqual(["group"]);
     expect(await demanded(member)).toEqual(["group"]);
-    expect(await demanded(stranger)).toEqual([]);
+    expect(await demanded(stranger)).toEqual(["group"]);
 
     // `rooms` is stored per user, which the starter's two sessions share, and
     // the create wrote it in no instance of a session's own.

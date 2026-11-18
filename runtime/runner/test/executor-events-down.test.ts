@@ -30,6 +30,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { maxOf } from "@commonfabric/collections/math";
@@ -45,7 +46,14 @@ import {
 } from "@commonfabric/memory/v2";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import type { ReconcileOutcome } from "../src/source-reconciler.ts";
+import {
+  type Cell,
+  EventDeliveryError,
+  isWithheldDelivery,
+  sendEvent,
+} from "../src/cell.ts";
 import { handlingCommittedBy } from "../src/handling-commit.ts";
 import type {
   IExtendedStorageTransaction,
@@ -57,14 +65,19 @@ import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { resolveLink } from "../src/link-resolution.ts";
-import { deriveEventKey } from "../src/scheduler/event-identity.ts";
+import {
+  deriveEventKey,
+  handlingReceiptId,
+  scopeCallerEventId,
+} from "../src/scheduler/event-identity.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../src/scheduler/constants.ts";
+import { sourceDocKey } from "../src/compilation-cache/cell-cache.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
 } from "../src/ensure-piece-running.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import { readWatermarkSeq } from "../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import type {
   WaveCommitRejection,
   WaveCommitSink,
@@ -76,6 +89,11 @@ import {
   markRendererTrustedEvent,
 } from "../src/cfc/ui-contract.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import {
   admittedCommits,
   ArrivalLog,
@@ -411,7 +429,7 @@ const THROW_PATTERN = [
  * serving-side receipt/result-write pins (events.md §4 "Result carriage").
  * `probe` returns a plain value derived from the event payload; `quiet`
  * returns nothing (the `{}` existence witness). Both bind `{}` — no context
- * cells — so the handlings' cause-derived receipt addresses depend on
+ * cells — so the handlings' receipt addresses depend on
  * nothing but the pattern and the invocation id, and their only durable
  * consequence is the receipt itself. */
 const DECLARED_RESULT_PATTERN = [
@@ -424,6 +442,22 @@ const DECLARED_RESULT_PATTERN = [
   "  { value: Writable<number> },",
   "  { value: number; probe: Stream<unknown>; quiet: Stream<unknown> }",
   ">(({ value }) => ({ value, probe: probe({}), quiet: quiet({}) }));",
+].join("\n");
+
+/** A handler whose result launches a child piece, so its receipt takes the
+ * launch branch of the handler-result path rather than the plain write. */
+const LAUNCHED_RESULT_PATTERN = [
+  "import { handler, pattern, Stream, Writable } from 'commonfabric';",
+  "const Note = pattern<{ title: string }, { title: string }>(",
+  "  ({ title }) => ({ title }),",
+  ");",
+  "const probe = handler<{ n?: number }, Record<string, never>>(",
+  "  (ev) => ({ note: Note({ title: 'tok-' + (ev?.n ?? 0) }) }),",
+  ");",
+  "export default pattern<",
+  "  { value: Writable<number> },",
+  "  { value: number; probe: Stream<unknown> }",
+  ">(({ value }) => ({ value, probe: probe({}) }));",
 ].join("\n");
 
 /** A handler whose `$ctx` requires a plain-number `gate` the argument doc
@@ -640,6 +674,12 @@ describe("Phase 3 events-down (serving side)", () => {
    * host comes up. */
   let servingLoadPieceForEvent: LoadPieceForEvent | undefined;
 
+  /** What the serving runtime's follow of a piece's origin answers, in place
+   * of its source reconciler, when set before the host comes up. */
+  let servingReconcile:
+    | ((cell: Cell<unknown>) => Promise<ReconcileOutcome>)
+    | undefined;
+
   const decorateWaveCommitSink = (sink: WaveCommitSink): WaveCommitSink => ({
     currentHeads: (space, docs) => sink.currentHeads(space, docs),
     concurrentWritePaths: (space, doc, sinceSeq) =>
@@ -742,6 +782,9 @@ describe("Phase 3 events-down (serving side)", () => {
             loadPieceForEvent?: LoadPieceForEvent;
           }).loadPieceForEvent = servingLoadPieceForEvent;
         }
+        if (servingReconcile !== undefined) {
+          runtime.sourceReconciler.reconcile = servingReconcile;
+        }
         servingRuntime = runtime;
         servingManager = manager;
         return {
@@ -788,6 +831,7 @@ describe("Phase 3 events-down (serving side)", () => {
     failServingCommitSequence = [];
     failServingCommitActionPrefix = undefined;
     servingLoadPieceForEvent = undefined;
+    servingReconcile = undefined;
   });
 
   afterEach(async () => {
@@ -840,16 +884,19 @@ describe("Phase 3 events-down (serving side)", () => {
     return { manager, runtime };
   };
 
-  /** Compile + run a pattern on `runtime`, returning its cells. */
+  /** Compile + run a pattern on `runtime`, returning its cells. The piece
+   * runs in `space`; the compile writes its program closure into
+   * `compileSpace`, which is `space` unless a test says otherwise. */
   const standUp = async (
     runtime: Runtime,
     source: string,
     names: { arg: string; result: string },
+    compileSpace: MemorySpace = space,
   ) => {
     const compiled = await runtime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{ name: "/main.tsx", contents: source }],
-    }, { space });
+    }, { space: compileSpace });
     const argument = runtime.getCell<{ value: number }>(
       space,
       names.arg,
@@ -2435,6 +2482,397 @@ describe("Phase 3 events-down (serving side)", () => {
     }
   });
 
+  it("records the same withheld outcome for a served handling that read another space's label, whether it committed, was refused or threw, and tells its sender it is withheld", async () => {
+    // A probe on the pattern's stream reads a document of another space whose
+    // label this space doesn't admit. For `commits` it writes nothing more;
+    // for `refuses` it also copies the value into this space, which the
+    // writer-fit gate refuses; for `throws` it throws an error whose message
+    // is the foreign secret; for `aborts` it aborts its transaction; for
+    // `acl` it writes the space's ACL document, which no served run may; for
+    // `plain` it reads nothing labeled; for `abortsPlain` it reads nothing
+    // labeled and aborts; for `releases` it reads a document of this space
+    // labeled outside it, waits while that label is released, and aborts. The
+    // processed claim (`processed-claim.ts`) takes nothing of the join, so
+    // the foreign-read handlings are delivered, and each records the outcome
+    // withheld, not how it ended, so no failure message carries the secret.
+    const foreignSigner = await Identity.fromPassphrase(
+      "events down withheld foreign",
+    );
+    const foreign = foreignSigner.did() as MemorySpace;
+    const foreignManager = EmulatedStorageManager.connectTo(server, {
+      as: foreignSigner,
+    });
+    extraManagers.push(foreignManager);
+    const foreignRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: foreignManager,
+    });
+    extraRuntimes.push(foreignRuntime);
+    const secretId = foreignRuntime.getCell(foreign, "withheld-secret")
+      .getAsNormalizedFullLink().id;
+    const seed = foreignRuntime.edit();
+    writeSeedEnvelopeDoc(seed, foreign);
+    seedStoredEnvelope(seed, {
+      space: foreign,
+      scope: "space",
+      id: secretId,
+      path: [],
+    }, {
+      value: { secret: "s3cr3t" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["secret"],
+            label: {
+              confidentiality: [
+                "https://commonfabric.org/cfc/atom/Public/withheld-secret",
+              ],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+
+    // A document of this space, written by its owner, whose `secret` is
+    // labeled outside the space until `seedLocal()` writes it unlabeled.
+    const ownerManager = EmulatedStorageManager.connectTo(server, {
+      as: spaceSigner,
+    });
+    extraManagers.push(ownerManager);
+    const ownerRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: ownerManager,
+    });
+    extraRuntimes.push(ownerRuntime);
+    const localId = ownerRuntime.getCell(space, "withheld-local")
+      .getAsNormalizedFullLink().id;
+    const seedLocal = async (secret: string, labeled: boolean) => {
+      const write = ownerRuntime.edit();
+      writeSeedEnvelopeDoc(write, space);
+      seedStoredEnvelope(write, {
+        space,
+        scope: "space",
+        id: localId,
+        path: [],
+      }, {
+        value: { secret },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: labeled
+              ? [{
+                path: ["secret"],
+                label: {
+                  confidentiality: [
+                    "https://commonfabric.org/cfc/atom/Public/withheld-local",
+                  ],
+                },
+              }]
+              : [],
+          },
+        },
+      });
+      expect((await write.commit().settled).error).toBeUndefined();
+    };
+    await seedLocal("l0cal", true);
+
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "withheld-arg",
+      result: "withheld-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    host = newHost();
+    result.key("bump").send({ kind: "warmup" });
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entryByKind = (kind: string) =>
+      ((Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries ?? []).find((entry) =>
+          (entry.payload as { kind?: string } | undefined)?.kind === kind
+        );
+    await awaitAdmitted(
+      server,
+      () => entryByKind("warmup")?.consequenced === true,
+    );
+    await awaitActive();
+
+    const warmup = entryByKind("warmup")!;
+    const streamLink = {
+      space,
+      id: warmup.stream.id as never,
+      path: [...warmup.stream.path],
+      scope: (warmup.stream.scope ?? "space") as never,
+    };
+    const secretLink = {
+      space: foreign,
+      id: secretId,
+      path: [],
+      scope: "space" as const,
+    };
+    /** The commit outcome of every served run of the probe, by event kind. */
+    const commitOutcomes = new ArrivalLog<{ kind: string; error: unknown }>();
+    /** The message of every error the probe threw for `throws`. */
+    const thrownMessages: (string | undefined)[] = [];
+    const localLink = {
+      space,
+      id: localId,
+      path: [],
+      scope: "space" as const,
+    };
+    /** Resolved once the `releases` run has read the labeled document. */
+    const releasesRead = Promise.withResolvers<void>();
+    /** Resolved by the case once that document's label is released. */
+    const released = Promise.withResolvers<void>();
+    const cancelProbe = servingRuntime!.scheduler.addEventHandler(
+      (tx, event) => {
+        const kind = (event as { kind?: string }).kind ?? "unknown";
+        tx.addCommitCallback((_tx, outcome) =>
+          commitOutcomes.record({ kind, error: outcome.error })
+        );
+        if (kind === "plain") return;
+        if (kind === "loads") {
+          servingRuntime!.getCellFromLink(localLink, undefined, tx).getRaw();
+        }
+        if (kind === "abortsPlain") {
+          tx.abort(new Error("the probe aborted"));
+          return;
+        }
+        if (kind === "releases") {
+          servingRuntime!.getCellFromLink(localLink, undefined, tx).getRaw();
+          releasesRead.resolve();
+          return released.promise.then(() => {
+            tx.abort(new Error("the probe aborted"));
+          });
+        }
+        const read = servingRuntime!.getCellFromLink(
+          secretLink,
+          undefined,
+          tx,
+        ).getRaw() as { secret?: string } | undefined;
+        if (kind === "throws") {
+          thrownMessages.push(read?.secret);
+          throw new Error(read?.secret);
+        }
+        if (kind === "aborts") {
+          tx.abort(new Error("the probe aborted"));
+          return;
+        }
+        if (kind === "notrun") {
+          // As a load wait names the document it reached, which can be one
+          // the foreign value chose.
+          tx.dispatchedHandlerNotRun = {
+            reason: `the document \`${read?.secret}\` was still loading`,
+          };
+          return;
+        }
+        if (kind === "acl") {
+          // The space's ACL document, which no served run may write.
+          servingRuntime!.getCellFromLink(
+            { space, id: `of:${space}` as never, path: [], scope: "space" },
+            undefined,
+            tx,
+          ).set({ [foreign]: "OWNER" } as never);
+          return;
+        }
+        if (kind !== "refuses") return;
+        servingRuntime!.getCell<{ copied?: string }>(
+          space,
+          "withheld-sink",
+          undefined,
+          tx,
+        ).set({ copied: read?.secret });
+      },
+      streamLink,
+    );
+    try {
+      // A first read of the foreign document, and of this space's labeled
+      // one, loads them into the serving runtime, so that the cases below
+      // read them on their first run.
+      result.key("bump").send({ kind: "loads" });
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("loads")?.consequenced === true,
+      );
+      const fired = {
+        commits: fireVerb(result, "bump", { kind: "commits" }, "withheld-1"),
+        refuses: fireVerb(result, "bump", { kind: "refuses" }, "withheld-2"),
+        throws: fireVerb(result, "bump", { kind: "throws" }, "withheld-4"),
+        aborts: fireVerb(result, "bump", { kind: "aborts" }, "withheld-5"),
+        acl: fireVerb(result, "bump", { kind: "acl" }, "withheld-6"),
+        plain: fireVerb(result, "bump", { kind: "plain" }, "withheld-3"),
+      };
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () =>
+          ["commits", "refuses", "throws", "aborts", "acl", "plain"].every((
+            kind,
+          ) => entryByKind(kind)?.consequenced === true),
+      );
+      // The `commits` handling committed, after the load of the foreign
+      // document its first run waited on; the `refuses` one was refused.
+      await commitOutcomes.matching((outcome) =>
+        outcome.kind === "commits" && outcome.error === undefined
+      );
+      const refusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "refuses"
+      )).error as { name?: string; message?: string } | undefined;
+      expect(refusal?.name).toBe("CfcCommitRefusalError");
+      expect(refusal?.message).toContain("writer-fit confidentiality misfit");
+
+      /** What an entry says of how its handling ended. */
+      const outcomeOf = (kind: string) => {
+        const entry = entryByKind(kind)!;
+        return {
+          consequenced: entry.consequenced,
+          withheld: entry.withheld,
+          error: entry.error,
+          status: entry.status,
+          reason: entry.reason,
+        };
+      };
+      const withheld = {
+        consequenced: true,
+        withheld: true,
+        error: undefined,
+        status: undefined,
+        reason: undefined,
+      };
+      expect(outcomeOf("commits")).toEqual(withheld);
+      expect(outcomeOf("refuses")).toEqual(withheld);
+      expect(outcomeOf("throws")).toEqual(withheld);
+      expect(outcomeOf("aborts")).toEqual(withheld);
+      expect(outcomeOf("acl")).toEqual(withheld);
+      expect(outcomeOf("plain")).toEqual({ ...withheld, withheld: undefined });
+      // The `throws` handling threw the foreign secret as its message, and
+      // nothing of it reached the entry.
+      expect(thrownMessages.length).toBeGreaterThan(0);
+      expect(thrownMessages.every((message) => message === "s3cr3t")).toBe(
+        true,
+      );
+      expect(JSON.stringify(entryByKind("throws"))).not.toContain("s3cr3t");
+
+      // Each sender is told the same: done, with the outcome withheld,
+      // whether the handling committed or not.
+      // The `acl` handling was refused for its write to the access list, not
+      // by a CFC verdict.
+      const aclRefusal = (await commitOutcomes.matching((outcome) =>
+        outcome.kind === "acl"
+      )).error as { name?: string; reason?: unknown } | undefined;
+      expect(aclRefusal?.name).toBe("StorageTransactionAborted");
+      expect(String(aclRefusal?.reason)).toContain(
+        "is the space ACL document",
+      );
+      for (
+        const kind of ["commits", "refuses", "throws", "aborts", "acl"] as const
+      ) {
+        await fired[kind].reached(1);
+        const { status, tx } = fired[kind].entries[0];
+        expect([kind, status, isWithheldDelivery(tx)]).toEqual([
+          kind,
+          "done",
+          true,
+        ]);
+      }
+      await fired.plain.reached(1);
+      const plain = fired.plain.entries[0];
+      expect(plain.status).not.toBe("error");
+      expect(isWithheldDelivery(plain.tx)).toBe(false);
+
+      // A handling that reads nothing labeled and aborts keeps its outcome,
+      // as one with no foreign join does.
+      fireVerb(result, "bump", { kind: "abortsPlain" }, "withheld-8");
+      await clientRuntime.idle();
+      await awaitAdmitted(
+        server,
+        () => entryByKind("abortsPlain")?.consequenced === true,
+      );
+      expect(entryByKind("abortsPlain")?.withheld).toBeUndefined();
+      expect(entryByKind("abortsPlain")?.error).toBe(
+        "Event handler aborted its transaction",
+      );
+
+      // A handling that read a label of this space's own document outside
+      // it, which is then released before the handling aborts, is withheld
+      // for what it read, not for what the store holds once it has ended.
+      const servingSeesRelease = Promise.withResolvers<void>();
+      const cancelRelease = servingRuntime!.getCellFromLink<
+        { secret?: string }
+      >(localLink).sink((value) => {
+        if (value?.secret === "released") servingSeesRelease.resolve();
+      });
+      try {
+        fireVerb(result, "bump", { kind: "releases" }, "withheld-9");
+        await clientRuntime.idle();
+        await releasesRead.promise;
+        await seedLocal("released", false);
+        await servingSeesRelease.promise;
+        released.resolve();
+        await awaitAdmitted(
+          server,
+          () => entryByKind("releases")?.consequenced === true,
+        );
+      } finally {
+        cancelRelease();
+      }
+      expect(outcomeOf("releases")).toEqual(withheld);
+
+      // A handling whose body records that it did not run is withdrawn and
+      // re-delivered until its deferrals harden into a drop, whose notice
+      // names nothing a foreign join's run reached. Fired last, since each
+      // deferral holds the same space's later entries behind it: the
+      // `behind` entry fired after it is held behind it, and the scheduler's
+      // debug log, the one place the reason for that hold goes, says it
+      // without the reason the run recorded.
+      const schedulerLogger = getLogger("scheduler");
+      const loggedLevel = schedulerLogger.level;
+      const originalDebug = console.debug;
+      const debugLines: string[] = [];
+      schedulerLogger.level = "debug";
+      console.debug = (...args: unknown[]) => {
+        debugLines.push(args.map(String).join(" "));
+      };
+      try {
+        fireVerb(result, "bump", { kind: "notrun" }, "withheld-7");
+        fireVerb(result, "bump", { kind: "plain" }, "withheld-behind");
+        await clientRuntime.idle();
+        await awaitAdmitted(
+          server,
+          () => entryByKind("notrun")?.status === "dropped",
+        );
+      } finally {
+        console.debug = originalDebug;
+        schedulerLogger.level = loggedLevel;
+      }
+      const dropped = entryByKind("notrun")!;
+      expect(dropped.reason).toContain("handler did not run after");
+      expect(JSON.stringify(dropped)).not.toContain("s3cr3t");
+      const held = debugLines.filter((line) => line.includes("held behind"));
+      expect(held.length).toBeGreaterThan(0);
+      expect(held.every((line) => line.includes("its outcome withheld")))
+        .toBe(true);
+      expect(held.some((line) => line.includes("s3cr3t"))).toBe(false);
+    } finally {
+      cancelProbe();
+      cancelDemand();
+    }
+  });
+
   // Stands up `BUMP_PATTERN` on a host whose delivery-failure clock the case
   // drives, with a probe handler on the pattern's stream. For an event of kind
   // `refused` the probe links the document named `names.source` into a list
@@ -3058,7 +3496,7 @@ describe("Phase 3 events-down (serving side)", () => {
    * three pins below share. The commit callback is the durable-ack
    * coupling's — it settles only after the handling CONSEQUENCED — and
    * hands back the echo's transaction, whose `handlingReceiptLink` is the
-   * cause-derived receipt address. */
+   * receipt address. */
   const fireVerb = (
     result: Cell<Record<string, unknown>>,
     verb: string,
@@ -3130,7 +3568,7 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(fired.entries[0].status).not.toBe("error");
 
     // WS-D under ON: the echo's transaction publishes the handling's
-    // receipt address — the same cause-derived cell the serving side
+    // receipt address — the same cell the serving side
     // wrote. An unchanged caller (the CLI verb dispatch) needs no
     // migration: address out of the callback, value by ordinary read.
     const link = fired.entries[0].tx.handlingReceiptLink;
@@ -3267,13 +3705,10 @@ describe("Phase 3 events-down (serving side)", () => {
     await clientRuntime.idle();
     await clientRuntime.storageManager.synced();
 
-    // The pre-created receipt, minted through the CLIENT-ERA writer: an
-    // explicit-OFF probe runtime (commitPreconditions on, the pre-flip
-    // client posture — a mixed-fleet OFF client against this ON server)
-    // dispatches the SAME invocation id locally and commits the receipt
-    // as an ordinary authored write. Explicit `false` does NOT un-claim
-    // the process-global serving flag while the harness's ON enablers
-    // are live (runtime.ts's enabler-count guard).
+    // The receipt the event will name, taken ahead of it as an ordinary
+    // authored write by a runtime that is not serving. Explicit `false` does
+    // NOT un-claim the process-global serving flag while the harness's ON
+    // enablers are live (runtime.ts's enabler-count guard).
     const probeManager = EmulatedStorageManager.connectTo(server, {
       as: aliceSigner,
     });
@@ -3284,36 +3719,31 @@ describe("Phase 3 events-down (serving side)", () => {
       experimental: { serverExecution: false, commitPreconditions: true },
     });
     extraRuntimes.push(probeRuntime);
-    const { result: probeResult } = await standUp(
-      probeRuntime,
-      DECLARED_RESULT_PATTERN,
-      names,
-    );
-    const cancelProbeDemand = probeResult.sink(() => {});
-    await probeRuntime.idle();
-    const probeFired = fireVerb(
-      probeResult,
-      "probe",
-      { n: 99 },
+    const streamLink = result.key("probe").resolveAsCell()
+      .getAsNormalizedFullLink();
+    const durableId = scopeCallerEventId(
       "cas-loss-1",
+      "receipt-pin-session",
+      streamLink,
     );
-    await probeRuntime.idle();
+    const taken = probeRuntime.getCellFromLink({
+      id: handlingReceiptId(durableId, streamLink),
+      path: [],
+      space,
+      scope: "space",
+    });
+    await probeRuntime.editWithRetry((tx) =>
+      taken.withTx(tx).set({ token: "tok-99" })
+    );
     await probeRuntime.storageManager.synced();
-    await probeFired.reached(1);
-    expect(probeFired.entries[0].status).not.toBe("error");
-    const probeLink = probeFired.entries[0].tx.handlingReceiptLink;
-    expect(probeLink).toBeDefined();
+    const takenId = taken.getAsNormalizedFullLink().id;
     await awaitAdmitted(
       server,
-      () => Engine.read(engine, { id: probeLink!.id })?.value !== undefined,
+      () => Engine.read(engine, { id: takenId })?.value !== undefined,
     );
-    expect(Engine.read(engine, { id: probeLink!.id })?.value).toEqual({
-      token: "tok-99",
-    });
-    cancelProbeDemand();
 
-    // Now the ON client fires the SAME id; the serving run's write finds
-    // the cell taken and must lose the CAS loudly — and harmlessly.
+    // Now the ON client fires; the serving run's write finds the cell taken
+    // and must lose the CAS loudly — and harmlessly.
     host = newHost();
     const fired = fireVerb(result, "probe", { n: 7 }, "cas-loss-1");
     await clientRuntime.idle();
@@ -3327,17 +3757,18 @@ describe("Phase 3 events-down (serving side)", () => {
       return entry?.consequenced === true &&
         value?.eventWatermark === entry?.seq;
     });
-    const durableId = (Engine.read(engine, { id: sidecarId })
-      ?.value as StreamEventsDocValue).entries![0].eventId;
+    expect(
+      (Engine.read(engine, { id: sidecarId })
+        ?.value as StreamEventsDocValue).entries![0].eventId,
+    ).toBe(durableId);
     await fired.reached(1);
     expect(fired.entries[0].status).not.toBe("error");
 
-    // Cross-arm address agreement: the ON echo published the SAME
-    // cause-derived address the OFF-arm writer used — the no-migration
-    // property, witnessed through the real machinery on both sides.
+    // The echo published the address the serving run wrote to, which derives
+    // from the event and its stream.
     const link = fired.entries[0].tx.handlingReceiptLink;
     expect(link).toBeDefined();
-    expect(link!.id).toBe(probeLink!.id);
+    expect(link!.id).toBe(takenId);
 
     // Single write: the standing value won — the served handler's value
     // (tok-7) never landed. The whole write history stays the ONE
@@ -3356,6 +3787,78 @@ describe("Phase 3 events-down (serving side)", () => {
     expect(JSON.stringify(carryingBatch!.operations)).not.toContain(link!.id);
 
     // The LOUD half: the serving runner counted the skip.
+    expect(servingRuntime!.runner.servedReceiptCasLosses).toBe(1);
+    cancelDemand();
+  });
+
+  it("leaves a receipt that already holds a value alone when the served handling's result launches a piece", async () => {
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(clientRuntime, LAUNCHED_RESULT_PATTERN, {
+      arg: "cas-loss-launch-arg",
+      result: "cas-loss-launch-result",
+    });
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+
+    const probeManager = EmulatedStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    extraManagers.push(probeManager);
+    const probeRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: probeManager,
+      experimental: { serverExecution: false, commitPreconditions: true },
+    });
+    extraRuntimes.push(probeRuntime);
+    const streamLink = result.key("probe").resolveAsCell()
+      .getAsNormalizedFullLink();
+    const durableId = scopeCallerEventId(
+      "cas-loss-launch-1",
+      "receipt-pin-session",
+      streamLink,
+    );
+    const taken = probeRuntime.getCellFromLink({
+      id: handlingReceiptId(durableId, streamLink),
+      path: [],
+      space,
+      scope: "space",
+    });
+    await probeRuntime.editWithRetry((tx) =>
+      taken.withTx(tx).set({ token: "tok-99" })
+    );
+    await probeRuntime.storageManager.synced();
+    const takenId = taken.getAsNormalizedFullLink().id;
+    await awaitAdmitted(
+      server,
+      () => Engine.read(engine, { id: takenId })?.value !== undefined,
+    );
+
+    host = newHost();
+    const fired = fireVerb(result, "probe", { n: 7 }, "cas-loss-launch-1");
+    await clientRuntime.idle();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    await awaitAdmitted(server, () => {
+      const value = Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined;
+      const entry = value?.entries?.[0];
+      return entry?.consequenced === true &&
+        value?.eventWatermark === entry?.seq;
+    });
+    await fired.reached(1);
+    expect(fired.entries[0].status).not.toBe("error");
+
+    // The launch never ran over the standing value, and nothing but the one
+    // authored commit has written this document.
+    expect(Engine.read(engine, { id: takenId })?.value).toEqual({
+      token: "tok-99",
+    });
+    const writers = commitsWriting(engine, takenId);
+    expect(writers.length).toBe(1);
+    expect(writers[0].class).toBe("authored");
     expect(servingRuntime!.runner.servedReceiptCasLosses).toBe(1);
     cancelDemand();
   });
@@ -3464,6 +3967,215 @@ describe("Phase 3 events-down (serving side)", () => {
       return ((doc?.value as { value?: number })?.value ?? 0) === 2;
     });
     cancelDemand();
+  });
+
+  it("defers a served event while the loop follows its piece's origin, spending none of the deferral budget, and delivers it once the follow completes", async () => {
+    // The piece records a `system:` origin, so the tenure's first start of
+    // it waits on the loop's follow (serving-loop.md §3e). The follow is
+    // held open here, as a compile of a new release holds it: the deferral
+    // it causes is the loop waiting on itself, so it arms no backstop and
+    // counts toward no drop; the follow's completion is what re-drains the
+    // entry.
+    ({ manager: clientManager, runtime: clientRuntime } = openClient());
+    const engine = await server.engineForSpace(space);
+    const { argument, result } = await standUp(clientRuntime, BUMP_PATTERN, {
+      arg: "followed-arg",
+      result: "followed-result",
+    });
+    {
+      const tx = clientRuntime.edit();
+      result.withTx(tx).setMetaRaw(
+        "patternSource",
+        "system:system/probe/probe.tsx",
+        rawMetaWriteAuthorization,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    const cancelDemand = result.sink(() => {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    const follow = Promise.withResolvers<ReconcileOutcome>();
+    const followed: string[] = [];
+    servingReconcile = (cell) => {
+      followed.push(cell.getAsNormalizedFullLink().id);
+      return follow.promise;
+    };
+
+    host = newHost();
+    sendEvent(result.key("bump"), {});
+    await clientRuntime.idle();
+    await clientRuntime.storageManager.synced();
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0];
+    const entry = () =>
+      (Engine.read(engine, { id: sidecarId })?.value as
+        | StreamEventsDocValue
+        | undefined)?.entries?.[0];
+    // Every scan that reaches the entry defers it for the follow — other
+    // input re-scans it, the backstop never does — and the entry stays
+    // pending through them all.
+    await awaitActive();
+    await eventDeferrals.reached(1);
+    expect(followed).toEqual([result.getAsNormalizedFullLink().id]);
+    {
+      const { events } = host.stats();
+      expect(events.originPendingDeferrals).toBeGreaterThanOrEqual(1);
+      expect(events.processed).toBe(events.originPendingDeferrals);
+      expect(events.deferredRescansArmed).toBe(0);
+      expect(events.dropped).toBe(0);
+    }
+    expect(entry()?.consequenced).not.toBe(true);
+
+    follow.resolve("current");
+    await awaitAdmitted(server, () => entry()?.consequenced === true);
+    expect(entry()?.status).toBeUndefined();
+    expect(entry()?.error).toBeUndefined();
+    await awaitAdmitted(server, () => {
+      const doc = Engine.read(engine, {
+        id: argument.getAsNormalizedFullLink().id,
+      });
+      return ((doc?.value as { value?: number })?.value ?? 0) === 1;
+    });
+    const stats = host.stats();
+    expect(stats.events.processed).toBe(
+      stats.events.originPendingDeferrals + 1,
+    );
+    expect(stats.events.deferredRescansFired).toBe(0);
+    expect(stats.events.dropped).toBe(0);
+    expect(stats.originFollows).toBe(1);
+    cancelDemand();
+  });
+
+  describe("a served event whose piece's program closure is not in the space", () => {
+    // The piece runs in `space` from a compile into the client's own space,
+    // as a child piece runs in a space its creator's runtime has not yet
+    // replicated the program into, so the serving runtime finds its pattern
+    // unloadable. A compile into `space` is the closure's arrival.
+
+    const program = {
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: BUMP_PATTERN }],
+    };
+
+    /** Stands up the piece without its closure in `space`, and fires an
+     * event at it; returns the piece's argument and a reader of the event's
+     * stream entry. */
+    const fireWithoutClosure = async (
+      policy: ConstructorParameters<typeof ExecutorHost>[0]["policy"],
+      names: { arg: string; result: string },
+    ) => {
+      ({ manager: clientManager, runtime: clientRuntime } = openClient());
+      const engine = await server.engineForSpace(space);
+      const { argument, result, compiled } = await standUp(
+        clientRuntime,
+        BUMP_PATTERN,
+        names,
+        aliceSigner.did() as MemorySpace,
+      );
+      const closureDocId = clientRuntime.getCell(
+        space,
+        sourceDocKey(
+          clientRuntime.patternManager.getArtifactEntryRef(
+            compiled,
+          )!.identity,
+        ),
+      ).getAsNormalizedFullLink().id;
+      expect(
+        Engine.selectDocHead(engine, { id: closureDocId, scopeKey: "space" }),
+      ).toBe(0);
+      host = newHost(policy);
+      sendEvent(result.key("bump"), {});
+      await clientRuntime.idle();
+      await clientRuntime.storageManager.synced();
+      await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+      const sidecarId = sidecarIdsIn(engine)[0];
+      const entry = () =>
+        (Engine.read(engine, { id: sidecarId })?.value as
+          | StreamEventsDocValue
+          | undefined)?.entries?.[0];
+      const bumped = () =>
+        ((Engine.read(engine, {
+          id: argument.getAsNormalizedFullLink().id,
+        })?.value as { value?: number })?.value ?? 0) === 1;
+      await awaitActive();
+      return { engine, entry, bumped };
+    };
+
+    it("delivers the event once the closure arrives, its deferrals spending none of the deferral budget however much input re-drains it", async () => {
+      const { engine, entry, bumped } = await fireWithoutClosure({
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        programClosureGraceMs: 600_000,
+      }, { arg: "waited-closure-arg", result: "waited-closure-result" });
+      await drainPasses.matching((queued) => queued >= 1);
+
+      // More input than the deferral budget holds, each a wave the event
+      // could be re-drained in.
+      for (let i = 0; i <= EVENT_DEFERRAL_DROP_THRESHOLD; i++) {
+        await kickAndSettle(engine);
+      }
+      {
+        const { events } = host!.stats();
+        expect(events.programWaitDeferrals).toBeGreaterThanOrEqual(1);
+        expect(events.deferredRescansArmed).toBe(0);
+        expect(events.dropped).toBe(0);
+      }
+      expect(entry()?.consequenced).not.toBe(true);
+      expect(entry()?.deliveryDeferral).toBeUndefined();
+
+      await clientRuntime.patternManager.compilePattern(program, { space });
+      await awaitAdmitted(server, () => entry()?.consequenced === true);
+      expect(entry()?.status).toBeUndefined();
+      expect(entry()?.error).toBeUndefined();
+      await awaitAdmitted(server, bumped);
+      expect(host!.stats().events.dropped).toBe(0);
+    });
+
+    it("delivers the event when the closure arrives after its grace, as the recovery its delivery failure waits on", async () => {
+      const { entry, bumped } = await fireWithoutClosure({
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        programClosureGraceMs: 0,
+      }, { arg: "late-closure-arg", result: "late-closure-result" });
+      await awaitAdmitted(
+        server,
+        () =>
+          entry()?.deliveryDeferral?.state === "failed" ||
+          entry()?.consequenced === true,
+      );
+      expect(entry()?.deliveryDeferral).toMatchObject({
+        phase: "dispatch-load",
+        failureClass: "program-unavailable",
+      });
+      expect(entry()?.consequenced).not.toBe(true);
+
+      await clientRuntime.patternManager.compilePattern(program, { space });
+      await awaitAdmitted(server, () => entry()?.consequenced === true);
+      expect(entry()?.status).toBeUndefined();
+      expect(entry()?.error).toBeUndefined();
+      await awaitAdmitted(server, bumped);
+    });
+
+    it("covers the event with one needs-attention notice when the closure never arrives, once its grace and its failed-state budget are spent", async () => {
+      const { entry } = await fireWithoutClosure({
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        programClosureGraceMs: 0,
+        deliveryFailureBudgetMs: 0,
+      }, { arg: "absent-closure-arg", result: "absent-closure-result" });
+      await awaitAdmitted(server, () => entry()?.consequenced === true);
+      expect(entry()?.status).toBe("needs-attention");
+      expect(entry()?.reason).toContain(
+        "its program has not reached this space",
+      );
+      expect(entry()?.attention).toMatchObject({
+        phase: "dispatch-load",
+        failureClass: "program-unavailable",
+        code: "delivery-failure-budget-exhausted",
+        recovery: "explicit-retry",
+      });
+      expect(host!.stats().events.dropped).toBe(0);
+    });
   });
 
   it("the DROP arm: an event whose piece can never start defers through the creation-race window, then drops with the events.md §5 notice", async () => {

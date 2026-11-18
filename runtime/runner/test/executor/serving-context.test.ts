@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as MemoryClient from "@commonfabric/memory/v2/client";
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import {
   inServingContext,
   runInServingContext,
@@ -33,7 +34,11 @@ async function frameContexts(
   try {
     const client = await runInServingContext(
       sendFromServing,
-      () => MemoryClient.connect({ transport: recording }),
+      () =>
+        MemoryClient.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport: recording,
+        }),
     );
     await client.close();
   } finally {

@@ -13,6 +13,7 @@ import type { EventHandler } from "../src/scheduler/types.ts";
 import { rendererVDOMSchema } from "../src/schemas.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
+import { viewInputFingerprint } from "../src/view-input-basis.ts";
 import type { ViewExecutionNode } from "../src/view-replication.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
@@ -303,6 +304,119 @@ describe("view plan publisher", () => {
     await publish();
     expect(fixture.reads.calls.length - quiet).toBeGreaterThan(1);
     expect(fixture.publications.calls).toHaveLength(2);
+  });
+
+  describe("a `read` view", () => {
+    const asReadView = () => {
+      fixture.interest.view = { ...fixture.interest.view, mode: "read" };
+    };
+
+    it("publishes nothing until the settlement reports nothing owed", async () => {
+      asReadView();
+
+      await publish();
+
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
+    it("publishes a selection marked `settled` that delivers nothing, without walking the view", async () => {
+      asReadView();
+      const reads = fixture.reads.calls.length;
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: () => true,
+      });
+
+      expect(fixture.reads.calls.length - reads).toBe(0);
+      expect(fixture.publications.calls).toHaveLength(1);
+      expect(fixture.publications.calls[0].args[2]).toEqual({
+        generation: 1,
+        settled: true,
+        delivery: [],
+        eligibleActions: [],
+        pieces: [],
+        inputs: [],
+        producers: [],
+      });
+    });
+
+    it("asks whether a view has settled with the list of views in hand", async () => {
+      asReadView();
+      const order: string[] = [];
+      fixture.interests.restore();
+      fixture.interests = stub(fixture.server, "viewInterestsForSpace", () => {
+        order.push("listed");
+        return [fixture.interest];
+      });
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: (handle) => {
+          order.push(`asked about ${handle.viewId}`);
+          return false;
+        },
+      });
+
+      expect(order).toEqual(["listed", "asked about screen"]);
+      expect(fixture.publications.calls).toHaveLength(0);
+    });
+
+    it("publishes once for a view however many settlements follow", async () => {
+      asReadView();
+
+      for (let settlement = 0; settlement < 3; settlement++) {
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        );
+      }
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns `false` for a settled view the server refuses the answer for", async () => {
+      asReadView();
+      fixture.publications.restore();
+      fixture.publications = stub(
+        fixture.server,
+        "setViewSelection",
+        () => Promise.resolve(false),
+      );
+
+      expect(
+        await fixture.publisher.publish(
+          fixture.runtime,
+          fixture.server,
+          space,
+          { settled: () => true },
+        ),
+      ).toBe(false);
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
+
+    it("returns whether a view has not settled yet", async () => {
+      asReadView();
+      const publish = (settled: boolean) =>
+        fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+          settled: () => settled,
+        });
+
+      expect(await publish(false)).toBe(true);
+      expect(await publish(true)).toBe(false);
+      expect(await publish(false)).toBe(false);
+    });
+
+    it("publishes for a view whose component contract differs from the server's", async () => {
+      asReadView();
+      fixture.interest.view.componentContractVersion = "another-build";
+
+      await fixture.publisher.publish(fixture.runtime, fixture.server, space, {
+        settled: () => true,
+      });
+
+      expect(fixture.publications.calls).toHaveLength(1);
+    });
   });
 
   it("plans a view with no selection yet after a cut wave", async () => {
@@ -750,5 +864,64 @@ describe("view plan publisher", () => {
       inline.getAsNormalizedFullLink().id,
     );
     expect(selection.eligibleActions).toEqual([]);
+  });
+
+  it("omits an inline argument from delivered view inputs", async () => {
+    const inline = fixture.runtime.getImmutableCell(space, { count: 1 });
+    await fixture.runtime.editWithRetry((tx) => {
+      fixture.root.withTx(tx).set({
+        $UI: {
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: [fixture.output, {
+            type: "vnode",
+            name: "cf-input",
+            props: { $value: fixture.input },
+            children: [],
+          }],
+        },
+      });
+      fixture.root.withTx(tx).setMetaRaw(
+        "argument",
+        inline.getAsLink(),
+        rawMetaWriteAuthorization,
+      );
+    });
+    await publish();
+    const selection = fixture.publications.calls.at(-1)!.args[2];
+    expect(selection.inputs?.map((input) => input.id)).toContain(
+      fixture.root.getAsNormalizedFullLink().id,
+    );
+    expect(selection.inputs?.map((input) => input.id)).not.toContain(
+      inline.getAsNormalizedFullLink().id,
+    );
+  });
+
+  it("fingerprints a producer's read of a document the replica does not hold", async () => {
+    const absent = fixture.runtime.getCell<number>(space, "absent", {
+      type: "number",
+    });
+    const [producer] = fixture.nodes;
+    fixture.nodes[0] = {
+      ...producer,
+      log: {
+        ...producer.log,
+        reads: [
+          ...producer.log.reads,
+          toMemorySpaceAddress(absent.getAsNormalizedFullLink()),
+        ],
+      },
+    };
+    await publish();
+    const selection = fixture.publications.calls.at(-1)!.args[2];
+    const reads = selection.producers?.[0].basis?.reads ?? [];
+    const fingerprintOf = (id: string) =>
+      reads.find((read) => read.id === id)?.fingerprint;
+    expect(fingerprintOf(absent.getAsNormalizedFullLink().id)).toBe(
+      viewInputFingerprint(undefined, []),
+    );
+    expect(fingerprintOf(fixture.input.getAsNormalizedFullLink().id)).not
+      .toBe(viewInputFingerprint(undefined, []));
   });
 });

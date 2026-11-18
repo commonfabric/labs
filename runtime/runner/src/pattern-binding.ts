@@ -56,12 +56,7 @@ import {
   sigilLinkAddressOnly,
 } from "./link-utils.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import {
-  CELL_SCOPES,
-  isCellScope,
-  narrowerScopeCap,
-  scopeRank,
-} from "./scope.ts";
+import { isCellScope, narrowerScopeCap, scopeRank } from "./scope.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import {
   internalVerifierRead,
@@ -287,7 +282,9 @@ function storedOutputChain(
 ): CellScope[] {
   const chain: CellScope[] = [];
   let at = ref;
-  for (let hops = 0; hops < CELL_SCOPES.length; hops++) {
+  // Each accepted hop names a strictly narrower scope than the one before, so
+  // the walk ends by the read at the narrowest scope.
+  while (true) {
     const stored = tx.readValueOrThrow(at, {
       meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
     });
@@ -306,7 +303,6 @@ function storedOutputChain(
     chain.push(link.scope);
     at = { ...ref, scope: link.scope };
   }
-  return chain;
 }
 
 /**
@@ -358,7 +354,7 @@ function sendValueToBindingInner<T>(
   options: SendValueToBindingOptions = {},
 ): void {
   if (argumentCellLink === undefined) {
-    argumentCellLink = getMetaLink(cell as Cell<unknown>, "argument")!;
+    argumentCellLink = getMetaLink(cell as Cell<unknown>, "argument");
   }
   // A binding reaches a write target either as a sigil write redirect or as
   // an `$alias` record. The second is only meaningful because `binding` comes
@@ -388,19 +384,16 @@ function sendValueToBindingInner<T>(
           ),
           { includeSchema: true, overwrite: "redirect" },
         );
-      } else if (typeof alias.cell !== "string") {
-        throw new Error(
-          debugStr`Invalid pseudo-alias cell: $quote,long${binding}`,
-        );
       } else {
-        // Certain strings have special meaning as the cell id
+        // Resolve the special values for "argument" and "result" — the only
+        // `cell` values isAliasBinding admits.
         const link = alias.cell === "argument"
           ? argumentCellLink
-          : alias.cell === "result"
-          ? cell.getAsNormalizedFullLink()
-          : undefined;
+          : cell.getAsNormalizedFullLink();
         if (link === undefined) {
-          throw new Error("Invalid pseudo-alias path: " + alias.path);
+          throw new Error(
+            "Cannot write to argument alias: no argument cell link available",
+          );
         }
         const path = alias.path;
         binding = createSigilLinkFromParsedLink(

@@ -21,10 +21,7 @@
 import { assert, assertEquals, assertExists } from "@std/assert";
 import { Server } from "../v2/server.ts";
 import { applyWaveCommit } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   effectIntentNonce,
   encodeMemoryBoundary,
@@ -289,7 +286,7 @@ Deno.test("same-principal two-session isolation (Phase-4 review MINOR-5): a deri
     // serving loop's path), then the push notify.
     const engine = await server.engineForSpace(SPACE);
     const holder = executionLeaseHolder(`service:${SPACE}`);
-    assert(acquireExecutionLease(engine, { space: SPACE, holder }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     const s1Key = resolvePrincipalSessionKey(ALICE, s1Session);
     const applied = applyWaveCommit(engine, {
       sessionId: holder,

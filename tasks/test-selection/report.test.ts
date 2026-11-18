@@ -996,6 +996,8 @@ describe("report", () => {
         pullRequest: withNewRealTestFailures(
           "census > drops a unit the tree no longer has",
           4,
+          "census > drops a unit the tree no longer had",
+          "census > keeps a unit the tree no longer has",
         ),
       }))).toEqual([]);
     });

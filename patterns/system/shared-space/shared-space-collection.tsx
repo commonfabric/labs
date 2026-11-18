@@ -15,6 +15,7 @@ import {
 import {
   changeSharedSpaceMembershipIn,
   type SharedSpaceCatalogStorage,
+  type SharedSpaceMembership,
   type SharedSpaceMembershipResult,
 } from "./shared-space-catalog.ts";
 import type { SharedSpaceCollectionView } from "./shared-space-interface.ts";
@@ -22,7 +23,7 @@ import type { SharedSpaceCollectionView } from "./shared-space-interface.ts";
 /** The rendered control's snapshot of the choice the person saw. */
 export interface CollectionChoiceEvent {
   target: {
-    dataset: { space: string; revision: string; state: string };
+    dataset: { space: string; revision: string; state: SharedSpaceMembership };
   };
 }
 
@@ -32,16 +33,17 @@ interface ChoiceState {
   conflict: Writable<string>;
 }
 
-/** Applies the control's observed revision, reporting a refusal in its view. */
+/**
+ * Applies the control's observed revision, reporting a refusal in its view.
+ * `changeSharedSpaceMembershipIn` refuses a dataset naming a state other than
+ * a membership.
+ */
 export const chooseCollectionMembership = handler<
   CollectionChoiceEvent,
   ChoiceState,
   SharedSpaceMembershipResult
 >((event, { catalog, conflict }) => {
   const { space, revision, state } = event.target.dataset;
-  if (state !== "saved" && state !== "archived") {
-    throw new TypeError("Collection choice requires a known membership state.");
-  }
   const result = changeSharedSpaceMembershipIn(catalog, {
     space,
     expectedRevision: revision,
@@ -104,6 +106,8 @@ const SharedSpaceCollection = pattern<
       ? view.saved
       : state === "archived"
       ? view.archived
+      : state === "deleted"
+      ? view.deleted ?? []
       : view.other;
     const selectedKind = kind.get();
     const query = search.get().trim().toLowerCase();
@@ -146,6 +150,7 @@ const SharedSpaceCollection = pattern<
           items={[
             { label: "Saved", value: "saved" },
             { label: "Archived", value: "archived" },
+            { label: "Deleted", value: "deleted" },
             { label: "Other states", value: "other" },
           ]}
         />
@@ -158,7 +163,9 @@ const SharedSpaceCollection = pattern<
               <cf-hstack slot="content" gap="2" align="center">
                 <cf-vstack gap="1" style={{ flex: "1" }}>
                   <cf-text variant="body">{entry.title || entry.space}</cf-text>
-                  <cf-space-link spaceDid={entry.space} label="Open" />
+                  {entry.state === "deleted"
+                    ? null
+                    : <cf-space-link spaceDid={entry.space} label="Open" />}
                   <cf-text variant="caption" tone="muted">
                     {kindLabel(entry.kind)} · {entry.state}
                   </cf-text>

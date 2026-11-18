@@ -1,4 +1,5 @@
 import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type ConfidenceAssessment,
   DEFAULT_INPUT,
@@ -264,7 +265,7 @@ textTrack.mode = "hidden";
 
 function showError(cause: unknown): void {
   durationErrorMessage = undefined;
-  error.textContent = cause instanceof Error ? cause.message : String(cause);
+  error.textContent = describeFailure(cause);
 }
 
 function clearError(): void {
@@ -273,7 +274,7 @@ function clearError(): void {
 }
 
 function showDurationError(cause: unknown): void {
-  const detail = cause instanceof Error ? cause.message : String(cause);
+  const detail = describeFailure(cause);
   durationErrorMessage = `Could not update the recording duration. ${detail}`;
   error.textContent = durationErrorMessage;
 }
@@ -676,7 +677,9 @@ async function startPlayback(): Promise<void> {
     playbackOffsetSeconds = 0;
   }
   await audioContext.resume();
-  if (audio.paused || disposed) return;
+  // A pause and a second play while the engine resumed started another
+  // playback, which may have got here first.
+  if (audio.paused || disposed || activeSource) return;
 
   const source = audioContext.createBufferSource();
   source.buffer = audioBuffer;
@@ -684,7 +687,6 @@ async function startPlayback(): Promise<void> {
   activeSource = source;
   playbackStartedAt = audioContext.currentTime;
   source.onended = () => {
-    if (activeSource !== source) return;
     activeSource = undefined;
     playbackStartedAt = undefined;
     playbackOffsetSeconds = audioBuffer!.duration;
@@ -795,7 +797,6 @@ async function synchronizeRequestedDurations(): Promise<void> {
 }
 
 function requestDurationSync(): void {
-  if (disposed) return;
   const duration = currentRequestedDuration();
   const target = durationRequestTarget(
     duration,
@@ -835,9 +836,6 @@ function requestDurationSync(): void {
 }
 
 function waitForMediaReady(): Promise<void> {
-  if (audio.readyState >= HTMLMediaElement.HAVE_METADATA) {
-    return Promise.resolve();
-  }
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       audio.removeEventListener("loadedmetadata", loaded);
@@ -857,7 +855,6 @@ function waitForMediaReady(): Promise<void> {
 }
 
 function teardown(): void {
-  if (disposed) return;
   disposed = true;
   abort.abort();
   stops.forEach((stop) => stop());

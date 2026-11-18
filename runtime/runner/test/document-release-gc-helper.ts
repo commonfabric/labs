@@ -5,9 +5,10 @@
  * collected; the package's fake-clock preload would freeze that boundary.
  *
  * It loads a document through a cell, runs release passes while the cell is
- * reachable and again once it has been dropped and collected, and prints one
- * line of JSON saying whether the document was still loaded after each:
- * `keptWhileHeld` and `keptOnceCollected`.
+ * reachable, again once only a key taken from the cell is, and again once that
+ * has been dropped and collected too, and prints one line of JSON saying
+ * whether the document was still loaded after each: `keptWhileHeld`,
+ * `keptByKey` and `keptOnceCollected`.
  */
 
 import { Identity } from "@commonfabric/identity";
@@ -49,7 +50,7 @@ try {
 
   // The cell lives only in `holder`, filled by a function that has returned:
   // a suspended async frame can keep the temporaries it used.
-  const holder: { cell?: Cell<unknown> } = {};
+  const holder: { cell?: Cell<unknown>; key?: Cell<unknown> } = {};
   const id = await (async () => {
     const cell = reader.getCell(space, "counter", schema);
     await cell.sync();
@@ -73,11 +74,18 @@ try {
   await releaseTwice();
   const keptWhileHeld = loaded();
 
+  // The key has not read anything, so only what it took from the cell can
+  // keep the document.
+  holder.key = holder.cell!.key("n");
   delete holder.cell;
+  await releaseTwice();
+  const keptByKey = loaded();
+
+  delete holder.key;
   await releaseTwice();
   const keptOnceCollected = loaded();
 
-  console.log(JSON.stringify({ keptWhileHeld, keptOnceCollected }));
+  console.log(JSON.stringify({ keptWhileHeld, keptByKey, keptOnceCollected }));
 } finally {
   await reader.dispose();
   await writer.dispose();

@@ -4,6 +4,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   RESEARCH_INPUTS_SCHEMA,
   RESEARCH_RULES_SCHEMA,
@@ -24,7 +25,6 @@ import type {
   HarnessResearchStatus,
   HarnessResearchSyntaxCheck,
 } from "../contracts/research.ts";
-import { errorMessage } from "../error-message.ts";
 import { RUN_PATTERN_INPUT_SCHEMA } from "../contracts/run-pattern.ts";
 import { validateStructuredResultValue } from "../structured-result.ts";
 import { objectValue, stringList, stringValue, unique } from "./model-value.ts";
@@ -66,6 +66,15 @@ export interface ResearchAdmissionEvidence {
 
   /** Uninspected metadata returned by the index search. */
   searchedPatterns?: ReadonlyMap<string, HarnessResearchPatternRecord>;
+}
+
+/** How admission reaches what it checks a proposed kit with. */
+export interface ResearchAdmissionOptions {
+  /**
+   * Loads the compiler stack the syntax check parses examples with; by
+   * default, `ensureCompilerStack`.
+   */
+  loadCompilerStack?: () => ReturnType<typeof ensureCompilerStack>;
 }
 
 /** JSON result requested from the private research model. */
@@ -310,12 +319,17 @@ const parseRules = (
   return rules;
 };
 
-/** Checks TypeScript/TSX grammar without resolving, checking, or executing it. */
+/**
+ * Checks TypeScript/TSX grammar without resolving, checking, or executing it.
+ * A compiler stack that fails to load leaves the check unavailable rather than
+ * failing admission.
+ */
 const checkPatternSourceSyntax = async (
   content: string,
+  loadCompilerStack: () => ReturnType<typeof ensureCompilerStack>,
 ): Promise<HarnessResearchSyntaxCheck> => {
   try {
-    const { ts } = await ensureCompilerStack();
+    const { ts } = await loadCompilerStack();
     const result = ts.transpileModule(content, {
       fileName: "/research-example.tsx",
       reportDiagnostics: true,
@@ -355,7 +369,7 @@ const checkPatternSourceSyntax = async (
       status: "unavailable",
       scope: "syntax-only",
       diagnostics: [],
-      detail: errorMessage(error),
+      detail: describeFailure(error),
     };
   }
 };
@@ -370,11 +384,34 @@ const syntaxDiagnosticText = (
   return `TS${diagnostic.code}${location}: ${diagnostic.message}`;
 };
 
+/** What a pattern-source example's syntax check leaves missing from a kit. */
+const syntaxCheckBlockers = (
+  syntax: HarnessResearchSyntaxCheck,
+): string[] => {
+  switch (syntax.status) {
+    case "valid":
+      return [];
+    case "invalid":
+      return syntax.diagnostics.map((diagnostic) =>
+        `pattern-source example has a syntax error: ${
+          syntaxDiagnosticText(diagnostic)
+        }`
+      );
+    case "unavailable":
+      return [
+        `pattern-source syntax check was unavailable: ${
+          syntax.detail ?? "unknown error"
+        }`,
+      ];
+  }
+};
+
 const parseExample = async (
   value: unknown,
   sources: ReadonlyMap<string, HarnessResearchSourceRead>,
   missing: string[],
   patterns: readonly HarnessResearchPatternRecord[],
+  options: ResearchAdmissionOptions,
 ): Promise<HarnessResearchExample | undefined> => {
   const record = objectValue(value);
   const kind = record.kind;
@@ -420,27 +457,16 @@ const parseExample = async (
       }
     } catch (error) {
       missing.push(
-        `run-pattern-input example is invalid: ${errorMessage(error)}`,
+        `run-pattern-input example is invalid: ${describeFailure(error)}`,
       );
     }
     return { kind, content, sourceIds: admitted };
   }
-  const syntax = await checkPatternSourceSyntax(content);
-  if (syntax.status === "invalid") {
-    for (const diagnostic of syntax.diagnostics) {
-      missing.push(
-        `pattern-source example has a syntax error: ${
-          syntaxDiagnosticText(diagnostic)
-        }`,
-      );
-    }
-  } else if (syntax.status === "unavailable") {
-    missing.push(
-      `pattern-source syntax check was unavailable: ${
-        syntax.detail ?? "unknown error"
-      }`,
-    );
-  }
+  const syntax = await checkPatternSourceSyntax(
+    content,
+    options.loadCompilerStack ?? ensureCompilerStack,
+  );
+  for (const blocker of syntaxCheckBlockers(syntax)) missing.push(blocker);
   return { kind, content, sourceIds: admitted, syntax };
 };
 
@@ -480,10 +506,11 @@ const admitEvidence = (
 };
 
 /** Returns an admitted kit with explicit blockers for unsupported claims. */
-export const admitResearchKit = async (
+const admitResearchKit = async (
   task: string,
   raw: RawResearchResult,
   state: ResearchAdmissionEvidence,
+  options: ResearchAdmissionOptions = {},
 ): Promise<HarnessResearchKit> => {
   const { missing, sourceMap, sources, patterns, inputs, rules } =
     admitEvidence(raw, state);
@@ -494,7 +521,13 @@ export const admitResearchKit = async (
       kindValue === "author" || kindValue === "focused-api"
       ? kindValue
       : "author";
-  const example = await parseExample(raw.example, sourceMap, missing, patterns);
+  const example = await parseExample(
+    raw.example,
+    sourceMap,
+    missing,
+    patterns,
+    options,
+  );
   if ((kind === "direct-run" || kind === "compose") && patterns.length === 0) {
     missing.push(`${kind} requires an inspected published pattern`);
   }
@@ -554,6 +587,7 @@ export const admitResearchResult = async (
   raw: RawResearchResult,
   state: ResearchAdmissionEvidence,
   purpose?: HarnessResearchPurpose,
+  options: ResearchAdmissionOptions = {},
 ): Promise<HarnessResearchResult> => {
   if (purpose !== undefined) {
     validateStructuredResultValue({
@@ -561,10 +595,18 @@ export const admitResearchResult = async (
       value: raw,
     });
   }
-  if (purpose === undefined) return await admitResearchKit(task, raw, state);
+  if (purpose === undefined) {
+    return await admitResearchKit(task, raw, state, options);
+  }
   const { missing, sourceMap, sources, inputs, rules, patterns } =
     admitEvidence(raw, state);
-  const example = await parseExample(raw.example, sourceMap, missing, patterns);
+  const example = await parseExample(
+    raw.example,
+    sourceMap,
+    missing,
+    patterns,
+    options,
+  );
   if (patterns.some((pattern) => pattern.sourceIdentityVerified !== true)) {
     missing.push(
       "selected patterns require verified published source identities",

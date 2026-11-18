@@ -30,6 +30,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { Logger, type LogMessage } from "@commonfabric/logger";
@@ -79,6 +80,17 @@ import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
 import { type Cell, cellTx, sendEvent } from "../src/cell.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
+/**
+ * The label-map entries `document`'s stored envelope holds, which a fixture
+ * restating the envelope keeps: the store refuses a commit that leaves a path
+ * whose stored declared entries hold a confidentiality clause with no
+ * declared entry.
+ */
+const storedLabelEntries = (document: unknown): FabricValue[] => {
+  const entries = (document as { cfc?: { labelMap?: { entries?: unknown } } })
+    .cfc?.labelMap?.entries;
+  return Array.isArray(entries) ? entries as FabricValue[] : [];
+};
 const spaceSigner = await Identity.fromPassphrase("speculation overlay space");
 const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase(
@@ -1373,7 +1385,10 @@ describe("Phase 2 speculation overlay", () => {
           version: 1,
           labelMap: {
             version: 1,
-            entries: [{ path: [], label: {}, origin: "declared" }],
+            entries: [
+              ...storedLabelEntries(base),
+              { path: [], label: {}, origin: "declared" },
+            ],
           },
           schemaHash: stagedHash,
         },
@@ -1560,7 +1575,10 @@ describe("Phase 2 speculation overlay", () => {
           version: 1,
           labelMap: {
             version: 1,
-            entries: [{ path: [], label: {}, origin: "declared" }],
+            entries: [
+              ...storedLabelEntries(base),
+              { path: [], label: {}, origin: "declared" },
+            ],
           },
           schemaHash: registryOnlyHash,
         },
@@ -1739,7 +1757,10 @@ describe("Phase 2 speculation overlay", () => {
           version: 1,
           labelMap: {
             version: 1,
-            entries: [{ path: [], label: {}, origin: "declared" }],
+            entries: [
+              ...storedLabelEntries(base),
+              { path: [], label: {}, origin: "declared" },
+            ],
           },
           schemaHash: installedHash,
         },
@@ -1918,7 +1939,10 @@ describe("Phase 2 speculation overlay", () => {
             version: 1,
             labelMap: {
               version: 1,
-              entries: [{ path: [], label: {}, origin: "declared" }],
+              entries: [
+                ...storedLabelEntries(base),
+                { path: [], label: {}, origin: "declared" },
+              ],
             },
             schemaHash: lateHash,
           },
@@ -2084,14 +2108,17 @@ describe("Phase 2 speculation overlay", () => {
       properties: { name: { type: "string" }, pairPin: { type: "boolean" } },
     } as const;
     const pairHash = internSchemaAsTaggedHashString(pairSchema);
-    const pairCfc = {
+    const pairCfcFor = (document: unknown) => ({
       version: 1,
       labelMap: {
         version: 1,
-        entries: [{ path: [], label: {}, origin: "declared" }],
+        entries: [
+          ...storedLabelEntries(document),
+          { path: [], label: {}, origin: "declared" },
+        ],
       },
       schemaHash: pairHash,
-    };
+    });
     const docBValue = replica.getDocument(
       draftBLink.id,
       draftBLink.scope,
@@ -2105,12 +2132,16 @@ describe("Phase 2 speculation overlay", () => {
       {
         id: draftLink.id,
         scope: draftLink.scope,
-        value: { ...currentDoc(), value: { name: "pair-frame" }, cfc: pairCfc },
+        value: {
+          ...currentDoc(),
+          value: { name: "pair-frame" },
+          cfc: pairCfcFor(currentDoc()),
+        },
       },
       {
         id: draftBLink.id,
         scope: draftBLink.scope,
-        value: { ...docBValue, cfc: pairCfc },
+        value: { ...docBValue, cfc: pairCfcFor(docBValue) },
       },
     ]);
     await awaitReplica(clientManager, readerSees("pair-frame"));
@@ -2126,7 +2157,10 @@ describe("Phase 2 speculation overlay", () => {
           version: 1,
           labelMap: {
             version: 1,
-            entries: [{ path: [], label: {}, origin: "declared" }],
+            entries: [
+              ...storedLabelEntries(currentDoc()),
+              { path: [], label: {}, origin: "declared" },
+            ],
           },
         },
       },

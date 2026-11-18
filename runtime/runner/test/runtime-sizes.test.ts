@@ -4,7 +4,7 @@ import { UnknownValue } from "@commonfabric/data-model/codec-common";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import {
   FabricBytes,
-  FabricRegExp,
+  FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
@@ -303,14 +303,18 @@ describe("runtime-sizes", () => {
       expect(storage.approxBytes).toBeGreaterThanOrEqual(1_000_000);
     });
 
-    it("counts a stored unknown value's preserved state and a regular expression's source in its space's approximate size", async () => {
+    it("counts a stored unknown value's preserved state and an unavailable value's message in its space's approximate size", async () => {
       const runtime = createRuntime();
       const tx = runtime.edit();
       runtime.getCell(space, "sized-unknown", { type: "object" }, tx).set({
         payload: new UnknownValue("FutureType@1", "x".repeat(1_000_000)),
       });
-      runtime.getCell(space, "sized-regexp", { type: "object" }, tx).set({
-        payload: new FabricRegExp("es2025", "y".repeat(1_000_000), ""),
+      runtime.getCell(space, "sized-unavailable", { type: "object" }, tx).set({
+        payload: new FabricUnavailable(
+          "error",
+          "general",
+          "y".repeat(1_000_000),
+        ),
       });
       await tx.commit().settled;
       await storageManager!.synced();

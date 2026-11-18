@@ -22,19 +22,13 @@ describe("CooperativeYield", () => {
         expect(yielder.yieldCount).toBe(1);
       });
 
-      it("calls `onYield` before the turn, and starts a fresh slice when the turn ends", async () => {
+      it("starts a fresh slice when the turn ends", async () => {
         const yielder = new CooperativeYield(20);
-        let observed = 0;
-        yielder.onYield = () => {
-          observed += 1;
-        };
         await clock.tick(20);
         const turn = yielder.maybeYield();
-        expect(observed).toBe(1);
         expect(yielder.yieldCount).toBe(1);
         await turn;
         expect(yielder.maybeYield()).toBeUndefined();
-        expect(observed).toBe(1);
       });
 
       it("resolves only after a macrotask queued before the yield has run", async () => {
@@ -66,15 +60,6 @@ describe("CooperativeYield", () => {
     describe("yieldNow()", () => {
       it("yields although the slice is fresh", async () => {
         const yielder = new CooperativeYield(20);
-        await yielder.yieldNow();
-        expect(yielder.yieldCount).toBe(1);
-      });
-
-      it("resolves and counts the yield when `onYield` throws", async () => {
-        const yielder = new CooperativeYield(20);
-        yielder.onYield = () => {
-          throw new Error("boom");
-        };
         await yielder.yieldNow();
         expect(yielder.yieldCount).toBe(1);
       });

@@ -1,5 +1,6 @@
 import type { GithubClient } from "@commonfabric/github-connector/client";
 import type { GithubFabricTarget } from "@commonfabric/github-connector/fabric";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 export type GithubHostStatus =
   | "starting"
@@ -30,10 +31,6 @@ export interface GithubHostHealth {
     completedAt: string;
     pullRequestCount: number;
   };
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Coordinates complete GitHub collections and health publication. */
@@ -132,7 +129,7 @@ export class GithubHost {
         status: "failed",
         startedAt,
         completedAt: this.#now(),
-        error: errorMessage(error),
+        error: describeFailure(error),
       };
       try {
         await this.#target.publishHealth(this.health());

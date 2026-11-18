@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { testSessionOpenAuthFactory } from "./memory-v2-test-utils.ts";
@@ -39,6 +40,7 @@ describe("v2-transaction", () => {
       throw new Error("the fixture needs an emulated storage manager");
     }
     remoteClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(candidate.server()),
     });
     remoteSession = await remoteClient.mount(

@@ -11,6 +11,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { parseHandleRef, resolveHandleToken } from "../handle-table.ts";
+import { PIECE_ID_PATTERN } from "../input-cells.ts";
 import {
   executeLoomAuthoringCommand,
   type LoomAuthoringCommand,
@@ -19,7 +20,7 @@ import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
 /** A requested addition, with one ordinary reference or one held pattern token. */
 export interface LoomComposeComponent {
-  /** A typed non-Fabric object reference, validated by the Loom host. */
+  /** A producer's composition-ready reference or held whole-piece token. */
   ref?: string;
 
   /** A held whole Pattern Instance address, resolved by the host. */
@@ -136,11 +137,14 @@ const projectManifest = (value: unknown) => {
   };
 };
 
+/** A reference that fails composition's held whole-piece contract. */
+export class InvalidPatternReference extends Error {}
+
 /**
- * Helper for composition, which accepts only held whole Pattern Instances in
- * the session's own space. Restricted skill handles never grant composition.
+ * Resolves a held whole-piece token in the session's own space to its durable
+ * composition identity. Restricted skill handles never grant composition.
  */
-const patternReference = async (
+export const patternReference = async (
   context: HarnessToolContext,
   token: string,
 ): Promise<string> => {
@@ -148,7 +152,9 @@ const patternReference = async (
     ? undefined
     : resolveHandleToken(context.handleTable, token);
   if (entry === undefined || entry.capability !== undefined) {
-    throw new Error("Use a general Pattern Instance token this run holds.");
+    throw new InvalidPatternReference(
+      "Use a general Pattern Instance token this run holds.",
+    );
   }
   if (context.getFabricSession === undefined) {
     throw new Error("Pattern Instance composition requires a Fabric session.");
@@ -160,7 +166,9 @@ const patternReference = async (
     (link.space !== undefined && link.space !== space) ||
     link.path.length > 0 || link.scope !== "space"
   ) {
-    throw new Error("Use a whole Pattern Instance in this run's own space.");
+    throw new InvalidPatternReference(
+      "Use a whole Pattern Instance in this run's own space.",
+    );
   }
   const cell = pieces.runtime.getCellFromLink({
     ...link,
@@ -170,7 +178,9 @@ const patternReference = async (
   await cell.sync();
   const id = pieceId(cell);
   if (id === undefined || getPatternIdentityRef(cell) === undefined) {
-    throw new Error("The held token does not identify a Pattern Instance.");
+    throw new InvalidPatternReference(
+      "The held token does not identify a Pattern Instance.",
+    );
   }
   return `pattern:${space}/${id}`;
 };
@@ -187,6 +197,67 @@ const apiBase = (value: unknown): string | undefined => {
     return url.href.replace(/\/+$/, "");
   } catch {
     return undefined;
+  }
+};
+
+/**
+ * Why {@link heldPatternInstance} gave no reference for a piece.
+ * `foreign-space` is read from the address alone. Every other failure is
+ * `unavailable`: an absent piece, a cell that is no whole Pattern Instance and
+ * a failed read answer alike, so a raw address from untrusted text cannot
+ * probe what the space holds (CFC §17.1, §8.13.5).
+ */
+export type UnheldPatternInstance = "foreign-space" | "unavailable";
+
+/**
+ * The model-facing reference for a whole Pattern Instance named by space and
+ * piece id: the token the run already holds for it, or its canonical link,
+ * which the prompt loop's outbound swap turns into a held handle. It is the
+ * inverse of {@link patternReference}, and admits only what that function
+ * would hand back out: a whole Pattern Instance in this run's own space.
+ * `restricted` says the run already held it only through a restricted
+ * handle, whose token `ref` then is; a caller that grants composition must
+ * refuse that, while a reader may use it as the run already could.
+ */
+export const heldPatternInstance = async (
+  context: HarnessToolContext,
+  space: string,
+  id: string,
+): Promise<
+  { ref: string; restricted: boolean } | { unheld: UnheldPatternInstance }
+> => {
+  if (!PIECE_ID_PATTERN.test(id) || context.getFabricSession === undefined) {
+    return { unheld: "unavailable" };
+  }
+  try {
+    const { pieces } = await context.getFabricSession();
+    const own = pieces.getSpace();
+    if (space !== own && space !== context.fabricSessionTarget?.space) {
+      return { unheld: "foreign-space" };
+    }
+    const cell = pieces.runtime.getCellFromLink({
+      ...parseHandleRef(`/of:${id}`),
+      space: own,
+      schema: undefined,
+    });
+    await cell.sync();
+    if (pieceId(cell) !== id || getPatternIdentityRef(cell) === undefined) {
+      return { unheld: "unavailable" };
+    }
+    const held = context.handleTable?.entries.filter((entry) => {
+      const address = parseHandleRef(entry.ref);
+      return address.id === `of:${id}` &&
+        address.path.length === 0 && address.scope === "space" &&
+        (address.space === undefined || address.space === own);
+    }) ?? [];
+    const restricted = held.find((entry) => entry.capability !== undefined);
+    return {
+      ref: restricted?.token ?? held[0]?.token ??
+        createLLMFriendlyLink(cell.getAsNormalizedFullLink(), own),
+      restricted: restricted !== undefined,
+    };
+  } catch {
+    return { unheld: "unavailable" };
   }
 };
 
@@ -214,35 +285,17 @@ const deployedPatterns = async (
       receipt.schema !== "loom-deployed-pattern-v1" ||
       apiBase(receipt.api_url) !== api ||
       typeof receipt.piece_id !== "string" ||
-      !/^fid1:[A-Za-z0-9_-]{43}$/.test(receipt.piece_id)
+      typeof receipt.space !== "string" ||
+      seen.has(receipt.piece_id)
     ) continue;
-    try {
-      const { pieces } = await context.getFabricSession();
-      const space = pieces.getSpace();
-      if (receipt.space !== target.space && receipt.space !== space) continue;
-      if (seen.has(receipt.piece_id)) continue;
-      seen.add(receipt.piece_id);
-      const cell = pieces.runtime.getCellFromLink({
-        ...parseHandleRef(`/of:${receipt.piece_id}`),
-        space,
-        schema: undefined,
-      });
-      await cell.sync();
-      if (
-        pieceId(cell) !== receipt.piece_id ||
-        getPatternIdentityRef(cell) === undefined
-      ) continue;
-      const link = createLLMFriendlyLink(cell.getAsNormalizedFullLink(), space);
-      const held = context.handleTable?.entries.filter((entry) => {
-        const address = parseHandleRef(entry.ref);
-        return address.id === `of:${receipt.piece_id}` &&
-          address.path.length === 0 && address.scope === "space" &&
-          (address.space === undefined || address.space === space);
-      }) ?? [];
-      if (held.some((entry) => entry.capability !== undefined)) continue;
-      output.push({ pattern_token: held[0]?.token ?? link });
-    } catch {
-      // Unavailable deployment cells do not prevent ordinary Loom recovery.
+    seen.add(receipt.piece_id);
+    const held = await heldPatternInstance(
+      context,
+      receipt.space,
+      receipt.piece_id,
+    );
+    if ("ref" in held && !held.restricted) {
+      output.push({ pattern_token: held.ref });
     }
   }
   return output;
@@ -298,15 +351,24 @@ const invoke = async (
       if ((item.ref !== undefined) === (item.pattern_token !== undefined)) {
         return fail("Give each component exactly one ref or pattern_token.");
       }
-      if (item.pattern_token !== undefined) {
-        if (typeof item.pattern_token !== "string") {
+      const token = item.pattern_token ??
+        (typeof item.ref === "string" && item.ref.startsWith("cfh:")
+          ? item.ref
+          : undefined);
+      if (token !== undefined) {
+        if (typeof token !== "string") {
           return fail("A pattern_token must be a held token.");
         }
         try {
-          const ref = await patternReference(context, item.pattern_token);
+          const ref = await patternReference(context, token);
           const { pattern_token: _token, ...rest } = item;
           normalized.push({ ...rest, ref });
-        } catch {
+        } catch (error) {
+          if (!(error instanceof InvalidPatternReference)) {
+            return fail(
+              "The Pattern Instance could not be read. Keep its ref and try again when the Fabric session is available.",
+            );
+          }
           return fail(
             "Use a held, unrestricted whole Pattern Instance in this run's own space.",
           );
@@ -314,7 +376,7 @@ const invoke = async (
       } else {
         if (
           typeof item.ref !== "string" ||
-          !/^(page|artifact|url|person|thread|moment|loom|wish|intention|chat|run):/
+          !/^(page|page-id|section|artifact|url|person|thread|moment|loom|wish|intention|chat|run):/
             .test(item.ref)
         ) {
           return fail(
@@ -436,7 +498,7 @@ export const loomComposeTool: HarnessToolDefinition<
               ref: {
                 type: "string",
                 description:
-                  "An existing page:, artifact:, url:, person:, thread:, moment:, loom:, wish:, intention:, chat:, or run: reference. The host validates its grammar and binding. Mutually exclusive with pattern_token.",
+                  "The ref returned by page.write, run_pattern or assign_slug, including a held whole-piece cfh:a: token; or a typed page:, page-id:, section:, artifact:, url:, person:, thread:, moment:, loom:, wish:, intention:, chat: or run: reference. The host validates grammar and binding. Mutually exclusive with pattern_token. Source-reader refs are not component refs: read with source.read, retain with page.write, then compose its ref.",
               },
               pattern_token: {
                 type: "string",

@@ -26,15 +26,6 @@ export interface FieldRegistration {
   /** Reference to the field element */
   element: HTMLElement;
 
-  /** Field name for identifying in form submission */
-  name?: string;
-
-  /** Get the current buffered value */
-  getValue: () => unknown;
-
-  /** Set the buffered value programmatically */
-  setValue: (value: unknown) => void;
-
   /** Write buffered value to bound cell (async to await cell update) */
   flush: () => Promise<void>;
 
@@ -43,9 +34,6 @@ export interface FieldRegistration {
 
   /** Validate the current buffered value */
   validate: () => ValidationResult;
-
-  /** Check if the field has unsaved changes */
-  isDirty: () => boolean;
 }
 
 /**

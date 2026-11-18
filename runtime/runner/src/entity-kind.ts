@@ -35,6 +35,13 @@
  *   a property of the binding, not of the entity, and unrelated to
  *   identity despite sharing the word (and the value `"stream"`).
  *
+ * ## Schemes that carry no kind
+ *
+ * `receipt:` is an entity scheme with no kind: it says what a document is, a
+ * handling's receipt (`handlingReceiptId()`), and asks for no relaxed conflict
+ * handling, so {@link entityKindOfIdString} answers `undefined` for it. Nothing
+ * refuses a write to one yet (events.md §4).
+ *
  * ## Which scheme names are registered
  *
  * The IANA URI scheme registry lists every registered scheme name:
@@ -45,8 +52,8 @@
  * - **Registered, and used for what it was registered for.** `did:`,
  *   defined by the W3C Decentralized Identifiers specification, and
  *   `data:`, defined by RFC 2397.
- * - **Absent from the registry.** `of:`, `computed:`, and runtime-local
- *   `snapshot:` identifiers are private to this codebase.
+ * - **Absent from the registry.** `of:`, `computed:`, `receipt:`, and
+ *   runtime-local `snapshot:` identifiers are private to this codebase.
  * - **Registered for an unrelated subject.** `cid:` prefixes a
  *   content-addressed schema document reference (`schema-decompose.ts`).
  *   RFC 2392 registers the same name for a body part of a MIME message,
@@ -66,14 +73,21 @@ export type EntityKind = "computed";
 /** The URI scheme of computed-kind entity ids (`computed:fid1:<hash>`). */
 export const COMPUTED_URI_SCHEME = "computed";
 
+/** The URI scheme of handling receipts (`receipt:fid1:<hash>`). */
+export const RECEIPT_URI_SCHEME = "receipt";
+
 /**
- * Every entity URI scheme: `of` (the unkinded default) plus one scheme per
- * entity kind. This is the SINGLE place the set is defined — the helpers
- * below and scheme parsers across layers (routing, display, embeds) derive
- * from it, so adding a kind cannot leave a stale `of|computed` alternation
- * behind somewhere.
+ * Every entity URI scheme: `of` (the unkinded default), one scheme per entity
+ * kind, and the schemes that carry no kind. This is the SINGLE place the set is
+ * defined — the helpers below and scheme parsers across layers (routing,
+ * display, embeds) derive from it, so adding a scheme cannot leave a stale
+ * `of|computed` alternation behind somewhere.
  */
-export const ENTITY_URI_SCHEMES = ["of", COMPUTED_URI_SCHEME] as const;
+export const ENTITY_URI_SCHEMES = [
+  "of",
+  COMPUTED_URI_SCHEME,
+  RECEIPT_URI_SCHEME,
+] as const;
 
 export type EntityUriScheme = (typeof ENTITY_URI_SCHEMES)[number];
 
@@ -121,7 +135,7 @@ export function stripEntityUriScheme(id: string): string {
  * `docs/specs/computed-cell-identity.md`), so dropping the scheme would
  * silently address the sibling instead of reporting that the caller named
  * something this seam cannot resolve. Every scheme but `of:` is refused, so a
- * kind added to {@link ENTITY_URI_SCHEMES} is refused here without a further
+ * scheme added to {@link ENTITY_URI_SCHEMES} is refused here without a further
  * edit.
  *
  * A string carrying no entity scheme is returned unchanged, including one with

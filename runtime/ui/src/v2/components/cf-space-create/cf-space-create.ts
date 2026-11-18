@@ -6,6 +6,7 @@ import { BaseElement } from "../../core/base-element.ts";
 
 import "../cf-message-input/index.ts";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
 
 import { runtimeContext } from "../../runtime-context.ts";
@@ -67,7 +68,7 @@ export class CFSpaceCreate extends BaseElement {
       const did = await runtime.createSpace(trimmed);
       this.emit("cf-space-created", { did, label: trimmed });
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = describeFailure(error);
     } finally {
       this.pending = false;
     }

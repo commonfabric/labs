@@ -4,6 +4,7 @@ import { resolveLink, unlessCyclic } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { declaredOnwardRead } from "../storage/reactivity-log.ts";
 import { listElementKeys } from "./list-element-keys.ts";
 import { listElementLink, listSlotPlace } from "./list-element-link.ts";
 import { inferListOpArgumentUsage } from "./list-op-argument-usage.ts";
@@ -74,6 +75,10 @@ export type ListCoordinatorPlan = {
  * resolutions are link-resolution probes, which flow derivation treats
  * as resolution machinery rather than observations.
  *
+ * `map` reads the list-doc with its membership declared onward onto its
+ * container: the list's membership label lands there, and a child it sets up
+ * carries its own slot's label and the selection's (`listMembershipRead`).
+ *
  * The result container is keyed on the node's reserved output spot — a
  * stable, position-derived, program-independent identity (CT-1623) —
  * rather than the serialized op or inputs, both of which carry the
@@ -102,34 +107,12 @@ export function listCoordinatorPlan(
       "writeRedirect",
     )
     : undefined;
-  // `array` callback arguments should observe the actual list entity, not
-  // the alias/boxed reference used to pass that list into the builtin.
-  const { listCell, rawList, slots } = listSlotResolutions(
-    runtime,
-    tx,
-    inputsCell,
-  );
-  const list: Cell<any>[] | undefined = rawList === undefined
-    ? undefined
-    : !Array.isArray(rawList)
-    ? rawList as unknown as Cell<any>[] // non-array: the caller's guard
-    : slots.map((resolved) => runtime.getCellFromLink(resolved, undefined, tx));
   // `.getRaw()` because the pattern itself is wanted, not what its aliases
   // reach: a compact `{ $patternRef }` sentinel (resolved to the live
   // canonical pattern by identity) or, on the legacy path, the embedded
   // pattern graph itself.
   const opPattern = resolveOpPattern(runtime, opCell.getRaw(), op, inputsCell);
   const argumentUsage = inferListOpArgumentUsage(opPattern);
-  const scope = op === "map" ? listTarget!.scope : narrowestCellScope(
-    runtime,
-    tx,
-    [
-      inputsCell.key("list"),
-      ...(Array.isArray(list) && argumentUsage.usesElement ? list : []),
-      argumentUsage.usesArray ? inputsCell.key("list") : undefined,
-      argumentUsage.usesParams ? inputsCell.key("params") : undefined,
-    ],
-  );
   const outputSpot = outputSpotFromBinding(outputBinding);
   if (!outputSpot) {
     throw new Error(
@@ -139,14 +122,48 @@ export function listCoordinatorPlan(
   const resultSchema = op === "map"
     ? listResultSchema(opPattern.resultSchema)
     : listResultSchema();
-  const container = ownedCell<any[]>(
+  const mintContainer = (scope: ReturnType<typeof narrowestCellScope>) =>
+    ownedCell<any[]>(
+      runtime,
+      tx,
+      parentCell,
+      listContainerCause(op, parentCell, outputSpot),
+      resultSchema,
+      scope,
+    );
+  // `map` knows its container before it reads the list, since the list read
+  // names the container its membership label lands on. The other two bind
+  // their container to a scope the list's elements decide.
+  const mapContainer = op === "map"
+    ? mintContainer(listTarget!.scope)
+    : undefined;
+  // `array` callback arguments should observe the actual list entity, not
+  // the alias/boxed reference used to pass that list into the builtin.
+  const { listCell, rawList, slots } = listSlotResolutions(
     runtime,
     tx,
-    parentCell,
-    listContainerCause(op, parentCell, outputSpot),
-    resultSchema,
-    scope,
+    inputsCell,
+    "list",
+    mapContainer,
   );
+  const list: Cell<any>[] | undefined = rawList === undefined
+    ? undefined
+    : !Array.isArray(rawList)
+    ? rawList as unknown as Cell<any>[] // non-array: the caller's guard
+    : slots.map((resolved) => runtime.getCellFromLink(resolved, undefined, tx));
+  const scope = mapContainer !== undefined
+    ? listTarget!.scope
+    : narrowestCellScope(
+      runtime,
+      tx,
+      [
+        inputsCell.key("list"),
+        ...(Array.isArray(list) && argumentUsage.usesElement ? list : []),
+        argumentUsage.usesArray ? inputsCell.key("list") : undefined,
+        argumentUsage.usesParams ? inputsCell.key("params") : undefined,
+      ],
+    );
+  const container = mapContainer ?? mintContainer(scope);
   const elementKeys = Array.isArray(list)
     ? listElementKeys(list)
     : new Map<number, string>();
@@ -162,6 +179,47 @@ export function listCoordinatorPlan(
 }
 
 /**
+ * A list input's entity and its raw slots: the list-doc read that journals
+ * membership and order, which ARE the list's content.
+ *
+ * That read observes the membership, and the transaction's join charges it
+ * to everything the transaction writes. With `onto` given, the read is
+ * declared onward instead (`declaredOnwardRead`): what it consumed at the
+ * list itself, the membership label, lands on `onto`'s membership as the
+ * flow stage stamps it, and what it consumed at the slots, each item's
+ * shape and reference identity, joins as before, so a child the caller sets
+ * up in the same transaction carries its own slot's label and the
+ * selection's, not every element's. A list whose membership carries every
+ * element's label, a query result (CFC spec §8.17.6), is the case that
+ * tells the two apart.
+ */
+export function listMembershipRead(
+  tx: IExtendedStorageTransaction,
+  inputsCell: Cell<any>,
+  listKey = "list",
+  onto?: Cell<any[]>,
+): {
+  listCell: Cell<any>;
+  rawList: unknown;
+} {
+  const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
+  const readRawList = () => listCell.withTx(tx).getRaw() as unknown;
+  // A declared-onward read (proposed CFC spec §18.6.2, commonfabric/specs#85):
+  // the list's membership label lands on `onto`, the caller's result
+  // container, as its membership stamp. Every other write the caller
+  // derives from this read is a child's setup, which the caller's
+  // resolution of that child's slot (`listSlotResolutions`) decides: that
+  // read stays in the join.
+  const rawList = onto === undefined
+    ? readRawList()
+    : tx.runWithAmbientReadMeta(
+      declaredOnwardRead(onto.getAsNormalizedFullLink()),
+      readRawList,
+    );
+  return { listCell, rawList };
+}
+
+/**
  * A list input's entity and the value resolution of each of its slots — the
  * cells a coordinator's element keys are built from. One derivation, shared
  * by the plan and by the resume pre-sync: a slot's value chain is followed
@@ -173,19 +231,25 @@ export function listCoordinatorPlan(
  * ends on, until a round ends where the last one did, before deriving a
  * plan. A slot whose links run in a cycle names no value and resolves to its
  * own place in the list. `slots` is empty when the list is not an array.
+ * The list itself is read by `listMembershipRead`, `onto` included.
  */
 export function listSlotResolutions(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
+  onto?: Cell<any[]>,
 ): {
   listCell: Cell<any>;
   rawList: unknown;
   slots: NormalizedFullLink[];
 } {
-  const listCell = inputsCell.key(listKey).withTx(tx).resolveAsCell();
-  const rawList = listCell.withTx(tx).getRaw() as unknown;
+  const { listCell, rawList } = listMembershipRead(
+    tx,
+    inputsCell,
+    listKey,
+    onto,
+  );
   const listBase = listCell.getAsNormalizedFullLink();
   // An element whose links run in a cycle, back to a place they passed or
   // into their own subpath, names no value, so its slot is its place in the

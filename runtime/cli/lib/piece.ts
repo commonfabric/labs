@@ -1,5 +1,6 @@
-import { ensureDir } from "@std/fs";
-import { dirname, join } from "@std/path";
+import { ensureDir } from "@std/fs/ensure-dir";
+import { dirname } from "@std/path/dirname";
+import { join } from "@std/path/join";
 
 import { ValidationError } from "@cliffy/command";
 import type { CellScope, JSONSchema } from "@commonfabric/api";
@@ -13,17 +14,30 @@ import {
   NULL_LIVE_ENVIRONMENT,
 } from "@commonfabric/data-model/codec-common";
 import {
+  type AsBytes,
   createSession,
-  type Identity,
   legacySpaceDid,
   Session,
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
-import { collectDataFileNames } from "@commonfabric/js-compiler";
-import { TARGET } from "@commonfabric/js-compiler/typescript";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  compileIndexedPattern,
+  type IndexedProgram,
+} from "@commonfabric/pattern-index/deploy";
+import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { setLLMUrl } from "@commonfabric/llm";
+import { openPatternIndexClient } from "@commonfabric/pattern-index/access";
+import {
+  findIndexedPiece,
+  type PatternIndexStore,
+  patternIndexStoreRoot,
+} from "@commonfabric/pattern-index/store";
+import {
+  ownerReleaseByIntentRequest,
+  ownerReleaseByIntentSignature,
+  ownerReleaseByIntentSignedBytes,
+} from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
 import {
   assignSlug,
   listSlugs,
@@ -46,8 +60,11 @@ import {
   type PiecePatternRef,
   PiecesController,
   type PieceSourceActionResult,
+  PieceSourceChangedError,
+  readServedInstantiateReceipt,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
+  type ServedPatternSource,
 } from "@commonfabric/piece/ops";
 import {
   declaredProperties,
@@ -64,7 +81,6 @@ import {
   decomposeSchema,
   encodeJsonPointer,
   entityIdFrom,
-  formatFabricRef,
   getCellOrThrow,
   getMetaLink,
   getPatternIdentityRef,
@@ -79,6 +95,7 @@ import {
   NAME,
   type NormalizedFullLink,
   parseExternalSchemaRef,
+  pullFromServer,
   recomposeSchema,
   resolveLink,
   resolveLinkTracingDereferences,
@@ -104,13 +121,20 @@ import {
   redactCaveatSourcesForDisplay,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
+  type ResolvedLabelReadOptions,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
-import { releaseCellConfidentiality } from "@commonfabric/runner/cfc/confidentiality-release";
+import {
+  releaseByIntentTargetOf,
+  releaseCellConfidentiality,
+  releaseConfidentialityByIntent,
+  storedClausesForRelease,
+} from "@commonfabric/runner/cfc/confidentiality-release";
 import { entityKindOfIdString } from "@commonfabric/runner/entity-kind";
 import { waitForSettledThroughHead } from "@commonfabric/runner/executor/watermark";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -157,8 +181,11 @@ import { loadIdentity } from "./identity.ts";
 import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
+  followPieceOnServer,
   instantiatePieceOnServer,
+  type LifecycleClientConfig,
   ServedLifecycleError,
+  type ServedPieceScope,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -189,6 +216,22 @@ export interface EntryConfig {
   /** Data file paths stored with the piece and never compiled. */
   dataFilePaths?: string[];
 }
+
+/**
+ * A published pattern to create a piece from, in place of local source. The
+ * index is read as the space's identity, the principal the piece is created
+ * as.
+ */
+export interface IndexedPatternEntry {
+  /** The pattern's id in the index, as a search answers it. */
+  patternId: string;
+
+  /** Base URL of the pattern index that serves it. */
+  patternIndexUrl: string;
+}
+
+/** Where a new piece's program comes from: local files, or the index. */
+export type PieceEntry = EntryConfig | IndexedPatternEntry;
 
 export interface SpaceConfig {
   apiUrl: string;
@@ -249,11 +292,44 @@ export interface PieceConfig extends SpaceConfig {
 
 export interface SetPiecePatternOptions {
   dangerouslyAllowIncompatibleSchema?: boolean;
+
+  /**
+   * The origin the piece follows from then on, recorded with the revision;
+   * absent, the update detaches the piece.
+   */
+  origin?: string;
+
+  /**
+   * Told what was deployed once storage accepted it; a caller that records
+   * each deploy (`cf`'s private versions) reads it here.
+   */
+  onDeployed?: (deployed: DeployedProgram) => void;
+}
+
+/** A program a deploy committed, and the pattern id it committed under. */
+export interface DeployedProgram {
+  program: RuntimeProgram;
+
+  /**
+   * Reads the pattern id the deploy committed; `undefined` when it cannot be
+   * read back. Lazy, so a caller that records nothing never pays the read.
+   */
+  patternId: () => Promise<string | undefined>;
+
+  /** The space the deploy wrote to, as a DID, and the piece it wrote. */
+  piece: { space: string; id: string };
 }
 
 export interface GetCellValueOptions {
   input?: boolean;
   step?: boolean;
+
+  /**
+   * `false` reads what the store holds now, with no wait for the serving
+   * runtime and no demand for a derived value that is stale.
+   */
+  run?: boolean;
+
   selection?: CellSelection;
 }
 
@@ -336,7 +412,9 @@ export function parseCellCfcLabelUpdate(
 
 /**
  * The label view both label commands answer from, read through the RESOLVED
- * reader — the doc the selected path lands in once its links are followed.
+ * reader — the doc the selected path lands in once its links are followed, or,
+ * with `lastNode: "top"`, the doc holding a link stored at the path, without
+ * the labels of where that link leads.
  *
  * Each command needs that doc for its own reason. An INSPECTION read must not
  * answer "none" for a value carrying a label behind a link the path crosses
@@ -347,8 +425,12 @@ export function parseCellCfcLabelUpdate(
 function cfcLabelViewForCommand(
   cell: unknown,
   path: readonly (string | number)[],
+  options: ResolvedLabelReadOptions = {},
 ): CfcLabelView | null {
-  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(cell);
+  const { view, readFailed } = cfcLabelViewForResolvedCellWithStatus(
+    cell,
+    options,
+  );
   if (readFailed) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Could not read CFC labels at "${location}".`);
@@ -388,9 +470,20 @@ export class PieceVerbReadError extends Error {
 }
 
 export class PieceResultProjectionError extends Error {
-  constructor(path: readonly (string | number)[], stepped: boolean) {
+  /**
+   * `stepped` says the read ran the piece here, and `served` that the serving
+   * runtime runs it, so that `--step` has nothing to add.
+   */
+  constructor(
+    path: readonly (string | number)[],
+    stepped: boolean,
+    served = false,
+  ) {
     const location = path.length === 0 ? "<root>" : path.join("/");
-    const stepHint = stepped
+    const stepHint = served
+      ? " The server was asked for it, but the required value still did not " +
+        "materialize."
+      : stepped
       ? " The piece was stepped, but the required value still did not " +
         "materialize."
       : " Use --step to start the piece and materialize session-scoped " +
@@ -514,11 +607,27 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   loadIdentity?: typeof loadIdentity;
   getProgramFromFile?: typeof getProgramFromFile;
   getPinnedProgramFromFile?: typeof getPinnedProgramFromFile;
+  getProgramFromIndex?: typeof getProgramFromIndex;
+  readServedInstantiateReceipt?: typeof readServedInstantiateReceipt;
+
+  /** The transport index reads go over, in place of the global `fetch`. */
+  patternIndexFetch?: PatternIndexFetch;
+
+  /** The local index membership record, in place of the user's own. */
+  patternIndexStore?: PatternIndexStore;
   instantiatePieceOnServer?: typeof instantiatePieceOnServer;
   setPieceSourceOnServer?: typeof setPieceSourceOnServer;
+  followPieceOnServer?: typeof followPieceOnServer;
 
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
+
+  /**
+   * Resolves when a created piece has had as long as it gets to start, and
+   * stops counting once `settled` aborts; {@link pieceStartDeadline} by
+   * default.
+   */
+  startDeadline?: (settled: AbortSignal) => Promise<void>;
 
   reportSearchError?: (
     pieceId: string,
@@ -526,6 +635,9 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
     error: unknown,
   ) => void;
   deriveSelectedValue?: typeof deriveSelectedValue;
+
+  /** Asks the server for a cell's value, in place of {@link pullServed}. */
+  pullServed?: typeof pullServed;
 }
 
 interface DisposableRuntime {
@@ -569,22 +681,14 @@ export async function withRuntimeCleanupOnFailure<T>(
     if (closeNow) {
       await closeNow().catch((disposeError) => {
         report(
-          `loadPieces storage cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces storage cleanup failed: ${describeFailure(disposeError)}`,
         );
       });
     }
     await runtime.dispose().catch(
       (disposeError) => {
         report(
-          `loadPieces cleanup failed: ${
-            disposeError instanceof Error
-              ? disposeError.message
-              : String(disposeError)
-          }`,
+          `loadPieces cleanup failed: ${describeFailure(disposeError)}`,
         );
       },
     );
@@ -626,6 +730,29 @@ export interface ConnectionOutput {
    * `jsonOutput` and the process's console serves everything else.
    */
   readonly consoleHandler?: ConsoleHandler;
+}
+
+/**
+ * The hook a connection's runtime calls when a pattern navigates. It writes
+ * the line naming the piece navigated to on `line` at once, so a script can
+ * capture it without waiting, and a target it cannot name on `failure`.
+ */
+export function navigateReporter(
+  line: (message: string) => void,
+  failure: (message: string) => void,
+): (target: Cell<unknown>) => void {
+  return (target) => {
+    try {
+      const id = pieceId(target);
+      if (!id) {
+        failure("navigateTo: target missing piece id");
+        return;
+      }
+      line(`navigateTo new piece id ${id}`);
+    } catch (e) {
+      failure(`navigateTo callback error: ${describeFailure(e)}`);
+    }
+  };
 }
 
 /**
@@ -720,23 +847,7 @@ export async function loadPieces(
               });
             },
           ],
-          navigateCallback: (target) => {
-            try {
-              const id = pieceId(target);
-              if (!id) {
-                navigateFailure("navigateTo: target missing piece id");
-                return;
-              }
-              // Emit greppable line immediately so scripts can capture without waiting
-              navigateLine(`navigateTo new piece id ${id}`);
-            } catch (e) {
-              navigateFailure(
-                `navigateTo callback error: ${
-                  e instanceof Error ? e.message : String(e)
-                }`,
-              );
-            }
-          },
+          navigateCallback: navigateReporter(navigateLine, navigateFailure),
         }),
         ...(consoleHandler === undefined ? {} : { consoleHandler }),
       }),
@@ -788,9 +899,7 @@ export async function loadPieces(
       );
     } catch (error) {
       (output.report ?? console.warn)(
-        `Could not load the profile delegations: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not load the profile delegations: ${describeFailure(error)}`,
       );
     }
     const deferSpaceCellSync = config.deferSpaceCellSync !== false;
@@ -823,11 +932,17 @@ export async function loadPieces(
   }, output.report);
 }
 
-export function getProgramFromFile(
+export async function getProgramFromFile(
   pieces: PiecesController,
   entry: EntryConfig,
 ): Promise<RuntimeProgram> {
-  return resolveLocalProgram(
+  // Reading a program from files reaches the compiler, which a command that
+  // only talks to a running piece should not load.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { resolveLocalProgram } = await import(
+    "@commonfabric/runner/local-program.deno"
+  );
+  return await resolveLocalProgram(
     (resolver) => pieces.runtime.harness.resolve(resolver),
     {
       main: entry.mainPath,
@@ -857,6 +972,52 @@ async function getPinnedProgramFromFile(
     console.error(renderPinRewrite(rewrite));
   }
   return result.program;
+}
+
+/**
+ * The program a published pattern deploys as, and the index's display name
+ * for it, fetched and compiled into the
+ * space the way cf-harness's `run_pattern` deploys one: the published patterns
+ * it imports are drawn into the space first, so its `cf:pattern:` imports
+ * resolve, and a failure's message never quotes the indexed source.
+ *
+ * Compiling here, ahead of creation, is what gives a creation the shared
+ * path's failures: creation compiles the program again, from the cache this
+ * compile filled, and a served creation compiles it on the server.
+ *
+ * Unlike a program read from local files, this one's fabric imports are not
+ * pinned: it deploys exactly as the index serves it, as `run_pattern` deploys
+ * it.
+ *
+ * @throws IndexedPatternError when the index, a composed import, or the
+ * compile fails.
+ */
+async function getProgramFromIndex(
+  pieces: PiecesController,
+  config: SpaceConfig,
+  entry: IndexedPatternEntry,
+  deps: PieceOperationDependencies = {},
+): Promise<IndexedProgram> {
+  const signer = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  const { program, name } = await compileIndexedPattern({
+    runtime: pieces.runtime,
+    space: pieces.getSpace(),
+    patternId: entry.patternId,
+    // Signs as the identity and presents the chain from the person's index
+    // root when this machine holds one, as every index call from `cf` does.
+    getClient: () =>
+      openPatternIndexClient({
+        baseUrl: entry.patternIndexUrl,
+        signer,
+        ...(deps.patternIndexFetch === undefined
+          ? {}
+          : { fetchFn: deps.patternIndexFetch }),
+        ...(deps.patternIndexStore === undefined
+          ? {}
+          : { store: deps.patternIndexStore }),
+      }),
+  });
+  return { program, ...(name === undefined ? {} : { name }) };
 }
 
 // Returns an array of metadata about pieces to display.
@@ -891,7 +1052,7 @@ export async function listPieces(
         return {
           id: piece.id,
           reference,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -939,7 +1100,7 @@ export async function listSpaceSlugs(
       } catch (err) {
         return {
           slug,
-          error: err instanceof Error ? err.message : String(err),
+          error: describeFailure(err),
         };
       }
     }),
@@ -1458,7 +1619,7 @@ export async function searchPieces(
     ) => {
       console.warn(
         `Warning: Could not read ${source} for piece ${pieceId}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
     });
@@ -1735,14 +1896,43 @@ function servesLifecycleVerbs(pieces: PiecesController): boolean {
     .serverExecution === true;
 }
 
-async function lifecycleClient(
-  config: SpaceConfig,
-  deps: PieceOperationDependencies,
-): Promise<{ apiUrl: URL; identity: Identity }> {
+/**
+ * The client a served verb is sent with: it sends the verb on `pieces`'
+ * memory session for its space, so the verb reaches the process serving that
+ * space and runs as the identity the connection was opened as.
+ */
+function lifecycleClient(pieces: PiecesController): LifecycleClientConfig {
+  const storageManager = (pieces.runtime as Runtime | undefined)
+    ?.storageManager;
   return {
-    apiUrl: new URL(config.apiUrl),
-    identity: await (deps.loadIdentity ?? loadIdentity)(config.identity),
+    session: (space, verb, body) => {
+      if (storageManager?.runPatternLifecycle === undefined) {
+        throw new Error(
+          "This connection's storage manager has no memory sessions to send " +
+            `the \`${verb}\` verb on`,
+        );
+      }
+      return storageManager.runPatternLifecycle(space, verb, body);
+    },
+    takesOrigins: async (space) => {
+      const flags = await storageManager?.serverFlags?.(space);
+      return flags === undefined
+        ? undefined
+        : flags?.patternLifecycleOrigins === true;
+    },
+    takesScopes: async (space) =>
+      (await storageManager?.serverFlags?.(space))?.patternLifecycleScopes,
   };
+}
+
+/**
+ * The scope a served verb names `scope`'s requester instance at: none for a
+ * piece's space instance, which the verb addresses by its id alone.
+ */
+function servedScope(
+  scope: PieceConfig["pieceScope"],
+): ServedPieceScope | undefined {
+  return scope === undefined || scope === "space" ? undefined : scope;
 }
 
 /**
@@ -1759,8 +1949,8 @@ async function lifecycleClient(
 async function createWithReceipt(
   config: SpaceConfig,
   pieces: PiecesController,
-  program: RuntimeProgram,
-  entry: EntryConfig,
+  source: ServedPatternSource,
+  repository: string | undefined,
   options: {
     input?: object;
     start?: boolean;
@@ -1770,18 +1960,15 @@ async function createWithReceipt(
   } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
-): Promise<{ id: string; getCell: () => Cell<unknown> }> {
+): Promise<string> {
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const trace = deps.phaseTrace ?? cliPhaseTrace;
   const receipt = await (async () => {
     try {
-      const client = await lifecycleClient(config, deps);
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
-        ...(entry.repository === undefined
-          ? {}
-          : { repository: entry.repository }),
+        ...(repository === undefined ? {} : { repository }),
         ...(options?.slug === undefined ? {} : { slug: options.slug }),
         ...(options?.force === undefined ? {} : { force: options.force }),
         register: true,
@@ -1791,11 +1978,11 @@ async function createWithReceipt(
           "newPiece.create.instantiate",
           () =>
             (deps.instantiatePieceOnServer ?? instantiatePieceOnServer)(
-              client,
+              lifecycleClient(pieces),
               {
                 ...request,
                 space: pieces.getSpace(),
-                program,
+                ...source,
                 ...(options?.start === false ? { start: false } : {}),
               },
             ),
@@ -1806,34 +1993,34 @@ async function createWithReceipt(
         }
         return served;
       }
+      const actingUser =
+        (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did();
       const created = await timeCliPhase(
         "newPiece.create.instantiate",
         () =>
           servedInstantiatePiece(pieces, {
             ...request,
-            source: { program },
-            actingUser: client.identity.did(),
+            source,
+            actingUser,
           }),
         trace,
       );
       return await timeCliPhase(
         "newPiece.create.register",
-        () =>
-          completeServedRegistration(pieces, created, client.identity.did()),
+        () => completeServedRegistration(pieces, created, actingUser),
         trace,
       );
     } catch (error) {
       if (
         error instanceof ServedLifecycleRefusal ||
-        (error instanceof ServedLifecycleError && error.status >= 400 &&
-          error.status < 500 && error.status !== 408)
+        (error instanceof ServedLifecycleError && error.refused)
       ) {
         throw error;
       }
       throw new Error(
         `Piece creation outcome may be incomplete. Retry the same command ` +
           `with --request-key ${requestKey}. ` +
-          (error instanceof Error ? error.message : String(error)),
+          describeFailure(error),
         { cause: error },
       );
     }
@@ -1846,23 +2033,60 @@ async function createWithReceipt(
         (receipt.registration?.error ?? ""),
     );
   }
-  const cell = await timeCliPhase(
-    "newPiece.create.getPieceCell",
-    () => pieces.getPieceCell(receipt.pieceId, false),
-    trace,
-  );
-  if (options?.start !== false) {
+  // Under server execution the serving loop runs what the verb created.
+  if (options?.start !== false && !servesLifecycleVerbs(pieces)) {
+    const cell = await timeCliPhase(
+      "newPiece.create.getPieceCell",
+      () => pieces.getPieceCell(receipt.pieceId, false),
+      trace,
+    );
     await timeCliPhase(
       "newPiece.create.start",
       () => boundStart(pieces.startPiece(cell)),
       trace,
     );
   }
-  return { id: receipt.pieceId, getCell: () => cell };
+  return receipt.pieceId;
+}
+
+/** How long `cf piece new` waits for a created piece to start. */
+const PIECE_START_TIMEOUT_MS = 60_000;
+
+/**
+ * Resolves once {@link PIECE_START_TIMEOUT_MS} has passed, unless `settled`
+ * aborts first, in which case it never resolves and holds no timer.
+ */
+function pieceStartDeadline(settled: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, PIECE_START_TIMEOUT_MS);
+    settled.addEventListener("abort", () => clearTimeout(timer));
+  });
 }
 
 /**
- * Creates a new piece from source code and optional input.
+ * The error reporting that `cf piece new` found no space where it was pointed,
+ * naming the command that creates one.
+ */
+function noSpaceAnswers(error: SpaceNotFoundError): Error {
+  return new Error(
+    `${error.message}. Opening a space never creates one; create one ` +
+      `with: ${cliCommand(["space", "create"])}`,
+    { cause: error },
+  );
+}
+
+/**
+ * What creating a piece answers: the piece's id, and for a piece from the
+ * pattern index, the index's display name for the pattern when it has one.
+ */
+export interface NewPieceReceipt {
+  pieceId: string;
+  name?: string;
+}
+
+/**
+ * Creates a new piece from source code, or from a published pattern, and
+ * optional input.
  *
  * A `slug` that already points somewhere is refused the way `set-slug`
  * refuses one, and `force` takes it. With a request key or a serving
@@ -1871,9 +2095,9 @@ async function createWithReceipt(
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
  */
-export async function newPiece(
+export async function newPieceWithReceipt(
   config: SpaceConfig,
-  entry: EntryConfig,
+  entry: PieceEntry,
   options?: {
     /** Initial argument committed during setup, before registration or start. */
     input?: object;
@@ -1882,9 +2106,15 @@ export async function newPiece(
     slug?: string;
     force?: boolean;
     requestKey?: string;
+
+    /**
+     * Told what was deployed once the piece exists, for a piece made from
+     * local files; never for one from the index or a replay.
+     */
+    onDeployed?: (deployed: DeployedProgram) => void;
   },
   deps: PieceOperationDependencies = {},
-): Promise<string> {
+): Promise<NewPieceReceipt> {
   const pieces = await timeCliPhase(
     "newPiece.loadPieces",
     () => (deps.loadPieces ?? loadPieces)(config),
@@ -1910,16 +2140,10 @@ export async function newPiece(
       );
     }
   } catch (error) {
-    if (error instanceof SpaceNotFoundError) {
-      throw new Error(
-        `${error.message}. Opening a space never creates one; create one ` +
-          `with: ${cliCommand(["space", "create"])}`,
-        { cause: error },
-      );
-    }
+    if (error instanceof SpaceNotFoundError) throw noSpaceAnswers(error);
     throw new Error(
       `Could not initialize the space's default pattern: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }\n` +
         `The new piece cannot be registered in the space's piece list ` +
         `without it.\n` +
@@ -1936,69 +2160,152 @@ export async function newPiece(
     );
   }
 
-  const program = await timeCliPhase(
-    "newPiece.getProgramFromFile",
-    () =>
-      (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
-        pieces,
-        entry,
+  // A creation replayed by its request key from the index answers from the
+  // receipt the first attempt left, naming the piece's pattern by identity:
+  // the index need not be reachable, nor the pattern still published, for a
+  // creation that already committed.
+  const replayed = "patternId" in entry && options?.requestKey !== undefined
+    ? await timeCliPhase(
+      "newPiece.readReceipt",
+      async () =>
+        (deps.readServedInstantiateReceipt ?? readServedInstantiateReceipt)(
+          pieces,
+          options.requestKey!,
+          (await (deps.loadIdentity ?? loadIdentity)(config.identity)).did(),
+        ),
+    )
+    : undefined;
+  const indexed = replayed !== undefined
+    ? undefined
+    : "patternId" in entry
+    ? await timeCliPhase(
+      "newPiece.getProgramFromIndex",
+      () =>
+        (deps.getProgramFromIndex ?? getProgramFromIndex)(
+          pieces,
+          config,
+          entry,
+          deps,
+        ),
+    )
+    : {
+      program: await timeCliPhase(
+        "newPiece.getProgramFromFile",
+        () =>
+          (deps.getPinnedProgramFromFile ?? getPinnedProgramFromFile)(
+            pieces,
+            entry,
+          ),
       ),
-  );
+    };
+  // Told only once the piece exists. The pattern id is what its pointer
+  // reads back, read only when the caller asks; a read that fails answers no
+  // id rather than failing a creation that succeeded.
+  const deployedFrom = (pieceId: string): void => {
+    if (
+      options?.onDeployed === undefined || indexed === undefined ||
+      "patternId" in entry
+    ) return;
+    options.onDeployed({
+      piece: { space: pieces.getSpace(), id: pieceId },
+      program: indexed.program,
+      patternId: () =>
+        pieces.get(pieceId, false).then(
+          (piece) => piece.getPatternRef(),
+        ).then((ref) => ref?.identity, () => undefined),
+    });
+  };
+  const source: ServedPatternSource = indexed === undefined
+    ? { pattern: replayed!.pattern }
+    : { program: indexed.program };
+  // What the receipt says beside the piece id: the index's display name, for
+  // a piece from the index that has one. A replay answers from the receipt,
+  // which records no name.
+  const named = indexed?.name === undefined ? {} : { name: indexed.name };
+  // A published pattern carries no repository locator of its own.
+  const repository = "patternId" in entry ? undefined : entry.repository;
   // A piece whose pattern never settles leaves `pieces.create` awaiting a
   // scheduler `idle()` that never resolves, and the runtime surfaces no
   // event that a start has definitively failed (a thrown pattern reports its
-  // error and still resolves; a stuck async load reports nothing). This
-  // wall-clock bound is the only thing that turns that hang into a message.
-  // When it fires, report the actual runtime error the pattern recorded while
-  // starting rather than only pointing at the server logs.
-  const PIECE_START_TIMEOUT_MS = 60_000;
+  // error and still resolves; a stuck async load reports nothing). The
+  // start's deadline is the only thing that turns that hang into a message.
+  // When it passes, report the actual runtime error the pattern recorded
+  // while starting rather than only pointing at the server logs.
   const runtimeErrors = runtimeErrorLog(pieces.runtime);
   const errorCountBefore = runtimeErrors.length;
+  const startDeadline = deps.startDeadline ?? pieceStartDeadline;
   const boundStart = <T>(starting: Promise<T>): Promise<T> => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
-        const detail = recorded !== undefined
-          ? `A runtime error was reported while it started: ${recorded}`
-          : `Check toolshed logs for runtime errors.`;
-        reject(
-          new Error(
-            `Piece created but failed to start within ${
-              PIECE_START_TIMEOUT_MS / 1000
-            }s. ${detail}`,
-          ),
-        );
-      }, PIECE_START_TIMEOUT_MS);
+    const settled = new AbortController();
+    const expired = startDeadline(settled.signal).then((): never => {
+      const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
+      const detail = recorded !== undefined
+        ? `A runtime error was reported while it started: ${recorded}`
+        : `Check toolshed logs for runtime errors.`;
+      throw new Error(
+        `Piece created but failed to start within ${
+          PIECE_START_TIMEOUT_MS / 1000
+        }s. ${detail}`,
+      );
     });
-    return Promise.race([starting, timeout]).finally(() => clearTimeout(timer));
+    return Promise.race([starting, expired]).finally(() => settled.abort());
   };
-  const receipted = served || options?.requestKey !== undefined;
-  const piece = await timeCliPhase(
-    "newPiece.create",
-    () =>
-      receipted
-        ? createWithReceipt(
+  // Receipt-backed creation returns after both setup and registration commit.
+  // Only a request key replays a receipt, so a creation with no program to
+  // hand on (`indexed` absent) always takes this path.
+  if (served || options?.requestKey !== undefined || indexed === undefined) {
+    const id = await timeCliPhase(
+      "newPiece.create",
+      () =>
+        createWithReceipt(
           config,
           pieces,
-          program,
-          entry,
+          source,
+          repository,
           options,
           deps,
           boundStart,
+        ),
+    ).catch(async (error) => {
+      // The serving side refuses a space with no history as `forbidden`,
+      // the answer it gives a caller without WRITE, so that the verb is not
+      // an existence oracle. Whether a space exists is an ordinary read, so
+      // the refusal is told apart here, where it is reported, and a name that
+      // reaches no space reads as it does when the client ensures the root.
+      // A read that fails tells nothing apart, and the refusal stands.
+      if (
+        served && error instanceof ServedLifecycleError &&
+        error.code === "forbidden" &&
+        await pieces.runtime.spaceExists(pieces.getSpace()).then(
+          (exists) => !exists,
+          () => false,
         )
-        : boundStart(pieces.create(program, {
-          repository: entry.repository,
-          start: options?.start,
-          ...(options?.input === undefined ? {} : { input: options.input }),
-        })),
+      ) {
+        throw noSpaceAnswers(
+          new SpaceNotFoundError(pieces.getSpace(), pieces.getSpaceName()),
+        );
+      }
+      throw error;
+    });
+    noteWroteTo(config.space);
+    deployedFrom(id);
+    return { pieceId: id, ...named };
+  }
+  const program = indexed.program;
+  const piece = await timeCliPhase(
+    "newPiece.create",
+    () =>
+      boundStart(pieces.create(program, {
+        repository,
+        start: options?.start,
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      })),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
-  // partial write that the operator is owed the location of.
+  // partial write that the operator is owed the location of. The source it
+  // runs is deployed either way, so it is a version either way.
   noteWroteTo(config.space);
-  // Receipt-backed creation returns after both setup and registration commit.
-  if (receipted) return piece.id;
+  deployedFrom(piece.id);
 
   if (options?.slug) {
     try {
@@ -2029,7 +2336,14 @@ export async function newPiece(
     () => pieces.add([piece.getCell()], { reconcile: false }),
   );
 
-  return piece.id;
+  return { pieceId: piece.id, ...named };
+}
+
+/** {@link newPieceWithReceipt}, answering only the new piece's id. */
+export async function newPiece(
+  ...args: Parameters<typeof newPieceWithReceipt>
+): Promise<string> {
+  return (await newPieceWithReceipt(...args)).pieceId;
 }
 
 /**
@@ -2151,27 +2465,27 @@ async function resolveSlugSourceCell(
 
 /**
  * The served half of `setPiecePattern`: the serving runtime replaces the
- * source and commits the update, and this connection then refreshes the
- * piece it holds the way a client-side update does after its own commit —
- * starting it, which under the flag runs the graph as speculation while
- * the serving loop serves the derived values — and reports that outcome in
- * the receipt's `refresh`, since the commit is durable whatever the refresh
- * did. A start whose own setup commit fails leaves the piece stopped, so
- * that is a failed refresh too.
+ * source and commits the update, and this connection then asks the server for
+ * the piece's result, which is what makes the new source run, and reports that
+ * outcome in the receipt's `refresh`, since the commit is durable whatever the
+ * refresh did.
  */
 async function updateOnServer(
   config: PieceConfig,
   pieces: PiecesController,
   pieceId: string,
+  scope: PieceConfig["pieceScope"],
   program: RuntimeProgram,
   entry: EntryConfig,
   options: SetPiecePatternOptions,
   deps: PieceOperationDependencies,
 ): Promise<PatternUpdateReceipt> {
+  const served = servedScope(scope);
   const receipt = await (deps.setPieceSourceOnServer ??
-    setPieceSourceOnServer)(await lifecycleClient(config, deps), {
+    setPieceSourceOnServer)(lifecycleClient(pieces), {
       space: pieces.getSpace(),
       piece: pieceId,
+      ...(served === undefined ? {} : { scope: served }),
       program,
       ...(entry.repository === undefined
         ? {}
@@ -2179,17 +2493,32 @@ async function updateOnServer(
       ...(options.dangerouslyAllowIncompatibleSchema
         ? { dangerouslyAllowIncompatibleSchema: true }
         : {}),
+      ...(options.origin === undefined ? {} : { origin: options.origin }),
     });
   noteWroteTo(config.space);
+  // A server from before `setsrc` took an origin drops the field and
+  // detaches the piece, and its receipt names no origin.
+  if (options.origin !== undefined && receipt.origin === undefined) {
+    throw new Error(
+      `The source update committed as revision ${receipt.revisionId}, but ` +
+        `this deployment does not record an origin with \`setsrc\` yet, ` +
+        `so the piece follows nothing.`,
+    );
+  }
   let refresh: PatternUpdateReceipt["refresh"];
   try {
-    const cell = await pieces.getPieceCell(receipt.pieceId, false);
-    await pieces.startPiece(cell, undefined, { awaitSetupCommit: true });
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
     refresh = { status: "completed" };
   } catch (error) {
     refresh = {
       status: "failed",
-      warning: error instanceof Error ? error.message : String(error),
+      warning: describeFailure(error),
     };
   }
   return {
@@ -2199,6 +2528,7 @@ async function updateOnServer(
     seq: receipt.seq,
     revisionId: receipt.revisionId,
     detachedOrigin: receipt.detachedOrigin,
+    ...(receipt.origin === undefined ? {} : { origin: receipt.origin }),
     refresh,
   };
 }
@@ -2221,10 +2551,18 @@ export interface FollowPieceSourceOptions
 
 /** A follow receipt includes the incompatibility this invocation accepted. */
 export type FollowPieceSourceResult =
-  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | { status: "incompatible"; message: string }
   | (Extract<PieceSourceActionResult, { status: "applied" }> & {
     acceptedIncompatibility?: string;
   });
+
+/**
+ * What a follow sent to a deployment whose memory server cannot read a
+ * `follow` request is refused with.
+ */
+const FOLLOW_NOT_SERVED =
+  "This deployment serves piece lifecycle verbs, and `follow` is not " +
+  "served yet: its memory server could not read the request.";
 
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
@@ -2233,14 +2571,25 @@ export type FollowPieceSourceResult =
  *
  * This is how a piece created detached — a profile made before the runtime
  * claimed origins for children of system pieces, say — is put on the
- * lifecycle a release reaches. Unlike `setsrc`, which detaches, the origin
- * is recorded with the revision. The transition carries the same writer
- * delegation a `setsrc` does, since it is the owner's explicit act.
+ * lifecycle a release reaches. The origin is recorded with the revision, and
+ * the source adopted is what the origin serves now; a `setsrc` that names an
+ * origin records it over source the caller supplies instead, and one that
+ * names none detaches. The transition carries the same writer delegation a
+ * `setsrc` does, since it is the owner's explicit act.
  *
- * @throws Error when the deployment serves piece lifecycle verbs (the served
- * update takes no origin), when the piece cannot be resolved, or when the
- * origin cannot be read or does not compile; `PieceSourceChangedError` when
- * the piece is off a pin `options` names.
+ * Against a deployment that serves piece lifecycle verbs, the serving runtime
+ * resolves the origin, reviews the candidate and commits the transition
+ * (docs/features/server-pattern-lifecycle.md), on this identity's instance
+ * of a piece addressed at a scope, and this connection then asks the server
+ * for the piece's result, reporting a failure of that as `executionWarning`.
+ * Nothing changes the source in this process there.
+ *
+ * @throws Error when the piece cannot be resolved, or when the origin cannot
+ * be read or does not compile; against a serving deployment, also when its
+ * memory server cannot read a `follow` request;
+ * `ServedLifecycleError` (`scope-unsupported`) for a piece addressed at a
+ * scope on a deployment whose verbs do not take one;
+ * `PieceSourceChangedError` when the piece is off a pin `options` names.
  */
 export async function followPieceSource(
   config: PieceConfig,
@@ -2249,20 +2598,25 @@ export async function followPieceSource(
   deps: PieceOperationDependencies = {},
 ): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  // Against a serving deployment a source transition is the serving
-  // runtime's to commit, and the served update verb carries no origin yet;
-  // a client-side repoint there would commit outside the served lifecycle.
-  if (servesLifecycleVerbs(pieces)) {
-    throw new Error(
-      "This deployment serves piece lifecycle verbs, and `follow` is not " +
-        "served yet; the served update takes no origin.",
-    );
-  }
   const resolvedConfig = await resolvePieceConfigWithPieces(
     config,
     pieces,
     deps,
   );
+  // Against a serving deployment a source transition is the serving
+  // runtime's to commit; a client-side repoint there would commit outside
+  // the served lifecycle.
+  if (servesLifecycleVerbs(pieces)) {
+    return await followOnServer(
+      config,
+      pieces,
+      resolvedConfig.piece,
+      resolvedConfig.pieceScope,
+      origin,
+      options,
+      deps,
+    );
+  }
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2270,7 +2624,32 @@ export async function followPieceSource(
     resolvedConfig.pieceScope,
   );
   const action = { kind: "repoint" as const, url: origin };
-  const pins = {
+  const pins = followPins(options);
+  const reviewed = await piece.changeSource(action, pins);
+  if (
+    reviewed.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const confirmed = await piece.changeSource(action, {
+      ...pins,
+      confirmedChange: reviewed.prepared,
+    });
+    if (confirmed.status !== "applied") return confirmed;
+    noteWroteTo(config.space);
+    return { ...confirmed, acceptedIncompatibility: reviewed.message };
+  }
+  if (reviewed.status === "applied") noteWroteTo(config.space);
+  return reviewed;
+}
+
+/** The pins `options` names, as a source change takes them. */
+function followPins(options: FollowPieceSourceOptions): {
+  expectedPattern?: { identity: string; symbol: string };
+  expectedRevision?: string | null;
+} {
+  return {
     ...(options.expectedPattern === undefined
       ? {}
       : { expectedPattern: options.expectedPattern }),
@@ -2278,31 +2657,88 @@ export async function followPieceSource(
       ? {}
       : { expectedRevision: options.expectedRevision }),
   };
-  let result: FollowPieceSourceResult = await piece.changeSource(action, pins);
-  if (
-    result.status === "incompatible" &&
-    options.dangerouslyAllowIncompatibleSchema
-  ) {
-    // Confirm only this review and its pinned candidate. Changed source
-    // state or retained input may require a new review by the caller.
-    const acceptedIncompatibility = result.message;
-    result = await piece.changeSource(action, {
-      ...pins,
-      confirmedChange: result.prepared,
-    });
-    if (result.status === "applied") {
-      result = { ...result, acceptedIncompatibility };
+}
+
+/**
+ * The served half of `followPieceSource`: the serving runtime reviews the
+ * candidate and commits the follow, and this connection then asks the
+ * server for the piece's result, which is what makes the new source run,
+ * reporting a failure of that as `executionWarning`, since the follow is
+ * durable whatever the refresh did. A refusal the review answers with
+ * comes back as it does from a client-side follow: an incompatible
+ * candidate as the result, a piece off a pin as `PieceSourceChangedError`.
+ */
+async function followOnServer(
+  config: PieceConfig,
+  pieces: PiecesController,
+  pieceId: string,
+  scope: PieceConfig["pieceScope"],
+  origin: string,
+  options: FollowPieceSourceOptions,
+  deps: PieceOperationDependencies,
+): Promise<FollowPieceSourceResult> {
+  const served = servedScope(scope);
+  let receipt: Awaited<ReturnType<typeof followPieceOnServer>>;
+  try {
+    receipt = await (deps.followPieceOnServer ?? followPieceOnServer)(
+      lifecycleClient(pieces),
+      {
+        space: pieces.getSpace(),
+        piece: pieceId,
+        ...(served === undefined ? {} : { scope: served }),
+        origin,
+        ...followPins(options),
+        ...(options.dangerouslyAllowIncompatibleSchema
+          ? { dangerouslyAllowIncompatibleSchema: true }
+          : {}),
+      },
+    );
+  } catch (error) {
+    if (error instanceof ServedLifecycleError) {
+      if (error.code === "incompatible") {
+        return { status: "incompatible", message: error.message };
+      }
+      if (error.code === "source-moved") {
+        throw new PieceSourceChangedError(error.message);
+      }
     }
+    // A memory server that predates the verb refuses the frame unread.
+    if (error instanceof Error && error.name === "InvalidMessageError") {
+      throw new Error(FOLLOW_NOT_SERVED, { cause: error });
+    }
+    throw error;
   }
-  if (result.status === "applied") noteWroteTo(config.space);
-  return result;
+  noteWroteTo(config.space);
+  let executionWarning: string | undefined;
+  try {
+    const cell = await pieces.getPieceCell(
+      receipt.pieceId,
+      false,
+      undefined,
+      scope,
+    );
+    await (deps.pullServed ?? pullServed)(pieces, pieces.getResult(cell));
+  } catch (error) {
+    executionWarning = describeFailure(error);
+  }
+  return {
+    status: "applied",
+    ...(receipt.acceptedIncompatibility === undefined
+      ? {}
+      : { acceptedIncompatibility: receipt.acceptedIncompatibility }),
+    ...(executionWarning === undefined ? {} : { executionWarning }),
+  };
 }
 
 /**
  * Replaces the piece's source and returns its setup transaction receipt.
- * Against a serving deployment the update is the serving runtime's to
- * commit; a piece addressed at a scope keeps the client-side path, since
- * the served verb takes the piece's id alone.
+ * The update detaches the piece unless `options.origin` names the origin it
+ * follows from then on. Against a serving deployment the update is the
+ * serving runtime's to commit, on this identity's instance of a piece
+ * addressed at a scope, and nothing changes the source in this process.
+ *
+ * @throws ServedLifecycleError (`scope-unsupported`) for a piece addressed
+ * at a scope on a serving deployment whose verbs do not take one.
  */
 export async function setPiecePattern(
   config: PieceConfig,
@@ -2318,18 +2754,24 @@ export async function setPiecePattern(
   );
   const program = await (deps.getPinnedProgramFromFile ??
     getPinnedProgramFromFile)(pieces, entry);
-  if (
-    servesLifecycleVerbs(pieces) && resolvedConfig.pieceScope === undefined
-  ) {
-    return await updateOnServer(
+  if (servesLifecycleVerbs(pieces)) {
+    const served = await updateOnServer(
       config,
       pieces,
       resolvedConfig.piece,
+      resolvedConfig.pieceScope,
       program,
       entry,
       options,
       deps,
     );
+    const patternId = served.ref.identity;
+    options.onDeployed?.({
+      piece: { space: served.space, id: resolvedConfig.piece },
+      program,
+      patternId: () => Promise.resolve(patternId),
+    });
+    return served;
   }
   const piece = await pieces.get(
     resolvedConfig.piece,
@@ -2342,8 +2784,15 @@ export async function setPiecePattern(
     ...(options.dangerouslyAllowIncompatibleSchema
       ? { dangerouslyAllowIncompatibleSchema: true }
       : {}),
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
   });
   noteWroteTo(config.space);
+  const patternId = receipt.ref.identity;
+  options.onDeployed?.({
+    piece: { space: receipt.space, id: resolvedConfig.piece },
+    program,
+    patternId: () => Promise.resolve(patternId),
+  });
   return receipt;
 }
 
@@ -2379,10 +2828,15 @@ export async function checkPiecePattern(
 export async function savePiecePattern(
   config: PieceConfig,
   outPath: string,
+  deps: PieceResolutionDeps = {},
 ): Promise<void> {
   await ensureDir(outPath);
-  const pieces = await loadPieces(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const resolvedConfig = await resolvePieceConfigWithPieces(
+    config,
+    pieces,
+    deps,
+  );
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2396,8 +2850,39 @@ export async function savePiecePattern(
     );
   }
   await writeSourcePackage(program, outPath);
+  await recordSavedIndexSource(
+    piece.id,
+    program.files.map((file) => join(outPath, file.name)),
+  );
+  // Finding what the source declares parses it, which reaches the compiler.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { undeclaredDataFileWarning } = await import(
+    "./undeclared-data-files.ts"
+  );
   const warning = undeclaredDataFileWarning(program);
   if (warning !== undefined) console.log(warning);
+}
+
+/**
+ * Where the piece came from the pattern index (`cf piece new --from-index`),
+ * remembers that the files `written` are that pattern's source, so
+ * publishing it again credits the original as `remixedFrom`. Best effort: a
+ * missing or unreadable record costs that credit and nothing else.
+ */
+async function recordSavedIndexSource(
+  pieceId: string,
+  written: readonly string[],
+): Promise<void> {
+  try {
+    const found = await findIndexedPiece(patternIndexStoreRoot(), pieceId);
+    if (found !== undefined) {
+      await found.store.recordSource(written, found.patternId);
+    }
+  } catch (error) {
+    console.error(
+      `Could not record where this source came from: ${describeFailure(error)}`,
+    );
+  }
 }
 
 /**
@@ -2424,47 +2909,17 @@ export async function writeSourcePackage(
   }
 }
 
-/**
- * The data files a later `setsrc` would have to be told about.
- *
- * A file the recovered source reads by name is declared, so rebuilding the
- * package from this directory attaches it again on its own. A file the source
- * cannot name — one read by a computed path, or one that ships with a pattern
- * that does not read it — is on disk with nothing recording that it was data,
- * and would come back as an ordinary file nobody stores. Naming those is what
- * keeps the round trip whole.
- */
-export function undeclaredDataFiles(program: RuntimeProgram): string[] {
-  // A data file is never parsed. One already attached sits in `files` like any
-  // other entry, and its bytes may happen to read as a `dataFile()` call.
-  const attached = new Set(program.dataFiles ?? []);
-  const declared = new Set(
-    program.files.filter((file) => !attached.has(file.name))
-      .flatMap((file) => collectDataFileNames(file, TARGET)),
+export async function applyPieceInput(
+  config: PieceConfig,
+  input: object,
+  deps: PieceResolutionDeps = {},
+) {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const resolvedConfig = await resolvePieceConfigWithPieces(
+    config,
+    pieces,
+    deps,
   );
-  return [...attached].filter((name) => !declared.has(name));
-}
-
-/**
- * What `getsrc` says about the data files it just wrote, or undefined when it
- * has nothing to say. The flags are spelled out so that reproducing the
- * revision is a matter of copying the line rather than working out which of
- * the written files were data.
- */
-export function undeclaredDataFileWarning(
-  program: RuntimeProgram,
-): string | undefined {
-  const undeclared = undeclaredDataFiles(program);
-  if (undeclared.length === 0) return undefined;
-  return `\nThis pattern carries ${undeclared.length} data file(s) its ` +
-    `source does not name.\nPass them on the next setsrc, or they are ` +
-    `dropped from that revision:\n` +
-    undeclared.map((name) => `  --datafile .${name}`).join("\n");
-}
-
-export async function applyPieceInput(config: PieceConfig, input: object) {
-  const pieces = await loadPieces(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
   const piece = await pieces.get(
     resolvedConfig.piece,
     false,
@@ -2611,10 +3066,14 @@ async function tryResolveLivePieceToolCallable(
  * Helper for callable resolution and discovery, which loads the target piece
  * and its pieces controller.
  *
- * Dispatch starts only the addressed piece before resolving the requested
- * callable. A verb sending into an existing root's `addPiece` stream has the
- * scheduler start that root at delivery through `ensurePieceRunningVerdict()`
- * in `runtime/runner/src/ensure-piece-running.ts`.
+ * Under server execution dispatch starts nothing: the event goes to the server,
+ * which runs the handler, and this process reads what is stored to resolve the
+ * callable. Otherwise dispatch starts the addressed piece, after the pieces
+ * that enclose it (`startWithInputSources()` in
+ * `runtime/runner/src/ensure-piece-running.ts`), before resolving the
+ * requested callable, and a verb sending into an existing root's `addPiece`
+ * stream has the scheduler start that root at delivery through
+ * `ensurePieceRunningVerdict()` in `runtime/runner/src/ensure-piece-running.ts`.
  *
  * Dispatch performs no separate space-root initialization. Root-dependent
  * verbs require an initialized root: lazy start neither creates an absent root
@@ -2705,7 +3164,7 @@ async function loadPieceForCallables(
       resolvedConfig.piece,
       resolvedConfig.pieceScope,
     )
-    : prepareDispatch
+    : prepareDispatch && pieces.runtime?.experimental?.serverExecution !== true
     ? pieces.get(
       resolvedConfig.piece,
       true,
@@ -4239,16 +4698,11 @@ export async function linkPieces(
     } else if (resolvedTargetPath.length > 0) {
       // Schema refusal takes precedence over the overridable absence check.
       // The write repeats this check against metadata in its own transaction.
+      const targetInput = await targetPiece.input.getCell();
       try {
-        assertPieceInputPath(
-          await targetPiece.input.getCell(),
-          resolvedTargetPath,
-        );
+        assertPieceInputPath(targetInput, resolvedTargetPath);
       } catch (error) {
-        if (error instanceof PieceInputPathError) {
-          throw new LinkValidationError(error.message);
-        }
-        throw error;
+        throw asLinkRefusal(error);
       }
       const targetData = await timeCliPhase(
         "linkPieces.readTargetInput",
@@ -4289,6 +4743,8 @@ export async function linkPieces(
           resolvedTargetPath,
           {
             ...options,
+            // The serving loop runs the pieces a link joins.
+            ...(servedPieces(pieces) ? { start: false } : {}),
             ...(resolvedSourceScope === undefined
               ? {}
               : { sourceScope: resolvedSourceScope }),
@@ -4299,12 +4755,19 @@ export async function linkPieces(
         ),
     );
   } catch (error) {
-    if (error instanceof PieceInputPathError) {
-      throw new LinkValidationError(error.message);
-    }
-    throw error;
+    throw asLinkRefusal(error);
   }
   noteWroteTo(config.space);
+}
+
+/**
+ * `error` as `cf piece link` reports it: a path the target's input schema
+ * does not declare is a refusal of the link, and anything else is itself.
+ */
+function asLinkRefusal(error: unknown): unknown {
+  return error instanceof PieceInputPathError
+    ? new LinkValidationError(error.message)
+    : error;
 }
 
 /**
@@ -4412,7 +4875,8 @@ export async function linkSqliteDiskSource(
     deps,
   );
   await pieces.link(id, [], resolvedTarget.piece, resolvedTarget.pathAfter, {
-    start: options?.start,
+    // The serving loop runs the piece a link reaches.
+    start: servedPieces(pieces) ? false : options?.start,
     targetScope: resolvedTarget.scope ?? options?.targetScope,
   });
   await pieces.synced();
@@ -4464,20 +4928,21 @@ function createPieceConnection(
 
 async function buildConnectionMap(
   config: SpaceConfig,
+  deps: PieceResolutionDeps,
 ): Promise<PieceConnectionMap> {
-  const pieces = await listPieces(config);
+  const pieces = await listPieces(config, deps);
   const connections: PieceConnectionMap = new Map();
 
   for (const piece of pieces) {
     const pieceConfig: PieceConfig = { ...config, piece: piece.id };
     try {
-      const details = await inspectPiece(pieceConfig);
+      const details = await inspectPiece(pieceConfig, deps);
       connections.set(piece.id, createPieceConnection(piece, details));
     } catch (error) {
       // Skip pieces that can't be inspected, but include them with no connections
       console.error(
         `Warning: Could not inspect piece ${piece.id}: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
       );
       connections.set(piece.id, createPieceConnection(piece));
@@ -4571,16 +5036,15 @@ export function formatSpaceMap(
       return generateAsciiMap(connections);
     case MapFormat.DOT:
       return generateDotMap(connections);
-    default:
-      throw new Error(`Unsupported format: ${format}`);
   }
 }
 
 export async function generateSpaceMap(
   config: SpaceConfig,
   format: MapFormat = MapFormat.ASCII,
+  deps: PieceResolutionDeps = {},
 ): Promise<string> {
-  const connections = await buildConnectionMap(config);
+  const connections = await buildConnectionMap(config, deps);
   return formatSpaceMap(connections, format);
 }
 
@@ -4738,6 +5202,7 @@ export async function inspectPiece(
     undefined,
     resolvedConfig.pieceScope,
   );
+  await pullServed(pieces, piece.getCell());
 
   const id = piece.id;
   const name = piece.name();
@@ -4787,26 +5252,10 @@ async function inspectSlugTargetCell(
   const name = isObjectOrArray(result) && typeof result[NAME] === "string"
     ? result[NAME]
     : undefined;
-  const identityRef = getPatternIdentityRef(target);
-  const patternRef: PiecePatternRef | undefined = identityRef === undefined
-    ? undefined
-    : {
-      ...identityRef,
-      source: {
-        ref: formatFabricRef({
-          ref: {
-            kind: "uri",
-            scheme: "pattern",
-            hash: identityRef.identity,
-          },
-        }),
-      },
-    };
-
+  // The target is no piece document, so it carries no pattern to report.
   return {
     id: slug,
     name,
-    patternRef,
     result,
     cachedResultFields: cachedResultFields(target, result),
     readingFrom: [],
@@ -4827,10 +5276,11 @@ export async function getPieceView(
 }
 
 export function formatViewTree(view: unknown): string {
-  const format = (node: unknown, prefix: string, last: boolean): string => {
+  const format = (value: unknown, prefix: string, last: boolean): string => {
     const branch = last ? "└─ " : "├─ ";
-    if (!isVNodeLike(node)) {
-      return `${prefix}${branch}${String(node)}`;
+    const node = viewNodeOf(value);
+    if (node === undefined) {
+      return `${prefix}${branch}${String(value)}`;
     }
 
     const children = Array.isArray(node.children) ? node.children : [];
@@ -5060,16 +5510,30 @@ const confidentialityToKeep = (
  * With `lowerConfidentiality`, the update is instead an owner's release
  * (`releaseCellConfidentiality()`): every confidentiality clause stored at the
  * path that `input.confidentiality` does not name is removed from every label
- * there, which rewrites the stored metadata. The input then holds
- * `confidentiality` alone, naming only clauses the path already stores.
+ * there, which rewrites the stored metadata. A `*` segment of the path names
+ * every stored position it matches at its depth, the wildcard entry there
+ * among them. The input then holds `confidentiality` alone, naming only
+ * clauses the path already stores. A write redirect at the path is followed
+ * to the labels where it leads, unless `linkSlot`, which lowers the labels of
+ * the link stored at the path itself.
  */
 export async function setCellCfcLabel(
   config: PieceConfig,
   addressedPath: (string | number)[],
   input: unknown,
-  options: { input?: boolean; lowerConfidentiality?: boolean } = {},
+  options: {
+    input?: boolean;
+    lowerConfidentiality?: boolean;
+    linkSlot?: boolean;
+  } = {},
   deps: PieceOperationDependencies = {},
 ): Promise<CfcLabelView | null> {
+  if (options.linkSlot === true && options.lowerConfidentiality !== true) {
+    throw new Error(
+      "`--link-slot` applies to a lowering alone: pass it with " +
+        "`--dangerously-allow-lowering-confidentiality`.",
+    );
+  }
   const update = parseCellCfcLabelUpdate(input);
   const keep = options.lowerConfidentiality === true
     ? confidentialityToKeep(update)
@@ -5097,19 +5561,34 @@ export async function setCellCfcLabel(
   // the update silently REPLACED a value-class entry with a class-less one,
   // and the command returned null while having written a label.
   const currentView = cfcLabelViewForCommand(targetCell, path);
-  const value = targetCell.getRaw();
+  // A lowering's `*` segment names the stored positions it matches rather
+  // than a value, so what has to be present is the value it sits in.
+  const wildcard = keep === undefined ? -1 : path.indexOf("*");
+  const value = wildcard < 0
+    ? targetCell.getRaw()
+    : rootCell.key(...path.slice(0, wildcard)).getRaw();
   if (value === undefined) {
     const location = path.length === 0 ? "<root>" : path.join("/");
     throw new Error(`Cannot set a CFC label on absent path "${location}".`);
   }
 
   if (keep !== undefined) {
-    const release = await releaseCellConfidentiality(targetCell, keep);
+    const release = await releaseCellConfidentiality(
+      targetCell,
+      keep,
+      options.linkSlot === true ? { linkSlot: true } : {},
+    );
     if (release.receipt !== undefined) {
       await pieces.synced();
       noteWroteTo(release.receipt.space);
     }
-    return cfcLabelViewForCommand(targetCell, path);
+    // A lowering of a link slot reports the slot it lowered, not the labels
+    // where the link leads.
+    return cfcLabelViewForCommand(
+      targetCell,
+      path,
+      options.linkSlot === true ? { lastNode: "top" } : {},
+    );
   }
 
   const { observes: requestedObserves, ...label } = update;
@@ -5183,6 +5662,328 @@ export async function setCellCfcLabel(
   return cfcLabelViewForCommand(targetCell, path);
 }
 
+/** One clause stored at the path a release by intent names. */
+export interface ReleasableClause {
+  /** The canonical clause digest, by which a release names it. */
+  readonly digest: string;
+
+  /** The clause, as stored. */
+  readonly clause: unknown;
+
+  /** Each label-map entry holding it, by component and observation class. */
+  readonly positions: readonly { origin: string; observes?: string }[];
+}
+
+/** What `cf cell release-by-intent` read, released, or would release. */
+export interface ReleaseByIntentOutcome {
+  /** The space holding the document. */
+  readonly space: string;
+
+  /**
+   * The space's owner, whose signature alone releases there: the owner its
+   * stored access list names; the space's own DID, a home space's owner, where
+   * it stores no access list; or `undefined` where its stored list names no
+   * valid concrete owner, so that no signature releases there.
+   */
+  readonly owner: string | undefined;
+
+  /** The document the path lands in, its crossed links followed. */
+  readonly document: string;
+
+  /** The stored path in that document. */
+  readonly path: readonly string[];
+
+  /** Every confidentiality clause stored at the path before the release. */
+  readonly clauses: readonly ReleasableClause[];
+
+  /**
+   * The document's other stored positions holding any of `.clauses`, with the
+   * digests each holds: each is a further release, of its own path, for a
+   * clause to be gone from the document. Named only; a release reaches none
+   * of them.
+   */
+  readonly otherPositions: readonly {
+    readonly path: readonly string[];
+    readonly digests: readonly string[];
+  }[];
+
+  /**
+   * The digests of the clauses released, or absent when no clause was named
+   * and the outcome only lists what is stored.
+   */
+  readonly released?: readonly string[];
+
+  /** The id of the release's record, when a release was committed. */
+  readonly record?: string;
+}
+
+/**
+ * The collaborators {@link releaseCellConfidentialityByIntent} asks the owner
+ * through, which a test supplies.
+ */
+export interface ReleaseByIntentDependencies
+  extends PieceOperationDependencies {
+  /** Whether standard input is a terminal. */
+  isStdinTerminal?: () => boolean;
+
+  /** Whether standard error, where the release is shown, is a terminal. */
+  isStderrTerminal?: () => boolean;
+
+  /**
+   * Shows `prompt` to the owner and returns the line they type, or `null` at
+   * the end of input.
+   */
+  readConfirmation?: (prompt: string) => Promise<string | null>;
+
+  /** Shows the owner a line of what the release would do. */
+  show?: (line: string) => void;
+}
+
+/** The word an owner types to confirm a release by intent. */
+export const RELEASE_BY_INTENT_CONFIRMATION = "release";
+
+/**
+ * Helper for {@link releaseCellConfidentialityByIntent}, which returns the
+ * digest each of `selectors` names among `clauses`: the digest it is, or the
+ * one digest it is a prefix of.
+ *
+ * @throws If a selector names no stored clause, or is a prefix of more than
+ *   one digest.
+ */
+export const resolveClauseSelectors = (
+  selectors: readonly string[],
+  clauses: readonly ReleasableClause[],
+): string[] => {
+  const resolved = new Set<string>();
+  for (const selector of selectors) {
+    const exact = clauses.find((clause) => clause.digest === selector);
+    const matches = exact === undefined
+      ? clauses.filter((clause) => clause.digest.startsWith(selector))
+      : [exact];
+    if (selector.length === 0 || matches.length === 0) {
+      throw new Error(
+        `No clause stored at the path has a digest beginning \`${selector}\`.`,
+      );
+    }
+    if (matches.length > 1) {
+      throw new Error(
+        `The digest prefix \`${selector}\` is ambiguous: it begins ` +
+          matches.map((clause) => `\`${clause.digest}\``).join(", ") +
+          ". Name more of the digest.",
+      );
+    }
+    resolved.add(matches[0].digest);
+  }
+  return [...resolved];
+};
+
+/**
+ * Helper for {@link releaseCellConfidentialityByIntent}, which renders one
+ * clause.
+ */
+const describeClause = (clause: ReleasableClause): string =>
+  `  ${clause.digest}  ${JSON.stringify(clause.clause)}\n    stored in ` +
+  clause.positions.map((position) =>
+    position.observes === undefined
+      ? position.origin
+      : `${position.origin} (${position.observes})`
+  ).join(", ");
+
+/** Where {@link readTerminalLine} writes its prompt and reads the answer. */
+export interface TerminalStreams {
+  input: ReadableStream<Uint8Array>;
+  output: { write(bytes: Uint8Array): Promise<number> };
+}
+
+/**
+ * Reads, from the owner at a terminal, one line typed in answer to `prompt`,
+ * or `null` at the end of input. The terminal is the process's standard input
+ * and standard error unless `terminal` names another.
+ */
+export async function readTerminalLine(
+  prompt: string,
+  terminal: TerminalStreams = {
+    input: Deno.stdin.readable,
+    output: Deno.stderr,
+  },
+): Promise<string | null> {
+  await terminal.output.write(new TextEncoder().encode(prompt));
+  const reader = terminal.input.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) return text.length > 0 ? text : null;
+      text += decoder.decode(value, { stream: true });
+      const end = text.indexOf("\n");
+      if (end >= 0) return text.slice(0, end).replace(/\r$/, "");
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+/**
+ * An owner's release by intent (§8.12.7 route 2d) at one piece data path: the
+ * clauses `selectors` names, by canonical clause digest or an unambiguous
+ * prefix of one, come off every label stored at the path, whoever they stand
+ * for, on a request the identity signs as the space's owner.
+ *
+ * The path is resolved to the document it lands in, the links it crosses
+ * followed and a link stored at the path itself not, and names one stored
+ * position, matched literally: a `*` segment names the wildcard position. With
+ * no selector, this only lists the clauses stored there, the document's other
+ * stored positions holding any of them, and the space's owner. With
+ * selectors, it refuses before building or signing anything unless standard
+ * input and standard error are both terminals, and unless the identity is the
+ * owner the space's access list names; it shows the owner the document, the
+ * path, each clause that would come off and stay, and the other positions
+ * still holding a released clause, asks them to type
+ * {@link RELEASE_BY_INTENT_CONFIRMATION}, and signs with the identity only
+ * once they have. Nothing bypasses the confirmation: the signature stands for
+ * the owner's own decision, which is the one thing the store cannot check.
+ *
+ * @throws If standard input or standard error is not a terminal when a clause
+ *   is named, if the identity is not the space's owner, if a selector names no
+ *   stored clause or several, if the owner does not confirm, or if the release
+ *   is refused, by the runtime or the store.
+ */
+export async function releaseCellConfidentialityByIntent(
+  config: PieceConfig,
+  addressedPath: (string | number)[],
+  selectors: readonly string[],
+  options: { input?: boolean } = {},
+  deps: ReleaseByIntentDependencies = {},
+): Promise<ReleaseByIntentOutcome> {
+  const naming = selectors.length > 0;
+  const atTerminal =
+    (deps.isStdinTerminal ?? (() => Deno.stdin.isTerminal()))() &&
+    (deps.isStderrTerminal ?? (() => Deno.stderr.isTerminal()))();
+  if (naming && !atTerminal) {
+    throw new Error(
+      "A release by intent is shown to its owner and confirmed at a " +
+        "terminal, and standard input or standard error is not one. Run it " +
+        "interactively; nothing was signed.",
+    );
+  }
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
+    config,
+    addressedPath,
+    pieces,
+    deps,
+  );
+  const piece = await pieces.get(
+    resolvedConfig.piece,
+    false,
+    undefined,
+    resolvedConfig.pieceScope,
+  );
+  const rootCell =
+    await (options.input ? piece.input.getCell() : piece.result.getCell());
+  const targetCell = rootCell.key(...path);
+  await targetCell.pull();
+  const target = releaseByIntentTargetOf(targetCell);
+  const stored = await storedClausesForRelease(pieces.runtime, target);
+  const clauses: ReleasableClause[] = stored.clauses.map((clause) => ({
+    digest: clause.digest,
+    clause: clause.clause,
+    positions: clause.positions,
+  }));
+  const listed = {
+    space: target.space,
+    document: target.id,
+    path: [...target.path],
+    owner: stored.owner,
+    clauses,
+    otherPositions: stored.otherPositions,
+  };
+  if (!naming) return listed;
+
+  const released = resolveClauseSelectors(selectors, clauses);
+  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
+  if (stored.owner !== identity.did()) {
+    throw new Error(
+      `The identity ${identity.did()} is not the space's owner (` +
+        (stored.owner ??
+          "it has none: its access list names no valid concrete owner") +
+        "), and only the owner's signature releases by intent there; " +
+        "nothing was signed.",
+    );
+  }
+  const request = ownerReleaseByIntentRequest({
+    space: target.space,
+    document: target.id,
+    path: target.path,
+    releasedClauseDigests: released,
+    envelopeDigest: stored.envelopeDigest,
+    signer: identity.did(),
+  });
+  const show = deps.show ?? ((line: string) => console.error(line));
+  const location = target.path.length === 0 ? "<root>" : target.path.join("/");
+  show(`Release by intent in space ${target.space}`);
+  show(`  document ${target.id}, path ${location}`);
+  show(
+    `  to be signed by ${identity.did()}, the space's owner`,
+  );
+  show("Clauses that come off every label stored at the path:");
+  for (const clause of clauses) {
+    if (released.includes(clause.digest)) show(describeClause(clause));
+  }
+  show("Clauses that stay:");
+  const kept = clauses.filter((clause) => !released.includes(clause.digest));
+  if (kept.length === 0) show("  (none)");
+  for (const clause of kept) show(describeClause(clause));
+  const elsewhere = stored.otherPositions.flatMap((position) => {
+    const digests = position.digests.filter((digest) =>
+      released.includes(digest)
+    );
+    return digests.length === 0 ? [] : [{ path: position.path, digests }];
+  });
+  if (elsewhere.length > 0) {
+    show(
+      "Other stored positions of the document hold a clause being released, " +
+        "and keep it; each takes a release of its own path:",
+    );
+    for (const position of elsewhere) {
+      show(
+        `  ${
+          position.path.length === 0 ? "<root>" : position.path.join("/")
+        }: ${position.digests.join(", ")}`,
+      );
+    }
+  }
+  show(
+    "Labels at other paths, the value, and integrity are not changed. The " +
+      "release is recorded, with your signature, in the space.",
+  );
+  const answer = await (deps.readConfirmation ?? readTerminalLine)(
+    `Type ${RELEASE_BY_INTENT_CONFIRMATION} to sign and commit it: `,
+  );
+  if (answer?.trim() !== RELEASE_BY_INTENT_CONFIRMATION) {
+    throw new Error("Not confirmed; nothing was signed or released.");
+  }
+  // Only the owner's typed confirmation reaches this signature. This host
+  // holds the owner's key, so the route's obligation that a signature stands
+  // for the owner's direct decision rests here.
+  const signature = await identity.sign(
+    ownerReleaseByIntentSignedBytes(request) as AsBytes<unknown>,
+  );
+  if (signature.error) throw signature.error;
+  const release = await releaseConfidentialityByIntent(pieces.runtime, {
+    request,
+    signature: ownerReleaseByIntentSignature(new Uint8Array(signature.ok)),
+  });
+  await pieces.synced();
+  noteWroteTo(target.space);
+  return {
+    ...listed,
+    released: release.releasedDigests,
+    record: release.recordId,
+  };
+}
+
 /** Resolve the canonical piece before the read selects its demand boundary. */
 async function loadPieceForRead(
   pieces: PiecesController,
@@ -5197,16 +5998,15 @@ async function loadPieceForRead(
 }
 
 /**
- * Waits, under server execution, until the serving runtime has reacted to
- * every authored commit at or below the server's head as of now, so a read
- * that follows a send, from this process or another, reads what the serving
- * runtime stored for it. Resolves at once in the OFF arm, where this runtime
- * runs what it reads, and against a server that advertises no serving loop.
- * Against one that serves without reporting authored commit boundaries, the
- * read goes ahead without the wait, and says so on stderr.
+ * Helper for {@link pullServed}, which waits, under server execution, until
+ * the serving runtime has reacted to every authored commit at or below the
+ * server's head as of now, so a read that follows a send, from this process or
+ * another, reads what the serving runtime stored for it. Resolves at once
+ * against a server that advertises no serving loop. Against one that serves
+ * without reporting authored commit boundaries, the read goes ahead without
+ * the wait, and says so on stderr.
  */
 async function waitForServedHead(pieces: PiecesController): Promise<void> {
-  if (pieces.runtime.experimental.serverExecution !== true) return;
   const space = pieces.getSpace();
   const head = await pieces.runtime.storageManager.open(space)
     .serverHeadSeq?.();
@@ -5218,6 +6018,36 @@ async function waitForServedHead(pieces: PiecesController): Promise<void> {
     console.warn(
       `${error.message}; reading without waiting for the serving runtime, ` +
         "so a run a send just started may not show yet.",
+    );
+  }
+}
+
+/** Whether the serving runtime runs the pieces `pieces` reaches. */
+function servedPieces(pieces: PiecesController): boolean {
+  return pieces.runtime?.experimental?.serverExecution === true;
+}
+
+/**
+ * Under server execution, asks the server for `cell` and waits until it holds
+ * what the server derives for it, having covered every send at or below the
+ * server's head as of now. Does nothing in the OFF arm, where this runtime runs
+ * what it reads. Against a server that cannot be asked, it says so on stderr,
+ * and a read that follows gets what the server has stored.
+ */
+export async function pullServed(
+  pieces: PiecesController,
+  cell: Cell<unknown>,
+): Promise<void> {
+  if (!servedPieces(pieces)) return;
+  await timeCliPhase("served.head", () => waitForServedHead(pieces));
+  const pulled = await timeCliPhase(
+    "served.pull",
+    () => pullFromServer(pieces.runtime, cell),
+  );
+  if (!pulled) {
+    console.warn(
+      "This server accepts no read views, so it was not asked to recompute " +
+        "this value; reading what it has stored, which may be stale.",
     );
   }
 }
@@ -5235,7 +6065,9 @@ export async function getCellValue(
     pieces,
     deps,
   );
-  const shouldStep = options.step === true;
+  // Under server execution there is nothing to run here: the pull below is
+  // what recomputes the value.
+  const shouldStep = options.step === true && !servedPieces(pieces);
   const piece = await timeCliPhase(
     "getCellValue.piece",
     () =>
@@ -5248,10 +6080,14 @@ export async function getCellValue(
   );
 
   try {
-    await timeCliPhase(
-      "getCellValue.served.settled",
-      () => waitForServedHead(pieces),
-    );
+    if (options.run !== false && servedPieces(pieces)) {
+      await pullServed(
+        pieces,
+        options.input
+          ? await piece.input.getCell(path)
+          : (await piece.result.getCell()).key(...path),
+      );
+    }
     if (shouldStep) {
       // A nested target pull is itself the demand and storage boundary for
       // the requested cell. Pulling the canonical piece first widens that
@@ -5287,6 +6123,24 @@ export async function getCellValue(
     }
 
     const prop = options.input ? "input" : "result";
+    // A path whose result the schema could not project. A verb there is refused
+    // either way. A derived value nothing has demanded has no stored value yet,
+    // which a read that asks for nothing reports as absent.
+    const projectionFailed = async (): Promise<undefined> => {
+      const verbRefusal = await verbReadRefusalOrNull(
+        piece,
+        prop,
+        path,
+        resolvedConfig.piece,
+      );
+      if (verbRefusal) throw verbRefusal;
+      if (options.run === false) return undefined;
+      throw new PieceResultProjectionError(
+        path,
+        shouldStep,
+        servedPieces(pieces),
+      );
+    };
     if (options.selection !== undefined) {
       const selection = options.selection;
       const targetCell = options.input
@@ -5322,7 +6176,7 @@ export async function getCellValue(
           error.message.startsWith("Cannot access path") &&
           await resultProjectionFailedAtPath(piece, path)
         ) {
-          throw new PieceResultProjectionError(path, shouldStep);
+          return await projectionFailed();
         }
         throw error;
       }
@@ -5343,19 +6197,17 @@ export async function getCellValue(
         !options.input && selected === undefined &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       if (selected === undefined && !sourceWasAbsent) {
         throw new CellSelectionError(
           "Cannot read selected value: the filter/schema expression did " +
             "not materialize a JSON-renderable value. This is not JSON " +
-            "null. Retry with --step for a computed result, or inspect the " +
-            "selected source data and schema.",
+            `null. ${
+              servedPieces(pieces)
+                ? "Inspect"
+                : "Retry with --step for a computed result, or inspect"
+            } the selected source data and schema.`,
         );
       }
       return selected;
@@ -5373,12 +6225,7 @@ export async function getCellValue(
         error.message.startsWith("Cannot access path") &&
         await resultProjectionFailedAtPath(piece, path)
       ) {
-        throw await verbReadRefusalOrNull(
-          piece,
-          prop,
-          path,
-          resolvedConfig.piece,
-        ) ?? new PieceResultProjectionError(path, shouldStep);
+        return await projectionFailed();
       }
       throw error;
     }
@@ -5387,12 +6234,7 @@ export async function getCellValue(
       !options.input && value === undefined &&
       await resultProjectionFailedAtPath(piece, path)
     ) {
-      throw await verbReadRefusalOrNull(
-        piece,
-        prop,
-        path,
-        resolvedConfig.piece,
-      ) ?? new PieceResultProjectionError(path, shouldStep);
+      return await projectionFailed();
     }
 
     // Read-path guard (verb contract WS-F): a path that lands ON a verb would
@@ -5426,6 +6268,9 @@ export interface CellWriteTarget {
 
   /** The path inside that piece, empty for a write at its root. */
   path: (string | number)[];
+
+  /** Whether the serving runtime recomputes what the write changes. */
+  served?: boolean;
 }
 
 /**
@@ -5467,7 +6312,7 @@ export async function setCellValue(
     await piece.result.set(value, path);
   }
   noteWroteTo(config.space);
-  return { piece: resolvedConfig.piece, path };
+  return { piece: resolvedConfig.piece, path, served: servedPieces(pieces) };
 }
 
 /**
@@ -5527,8 +6372,9 @@ export async function callPieceHandler<T = any>(
  * for {@link stepPiece}. The two differ in what they are for and so in what
  * they do around the start: a step exists to commit what recomputation
  * produced, so it pulls, settles, receipts the space and stops the piece
- * again; this one leaves the pattern running, writes nothing, and receipts
- * nothing, because starting a piece is not a write.
+ * again, except under server execution, where it starts nothing and only pulls
+ * from the server; this one leaves the pattern running, writes nothing, and
+ * receipts nothing, because starting a piece is not a write.
  *
  * `addressedPath` is the path the caller was aiming at, and what it decides is
  * which piece runs: a walk that reaches a collection's member spends the
@@ -5569,7 +6415,10 @@ export async function warmPiece(
   // the resolution's answer: a walk into a collection holder reaches a member,
   // and the caller's memo is over pieces rather than over the paths that
   // reach them.
-  if (deps.alreadyRunning?.(resolvedConfig.piece) !== true) {
+  if (
+    !servedPieces(pieces) &&
+    deps.alreadyRunning?.(resolvedConfig.piece) !== true
+  ) {
     await timeCliPhase(
       "warmPiece.getPiece",
       () =>
@@ -5678,6 +6527,7 @@ export async function sinkCellValue(
   // and a read of one path would otherwise be about two different cells.
   const io = options.input ? piece.input : piece.result;
   const cell = await io.getCell(path) as Cell<unknown>;
+  await pullServed(pieces, cell);
   // Before the subscription, so the baseline is the value a read of this path
   // would serve. The first settle writes no line and is what every later
   // change is measured against, and `runtime.idle()` says the runtime is quiet
@@ -5772,16 +6622,23 @@ export async function stepPiece(
     pieces,
     deps,
   );
+  const served = servedPieces(pieces);
   const piece = await timeCliPhase(
     "stepPiece.getPiece",
     () =>
       pieces.get(
         resolvedConfig.piece,
-        true,
+        !served,
         undefined,
         resolvedConfig.pieceScope,
       ),
   );
+  if (served) {
+    // The server runs the piece and commits what it derives, so the step is
+    // the pull, and it writes nothing.
+    await pullServed(pieces, piece.getCell());
+    return;
+  }
   await timeCliPhase("stepPiece.pull", () => piece.getCell().pull());
   await timeCliPhase("stepPiece.synced", () => pieces.synced());
   // A step exists to run the pattern and commit what recomputation
@@ -5831,14 +6688,22 @@ export async function recreateSpaceRootPattern(
   return piece.id;
 }
 
-function isVNodeLike(value: unknown): value is VNode {
+/**
+ * The view node `value` is, or the one its chain of `[UI]` wrappers ends at;
+ * `undefined` where the chain ends at something else or loops.
+ */
+function viewNodeOf(value: unknown): VNode | undefined {
   const visited = new Set<object>();
   while (isObjectOrArray(value) && UI in value) {
-    if (visited.has(value)) return false; // Cycle detected
+    if (visited.has(value)) return undefined;
     visited.add(value);
     value = value[UI];
   }
-  return (value as VNode)?.type === "vnode";
+  return isViewNode(value) ? value : undefined;
+}
+
+function isViewNode(value: unknown): value is VNode {
+  return isObjectOrArray(value) && value.type === "vnode";
 }
 
 /**
@@ -5849,10 +6714,11 @@ function isVNodeLike(value: unknown): value is VNode {
 export async function createSpace(
   config: Omit<SpaceConfig, "space">,
   label?: string,
+  deps: Pick<PieceOperationDependencies, "loadIdentity" | "loadPieces"> = {},
 ): Promise<string> {
-  const identity = await loadIdentity(config.identity);
+  const identity = await (deps.loadIdentity ?? loadIdentity)(config.identity);
   const homeConfig: SpaceConfig = { ...config, space: identity.did() };
-  const pieces = await loadPieces(homeConfig);
+  const pieces = await (deps.loadPieces ?? loadPieces)(homeConfig);
   const space = await pieces.createSpace(label);
   noteWroteTo(homeConfig.space);
   return space;

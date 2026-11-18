@@ -74,14 +74,11 @@ piece root. All pieces have a `.handlers` file at the piece root.
    - synthetic shebang text for `.handler` / `.tool` files
 5. Return the requested byte range (offset + size from the read call).
 
-Mounted callable reads return synthetic text whose first line is:
-
-```text
-#!<stable-cf-shim> exec
-```
-
-This is display-only for this change. The supported execution contract is
-`cf exec <mounted-callable-file> ...`.
+Mounted callable reads return a synthetic shell script: a `#!/bin/sh` line,
+comments giving the callable's input schema and type, and a line that runs
+`cf exec` on the file with the arguments it was given. Running the file
+directly and running `cf exec <mounted-callable-file> ...` reach the same
+callable.
 
 Reads are served from a cache. The cache is populated eagerly for subscribed
 cells and lazily for others.
@@ -171,8 +168,17 @@ When a piece uses the `[FS]` projection, writing to `index.md` or
 
 **`index.md`**: The file is parsed as YAML frontmatter + markdown body.
 - Each frontmatter key (except `entityId`, which is read-only) is written to
-  its corresponding cell via the `$FS.frontmatter.<key>` path.
-- The body is written to the `$FS.content` cell.
+  its corresponding cell via the `$FS.frontmatter.<key>` path. A value in
+  double quotes is read as the string inside them, with JSON escapes
+  applied, which is the form the projection writes every string in. A bare
+  number, boolean, or `null` is read as that value, and any other bare value
+  is read as text.
+- Keys present in the cell but absent from the file are cleared.
+- The body is written to the `$FS.content` cell as saved, line endings
+  included.
+- The frontmatter is found under LF, CRLF, or CR line endings, and a leading
+  byte-order mark is dropped, so a file saved any of those ways keeps its
+  frontmatter.
 - Invalid YAML frontmatter is silently skipped.
 
 **`index.json`**: Parsed as a JSON object.

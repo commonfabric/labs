@@ -1,6 +1,6 @@
-import ts from "typescript";
+import type ts from "typescript";
 import { TransformationContext } from "./mod.ts";
-import { CrossStageState } from "./cross-stage-state.ts";
+import type { CrossStageState } from "./cross-stage-state.ts";
 import type { BuilderSourceSite } from "./runtime-contract.ts";
 
 /**
@@ -84,6 +84,13 @@ export type CapabilityParamSummary = {
   readonly fullShapePaths?: readonly (readonly string[])[];
   readonly writePaths: readonly (readonly string[])[];
   readonly opaquePaths?: readonly (readonly string[])[];
+
+  /**
+   * Paths whose value the function only hands on to a pattern it instantiates.
+   * The new piece holds a link and does its own reading, so the function needs
+   * an opaque handle there, whatever type the value has.
+   */
+  readonly forwardedPaths?: readonly (readonly string[])[];
 
   /**
    * Paths whose whole value left the function: returned to a caller, put in a

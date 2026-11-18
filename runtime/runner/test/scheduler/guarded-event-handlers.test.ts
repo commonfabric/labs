@@ -341,7 +341,7 @@ describe("guarded-event-handlers", () => {
     expect(failures[0]).toMatchObject({ kind: "deferred" });
   });
 
-  it("defers a replacement that arrives while the prior body is presyncing", async () => {
+  it("runs a replacement that arrives while the prior body is presyncing", async () => {
     const started = Promise.withResolvers<void>();
     const released = Promise.withResolvers<void>();
     const old = implementation("a", "old");
@@ -372,11 +372,7 @@ describe("guarded-event-handlers", () => {
       released.resolve();
     }
     await env.runtime.idle();
-    expect(calls).toEqual([]);
-    expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatchObject({ kind: "deferred" });
-    queue(alice, 2);
-    await env.runtime.idle();
-    expect(calls).toEqual([`new:${alice}:2`]);
+    expect(calls).toEqual([`new:${alice}:1`]);
+    expect(failures).toEqual([]);
   });
 });

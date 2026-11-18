@@ -7,6 +7,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";
 import { ENTITY_URI_SCHEMES } from "../src/entity-kind.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -187,6 +188,7 @@ async function durableSnapshots(
   roots: ReadonlyArray<{ id: string; scope?: unknown }>,
 ): Promise<Map<string, unknown>> {
   const client = await MemoryV2Client.connect({
+    instanceNames: namesInstancesByDefault(),
     transport: MemoryV2Client.loopback(server),
   });
   try {
@@ -302,6 +304,7 @@ class RewritingSessionFactory implements SessionFactory {
   }
   async create(spaceId: string, sgnr?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: rewritingLoopback(
         this.#getServer(),
         this.#redirectSends,

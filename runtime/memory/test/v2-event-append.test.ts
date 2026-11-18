@@ -46,10 +46,7 @@ import {
   read,
   selectPendingStreamEventDocs,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   aliasForDbId,
   attachDatabase,
@@ -127,7 +124,7 @@ const sidecarValue = (engine: Engine): StreamEventsDocValue =>
 
 const withLiveLease = (engine: Engine): string => {
   const holder = executionLeaseHolder(SERVICE);
-  assert(acquireExecutionLease(engine, { space: SPACE, holder }));
+  assert(engine.executionLeases.acquire(SPACE, holder));
   return holder;
 };
 
@@ -173,7 +170,7 @@ const waveSetSidecar = (
   });
 
 const headSeqOf = (engine: Engine): number =>
-  (engine.statements.selectServerSeq.get() as { seq: number }).seq;
+  (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 
 const commitActingColumns = (
   path: string,
@@ -440,6 +437,7 @@ Deno.test("event-append admission: declarations and the sidecar write guard", as
           const overrides of [
             { consequenced: true },
             { error: "boo" },
+            { withheld: true as const },
             { status: "dropped" as const, reason: "x" },
           ]
         ) {

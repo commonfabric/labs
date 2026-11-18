@@ -1,4 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import type { CellKind } from "@commonfabric/api";
+import type { JSONSchema } from "commonfabric";
 import { schemaToTypeString } from "../src/schema-format.ts";
 
 //
@@ -820,4 +823,92 @@ Deno.test("schemaToTypeString renders an object conjunct that names no field", (
     schemaToTypeString({ allOf: [{ type: "object" }] } as never),
     "{}",
   );
+});
+
+Deno.test("schemaToTypeString names a reference to an absent definition", () => {
+  expect(schemaToTypeString({ $ref: "#/$defs/Missing" })).toBe("Missing");
+  expect(
+    schemaToTypeString({ $ref: "#/$defs/Missing" }, {
+      defs: { Missing: { type: "string" } },
+    }),
+  ).toBe("string");
+});
+
+Deno.test("schemaToTypeString keeps cell wrappers at the depth cap", () => {
+  const schema: JSONSchema = {
+    type: "object",
+    properties: { a: { type: "string" } },
+    asCell: ["stream", "cell"],
+  };
+  expect(schemaToTypeString(schema, { depth: 4 })).toBe("(Cell<...>) => void");
+  expect(schemaToTypeString(schema, { depth: 3 })).toBe(
+    "(Cell<{...}>) => void",
+  );
+});
+
+Deno.test("schemaToTypeString abbreviates an enum past five values", () => {
+  expect(schemaToTypeString({ enum: [1, 2, 3, 4, 5, 6] })).toBe(
+    "1 | 2 | 3 | 4 | 5 | ...",
+  );
+  expect(schemaToTypeString({ enum: [1, 2, 3, 4, 5] })).toBe(
+    "1 | 2 | 3 | 4 | 5",
+  );
+});
+
+Deno.test("schemaToTypeString abbreviates a union past four variants", () => {
+  const variants: JSONSchema[] = [
+    { const: 1 },
+    { const: 2 },
+    { const: 3 },
+    { const: 4 },
+    { const: 5 },
+  ];
+  expect(schemaToTypeString({ oneOf: variants })).toBe("1 | 2 | 3 | 4 | ...");
+  expect(schemaToTypeString({ oneOf: variants.slice(0, 4) })).toBe(
+    "1 | 2 | 3 | 4",
+  );
+});
+
+Deno.test("schemaToTypeString renders an array without an item schema as unknown[]", () => {
+  expect(schemaToTypeString({ type: "array" })).toBe("unknown[]");
+  expect(schemaToTypeString({ type: "array", items: { type: "number" } }))
+    .toBe("number[]");
+});
+
+Deno.test("schemaToTypeString renders an object of only $-prefixed properties as {}", () => {
+  expect(
+    schemaToTypeString({ type: "object", properties: { $UI: {} } }),
+  ).toBe("{}");
+  expect(
+    schemaToTypeString({ type: "object", properties: { $UI: {}, a: {} } }),
+  ).toBe("{\n  a?: unknown\n}");
+});
+
+Deno.test("schemaToTypeString names each cell kind's wrapper", () => {
+  const wrapped = (kind: CellKind) =>
+    schemaToTypeString({ type: "string", asCell: [kind] });
+  expect(wrapped("readonly")).toBe("ReadonlyCell<string>");
+  expect(wrapped("writeonly")).toBe("WriteonlyCell<string>");
+  expect(wrapped("comparable")).toBe("ComparableCell<string>");
+  expect(wrapped("cell")).toBe("Cell<string>");
+});
+
+Deno.test("schemaToTypeString names a wrapper of a kind it does not know UnknownWrapper", () => {
+  // Stored schemas arrive as JSON, so a kind outside `CellKind` reaches the
+  // formatter that way.
+  expect(
+    schemaToTypeString(JSON.parse('{"type":"string","asCell":["bogus"]}')),
+  ).toBe("UnknownWrapper");
+});
+
+Deno.test("schemaToTypeString wraps a space-scoped cell in PerSpace", () => {
+  expect(
+    schemaToTypeString({
+      type: "string",
+      asCell: [{ kind: "cell", scope: "space" }],
+    }),
+  ).toBe("PerSpace<Cell<string>>");
+  expect(
+    schemaToTypeString({ type: "string", asCell: [{ kind: "cell" }] }),
+  ).toBe("Cell<string>");
 });

@@ -230,12 +230,21 @@ lacked before the transaction, so that one holding `undefined` is not new, which
 the stored envelope declares nothing at or beneath, and which lies beneath no
 protected field the setup restates. Such a field is initialized as "New fields
 during a source update" above describes, and a list there whose entries are
-protected may hold no entry. The stored schema document and envelope version are
-then kept where the comparison left out no new field's claims. Otherwise the
-envelope the transaction derives is stored. It differs from the stored one at
-the new fields, whose claims it declares, and, in a release, beneath links,
-where it re-describes the claims as the specification's link-position rule
-("Claims Beneath a Link Position", "Release") lets a release do. Labels
+protected may hold no entry. In a release, where the comparison leaves out the
+new fields' claims, a position whose write policy the release extended counts as
+unchanged: the stored `writePolicyAnyOf` alternatives begin the derived list, in
+order and each exactly as stored, every alternative after them is one the
+release may append ("Release", `admissible`), and the position's other claims
+are the same. A position whose logical path the comparison cannot tell, such as
+a rest claim beside named properties, or one at, above or beneath a deferred
+field, is not taken that way, and is compared exactly. The stored schema
+document and envelope version are then kept where the comparison left out no
+new field's claims and took no position that way. Otherwise the envelope the
+transaction derives is stored. It differs from the stored one at the new
+fields, whose claims it declares, at a position whose write policy the release
+extended, which holds the appended alternatives, and, in a release, beneath
+links, where it re-describes the claims as the specification's link-position
+rule ("Claims Beneath a Link Position", "Release") lets a release do. Labels
 elsewhere in the document persist as for any write. An authoritative
 transaction, which commits each document whole, receives no deferral. Any other
 write attempt at a protected field — pattern code setting a whole document with
@@ -254,20 +263,29 @@ about the current principal — `RepresentsCurrentUser`, `AuthoredByCurrentUser`
 transaction of a handler run they invoked, a piece start deferred from one,
 and the transaction that brings a piece into being outside any action — a
 deploy, a host creating a piece on the principal's behalf. The runtime marks
-those transactions (`CfcTxState.attributedInitialization`, set through the
-runtime's authorization); the piece a handler creates, its cross-space
-children included, is initialized in the handler's own transaction, and a
-served creation carries the requester's trust snapshot. A builtin that
-instantiates a pattern from a continuation of its action declines the mark
-(`attributeInitialization: false`): the piece is nobody's act. A deferred
-piece start runs in a transaction of its own and takes the trust snapshot of
-the transaction it was deferred from, so the root a serving runtime's
-space-root ensure creates, under the snapshot of the owner it resolves, starts
-on that owner's behalf. A run under the serving runtime's own trust snapshot,
+those transactions through its authorization: a handler run's transaction
+whole (`CfcTxState.attributedInitialization`), and a creation's for the new
+piece's own documents (`CfcTxState.attributedPieces`): its result document,
+and the argument and internal documents its setup names for it. The piece a
+handler creates, its cross-space children included, is initialized in the
+handler's own transaction, and a served creation carries the requester's trust
+snapshot. A builtin that instantiates a pattern from a continuation of its
+action declines the mark (`attributeInitialization: false`): the piece is
+nobody's act. A deferred piece start runs in a transaction of its own, carries
+the marks of the transaction it was deferred from and takes that transaction's
+trust snapshot, so the root a serving runtime's space-root ensure creates,
+under the snapshot of the owner it resolves, starts on that owner's behalf. A
+creation's mark reaches no other piece: a projection the same transaction
+re-stages for a piece that already existed, when a release of its parent adds
+a child the next start brings into being, is initialized on nobody's behalf,
+as the next paragraph describes. A run under the serving runtime's own trust snapshot,
 which is what a served run that acts for no one keeps, is refused an
 initialization it would attribute, whether the claim would name the service
 or the service would become a field's owner, as any of its writes carrying
-such a claim is.
+such a claim is. A reference the runtime stages at an owner position, the
+result document's binding to an argument field a release adds, writes nothing
+of the value it names and mints no owner claim, so a served run acting for no
+one is admitted it as it is admitted an initialization on nobody's behalf.
 
 In any other transaction — a runtime starting a piece it finds set up, a
 collection builtin instantiating a sub-pattern over a new entry, a source
@@ -275,15 +293,46 @@ update installing a new field's default — the seed, the reference that
 exposes it, the new field's default, the internal cells a setup projects
 result fields to and the slots it stages bindings into are all persisted
 without a claim about the current principal.
-Other integrity the schema adds is minted as for any write. No owner is bound by such an initialization: the field's
-`ownerPrincipal` binding is established by the first write an acting
-principal makes through the field's writer, and that write mints the claim
-for its actor as every handler write does. From then on the field is that
-principal's: the `ownerPrincipal` placeholder names the principal the stored
-label represents, and a write through the writer by any other principal is
-refused (`ownerPrincipal mismatch`), as is one to a field whose stored label
-names more than one principal. An initialization on nobody's behalf leaves
-the stored owner as it is.
+Other integrity the schema adds is minted as for any write. Who owns a field
+such an initialization installs at a placeholder `ownerPrincipal` depends on
+whether the piece records its creator.
+
+A piece records the principal it was created for in the `creator` meta field
+of its result document, written by the setup that brings it into being and
+admitted by no later write, a setup that installs the pointer again over a
+retained record included: a creation outside any action and a handler's
+creation record the acting principal; a child a piece instantiates records its
+parent's creator, whoever's run instantiated it; a served run acting for no
+one records nothing. A piece created before the runtime recorded creators gains
+one at its next source transition: a space root takes the owner its space's
+access list names, and any other piece the one principal the stored labels of
+its owner-protected fields represent, none where those fields name two
+principals or none. The record is written only while the
+`pieceCreatorRecord` experimental option is on
+([`EXPERIMENTAL_OPTIONS.md`](../development/EXPERIMENTAL_OPTIONS.md)).
+
+Where the piece records a creator and the stored label at the position names
+no owner, the initialization binds the creator: the persisted label mints
+`represents-principal` for the recorded creator and no other claim about the
+current principal, whichever runtime performs the update and whether or not
+the run acts for anyone. The piece's creator chose its origin and with it
+delegated every later release, so a field a release adds is theirs, not the
+updater's, not the first writer's and not the service's. Where the piece
+records no creator, no owner is bound: the field's `ownerPrincipal` binding is
+established by the first write an acting principal makes through the field's
+writer, and that write mints the claim for its actor as every handler write
+does. From then on the field is that principal's either way: the
+`ownerPrincipal` placeholder names the principal the stored label represents,
+and a write through the writer by any other principal is refused
+(`ownerPrincipal mismatch`), as is one to a field whose stored label names
+more than one principal. An initialization on nobody's behalf at a position
+whose stored label already names an owner leaves that owner as it is.
+`runtime/runner/test/cfc-creator-owner-binding.test.ts` covers the binding
+under the creator's runtime, another member's and a serving runtime acting for
+no one, the writer afterward, a piece without a record, and the record a
+source transition writes from a legacy piece's fields;
+`runtime/runner/test/cfc-piece-creator.test.ts` covers the record itself and
+the writes to it that are refused.
 
 An initialization that is nobody's act leaves the claim a stored label
 already makes at its path about a principal: the claim is carried forward as

@@ -1,13 +1,20 @@
-import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  type CellScope,
+  resolveScopeKey,
+  type ScopeKey,
+  type ScopeKeyIdentity,
+} from "@commonfabric/memory/v2";
+import { type ArmedTurn, armTurn } from "@commonfabric/async/turn";
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
 import { ensureNotRenderThread } from "@commonfabric/platform/env";
 import { getLogger } from "@commonfabric/logger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getTopFrame } from "../builder/pattern.ts";
 import type { Cancel } from "../cancel.ts";
 import { waveRunContextOf, waveSettlementOf } from "../executor/wave.ts";
-import { ConsoleEvent } from "../harness/console.ts";
+import type { ConsoleEvent } from "../harness/console.ts";
 import {
   type NormalizedFullLink,
   toMemorySpaceAddress,
@@ -82,14 +89,12 @@ import {
   runSchedulerIdempotencyCheck,
   type SchedulerDiagnosisControlState,
   startSchedulerDiagnosis,
-  stopSchedulerDiagnosis,
 } from "./diagnosis.ts";
 import {
   getPieceMetadataFromFrame,
   getSchedulerActionId,
   getSchedulerActionTelemetryInfo,
   handleSchedulerError,
-  queueTask,
   recordTriggerTrace as recordTriggerTraceState,
   type SchedulerActionIdentityState,
 } from "./diagnostics.ts";
@@ -126,7 +131,7 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { dirtyFanOutKey, keyAtRatchet } from "./fan-out.ts";
+import { dirtyFanOutKey, fanOutInstances, keyAtRatchet } from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -145,6 +150,7 @@ import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
+  type SchedulerResubscribeOptions,
   type SchedulerSubscribeActionState,
   type SchedulerSubscriptionState,
   type SchedulerUnsubscribeActionState,
@@ -183,6 +189,7 @@ import type {
   ActionRunTraceEntry,
   EventHandler,
   EventPreflightTraceContext,
+  LoadingReadWithdrawal,
   QueuedEvent,
   ReactivityLog,
   SchedulerObservationIdentity,
@@ -268,6 +275,22 @@ function isReactivityLog(value: unknown): value is ReactivityLog {
 function isAuthorizationLoadFailure(error: unknown): boolean {
   return error instanceof ReplicaLoadFailureError &&
     error.failure.failureClass === "authorization";
+}
+
+/** The key of one document in `Scheduler`'s produced-watchers: its space and
+ * id, which hold no NUL. */
+const producedWatchKey = (space: string, id: string): string =>
+  `${space}\0${id}`;
+
+/**
+ * Like `isAuthorizationLoadFailure()`, except that the failure also carries
+ * durable evidence of the refusal (`permanentEvidence`), as one naming the
+ * access list's revision does, rather than being one a remounted session may
+ * not repeat.
+ */
+function isLastingAuthorizationLoadFailure(error: unknown): boolean {
+  return isAuthorizationLoadFailure(error) &&
+    (error as ReplicaLoadFailureError).failure.permanentEvidence === true;
 }
 
 function normalizeRegistrationArgs(
@@ -448,7 +471,7 @@ export class Scheduler {
   #diagnosisControlState!: SchedulerDiagnosisControlState;
 
   // Debounce infrastructure for throttling slow actions
-  #pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null = null;
+  #queuedPass: ArmedTurn | null = null;
   #eventQueueState!: SchedulerEventQueueState;
   #eventExecutionState!: SchedulerEventExecutionState;
   readonly #gates = new SchedulerGates({
@@ -551,14 +574,19 @@ export class Scheduler {
   /**
    * Head event parked on in-flight document loads, keyed by event id. The
    * park ends once every load it waits on has settled: with no failure among
-   * them — or, for a client event, none but `authorization`-class failures —
-   * execution is re-queued, and otherwise `#failHeadEventLoadPark()` drops a
-   * client event and defers a served one.
+   * them — or none but `authorization`-class failures, for a client event or
+   * (lasting ones) for one its own run's loading reads parked — execution is
+   * re-queued, and
+   * otherwise `#failHeadEventLoadPark()` drops a client event and defers a
+   * served one.
    */
   #headEventLoadPark: {
     eventId: string;
     keys: readonly string[];
     generations: ReadonlyMap<string, number>;
+
+    /** Present when the event's own run was withdrawn into this park. */
+    withdrawal?: LoadingReadWithdrawal;
   } | null = null;
 
   /**
@@ -608,9 +636,7 @@ export class Scheduler {
   /**
    * The serving posture's cooperative macrotask yield (`cooperative-yield.ts`):
    * constructed _only_ for a serving runtime, so the OFF arm and flag-ON
-   * clients keep their settle loops' exact microtask shape. Its observer is the
-   * runtime's `servingYieldObserver` seam — the `SpaceServer`'s mid-wave lease
-   * renew.
+   * clients keep their settle loops' exact microtask shape.
    */
   readonly #cooperativeYield: CooperativeYield | undefined;
 
@@ -623,11 +649,7 @@ export class Scheduler {
     consoleHandler?: ConsoleHandler,
     errorHandlers?: ErrorHandler[],
   ) {
-    if (runtime.servingPosture) {
-      const yielder = new CooperativeYield();
-      yielder.onYield = () => runtime.servingYieldObserver?.();
-      this.#cooperativeYield = yielder;
-    }
+    if (runtime.servingPosture) this.#cooperativeYield = new CooperativeYield();
     this.#initializeSchedulerState();
 
     this.#consoleHandler = consoleHandler ||
@@ -674,7 +696,7 @@ export class Scheduler {
     readonly gates: SchedulerGates;
     readonly nodes: NodeRegistry;
     readonly pending: Set<Action>;
-    pendingQueueTaskTimer: ReturnType<typeof setTimeout> | null;
+    queuedPass: ArmedTurn | null;
     scheduled: boolean;
     readonly settlingTracker: SettlingTracker;
     clearBackoffForCleanNodes(): void;
@@ -708,11 +730,11 @@ export class Scheduler {
       gates: this.#gates,
       nodes: this.#nodes,
       pending: this.#pending,
-      get pendingQueueTaskTimer() {
-        return outerThis.#pendingQueueTaskTimer;
+      get queuedPass() {
+        return outerThis.#queuedPass;
       },
-      set pendingQueueTaskTimer(value) {
-        outerThis.#pendingQueueTaskTimer = value;
+      set queuedPass(value) {
+        outerThis.#queuedPass = value;
       },
       get scheduled() {
         return outerThis.#scheduled;
@@ -973,16 +995,22 @@ export class Scheduler {
   resubscribe(
     action: Action,
     log: ReactivityLog,
-    options: {
-      isEffect?: boolean;
-      changeGroup?: ChangeGroup;
-    } = {},
+    options: SchedulerResubscribeOptions = {},
   ): void {
+    this.#resubscribe(action, log, options);
+  }
+
+  /** Like {@link resubscribe}, except that it returns the action's node. */
+  #resubscribe(
+    action: Action,
+    log: ReactivityLog,
+    options: SchedulerResubscribeOptions = {},
+  ): SchedulerNode {
     const record = this.#nodes.get(action);
     const wasLiveBeforeRootRegistration = record !== undefined &&
       isLive(this.#dependencyGraphState, record);
     this.#updateMaterializerRegistration(action);
-    resubscribePullSchedulerAction(
+    return resubscribePullSchedulerAction(
       this.#subscribeActionState,
       action,
       log,
@@ -1011,6 +1039,10 @@ export class Scheduler {
         ? { demandRootIds: identity.demandRootIds }
         : {}),
     };
+    // The registry files a node under its demand roots when it joins the
+    // active set, so an identity set on a node that is already active has to
+    // be told to it. This is the only place an identity is set.
+    this.#nodes.noteObservationIdentity(action);
   }
 
   unsubscribe(
@@ -1278,13 +1310,18 @@ export class Scheduler {
     }
     if (
       this.#hasPendingLineageHeadEvent() || this.#hasLoadParkedHeadEvent() ||
-      this.#eventQueue[0]?.retryReadinessPending === true
+      this.#eventQueue[0]?.retryReadinessPending === true ||
+      this.#eventQueue[0]?.presyncPending === true ||
+      this.#eventQueue[0]?.multiSpaceCommitPending === true
     ) {
       // A cross-space lineage head has no timer — its origin commit callback
       // is the wake source; a load-parked head wakes on load completion or
       // drops on an explicit load failure; a head requeued by a stale-basis
-      // retry wakes once the retry's readiness resolves. Either way idle
-      // must stay open until the callback re-queues execution.
+      // retry wakes once the retry's readiness resolves; a head held for its
+      // input presync wakes once the presync settles, or once a drop takes
+      // it off the queue; a head held for an earlier multi-space commit wakes
+      // once that commit has handed its writes over. Either way idle must
+      // stay open until the callback re-queues execution.
       return { kind: "drain" };
     }
     // Execution is scheduled - wait for it to complete
@@ -1351,17 +1388,11 @@ export class Scheduler {
    * whenever it comes. Returns the number of nodes re-armed.
    */
   invalidateActionsForDemandRoots(rootIds: readonly string[]): number {
-    const roots = new Set(rootIds);
     let rearmed = 0;
-    for (const record of this.#nodes.nodes()) {
-      const identity = (record.action as Partial<TelemetryAnnotations>)
-        .schedulerObservationIdentity;
-      const demandRootIds = identity?.demandRootIds ??
-        (identity?.pieceRootId !== undefined
-          ? [identity.pieceRootId]
-          : undefined);
-      if (demandRootIds === undefined) continue;
-      if (!demandRootIds.some((id) => roots.has(id))) continue;
+    // Read from the registry's index by demand root rather than by walking
+    // every node: the space server calls this once for each demand key it
+    // maps to a piece, and a session on a large space brings thousands.
+    for (const record of this.#nodes.nodesUnderDemandRoots(rootIds)) {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
       } else if (!record.fanOut.narrowed) continue;
@@ -1373,6 +1404,29 @@ export class Scheduler {
     }
     if (rearmed > 0) this.queueExecution();
     return rearmed;
+  }
+
+  /**
+   * Whether the event queue holds an event that a handler of the piece whose
+   * result document is `id` in `space` is to handle, or one still waiting for
+   * its handler to load, which may be any piece's. A handler that carries no
+   * observation identity counts as the piece's, since nothing says it isn't.
+   */
+  hasQueuedEventFor(space: MemorySpace, id: string): boolean {
+    for (const queued of this.#eventQueue) {
+      if (queued.handlerLoadPending === true) return true;
+      const identity = (queued.handler as Partial<TelemetryAnnotations>)
+        .schedulerObservationIdentity;
+      if (identity === undefined) return true;
+      if ((identity.ownerSpace ?? queued.eventLink.space) !== space) continue;
+      if (
+        identity.pieceId === id || identity.pieceRootId === id ||
+        identity.demandRootIds?.includes(id) === true
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1496,6 +1550,9 @@ export class Scheduler {
 
   #demandedWriterHookInstalled = false;
 
+  /** The callbacks `watchProducedDocument()` holds, by `producedWatchKey()`. */
+  readonly #producedWatchers = new Map<string, Set<() => void>>();
+
   #installDemandedWriterHook(): void {
     if (this.#demandedWriterHookInstalled) return;
     this.#demandedWriterHookInstalled = true;
@@ -1504,6 +1561,9 @@ export class Scheduler {
     // its last demanded entity leaves it. Bracketed like every other root
     // flip (serving-loop.md §8: capture wasLive → flip → notify).
     this.#writeIndex.onWriterEntitiesChanged = (action, added, removed) => {
+      // A writer that stops writing a document has stopped owing it, which
+      // is news to whoever waits on it being produced.
+      if (removed.size > 0) this.#wakeProducedWatchers(removed);
       let touchesDemand = false;
       for (const entity of added) {
         if ((this.#demandedEntityRefs.get(entity) ?? 0) > 0) {
@@ -1549,7 +1609,6 @@ export class Scheduler {
       this.#nodes.demandedWriters.delete(action);
       this.#demandRootCounters.leaves += 1;
     }
-    if (record === undefined) return;
     notifyNodeLivenessChange(this.#dependencyGraphState, action, wasLive);
     if (
       shouldBeRoot && this.#isLiveAction(action) &&
@@ -1580,6 +1639,22 @@ export class Scheduler {
       for (const writer of writers) this.#reconcileDemandedWriter(writer);
     }
     return writers;
+  }
+
+  /** Whether a client session tracks the instance key `(space, id, scope)`. */
+  isDemandedEntity(
+    address: { space: MemorySpace; id: string; scope: CellScope },
+  ): boolean {
+    return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
+  /** Whether a client session tracks an instance a node of the piece `id` writes. */
+  pieceHasDemandedWriter(space: MemorySpace, id: string): boolean {
+    for (const action of this.#nodes.demandedWriters) {
+      const { viewPiece } = action as Partial<TelemetryAnnotations>;
+      if (viewPiece?.space === space && viewPiece.id === id) return true;
+    }
+    return false;
   }
 
   /** LEAVE: the last session tracking the instance key left (R-D's
@@ -1620,12 +1695,11 @@ export class Scheduler {
     if (writers === undefined || writers.size === 0) return 0;
     let rearmed = 0;
     for (const writer of writers) {
-      const record = this.#nodes.get(writer);
-      if (record === undefined) continue;
-      if (record.fanOut === undefined) continue;
-      const pairKey = keyAtRatchet(record.fanOut, demander);
+      const fanOut = this.#nodes.get(writer)?.fanOut;
+      if (fanOut === undefined) continue;
+      const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
-      if (record.fanOut.clean.has(pairKey)) continue;
+      if (fanOut.clean.has(pairKey)) continue;
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -1635,30 +1709,6 @@ export class Scheduler {
       this.queueExecution();
     }
     return rearmed;
-  }
-
-  /** DIAGNOSTIC (tests): a node's fan-out record — the known-scope
-   * ratchet and per-instance state — or undefined off the fan-out path.
-   * Takes the action or its id (the trace's `actionId`). */
-  fanOutStateOf(action: Action | string): {
-    narrowed: boolean;
-    sessionPrincipals: string[];
-    instanceKeys: string[];
-    cleanKeys: string[];
-  } | undefined {
-    const record = typeof action === "string"
-      ? [...this.#nodes.nodes()].find((candidate) =>
-        this.#getActionId(candidate.action) === action
-      )
-      : this.#nodes.get(action);
-    const state = record?.fanOut;
-    if (state === undefined) return undefined;
-    return {
-      narrowed: state.narrowed,
-      sessionPrincipals: [...state.sessionPrincipals],
-      instanceKeys: [...state.instances.keys()],
-      cleanKeys: [...state.clean],
-    };
   }
 
   /** The bound yield hook handed to the settle loop (stage C tuning T3):
@@ -1675,13 +1725,13 @@ export class Scheduler {
   queueExecution(): void {
     if (this.#disposed) return;
     if (this.#scheduled) {
-      if (this.#pendingQueueTaskTimer === null) {
+      if (this.#queuedPass === null) {
         this.#rerunAfterCurrentExecute = true;
       }
       return;
     }
-    this.#pendingQueueTaskTimer = queueTask(() => {
-      this.#pendingQueueTaskTimer = null;
+    this.#queuedPass = armTurn(() => {
+      this.#queuedPass = null;
       this.#execute();
     });
     this.#scheduled = true;
@@ -1937,10 +1987,6 @@ export class Scheduler {
     this.#eventPreflightTelemetryEnabled = enabled;
   }
 
-  isEventPreflightTelemetryEnabled(): boolean {
-    return this.#eventPreflightTelemetryEnabled;
-  }
-
   //
   // Debounce infrastructure for throttling slow actions
   //
@@ -2056,27 +2102,188 @@ export class Scheduler {
   }
 
   /**
-   * Whether an action registered here other than `except` declares a write to
-   * some instance of `address`'s document, at any scope.
+   * Whether an action registered here, other than the one `tx` runs, declares
+   * a write to some instance of `address`'s document and has not yet produced
+   * the instance `tx` reads (`#owingWriters()`). A writer whose run finished
+   * and left the instance absent has produced it, and its value is
+   * `undefined`; one whose run was withdrawn has not.
+   */
+  owesScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): boolean {
+    return this.#owingWriters(address, tx).owing.length > 0;
+  }
+
+  /**
+   * Calls `wake`, once, when a writer of `address`'s document finishes a run
+   * that was not withdrawn, or stops writing the document; returns a cancel.
+   * A writer's run that leaves its instance absent commits no write to it, so
+   * one waiting on the instance learns of that run here rather than from a
+   * commit. A served event whose handler did not run waits this way
+   * (events.md §5).
+   */
+  watchProducedDocument(
+    address: { space: string; id: string },
+    wake: () => void,
+  ): () => void {
+    this.#installDemandedWriterHook();
+    const key = producedWatchKey(address.space, address.id);
+    let watchers = this.#producedWatchers.get(key);
+    if (watchers === undefined) {
+      watchers = new Set();
+      this.#producedWatchers.set(key, watchers);
+    }
+    watchers.add(wake);
+    return () => {
+      const current = this.#producedWatchers.get(key);
+      current?.delete(wake);
+      if (current?.size === 0) this.#producedWatchers.delete(key);
+    };
+  }
+
+  /** Wakes, once, the watchers of every document among `entities`
+   * (`watchProducedDocument()`). */
+  #wakeProducedWatchers(entities: Iterable<SpaceScopeAndURI>): void {
+    if (this.#producedWatchers.size === 0) return;
+    for (const entity of entities) {
+      // An entity key is `<space>/<scope>/<id>` (`entityNameKey()`).
+      const [space, , ...id] = entity.split("/");
+      const key = producedWatchKey(space, id.join("/"));
+      const watchers = this.#producedWatchers.get(key);
+      if (watchers === undefined) continue;
+      this.#producedWatchers.delete(key);
+      for (const wake of watchers) wake();
+    }
+  }
+
+  /** Notes that `action` finished a run that was not withdrawn, waking the
+   * watchers of the documents it writes. */
+  #noteProduced(action: Action): void {
+    const entities = this.#writeIndex.actionWriteEntities.get(action);
+    if (entities !== undefined) this.#wakeProducedWatchers(entities);
+  }
+
+  /**
+   * The key of `address`'s instance, as the run `tx` carries reads it, when
+   * some writer that owes it (`owesScopedInstance()`) will run for it
+   * (`#willRunForInstance()`); undefined when none will. A writer nothing
+   * demands stays dormant, and one that has run stays clean until an input
+   * changes, so neither is coming to produce the instance, and a served event
+   * waiting on it would wait for nothing.
+   */
+  comingOwedScopedInstance(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): ScopeKey | undefined {
+    const { owing, instance } = this.#owingWriters(address, tx);
+    return instance !== undefined &&
+        owing.some((writer) => this.#willRunForInstance(writer, instance))
+      ? instance
+      : undefined;
+  }
+
+  /**
+   * The writers registered here, other than the one `tx` runs, that declare a
+   * write to some instance of `address`'s document, at any scope, and have not
+   * produced the instance `tx` reads (`#hasProducedInstance()`), with that
+   * instance's key: `address`'s scope resolved against the run identity of
+   * `tx`.
    *
    * The lookup spans every scope because the write index keys a derivation by
    * its declared scope, while a JavaScript derivation writes its output at the
    * scope its reads narrowed to: a user instance of an output declared at
    * space scope has a writer indexed only at space scope.
    */
-  hasOtherWriterOf(
-    address: Pick<IMemorySpaceAddress, "space" | "id">,
-    except: object,
-  ): boolean {
+  #owingWriters(
+    address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+    tx: IExtendedStorageTransaction,
+  ): { owing: Action[]; instance: ScopeKey | undefined } {
+    const reader = tx.tx.sourceAction;
+    const identity = waveRunContextOf(tx)?.scopeKeyIdentity ??
+      this.runtime.scopeKeyIdentity;
+    let instance: ScopeKey | undefined;
+    try {
+      instance = resolveScopeKey(address.scope, identity);
+    } catch {
+      // An identity that cannot name the instance (a sessionless one read
+      // at session scope) names none any writer has produced.
+    }
+    const owing: Action[] = [];
     for (const scope of ["space", "user", "session"] as const) {
       const writers = this.#writeIndex.writersByEntity.get(
         entityNameKey({ ...address, scope }),
       );
       for (const writer of writers ?? []) {
-        if (writer !== except) return true;
+        if (
+          writer !== reader && !owing.includes(writer) &&
+          !this.#hasProducedInstance(writer, instance)
+        ) {
+          owing.push(writer);
+        }
       }
     }
-    return false;
+    return { owing, instance };
+  }
+
+  /**
+   * Whether `action` will run for the instance keyed `instance`. It must be
+   * live, a materializer, or pending, which is what has the scheduler queue
+   * it. On a node that is not fanned out it must also be invalid or never
+   * have run. On a fanned-out node, whose dirtiness is per instance, the
+   * instance must instead not be current (`fanOut.clean`), and be one its
+   * current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
+   * asks): the run supply runs no other, so a principal nothing demands this
+   * node for gets no run of it.
+   */
+  #willRunForInstance(action: Action, instance: ScopeKey): boolean {
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    const queued = this.#isLiveAction(action) ||
+      this.#materializers.isMaterializer(action) ||
+      this.#pending.has(action);
+    if (!queued) return false;
+    if (node.fanOut === undefined) return this.#isInvalidAction(action);
+    if (node.fanOut.clean.has(instance)) return false;
+    const observation = (action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity;
+    const roots = observation?.demandRootIds ??
+      (observation?.pieceRootId !== undefined
+        ? [observation.pieceRootId]
+        : undefined);
+    if (roots === undefined) return false;
+    const demanders = this.runtime.serverRunDemandersFor(roots) ?? [];
+    return fanOutInstances(node.fanOut, demanders).some((candidate) =>
+      candidate.key === instance
+    );
+  }
+
+  /**
+   * Whether `action` has produced the instance keyed `instance`: it is a
+   * JavaScript derivation, and a run of it finished without being withdrawn,
+   * for that instance on a fanned-out node and at all on any other. A
+   * JavaScript derivation writes its whole result in its run, so a run that
+   * left the instance absent produced that absence. A builtin can write its
+   * output after its run returns, as a list coordinator does once its element
+   * setups complete, so a finished run of one shows nothing about whether it
+   * has produced the instance. And a fanned-out node's run for another
+   * instance, such as its space-keyed probe before it learned to narrow,
+   * produced that instance and not this one.
+   */
+  #hasProducedInstance(
+    action: Action,
+    instance: ScopeKey | undefined,
+  ): boolean {
+    if (
+      (action as Partial<TelemetryAnnotations>).module?.type !== "javascript"
+    ) {
+      return false;
+    }
+    const node = this.#nodes.get(action);
+    if (node === undefined) return false;
+    if (node.fanOut === undefined) return node.produced === true;
+    return instance !== undefined &&
+      node.fanOut.instances.get(instance)?.produced === true;
   }
 
   /**
@@ -2747,10 +2954,8 @@ export class Scheduler {
       record.cancelLocalReadWake = undefined;
     }
     this.#gates.cancelWake();
-    if (this.#pendingQueueTaskTimer !== null) {
-      clearTimeout(this.#pendingQueueTaskTimer);
-      this.#pendingQueueTaskTimer = null;
-    }
+    this.#queuedPass?.cancel();
+    this.#queuedPass = null;
     this.#triggerIndex.clear();
     this.#wakeShaper.dispose();
     // Release waiters already parked when dispose arrived. The disposed check
@@ -2805,7 +3010,7 @@ export class Scheduler {
   async #execute(): Promise<void> {
     if (this.#disposed) return;
     logger.timeStart("scheduler", "execute");
-    // Each execute pass starts in a fresh macrotask (queueTask): restart
+    // Each execute pass starts in a fresh macrotask (armTurn): restart
     // the serving posture's yield slice so idle time between passes never
     // reads as spent work (stage C tuning T3).
     this.#cooperativeYield?.noteMacrotaskBoundary();
@@ -2817,9 +3022,10 @@ export class Scheduler {
     const deferredBefore = this.#settleDeferredForLoadPark;
     const { eventBlockingDeps, dispatched } = await this
       .#processExecuteEventPhases();
-    // Under the serving posture a head the preflight parked on its loads,
+    // Under the serving posture a head waiting on loads, parked on its
+    // closure's by the preflight or held for its handler's input presync,
     // behind events this pass dispatched, ends the pass without its settle:
-    // the pass the park's end queues dispatches it and settles behind it,
+    // the pass the wait's end queues dispatches it and settles behind it,
     // so the derivations the events before it invalidated run once behind
     // all of them rather than once per parked event. That is the trade: the
     // scheduler is not idle while the head is parked, and a serving cycle
@@ -2834,7 +3040,7 @@ export class Scheduler {
     // whose derivations the deferral exists to run once.
     this.#settleDeferredForLoadPark = this.runtime.servingPosture === true &&
       (dispatched > 0 || deferredBefore) && eventBlockingDeps.size === 0 &&
-      this.#hasLoadParkedHeadEvent();
+      this.#hasLoadWaitingHeadEvent();
     if (this.#settleDeferredForLoadPark) {
       this.#recordExecuteEndTelemetry();
       this.#applyExecuteContinuation();
@@ -2892,9 +3098,6 @@ export class Scheduler {
         this.#eventQueue[0] === head
       ) break;
       if (--remaining <= 0 || this.#eventQueue.length === 0) break;
-      // The handler's run has to have landed before the next preflight
-      // reads what it wrote.
-      if (this.runningPromise) await this.runningPromise;
     }
     return {
       eventBlockingDeps,
@@ -3075,13 +3278,6 @@ export class Scheduler {
   }
 
   /**
-   * Stops diagnosis mode and finalizes results.
-   */
-  #stopDiagnosis(): void {
-    stopSchedulerDiagnosis(this.#diagnosisControlState);
-  }
-
-  /**
    * Updates the reverse dependency graph (dependents map).
    * For each action that writes to paths this action reads, add this action as a dependent.
    */
@@ -3248,7 +3444,6 @@ export class Scheduler {
         }),
       recordTriggerTrace: (entry) =>
         recordTriggerTraceState({ triggerTrace: this.#triggerTrace }, entry),
-      scheduleWithDebounce: (target) => this.#scheduleWithDebounce(target),
       markInvalid: (target, cause) =>
         this.#markAndScheduleInvalidAction(target, cause),
       isInvalid: (target) => this.#isInvalidAction(target),
@@ -3472,7 +3667,7 @@ export class Scheduler {
         return shouldRerun;
       },
       hasPendingLineageHeadEvent: () => this.#hasPendingLineageHeadEvent(),
-      hasLoadParkedHeadEvent: () => this.#hasLoadParkedHeadEvent(),
+      hasLoadWaitingHeadEvent: () => this.#hasLoadWaitingHeadEvent(),
       settleDeferredForLoadPark: () => this.#settleDeferredForLoadPark,
       scheduleWake: (at) => this.#gates.scheduleWake(at),
       hasWakeTimer: () => this.#gates.hasWakeTimer(),
@@ -3485,8 +3680,8 @@ export class Scheduler {
       resetConvergenceHoldPasses: () => {
         this.#resetConvergenceHoldPasses();
       },
-      setPendingQueueTaskTimer: (timer) => {
-        this.#pendingQueueTaskTimer = timer;
+      setQueuedPass: (turn) => {
+        this.#queuedPass = turn;
       },
       execute: () => this.#execute(),
     };
@@ -3524,10 +3719,11 @@ export class Scheduler {
       backpressure: this.runtime.commitBackpressure,
       collectPendingLoadParkKeys: (event, deps) =>
         this.#collectPendingLoadParkKeys(event, deps),
+      unawaitedLoadKeys: (event, keys) => this.#unawaitedLoadKeys(event, keys),
       capturePendingLoadGenerations: () =>
         this.#capturePendingLoadGenerations(),
-      parkHeadEventForLoads: (event, keys) =>
-        this.#parkHeadEventForLoads(event, keys),
+      parkHeadEventForLoads: (event, keys, withdrawal) =>
+        this.#parkHeadEventForLoads(event, keys, withdrawal),
       isHeadEventLoadParked: (event) => this.#isHeadEventLoadParked(event),
       nodes: this.#nodes,
       pending: this.#pending,
@@ -3608,9 +3804,7 @@ export class Scheduler {
       ],
       writes: previous?.writes ?? [],
     };
-    this.resubscribe(action, log);
-    const record = this.#nodes.get(action);
-    if (record === undefined) return;
+    const record = this.#resubscribe(action, log);
     const cancels: (() => void)[] = [];
     for (const space of new Set(log.reads.map((read) => read.space))) {
       const replica = this.runtime.storageManager.open(space).replica;
@@ -3667,6 +3861,7 @@ export class Scheduler {
       maybeAutoDebounce: (target) => this.#maybeAutoDebounce(target),
       markActionHasRun: (target) => this.#gates.markActionHasRun(target),
       markNodeHasRun: (target) => this.#markNodeHasRun(target),
+      noteProduced: (target) => this.#noteProduced(target),
       handleError: (error, target) => this.#handleError(error, target),
       resubscribe: (target, log) => this.resubscribe(target, log),
       markInvalid: (target, options) =>
@@ -3929,18 +4124,39 @@ export class Scheduler {
       pendingLoadAddresses,
       log,
     );
-    if (keys.length === 0) return keys;
+    return this.#unawaitedLoadKeys(event, keys);
+  }
+
+  /**
+   * The members of `keys`, keys of documents whose loads are in flight, that
+   * `event` has not already waited for. A key whose load the event parked on
+   * and saw settle is left out, unless the load in flight now was already in
+   * flight when the current preflight began, which makes it a refresh rather
+   * than a load the event's own reads kicked again. A load that settles
+   * leaving the replica no basis for its document, as one failing with an
+   * authorization-class failure does where no refusal of its space is
+   * recorded, is kicked again by every read, so without this the event would
+   * park on it every time it ran.
+   */
+  #unawaitedLoadKeys(
+    event: QueuedEvent,
+    keys: readonly string[],
+  ): string[] {
     const history = this.#headEventLoadParkHistory;
-    if (!history || history.eventId !== event.id) return keys;
+    if (!history || history.eventId !== event.id) return [...keys];
     return keys.filter((key) => {
-      const currentGeneration =
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
+      const currentGeneration = this.#pendingLoadGeneration(key);
       const settledGeneration = history.generations.get(key);
       if (settledGeneration === undefined) return true;
       if (settledGeneration === currentGeneration) return false;
       return this.#preflightPendingLoadGenerations.get(key) ===
         currentGeneration;
     });
+  }
+
+  /** The generation of `key`'s pending load, or 0 when none is pending. */
+  #pendingLoadGeneration(key: string): number {
+    return this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0;
   }
 
   #capturePendingLoadGenerations(): void {
@@ -3952,21 +4168,23 @@ export class Scheduler {
       const key = entityKey(address, this.runtime.scopeKeyIdentity);
       this.#preflightPendingLoadGenerations.set(
         key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
+        this.#pendingLoadGeneration(key),
       );
     }
   }
 
+  /**
+   * Parks `event`, the head, on the loads of `keys`. The event is not parked
+   * already: a parked event neither passes its preflight nor runs, and those
+   * are the only places that park one.
+   */
   #parkHeadEventForLoads(
     event: QueuedEvent,
     keys: readonly string[],
+    withdrawal?: LoadingReadWithdrawal,
   ): void {
-    if (this.#headEventLoadPark?.eventId === event.id) return;
     const generations = new Map(
-      keys.map((key) => [
-        key,
-        this.runtime.storageManager.pendingLoadGeneration?.(key) ?? 0,
-      ]),
+      keys.map((key) => [key, this.#pendingLoadGeneration(key)]),
     );
     logger.debug("event-load-park", () => [
       `event ${event.id} parks on ${keys.length} loading document(s)`,
@@ -3984,7 +4202,12 @@ export class Scheduler {
           failures.push(error);
         })
       ));
-    this.#headEventLoadPark = { eventId: event.id, keys, generations };
+    this.#headEventLoadPark = {
+      eventId: event.id,
+      keys,
+      generations,
+      ...(withdrawal !== undefined ? { withdrawal } : {}),
+    };
     void settled.then(() => {
       if (failures.length === 0) this.#releaseHeadEventLoadPark(event.id);
       else this.#failHeadEventLoadPark(event, failures);
@@ -4063,6 +4286,17 @@ export class Scheduler {
    * class among them still drops the event, since that document may yet
    * hold what the closure reads.
    *
+   * A park its own run's loading reads put the event in
+   * (`LoadingReadWithdrawal`) releases when every failure is of the
+   * `authorization` class, and for a served event only when each also carries
+   * durable evidence of the refusal, so that a run reading into a space its
+   * principal cannot read proceeds on the absence and holds no later event
+   * behind it, as it would with no load in flight. A served event whose
+   * failure is no such evidence, as a revoked session's about to remount is
+   * not, defers as at the preflight. Such a park's drop of a client event
+   * also reports the error the withdrawn run threw, which no later run will,
+   * and abandons the work that run staged.
+   *
    * `errors` holds every failed load's error, in the order they failed. A
    * served deferral reports the first; a client drop reports the first of
    * another class than `authorization`, the one that decided it.
@@ -4072,8 +4306,12 @@ export class Scheduler {
     errors: readonly unknown[],
   ): void {
     if (this.#headEventLoadPark?.eventId !== event.id) return;
+    const withdrawn = this.#headEventLoadPark.withdrawal;
     if (
-      event.served === undefined && errors.every(isAuthorizationLoadFailure)
+      event.served === undefined
+        ? errors.every(isAuthorizationLoadFailure)
+        : withdrawn !== undefined &&
+          errors.every(isLastingAuthorizationLoadFailure)
     ) {
       this.#releaseHeadEventLoadPark(event.id);
       return;
@@ -4085,13 +4323,20 @@ export class Scheduler {
     const keys = this.#headEventLoadPark.keys.join(", ");
     this.#endHeadEventLoadPark();
     this.#headEventLoadParkHistory = null;
-    const detail = error instanceof Error ? error.message : String(error);
+    const detail = describeFailure(error);
+    const when = withdrawn === undefined
+      ? "before dispatch"
+      : "before the handler ran again";
     if (event.served === undefined) {
       this.#dropEvent(
         event,
-        `Event dropped: required replica load failed before dispatch ` +
+        `Event dropped: required replica load failed ${when} ` +
           `(${keys}: ${detail})`,
       );
+      withdrawn?.abandonStagedWork();
+      if (withdrawn?.error !== undefined) {
+        this.#handleError(withdrawn.error, event.action, event.id);
+      }
       return;
     }
     const failure = error instanceof ReplicaLoadFailureError ? error.failure : {
@@ -4104,7 +4349,7 @@ export class Scheduler {
     // the durable checkpoint and terminal attention surface persistent failure.
     this.#dropEvent(
       event,
-      `Event deferred: required replica load failed before dispatch ` +
+      `Event deferred: required replica load failed ${when} ` +
         `(${keys}: ${detail}); the entry stays pending and a later drain ` +
         `re-delivers it`,
       {
@@ -4124,7 +4369,7 @@ export class Scheduler {
       this.#dropEvent(
         later,
         `Event deferred: held behind ${event.id}, whose required replica ` +
-          `load failed before dispatch (${keys}); later-arrived events wait ` +
+          `load failed ${when} (${keys}); later-arrived events wait ` +
           `behind it`,
         {
           servedKind: "deferred",
@@ -4157,6 +4402,11 @@ export class Scheduler {
       // The park's release finds no park once the drop has ended it.
       this.#endHeadEventLoadPark();
     }
+    if (event.presyncPending === true) {
+      // The presync may never settle, so the pass that runs what waited on
+      // the head is queued here.
+      this.queueExecution();
+    }
     if (this.#headEventLoadParkHistory?.eventId === event.id) {
       this.#headEventLoadParkHistory = null;
     }
@@ -4180,8 +4430,9 @@ export class Scheduler {
    * head for a load, or mid-presync at the head, never one whose
    * dispatch has shifted it off the queue — through the pre-dispatch
    * drop chokepoint (`dropQueuedEvent`: lineage released, the final-
-   * outcome guard honored, a head dispatch parked in presync bails when
-   * it finds itself no longer at the head). Returns how many were
+   * outcome guard honored, and a head held for its presync off the queue,
+   * so the events behind it proceed whether or not the presync ever
+   * settles). Returns how many were
    * removed. Server-execution v2 stage C build W3, (α1): the serving
    * loop calls this at its flush-deadline decision to purge the LT1
    * in-process leftovers (`served !== undefined && served.streamEntry
@@ -4209,6 +4460,15 @@ export class Scheduler {
   #hasLoadParkedHeadEvent(): boolean {
     const head = this.#eventQueue[0];
     return head !== undefined && this.#headEventLoadPark?.eventId === head.id;
+  }
+
+  /**
+   * Whether the head waits out of the pass for loads: its closure's, in a load
+   * park, or its handler's inputs, in a presync.
+   */
+  #hasLoadWaitingHeadEvent(): boolean {
+    return this.#hasLoadParkedHeadEvent() ||
+      this.#eventQueue[0]?.presyncPending === true;
   }
 
   #canAutomaticallyDebounce(action: Action): boolean {
@@ -4284,10 +4544,6 @@ export class Scheduler {
   #markNodeHasRun(action: Action): void {
     const record = this.#nodes.get(action);
     if (!record) return;
-
-    if (record.status === "never-ran") {
-      this.#nodes.setStatus(action, "clean");
-    }
 
     if (
       record.provisionalDemand &&

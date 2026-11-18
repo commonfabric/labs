@@ -19,7 +19,7 @@ import {
   requiredEventFieldsOwed,
   verbRunsWithoutPayload,
 } from "./callable.ts";
-import { shellQuote } from "./shell-quote.ts";
+import { shellWord } from "./shell-quote.ts";
 import {
   firstReadOption,
   projectionInSectionRefusal,
@@ -126,10 +126,6 @@ function schemaType(schema: JSONSchema): string | undefined {
 
 function flagNameForKey(key: string): string {
   return key.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase();
-}
-
-function displayCommandPath(path: string): string {
-  return /^[A-Za-z0-9_./:-]+$/.test(path) ? path : shellQuote(path);
 }
 
 function parseBoolean(value: string, flagName: string): boolean {
@@ -1207,7 +1203,7 @@ export function usageCommandPrefix(
   if (commandPrefix) {
     return commandPrefix;
   }
-  const displayedPath = displayCommandPath(mountedFilePath);
+  const displayedPath = shellWord(mountedFilePath);
   return invocationStyle === "direct"
     ? displayedPath
     : cliCommand(["exec", displayedPath]);

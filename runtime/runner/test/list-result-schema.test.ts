@@ -6,7 +6,7 @@ import { exportCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { listResultSchema } from "../src/builtins/list-result-schema.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
-import { type FactoryInput, type JSONSchema } from "../src/builder/types.ts";
+import type { FactoryInput, JSONSchema } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("runner-list-result-schema");
 const space = signer.did();

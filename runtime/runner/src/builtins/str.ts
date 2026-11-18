@@ -1,7 +1,7 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 
-import { type Cell } from "../cell.ts";
-import { type Action } from "../scheduler.ts";
+import type { Cell } from "../cell.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 
 /**

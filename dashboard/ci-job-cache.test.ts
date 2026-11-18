@@ -4,6 +4,9 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
+import { join } from "@std/path";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   type CachedCiHistoryRefresh,
   type CachedCiRun,
@@ -690,4 +693,121 @@ Deno.test("CI job cache preserves a write error when temporary cleanup fails", a
     Deno.remove = remove;
     await Deno.remove(directory, { recursive: true });
   }
+});
+
+/** A store version later than any this version of the dashboard writes. */
+const STORE_VERSION_LATER = 2;
+
+describe("ci-job-cache", () => {
+  describe("CiJobHistoryStore", () => {
+    describe("instance members", () => {
+      describe("save()", () => {
+        let directory: string;
+        let file: string;
+
+        beforeEach(async () => {
+          directory = await Deno.makeTempDir({ prefix: "ci-job-cache-" });
+          file = join(directory, "history.json");
+        });
+
+        afterEach(async () => {
+          await Deno.remove(directory, { recursive: true });
+        });
+
+        /** The ids of the runs a new store loads from the file. */
+        async function savedIds(): Promise<number[]> {
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          return store.list(REPO, WORKFLOW).map((run) => run.runId);
+        }
+
+        it("writes without reading the file again while it is at the version it last wrote", async () => {
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          store.set(cachedRun(1));
+          await store.save(NOW);
+          // Changes what the file holds without changing its version, which
+          // no writer does, so that a read of the file would fail.
+          const { size, mtime } = await Deno.stat(file);
+          await Deno.writeTextFile(file, " ".repeat(size));
+          await Deno.utime(file, mtime!, mtime!);
+
+          store.set(cachedRun(2));
+          await store.save(NOW);
+
+          expect(await savedIds()).toEqual([1, 2]);
+        });
+
+        it("writes without reading the file again while it is at the version loaded", async () => {
+          const writer = new CiJobHistoryStore(file);
+          await writer.load();
+          writer.set(cachedRun(1));
+          await writer.save(NOW);
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          // As above, a read of the file would now fail.
+          const { size, mtime } = await Deno.stat(file);
+          await Deno.writeTextFile(file, " ".repeat(size));
+          await Deno.utime(file, mtime!, mtime!);
+
+          store.set(cachedRun(2));
+          await store.save(NOW);
+
+          expect(await savedIds()).toEqual([1, 2]);
+        });
+
+        it("reads a file it loaded but could not use in full again before writing over it", async () => {
+          await Deno.writeTextFile(
+            file,
+            JSON.stringify({ version: STORE_VERSION_LATER, runs: [] }),
+          );
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          store.set(cachedRun(1));
+
+          await expect(store.save(NOW)).rejects.toThrow(
+            "Unsupported CI job history cache format",
+          );
+          expect(JSON.parse(await Deno.readTextFile(file)).version).toBe(
+            STORE_VERSION_LATER,
+          );
+        });
+
+        it("keeps the runs another store saved since it last wrote", async () => {
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          store.set(cachedRun(1));
+          await store.save(NOW);
+          const other = new CiJobHistoryStore(file);
+          await other.load();
+          other.set(cachedRun(2, 1, NOW + 1));
+          await other.save(NOW);
+
+          store.set(cachedRun(3, 1, NOW + 2));
+          await store.save(NOW);
+
+          expect(await savedIds()).toEqual([1, 2, 3]);
+        });
+
+        it("removes the temporary files that interrupted saves left beside the file", async () => {
+          const leftover = `history.json.${crypto.randomUUID()}.tmp`;
+          const other = `other.json.${crypto.randomUUID()}.tmp`;
+          await Deno.writeTextFile(join(directory, leftover), "{");
+          await Deno.writeTextFile(join(directory, other), "{");
+          const store = new CiJobHistoryStore(file);
+          await store.load();
+          store.set(cachedRun(1));
+
+          await store.save(NOW);
+
+          const names = [...Deno.readDirSync(directory)].map((entry) =>
+            entry.name
+          );
+          expect(names.sort()).toEqual(
+            [other, "history.json", "history.json.lock"].sort(),
+          );
+        });
+      });
+    });
+  });
 });

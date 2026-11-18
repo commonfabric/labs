@@ -200,6 +200,59 @@ describe("Cell", () => {
           expect(cell.key("length").get()).toBe(2);
         });
 
+        it("returns no schema on a conjunction of an array and a reference to `true`", () => {
+          const cell = cellHolding(
+            "conjunction with true reference length",
+            {
+              allOf: [{ type: "array" }, { $ref: "#/$defs/Any" }],
+              $defs: { Any: true },
+            },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBeUndefined();
+          expect(cell.key("length").get()).toBe(2);
+        });
+
+        it("keeps `false` on a conjunction of an array and a reference to `false`", () => {
+          const cell = cellHolding(
+            "conjunction with false reference length",
+            {
+              allOf: [{ type: "array" }, { $ref: "#/$defs/None" }],
+              $defs: { None: false },
+            },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
+        it("keeps `false` on a conjunction of an array and a schema that admits nothing", () => {
+          const cell = cellHolding(
+            "conjunction with not-true length",
+            { allOf: [{ type: "array" }, { not: true }] },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
+        it("keeps `false` on a conjunction of an array and a reference cycle", () => {
+          const cell = cellHolding(
+            "conjunction with reference cycle length",
+            {
+              allOf: [{ type: "array" }, { $ref: "#/$defs/Loop" }],
+              $defs: { Loop: { allOf: [{ $ref: "#/$defs/Loop" }] } },
+            },
+            [1, 2],
+          );
+
+          expect(linkSchemaOf(cell.key("length"))).toBe(false);
+          expect(cell.key("length").get()).toBeUndefined();
+        });
+
         it("keeps `false` on a conjunction of an array and a string", () => {
           const cell = cellHolding(
             "unsatisfiable conjunction length",

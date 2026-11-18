@@ -30,7 +30,10 @@ export type CompoundNode = {
   summary: string;
 };
 
-type Input = Record<string, never>;
+type Input = {
+  /** The conversation with the graph analyst, empty until a build asks. */
+  messages?: Writable<BuiltInLLMMessage[] | Default<[]>>;
+};
 
 /** Query result type for LLM consumption — names for readability, refs for identity. */
 type EdgeResult = {
@@ -42,9 +45,16 @@ type EdgeResult = {
 };
 
 /** Structured result the LLM agent produces. */
-type GraphAnnotations = {
+export type GraphAnnotations = {
   links: Array<{ fromName: string; toName: string; description: string }>;
   groups: Array<{ name: string; pieceNames: string[]; summary: string }>;
+};
+
+/** A summary index entry: a piece, its name, and its summary. */
+export type SummaryEntry = {
+  piece: Writable<MentionablePiece>;
+  summary: string;
+  name: string;
 };
 
 // --- Module-scope handlers ---
@@ -151,16 +161,8 @@ export const searchGraphPattern = pattern<
 
 /** Pattern tool: lists the supplied pieces with their summaries. */
 const listPiecesPattern = pattern<
-  {
-    entries: Array<
-      { piece: Writable<MentionablePiece>; summary: string; name: string }
-    >;
-  },
-  {
-    result: Array<
-      { piece: Writable<MentionablePiece>; name: string; summary: string }
-    >;
-  }
+  { entries: SummaryEntry[] },
+  { result: SummaryEntry[] }
 >(({ entries }) => {
   const result = entries.map((e) => ({
     piece: e.piece,
@@ -170,9 +172,81 @@ const listPiecesPattern = pattern<
   return { result };
 });
 
+/** The agent's links as edges between the pieces they name. A link naming a
+ * piece the summary index does not list is dropped. */
+export function annotatedEdges(
+  annotations: GraphAnnotations | undefined,
+  entries: readonly SummaryEntry[],
+): GraphEdge[] {
+  return (annotations?.links ?? []).flatMap((link) => {
+    const fromEntry = entries.find((e) => e.name === link.fromName);
+    const toEntry = entries.find((e) => e.name === link.toName);
+    if (!fromEntry || !toEntry) return [];
+    return [{
+      from: fromEntry.piece,
+      to: toEntry.piece,
+      fromName: link.fromName,
+      toName: link.toName,
+      description: link.description,
+    }];
+  });
+}
+
+/** The agent's groups as compound nodes over the pieces they name. A name the
+ * summary index does not list is left out of its group. */
+export function annotatedGroups(
+  annotations: GraphAnnotations | undefined,
+  entries: readonly SummaryEntry[],
+): CompoundNode[] {
+  return (annotations?.groups ?? []).map((group) => ({
+    [NAME]: group.name,
+    linkedPieces: (group.pieceNames ?? []).flatMap((name) => {
+      const piece = entries.find((e) => e.name === name)?.piece;
+      return piece ? [piece] : [];
+    }),
+    summary: group.summary,
+  }));
+}
+
+/** The graph agent's instructions, listing the pieces it can link and the
+ * links their mentions already make. */
+export function graphAnalystPrompt(
+  entries: readonly SummaryEntry[],
+  baseEdges: readonly GraphEdge[],
+): string {
+  const pieceList = entries.map((e) => `- ${e.name}: ${e.summary}`).join("\n");
+  const baseEdgeList = baseEdges.map((e) =>
+    `- ${e.fromName} → ${e.toName} (${e.description})`
+  ).join("\n");
+
+  return `You are a knowledge graph analyst. Your job is to discover and annotate relationships between pieces — both explicit ones and hidden connections the user hasn't linked yet.
+
+Pieces in the space (with summaries):
+${pieceList || "(none)"}
+
+Existing base links (from explicit mentions):
+${baseEdgeList || "(none)"}
+
+Your tasks:
+1. **Enrich existing links** — upgrade generic "mentions" to richer descriptions like "references recipe", "extends idea", "provides context for", "contradicts", "builds upon"
+2. **Discover hidden connections** — read the piece names and summaries carefully. Look for pieces that share themes, reference similar concepts, could inform each other, or represent different perspectives on the same topic. These are the MOST VALUABLE links to create — connections the user hasn't made explicitly but that exist semantically.
+3. **Create groups** — cluster related pieces that share a theme, project, or domain
+
+When discovering hidden connections, think broadly:
+- Pieces about related topics (e.g. a recipe and a grocery list, a meeting note and a project plan)
+- Pieces that could inform each other (e.g. research notes and a draft document)
+- Pieces with overlapping entities (people, places, concepts mentioned in summaries)
+- Temporal or causal relationships (e.g. a decision and its consequences)
+- Complementary perspectives on the same subject
+
+Do NOT recreate links that already exist in the base links above.
+Use listPieces and getNeighbors to explore, then call presentResult with your annotations.
+Use exact piece names from the piece list above for fromName/toName/pieceNames.`;
+}
+
 // --- Main pattern ---
 
-const KnowledgeGraph = pattern<Input>(() => {
+const KnowledgeGraph = pattern<Input>(({ messages }) => {
   const mentionable = wish<Writable<MentionablePiece>[] | Default<[]>>({
     query: "#mentionable",
   }).result;
@@ -201,51 +275,15 @@ const KnowledgeGraph = pattern<Input>(() => {
   });
 
   // Wish for summary index data
-  const { entries: summaryEntries } = wish<
-    {
-      entries: Array<
-        { piece: Writable<MentionablePiece>; summary: string; name: string }
-      >;
-    }
-  >({ query: "#summaryIndex" }).result!;
+  const { entries: summaryEntries } = wish<{ entries: SummaryEntry[] }>({
+    query: "#summaryIndex",
+  }).result!;
 
-  // LLM agent state
-  const messages = new Writable<BuiltInLLMMessage[]>([]);
   const hasBeenBuilt = computed(() => messages.get().length > 0);
 
-  const agentSystemPrompt = computed(() => {
-    const entries = summaryEntries ?? [];
-    const pieceList = entries.map((e: any) => `- ${e.name}: ${e.summary}`).join(
-      "\n",
-    );
-    const baseEdgeList = baseEdges.map((e) =>
-      `- ${e.fromName} → ${e.toName} (${e.description})`
-    ).join("\n");
-
-    return `You are a knowledge graph analyst. Your job is to discover and annotate relationships between pieces — both explicit ones and hidden connections the user hasn't linked yet.
-
-Pieces in the space (with summaries):
-${pieceList || "(none)"}
-
-Existing base links (from explicit mentions):
-${baseEdgeList || "(none)"}
-
-Your tasks:
-1. **Enrich existing links** — upgrade generic "mentions" to richer descriptions like "references recipe", "extends idea", "provides context for", "contradicts", "builds upon"
-2. **Discover hidden connections** — read the piece names and summaries carefully. Look for pieces that share themes, reference similar concepts, could inform each other, or represent different perspectives on the same topic. These are the MOST VALUABLE links to create — connections the user hasn't made explicitly but that exist semantically.
-3. **Create groups** — cluster related pieces that share a theme, project, or domain
-
-When discovering hidden connections, think broadly:
-- Pieces about related topics (e.g. a recipe and a grocery list, a meeting note and a project plan)
-- Pieces that could inform each other (e.g. research notes and a draft document)
-- Pieces with overlapping entities (people, places, concepts mentioned in summaries)
-- Temporal or causal relationships (e.g. a decision and its consequences)
-- Complementary perspectives on the same subject
-
-Do NOT recreate links that already exist in the base links above.
-Use listPieces and getNeighbors to explore, then call presentResult with your annotations.
-Use exact piece names from the piece list above for fromName/toName/pieceNames.`;
-  });
+  const agentSystemPrompt = computed(() =>
+    graphAnalystPrompt(summaryEntries ?? [], baseEdges)
+  );
 
   const allEdgesFromBase = baseEdges;
 
@@ -266,42 +304,12 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
     dialogOptions,
   );
 
-  // Resolve annotations into actual GraphEdges by looking up piece refs by name
-  const agentEdges = computed(() => {
-    if (!annotations) return [] as GraphEdge[];
-    const links = annotations.links ?? [];
-    const entryList = summaryEntries ?? [];
-    return links.flatMap(
-      (link: { fromName: string; toName: string; description: string }) => {
-        const fromEntry = entryList.find((e: any) => e.name === link.fromName);
-        const toEntry = entryList.find((e: any) => e.name === link.toName);
-        if (!fromEntry || !toEntry) return [];
-        return [{
-          from: fromEntry.piece,
-          to: toEntry.piece,
-          fromName: link.fromName,
-          toName: link.toName,
-          description: link.description,
-        }];
-      },
-    );
-  });
-
-  const compoundNodes = computed(() => {
-    if (!annotations) return [] as CompoundNode[];
-    const groups = annotations.groups ?? [];
-    const entryList = summaryEntries ?? [];
-    return groups.map(
-      (group: { name: string; pieceNames: string[]; summary: string }) => ({
-        [NAME]: group.name,
-        linkedPieces: (group.pieceNames ?? []).flatMap((name: string) => {
-          const piece = entryList.find((e: any) => e.name === name)?.piece;
-          return piece ? [piece] : [];
-        }),
-        summary: group.summary,
-      }),
-    );
-  });
+  const agentEdges = computed(() =>
+    annotatedEdges(annotations, summaryEntries ?? [])
+  );
+  const compoundNodes = computed(() =>
+    annotatedGroups(annotations, summaryEntries ?? [])
+  );
 
   const allEdges = computed(() => [
     ...baseEdges,
@@ -363,7 +371,7 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
             ? (
               <div>
                 <h3 style={{ margin: "0 0 8px", fontSize: "15px" }}>Groups</h3>
-                <cf-table full-width>
+                <cf-table fullWidth>
                   <tbody>
                     {compoundNodes.map((node: any) => (
                       <tr>
@@ -385,7 +393,7 @@ Use exact piece names from the piece list above for fromName/toName/pieceNames.`
             : null}
 
           <h3 style={{ margin: "0", fontSize: "15px" }}>Links</h3>
-          <cf-table full-width>
+          <cf-table fullWidth>
             <tbody>
               {allEdges.map((edge) => (
                 <tr>

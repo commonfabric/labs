@@ -2,6 +2,7 @@ export {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 export { parseExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 export { lookupSchemaDocument } from "./schema-registry.ts";
@@ -15,8 +16,10 @@ export {
   type DurableRead,
   readConfirmed,
   readDurable,
+  speculationSettledFor,
 } from "./confirmed-read.ts";
 export { handlingCommittedBy } from "./handling-commit.ts";
+export { pullFromServer } from "./served-read.ts";
 export { ensureSESLockdown } from "./sandbox/ses-runtime.ts";
 export {
   fabricAuthorityMatchesSpaceHost,
@@ -51,6 +54,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   MAX_ENFORCEMENT_CFC_OPTIONS,
   MAX_ENFORCEMENT_SINK_CEILINGS,
   MAX_ENFORCEMENT_SINK_GOVERNANCE,
@@ -125,6 +130,7 @@ export {
   UnreportedAuthoredBoundaryError,
 } from "./storage/interface.ts";
 export { isCfcEnforcementRejection } from "./storage/rejection.ts";
+export { isSpaceAccessRefusal } from "./storage/space-access-refusal.ts";
 export { transactionFailureMessage } from "./storage/transaction-errors.ts";
 export type {
   EntityIdListOptions,
@@ -149,10 +155,13 @@ export {
   isCell,
   isReadableCell,
   isStream,
+  isWithheldDelivery,
+  pullProjected,
   readProjected,
   sendEvent,
   setCell,
   sinkProjected,
+  syncCellForIdentity,
 } from "./cell.ts";
 export {
   getCellOrThrow,
@@ -177,6 +186,7 @@ export {
 } from "./harness/index.ts";
 export {
   PATTERN_COVERAGE_INTEGRATION_TEST_NAME,
+  PATTERN_COVERAGE_MULTI_RUNTIME_TEST_NAME,
   PATTERN_COVERAGE_TEST_NAME,
   PatternCoverageCollector,
   type PatternCoverageData,
@@ -248,6 +258,7 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
   type PieceOriginKind as PieceOriginClassification,
@@ -265,12 +276,15 @@ export {
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceDelegations,
+  getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
   isStoredArgumentSchemaRefusal,
   keepLaterConfirmation,
   knownPieceReleasedAt,
   mergeSchemaDefaults,
+  normalizePieceSourceOrigin,
   patternIdentityKey,
   type PatternSetupCommitReceipt,
   PatternSetupPostCommitError,
@@ -413,7 +427,7 @@ export { deepEqual } from "@commonfabric/js-values/deep-equal";
 export { getValueAtPath, setValueAtPath } from "./path-utils.ts";
 export { schemaToTypeString } from "./schema-format.ts";
 export type { SchemaFormatOptions } from "./schema-format.ts";
-export { ACLManager } from "./acl-manager.ts";
+export { ACLManager, SpaceMembersRemainError } from "./acl-manager.ts";
 export {
   cellEntityIdString,
   type CellPath,
@@ -453,6 +467,7 @@ export {
 } from "./sandbox/fabric-import-specifier.ts";
 export { type PinRewrite, rewriteFabricPins } from "./fabric-pin-rewrite.ts";
 export { DEFAULT_CELL_SCOPE } from "./scope.ts";
+export { startWithInputSources } from "./ensure-piece-running.ts";
 export {
   isPieceDocument,
   isPieceRoot,

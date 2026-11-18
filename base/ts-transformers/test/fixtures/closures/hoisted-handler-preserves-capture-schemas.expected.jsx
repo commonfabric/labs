@@ -110,19 +110,34 @@ const __cfHandler_2 = __cfHelpers.handler({
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {
-        self: {
-            $ref: "#/$defs/ListOutput"
-        },
         items: {
             type: "array",
             items: {
                 $ref: "#/$defs/Item"
             },
             asCell: ["writeonly"]
+        },
+        self: {
+            $ref: "#/$defs/ListOutput",
+            asCell: ["opaque"]
         }
     },
-    required: ["self", "items"],
+    required: ["items", "self"],
     $defs: {
+        ListOutput: {
+            type: "object",
+            properties: {
+                read: true,
+                write: true,
+                $NAME: {
+                    type: "string"
+                },
+                $UI: {
+                    $ref: "https://commonfabric.org/schemas/vnode.json"
+                }
+            },
+            required: ["read", "write", "$NAME", "$UI"]
+        },
         Item: {
             type: "object",
             properties: {
@@ -137,20 +152,6 @@ const __cfHandler_2 = __cfHelpers.handler({
                 }
             },
             required: ["id", "label", "$NAME"]
-        },
-        ListOutput: {
-            type: "object",
-            properties: {
-                read: true,
-                write: true,
-                $NAME: {
-                    type: "string"
-                },
-                $UI: {
-                    $ref: "https://commonfabric.org/schemas/vnode.json"
-                }
-            },
-            required: ["read", "write", "$NAME", "$UI"]
         }
     }
 } as const satisfies __cfHelpers.JSONSchema, ({ label }, { self, items }) => {

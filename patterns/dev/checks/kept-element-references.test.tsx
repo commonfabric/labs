@@ -1,8 +1,8 @@
 /**
  * A builder's input schema is narrowed to the members its body reads. Each
  * builder here reads only `id` off an element and then hands the element on
- * whole — out of its result, through a cell write, on a stream, as a prop of a
- * node it returns. Every one of those stores the element as a link, so the
+ * whole — out of its result, alone or in a sorted copy of its array, through a
+ * cell write, on a stream, as a prop of a node it returns. Every one of those stores the element as a link, so the
  * reader on the other side sees the whole row however narrow the sender's
  * schema was. The narrowing leans on that; these cases hold it in place.
  */
@@ -33,6 +33,14 @@ const firstRow = lift(({ index }: { index: Index }): Source | undefined => {
 
 const driverOf = lift(({ row }: { row: Source | undefined }): string =>
   row ? `${row.id}:${row.driver}` : ""
+);
+
+const sortedRows = lift(({ rows }: { rows: Source[] }): Source[] =>
+  [...rows].sort((left, right) => (left.id < right.id ? 1 : -1))
+);
+
+const driversOf = lift(({ rows }: { rows: Source[] }): string =>
+  rows.map((row) => `${row.id}:${row.driver}`).join(",")
 );
 
 const rowNodes = lift(({ index }: { index: Index }) =>
@@ -103,7 +111,13 @@ export default pattern(() => {
   const updated = new Writable<Boxed>({ note: "kept" });
   const received = new Writable<Source | undefined>(undefined);
 
+  const rows = new Writable<Source[]>([
+    { id: "a", driver: "x" },
+    { id: "b", driver: "y" },
+  ]);
+
   const driver = driverOf({ row: firstRow({ index }) });
+  const drivers = driversOf({ rows: sortedRows({ rows }) });
   const nodes = rowNodes({ index });
 
   const set = setFirst({ index, out });
@@ -119,6 +133,7 @@ export default pattern(() => {
   const action_send = action(() => send.send());
 
   const assert_returned_row_is_whole = assert(() => driver === "a:x");
+  const assert_sorted_rows_are_whole = assert(() => drivers === "b:y,a:x");
   const assert_prop_row_is_whole = assert(() =>
     driverUnderFirstProp(nodes) === "x"
   );
@@ -137,6 +152,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_returned_row_is_whole },
+      { assertion: assert_sorted_rows_are_whole },
       { assertion: assert_prop_row_is_whole },
       { action: action_set },
       { assertion: assert_set_row_is_whole },

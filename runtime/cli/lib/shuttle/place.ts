@@ -28,6 +28,7 @@
  */
 
 import type { CellScope, LinkScope, ReferenceMember } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { glyphFor } from "../view/display.ts";
 import {
@@ -1044,7 +1045,7 @@ function movePlace(
       scope: place.scope,
     });
   } catch (error) {
-    return refusing(messageOf(error));
+    return refusing(describeFailure(error));
   }
   if (reference !== undefined) {
     return moveByReference(place, reference, operand, verb);
@@ -1064,7 +1065,7 @@ function movePlace(
   try {
     parts = parseRelativeReference(operand);
   } catch (error) {
-    return refusing(messageOf(error));
+    return refusing(describeFailure(error));
   }
   return walkFrom(from, parts, operand, verb, false);
 }
@@ -1088,7 +1089,7 @@ function readHandle(operand: string): Walked {
       RELATIVE_HEAD + (end === -1 ? "" : operand.slice(end)),
     );
   } catch (error) {
-    return refusing(messageOf(error));
+    return refusing(describeFailure(error));
   }
   if (parts.pin !== undefined) return refusing(refusePin(operand));
   const scope = placeScope(parts.scope);
@@ -1451,7 +1452,7 @@ function moveIntoPiece(
   try {
     segment = parsePieceSegment(encodeJsonPointer([key]));
   } catch (error) {
-    return refusing(messageOf(error));
+    return refusing(describeFailure(error));
   }
   if (segment.pin !== undefined) return refusing(refusePin(operand));
   const fault = unnameablePiece(segment.id);
@@ -1986,7 +1987,7 @@ function outsideVocabulary(piece: string): Step | undefined {
   try {
     validatePieceSegment(piece);
   } catch (error) {
-    return refuse(messageOf(error));
+    return refuse(describeFailure(error));
   }
   return undefined;
 }
@@ -2115,33 +2116,6 @@ function confirmed(move: PendingMove, resolved: ResolvedPlace): Step {
         : [landed({ ...position, path: position.path.slice(spent) })];
     }),
   );
-}
-
-/**
- * The message a thrown value carries, for every surface that reports one.
- *
- * Total, which the obvious spelling is not. `String` throws on a value with no
- * `toString` — `Object.create(null)` is the reachable one, out of a rejection
- * built from a bare record — and on one whose conversion throws; an `Error`
- * may carry a `message` that is a getter which throws, or that is not a string
- * at all, which the next reader of it would be the one to fail on. Every
- * caller is already on its way to reporting a failure, so a throw raised here
- * replaces the failure being reported with itself: at the prompt that ends the
- * session on the read that failed, rather than answering the line and reading
- * the next one.
- *
- * A value that will not describe itself gets the sentence below instead. It
- * tells a reader less than a real message would and a great deal more than a
- * run that stopped.
- */
-export function messageOf(thrown: unknown): string {
-  try {
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
-    if (typeof message === "string") return message;
-  } catch {
-    // The conversion is what failed, which is the case this exists for.
-  }
-  return "The failure carries nothing that can be written as a message.";
 }
 
 /**

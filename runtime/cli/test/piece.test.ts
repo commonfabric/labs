@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { ValidationError } from "@cliffy/command";
+
 import { BaseFabricSpecialObject } from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
@@ -45,6 +47,7 @@ import {
   setCellValueFromCommand,
   setPieceSourceFromCommand,
   setsrcSuccessLine,
+  spaceWasWritten,
 } from "../commands/piece.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";
@@ -671,6 +674,30 @@ describe("cli piece parsing", () => {
     });
   });
 
+  it("parseSpaceOptions() reads the space of a --url as the shell does", () => {
+    // The shell percent-encodes a space name and may write the space's mark
+    // ahead of it.
+    for (const segment of [SPACE, `@${SPACE}`, `%40${SPACE}`]) {
+      expect(parseSpaceOptions({ url: `${API_URL}/${segment}`, identity: ID }))
+        .toMatchObject({ space: SPACE });
+    }
+    expect(parseSpaceOptions({ url: `${API_URL}/a%20b`, identity: ID }))
+      .toMatchObject({ space: "a b" });
+    expect(parseSpaceOptions({ url: `${API_URL}/@%40work`, identity: ID }))
+      .toMatchObject({ space: "@work" });
+    expect(() => parseSpaceOptions({ url: `${API_URL}/@`, identity: ID }))
+      .toThrow(/does not contain a space/);
+    // The embed prefix says how the shell shows the page, not what it names.
+    expect(
+      parsePieceOptions({
+        url: `${API_URL}/.embed/${SPACE}/tracker`,
+        identity: ID,
+      }),
+    ).toMatchObject({ apiUrl: API_URL, space: SPACE, piece: "tracker" });
+    expect(() => parseSpaceOptions({ url: `${API_URL}/.embed`, identity: ID }))
+      .toThrow(/does not contain a space/);
+  });
+
   it("parseSpaceOptions() takes both URL encodings off a path segment", () => {
     // A URL escapes with percent-encoding and a cell path is a JSON Pointer,
     // so a key holding "/" or "~" arrives doubly escaped and a segment taken
@@ -1162,11 +1189,10 @@ describe("cli piece parsing", () => {
     ).toThrow();
   });
 
-  it("newPiece() asks a serving deployment to create the piece and keeps only the start", async () => {
+  it("newPiece() asks a serving deployment to create the piece and starts nothing", async () => {
     // The connection carries the deployment's flag posture; under it the
     // client resolves the program, sends it with the name and the registry
-    // request, leaves the space root to the serving loop, and starts the
-    // piece it is handed back unless told not to.
+    // request, and leaves the space root and the piece to the serving loop.
     const program = { main: "/main.tsx", files: [] };
     const cell = { name: "the new piece's cell" };
     const seen: {
@@ -1190,7 +1216,6 @@ describe("cli piece parsing", () => {
     const deps = {
       loadPieces: () => Promise.resolve(controller as any),
       getPinnedProgramFromFile: () => Promise.resolve(program as any),
-      loadIdentity: () => Promise.resolve({} as any),
       instantiatePieceOnServer: (_config: unknown, input: unknown) => {
         seen.requests.push(input);
         return Promise.resolve({
@@ -1218,7 +1243,7 @@ describe("cli piece parsing", () => {
       register: true,
       requestKey: "retry-key",
     });
-    expect(seen.started).toEqual([cell]);
+    expect(seen.started).toEqual([]);
 
     const unstarted = await newPiece(
       config,
@@ -1236,7 +1261,7 @@ describe("cli piece parsing", () => {
       requestKey: "retry-key",
       start: false,
     });
-    expect(seen.started).toEqual([cell]);
+    expect(seen.started).toEqual([]);
     expect(seen.ensured).toBeUndefined();
   });
 
@@ -1247,13 +1272,17 @@ describe("cli piece parsing", () => {
     type Receipt = Awaited<ReturnType<Instantiate>>;
 
     /** Observe the CLI boundary without starting a runtime or a live service. */
-    async function fixture() {
+    function fixture() {
       const requests: Request[] = [];
       const opened: string[] = [];
       const started: unknown[] = [];
       const cell = { name: "created piece" };
       const controller = {
-        runtime: { experimental: { serverExecution: true } },
+        runtime: {
+          experimental: { serverExecution: true },
+          // The space this fixture creates in exists: a refusal is the server's.
+          spaceExists: () => Promise.resolve(true),
+        },
         getSpace: () => SPACE_DID,
         getPieceCell: (id: string, run: boolean) => {
           expect(run).toBe(false);
@@ -1265,7 +1294,6 @@ describe("cli piece parsing", () => {
           return Promise.resolve();
         },
       };
-      const identity = await Identity.fromPassphrase("cli served registration");
       const state: {
         status: Receipt["registration"]["status"];
         transportError?: Error;
@@ -1277,7 +1305,6 @@ describe("cli piece parsing", () => {
               ReturnType<NonNullable<Dependencies["loadPieces"]>>
             >,
           ),
-        loadIdentity: () => Promise.resolve(identity),
         getPinnedProgramFromFile: () =>
           Promise.resolve({ main: "/main.tsx", files: [] }),
         instantiatePieceOnServer: (_config, request) => {
@@ -1308,7 +1335,7 @@ describe("cli piece parsing", () => {
 
     for (const status of ["pending", "failed"] as const) {
       it(`stops before opening or starting a piece when registration is ${status}`, async () => {
-        const run = await fixture();
+        const run = fixture();
         run.state.status = status;
         const result = await run.create({ requestKey: "registration-retry" })
           .then(
@@ -1331,7 +1358,7 @@ describe("cli piece parsing", () => {
     }
 
     it("registers an unstarted piece and leaves it unstarted after registration completes", async () => {
-      const run = await fixture();
+      const run = fixture();
       expect(await run.create({ start: false, requestKey: "unstarted-retry" }))
         .toBe(PIECE);
       expect(run.requests).toHaveLength(1);
@@ -1340,12 +1367,12 @@ describe("cli piece parsing", () => {
         start: false,
         requestKey: "unstarted-retry",
       });
-      expect(run.opened).toEqual([PIECE]);
+      expect(run.opened).toEqual([]);
       expect(run.started).toEqual([]);
     });
 
     it("reports its generated key and forwards that same key when failed registration is retried", async () => {
-      const run = await fixture();
+      const run = fixture();
       run.state.status = "failed";
       const result = await run.create().then(
         () => undefined,
@@ -1363,17 +1390,13 @@ describe("cli piece parsing", () => {
         retryKey,
         retryKey,
       ]);
-      expect(run.opened).toEqual([PIECE]);
-      expect(run.started).toEqual([run.cell]);
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
     });
 
     it("preserves a deterministic serving refusal without reporting an uncertain creation", async () => {
-      const run = await fixture();
-      const refusal = new ServedLifecycleError(
-        "unauthorized",
-        403,
-        "Access denied",
-      );
+      const run = fixture();
+      const refusal = new ServedLifecycleError("forbidden", "Access denied");
       run.state.transportError = refusal;
       const result = await run.create().catch((error: unknown) => error);
       expect(result).toBe(refusal);
@@ -1382,7 +1405,7 @@ describe("cli piece parsing", () => {
     });
 
     it("retains the retry key after an unknown transport outcome and does not start", async () => {
-      const run = await fixture();
+      const run = fixture();
       run.state.transportError = new Error("response connection closed");
       const result = await run.create().then(
         () => undefined,
@@ -1399,13 +1422,12 @@ describe("cli piece parsing", () => {
       expect(run.started).toEqual([]);
     });
 
-    it("retains retry guidance for malformed success, timeout, and server-error replies", async () => {
-      for (const status of [200, 408, 500, 503]) {
-        const run = await fixture();
+    it("retains retry guidance for a refusal that leaves the outcome unknown", async () => {
+      for (const code of ["internal", "space-not-served"]) {
+        const run = fixture();
         run.state.transportError = new ServedLifecycleError(
-          `http-${status}`,
-          status,
-          "Unconfirmed response",
+          code,
+          "Unconfirmed outcome",
         );
         const error = await run.create().catch((error: unknown) => error);
         expect(error).toBeInstanceOf(Error);
@@ -1422,31 +1444,32 @@ describe("cli piece parsing", () => {
   it("setPiecePattern() asks a serving deployment to replace the source and refreshes the piece here", async () => {
     // Under the deployment's flag posture the client resolves the program
     // and sends it; the serving runtime commits the update. What stays here
-    // is the refresh of the piece this connection holds, whose outcome the
-    // receipt reports the way a client-side update's does.
+    // is asking the server for the piece's result, whose outcome the receipt
+    // reports the way a client-side update's does.
     const program = { main: "/main.tsx", files: [] };
     const cell = { name: "the piece's cell" };
-    const seen: { requests: unknown[]; started: unknown[][] } = {
+    const result = { name: "the piece's result" };
+    const seen: { requests: unknown[]; pulled: unknown[] } = {
       requests: [],
-      started: [],
+      pulled: [],
     };
     let refreshFails = false;
     const controller = {
       runtime: { experimental: { serverExecution: true } },
       getSpace: () => SPACE_DID,
       getPieceCell: () => Promise.resolve(cell),
-      startPiece: (...args: unknown[]) => {
-        seen.started.push(args);
-        return refreshFails
-          ? Promise.reject(new Error("the piece never settled"))
-          : Promise.resolve();
-      },
+      getResult: () => result,
     };
     const deps = {
       loadPieces: () => Promise.resolve(controller as any),
       resolvePieceAddress: () => Promise.resolve(PIECE),
       getPinnedProgramFromFile: () => Promise.resolve(program as any),
-      loadIdentity: () => Promise.resolve({} as any),
+      pullServed: (_pieces: unknown, pulled: unknown) => {
+        seen.pulled.push(pulled);
+        return refreshFails
+          ? Promise.reject(new Error("the piece never settled"))
+          : Promise.resolve();
+      },
       setPieceSourceOnServer: (_config: unknown, input: unknown) => {
         seen.requests.push(input);
         return Promise.resolve({
@@ -1482,11 +1505,7 @@ describe("cli piece parsing", () => {
       program,
       repository: "repo",
     });
-    // The start answers for its own setup commit, which a plain start would
-    // report only to the log.
-    expect(seen.started).toEqual([
-      [cell, undefined, { awaitSetupCommit: true }],
-    ]);
+    expect(seen.pulled).toEqual([result]);
 
     refreshFails = true;
     const unrefreshed = await setPiecePattern(
@@ -1506,6 +1525,125 @@ describe("cli piece parsing", () => {
       status: "failed",
       warning: "the piece never settled",
     });
+  });
+
+  it("setPiecePattern() sends the origin to a serving deployment, and fails over a receipt that records none", async () => {
+    const requests: unknown[] = [];
+    let recordsOrigin = true;
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: () => Promise.resolve({}),
+          getResult: () => ({}),
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: unknown) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+          ...(recordsOrigin ? { origin: "system:origin.tsx" } : {}),
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    const receipt = await setPiecePattern(config, entry, {
+      origin: "system:origin.tsx",
+    }, deps);
+    expect(receipt.origin).toBe("system:origin.tsx");
+    expect(requests[0]).toMatchObject({ origin: "system:origin.tsx" });
+
+    // A server that does not take an origin drops it and detaches.
+    recordsOrigin = false;
+    await expect(
+      setPiecePattern(config, entry, { origin: "system:origin.tsx" }, deps),
+    ).rejects.toThrow("does not record an origin");
+    // Without one asked for, no receipt has to name one.
+    const plain = await setPiecePattern(config, entry, {}, deps);
+    expect(plain.origin).toBeUndefined();
+    expect(requests[2]).not.toHaveProperty("origin");
+  });
+
+  it("setPiecePattern() sends a piece addressed at a scope to a serving deployment with its scope, and refreshes that instance, changing nothing here", async () => {
+    const requests: { scope?: string }[] = [];
+    const opened: unknown[] = [];
+    const deps = {
+      loadPieces: () =>
+        Promise.resolve({
+          runtime: { experimental: { serverExecution: true } },
+          getSpace: () => SPACE_DID,
+          getPieceCell: (
+            id: string,
+            _open: unknown,
+            _schema: unknown,
+            scope: unknown,
+          ) => {
+            opened.push([id, scope]);
+            return Promise.resolve({});
+          },
+          getResult: () => ({}),
+          get: () => {
+            throw new Error("must not reach the client-side update");
+          },
+        } as any),
+      resolvePieceAddress: () => Promise.resolve(PIECE),
+      getPinnedProgramFromFile: () =>
+        Promise.resolve({ main: "/main.tsx", files: [] } as any),
+      pullServed: () => Promise.resolve(),
+      setPieceSourceOnServer: (_config: unknown, input: { scope?: string }) => {
+        requests.push(input);
+        return Promise.resolve({
+          pieceId: PIECE,
+          pattern: { identity: "B".repeat(43), symbol: "default" },
+          revisionId: "revision-2",
+          seq: 12,
+          detachedOrigin: null,
+        });
+      },
+    };
+    const config = {
+      apiUrl: API_URL,
+      space: SPACE,
+      identity: ID,
+      piece: PIECE,
+    };
+    const entry = { mainPath: "/main.tsx" };
+
+    for (const pieceScope of ["user", "session", "space"] as const) {
+      const receipt = await setPiecePattern(
+        { ...config, pieceScope },
+        entry,
+        {},
+        deps,
+      );
+      expect(receipt.refresh).toEqual({ status: "completed" });
+    }
+    expect(requests.map((request) => request.scope)).toEqual([
+      "user",
+      "session",
+      undefined,
+    ]);
+    expect(requests[2]).not.toHaveProperty("scope");
+    expect(opened).toEqual([
+      [PIECE, "user"],
+      [PIECE, "session"],
+      [PIECE, "space"],
+    ]);
   });
 
   it("recreateSpaceRootPattern() targets the explicit space", async () => {
@@ -1613,6 +1751,7 @@ describe("cli piece parsing", () => {
 
     it("should reject invalid scope suffixes on the piece ID segment", () => {
       expect(() => parseLink("piece1@any")).toThrow(/Invalid scope suffix/);
+      expect(() => parseLink("piece1@any")).toThrow(ValidationError);
       expect(() => parseLink("piece1@inherit")).toThrow(
         /requires a reference context/,
       );
@@ -1689,6 +1828,19 @@ describe("cli piece parsing", () => {
         embeddedSpace: SPACE_DID,
         path: ["field"],
       });
+    });
+
+    it("reads an endpoint's scope written as a named qualifier", () => {
+      expect(parseLink("fid1:abc@scope=session/field")).toEqual({
+        pieceId: "fid1:abc",
+        scope: "session",
+        path: ["field"],
+      });
+    });
+
+    it("throws for an endpoint carrying a pin", () => {
+      expect(() => parseLink(`fid1:abc@pin=${"A".repeat(43)}/field`))
+        .toThrow("which a target does not take");
     });
   });
 
@@ -3219,6 +3371,31 @@ describe("cli piece parsing", () => {
       `Committed source update for piece ${PIECE} ` +
         `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
         `Revision: revision-2, Seq: 12)`,
+    );
+  });
+
+  it("names the origin the update records in the setsrc success line", () => {
+    expect(setsrcSuccessLine(
+      {
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: "/tmp/test.key",
+        piece: PIECE,
+      },
+      {
+        status: "committed",
+        ref: { identity: "B".repeat(43), symbol: "default" },
+        revisionId: "revision-2",
+        detachedOrigin: null,
+        origin: "system:origin.tsx",
+        space: SPACE_DID,
+        seq: 12,
+        refresh: { status: "completed" },
+      },
+    )).toBe(
+      `Committed source update for piece ${PIECE} ` +
+        `(Pattern Ref: cf:module/${"B".repeat(43)}#default, ` +
+        `Revision: revision-2, Seq: 12); it follows system:origin.tsx`,
     );
   });
 
@@ -5533,6 +5710,7 @@ describe("cli piece parsing", () => {
                 Promise.resolve({
                   id: PIECE,
                   name: () => "Notes",
+                  getCell: () => runtime.getCell(space, "piece"),
                   getPatternRef: () => Promise.resolve(patternRef),
                   input: {
                     get: () => Promise.resolve({ title: "Input" }),
@@ -5650,5 +5828,125 @@ describe("cli piece parsing", () => {
           ),
       },
     )).rejects.toThrow(/Slug "demo" not found/);
+  });
+
+  describe("parsePieceOptions() on a bare target", () => {
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space: "did:key:z6MkSpace",
+      quiet: true,
+    };
+    const pin = "A".repeat(43);
+
+    it("reads a scope written as a named qualifier", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch@scope=user" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBe("user");
+    });
+
+    it("reads no scope on a target that names none", () => {
+      const config = parsePieceOptions({ ...target, cell: "lunch" });
+
+      expect(config.piece).toBe("lunch");
+      expect(config.pieceScope).toBeUndefined();
+    });
+
+    it("throws for a target carrying a pin", () => {
+      expect(() => parsePieceOptions({ ...target, cell: `lunch@pin=${pin}` }))
+        .toThrow(
+          `"lunch@pin=${pin}" carries a \`@pin\` or \`@inherit\` qualifier, which a target does not take.`,
+        );
+    });
+
+    it("throws a `ValidationError` naming the grammar's refusal for a target holding a path", () => {
+      const parse = () =>
+        parsePieceOptions({ ...target, cell: "lunch@user/title" });
+      expect(parse).toThrow(ValidationError);
+      expect(parse).toThrow(
+        "Expected one piece segment, without a path separator.",
+      );
+    });
+  });
+
+  describe("parseSpaceOptions() beside `--url`", () => {
+    const space = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
+    const target = {
+      apiUrl: "http://127.0.0.1:8000",
+      identity: "/nonexistent-but-unread.key",
+      space,
+      cell: "fid1:refused",
+    };
+    const url = `http://127.0.0.1:8000/${space}`;
+
+    it("throws for `--url` beside a space written on the command line", () => {
+      expect(() => parseSpaceOptions({ ...target, url, explicitSpace: true }))
+        .toThrow('"--space" cannot be provided when using "--url".');
+    });
+
+    it("takes the space from `--url` over one supplied by the environment", () => {
+      expect(parseSpaceOptions({ ...target, url, explicitSpace: false }).space)
+        .toBe(space);
+    });
+  });
+
+  describe("spaceWasWritten()", () => {
+    it("returns what the caller says when it says", () => {
+      expect(spaceWasWritten(true, [])).toBe(true);
+      expect(spaceWasWritten(false, ["--space", "home"])).toBe(false);
+    });
+
+    it("returns whether the command's own arguments spell the space", () => {
+      expect(spaceWasWritten(undefined, ["--space", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["-s", "home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--space=home"])).toBe(true);
+      expect(spaceWasWritten(undefined, ["--cell", "lunch"])).toBe(false);
+    });
+
+    it("returns `false` for a space spelled only after `--`, which a callable takes", () => {
+      expect(
+        spaceWasWritten(undefined, ["--cell", "lunch", "--", "--space", "x"]),
+      ).toBe(false);
+      expect(spaceWasWritten(undefined, ["-s", "home", "--", "--space"]))
+        .toBe(true);
+    });
+  });
+
+  describe("setCellValueFromCommand() stale-value hint", () => {
+    /** Writes through the command, the write reporting `served`. */
+    async function set(served: boolean): Promise<string[]> {
+      const hints: string[] = [];
+      await setCellValueFromCommand(
+        {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: "/nonexistent-but-unread.key",
+          space: "did:key:z6MkSpace",
+          quiet: true,
+          cell: "lunch",
+        },
+        "title",
+        undefined,
+        {
+          drainStdin: () => Promise.resolve({ text: "Tacos" }),
+          setCellValue: () =>
+            Promise.resolve({ piece: "lunch", path: ["title"], served }),
+          render: () => {},
+          hint: (message) => hints.push(message),
+        },
+      );
+      return hints;
+    }
+
+    it("says computed values may be stale after a write this process runs", async () => {
+      const hints = await set(false);
+
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("TIP: Computed values may be stale.");
+    });
+
+    it("says nothing about stale values after a write the server runs", async () => {
+      expect(await set(true)).toEqual([]);
+    });
   });
 });

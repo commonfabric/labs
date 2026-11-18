@@ -12,7 +12,6 @@ import {
   DEPLOYMENT_PATTERN_INDEX_URL,
   DEPLOYMENT_SKILLS_REGISTRY_URL,
   LAUNCHER_OWNED_VARIABLES,
-  launchFailureMessage,
   readOptionalFile,
   readToolshedStoreDir,
   resolveConsoleLaunchPlan,
@@ -1287,6 +1286,24 @@ describe("launch", () => {
       ).rejects.toThrow("`--port` was given no value");
     });
 
+    it("throws naming a flag written with an empty or blank value", async () => {
+      // Falling through to the default would ignore a value someone typed.
+
+      for (const args of [["--port="], ["--store", " "]]) {
+        const flag = args[0].replace("=", "");
+        await expect(
+          prepareConsoleLaunch([...NAMED_ARGS, ...args], {}, io()),
+        ).rejects.toThrow(`\`${flag}\` was given no value`);
+      }
+      // The same flag given a value is read.
+      const { plan } = await prepareConsoleLaunch(
+        [...NAMED_ARGS, "--port=8123"],
+        {},
+        io(),
+      );
+      expect(plan.environment.CF_HARNESS_CONSOLE_PORT).toBe("8123");
+    });
+
     it("returns the port for the `=` spelling a negative value needs", async () => {
       await expect(
         prepareConsoleLaunch([...NAMED_ARGS, "--port=-1"], {}, io()),
@@ -1630,18 +1647,6 @@ describe("launch", () => {
     it("returns `undefined` for arguments that ask for no help", () => {
       expect(consoleLaunchHelpText(["--instance", "loom", "--", "--port", "1"]))
         .toBeUndefined();
-    });
-  });
-
-  describe("launchFailureMessage()", () => {
-    it("returns the error's message", () => {
-      expect(launchFailureMessage(new Error("no space named"))).toBe(
-        "no space named",
-      );
-    });
-
-    it("returns the string form of something thrown that is not an error", () => {
-      expect(launchFailureMessage("plain")).toBe("plain");
     });
   });
 

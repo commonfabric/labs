@@ -240,9 +240,15 @@ handler fires
   lazy-computed case is literally in the code; CT-1795's staleness park
   is an extra gate on top) — the common case being not rapid-fire but a
   lazy computed nothing has pulled yet, which the handler must and does
-  see fresh. Handlers never read last-wave state: events drain as part
-  of regular execution — the loop is simply not idle until all events
-  are processed — and the preflight ahead of each dispatch makes the
+  see fresh. An input the handler's argument schema declares opaque, by the
+  outermost entry of its `asCell`, is one it hands on without reading, so its
+  writer owes the handler nothing and the preflight leaves it alone. A
+  `Stream<void>` input (`asCell: ["stream", "opaque"]`) is a stream whose
+  payload is opaque: the handler sends to it through its link, so the
+  preflight brings that link's writers up to date as for a read. Handlers
+  never read last-wave state: events drain as part of regular execution —
+  the loop is simply not idle until all events are processed — and the
+  preflight ahead of each dispatch makes the
   inputs a handler reads current. Within that rule the serving
   scheduler's pass takes every ready event behind the head as well, each
   through its own preflight, and settles the derivations once behind all
@@ -258,7 +264,10 @@ handler fires
   off the queue first, as the flush deadline's purge of an in-process
   leftover does, and each queues that pass; a head the event phases
   drop on their own leaves its park to end at its loads' release, which
-  queues it then. A head that
+  queues it then. A head held for its handler's input presync
+  (scheduler-v2 README §7.5) ends the pass the same way; the hold ends
+  when the presync settles or when a drop takes the head off the queue,
+  and each queues that pass. A head that
   parks before the pass ran any handler leaves the settle to run as
   before. The scheduler is not idle while a head is parked, so a serving
   cycle whose flush deadline comes before the park ends commits the
@@ -342,13 +351,17 @@ ambient-state one.
   witness stands — in the handler run's own transaction, so the write
   seals into the run's wave with the entry's `consequenced` mark (§4's
   mark/effects atomicity) and rides the same carriage as every other
-  served event-handler write. The cell identity stays the cause-derived
-  address the client-era write used (same event ⇒ same minted cell id),
-  so an unchanged consumer reads served results exactly as it read
-  client-written ones; a flag-ON client's diverted echo publishes that
-  same address on its transaction, and the durable-ack coupling settles
-  the sender's callback only after the handling consequenced — the
-  receipt is durable before the address is ever dereferenced. The
+  served event-handler write. The cell's id is the `receipt:` scheme over
+  a hash of the durable event id and the stream (`handlingReceiptId()`,
+  RULED 2026-11-03): one event on one stream names one cell, whichever
+  runtime handled it and whoever sent it, so a sender names the receipt
+  without running the handler. A flag-OFF client that handles an event
+  writes the same cell, create-only. A flag-ON
+  client's diverted echo publishes that address on its transaction, and
+  so does a send with `echo: false`, which queues no echo and starts no
+  piece, and the durable-ack coupling settles the sender's callback only
+  after the handling consequenced — the receipt is durable before the
+  address is ever dereferenced. The
   callback reads that outcome rather than the echo's: where the echo's
   own transaction failed — an echo that withdrew (speculation.md §2), or
   one whose commit was refused — the transaction it is handed reports
@@ -366,11 +379,20 @@ ambient-state one.
   (even if the value is undefined), and the CAS for that is the
   write-once guarantee" — the owner's model): a lost CAS means a writer
   already landed this handling's receipt (a re-served replay converging
-  on the same cause-derived id, or a pre-created cell) and is a LOUD
+  on the same id, or a pre-created cell) and is a LOUD
   NO-OP — first-writer-wins, the OFF arm's receipt-collision
   semantics — never a second write, never an error that fails the wave.
   No create-only mark rides the wave (the invariant above holds); the
   client's own write stays disabled.
+- **The `receipt:` scheme is reserved for these cells, and nothing
+  enforces that yet (RULED 2026-11-03).** It says what a document is, and
+  it is where a later check can refuse authored writes under the flag. Until
+  then a client holding write authority can author a `receipt:` document,
+  and the served handling that finds it takes the no-op above. What stands in
+  is that an event id cannot be predicted before the send; after the append
+  anyone who can read the stream can see it. The stream in the hash is what
+  keeps an id replayed onto another stream from reaching this receipt, a case
+  a write check alone would not stop, since the server writes both.
 - **The drain's own re-scan (stage C tuning, 2026-08-18):** the drain
   queues a pending entry into the serving scheduler AT MOST ONCE until
   the store has spoken for it — a re-drain skips an entry whose earlier
@@ -578,6 +600,30 @@ loop's duty).
   and a fresh attempt may land the write that sealing an error would
   end. An explicit handler abort is a handler-error consequence, not an
   infrastructure retry.
+- **Outcome withheld under a foreign join.** The entry's `consequenced`
+  mark is the event's processed claim (CFC §6.2.2), which takes nothing
+  of what the handler read: the CFC gate neither stamps nor measures it
+  (`runtime/runner/src/executor/processed-claim.ts`;
+  [specs#94](https://github.com/commonfabric/specs/pull/94)). Where the
+  handler's flow join carries a clause the stream's space doesn't admit,
+  the entry also says the same thing however the handling ended: a
+  commit, a throw, a CFC verdict, an explicit abort and an ACL-document
+  refusal each leave `consequenced` and `withheld: true`, and none of
+  `error`, `status` or `reason`. A drain-delivered run writes `withheld`
+  in its own transaction, the wave writes it beside a same-wave copy's
+  mark, and the consequence notice writes it for a failure. The sender's
+  durable-ack coupling reports every such outcome as `done`, on a view
+  `isWithheldDelivery()` names, never as a failure, since the handling
+  may have committed; the overlay signals `withheld`. Neither the sender
+  nor a reader of the stream's space learns whether the handling
+  committed. What the handling wrote stays
+  readable under its own labels. A dispatch whose handler did not run is
+  withdrawn rather than marked, and under such a join its deferral, and the
+  drop notice its deferrals can harden into, carry fixed text in place of the
+  runner's reason, which can name a document the run reached. A delivery failure that ends in
+  `needs-attention` made no claim: the event was not handled and stays
+  retryable, and its record holds fixed text and the failure's class,
+  `unknown` for a commit preparation, and nothing of what the run read.
 - **Handler body DID NOT RUN — not a consequence (RULED 2026-08-27;
   mark/effects atomicity, the a04 write-side member).** A served
   dispatch whose handler body never executed — the runner's
@@ -586,7 +632,46 @@ loop's duty).
   carries the entry's pre-stamped `consequenced` mark (§4), is
   WITHDRAWN whole. The entry stays pending-unconsequenced, the
   standard re-drain re-delivers it, and the retried handler's
-  cause-derived (idempotent) writes converge. Sealing the skip is the
+  cause-derived (idempotent) writes converge. A handler's write into
+  another space at a link-hop target whose document has not arrived
+  (`pendingHopDoc`) records the same skip while that document's load
+  is in flight: read without a stream schema, the target's stream
+  marker is what tells a send from a write, and there it is
+  unknowable, so the write is neither sent nor attempted (a value
+  write would open a second space's writer, which the transaction
+  refuses, and lose the event); the re-run reads the loaded document
+  and sends. A target the load confirms absent writes as before. A
+  body that did run is withdrawn too, a throw from it included, when
+  it read, in a space other than its home, a document whose load is in
+  flight and of which the replica holds nothing, not even a confirmed
+  absence. Such a document is one the body reached through a link it
+  resolved while it ran, which no dependency CT-1795's preflight park
+  walks names, and the read returned the schema's default, or
+  nothing, in place of the stored value. That entry is not left to
+  the drain: the serving scheduler requeues it with its carriage and
+  parks it on those loads as the preflight park parks a head, and the
+  copy's final callback waits for the run that follows, so it runs
+  again once they settle and a load it already waited for does not
+  withdraw it again. When every failed load failed by authorization,
+  with durable evidence of the refusal (the access list's revision), it
+  runs again on what the replica holds; any other failure, a revoked
+  session's not least, defers it as a failed preflight load does. A read in
+  the home space needs none of this, since the wave holds the run's
+  home-space reads to the store's head (serving-loop.md §3d) once the
+  run seals a write there, as a drain's copy always does with its
+  consequence mark; an LT1 in-process copy that writes only into other
+  spaces seals nothing at home, so its home-space reads count too, and
+  so do every run's that threw, which seals nothing at all. The
+  run that reads a document its load confirms absent proceeds with
+  that absence. So does a run reading a document in a space the
+  server refuses the serving identity, which commits the schema's
+  default: a load in a space whose access the runtime has lost
+  (`spaceAccessError()`) delivers nothing, so the check made after the
+  run does not wait on one, and a run that reads such a space reads the
+  lost state, whether or not a retry of the space's access is in flight.
+  The checks made as a run reads (`resolveAsCell()`, a send into another
+  space) take that load as they take any other.
+  Sealing the skip is the
   defect this rule prevents: the mark committed ALONE — a 1-op derived
   commit, the user's event permanently consumed with zero effects and
   no error (the b1-lifts a04 red, seqs 53/56). Consequence atomicity
@@ -600,7 +685,33 @@ loop's duty).
   armed, counted `handlerNotRunDeferrals`, serving-loop.md §7), so a
   PERMANENTLY unresolvable argument hardens through the bounded
   deferral budget into the visible T3 drop notice instead of wedging
-  the stream. The withdrawal carries §2's per-space arrival-order
+  the stream. A withdrawal whose run read a scoped instance the serving
+  loop has not produced, in the stream's own space, while a writer that
+  owes it will still run, is settlement instead (counted
+  `handlerNotRunWaits` as well). "Owes" is link resolution's
+  `unproducedScopedInstance` (serving-loop.md §3d), and "will run" is
+  the scheduler's own test for queueing the writer: invalid or never
+  run, and live, a materializer, or pending; on a fanned-out writer, the
+  instance must also be one its current demanders produce and not
+  current, since the run supply runs no other. Such a deferral spends no
+  deferral budget and arms no backstop: the entry waits on that
+  instance and is not dispatched again until a commit writes it (a write
+  to another instance of the document does not wake it) or a writer of
+  the document finishes a run that was not withdrawn, or stops writing
+  it. The second wake is what reaches a writer whose run leaves the
+  instance absent, which commits no write to it. Once dispatched again,
+  the entry is judged afresh; and
+  the drain stops its pass at the waiting entry, so later arrivals in
+  the space wait behind it. Time and unrelated commits decide nothing
+  about it. A tenure that parks forgets the wait, and the next one
+  dispatches the entry afresh. A withdrawal with nothing
+  owed, or owed only by a writer that is dormant or clean, spends the
+  budget as above, so an argument that nothing will change still ends
+  in the drop notice, and an instance in another space, whose commits
+  this loop does not see, takes the budget too. A writer that stays
+  queued without ever producing holds the entry, and §2's arrival-order
+  barrier holds the space's later arrivals behind it, as a load in
+  flight holds a client dispatch (RULED 2026-11-17, owner). The withdrawal carries §2's per-space arrival-order
   BARRIER with it, exactly as the load-park failure arm does — both
   halves: every later-arrived durable served entry already QUEUED
   behind the withdrawn dispatch in the same space defers too
@@ -632,8 +743,20 @@ loop's duty).
   the argument reaches is a cold read rather than a schema mismatch: a
   computation reading a document the replica does not hold publishes
   `undefined` until the load lands, by design, so a handler reading
-  through it finds its argument unresolved in exactly that window.
-  Sealing the skip would fire the commit callback on a transaction that
+  through it finds its argument unresolved in exactly that window. A
+  body that did run is withdrawn the same way, a throw from it
+  included, when it read a document still loading, as the served rule
+  above describes, in a space its commit does not write. Its re-run is
+  parked on that load, spending none of the retry window below, since
+  waiting on a load is settlement; a load that fails otherwise than by
+  authorization drops it, reporting the error the withdrawn run threw.
+  A read in a space the commit writes travels with that commit, which
+  the store refuses when the read is stale; a run that threw makes no
+  commit, so every one of its reads counts. A one-shot
+  (`retries: false`) is not withdrawn, since it is never run again: one
+  that read a document still loading commits what it read, the
+  schema's default, as one with nothing in flight does. Sealing the skip
+  would fire the commit callback on a transaction that
   wrote nothing, which a caller reads as a completed handling. The
   finalize withdraws the transaction and requeues the event within the
   retry window a stale-basis rejection gets, drawing on the same budget:
@@ -690,10 +813,17 @@ loop's duty).
   independently of the storage-manager lifetime. Only successful settlement
   of a new generation for that same document is positive recovery evidence;
   starting the generation is not. A successful load after storage-manager
-  recreation can therefore wake one recovery attempt.
+  recreation can therefore wake one recovery attempt. A
+  `program-unavailable` checkpoint (§5's program-closure wait, above)
+  names the closure's entry document instead, and the commit that writes
+  that document into the space is its positive recovery evidence. A
+  tenure that replays such a checkpoint and finds the document already
+  in the store takes that as the evidence.
 - A current-ACL authorization denial is immediately permanent only when
   its typed verdict carries the durable ACL revision and distinguishes the
-  denial from a revoked or missing session. A required-load denial uses the
+  denial from a revoked or missing session. A load refused because its space
+  is deleted is not a failure of the load at all (the deleted-space rule
+  below). A required-load denial uses the
   `dispatch-load` phase; a proven-no-commit denial while finalizing a handler
   commit uses `commit-finalization`. A `RowLabelCommitError` is a
   proven-no-commit protocol verdict in `commit-finalization` and terminalizes
@@ -730,6 +860,29 @@ loop's duty).
   dependency walk reads beyond the handler's declared schema, following a
   linked piece's own fields (a profile's view and per-user state, for
   example), and what it reads there decides nothing.
+- A load of a document in a deleted space
+  ([INV-15](../memory-v2/09-invariants.md#inv-15--space-deletion)) settles
+  as an absence, not as a failure of the load, however the runtime learns of
+  the deletion: from the memory server's refusal of its open, marked
+  `deleted` and carrying the deletion's ACL revision, or from the `deleted`
+  revocation of a session it held on the space when the deletion committed,
+  which carries no revision. The storage manager settles it so for every
+  reader of the document, an event's preflight park and a withdrawn run's
+  park among them, served or not. Deletion is the same for every principal
+  and is never undone, so from then on the absence is the document's state,
+  which no wait or retry changes. The event dispatches and is decided by what
+  its run reads: the document absent, and `spaceDeleted()` for it `true`. A
+  handler that does something about the deletion therefore does it, as the
+  chat manager's `forget` archives a deleted room's entry and its
+  `openDirect` replaces a deleted direct room. A failure would instead either
+  hold the event, and every later same-space arrival behind it, for the
+  failed-state budget above (the revocation, without a revision, is not
+  permanent evidence), or seal a `needs-attention` notice at once (the
+  refused open), and either way the notice discards an event whose Retry
+  would fail the same way. A run whose argument does not resolve because what
+  it reads is gone takes the handler-not-run arm above, and one that writes
+  into the deleted space has its commit refused as
+  [serving-loop.md](serving-loop.md#a-deleted-space) describes.
 - An event held only behind an earlier failed head preserves arrival
   order but records no checkpoint and spends no budget. A load-park
   observation neither increments nor clears the independent cold-view
@@ -837,6 +990,38 @@ loop's duty).
   entry always spends the budget, so an event addressing a piece that
   nothing creates still hardens into this drop once the events ahead
   of it have their consequences.
+
+  A served event's piece can also name a pattern whose program closure
+  the space does not hold yet. A piece placed in a space of its own (an
+  `inSpace` child, such as a FabriChat room or a Home profile) runs a
+  program that the creating runtime replicates into that space after
+  the run that creates the piece (module-loading.md). The space's own
+  serving runtime cannot observe that replication, only its commit
+  landing. A not-loadable verdict reached while the space's store lacks
+  the closure's entry document is the run racing that replication, so
+  this predicate does not apply to it, and the earliest pending entry
+  does not spend the budget for it either. The wait has two phases:
+
+  - For a grace of ten seconds (`PROGRAM_CLOSURE_GRACE_MS`) the deferral
+    is settlement, like a replica load in flight: it spends no deferral
+    budget, writes no checkpoint, and arms no backstop.
+  - Past the grace, the absence is a typed delivery failure in
+    `dispatch-load` of class `program-unavailable`, under the
+    failed-state budget below. A closure that never arrives therefore
+    ends in the `needs-attention` notice, never in this drop.
+
+  In both phases the commit that writes the closure's entry document
+  into the space wakes the event, and in the second it is the positive
+  recovery evidence that wakes the failure's one retry. In both phases
+  the event holds §2's arrival-order barrier, so later same-space
+  arrivals wait behind it. The grace is an explicit exception to the
+  repository's no-timeout rule. Nothing else can end a wait for a
+  replication this runtime cannot see; the wait ends in the
+  delivery-failure handling below rather than a drop; it cancels
+  nothing in flight; and it is held in memory only, so a restart or a
+  lease handoff starts it afresh. A store that holds the closure's
+  entry when the load fails is not this case, and that deferral spends
+  the budget as any other does.
 
   With server execution off, a CLIENT event — one with no served
   carriage, so no durable entry for a later pass to re-drain, and no

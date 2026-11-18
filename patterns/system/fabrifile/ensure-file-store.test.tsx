@@ -28,7 +28,7 @@ export default pattern(() => {
   const held = Writable.of<HeldStore>({});
   // Something in the test's space, which is the record's.
   const here = new Writable({ [NAME]: "Here" });
-  const hold = action(() => held.set({ store: record.get().store }));
+  const hold = action(() => held.set({ store: record.get().store! }));
 
   return {
     [TESTS]: [

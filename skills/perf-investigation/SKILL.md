@@ -101,6 +101,26 @@ was found receiving 25 MB, and
 `docs/history/development/performance/2026-09-cf-cli-topics-board-cost.md` is
 the worked case.
 
+**Starting the process.** `profile-cf.ts` imports the CLI before its profiler
+starts, so nothing above sees what starting a command costs, which on a thin
+command is most of its time. To see it, compare the module graph rather than a
+clock: `deno info --json <entry>` lists what a run reads, and following only
+edges without `isDynamic` gives the static part. A CPU profile of an
+`await
+import()` of the entry shows the same thing as `(idle)`, because Deno
+reads the modules off the JavaScript thread: when the idle share dwarfs every
+frame, the fix is fewer modules, not cheaper ones.
+`docs/development/imports.md`, "What starting a program reads", says what
+decides that set.
+
+V8's code cache makes these numbers bimodal. `npm:typescript` takes 0.15 s of
+CPU with a cache hit and 1.6 s with `--no-code-cache`, and a checkout's first
+run after an edit misses too. A process run with `--jitless` disturbs the
+entries of the npm packages every checkout shares, so the next plain run costs
+more; `--max-old-space-size` does not. Throw away the first run of each arm, and
+read a pair that disagrees about `user` time as a cache miss before reading it
+as a change.
+
 **The deployed thing.** Every rung above is a rig you built, and a rig can
 measure itself (see "What your harness holds live"). The board the team actually
 uses is one `cf` command away — `skills/topics/SKILL.md` names it — and a single
@@ -117,6 +137,15 @@ request, no harness, and under the `serverExecution` ON arm it reaches where
 most of the work now is. "The server side" in
 `docs/development/debugging/profiling.md` has the requests and the fields; the
 next section here is what to know before making them.
+
+**A heap that keeps growing.** Hold every other instrument here until the heap
+has been read after a forced collection, between steps that vary one thing:
+`/api/health/collected-memory` on a local server. Then
+`skills/perf-investigation/scripts/heap-worker-probe.ts` has a serving worker
+snapshot its own heap around a run of creates, `heap-snapshot.ts` takes a
+running server's main thread over the inspector, and `heap-retained.ts` and
+`heap-removal.ts` beside them name what holds the growth.
+`docs/plans/serving-worker-heap.md` gives the process in order.
 
 ## Which process is doing the work
 

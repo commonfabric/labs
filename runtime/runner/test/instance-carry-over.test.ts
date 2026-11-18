@@ -312,6 +312,8 @@ describe("instance-carry-over", () => {
   let rt: Runtime;
   // Runtimes `freshRuntime()` has replaced, kept running until the case ends.
   let replaced: Runtime[];
+  // Memory servers a case made for itself, closed once the case ends.
+  let servers: ReturnType<typeof newLoopbackServer>[];
 
   // The options of a runtime that names instances when `instanceNames` is
   // true, and compiles every instance positionally when it is false.
@@ -324,11 +326,13 @@ describe("instance-carry-over", () => {
     storageManager = StorageManager.emulate({ as: signer });
     rt = new Runtime({ ...naming(), storageManager });
     replaced = [];
+    servers = [];
   });
   afterEach(async () => {
     await rt?.dispose();
     for (const runtime of replaced) await runtime.dispose();
     await storageManager?.close();
+    for (const server of servers) await server.close();
   });
 
   const compile = (program: RuntimeProgram) =>
@@ -709,7 +713,9 @@ describe("instance-carry-over", () => {
     it("keeps each `.map()` element's child state through a start in a runtime that names instances", async () => {
       // The elements were set up by a runtime that named no instance, which a
       // runtime with naming off reproduces with the very source that names
-      // `row`.
+      // `row`. One storage manager's sessions serve one naming mode, so each
+      // runtime here has its own, over a server whose posture names
+      // instances.
 
       const program: RuntimeProgram = {
         main: "/main.tsx",
@@ -732,8 +738,20 @@ describe("instance-carry-over", () => {
           },
         ],
       };
+      const server = newLoopbackServer({
+        subscriptionRefreshDelayMs: 0,
+        namesInstances: () => true,
+      });
+      servers.push(server);
+      const onServer = (instanceNames: boolean) =>
+        new Runtime({
+          ...naming(instanceNames),
+          storageManager: EmulatedStorageManager.connectTo(server, {
+            as: signer,
+          }),
+        });
       replaced.push(rt);
-      rt = new Runtime({ ...naming(false), storageManager });
+      rt = onServer(false);
       {
         const deployed = await compile(program);
         const tx = rt.edit();
@@ -753,8 +771,13 @@ describe("instance-carry-over", () => {
         expect((await write.commit().settled).error).toBeUndefined();
         await rt.idle();
         rt.runner.stop(cell);
+        await rt.patternManager.flushCompileCacheWrites();
+        await rt.storageManager.synced();
       }
-      const cell = await freshRuntime("map-elements");
+      replaced.push(rt);
+      rt = onServer(true);
+      const cell = rt.getCell<Record<string, unknown>>(space, "map-elements");
+      await cell.sync();
 
       expect(await rt.runner.start(cell)).toBe(true);
       await rt.idle();
@@ -1211,11 +1234,17 @@ describe("instance-carry-over", () => {
   describe("a runtime with naming off", () => {
     it("carries nothing over and records nothing, updating a parent to a source that binds its child to a `const`", async () => {
       // With naming off the source names no instance, so nothing is pending
-      // and carry-over writes nothing.
+      // and carry-over writes nothing. The parent is set up with naming off
+      // as well, since a space a runtime with naming on has written refuses
+      // one with naming off (INV-16), and on a storage manager of its own,
+      // since one manager's sessions serve one naming mode.
 
+      const positional = StorageManager.emulate({ as: signer });
+      replaced.push(rt);
+      rt = new Runtime({ ...naming(false), storageManager: positional });
       await deployedParent("naming-off");
       replaced.push(rt);
-      rt = new Runtime({ ...naming(false), storageManager });
+      rt = new Runtime({ ...naming(false), storageManager: positional });
       const reopened = rt.getCell<Record<string, unknown>>(space, "naming-off");
       await reopened.sync();
       const before = freshStarts();
@@ -1333,7 +1362,11 @@ describe("instance-carry-over", () => {
     // `rt` stands in for the runtime the enclosing hooks made until the case
     // ends, so the shared helpers act on the server's runtimes.
     beforeEach(() => {
-      server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+      // Every runtime here names instances, so the server's posture does.
+      server = newLoopbackServer({
+        subscriptionRefreshDelayMs: 0,
+        namesInstances: () => true,
+      });
       managers = [];
       made = [];
       replaced.push(rt);

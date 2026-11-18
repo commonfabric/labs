@@ -4,13 +4,13 @@
  * `when` and `unless`.
  */
 
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { findAndInlineDataUriLinks } from "../data-uri.ts";
 import { resolveLink } from "../link-resolution.ts";
 import { parseLink } from "../link-utils.ts";
-import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
+import type { Action } from "../scheduler.ts";
 import { readsTruthyAtRoot } from "../schema.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {

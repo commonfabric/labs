@@ -18,8 +18,10 @@ import ProfileHome, {
   type ProfileInbox,
 } from "../profile-home/profile-home.tsx";
 import PrivateInbox, {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   isNonListAppendRefusal,
   type Offer,
   OFFER_ADDRESS_MAX_LENGTH,
@@ -145,8 +147,10 @@ const Seeder = pattern<
 
 /**
  * Stands in for Home's ensure step: Home's `ensurePrivateInbox` over a holder,
- * a list of retained inboxes and a profile list, with its pointing step, and
- * a refusal holder of its own, which `refusal` returns.
+ * a list of retained inboxes and a profile list, with its pointing step over
+ * the same three, its creating step and the ensure that step hands its event
+ * on to, as Home binds them, and a refusal holder and a holder of Home's own
+ * inbox of its own, which `refusal` and `own` return.
  */
 const EnsuringHome = pattern<
   {
@@ -157,18 +161,38 @@ const EnsuringHome = pattern<
   {
     ensure: Stream<EnsurePrivateInboxEvent>;
     refusal: PrivateInboxRefusalHolder;
+    own: PrivateInboxHolder;
   }
 >(({ privateInbox, retainedPrivateInboxes, profiles }) => {
   const refusal = new Writable<PrivateInboxRefusalHolder>({});
+  const own = new Writable<PrivateInboxHolder>({});
+  const pointProfiles = pointProfilesAtPrivateInbox({
+    privateInbox,
+    retainedPrivateInboxes,
+    profiles,
+  });
   return {
     ensure: ensurePrivateInbox({
       privateInbox,
+      ownPrivateInbox: own,
       retainedPrivateInboxes,
       privateInboxRefusal: refusal,
       profiles,
-      pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox: own,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox: own,
+          retainedPrivateInboxes,
+          privateInboxRefusal: refusal,
+          profiles,
+          pointProfiles,
+        }),
+      }),
     }),
     refusal,
+    own,
   };
 });
 
@@ -183,25 +207,72 @@ const SeededEnsuringHome = pattern<
     profiles: PointTarget[];
   },
   { ensure: Stream<EnsurePrivateInboxEvent> }
->(({ privateInbox, privateInboxRefusal, profiles }) => ({
-  ensure: ensurePrivateInbox({
+>(({ privateInbox, privateInboxRefusal, profiles }) => {
+  const own = new Writable<PrivateInboxHolder>({});
+  const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]);
+  const pointProfiles = pointProfilesAtPrivateInbox({ privateInbox, profiles });
+  return {
+    ensure: ensurePrivateInbox({
+      privateInbox,
+      ownPrivateInbox: own,
+      retainedPrivateInboxes,
+      privateInboxRefusal,
+      profiles,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox: own,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox: own,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          profiles,
+          pointProfiles,
+        }),
+      }),
+    }),
+  };
+});
+
+/**
+ * Like {@link EnsuringHome}, except that the holder of Home's own inbox is
+ * given, so that a test can put an inbox in it first, and the ensure is the
+ * one the creating step hands its event on to, which never asks for one.
+ */
+const OwnedEnsuringHome = pattern<
+  {
+    privateInbox: Writable<PrivateInboxHolder>;
+    ownPrivateInbox: Writable<PrivateInboxHolder>;
+    retainedPrivateInboxes: Writable<RetainedPrivateInboxes>;
+    profiles: PointTarget[];
+  },
+  { ensure: Stream<EnsurePrivateInboxEvent> }
+>(({ privateInbox, ownPrivateInbox, retainedPrivateInboxes, profiles }) => ({
+  ensure: ensurePrivateInboxOnly({
     privateInbox,
-    retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
-    privateInboxRefusal,
+    ownPrivateInbox,
+    retainedPrivateInboxes,
+    privateInboxRefusal: new Writable<PrivateInboxRefusalHolder>({}),
     profiles,
-    pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+    pointProfiles: pointProfilesAtPrivateInbox({
+      privateInbox,
+      retainedPrivateInboxes,
+      profiles,
+    }),
   }),
 }));
 
 /**
  * Stands in for Home's replacement of a refused inbox: Home's
- * `replaceRefusedPrivateInbox` over a holder, a refusal holder and a profile
- * list, with its re-pointing step, which `repoint` returns, and a replacement
- * record of its own, which `replacement` returns.
+ * `replaceRefusedPrivateInbox` over a holder, a holder of Home's own inbox, a
+ * refusal holder and a profile list, with its re-pointing step, which
+ * `repoint` returns, and a replacement record of its own, which `replacement`
+ * returns.
  */
 const ReplacingHome = pattern<
   {
     privateInbox: Writable<PrivateInboxHolder>;
+    ownPrivateInbox: Writable<PrivateInboxHolder>;
     privateInboxRefusal: Writable<PrivateInboxRefusalHolder>;
     profiles: PointTarget[];
   },
@@ -210,7 +281,7 @@ const ReplacingHome = pattern<
     repoint: Stream<void>;
     replacement: PrivateInboxReplacementRecord;
   }
->(({ privateInbox, privateInboxRefusal, profiles }) => {
+>(({ privateInbox, ownPrivateInbox, privateInboxRefusal, profiles }) => {
   const replacement = new Writable<PrivateInboxReplacementRecord>({});
   const repoint = repointProfilesFromReplacedInbox({
     privateInbox,
@@ -220,6 +291,7 @@ const ReplacingHome = pattern<
   return {
     replace: replaceRefusedPrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       privateInboxRefusal,
       privateInboxReplacement: replacement,
       repointProfiles: repoint,
@@ -408,12 +480,15 @@ export default pattern(() => {
       from: me.get(),
     };
     inbox.receive.send({ ...valid, id: "bad-space", space: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-space", space: undefined });
+    const { space: _space, ...noSpace } = valid;
+    inbox.receive.send({ ...noSpace, id: "no-space" });
     inbox.receive.send({ ...valid, id: "bad-from", from: "not-a-did" });
-    inbox.receive.send({ ...valid, id: "no-from", from: undefined });
+    const { from: _from, ...noFrom } = valid;
+    inbox.receive.send({ ...noFrom, id: "no-from" });
     inbox.receive.send({ ...valid, id: "ftp-host", host: "ftp://example.com" });
     inbox.receive.send({ ...valid, id: "path-host", host: `${HOST}/path` });
-    inbox.receive.send({ ...valid, id: "no-host", host: undefined });
+    const { host: _host, ...noHost } = valid;
+    inbox.receive.send({ ...noHost, id: "no-host" });
     inbox.receive.send({
       ...valid,
       id: "userinfo-host",
@@ -545,9 +620,9 @@ export default pattern(() => {
     holdElsewhereInbox.send();
   });
   const action_point_one_elsewhere = action(() => {
-    pointed.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    pointed.setInbox.send({ inbox: elsewhere.get().piece!.resolveAsCell() });
     earlierPointed.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_point_profiles = action(() => {
@@ -588,7 +663,7 @@ export default pattern(() => {
   });
   const action_point_fresh_elsewhere = action(() => {
     freshPointedElsewhere.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_seed_fresh_profiles = action(() => {
@@ -616,9 +691,11 @@ export default pattern(() => {
   // inbox to adopt and the profile that decided it. Home adopts it only when
   // that profile is in its list and still points at it, retaining an inbox it
   // held, and otherwise keeps what it holds, or holds none. A profile pointing
-  // at another inbox keeps its pointer, and the seed step points a new profile
-  // at the adopted inbox. A Home holding none creates one when no profile
-  // points at an inbox.
+  // at an inbox Home retains is pointed at Home's; one pointing at any other
+  // inbox keeps its pointer, and the seed step points a new profile at the
+  // adopted inbox. A Home holding none creates one when no profile points at
+  // an inbox. An event naming an inbox to replace, one Home did not make, has
+  // Home hold an inbox of its own and retain the replaced one.
   const third = new Writable<PrivateInboxHolder>({});
   const holdThirdInbox = holdNewInbox({ holder: third });
 
@@ -735,7 +812,7 @@ export default pattern(() => {
     profiles: [readoptingAdvertising, readoptingUnpointed] as any,
   });
   // Another profile still points at the inbox Home holds, ahead of the
-  // deciding one in the list.
+  // deciding one in the list, and is pointed at the inbox Home adopts.
   const stillAdvertisingHeld = ProfileHome({
     initialName: "Still advertising held",
   });
@@ -820,6 +897,101 @@ export default pattern(() => {
     profiles: [aliasAdvertising] as any,
   });
 
+  // The refusal codes the host's refusals below name.
+  const REFUSED = "inbox-adoption-acl-mismatch";
+  const REFUSED_AGAIN = "inbox-receive-missing";
+
+  // Homes the host has replace an inbox Home did not make. Which inbox Home
+  // made is the host's decision; the handler checks only that Home holds the
+  // inbox, or that the profile the event names still points at it.
+  const replacingHeldAdvertising = ProfileHome({
+    initialName: "Replacing held advertising",
+  });
+  const replacingHeldUnpointed = ProfileHome({
+    initialName: "Replacing held unpointed",
+  });
+  const replacingHeld = new Writable<PrivateInboxHolder>({});
+  const replacingHeldRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReplacingHeld = EnsuringHome({
+    privateInbox: replacingHeld,
+    retainedPrivateInboxes: replacingHeldRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [replacingHeldAdvertising, replacingHeldUnpointed] as any,
+  });
+  // An event from a host that names no deciding profile.
+  const replacingUnnamedAdvertising = ProfileHome({
+    initialName: "Replacing unnamed advertising",
+  });
+  const replacingUnnamed = new Writable<PrivateInboxHolder>({});
+  const replacingUnnamedRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReplacingUnnamed = EnsuringHome({
+    privateInbox: replacingUnnamed,
+    retainedPrivateInboxes: replacingUnnamedRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [replacingUnnamedAdvertising] as any,
+  });
+  const replacingAdvertisedAdvertising = ProfileHome({
+    initialName: "Replacing advertised advertising",
+  });
+  const replacingAdvertised = new Writable<PrivateInboxHolder>({});
+  const replacingAdvertisedRetained = new Writable<RetainedPrivateInboxes>(
+    [],
+  );
+  const ensureReplacingAdvertised = EnsuringHome({
+    privateInbox: replacingAdvertised,
+    retainedPrivateInboxes: replacingAdvertisedRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [replacingAdvertisedAdvertising] as any,
+  });
+  const keepingOwnAdvertising = ProfileHome({
+    initialName: "Keeping own advertising",
+  });
+  const keepingOwn = new Writable<PrivateInboxHolder>({});
+  const keepingOwnRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureKeepingOwn = EnsuringHome({
+    privateInbox: keepingOwn,
+    retainedPrivateInboxes: keepingOwnRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [keepingOwnAdvertising] as any,
+  });
+  // A Home holding an inbox it did not make while the deciding profile
+  // advertises another it did not make, which the host names beside it.
+  const replacingBothAdvertising = ProfileHome({
+    initialName: "Replacing both advertising",
+  });
+  const replacingBoth = new Writable<PrivateInboxHolder>({});
+  const replacingBothRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReplacingBoth = EnsuringHome({
+    privateInbox: replacingBoth,
+    retainedPrivateInboxes: replacingBothRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [replacingBothAdvertising] as any,
+  });
+  // The same, with the deciding profile's inbox refused, which the host names
+  // beside the held inbox it has Home replace.
+  const replacingRefusingAdvertising = ProfileHome({
+    initialName: "Replacing refusing advertising",
+  });
+  const replacingRefusing = new Writable<PrivateInboxHolder>({});
+  const replacingRefusingRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReplacingRefusing = EnsuringHome({
+    privateInbox: replacingRefusing,
+    retainedPrivateInboxes: replacingRefusingRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [replacingRefusingAdvertising] as any,
+  });
+  const unreplacedAdvertising = ProfileHome({
+    initialName: "Unreplaced advertising",
+  });
+  const unreplaced = new Writable<PrivateInboxHolder>({});
+  const unreplacedRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureUnreplaced = EnsuringHome({
+    privateInbox: unreplaced,
+    retainedPrivateInboxes: unreplacedRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [unreplacedAdvertising] as any,
+  });
+
   const action_advertise_inboxes = action(() => {
     holdThirdInbox.send();
     const advertised = elsewhere.get().piece?.resolveAsCell();
@@ -840,12 +1012,18 @@ export default pattern(() => {
         guardedAdvertising,
         heldOutsiderListed,
         outsider,
+        replacingAdvertisedAdvertising,
+        keepingOwnAdvertising,
+        replacingBothAdvertising,
+        unreplacedAdvertising,
       ]
     ) {
-      profile.setInbox.send({ inbox: advertised });
+      profile.setInbox.send({ inbox: advertised! });
     }
-    stillAdvertisingHeld.setInbox.send({ inbox: homeInbox });
-    aliasAdvertising.setInbox.send({ inbox: homeInbox });
+    stillAdvertisingHeld.setInbox.send({ inbox: homeInbox! });
+    aliasAdvertising.setInbox.send({ inbox: homeInbox! });
+    replacingHeldAdvertising.setInbox.send({ inbox: homeInbox! });
+    replacingUnnamedAdvertising.setInbox.send({ inbox: homeInbox! });
     for (
       const holder of [
         readopting,
@@ -855,55 +1033,104 @@ export default pattern(() => {
         refusing,
         guarded,
         heldNamingAnOutsider,
+        replacingHeld,
+        replacingUnnamed,
+        replacingBoth,
+        replacingRefusing,
       ]
     ) {
-      holder.set({ piece: homeInbox });
+      holder.set({ piece: homeInbox! });
     }
-    aliasKeeping.set({ piece: home.get().piece });
+    aliasKeeping.set({ piece: home.get().piece! });
     if (advertised !== undefined) returningRetained.set([advertised]);
   });
   const action_advertise_a_second_inbox = action(() => {
     const another = third.get().piece?.resolveAsCell();
-    otherAdvertising.setInbox.send({ inbox: another });
-    decidingAdvertising.setInbox.send({ inbox: another });
+    otherAdvertising.setInbox.send({ inbox: another! });
+    decidingAdvertising.setInbox.send({ inbox: another! });
+    replacingRefusingAdvertising.setInbox.send({ inbox: another! });
+    keepingOwn.set({ piece: third.get().piece! });
   });
+  // A refusal of the inbox the Home keeping its own inbox replaces, recorded
+  // before the host vets that inbox again and has Home replace it.
+  const action_refuse_the_inbox_a_home_keeping_its_own_replaces = action(
+    () => {
+      ensureKeepingOwn.ensure.send({
+        from: keepingOwnAdvertising,
+        refused: {
+          reason: REFUSED,
+          inbox: elsewhere.get().piece!.resolveAsCell(),
+        },
+      });
+    },
+  );
+  const assert_the_refusal_is_recorded_before_the_replacement = assert(() =>
+    ensureKeepingOwn.refusal.refusal?.reason === REFUSED &&
+    equals(ensureKeepingOwn.refusal.refusal?.inbox, elsewhere.get().piece)
+  );
   const action_ensure_inboxes = action(() => {
     const vetted = elsewhere.get().piece?.resolveAsCell();
     const another = third.get().piece?.resolveAsCell();
     const homeInbox = home.get().piece?.resolveAsCell();
     ensureCreating.ensure.send({});
-    ensureAdoptingOne.ensure.send({ adopt: vetted, from: loneAdvertising });
+    ensureAdoptingOne.ensure.send({ adopt: vetted!, from: loneAdvertising });
     ensureAdoptingAmongOthers.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: adoptedAdvertising,
     });
     ensureFollowingDecider.ensure.send({
-      adopt: another,
+      adopt: another!,
       from: decidingAdvertising,
     });
     ensureUnvetted.ensure.send({});
     ensureMismatched.ensure.send({
-      adopt: another,
+      adopt: another!,
       from: mismatchedAdvertising,
     });
-    ensureNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
-    ensureAdoptingUnnamed.ensure.send({ adopt: vetted });
+    ensureNamingAnOutsider.ensure.send({ adopt: vetted!, from: outsider });
+    ensureAdoptingUnnamed.ensure.send({ adopt: vetted! });
     ensureReadopting.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: readoptingAdvertising,
     });
     ensureReadoptingOverAnother.ensure.send({
-      adopt: vetted,
+      adopt: vetted!,
       from: decidingElsewhere,
     });
-    ensureReturning.ensure.send({ adopt: vetted, from: returningAdvertising });
+    ensureReturning.ensure.send({ adopt: vetted!, from: returningAdvertising });
     ensureKeepingUnadvertised.ensure.send({});
     ensureRefusing.ensure.send({});
-    ensureGuarded.ensure.send({ adopt: another, from: guardedAdvertising });
-    ensureHeldNamingAnOutsider.ensure.send({ adopt: vetted, from: outsider });
+    ensureGuarded.ensure.send({ adopt: another!, from: guardedAdvertising });
+    ensureHeldNamingAnOutsider.ensure.send({ adopt: vetted!, from: outsider });
     ensureAliasKeeping.ensure.send({
-      adopt: homeInbox,
+      adopt: homeInbox!,
       from: aliasAdvertising,
+    });
+    ensureReplacingHeld.ensure.send({
+      replace: [homeInbox!],
+      from: replacingHeldAdvertising,
+    });
+    ensureReplacingUnnamed.ensure.send({ replace: [homeInbox!] });
+    ensureReplacingAdvertised.ensure.send({
+      replace: [vetted!],
+      from: replacingAdvertisedAdvertising,
+    });
+    ensureKeepingOwn.ensure.send({
+      replace: [vetted!],
+      from: keepingOwnAdvertising,
+    });
+    ensureReplacingBoth.ensure.send({
+      replace: [homeInbox!, vetted!],
+      from: replacingBothAdvertising,
+    });
+    ensureReplacingRefusing.ensure.send({
+      replace: [homeInbox!],
+      from: replacingRefusingAdvertising,
+      refused: { reason: REFUSED, inbox: another! },
+    });
+    ensureUnreplaced.ensure.send({
+      replace: [another!],
+      from: unreplacedAdvertising,
     });
   });
   // The created inbox is none of the others. Asserted again after the second
@@ -968,7 +1195,7 @@ export default pattern(() => {
       retainsExactly(readoptingOverAnotherRetained.get(), [
         home.get().piece,
       ]) &&
-      equals(stillAdvertisingHeld.inbox?.piece, home.get().piece),
+      equals(stillAdvertisingHeld.inbox?.piece, elsewhere.get().piece),
   );
   const assert_an_inbox_adopted_again_leaves_the_retained_list = assert(() =>
     equals(returning.get().piece, elsewhere.get().piece) &&
@@ -995,6 +1222,126 @@ export default pattern(() => {
       !aliasKeeping.get().piece?.equalLinks(aliasAdvertising.inbox?.piece) &&
       aliasKeepingRetained.get().length === 0,
   );
+  const assert_a_held_inbox_home_did_not_make_gives_way_to_its_own = assert(
+    () =>
+      replacingHeld.get().piece !== undefined &&
+      !equals(replacingHeld.get().piece, home.get().piece) &&
+      !equals(replacingHeld.get().piece, elsewhere.get().piece) &&
+      !equals(replacingHeld.get().piece, third.get().piece) &&
+      retainsExactly(replacingHeldRetained.get(), [home.get().piece]) &&
+      equals(
+        replacingHeldAdvertising.inbox?.piece,
+        replacingHeld.get().piece,
+      ) &&
+      equals(replacingHeldUnpointed.inbox?.piece, replacingHeld.get().piece) &&
+      ensureReplacingHeld.refusal.refusal === undefined,
+  );
+  const assert_a_held_inbox_is_replaced_though_the_event_names_no_profile =
+    assert(() =>
+      replacingUnnamed.get().piece !== undefined &&
+      !equals(replacingUnnamed.get().piece, home.get().piece) &&
+      retainsExactly(replacingUnnamedRetained.get(), [home.get().piece]) &&
+      equals(
+        replacingUnnamedAdvertising.inbox?.piece,
+        replacingUnnamed.get().piece,
+      )
+    );
+  const assert_an_advertised_inbox_home_did_not_make_is_retained_for_its_own =
+    assert(() =>
+      replacingAdvertised.get().piece !== undefined &&
+      !equals(replacingAdvertised.get().piece, elsewhere.get().piece) &&
+      retainsExactly(replacingAdvertisedRetained.get(), [
+        elsewhere.get().piece,
+      ]) &&
+      equals(
+        replacingAdvertisedAdvertising.inbox?.piece,
+        replacingAdvertised.get().piece,
+      )
+    );
+  const assert_an_inbox_of_homes_own_is_kept_over_one_it_replaces = assert(
+    () =>
+      equals(keepingOwn.get().piece, third.get().piece) &&
+      retainsExactly(keepingOwnRetained.get(), [elsewhere.get().piece]) &&
+      equals(keepingOwnAdvertising.inbox?.piece, third.get().piece),
+  );
+  const assert_replacing_the_refused_inbox_ends_its_refusal = assert(() =>
+    ensureKeepingOwn.refusal.refusal === undefined
+  );
+  const assert_a_held_inbox_and_the_deciding_ones_both_give_way = assert(
+    () =>
+      replacingBoth.get().piece !== undefined &&
+      !equals(replacingBoth.get().piece, home.get().piece) &&
+      !equals(replacingBoth.get().piece, elsewhere.get().piece) &&
+      !equals(replacingBoth.get().piece, third.get().piece) &&
+      retainsExactly(replacingBothRetained.get(), [
+        home.get().piece,
+        elsewhere.get().piece,
+      ]) &&
+      equals(
+        replacingBothAdvertising.inbox?.piece,
+        replacingBoth.get().piece,
+      ) &&
+      ensureReplacingBoth.refusal.refusal === undefined,
+  );
+  const assert_a_held_inbox_gives_way_beside_a_refusal_it_records = assert(
+    () =>
+      replacingRefusing.get().piece !== undefined &&
+      !equals(replacingRefusing.get().piece, home.get().piece) &&
+      !equals(replacingRefusing.get().piece, third.get().piece) &&
+      retainsExactly(replacingRefusingRetained.get(), [home.get().piece]) &&
+      equals(replacingRefusingAdvertising.inbox?.piece, third.get().piece) &&
+      ensureReplacingRefusing.refusal.refusal?.reason === REFUSED &&
+      equals(
+        ensureReplacingRefusing.refusal.refusal?.inbox,
+        third.get().piece,
+      ),
+  );
+  const assert_an_inbox_neither_held_nor_advertised_is_not_replaced = assert(
+    () =>
+      unreplaced.get().piece === undefined &&
+      unreplacedRetained.get().length === 0 &&
+      equals(unreplacedAdvertising.inbox?.piece, elsewhere.get().piece),
+  );
+  // The inbox a Home takes, when none is advertised and in place of one it
+  // replaces, is the one it created for itself; a Home that adopts an inbox,
+  // or keeps the one it holds while the host names none to replace, creates
+  // none. Asserted again after the second ensure, which creates no other.
+  const assert_home_holds_the_inbox_it_created_for_itself = assert(() =>
+    ensureCreating.own.piece !== undefined &&
+    equals(ensureCreating.own.piece, creating.get().piece) &&
+    equals(ensureReplacingHeld.own.piece, replacingHeld.get().piece) &&
+    equals(ensureReplacingBoth.own.piece, replacingBoth.get().piece) &&
+    // A stand-in's output reads an absent link as a cell holding nothing.
+    ensureAdoptingOne.own.piece?.get() === undefined &&
+    ensureKeepingUnadvertised.own.piece?.get() === undefined &&
+    ensureRefusing.own.piece?.get() === undefined
+  );
+  // A Home holding none, whose own inbox is one it retains, as after it
+  // adopted another and then lost its holder, takes its own again, and the
+  // retained list no longer holds it.
+  const reowning = new Writable<PrivateInboxHolder>({});
+  const reowningOwn = new Writable<PrivateInboxHolder>({});
+  const reowningRetained = new Writable<RetainedPrivateInboxes>([]);
+  const ensureReowning = OwnedEnsuringHome({
+    privateInbox: reowning,
+    ownPrivateInbox: reowningOwn,
+    retainedPrivateInboxes: reowningRetained,
+    // deno-lint-ignore no-explicit-any
+    profiles: [] as any,
+  });
+  const action_retain_home_own_inbox_and_ensure = action(() => {
+    const own = third.get().piece?.resolveAsCell();
+    const given = elsewhere.get().piece?.resolveAsCell();
+    if (own === undefined || given === undefined) return;
+    reowningOwn.set({ piece: own });
+    reowningRetained.set([own, given]);
+    ensureReowning.ensure.send({});
+  });
+  const assert_home_takes_its_own_again_and_no_longer_retains_it = assert(
+    () =>
+      equals(reowning.get().piece, third.get().piece) &&
+      retainsExactly(reowningRetained.get(), [elsewhere.get().piece]),
+  );
   const action_seed_after_adoption = action(() => {
     seederAfterAdoption.seed.send({
       name: "Fresh",
@@ -1013,8 +1360,6 @@ export default pattern(() => {
   // never records a refusal of the inbox it holds, and cuts a long code.
   // Clearing it when Home creates an inbox is covered by
   // `integration/private-inbox-multi-runtime.test.ts`.
-  const REFUSED = "inbox-adoption-acl-mismatch";
-  const REFUSED_AGAIN = "inbox-receive-missing";
   const refusedNoneUnpointed = ProfileHome({
     initialName: "Refused none unpointed",
   });
@@ -1194,18 +1539,18 @@ export default pattern(() => {
         otherInboxAdvertising,
       ]
     ) {
-      profile.setInbox.send({ inbox: advertised });
+      profile.setInbox.send({ inbox: advertised! });
     }
     const homeInbox = home.get().piece?.resolveAsCell();
     const another = third.get().piece?.resolveAsCell();
-    secondFirst.setInbox.send({ inbox: another });
-    heldLaterDeciding.setInbox.send({ inbox: homeInbox });
-    refusedHeld.set({ piece: homeInbox });
-    abandoned.set({ piece: homeInbox });
-    stillRefused.set({ piece: homeInbox });
-    movedAway.set({ piece: homeInbox });
-    secondAdvertiser.set({ piece: homeInbox });
-    heldLater.set({ piece: homeInbox });
+    secondFirst.setInbox.send({ inbox: another! });
+    heldLaterDeciding.setInbox.send({ inbox: homeInbox! });
+    refusedHeld.set({ piece: homeInbox! });
+    abandoned.set({ piece: homeInbox! });
+    stillRefused.set({ piece: homeInbox! });
+    movedAway.set({ piece: homeInbox! });
+    secondAdvertiser.set({ piece: homeInbox! });
+    heldLater.set({ piece: homeInbox! });
     if (advertised !== undefined && another !== undefined) {
       keptRefusal.set({
         refusal: { reason: REFUSED, inbox: advertised, refusedAt: EARLIER },
@@ -1318,15 +1663,15 @@ export default pattern(() => {
 
   const action_move_refused_pointers = action(() => {
     repeatedAdvertising.setInbox.send({
-      inbox: third.get().piece?.resolveAsCell(),
+      inbox: third.get().piece!.resolveAsCell(),
     });
     refusedHeldAdvertising.setInbox.send({
-      inbox: home.get().piece?.resolveAsCell(),
+      inbox: home.get().piece!.resolveAsCell(),
     });
     abandonedAdvertising.setInbox.send({});
     stillRefusedMoved.setInbox.send({});
     movedAwayAdvertising.setInbox.send({
-      inbox: third.get().piece?.resolveAsCell(),
+      inbox: third.get().piece!.resolveAsCell(),
     });
   });
   const action_send_after_the_refusals = action(() => {
@@ -1338,7 +1683,7 @@ export default pattern(() => {
       refused: { reason: REFUSED_AGAIN, inbox: another },
     });
     ensureRefusedHeld.ensure.send({ from: refusedHeldAdvertising });
-    ensureCured.ensure.send({ adopt: advertised, from: curedAdvertising });
+    ensureCured.ensure.send({ adopt: advertised!, from: curedAdvertising });
     ensureAbandoned.ensure.send({});
     ensureStillRefused.ensure.send({ from: stillRefusedStaying });
     if (advertised === undefined) return;
@@ -1427,9 +1772,11 @@ export default pattern(() => {
   // inbox, or at none, are left alone. With no refusal recorded it does
   // nothing. The re-pointing step reads the refused inbox from the record, so
   // sending it again re-points a pointer moved back to the refused inbox, and
-  // with no record it does nothing. Replacing while Home holds no inbox, which
-  // creates one, is covered by
-  // `integration/private-inbox-multi-runtime.test.ts`.
+  // with no record it does nothing. Replacing while Home holds no inbox takes
+  // Home's own, which the ensure creates whenever Home holds none, and does
+  // nothing while Home has none of its own, so the refusal stays for a later
+  // click; `integration/private-inbox-multi-runtime.test.ts` covers the ensure
+  // and the click together.
   const replacedFirst = ProfileHome({ initialName: "Replaced first" });
   const replacedSecond = ProfileHome({ initialName: "Replaced second" });
   const replacedOther = ProfileHome({ initialName: "Replaced other" });
@@ -1438,6 +1785,7 @@ export default pattern(() => {
   const replacingRefusal = new Writable<PrivateInboxRefusalHolder>({});
   const replaceRefused = ReplacingHome({
     privateInbox: replacing,
+    ownPrivateInbox: new Writable<PrivateInboxHolder>({}),
     privateInboxRefusal: replacingRefusal,
     profiles: [
       replacedFirst,
@@ -1453,9 +1801,46 @@ export default pattern(() => {
   const unrefused = new Writable<PrivateInboxHolder>({});
   const replaceUnrefused = ReplacingHome({
     privateInbox: unrefused,
+    ownPrivateInbox: new Writable<PrivateInboxHolder>({}),
     privateInboxRefusal: new Writable<PrivateInboxRefusalHolder>({}),
     // deno-lint-ignore no-explicit-any
     profiles: [unrefusedAdvertising] as any,
+  });
+  const owningAdvertising = ProfileHome({ initialName: "Owning advertising" });
+  const owning = new Writable<PrivateInboxHolder>({});
+  const owningOwn = new Writable<PrivateInboxHolder>({});
+  const owningRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const replaceOwning = ReplacingHome({
+    privateInbox: owning,
+    ownPrivateInbox: owningOwn,
+    privateInboxRefusal: owningRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [owningAdvertising] as any,
+  });
+  const ownlessAdvertising = ProfileHome({
+    initialName: "Ownless advertising",
+  });
+  const ownless = new Writable<PrivateInboxHolder>({});
+  const ownlessRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const replaceOwnless = ReplacingHome({
+    privateInbox: ownless,
+    ownPrivateInbox: new Writable<PrivateInboxHolder>({}),
+    privateInboxRefusal: ownlessRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [ownlessAdvertising] as any,
+  });
+  const ownRefusedAdvertising = ProfileHome({
+    initialName: "Own refused advertising",
+  });
+  const ownRefused = new Writable<PrivateInboxHolder>({});
+  const ownRefusedOwn = new Writable<PrivateInboxHolder>({});
+  const ownRefusedRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const replaceOwnRefused = ReplacingHome({
+    privateInbox: ownRefused,
+    ownPrivateInbox: ownRefusedOwn,
+    privateInboxRefusal: ownRefusedRefusal,
+    // deno-lint-ignore no-explicit-any
+    profiles: [ownRefusedAdvertising] as any,
   });
   const action_advertise_the_inbox_to_replace = action(() => {
     const refused = elsewhere.get().piece?.resolveAsCell();
@@ -1463,17 +1848,41 @@ export default pattern(() => {
     if (refused === undefined || homeInbox === undefined) return;
     replacedFirst.setInbox.send({ inbox: refused });
     replacedSecond.setInbox.send({ inbox: refused });
-    replacedOther.setInbox.send({ inbox: third.get().piece?.resolveAsCell() });
+    replacedOther.setInbox.send({ inbox: third.get().piece!.resolveAsCell() });
     unrefusedAdvertising.setInbox.send({ inbox: refused });
     replacing.set({ piece: homeInbox });
     unrefused.set({ piece: homeInbox });
     replacingRefusal.set({
       refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
     });
+    owningAdvertising.setInbox.send({ inbox: refused });
+    ownlessAdvertising.setInbox.send({ inbox: refused });
+    owningOwn.set({ piece: third.get().piece!.resolveAsCell() });
+    owningRefusal.set({
+      refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
+    });
+    ownlessRefusal.set({
+      refusal: { reason: REFUSED, inbox: refused, refusedAt: EARLIER },
+    });
+    // An own inbox the creating step made, as its holder stores it, and the
+    // result document's own link, as the host names it in a refusal and a
+    // profile's pointer holds it: the two forms production stores.
+    const created = ensureCreating.own.piece;
+    if (created !== undefined) {
+      const createdInbox = created.resolveAsCell();
+      ownRefusedAdvertising.setInbox.send({ inbox: createdInbox });
+      ownRefusedOwn.set({ piece: created });
+      ownRefusedRefusal.set({
+        refusal: { reason: REFUSED, inbox: createdInbox, refusedAt: EARLIER },
+      });
+    }
   });
   const action_replace_the_refused_inbox = action(() => {
     replaceRefused.replace.send();
     replaceUnrefused.replace.send();
+    replaceOwning.replace.send();
+    replaceOwnless.replace.send();
+    replaceOwnRefused.replace.send();
   });
   const assert_the_profiles_pointing_at_the_refused_inbox_point_at_home_inbox =
     assert(() =>
@@ -1499,9 +1908,34 @@ export default pattern(() => {
     equals(unrefusedAdvertising.inbox?.piece, elsewhere.get().piece) &&
     equals(unrefused.get().piece, home.get().piece)
   );
+  const assert_replacing_while_holding_none_takes_homes_own_inbox = assert(
+    () =>
+      equals(owning.get().piece, third.get().piece) &&
+      equals(owningAdvertising.inbox?.piece, third.get().piece) &&
+      owningRefusal.get().refusal === undefined &&
+      replaceOwning.replacement.replacement?.reason === REFUSED,
+  );
+  const assert_replacing_while_holding_and_owning_none_does_nothing = assert(
+    () =>
+      ownless.get().piece === undefined &&
+      equals(ownlessAdvertising.inbox?.piece, elsewhere.get().piece) &&
+      ownlessRefusal.get().refusal?.reason === REFUSED &&
+      replaceOwnless.replacement.replacement === undefined,
+  );
+  // Nor does the click take Home's own inbox when that is the refused one,
+  // and Home's notice offers no button then.
+  const assert_replacing_while_holding_none_leaves_a_refused_own_inbox = assert(
+    () =>
+      ownRefused.get().piece === undefined &&
+      ensureCreating.own.piece !== undefined &&
+      equals(ownRefusedOwn.get().piece, ensureCreating.own.piece) &&
+      equals(ownRefusedAdvertising.inbox?.piece, ensureCreating.own.piece) &&
+      ownRefusedRefusal.get().refusal?.reason === REFUSED &&
+      replaceOwnRefused.replacement.replacement === undefined,
+  );
   const action_point_back_at_the_replaced_inbox = action(() => {
     replacedSecond.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
   });
   const action_repoint_again = action(() => {
@@ -1546,6 +1980,8 @@ export default pattern(() => {
       { assertion: assert_existing_named_profile_left_alone },
       { action: action_advertise_inboxes },
       { action: action_advertise_a_second_inbox },
+      { action: action_refuse_the_inbox_a_home_keeping_its_own_replaces },
+      { assertion: assert_the_refusal_is_recorded_before_the_replacement },
       { action: action_ensure_inboxes },
       { assertion: assert_an_inbox_is_created_when_none_is_advertised },
       { assertion: assert_the_named_inbox_is_adopted },
@@ -1576,6 +2012,25 @@ export default pattern(() => {
       { assertion: assert_a_held_inbox_is_kept_when_the_host_names_none },
       { assertion: assert_a_held_inbox_is_kept_when_the_host_names_another },
       { assertion: assert_a_held_inbox_reached_through_another_link_is_kept },
+      { assertion: assert_a_held_inbox_home_did_not_make_gives_way_to_its_own },
+      {
+        assertion:
+          assert_a_held_inbox_is_replaced_though_the_event_names_no_profile,
+      },
+      {
+        assertion:
+          assert_an_advertised_inbox_home_did_not_make_is_retained_for_its_own,
+      },
+      { assertion: assert_an_inbox_of_homes_own_is_kept_over_one_it_replaces },
+      { assertion: assert_replacing_the_refused_inbox_ends_its_refusal },
+      { assertion: assert_a_held_inbox_and_the_deciding_ones_both_give_way },
+      { assertion: assert_a_held_inbox_gives_way_beside_a_refusal_it_records },
+      {
+        assertion: assert_an_inbox_neither_held_nor_advertised_is_not_replaced,
+      },
+      { assertion: assert_home_holds_the_inbox_it_created_for_itself },
+      { action: action_retain_home_own_inbox_and_ensure },
+      { assertion: assert_home_takes_its_own_again_and_no_longer_retains_it },
       // Ensuring again changes nothing, and retains nothing more.
       { action: action_ensure_inboxes },
       { assertion: assert_an_inbox_is_created_when_none_is_advertised },
@@ -1607,6 +2062,23 @@ export default pattern(() => {
       { assertion: assert_a_held_inbox_is_kept_when_the_host_names_none },
       { assertion: assert_a_held_inbox_is_kept_when_the_host_names_another },
       { assertion: assert_a_held_inbox_reached_through_another_link_is_kept },
+      { assertion: assert_a_held_inbox_home_did_not_make_gives_way_to_its_own },
+      {
+        assertion:
+          assert_a_held_inbox_is_replaced_though_the_event_names_no_profile,
+      },
+      {
+        assertion:
+          assert_an_advertised_inbox_home_did_not_make_is_retained_for_its_own,
+      },
+      { assertion: assert_an_inbox_of_homes_own_is_kept_over_one_it_replaces },
+      { assertion: assert_replacing_the_refused_inbox_ends_its_refusal },
+      { assertion: assert_a_held_inbox_and_the_deciding_ones_both_give_way },
+      { assertion: assert_a_held_inbox_gives_way_beside_a_refusal_it_records },
+      {
+        assertion: assert_an_inbox_neither_held_nor_advertised_is_not_replaced,
+      },
+      { assertion: assert_home_holds_the_inbox_it_created_for_itself },
       { action: action_seed_after_adoption },
       { assertion: assert_a_new_profile_is_pointed_at_the_adopted_inbox },
       { action: action_advertise_refused_inboxes },
@@ -1671,6 +2143,14 @@ export default pattern(() => {
       },
       { assertion: assert_replacing_clears_the_refusal_and_records_it },
       { assertion: assert_replacing_with_no_refusal_does_nothing },
+      { assertion: assert_replacing_while_holding_none_takes_homes_own_inbox },
+      {
+        assertion: assert_replacing_while_holding_and_owning_none_does_nothing,
+      },
+      {
+        assertion:
+          assert_replacing_while_holding_none_leaves_a_refused_own_inbox,
+      },
       { action: action_point_back_at_the_replaced_inbox },
       { action: action_repoint_again },
       {

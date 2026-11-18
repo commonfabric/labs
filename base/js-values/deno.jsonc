@@ -16,6 +16,7 @@
   "exports": {
     "./arrays": "./src/arrays.ts",
     "./deep-equal": "./src/deep-equal.ts",
+    "./describe-failure": "./src/describe-failure.ts",
     "./objects": "./src/objects.ts",
     "./strip-undefined-props": "./src/strip-undefined-props.ts",
     "./types": "./src/types.ts"

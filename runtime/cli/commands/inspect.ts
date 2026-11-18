@@ -418,33 +418,26 @@ async function resolveMultiSpaces(opts: {
   ) {
     throw new ValidationError("`--dir` cannot be used with `--remote`.");
   }
+  // Exactly one selector is set past this point, and `--dir` is local-only.
   const base = remoteBaseUrl(opts);
   if (base) {
     const sign = await remoteSigner(opts);
-    let dids: string[];
-    if (opts.all) {
-      dids = (await listRemoteSpaces(base, { sign })).map((s) => s.space);
-    } else if (spaceTokens) {
-      dids = await Promise.all(
-        spaceTokens.map((token) => resolveRemoteDid(token, base, sign)),
+    const dids = opts.all
+      ? (await listRemoteSpaces(base, { sign })).map((s) => s.space)
+      : await Promise.all(
+        (spaceTokens ?? []).map((token) => resolveRemoteDid(token, base, sign)),
       );
-    } else {
-      throw new Error("with --remote, provide --all or --spaces <a,b,…>.");
-    }
     const paths: string[] = [];
     for (const did of dids) paths.push(await fetchSpaceDb(did, base, { sign }));
     return openSpaces(paths);
   }
-  if (opts.dir) return openSpaces(listSqliteFiles(opts.dir));
+  if (opts.dir !== undefined) return openSpaces(listSqliteFiles(opts.dir));
   if (opts.all) return openSpaces(discoverSpaceDbs().map((s) => s.path));
-  if (spaceTokens) {
-    const discovered = discoverSpaceDbs();
-    const paths = await Promise.all(
-      spaceTokens.map((token) => resolveSpace(token, discovered)),
-    );
-    return openSpaces(paths);
-  }
-  throw new Error("provide --all, --spaces <a,b,…>, or --dir <dir>");
+  const discovered = discoverSpaceDbs();
+  const paths = await Promise.all(
+    (spaceTokens ?? []).map((token) => resolveSpace(token, discovered)),
+  );
+  return openSpaces(paths);
 }
 
 function relTag(r: ExactConvergenceResult): string {
@@ -614,7 +607,7 @@ export const inspect = new Command()
     );
     const result = groupDiscoveredSpaces(discovered);
     out(!!options.json, result, () => {
-      if (result.groups.length === 0 && result.ungrouped.length === 0) {
+      if (result.groups.length === 0) {
         console.log("no space DBs found.");
         return;
       }
@@ -653,13 +646,10 @@ export const inspect = new Command()
         return;
       }
 
-      // Default: one compact line per group, biggest first.
+      // Default: one compact line per group, biggest first. Every discovered
+      // space joins the group of its own principal, so none is ungrouped.
       console.log(
-        `${result.groups.length} user group(s)` +
-          (result.ungrouped.length
-            ? `, ${result.ungrouped.length} ungrouped`
-            : "") +
-          `  —  use --did <prefix> to expand one`,
+        `${result.groups.length} user group(s)  —  use --did <prefix> to expand one`,
       );
       for (const g of result.groups) {
         const c = roleCounts(g);
@@ -711,8 +701,8 @@ export const inspect = new Command()
       }
       if (w.totals.scopedEntities > 0) {
         console.log(
-          "\ntip: `inspect value-at <space> <id> --as " + shortDid(did) +
-            "…` reads a cell as this identity.",
+          `\ntip: \`inspect value-at <space> <id> --as ${did}\` reads a cell ` +
+            "as this identity.",
         );
       }
     });
@@ -728,6 +718,12 @@ export const inspect = new Command()
       const sum = summarizeSpace(s);
       out(!!options.json, sum, () => {
         console.log(`space: ${sum.path}`);
+        if (sum.deletion !== undefined) {
+          console.log(
+            `deleted: by ${sum.deletion.by}, in the commit at seq ` +
+              sum.deletion.seq,
+          );
+        }
         console.log(
           `commits: ${sum.commits}` +
             (sum.commitSeqRange
@@ -812,6 +808,14 @@ export const inspect = new Command()
               ` integrated=${field.integrated.length}` +
               `${field.pagination.integratedTruncated ? "+" : ""}` +
               ` checkpoints=${field.checkpoints.length}`,
+          );
+          const anchorsDocument = field.consistency.anchorsDocumentValid;
+          console.log(
+            `  anchors=${Object.keys(field.anchors).length}` +
+              ` anchors-document=${field.anchorsDocumentId}` +
+              ` anchors-document-valid=${
+                anchorsDocument === null ? "n/a" : anchorsDocument
+              }`,
           );
         }
         if (report.fieldsTruncated) {
@@ -1328,17 +1332,17 @@ export const inspect = new Command()
           const n = labelOf.get(src)!;
           console.log(`\n${n.kind} ${shortDid(src)}  ${n.label}`);
           for (const e of bySource.get(src)!) {
-            const t = labelOf.get(e.to);
-            // External targets carry the real id in `entityId` and the target
-            // space in `space`; print the space DID (not the qualified node key).
-            const desc = t
-              ? (e.external
-                ? `${shortDid(t.entityId)} (external)`
-                : `${t.kind} ${t.label}`)
-              : "?";
+            // The graph holds a node, a stub if nothing else, for every edge
+            // target. External targets carry the real id in `entityId` and the
+            // target space in `space`; print the space DID (not the qualified
+            // node key).
+            const t = labelOf.get(e.to)!;
+            const desc = e.external
+              ? `${shortDid(t.entityId)} (external)`
+              : `${t.kind} ${t.label}`;
             console.log(
               `  ${arrow(e.kind).padEnd(9)} ${desc}${
-                e.external ? ` @${shortDid(t?.space ?? "")} [cross-space]` : ""
+                e.external ? ` @${shortDid(t.space ?? "")} [cross-space]` : ""
               }${e.label ? `  (${e.label})` : ""}`,
             );
           }
@@ -1461,12 +1465,6 @@ export const inspect = new Command()
   )
   .action(async (options, space, entity) => {
     const path = parsePathOptions(options);
-    if (options.as !== undefined && options.as.length === 0) {
-      throw new ValidationError("`--as` must not be empty.");
-    }
-    if (options.session !== undefined && options.session.length === 0) {
-      throw new ValidationError("`--session` must not be empty.");
-    }
     if (options.as !== undefined && options.scope !== undefined) {
       throw new ValidationError(
         "Use either `--as` or `--scope`, not both.",

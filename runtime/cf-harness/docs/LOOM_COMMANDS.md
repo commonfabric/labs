@@ -9,9 +9,9 @@ reach the operations the host offers without the harness naming any of them. The
 host already describes those operations in its command manifest and serves them
 from one endpoint. Two generic tools put that in front of the model:
 `list_commands` shows the commands the host offers, each as a typed signature,
-and `run_command` runs one or a batch of them, as the agent, with write-class
-authority. Which commands those are is the host's decision alone; nothing in
-cf-harness names a command.
+and `run_command` runs one or a batch of them, as the agent, using the
+host-declared effect. Which commands those are is the host's decision alone;
+nothing in cf-harness names a command.
 
 ## Host configuration
 
@@ -42,13 +42,15 @@ host answers with its manifest and with each command's result unchanged. The
 host decides what a run may list and run: it filters its listing for the caller,
 each command's `actors`, `origins_required`, and `origins_refused` apply to this
 caller as to any other, and the run-id header marks the call as an agent's
-session. cf-harness filters nothing itself.
+session. cf-harness applies no additional command-selection filter to the host's
+catalog. The run's tool grants and CFC policy still apply.
 
 The host may also name the commands relevant to a run: `--commands-relevant`,
 repeatable, or `relevant` in a local-job profile's `commands` entry. A hint
 only, it neither adds a command to the listing nor takes one away:
-`list_commands` shows those commands first and marks them `relevant: true`, so a
-listing past the model bound keeps them whole.
+`list_commands` shows those commands first and marks them `relevant: true`.
+Relevance does not add detail: only commands named in `detail` carry their
+description and input schema.
 
 `list_commands` and the first `run_command` of a run read the listing. Each call
 `run_command` sends to the host, a lone call or one call of a batch, is one
@@ -76,7 +78,6 @@ Takes an optional `detail`, naming up to sixteen commands. Returns:
       "name": "people-discovery.dossier",
       "signature": "people-discovery.dossier(entity_id: string, limit?: integer = 50) -> {messages, records}  [read, global]",
       "title": "Gather what is known about a person.",
-      "description": "…",
       "relevant": true
     }
   ]
@@ -104,14 +105,12 @@ Each entry's `signature` is one line read from the command's argument schema
   `run_command` passes the one a call names and infers none from the target.
 
 A line is cut to 400 characters, its trailing parameters replaced by `…`. A
-command named in `detail` also carries its `inputSchema`: the host's schema with
-its `x-*` extension keywords removed, which every schema the model sees is, or
-`true`, open, where the host's is not an object or is larger than 16 KiB once
-those keywords are removed. A listing larger than the model bound keeps its
-first entries whole and the rest without description; a command named in
-`detail` is always kept whole. Every row the host lists is kept, however many;
-`omitted` counts rows that could not be read as a command, and `compacted` the
-entries shown without description.
+command named in `detail` also carries its description and `inputSchema`: the
+host's schema with its `x-*` extension keywords removed, which every schema the
+model sees is, or `true`, open, where the host's is not an object or is larger
+than 16 KiB once those keywords are removed. Descriptions and schemas are absent
+for commands not named in `detail`. Every row the host lists is kept, however
+many; `omitted` counts rows that could not be read as a command.
 
 The listing's `notice` says to assume a command with an absent or unknown effect
 may change the person's data.
@@ -136,11 +135,9 @@ or a batch of independent calls, each of the same shape:
 ```
 
 A batch carries one to sixteen calls, and one that names `command` as well as
-`calls` is refused. Each call's arguments are bounded at 16 KiB of JSON. Before
-anything is sent, each call is checked against the run's catalog: a command the
-catalog does not show is refused, so what a run can call is what it can see. The
-host's command layer checks each call's `args` against the command's schema, and
-refuses a command the host has withdrawn since the catalog was read.
+`calls` is refused. Each call's arguments are bounded at 2 MiB of serialized
+UTF-8 JSON. The host decides admission, including for names absent from the
+catalog, and checks each call's arguments against its schema.
 
 A batch's calls run concurrently, at most four in flight to the host at once,
 and one call's failure does not stop the others.
@@ -159,10 +156,6 @@ Each call, alone or in a batch, comes back as one of:
   rather than retry it. An answer the command layer refused as `bad-args` — the
   args do not match the command's schema — carries the command's `signature`,
   the line `list_commands` showed, so the model can correct the call.
-- `unknown_command`: the catalog shows no command by that name, and nothing was
-  sent. `suggestions` names up to three listed commands nearest the one called —
-  names containing it first, then by edit distance — and `hint` points the model
-  back to `list_commands`.
 - `failed_to_deliver` with `landed: "no"`: nothing was sent — `not_configured`,
   `invalid_input` (a malformed call), `batch_too_large` (more than sixteen
   calls), `cancelled`, or the catalog could not be read (`command_failed`,
@@ -180,7 +173,7 @@ Each call, alone or in a batch, comes back as one of:
   "status": "batch",
   "results": [
     { "status": "executed", "…": "…" },
-    { "status": "unknown_command" }
+    { "status": "executed", "outcome": { "ok": false, "code": "not_granted" } }
   ],
   "truncated": false
 }
@@ -190,28 +183,28 @@ Each call, alone or in a batch, comes back as one of:
 call alone would have returned, with its own `outputId`, minted in the calls'
 order. Three things differ from sending the calls one at a time. An executed
 call's summary is compact: `completed` is replaced by its count,
-`outcome.completedOmitted`, and `hint` is left out; the `signature` a `bad-args`
-refusal carries is kept. The summaries are charged against one output bound for
+`outcome.completedOmitted`; the refusal `hint` and the `signature` a `bad-args`
+refusal carries are kept. The summaries are charged against one output bound for
 the whole batch at their serialized size, in the calls' order, each beside the
 smallest form of every call after it; one that does not fit drops its
 `signature`, and then keeps only the outcome's `ok`, `code`, and `bodyBytes`,
 marked `summaryOmitted: true`, so later calls shrink first. The answers are
-measured in the calls' order against what the summaries leave: an answer that
-would have fit alone can be left out of its result, which is then marked
-truncated, and `truncated` says whether any was. And an answer without a label
-of its own takes the label of the batch's input as a whole, which covers every
-call's arguments: for a call whose own arguments carried less, that is the
-conservative choice.
+measured smallest-first by body size against what the summaries leave: an answer
+that would have fit alone can be left out of its result, which is then marked
+truncated, with a `hint` explaining that no requested values are shown and
+asking for a smaller range, fewer results, or a smaller batch. An existing
+refusal hint takes precedence over this omission guidance. The batch `truncated`
+says whether any result was cut. And an answer without a label of its own takes
+the label of the batch's input as a whole, which covers every call's arguments:
+for a call whose own arguments carried less, that is the conservative choice.
 
 ### Authorization
 
-The tool's effect class is `write` for every call, a batch included, even when
-the host declares the command a read. Policy judges a tool call, so a batch is
-authorized or refused whole, as one write. Policy treats it as any other write:
-under `enforce-explicit` and `enforce-strict` a call runs only when the run's
-task is bound as a `direct-command` prompt slot, so a task that arrived as
-`context` — a request a pattern submitted through the `agent` built-in, say —
-can list commands but cannot invoke this tool.
+The host's `read` effect is a read, `external` is a side effect, and a write,
+missing or unknown effect is a write. A batch uses its most consequential
+effect. Under `enforce-explicit`, declared reads may run from context or unbound
+prompt slots; every other effect requires a `direct-command` binding. Under
+`enforce-strict`, every call requires that binding, including reads.
 
 ## The answer is Loom data
 

@@ -14,6 +14,10 @@ import {
   onGrammarLoad,
   parseDocument,
   prepareGrammar,
+  type ShortComments,
+  type SourcePoint,
+  type SourceRange,
+  type SyntaxNode,
   type TreeSitterGrammar,
 } from "../../../../../lib/view/languages/treesitter/adapter.ts";
 import { pythonGrammar } from "../../../../../lib/view/languages/python/python.ts";
@@ -228,6 +232,146 @@ describe("adapter", () => {
         "Box",
         "method",
       ]);
+    });
+  });
+
+  describe("short comments", () => {
+    // A rule under which a comment holding a semicolon ends at it.
+
+    const source = "x = 1  # a; y = 2\nz = 3  # b; w = 4\n";
+
+    function beforeSemicolon(
+      root: SyntaxNode,
+      from: SourcePoint,
+    ): SourceRange | undefined {
+      for (const comment of root.descendantsOfType("comment", from)) {
+        const semicolon = comment.text.indexOf(";");
+        if (comment.startIndex >= from.index && semicolon >= 0) {
+          return {
+            start: comment.startIndex,
+            end: comment.startIndex + semicolon,
+          };
+        }
+      }
+      return undefined;
+    }
+
+    async function withRule(
+      id: string,
+      next: ShortComments["next"],
+    ): Promise<TreeSitterGrammar> {
+      const grammar = { ...pythonGrammar, id, shortComments: { next } };
+      await prepareGrammar(grammar);
+      return grammar;
+    }
+
+    function commentsOf(lines: readonly Line[]): string[] {
+      return lines.flatMap((line) =>
+        line.spans.filter((span) => span.cls === "comment").map((span) =>
+          span.text
+        )
+      );
+    }
+
+    it("colors each comment the rule gives as a comment and the code after it as code", async () => {
+      const grammar = await withRule(
+        "python-short-comments",
+        (root, _source, from) => beforeSemicolon(root, from),
+      );
+
+      const lines = highlightLines(grammar, source);
+
+      expect(verbatim(lines)).toBe(source);
+      expect(commentsOf(lines)).toEqual(["# a", "# b"]);
+      expect(classesOf(lines, "y")).toEqual(["identifier"]);
+      expect(classesOf(lines, "w")).toEqual(["identifier"]);
+      expect(commentsOf(highlightLines(pythonGrammar, source))).toEqual([
+        "# a; y = 2",
+        "# b; w = 4",
+      ]);
+    });
+
+    it("leaves the comments after the rule stops running to where the parser reads them", async () => {
+      const firstLine = source.indexOf("\n");
+      const grammar = await withRule(
+        "python-short-comments-stopped",
+        (root, _source, from) => {
+          const comment = beforeSemicolon(root, from);
+          return comment !== undefined && comment.start < firstLine
+            ? comment
+            : undefined;
+        },
+      );
+
+      expect(commentsOf(highlightLines(grammar, source))).toEqual([
+        "# a",
+        "# b; w = 4",
+      ]);
+    });
+
+    it("keeps the line breaks a comment spans", async () => {
+      const end = source.indexOf("# b") + 1;
+      const grammar = await withRule(
+        "python-short-comments-spanning",
+        (_root, _source, from) =>
+          from.index === 0 ? { start: 0, end } : undefined,
+      );
+
+      const lines = highlightLines(grammar, source);
+
+      expect(verbatim(lines)).toBe(source);
+      expect(commentsOf(lines)).toEqual(["x = 1  # a; y = 2", "z = 3  #"]);
+    });
+
+    it("stops when its work runs out, keeping the comments read so far", async () => {
+      const long = "x = 1  # a; y = 2\n".repeat(400);
+      const grammar = await withRule(
+        "python-short-comments-long",
+        (root, _source, from) => beforeSemicolon(root, from),
+      );
+
+      const comments = commentsOf(highlightLines(grammar, long));
+
+      expect(comments[0]).toBe("# a");
+      expect(comments.at(-1)).toBe("# a; y = 2");
+      expect(comments.indexOf("# a; y = 2")).toBe(
+        comments.lastIndexOf("# a") + 1,
+      );
+    });
+
+    it("throws when the rule gives a comment before the last one it gave", async () => {
+      const grammar = await withRule(
+        "python-short-comments-repeated",
+        () => ({ start: 7, end: 10 }),
+      );
+
+      expect(() => highlightLines(grammar, source)).toThrow(
+        "which does not follow 10",
+      );
+    });
+
+    it("matches a complete highlight after edits that move, change, and remove short comments", async () => {
+      const grammar = await withRule(
+        "python-short-comments-edited",
+        (root, _source, from) => beforeSemicolon(root, from),
+      );
+      const edits: [string, string][] = [
+        ["x = 1", "xx = 1"],
+        ["# a;", "# aa;"],
+        ["y = 2", "y = 22"],
+        ["# b;", "# b"],
+        ["z = 3  # b w", "z = 3  # b; w"],
+      ];
+      const highlighter = createHighlighter(grammar, source);
+      let current = source;
+      for (const [from, to] of edits) {
+        expect(current).toContain(from);
+        current = current.replace(from, to);
+        const updated = highlighter.update(current);
+        expect(verbatim(updated)).toBe(current);
+        expect(updated).toEqual(highlightLines(grammar, current));
+      }
+      expect(commentsOf(highlighter.lines)).toEqual(["# aa", "# b"]);
     });
   });
 

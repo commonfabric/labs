@@ -1,8 +1,8 @@
 import { basename, dirname, join, relative, resolve } from "@std/path";
 
-import {
+import type {
   PieceController,
-  type PiecePatternRef,
+  PiecePatternRef,
   PiecesController,
 } from "@commonfabric/piece/ops";
 import type { Cell } from "@commonfabric/runner";

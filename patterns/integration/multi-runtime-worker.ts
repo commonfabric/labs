@@ -35,7 +35,10 @@ import {
   fabricFromRealmValue,
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
-import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import {
+  FabricBytes,
+  type FabricKeyPair,
+} from "@commonfabric/data-model/fabric-primitives";
 import type { JSONSchema } from "@commonfabric/api";
 import type {
   Cell,
@@ -43,6 +46,7 @@ import type {
   NormalizedFullLink,
 } from "@commonfabric/runner";
 import {
+  ACLManager,
   cellRuntime,
   convertCellsToLinks,
   createSpaceRootIfAbsent,
@@ -62,8 +66,15 @@ import {
   markRendererTrustedEvent,
   reviewedActionProvenance,
 } from "@commonfabric/runner/cfc";
-import { MemoryWebSocketForTestingOnly } from "@commonfabric/runner/for-testing-only";
+import {
+  ExtendedStorageTransactionForTestingOnly,
+  MemoryWebSocketForTestingOnly,
+} from "@commonfabric/runner/for-testing-only";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  offerProfileSuggestion,
+  profileSuggestionCell,
+} from "@commonfabric/runner/profile-suggestion";
 import {
   ensurePrivateInboxOf,
   inboxPieceLinkSchema,
@@ -502,6 +513,8 @@ const handlers: Record<
       watchPaths: requestedWatchPaths,
       renderView: requestedRenderView,
       clientClass,
+      preferredProfileSpace,
+      profileSuggestion,
     },
   ) {
     const identity = await Identity.fromKeyPair(
@@ -523,7 +536,22 @@ const handlers: Record<
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
       ...(clientClass === "web" ? { clientClass } : {}),
+      ...(typeof preferredProfileSpace === "string"
+        ? { preferredProfileSpace: preferredProfileSpace as MemorySpace }
+        : {}),
     });
+    if (isObjectNotArray(profileSuggestion)) {
+      const { name, picture } = profileSuggestion as {
+        name: string;
+        picture?: number[];
+      };
+      await offerProfileSuggestion(controller().runtime, {
+        name,
+        ...(picture === undefined
+          ? {}
+          : { picture: new FabricBytes(new Uint8Array(picture)) }),
+      });
+    }
     // Opening the storage session exchanges frames, so a shim that has shaped
     // none patches a class this realm's memory sockets do not use.
     if (wsShimInstalled && shapedFrames === 0) {
@@ -915,6 +943,12 @@ const handlers: Record<
    * asked for. The same read annotates each container it returns with the cell
    * it came from, and that annotation is machinery rather than content: the
    * container's own entries are what the reader asked for.
+   *
+   * The cell at `path` is pulled as well as the result. A path can run past a
+   * link the result's schema holds as a handle, into another space, and a
+   * client loads what such a path reaches only when a read reaches it: the
+   * result's pull stops at the handle, and a bare `get()` of the path would
+   * read the far documents before they arrive.
    */
   async read({ path, piece }) {
     const target = await resultAt(piece);
@@ -924,7 +958,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
   },
 
@@ -984,10 +1018,32 @@ const handlers: Record<
   },
 
   /**
+   * The profile stored as suggested for this runtime's user, its picture's
+   * bytes as numbers, or `undefined` when none is stored.
+   */
+  async profileSuggestion() {
+    const cell = profileSuggestionCell(controller().runtime);
+    await cell.pull();
+    const suggestion = cell.get();
+    if (suggestion === undefined) return undefined;
+    return {
+      ...(suggestion.name === undefined ? {} : { name: suggestion.name }),
+      ...(suggestion.picture === undefined
+        ? {}
+        : { picture: [...suggestion.picture.slice()] }),
+    };
+  },
+
+  /**
    * Read the RAW stored value of the cell reached from the piece result by
    * `path` (links resolved to the target cell, NO result-schema shaping) —
    * for state the declared schema does not carry, e.g. a query result's
    * `requestHash`. Nested links in the raw value stay sigils.
+   *
+   * The cell at `path` is pulled as well as the result, as `read` pulls it:
+   * a path that runs past a handle into another space loads what it reaches
+   * only when a read reaches it, and the pull loads and demands it without
+   * shaping the raw value read after it.
    */
   async readRaw({ path, piece }) {
     const target = await resultAt(piece);
@@ -997,7 +1053,7 @@ const handlers: Record<
       cell = cell.key(segment as never);
     }
     if (boundedReads) cell.get();
-    if (boundedReads) await cell.pull();
+    await cell.pull();
     return cell.resolveAsCell().getRaw();
   },
 
@@ -1117,6 +1173,32 @@ const handlers: Record<
     return {};
   },
 
+  /** Removes `user` from the access list of `space`, as an OWNER of it. */
+  async removeFromAccessList({ space, user }) {
+    if (typeof space !== "string" || typeof user !== "string") {
+      throw new TypeError(
+        "removeFromAccessList takes a space DID and a list entry.",
+      );
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).remove(user as DID | "*");
+    await idle();
+    return {};
+  },
+
+  /** Deletes `space`, whose sole member this session's identity is. */
+  async deleteSpace({ space }) {
+    if (typeof space !== "string") {
+      throw new TypeError("deleteSpace takes a space DID.");
+    }
+    const { runtime } = controller();
+    await new ACLManager(runtime, space as DID).delete(
+      runtime.userIdentityDID,
+    );
+    await idle();
+    return {};
+  },
+
   /** Whether this runtime retains a refusal of `space`, without opening it. */
   async spaceRefused({ space }) {
     if (typeof space !== "string") {
@@ -1177,6 +1259,32 @@ const handlers: Record<
   },
 
   /**
+   * Stores `value` whole as the document at an explicit storage address, in a
+   * commit nothing prepares, which holds what no pattern here writes. `value`
+   * is the document as `rawRead` returns it. The write has the runtime's own
+   * authority, so it can change the document's `cfc` label map.
+   */
+  async rawWrite({ id, space, scope, value }) {
+    const outer = controller().runtime.edit();
+    if (!(outer instanceof ExtendedStorageTransactionForTestingOnly)) {
+      throw new TypeError("rawWrite needs the runtime's own transaction");
+    }
+    outer.accessForTestingOnly.privilegedSystemWrite({
+      space: space as never,
+      id: id as never,
+      type: "application/json",
+      path: [],
+      ...(scope !== undefined ? { scope: scope as never } : {}),
+    } as never, value as never);
+    const committed = await outer.tx.commit().settled;
+    if (committed.error !== undefined) {
+      throw new Error(`rawWrite failed: ${committed.error.message}`);
+    }
+    await idle();
+    return {};
+  },
+
+  /**
    * Has the host give the Home stand-in reached from the piece result by
    * `path` its private inbox, as `PiecesController.ensurePrivateInbox()` gives
    * the identity's Home its own, and answers what the host found, naming an
@@ -1197,21 +1305,22 @@ const handlers: Record<
       runtime.userIdentityDID,
     );
     await idle();
-    const inbox = "inbox" in found
-      ? found.inbox.getAsNormalizedFullLink()
-      : undefined;
-    const profile = "profile" in found
-      ? found.profile?.getAsNormalizedFullLink()
-      : undefined;
+    const addressOf = (link: Cell<unknown>) => {
+      const { id, space } = link.getAsNormalizedFullLink();
+      return { id, space };
+    };
+    const refused = found.outcome === "replace" ? found.refused : undefined;
     return {
       outcome: found.outcome,
       ...("reason" in found ? { reason: found.reason } : {}),
-      ...(inbox === undefined
-        ? {}
-        : { inbox: { id: inbox.id, space: inbox.space } }),
-      ...(profile === undefined
-        ? {}
-        : { profile: { id: profile.id, space: profile.space } }),
+      ...("inbox" in found ? { inbox: addressOf(found.inbox) } : {}),
+      ...("inboxes" in found ? { inboxes: found.inboxes.map(addressOf) } : {}),
+      ...(refused === undefined ? {} : {
+        refused: { reason: refused.reason, inbox: addressOf(refused.inbox) },
+      }),
+      ...("profile" in found && found.profile !== undefined
+        ? { profile: addressOf(found.profile) }
+        : {}),
     };
   },
 

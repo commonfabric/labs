@@ -29,11 +29,11 @@ import {
 
 import { BaseFabricInstance } from "@/fabric-bases/BaseFabricInstance.ts";
 import { BaseFabricPrimitive } from "@/fabric-bases/BaseFabricPrimitive.ts";
-import {
-  type FabricConvertibleJsObject,
-  type FabricPlainObject,
-  type FabricValue,
-  type FabricValueLayer,
+import type {
+  FabricConvertibleJsObject,
+  FabricPlainObject,
+  FabricValue,
+  FabricValueLayer,
 } from "@/interface.ts";
 import { isFabricPlainObject, isFabricSpecialObject } from "./narrowing.ts";
 import { tagOfConvertibleJsValueElseNull } from "./tag-of.ts";
@@ -420,8 +420,7 @@ export function isValidFabricConvertibleJsObject(
     case VALUE_TAGS.JsMap:
     case VALUE_TAGS.JsSet:
     case VALUE_TAGS.JsDate:
-    case VALUE_TAGS.JsUint8Array:
-    case VALUE_TAGS.JsRegExp: {
+    case VALUE_TAGS.JsUint8Array: {
       return true;
     }
 

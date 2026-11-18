@@ -158,6 +158,44 @@ describe("refused-argument-slots", () => {
       }
     });
 
+    it("names the argument document inside a record, keeping a scope it names", async () => {
+      const server = newSharedServer();
+      const session = sessionOf(server);
+      try {
+        const { runtime } = session;
+        const piece: PieceAddress = {
+          ...runtime.getCell(space, "record piece").getAsNormalizedFullLink(),
+        };
+        const argument = runtime.getCell(space, "record argument")
+          .getAsNormalizedFullLink();
+        const toSessionLabel = createSigilLinkFromParsedLink(
+          { ...argument, scope: "session", path: ["label"] },
+          { base: argument },
+        );
+        expect(linkRefPayload(toSessionLabel).id).toBeUndefined();
+        expect(linkRefPayload(toSessionLabel).scope).toBe("session");
+
+        await keepFrom(runtime, piece, "record argument", {
+          kept: { plain: "text", link: toSessionLabel },
+        }, { kept: "refused" });
+
+        const store = await storeOf(runtime, piece);
+        const record = store!.kept[REFUSED_BY][0].value as Record<
+          string,
+          FabricValue
+        >;
+        expect(record.plain).toBe("text");
+        expect(linkRefPayload(record.link as never)).toMatchObject({
+          id: argument.id,
+          space: argument.space,
+          scope: "session",
+          path: ["label"],
+        });
+      } finally {
+        await session.dispose();
+      }
+    });
+
     it("is kept as it was when it already names its document", async () => {
       const server = newSharedServer();
       const session = sessionOf(server);

@@ -5,6 +5,7 @@ import type {
   TerminalCodec,
 } from "@/codec-interface/interface.ts";
 import { debugStr, toCompactDebugString } from "@/value-debug";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { UnknownValue } from "./UnknownValue.ts";
 import type { FabricValue } from "@/interface.ts";
@@ -233,10 +234,10 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
   ): FabricValue {
     if (!isCodecTypeTag(tag)) {
       // Anything that is not a tag syntactically is an encoding error whatever
-      // follows it, per Section 9 of the formal spec, and is reported rather
-      // than preserved as an `UnknownValue`: that form exists to round-trip a
-      // tag no codec claims, which presupposes a tag. Reported over the
-      // decoded state, so that a lenient result carries what arrived.
+      // follows it, per Section 2.5 of `1-fabric-values.md`, and is reported
+      // rather than preserved as an `UnknownValue`: that form exists to
+      // round-trip a tag no codec claims, which presupposes a tag. Reported
+      // over the decoded state, so that a lenient result carries what arrived.
       return this.reportMalformed(
         tag,
         this.decodeValue(rawState),
@@ -313,7 +314,7 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       return this.reportMalformed(
         tag,
         state,
-        e instanceof Error ? e.message : String(e),
+        describeFailure(e),
       );
     }
 

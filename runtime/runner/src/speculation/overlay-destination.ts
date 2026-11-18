@@ -83,6 +83,7 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
@@ -157,7 +158,7 @@ export type EventIntentOutcome = {
   eventId: string;
   seq?: number;
   sidecarId?: string;
-  kind: "dropped" | "errored" | "refused" | "needs-attention";
+  kind: "dropped" | "errored" | "refused" | "needs-attention" | "withheld";
   retryable?: boolean;
   reason: string;
   attention?: DeliveryAttention;
@@ -177,6 +178,7 @@ export type IntentConsequence = {
     | "dropped"
     | "refused"
     | "needs-attention"
+    | "withheld"
     | "unsettled";
   reason?: string;
   attention?: DeliveryAttention;
@@ -302,7 +304,8 @@ export class SpeculationOverlayDestination
   readonly #arrivalObserverReleases = new Map<MemorySpace, () => void>();
 
   /** Intents whose TERMINAL consequence this overlay has observed
-   * (consequenced / errored / dropped / refused), keyed by eventId (a
+   * (consequenced / errored / dropped / refused / needs-attention /
+   * withheld), keyed by eventId (a
    * per-fire mint — event-identity.ts — unique across spaces), bounded and
    * insertion-ordered (oldest pruned). Stage C tuning T2's
    * LATE-ECHO rule reads it at seal: an event-handler echo whose intent is
@@ -392,6 +395,15 @@ export class SpeculationOverlayDestination
    * one raw replica read, ZERO transactions, ZERO probes, ZERO scheduler
    * runs, no demand edge. */
   #intentListener: CoalescedDocListener | undefined;
+
+  /**
+   * The cancel of the document reader that has the storage manager keep
+   * each sidecar with an intent outstanding on it loaded and watched
+   * through a release of unread documents (`addDocumentReader()`), so that
+   * its consequence mark arrives. Installed by the first `trackIntent`,
+   * and cancelled on close.
+   */
+  #intentSidecarReaderCancel: (() => void) | undefined;
 
   /** space\0sidecarId -> per-sidecar check state: entry-index HINTS the
    * differential's leaf paths named since the last check (a mark on
@@ -888,7 +900,7 @@ export class SpeculationOverlayDestination
       // catch, entries already collected kept unresolved verdicts and
       // live pending writes forever. Withdraw them and surface a
       // CommitError like any other seal failure.
-      const message = cause instanceof Error ? cause.message : String(cause);
+      const message = describeFailure(cause);
       result = {
         error: {
           name: "StorageTransactionAborted",
@@ -1108,6 +1120,7 @@ export class SpeculationOverlayDestination
     // the stream unwatched — NO frame would arrive — until the set
     // drains (independent review of W2, MIN-4; the old sink's single
     // `if (!synced) sync()` kick had the same hole).
+    this.#ensureIntentSidecarReader();
     this.#watchIntentSidecar(space, sidecarId);
     // The IMMEDIATE raw check (design contract point 2(iii)): a
     // duplicate fire whose consequence already landed (a re-delivered
@@ -1133,6 +1146,23 @@ export class SpeculationOverlayDestination
         error,
       ]);
     }
+  }
+
+  /**
+   * Helper for `trackIntent()`, which installs the reader that keeps each
+   * sidecar with an intent outstanding on it (`#intentSidecarReaderCancel`),
+   * once per overlay. Nothing else reads a sidecar here: the watch below
+   * holds it only until a release pass finds it unread, and the pass would
+   * then drop the document and its watch, so the mark of an intent still
+   * outstanding would never arrive.
+   */
+  #ensureIntentSidecarReader(): void {
+    if (this.#intentSidecarReaderCancel !== undefined) return;
+    this.#intentSidecarReaderCancel = this.#runtime.storageManager
+      .addDocumentReader?.((address) =>
+        (address.scope === undefined || address.scope === "space") &&
+        this.#trackedIntents.get(address.space)?.has(address.id) === true
+      );
   }
 
   /** Keep the sidecar doc watched (contract point 2(ii)) — the
@@ -1182,7 +1212,6 @@ export class SpeculationOverlayDestination
         (scope === undefined || scope === "space") &&
         this.#trackedIntents.get(space)?.has(id) === true,
       onNotify: (space, id, paths) => {
-        if (this.#closed) return;
         if (id === undefined) {
           // A storage reset: everything tracked in the space is dirty.
           const bySidecar = this.#trackedIntents.get(space);
@@ -1235,9 +1264,8 @@ export class SpeculationOverlayDestination
     sidecarId: string,
     hints: readonly number[],
   ): void {
-    if (this.#closed) return;
     const ids = this.#trackedIntents.get(space)?.get(sidecarId);
-    if (ids === undefined || ids.size === 0) return;
+    if (ids === undefined) return;
     const state = this.#intentSidecarStates.get(`${space}\0${sidecarId}`);
     for (const hint of hints) state?.hints.add(hint);
     let entries: unknown;
@@ -1280,20 +1308,7 @@ export class SpeculationOverlayDestination
       pending.delete(entry.eventId);
       const live = this.#trackedIntents.get(space)?.get(sidecarId);
       if (live === undefined || !live.has(entry.eventId)) return;
-      try {
-        this.#applyIntentEntry(space, sidecarId, entry);
-      } catch (error) {
-        // Nothing in the arms throws today (subscribers are caught in
-        // `#notifyIntentOutcome`; the waiters are promise resolvers),
-        // and the old sink ran inside a scheduler effect whose catch
-        // logged `schedule-error`. Kept so a future regression in one
-        // entry's arm cannot strand the OTHER ids of this check in a
-        // microtask's uncaught throw (independent review of W2, N-2).
-        logger.warn("intent-apply-failed", () => [
-          `intent ${entry.eventId} on ${sidecarId}: applying its entry threw`,
-          error,
-        ]);
-      }
+      this.#applyIntentEntry(space, sidecarId, entry);
     };
     if (state !== undefined && state.hints.size > 0) {
       const hinted = [...state.hints];
@@ -1422,8 +1437,8 @@ export class SpeculationOverlayDestination
   ): void {
     const key = `${space}\0${eventId}`;
     // The late-echo rule's memory (stage C tuning T2): every terminal
-    // signal — consequenced, errored, dropped, refused — makes a later
-    // echo of this intent jobless.
+    // signal — consequenced, errored, dropped, refused, needs-attention,
+    // withheld — makes a later echo of this intent jobless.
     this.#noteJoblessIntent(eventId);
     const waiters = this.#intentConsequenceWaiters.get(key);
     if (waiters !== undefined && waiters.length > 0) {
@@ -1566,11 +1581,15 @@ export class SpeculationOverlayDestination
   }
 
   /** Today's arms, in today's order, on ONE tracked entry (design
-   * contract point 4): `status === "dropped"` → untrack, retire, settle
-   * `dropped`, notify; else `consequenced === true` → untrack, retire,
-   * settle `errored` (if `error`) or `consequenced`, notify `errored`
-   * if `error`. Anything else (the entry present but not yet processed)
-   * leaves the intent tracked. */
+   * contract point 4): `status === "needs-attention"` → untrack, retire,
+   * settle and notify `needs-attention`; `status === "dropped"` → untrack,
+   * retire, settle `dropped`, notify; `consequenced === true` with
+   * `withheld` → untrack, retire, settle and notify `withheld` (the
+   * handling read data this space doesn't admit, so the entry says the same
+   * thing however it ended, events.md §5); else `consequenced === true` →
+   * untrack, retire, settle `errored` (if `error`) or `consequenced`,
+   * notify `errored` if `error`. Anything else (the entry present but not
+   * yet processed) leaves the intent tracked. */
   #applyIntentEntry(
     space: MemorySpace,
     sidecarId: string,
@@ -1616,6 +1635,24 @@ export class SpeculationOverlayDestination
         eventId: entry.eventId,
         kind: "dropped",
         reason: entry.reason ?? "dropped",
+      });
+    } else if (entry.consequenced === true && entry.withheld === true) {
+      // The handling read data this space doesn't admit, so the entry says
+      // the same thing however it ended (events.md §5): the echo retires,
+      // and subscribers hear only that the outcome is withheld.
+      const reason = "the outcome is withheld: the handling read data this " +
+        "space does not admit";
+      this.#untrackIntent(space, sidecarId, entry.eventId);
+      this.retireIntent(space, entry.eventId);
+      this.#settleIntentConsequence(space, entry.eventId, {
+        kind: "withheld",
+        reason,
+      });
+      this.#notifyIntentOutcome({
+        space,
+        eventId: entry.eventId,
+        kind: "withheld",
+        reason,
       });
     } else if (entry.consequenced === true) {
       if (entry.error !== undefined) {
@@ -1674,9 +1711,10 @@ export class SpeculationOverlayDestination
       if (bySidecar!.size === 0) {
         this.#trackedIntents.delete(space);
         // The listener lives exactly as long as something is outstanding
-        // (contract point 5). The sidecar WATCH stays: a session's watch
-        // set is coarse by ruling (R-D), and the next fire on this stream
-        // is likely imminent.
+        // (contract point 5). The sidecar WATCH stays until a release pass
+        // finds nothing reading the sidecar: a session's watch set is
+        // coarse by ruling (R-D), and the next fire on this stream is
+        // likely imminent.
         if (this.#trackedIntents.size === 0) this.#releaseIntentListener();
         this.#flushIntentQuiescenceWaiters();
       }
@@ -1731,7 +1769,8 @@ export class SpeculationOverlayDestination
    * that wave lands, a visible flicker. Counted: `cascade-echo-retired`
    * per retired cascade echo, and — when the caller arms the witness
    * with the MARK's sidecar (the consequenced, non-error arm: the one
-   * case where a server cascade child is on its way) —
+   * case known to have a server cascade child on its way; a withheld
+   * entry says nothing of that, and arms nothing) —
    * `cascade-echo-retired-unarrived` when NO doc the echo wrote holds a
    * confirmed value at or after the mark frame's seq (read as the
    * sidecar's confirmed seq at the check: the mark and a same-wave
@@ -2023,7 +2062,6 @@ export class SpeculationOverlayDestination
           | undefined;
       };
       observable.speculationArrivalObserver = (arrived) => {
-        if (this.#closed) return;
         const entries = this.#entries.get(space);
         if (entries === undefined || entries.size === 0) return;
         const arrivedKeys = new Set(
@@ -2087,7 +2125,6 @@ export class SpeculationOverlayDestination
         speculationAckObserver: (() => void) | undefined;
       };
       observable.speculationAckObserver = () => {
-        if (this.#closed) return;
         this.#sweep(space, this.#watermarks.get(space) ?? 0);
       };
       const installed = observable.speculationAckObserver;
@@ -2210,6 +2247,10 @@ export class SpeculationOverlayDestination
         // confirmed cover witnesses, whatever its class: the store has
         // moved past everything this speculation consumed.
         let arrived = true;
+        const unservedCids: string[] = [];
+        const namedCids = new Set<string>();
+        let namesUnknown = false;
+        let arrivedDocs = 0;
         for (const doc of entry.writtenDocs) {
           const state = view(doc.id, doc.scope);
           // A content-addressed doc the store holds witnesses at ANY
@@ -2229,10 +2270,10 @@ export class SpeculationOverlayDestination
           // speculative cid layer is inadmissible content that can
           // never arrive, so holding the entry for it would strand
           // the entry, and its sibling layers, forever. A cid doc
-          // with NO confirmed cover still holds the entry: nothing
-          // has served the schema document yet, and dropping the
-          // layer would flip local schema resolution to nothing.
-          if (doc.id.startsWith("cid:") && state.confirmedSeq > 0) {
+          // with NO confirmed cover is decided once every other doc has
+          // arrived, below.
+          if (doc.id.startsWith("cid:")) {
+            if (state.confirmedSeq === 0) unservedCids.push(doc.id);
             continue;
           }
           if (state.confirmedSeq === 0 || state.confirmedSeq < floor) {
@@ -2243,6 +2284,32 @@ export class SpeculationOverlayDestination
             arrived = false;
             break;
           }
+          arrivedDocs += 1;
+          if (state.envelopeDocuments === undefined) {
+            namesUnknown = true;
+          } else {
+            for (const id of state.envelopeDocuments) namedCids.add(id);
+          }
+        }
+        // A cid doc the store has not served holds the entry while a
+        // document it wrote names it, as the store has that document (the
+        // arrived envelope's schema or label document, which a frame
+        // delivers apart from the envelope, so it can arrive after), and
+        // while the entry wrote no other document at all: nothing has
+        // served the cid doc, and the layer may be all that holds it here.
+        // Otherwise no arrived document needs it: the speculative run
+        // minted it for an envelope the served derivation did not write —
+        // a labeled write the serving runtime refused, or a schema it
+        // stamps differently — so the store never comes to hold it, and
+        // holding the entry for it would strand the entry and its sibling
+        // layers forever, masking the served values. Only the documents
+        // this entry wrote are consulted.
+        if (
+          arrived && unservedCids.length > 0 &&
+          (arrivedDocs === 0 || namesUnknown ||
+            unservedCids.some((id) => namedCids.has(id)))
+        ) {
+          arrived = false;
         }
         if (!arrived) continue;
         entries.delete(entry.localSeq);
@@ -2285,7 +2352,6 @@ export class SpeculationOverlayDestination
    * closing — rollback is best-effort) and release the watermark
    * sinks. */
   close(): void {
-    if (this.#closed) return;
     this.#closed = true;
     this.#closedForQuiescence.resolve();
     for (const entries of this.#entries.values()) {
@@ -2309,6 +2375,8 @@ export class SpeculationOverlayDestination
     }
     this.#watermarkSinks.clear();
     this.#releaseIntentListener();
+    this.#intentSidecarReaderCancel?.();
+    this.#intentSidecarReaderCancel = undefined;
     this.#intentSidecarStates.clear();
     this.#trackedIntents.clear();
     this.#intentOutcomeSubscribers.clear();
@@ -2320,21 +2388,9 @@ export class SpeculationOverlayDestination
     // Nothing can retire an intent after close (`#trackedIntents` was
     // just cleared), so quiescence waiters settle now rather than hang.
     this.#flushIntentQuiescenceWaiters();
-    for (const release of this.#ackObserverReleases.values()) {
-      try {
-        release();
-      } catch {
-        // observer release is best-effort during teardown
-      }
-    }
+    for (const release of this.#ackObserverReleases.values()) release();
     this.#ackObserverReleases.clear();
-    for (const release of this.#arrivalObserverReleases.values()) {
-      try {
-        release();
-      } catch {
-        // observer release is best-effort during teardown
-      }
-    }
+    for (const release of this.#arrivalObserverReleases.values()) release();
     this.#arrivalObserverReleases.clear();
     this.#terminalIntents.clear();
     this.#cascadeParents.clear();

@@ -3,9 +3,9 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { isOrClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
-import { isOrClause } from "../src/cfc/clause.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
   CFC_LABEL_READ_FAILED_ATOM,

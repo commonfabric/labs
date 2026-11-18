@@ -13,19 +13,10 @@ import {
   findElementByExactText,
   findNodeById,
   hasText,
-  propsOf,
   propValue,
+  setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
 import { type Book, InvitationView, LibraryView } from "./views.tsx";
-
-/** Writes through the same cell binding used by the rendered input. */
-function fillInput(ui: unknown, id: string, value: string): void {
-  const binding = propsOf(findNodeById(ui, id))?.["$value"];
-  if (!binding || typeof binding !== "object" || !("set" in binding)) {
-    throw new Error(`Missing input binding: ${id}`);
-  }
-  (binding as { set(value: string): void }).set(value);
-}
 
 const captureRecommendations = handler<
   { books: Book[] },
@@ -152,8 +143,16 @@ export default pattern(() => {
     clickButton(visitor[UI], "Review selected recommendations")
   );
   const action_manual = action(() => {
-    fillInput(visitor[UI], "recommend-title", "  A Wizard of Earthsea  ");
-    fillInput(visitor[UI], "recommend-author", " Ursula K. Le Guin ");
+    setBound(
+      findNodeById(visitor[UI], "recommend-title"),
+      "$value",
+      "  A Wizard of Earthsea  ",
+    );
+    setBound(
+      findNodeById(visitor[UI], "recommend-author"),
+      "$value",
+      " Ursula K. Le Guin ",
+    );
   });
   const action_submit_manual = action(() =>
     clickButton(visitor[UI], "Review recommendation")
@@ -162,9 +161,17 @@ export default pattern(() => {
     clickButton(visitor[UI], "Review recommendation")
   );
   const action_library_draft = action(() => {
-    fillInput(library[UI], "library-title", "Dune");
-    fillInput(library[UI], "library-author", "Frank Herbert");
-    fillInput(library[UI], "favorite-author", "Terry Pratchett");
+    setBound(findNodeById(library[UI], "library-title"), "$value", "Dune");
+    setBound(
+      findNodeById(library[UI], "library-author"),
+      "$value",
+      "Frank Herbert",
+    );
+    setBound(
+      findNodeById(library[UI], "favorite-author"),
+      "$value",
+      "Terry Pratchett",
+    );
   });
   const action_add_library = action(() => {
     clickButton(library[UI], "Add book");

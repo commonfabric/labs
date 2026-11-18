@@ -117,6 +117,7 @@ for (
           cursor: { epoch: 1, version: 1 },
           baselineHash: "baseline",
           materialized: "toggle!",
+          anchors: {},
           operations: [],
         }),
       subscribeOperationField: () => Promise.resolve(() => {}),
@@ -166,6 +167,7 @@ for (
         cursor: null,
         baselineHash: "baseline",
         materialized: "toggle",
+        anchors: {},
         operations: [],
       });
       await Promise.race([ready, failed.promise]);

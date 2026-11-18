@@ -126,6 +126,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The submitted result schema; absent when the answer is final assistant text. */
   resultSchema?: JSONSchema;
 
+  /** Whether this job offers the host-provided milestone tool. */
+  progress?: boolean;
+
   /** The tools the job may use; a schema adds `submit_result`. */
   tools: readonly string[];
 
@@ -163,6 +166,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** The provider reasoning effort; the provider's default when absent. */
   reasoningEffort?: string;
 
+  /**
+   * The provider prompt-cache key the job's model calls carry, shared with
+   * every other run that names it; the run's own id when absent, so a run
+   * then reuses the cache only within itself.
+   */
+  cacheAffinityKey?: string;
+
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
@@ -187,6 +197,9 @@ export interface HarnessJobSpec extends HarnessModelLimits {
    * harness publishes unless this is `false`.
    */
   patternIndexPublish?: boolean;
+
+  /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
+  patternIndexOrigin?: "agent";
 }
 
 /**
@@ -250,6 +263,9 @@ export interface HarnessJobOptions {
 
   /** Records the artifact root before this job starts its model loop. */
   onStart?: (runRoot: string) => void;
+
+  /** Publishes opt-in milestones with their observation context. */
+  onProgress?: RunCfHarnessCliDependencies["reportProgress"];
 
   /** Cumulative usage after a completed model call, with its accounting scope. */
   onUsage?: (update: {
@@ -384,6 +400,9 @@ const argvOf = (
     ? ["--pattern-index-url", spec.patternIndexUrl]
     : []),
   ...(spec.patternIndexPublish === false ? ["--no-pattern-index-publish"] : []),
+  ...(spec.patternIndexOrigin === "agent"
+    ? ["--pattern-index-origin", "agent"]
+    : []),
   ...(spec.loomRetrievalConfigPath !== undefined
     ? ["--loom-retrieval-config", spec.loomRetrievalConfigPath]
     : []),
@@ -425,7 +444,10 @@ const argvOf = (
   ]),
   // The job's tools, and the tool it returns its result through.
   ...[
-    ...spec.tools.filter((tool) => tool !== "submit_result"),
+    ...spec.tools.filter((tool) =>
+      tool !== "submit_result" && tool !== "report_progress"
+    ),
+    ...(spec.progress === true ? ["report_progress"] : []),
     ...(spec.resultSchema === undefined ? [] : ["submit_result"]),
   ].flatMap(
     (tool) => ["--allow-tool", tool],
@@ -456,6 +478,23 @@ export const selectHarnessJobSandboxRuntime = (
 ) => selectCfHarnessCliSandboxRuntime({ ...harnessDeps, ...SANDBOX_SELECTION });
 
 /**
+ * Whether the run recorded at `runRoot` holds a checkpoint it can continue
+ * from. A run root that is not there recorded nothing to continue.
+ *
+ * @throws Error when the run's artifacts are there but cannot be read.
+ */
+export const canContinueRecordedRun = async (
+  runRoot: string,
+): Promise<boolean> => {
+  try {
+    return canContinueHarnessRun(await readHarnessRunArtifacts(runRoot));
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+};
+
+/**
  * Runs one job. It ends `completed` with the submitted value or final text and
  * the handles the job held; `cancelled` when its signal aborted; `failed` as
  * `LIMIT_REACHED` when the model-turn limit ended it, as `INVALID_RESULT`,
@@ -470,6 +509,9 @@ export const runHarnessJob = async (
   spec: HarnessJobSpec,
   options: HarnessJobOptions,
 ): Promise<HarnessJobResult> => {
+  if (spec.progress === true && options.onProgress === undefined) {
+    throw new Error("Progress requires a host publication channel");
+  }
   const workspace = options.workspace ?? join(options.runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultDir = join(workspace, ".job-results");
@@ -533,6 +575,7 @@ export const runHarnessJob = async (
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,
+    reportProgress: spec.progress === true ? options.onProgress : undefined,
     env,
     ...(options.browserHost !== undefined
       ? { browserHost: options.browserHost }
@@ -563,6 +606,9 @@ export const runHarnessJob = async (
           : {}),
         ...(spec.maxOutputTokens !== undefined
           ? { maxOutputTokens: spec.maxOutputTokens }
+          : {}),
+        ...(spec.cacheAffinityKey !== undefined
+          ? { cacheAffinityKey: spec.cacheAffinityKey }
           : {}),
       });
       const run = async <
@@ -642,16 +688,8 @@ export const runHarnessJob = async (
       }
       : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
-  let recordedRun = false;
-  if (runRef !== undefined) {
-    try {
-      recordedRun = canContinueHarnessRun(
-        await readHarnessRunArtifacts(runRef),
-      );
-    } catch (error) {
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-    }
-  }
+  const recordedRun = runRef !== undefined &&
+    await canContinueRecordedRun(runRef);
   const report = loopResult !== undefined
     ? reportOf(loopResult)
     : failedReport ??

@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
+  carrierStamps,
   carrierStampsOf,
   isCfcCarrierMember,
 } from "../../src/typescript/cfc-carrier.ts";
@@ -21,7 +22,19 @@ const DECLARATIONS = `
       ? { readonly __ct_cfc__?: unknown; readonly payload: T }
       : { readonly __ct_cfc__?: unknown; readonly payload: T };
   }
-  interface Probes<T> {
+  namespace Bare {
+    // An author's alias of the tag's name whose branch holds the payload
+    // itself beside the carrier member.
+    export type CfcTag<T> = [T] extends [unknown]
+      ? { readonly __ct_cfc__?: unknown } | T
+      : { readonly __ct_cfc__?: unknown } | T;
+  }
+  interface Probes<T, S extends { readonly meta?: "secret" } = never> {
+    bare: Bare.CfcTag<T>;
+    constrained: S;
+    label: "secret";
+    labels: "secret" | "public";
+    stamp: { readonly meta?: "secret"; readonly of?: number };
     deferred: CfcTag<T, { confidentiality: ["x"] }>;
     other: OtherTag<T>;
     authored: Authored.CfcTag<T>;
@@ -31,12 +44,15 @@ const DECLARATIONS = `
 `;
 
 /**
- * The type of each member of `Probes<T>`, read while `T` is a parameter, and
- * the checker that read them.
+ * The type of each member of `Probes<T, S>`, read while `T` and `S` are
+ * parameters.
  */
-async function probes(): Promise<
-  { types: Map<string, ts.Type>; checker: ts.TypeChecker }
-> {
+async function probes(): Promise<Map<string, ts.Type>> {
+  return (await probesAndChecker()).types;
+}
+
+/** `probes()`, and the checker the types belong to. */
+async function probesAndChecker() {
   const { checker, sourceFile } = await createTestProgram(DECLARATIONS);
   const probe = sourceFile.statements.find((statement) =>
     ts.isInterfaceDeclaration(statement) && statement.name.text === "Probes"
@@ -47,37 +63,44 @@ async function probes(): Promise<
       checker.getTypeFromTypeNode(member.type!),
     ]),
   );
-  return { types, checker };
+  return { checker, types };
 }
 
 describe("cfc-carrier", () => {
   describe("isCfcCarrierMember", () => {
     it("returns `true` for the carrier member and for the `CfcTag` the checker defers", async () => {
-      const { types } = await probes();
+      const types = await probes();
 
       expect(isCfcCarrierMember(types.get("carrier")!)).toBe(true);
       expect(isCfcCarrierMember(types.get("deferred")!)).toBe(true);
     });
 
     it("returns `false` for another deferred conditional and for an object holding more than the carrier", async () => {
-      const { types } = await probes();
+      const types = await probes();
 
       expect(isCfcCarrierMember(types.get("other")!)).toBe(false);
       expect(isCfcCarrierMember(types.get("beside")!)).toBe(false);
     });
 
     it("returns `false` for an alias of the tag's name whose branch holds a payload field", async () => {
-      expect(isCfcCarrierMember((await probes()).types.get("authored")!))
-        .toBe(false);
+      expect(isCfcCarrierMember((await probes()).get("authored")!)).toBe(
+        false,
+      );
+    });
+
+    it("returns `false` for an alias of the tag's name whose branch holds the payload beside the carrier", async () => {
+      expect(isCfcCarrierMember((await probes()).get("bare")!)).toBe(false);
     });
   });
 
   describe("carrierStampsOf", () => {
+    // As for `carrierStamps()`, the cases compare checker types as booleans.
+
     it("returns the stamp the deferred `CfcTag` is given, its metadata and its payload", async () => {
-      const { types, checker } = await probes();
+      const { checker, types } = await probesAndChecker();
       const stamps = carrierStampsOf(types.get("deferred")!, checker);
 
-      expect(stamps).toHaveLength(1);
+      expect(stamps?.length).toBe(1);
       expect(checker.typeToString(stamps![0]!.meta)).toBe(
         '{ confidentiality: ["x"]; }',
       );
@@ -85,20 +108,58 @@ describe("cfc-carrier", () => {
     });
 
     it("returns the stamp the carrier member holds", async () => {
-      const { types, checker } = await probes();
+      const { checker, types } = await probesAndChecker();
       const stamps = carrierStampsOf(types.get("carrier")!, checker);
 
-      expect(stamps).toHaveLength(1);
+      expect(stamps?.length).toBe(1);
       expect(checker.typeToString(stamps![0]!.meta)).toBe('["x"]');
-      expect(stamps![0]!.of).toBeUndefined();
+      expect(stamps![0]!.of === undefined).toBe(true);
     });
 
     it("returns `undefined` for another deferred conditional, an object holding more than the carrier, and an alias of the tag's name", async () => {
-      const { types, checker } = await probes();
+      const { checker, types } = await probesAndChecker();
 
-      for (const name of ["other", "beside", "authored"]) {
-        expect(carrierStampsOf(types.get(name)!, checker)).toBeUndefined();
+      for (const name of ["other", "beside", "authored", "bare"]) {
+        expect(carrierStampsOf(types.get(name)!, checker) === undefined)
+          .toBe(true);
       }
+    });
+  });
+
+  describe("carrierStamps", () => {
+    // A stamp holds checker types, which `expect` takes too long to print in
+    // a failure, so the cases compare them by identity as booleans.
+
+    it("returns a label that is no object as a policy's metadata, with no payload", async () => {
+      const { checker, types } = await probesAndChecker();
+      const label = types.get("label")!;
+      const labels = types.get("labels")!;
+
+      for (const value of [label, labels]) {
+        const stamps = carrierStamps(value, checker);
+
+        expect(stamps.length).toBe(1);
+        expect(stamps[0]!.meta === value).toBe(true);
+        expect(stamps[0]!.of === undefined).toBe(true);
+      }
+    });
+
+    it("returns a type parameter constrained to a stamp as a policy's metadata, whole", async () => {
+      const { checker, types } = await probesAndChecker();
+      const parameter = types.get("constrained")!;
+      const stamps = carrierStamps(parameter, checker);
+
+      expect(stamps.length).toBe(1);
+      expect(stamps[0]!.meta === parameter).toBe(true);
+      expect(stamps[0]!.of === undefined).toBe(true);
+    });
+
+    it("returns a stamp's metadata and payload apart", async () => {
+      const { checker, types } = await probesAndChecker();
+      const [stamp] = carrierStamps(types.get("stamp")!, checker);
+
+      expect(checker.typeToString(stamp!.meta)).toBe('"secret"');
+      expect(checker.typeToString(stamp!.of!)).toBe("number");
     });
   });
 });

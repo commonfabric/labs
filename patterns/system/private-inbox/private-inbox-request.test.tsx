@@ -22,7 +22,9 @@ import {
 } from "commonfabric";
 import ProfileHome from "../profile-home/profile-home.tsx";
 import PrivateInbox, {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
+  ensurePrivateInboxOnly,
   pointProfilesAtPrivateInbox,
   type PointTarget,
   PrivateInboxAnswering,
@@ -63,7 +65,7 @@ const holdInboxElsewhere = handler<
 /**
  * Stands in for Home's request for its inbox: Home's `requestPrivateInbox`
  * over a profile list and the answers Home computes for it, sending Home's
- * `ensurePrivateInbox`, with its pointing step, over the same.
+ * `ensurePrivateInbox`, with its pointing and creating steps, over the same.
  */
 const RequestingHome = pattern<
   {
@@ -81,6 +83,10 @@ const RequestingHome = pattern<
     profiles,
     requested,
   });
+  const own = new Writable<PrivateInboxHolder>({});
+  const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]);
+  const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({});
+  const pointProfiles = pointProfilesAtPrivateInbox({ privateInbox, profiles });
   return {
     request: requestPrivateInbox({
       profiles,
@@ -88,10 +94,22 @@ const RequestingHome = pattern<
       answers,
       ensure: ensurePrivateInbox({
         privateInbox,
-        retainedPrivateInboxes: new Writable<RetainedPrivateInboxes>([]),
-        privateInboxRefusal: new Writable<PrivateInboxRefusalHolder>({}),
+        ownPrivateInbox: own,
+        retainedPrivateInboxes,
+        privateInboxRefusal,
         profiles,
-        pointProfiles: pointProfilesAtPrivateInbox({ privateInbox, profiles }),
+        pointProfiles,
+        createOwn: createOwnPrivateInbox({
+          ownPrivateInbox: own,
+          ensure: ensurePrivateInboxOnly({
+            privateInbox,
+            ownPrivateInbox: own,
+            retainedPrivateInboxes,
+            privateInboxRefusal,
+            profiles,
+            pointProfiles,
+          }),
+        }),
       }),
     }),
     answers,
@@ -217,15 +235,15 @@ export default pattern(() => {
   const action_point_the_profiles = action(() => {
     pointHolding.send();
     pointedElsewhere.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
     pointedNearby.setInbox.send({
-      inbox: nearby.get().piece?.resolveAsCell(),
+      inbox: nearby.get().piece!.resolveAsCell(),
     });
     advertising.setInbox.send({
-      inbox: elsewhere.get().piece?.resolveAsCell(),
+      inbox: elsewhere.get().piece!.resolveAsCell(),
     });
-    unvetted.setInbox.send({ inbox: elsewhere.get().piece?.resolveAsCell() });
+    unvetted.setInbox.send({ inbox: elsewhere.get().piece!.resolveAsCell() });
   });
   const assert_the_answer_follows_the_pointer_to_the_held_inbox = assert(() =>
     answerOf(holdingAnswers, pointedByHome) === "ensured" &&

@@ -332,6 +332,8 @@ describe("run_pattern release decisions in the policy trace", () => {
     expect(harnessReleaseDecisionOf({ releaseDecision: "withheld" }))
       .toBeUndefined();
     expect(harnessReleaseDecisionOf({})).toBeUndefined();
+    // A tool whose output is plain text states no decision either.
+    expect(harnessReleaseDecisionOf("withheld")).toBeUndefined();
   });
 
   it("gives each reason code the decision it states", () => {

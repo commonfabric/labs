@@ -9,6 +9,7 @@ const interest = (
   sessionId: string,
   principal: string | undefined,
   selectionGeneration?: number,
+  servingOwn?: true,
 ): SessionViewInterest => ({
   handle: {
     sessionId,
@@ -18,6 +19,7 @@ const interest = (
     revision: 1,
   },
   principal,
+  ...(servingOwn === undefined ? {} : { servingOwn }),
   attached: true,
   view: { id: "view", revision: 1 } as SessionViewInterest["view"],
   ...(selectionGeneration === undefined ? {} : { selectionGeneration }),
@@ -76,7 +78,7 @@ describe("view-interests", () => {
   it("leaves out the excluded principal's interests without reading again", async () => {
     const cache = new ViewInterestCache();
     const r = reader(() => [
-      interest("a", "did:key:alice"),
+      interest("a", "did:key:alice", undefined, true),
       interest("b", "did:key:bob"),
     ]);
     await cache.interestsFor(space, undefined, r.read);
@@ -85,6 +87,21 @@ describe("view-interests", () => {
 
     expect(bobOnly.map((entry) => entry.handle.sessionId)).toEqual(["b"]);
     expect(r.state.reads).toBe(1);
+  });
+
+  it("keeps the interests of a client session signed by the excluded principal", async () => {
+    // A client that signs with the serving loop's own key is still a
+    // client; only the loop's own sessions are left out.
+
+    const cache = new ViewInterestCache();
+    const r = reader(() => [
+      interest("svc", "did:key:service", undefined, true),
+      interest("cli", "did:key:service"),
+    ]);
+
+    const kept = await cache.interestsFor(space, "did:key:service", r.read);
+
+    expect(kept.map((entry) => entry.handle.sessionId)).toEqual(["cli"]);
   });
 
   it("carries an accepted selection's generation on the held interest", async () => {
@@ -227,5 +244,16 @@ describe("view-interests", () => {
 
     expect((await cache.interestsFor(space, undefined, r.read))[0])
       .toEqual(interest("a", undefined));
+  });
+
+  it("ignores a selection for a space it holds no list for, and reads the server's", async () => {
+    const cache = new ViewInterestCache();
+    const r = reader(() => [interest("a", undefined, 2)]);
+
+    cache.noteSelection(space, interest("a", undefined).handle, 9);
+
+    expect(await cache.interestsFor(space, undefined, r.read)).toEqual([
+      interest("a", undefined, 2),
+    ]);
   });
 });

@@ -1,7 +1,16 @@
 /** Cycle validation for boundaries whose value encoding cannot carry cycles. */
 
-import type { FabricContainerValue, FabricValue } from "./interface.ts";
-import { isValidDeepFrozenFabricValue } from "./deep-freeze.ts";
+import { BaseFabricPrimitive } from "./fabric-bases/BaseFabricPrimitive.ts";
+import type {
+  FabricArray,
+  FabricContainerValue,
+  FabricPlainObject,
+  FabricValue,
+} from "./interface.ts";
+import {
+  isValidDeepFrozenFabricValue,
+  recordValidDeepFrozenFabricValue,
+} from "./deep-freeze.ts";
 import { isFabricContainerValue } from "./types/index.ts";
 import {
   DefaultValueVisitor,
@@ -18,7 +27,7 @@ import {
 const acyclic = new WeakSet<object>();
 
 class AcyclicVisitor extends DefaultValueVisitor {
-  readonly #seen = new WeakSet<object>();
+  readonly #seen = new Set<object>();
 
   override visitFabricContainerValue(
     value: FabricContainerValue,
@@ -42,6 +51,37 @@ class AcyclicVisitor extends DefaultValueVisitor {
     Object.freeze(this);
     Object.freeze(this.prototype);
   }
+}
+
+/**
+ * Records `container`, a frozen array or plain object whose own layer is a
+ * valid `FabricValue` layer, as a deep-frozen acyclic `FabricValue` when each
+ * of its children is already known to be one, so that checking it later costs
+ * a lookup. A container with any other child is left for those checks to walk.
+ */
+export function recordFrozenFabricContainer(
+  container: FabricArray | FabricPlainObject,
+): void {
+  if (Array.isArray(container)) {
+    for (let i = 0; i < container.length; i++) {
+      if (i in container && !isKnownAcyclicChild(container[i])) return;
+    }
+  } else {
+    for (const child of Object.values(container)) {
+      if (!isKnownAcyclicChild(child)) return;
+    }
+  }
+  recordValidDeepFrozenFabricValue(container);
+  acyclic.add(container);
+}
+
+/**
+ * Helper for `recordFrozenFabricContainer()`, which tells whether `value`, a
+ * `FabricValue`, is known to be deep-frozen and acyclic without walking it.
+ */
+function isKnownAcyclicChild(value: FabricValue): boolean {
+  return typeof value !== "object" || value === null ||
+    BaseFabricPrimitive.isInstance(value) || acyclic.has(value);
 }
 
 /**

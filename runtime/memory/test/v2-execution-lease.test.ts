@@ -1,15 +1,15 @@
-// Server-execution v2 stage B: the single-deriver lease
-// (docs/specs/server-side-execution/serving-loop.md §2) and the derived-class
-// admission equality check (protocol.md §2's `derived` row). These tests are
-// the implementation-side mirror of the executable spec model's C6/C7
-// properties (base/spec-model/server-execution/): admission is ONE
-// equality check against the live row, liveness is judged by the memory
-// server's own clock (an expired row matches nobody), the holder is a
-// per-process identity so the equality check itself fences cross-process
-// succession (DR1), and the same-process residue is closed by the in-process
-// abort-before-reacquire discipline. A lease renewal is NEVER a commit.
+// Server-execution v2: the single-deriver lease
+// (docs/specs/server-side-execution/serving-loop.md §2), held in the memory
+// server's memory, and the derived-class admission equality check
+// (protocol.md §2's `derived` row). These tests are the implementation-side
+// mirror of the executable spec model's C6/C7 properties
+// (base/spec-model/server-execution/): admission is ONE equality check against
+// the map, the holder is a per-start identity so the equality check itself
+// fences succession between serving workers (DR1), and the same-process residue
+// is closed by the in-process abort-before-reacquire discipline. Nothing about
+// the lease is stored, so a restarted process waits for nobody.
 
-import { assert, assertEquals, assertGreater, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import {
@@ -18,17 +18,16 @@ import {
   type Engine,
   open,
   ProtocolError,
+  read,
+  serverSeq,
 } from "../v2/engine.ts";
 import {
-  acquireExecutionLease,
-  EXECUTION_LEASE_RENEW_INTERVAL_MS,
-  EXECUTION_LEASE_TTL_MS,
   ExecutionLeaseCycle,
   executionLeaseHolder,
   processInstanceId,
-  releaseExecutionLease,
-  renewExecutionLease,
 } from "../v2/execution-lease.ts";
+import { Server } from "../v2/server.ts";
+import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
 import {
   type ClientCommit,
   resetServerExecutionConfig,
@@ -53,18 +52,11 @@ const setCommit = (localSeq: number, id: string): ClientCommit => ({
   operations: [{ op: "set", id, value: { value: { n: localSeq } } }],
 });
 
-/** Reads every lease row, with the expiry read through SQLite's REAL accessor. */
-const leaseRows = (
-  engine: Engine,
-): { space: string; holder: string; expires_at: number }[] =>
+/** Reads every row of the stored table, which nothing writes any more. */
+const storedLeaseRows = (engine: Engine): { space: string; holder: string }[] =>
   engine.database.prepare(
-    // The engine's INTEGER accessor truncates to 32 bits; millisecond
-    // timestamps are exactly representable as REAL values. The synthetic-
-    // clock assertions (t0 = 1_000_000) fit in 32 bits either way; only a
-    // live-clock expiry needs the CAST to read back exactly.
-    `SELECT space, holder, CAST(expires_at AS REAL) AS expires_at
-     FROM execution_lease ORDER BY space`,
-  ).all() as { space: string; holder: string; expires_at: number }[];
+    `SELECT space, holder FROM execution_lease ORDER BY space`,
+  ).all() as { space: string; holder: string }[];
 
 const commitRows = (
   engine: Engine,
@@ -73,23 +65,28 @@ const commitRows = (
     `SELECT seq, class, holder FROM "commit" ORDER BY seq`,
   ).all() as { seq: number; class: string; holder: string | null }[];
 
-// A live lease relative to the admission clock (`Date.now()`), without
-// waiting on real time: acquired at the real now, it lives TTL ms into the
-// future. An EXPIRED one is acquired at epoch ms 1, so its expiry sits in
-// 1970 — expired for any real clock, no sleep involved.
-const LIVE_NOW = () => Date.now();
-const EXPIRED_NOW = 1;
+/** Models the process that held the lease before this one: a row it left. */
+const leaveStoredRow = (engine: Engine, holder: string): void => {
+  engine.database.prepare(
+    `INSERT INTO execution_lease (space, holder, expires_at)
+     VALUES (:space, :holder, :expires_at)`,
+  ).run({ space: SPACE, holder, expires_at: Date.now() + 3_600_000 });
+};
 
-Deno.test("execution_lease: exactly three fields — the v1 shape's extra columns did not come back", async () => {
+Deno.test("execution_lease: the stored table stays in the schema, and acquiring and releasing leave it empty", async () => {
   const { engine } = await createEngine();
   try {
     const columns = engine.database.prepare(
       `PRAGMA table_info("execution_lease")`,
     ).all() as { name: string }[];
-    // serving-loop.md §2: `(space, holder, expiresAt)` — the v1 branch's
-    // lease_generation / host_id / on_behalf_of / state are prior art that
-    // was REDUCED away, and their reappearance is v1 revival (§8 tripwires).
     assertEquals(columns.map((c) => c.name), ["space", "holder", "expires_at"]);
+
+    const holder = executionLeaseHolder(SERVICE);
+    assert(engine.executionLeases.acquire(SPACE, holder));
+    assertEquals(storedLeaseRows(engine), []);
+    engine.executionLeases.release(SPACE, holder);
+    assertEquals(storedLeaseRows(engine), []);
+    assertEquals(commitRows(engine), []);
   } finally {
     close(engine);
   }
@@ -113,17 +110,38 @@ Deno.test("execution_lease: a pre-stage-B store gains the table on reopen", asyn
 
   const reopened = await open({ url: toFileUrl(path) });
   try {
-    assertEquals(leaseRows(reopened), []);
-    assert(
-      acquireExecutionLease(reopened, {
-        space: SPACE,
-        holder: executionLeaseHolder(SERVICE),
-      }),
-    );
+    assertEquals(storedLeaseRows(reopened), []);
     // The commit `holder` column migrated back too (protocol.md §7 metadata).
     assertEquals(commitRows(reopened), []);
   } finally {
     close(reopened);
+  }
+});
+
+Deno.test("restart: a new process's map starts empty, so a row or an in-memory holder of an earlier process delays nobody", async () => {
+  const { engine, path } = await createEngine();
+  const successor = await open({ url: toFileUrl(path) });
+  setServerExecutionConfig(true);
+  try {
+    const earlier = executionLeaseHolder(SERVICE, "earlier-process");
+    assert(engine.executionLeases.acquire(SPACE, earlier));
+    leaveStoredRow(engine, earlier);
+
+    const holder = executionLeaseHolder(SERVICE, "restarted-process");
+    assertEquals(successor.executionLeases.holderOf(SPACE), undefined);
+    assert(successor.executionLeases.acquire(SPACE, holder));
+    applyCommit(successor, {
+      sessionId: holder,
+      space: SPACE,
+      commit: setCommit(1, "of:doc-1"),
+      commitClass: "derived",
+      holder,
+    });
+    assertEquals(commitRows(successor), [{ seq: 1, class: "derived", holder }]);
+  } finally {
+    resetServerExecutionConfig();
+    close(successor);
+    close(engine);
   }
 });
 
@@ -140,99 +158,150 @@ Deno.test("holder identity: service identity + process-instance component, stabl
   assert(holder !== successor);
 });
 
-Deno.test("acquire: conditional write — free and expired rows are taken, a live foreign lease is not", async () => {
+Deno.test("acquire: takes a free space and keeps one's own, and leaves another holder's lease alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
     const other = executionLeaseHolder(SERVICE, "other-process");
 
     // Free: taken.
-    assert(acquireExecutionLease(engine, { space: SPACE, holder: mine }));
-    assertEquals(leaseRows(engine).map((r) => r.holder), [mine]);
+    assert(engine.executionLeases.acquire(SPACE, mine));
+    assertEquals(engine.executionLeases.holderOf(SPACE), mine);
 
-    // Live and foreign: refused, row untouched.
-    assert(
-      !acquireExecutionLease(engine, { space: SPACE, holder: other }),
-    );
-    assertEquals(leaseRows(engine).map((r) => r.holder), [mine]);
+    // Held by another: refused, holder untouched.
+    assert(!engine.executionLeases.acquire(SPACE, other));
+    assertEquals(engine.executionLeases.holderOf(SPACE), mine);
 
-    // Live and our own: re-taken (extends).
-    assert(acquireExecutionLease(engine, { space: SPACE, holder: mine }));
-
-    // Expired: taken over by a successor.
-    const expired = await createEngine();
-    try {
-      assert(acquireExecutionLease(expired.engine, {
-        space: SPACE,
-        holder: mine,
-        now: EXPIRED_NOW,
-      }));
-      assert(acquireExecutionLease(expired.engine, {
-        space: SPACE,
-        holder: other,
-      }));
-      assertEquals(leaseRows(expired.engine).map((r) => r.holder), [other]);
-    } finally {
-      close(expired.engine);
-    }
+    // Our own: kept.
+    assert(engine.executionLeases.acquire(SPACE, mine));
+    assertEquals(engine.executionLeases.holderOf(SPACE), mine);
   } finally {
     close(engine);
   }
 });
 
-Deno.test("renew: extends only a lease the caller still holds live — and is never a commit", async () => {
+Deno.test("release: frees the caller's own lease and leaves a foreign one alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
     const other = executionLeaseHolder(SERVICE, "other-process");
-    const t0 = 1_000_000;
-    assert(
-      acquireExecutionLease(engine, { space: SPACE, holder: mine, now: t0 }),
-    );
-    assertEquals(leaseRows(engine)[0].expires_at, t0 + EXECUTION_LEASE_TTL_MS);
+    assert(engine.executionLeases.acquire(SPACE, mine));
 
-    // A renewal on the holder's cadence extends the expiry.
-    const t1 = t0 + EXECUTION_LEASE_RENEW_INTERVAL_MS;
-    assert(
-      renewExecutionLease(engine, { space: SPACE, holder: mine, now: t1 }),
-    );
-    assertEquals(leaseRows(engine)[0].expires_at, t1 + EXECUTION_LEASE_TTL_MS);
+    engine.executionLeases.release(SPACE, other);
+    assertEquals(engine.executionLeases.holderOf(SPACE), mine);
 
-    // A non-holder cannot renew.
-    assert(
-      !renewExecutionLease(engine, { space: SPACE, holder: other, now: t1 }),
-    );
-
-    // Once expired there is nothing live to renew — even for the holder
-    // itself. This failing renewal is the stop-committing signal.
-    const late = t1 + EXECUTION_LEASE_TTL_MS;
-    assert(
-      !renewExecutionLease(engine, { space: SPACE, holder: mine, now: late }),
-    );
-
-    // serving-loop.md §2 (and the coverage register's OW2): a lease renewal
-    // is NEVER a commit. The whole acquire/renew traffic above left the
-    // commit table empty.
-    assertEquals(commitRows(engine), []);
+    engine.executionLeases.release(SPACE, mine);
+    assertEquals(engine.executionLeases.holderOf(SPACE), undefined);
   } finally {
     close(engine);
   }
 });
 
-Deno.test("release: deletes the caller's own row and leaves a foreign one alone", async () => {
+Deno.test("releaseAllOf: frees every lease of one holder, counts them, and leaves other holders' alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
     const other = executionLeaseHolder(SERVICE, "other-process");
-    assert(acquireExecutionLease(engine, { space: SPACE, holder: mine }));
+    assert(engine.executionLeases.acquire("did:key:space-a", mine));
+    assert(engine.executionLeases.acquire("did:key:space-b", mine));
+    assert(engine.executionLeases.acquire("did:key:space-c", other));
 
-    releaseExecutionLease(engine, { space: SPACE, holder: other });
-    assertEquals(leaseRows(engine).map((r) => r.holder), [mine]);
+    assertEquals(engine.executionLeases.releaseAllOf(mine), 2);
 
-    releaseExecutionLease(engine, { space: SPACE, holder: mine });
-    assertEquals(leaseRows(engine), []);
+    assertEquals(engine.executionLeases.holderOf("did:key:space-a"), undefined);
+    assertEquals(engine.executionLeases.holderOf("did:key:space-b"), undefined);
+    assertEquals(engine.executionLeases.holderOf("did:key:space-c"), other);
+    assertEquals(engine.executionLeases.releaseAllOf(mine), 0);
   } finally {
     close(engine);
+  }
+});
+
+Deno.test("failure notice: the server patches the source entry only under the lease, once, and leaves a compacted entry alone", async () => {
+  const server = new Server({
+    ...testSessionOpenServerOptions,
+    store: new URL("memory://lease-failure-notice"),
+  });
+  setServerExecutionConfig(true);
+  try {
+    const engine = await server.engineForSpace(SPACE);
+    const sidecarId = "of:notice-stream";
+    applyCommit(engine, {
+      sessionId: "session-a",
+      principal: "user:alice",
+      space: SPACE,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: sidecarId,
+          value: {
+            value: { entries: [{ eventId: "other" }, { eventId: "source" }] },
+          },
+        }],
+      },
+    });
+    const holder = executionLeaseHolder(SERVICE);
+    const notice = (
+      localSeq: number,
+      eventId: string,
+      sourceEventId = "source",
+    ) =>
+      server.commitDeliveryFailureNotice({
+        space: SPACE,
+        holder,
+        localSeq,
+        sourceEvent: { sidecarId, eventId: sourceEventId },
+        failure: { eventId, targetSpace: "did:key:target", reason: "refused" },
+      });
+    const refused = {
+      eventId: "refused",
+      targetSpace: "did:key:target",
+      reason: "refused",
+    };
+
+    await assertRejects(
+      () => notice(1, "refused"),
+      ProtocolError,
+      "execution lease",
+    );
+
+    assert(server.executionLeases.acquire(SPACE, holder));
+    await notice(1, "refused");
+    assertEquals(read(engine, { id: sidecarId })?.value, {
+      entries: [
+        { eventId: "other" },
+        { eventId: "source", deliveryFailures: [refused] },
+      ],
+    });
+
+    // Already on the entry, an entry compacted away, and a document with no
+    // entries at all: nothing is due, so nothing commits.
+    const head = serverSeq(engine);
+    await notice(2, "refused");
+    await notice(3, "other-refusal", "compacted-away");
+    await server.commitDeliveryFailureNotice({
+      space: SPACE,
+      holder,
+      localSeq: 4,
+      sourceEvent: { sidecarId: "of:no-such-stream", eventId: "source" },
+      failure: refused,
+    });
+    assertEquals(serverSeq(engine), head);
+
+    // Nothing due is not admission, so only a notice that is due is refused.
+    server.executionLeases.release(SPACE, holder);
+    await notice(5, "refused");
+    await assertRejects(
+      () => notice(6, "later"),
+      ProtocolError,
+      "execution lease",
+    );
+    assertEquals(serverSeq(engine), head);
+  } finally {
+    resetServerExecutionConfig();
+    await server.close();
   }
 });
 
@@ -240,11 +309,7 @@ Deno.test("admission: off the flag, `derived` stays unclaimable even under a liv
   const { engine } = await createEngine();
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     assertThrows(
       () =>
         applyCommit(engine, {
@@ -268,11 +333,7 @@ Deno.test("admission: under the flag, the live holder's derived commit is admitt
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -294,11 +355,7 @@ Deno.test("admission: the one equality check rejects non-holders, missing holder
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
 
     const attempt = (options: { holder?: string; space?: string }) =>
       assertThrows(
@@ -311,7 +368,7 @@ Deno.test("admission: the one equality check rejects non-holders, missing holder
             holder: options.holder,
           }),
         ProtocolError,
-        "execution_lease",
+        "execution lease",
       );
 
     // A different holder — the model's forged/foreign probe (C6).
@@ -330,19 +387,13 @@ Deno.test("admission: the one equality check rejects non-holders, missing holder
   }
 });
 
-Deno.test("admission: an expired lease matches NOBODY — its own holder is rejected before any successor acquires", async () => {
+Deno.test("admission: a released lease matches NOBODY, its last holder included", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    // The row exists but expired long ago by the memory server's clock; no
-    // successor has taken it. Liveness is the SERVER's judgment, so even the
-    // row's own holder no longer matches (serving-loop.md §2).
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: EXPIRED_NOW,
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
+    engine.executionLeases.release(SPACE, holder);
     assertThrows(
       () =>
         applyCommit(engine, {
@@ -353,22 +404,32 @@ Deno.test("admission: an expired lease matches NOBODY — its own holder is reje
           holder,
         }),
       ProtocolError,
-      "execution_lease",
+      "execution lease",
     );
+    assertEquals(commitRows(engine), []);
+  } finally {
+    resetServerExecutionConfig();
+    close(engine);
+  }
+});
 
-    // No lease row at all matches nobody either.
-    releaseExecutionLease(engine, { space: SPACE, holder });
+Deno.test("admission: a stored row names nobody, its holder included", async () => {
+  const { engine } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = executionLeaseHolder(SERVICE);
+    leaveStoredRow(engine, holder);
     assertThrows(
       () =>
         applyCommit(engine, {
-          sessionId: "server:executor",
+          sessionId: holder,
           space: SPACE,
           commit: setCommit(1, "of:doc-1"),
           commitClass: "derived",
           holder,
         }),
       ProtocolError,
-      "execution_lease",
+      "execution lease",
     );
     assertEquals(commitRows(engine), []);
   } finally {
@@ -441,36 +502,32 @@ Deno.test("admission: a holder smuggled into the client payload is inert", async
 // stop-committing MUST, enforced before any reacquire).
 //
 
-Deno.test("discipline (C7a): a probe sealed before an expiry never commits — renewal failure ends the tenure before the reacquire", async () => {
+Deno.test("discipline (C7a): a probe sealed before a release never commits — the release ends the tenure before any reacquire", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
-    // The cycle's clock is the admission clock advanced by a controlled
-    // delta — the co-hosted premise (one process, one clock), with the
-    // pause made deterministic instead of slept.
-    let clock = Date.now();
     const cycle = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space: SPACE,
       holder: executionLeaseHolder(SERVICE),
-      now: () => clock,
     });
 
-    assert(cycle.acquire());
+    assert(await cycle.acquire());
     const sealedTenure = cycle.tenure; // work seals under the first tenure
 
-    // A pause outlives the TTL (the canonical cause is a runtime GC pause).
-    clock += EXECUTION_LEASE_TTL_MS + 1;
+    // A double acquire must not abort the tenure's in-flight work.
+    assert(await cycle.acquire());
+    assert(cycle.isCurrentTenure(sealedTenure));
 
-    // The renewal fails: the tenure ends HERE, before any reacquire is
-    // possible — "stop committing immediately".
-    assert(!cycle.renew());
+    // A park releases the lease: the tenure ends HERE, before any reacquire
+    // is possible — "stop committing immediately".
+    await cycle.release();
     assert(!cycle.held);
     assert(!cycle.isCurrentTenure(sealedTenure));
 
     // Same process re-acquires: same holder (DR1 — the process component is
     // stable within a process lifetime), NEW tenure.
-    assert(cycle.acquire());
+    assert(await cycle.acquire());
     assert(cycle.held);
     assertEquals(cycle.holder, executionLeaseHolder(SERVICE));
     assert(cycle.tenure !== sealedTenure);
@@ -509,19 +566,16 @@ Deno.test("discipline (C7b): without the in-process check the same-process stale
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
-    let clock = Date.now();
     const cycle = new ExecutionLeaseCycle({
-      engine,
+      leases: engine.executionLeases,
       space: SPACE,
       holder: executionLeaseHolder(SERVICE),
-      now: () => clock,
     });
-    assert(cycle.acquire());
-    clock += EXECUTION_LEASE_TTL_MS + 1;
-    assert(!cycle.renew());
-    assert(cycle.acquire()); // same holder, new tenure, live again
+    assert(await cycle.acquire());
+    await cycle.release();
+    assert(await cycle.acquire()); // same holder, new tenure, held again
 
-    // Deliver the pre-expiry probe WITHOUT consulting the discipline: the
+    // Deliver the earlier tenure's probe WITHOUT consulting the discipline: the
     // admission equality check alone cannot tell the tenures apart, because
     // the holder value is identical by design (DR1). This admission is the
     // reachable stale-admission of the model's C7b — the reason the
@@ -547,8 +601,8 @@ Deno.test("discipline (C7b): without the in-process check the same-process stale
 // session, same localSeq, same class + holder envelope — answers from the
 // store, never from current authority. The lease equality check admits NEW
 // derived commits; a network retry of an accepted one must return the
-// stored seq even after the producing lease was released, expired, or
-// succeeded by a new holder. Fresh (new-localSeq) derived commits keep the
+// stored seq even after the producing lease was released or succeeded by a
+// new holder. Fresh (new-localSeq) derived commits keep the
 // full admission check in every one of those states, and a same-key
 // resubmission that differs — in bytes OR in its class/holder envelope —
 // is still refused as a replay mismatch. The mints below commit with
@@ -562,16 +616,7 @@ Deno.test("replay: a byte-identical retry answers from the store after the lease
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
-    // The live-clock expiry reads back as the real millisecond timestamp:
-    // leaseRows reads the column as a REAL, so this is not the low 32 bits
-    // of the epoch (which went negative on 2026-09-08 and flip sign every
-    // ~24.9 days).
-    assertGreater(leaseRows(engine)[0].expires_at, Date.now());
+    assert(engine.executionLeases.acquire(SPACE, holder));
     const first = applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -580,11 +625,10 @@ Deno.test("replay: a byte-identical retry answers from the store after the lease
       holder,
     });
 
-    releaseExecutionLease(engine, { space: SPACE, holder });
-    assertEquals(leaseRows(engine), []);
+    engine.executionLeases.release(SPACE, holder);
 
     // The reviewer's repro: the retry of the accepted commit must not be
-    // re-admitted against the (now absent) live lease.
+    // re-admitted against the (now absent) lease.
     const replay = applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -616,7 +660,7 @@ Deno.test("replay: a byte-identical retry answers from the store after the lease
       { seq: first.seq, class: "derived", holder },
     ]);
 
-    // A FRESH derived commit (new localSeq) still needs the live lease.
+    // A FRESH derived commit (new localSeq) still needs the lease.
     assertThrows(
       () =>
         applyCommit(engine, {
@@ -627,67 +671,7 @@ Deno.test("replay: a byte-identical retry answers from the store after the lease
           holder,
         }),
       ProtocolError,
-      "execution_lease",
-    );
-  } finally {
-    resetServerExecutionConfig();
-    close(engine);
-  }
-});
-
-Deno.test("replay: a byte-identical retry answers from the store after the lease EXPIRED", async () => {
-  const { engine } = await createEngine();
-  setServerExecutionConfig(true);
-  try {
-    const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
-    const first = applyCommit(engine, {
-      sessionId: holder,
-      space: SPACE,
-      commit: setCommit(1, "of:doc-1"),
-      commitClass: "derived",
-      holder,
-    });
-
-    // Force the row into the past: a same-holder re-acquire rewrites
-    // expires_at from EPOCH ms 1, so the row now matches nobody by the
-    // admission clock (same construction as the expiry tests above).
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: EXPIRED_NOW,
-    }));
-
-    const replay = applyCommit(engine, {
-      sessionId: holder,
-      space: SPACE,
-      commit: setCommit(1, "of:doc-1"),
-      commitClass: "derived",
-      holder,
-    });
-    assertEquals(replay.seq, first.seq);
-    assertEquals(commitRows(engine), [
-      { seq: first.seq, class: "derived", holder },
-    ]);
-
-    // Fresh work under the expired lease is still rejected — the expired
-    // row matches nobody for ADMISSION; it only stops mattering for the
-    // already-answered replay.
-    assertThrows(
-      () =>
-        applyCommit(engine, {
-          sessionId: holder,
-          space: SPACE,
-          commit: setCommit(2, "of:doc-2"),
-          commitClass: "derived",
-          holder,
-        }),
-      ProtocolError,
-      "execution_lease",
+      "execution lease",
     );
   } finally {
     resetServerExecutionConfig();
@@ -701,11 +685,7 @@ Deno.test("replay: after SUCCESSION the old holder's accepted commit still repla
   try {
     // p0 holds the lease and lands a derived commit.
     const p0 = executionLeaseHolder(SERVICE, "process-0");
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder: p0,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, p0));
     const first = applyCommit(engine, {
       sessionId: p0,
       space: SPACE,
@@ -714,18 +694,10 @@ Deno.test("replay: after SUCCESSION the old holder's accepted commit still repla
       holder: p0,
     });
 
-    // p0's lease lapses; p1 succeeds it (DR1: fresh process component).
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder: p0,
-      now: EXPIRED_NOW,
-    }));
+    // p0 is replaced; p1 succeeds it (DR1: fresh process component).
+    engine.executionLeases.release(SPACE, p0);
     const p1 = executionLeaseHolder(SERVICE, "process-1");
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder: p1,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, p1));
 
     // The byte-identical retry of p0's ACCEPTED commit answers from the
     // store — the successor owning the lease is irrelevant to it.
@@ -750,7 +722,7 @@ Deno.test("replay: after SUCCESSION the old holder's accepted commit still repla
           holder: p0,
         }),
       ProtocolError,
-      "execution_lease",
+      "execution lease",
     );
 
     // …and the successor's fresh derived commit is admitted.
@@ -776,11 +748,7 @@ Deno.test("replay: a same-key DIFFERENT-bytes resubmission is refused as a repla
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -788,7 +756,7 @@ Deno.test("replay: a same-key DIFFERENT-bytes resubmission is refused as a repla
       commitClass: "derived",
       holder,
     });
-    releaseExecutionLease(engine, { space: SPACE, holder });
+    engine.executionLeases.release(SPACE, holder);
 
     // Same session + localSeq, different payload bytes: the existing
     // replay-mismatch semantics apply ahead of any admission answer.
@@ -816,11 +784,7 @@ Deno.test("replay: the stored class + holder are part of the replay identity —
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -828,7 +792,7 @@ Deno.test("replay: the stored class + holder are part of the replay identity —
       commitClass: "derived",
       holder,
     });
-    releaseExecutionLease(engine, { space: SPACE, holder });
+    engine.executionLeases.release(SPACE, holder);
 
     // Same key + bytes, but claimed by a DIFFERENT holder: not the stored
     // submission — refused, never answered with the stored seq.
@@ -904,16 +868,12 @@ Deno.test("replay: authored replays are untouched — a stray holder stays inert
   }
 });
 
-Deno.test("replay: a retry while the lease is STILL LIVE keeps answering from the store", async () => {
+Deno.test("replay: a retry while the lease is STILL HELD keeps answering from the store", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
     const holder = executionLeaseHolder(SERVICE);
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, holder));
     const first = applyCommit(engine, {
       sessionId: holder,
       space: SPACE,
@@ -942,19 +902,13 @@ Deno.test("discipline (C7b): cross-process succession is fenced by the equality 
   try {
     // Process p0 holds the lease and seals a probe.
     const p0 = executionLeaseHolder(SERVICE, "process-0");
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder: p0,
-      now: EXPIRED_NOW, // …and then its lease lapses
-    }));
+    assert(engine.executionLeases.acquire(SPACE, p0));
+    // …and then it is replaced.
+    engine.executionLeases.release(SPACE, p0);
 
     // A genuinely-new process succeeds it: fresh process component (DR1).
     const p1 = executionLeaseHolder(SERVICE, "process-1");
-    assert(acquireExecutionLease(engine, {
-      space: SPACE,
-      holder: p1,
-      now: LIVE_NOW(),
-    }));
+    assert(engine.executionLeases.acquire(SPACE, p1));
 
     // p0's in-flight probe arrives at the store's door: the ONE equality
     // check rejects it, because p0's holder can never equal p1's.
@@ -968,7 +922,7 @@ Deno.test("discipline (C7b): cross-process succession is fenced by the equality 
           holder: p0,
         }),
       ProtocolError,
-      "execution_lease",
+      "execution lease",
     );
     assertEquals(commitRows(engine), []);
   } finally {

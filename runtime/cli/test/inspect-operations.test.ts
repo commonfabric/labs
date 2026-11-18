@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
-import { toValuePath } from "@commonfabric/memory/v2";
+import { operationAnchorsDocId, toValuePath } from "@commonfabric/memory/v2";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
@@ -155,6 +155,87 @@ describe("cf inspect operations", () => {
       expect(scopes).toContain("user z6MkInsp…ions");
       expect(scopes).toContain("session z6MkInsp…ions/session:");
       expect(scopes).toContain("inspect overlay");
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("reports a field's anchors and the anchors document check", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "inspect-anchors-" });
+    try {
+      const path = `${directory}/anchors.sqlite`;
+      const documentId = operationAnchorsDocId({
+        id: "of:anchored",
+        scope: "space",
+        path: ["body"],
+      });
+      const engine = await open({ url: toFileUrl(path) });
+      try {
+        applyCommit(engine, {
+          sessionId: "session:setup",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: ["of:anchored", "of:bare"].map((id) => ({
+              op: "set" as const,
+              id,
+              value: { value: { body: "hello world" } },
+            })),
+          },
+        });
+        // The anchors bound `world`, and the edit in the same commit moves
+        // both.
+        applyCommit(engine, {
+          sessionId: "session:writer",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set" as const,
+                id: documentId,
+                value: { value: { from: 6, to: 11 } },
+              },
+              ...["of:anchored", "of:bare"].map((id) => ({
+                op: "apply-op" as const,
+                id,
+                path: toValuePath(["body"]),
+                codec: CODEMIRROR_CHANGESET_CODEC,
+                submissionId: "writer:1",
+                base: null,
+                baselineHash: operationBaselineHash("hello world"),
+                payload: {
+                  updates: [{ clientId: "writer", changes: [[0, ">"], 11] }],
+                },
+              })),
+            ],
+          },
+        });
+      } finally {
+        close(engine);
+      }
+
+      const json = JSON.parse(
+        await output(["operations", path, "of:anchored", "--json"]),
+      );
+      expect(json.fields[0]).toMatchObject({
+        active: true,
+        cursor: { epoch: 1, version: 1 },
+        anchorsDocumentId: documentId,
+        consistency: { anchorsDocumentValid: true, healthy: true },
+      });
+      expect(json.fields[0].anchors).toEqual({ from: 7, to: 12 });
+
+      const human = await output(["operations", path, "of:anchored"]);
+      expect(human).toContain("healthy");
+      expect(human).toContain(
+        `anchors=2 anchors-document=${documentId} anchors-document-valid=true`,
+      );
+
+      const bare = await output(["operations", path, "of:bare"]);
+      expect(bare).toContain("healthy");
+      expect(bare).toContain("anchors=0 anchors-document=");
+      expect(bare).toContain("anchors-document-valid=n/a");
     } finally {
       await Deno.remove(directory, { recursive: true });
     }

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { hashOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -21,6 +22,8 @@ import type { RuntimeProgram } from "../../src/harness/types.ts";
 import { MAX_ENFORCEMENT_CFC_OPTIONS } from "../../src/runtime-presets.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
+import { getTransactionWriteAttempts } from "../../src/storage/transaction-inspection.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -868,6 +871,148 @@ describe("compile-and-run-served", () => {
       expect(confidentiality(f.outputs.error)).toContain("late-source-label");
     } finally {
       compilation.reject(new Error("Test finished"));
+      await f.close();
+    }
+  });
+
+  describe("a request's ending after something else moved on", () => {
+    /** The refusal a staged request's transaction is abandoned with. */
+    const refusal = {
+      name: "StorageTransactionAborted",
+      message: "Controlled request refusal",
+      reason: "Controlled request refusal",
+    } as const;
+
+    it("leaves an abandoned request's outputs to the program that replaced it", async () => {
+      const f = await fixture(true);
+      f.runtime.patternManager.compileOrGetPattern = () =>
+        new Promise<never>(() => {});
+      try {
+        const seed = f.runtime.edit();
+        f.inputs.withTx(seed).set(PROGRAM);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const tx = f.runtime.edit();
+        f.action(tx);
+        const replace = f.runtime.edit();
+        f.inputs.withTx(replace).set(SECOND_PROGRAM);
+        expect((await replace.commit().settled).error).toBeUndefined();
+
+        tx.abort(refusal);
+        tx.abandonStagedWork(refusal);
+        await f.runtime.settled();
+        expect(f.outputs.error.get()).toBeUndefined();
+        expect(f.memo.get()).toBeUndefined();
+      } finally {
+        await f.close();
+      }
+    });
+
+    it("leaves an abandoned request that another completion resolved as that completion left it", async () => {
+      const f = await fixture(true);
+      f.runtime.patternManager.compileOrGetPattern = () =>
+        new Promise<never>(() => {});
+      try {
+        const seed = f.runtime.edit();
+        f.inputs.withTx(seed).set(PROGRAM);
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const tx = f.runtime.edit();
+        f.action(tx);
+        const resolved = {
+          requestHash: hashOf(PROGRAM).toString(),
+          phase: "resolved",
+        } as const;
+        const resolve = f.runtime.edit();
+        f.memo.withTx(resolve).set(resolved);
+        expect((await resolve.commit().settled).error).toBeUndefined();
+
+        tx.abort(refusal);
+        tx.abandonStagedWork(refusal);
+        await f.runtime.settled();
+        expect(f.outputs.error.get()).toBeUndefined();
+        expect(f.memo.get()).toEqual(resolved);
+      } finally {
+        await f.close();
+      }
+    });
+
+    it("records nothing for a compilation that finishes after its request resolved", async () => {
+      const f = await fixture(true);
+      const child = createTrustedBuilder(f.runtime).commonfabric.pattern(
+        () => ({ answer: 1 }),
+      );
+      const compilation = deferredCompilation<typeof child>();
+      f.runtime.patternManager.compileOrGetPattern = () => compilation.promise;
+      try {
+        expect(await f.run(PROGRAM)).toBe(true);
+        const resolved = {
+          requestHash: hashOf(PROGRAM).toString(),
+          phase: "resolved",
+        } as const;
+        const resolve = f.runtime.edit();
+        f.memo.withTx(resolve).set(resolved);
+        expect((await resolve.commit().settled).error).toBeUndefined();
+
+        compilation.resolve(child);
+        await f.runtime.settled();
+        expect(f.memo.get()).toEqual(resolved);
+      } finally {
+        await f.close();
+      }
+    });
+  });
+
+  it("rejects the tracked work when the completion cannot commit", async () => {
+    const f = await fixture(true);
+    const compilation = deferredCompilation<never>();
+    f.runtime.patternManager.compileOrGetPattern = () => compilation.promise;
+    const work: Promise<unknown>[] = [];
+    f.runtime.asyncWorkObserver = (registered) => void work.push(registered);
+    try {
+      expect(await f.run(PROGRAM)).toBe(true);
+
+      // The completion is the one transaction that writes the request's memo
+      // from here on, so refusing the commits that write it refuses exactly
+      // the completion.
+      const refusal = {
+        name: "AuthorizationError",
+        message: "the space refused the write",
+      } as const;
+      const memoDocument = f.memo.getAsNormalizedFullLink().id;
+      const pristineEdit = f.runtime.edit.bind(f.runtime);
+      let refused = 0;
+      using _edit = stub(
+        f.runtime,
+        "edit",
+        (...args: Parameters<Runtime["edit"]>) => {
+          const opened = pristineEdit(...args);
+          const commit = opened.commit.bind(opened);
+          opened.commit = (...commitArgs) => {
+            const written = (getTransactionWriteAttempts(opened) ?? []).map(
+              (attempt) => attempt.id,
+            );
+            if (!written.includes(memoDocument)) return commit(...commitArgs);
+            refused++;
+            opened.abort(refusal);
+            return createTransactionCommitReceipt(
+              Promise.resolve({ error: refusal }),
+            );
+          };
+          return opened;
+        },
+      );
+      compilation.reject(new Error("compiler failure"));
+      await f.runtime.settled();
+
+      expect(refused).toBe(1);
+      const rejections = (await Promise.allSettled(work)).flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : []
+      );
+      expect(rejections).toEqual([
+        new Error("Compile completion failed: the space refused the write"),
+      ]);
+      expect(f.memo.get()?.phase).toBe("pending");
+      expect(f.outputs.pending.get()).toBe(true);
+    } finally {
       await f.close();
     }
   });

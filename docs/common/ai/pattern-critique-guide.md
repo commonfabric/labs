@@ -81,7 +81,7 @@ has been explicitly verified as problematic.
 | `$checked={item}` | `$checked={item.done}` |
 | wrong event name | Use `oncf-send`, `oncf-input`, or `oncf-change` |
 | cell-bound control (for example `$value={status}`) with `oncf-change` writing `status.set(...)` | Let the binding own the control value; use the handler only for dependent state or side effects |
-| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/` |
+| any `$`-binding (`$value`/`$checked`/`$profile`/…) inside a `computed(() => …)` subtree → throws *"Bidirectionally bound property … is not reactive"* and **blanks the whole render** | Hoist the `$`-binding to a **static** `[UI]` position; switch views with `ifElse(cond, staticA, staticB)` as a child of a static wrapper, or lift behind a `pattern<{…}>` sub-pattern. Repro: `patterns/dev/scope-bug-computed-vnode-blank/`; the refusal is tested in `runtime/runner/test/h-binding-validation.test.ts` |
 
 ### 6. Custom Component Props and Styling Affordances
 
@@ -91,7 +91,7 @@ than guessing at unsupported internals.
 
 | Violation | Fix |
 |-----------|-----|
-| kebab-case props on `cf-*` | Use camelCase, for example `allowCustom` |
+| a hyphenated prop on an element (`cf-*` or native, not a pattern component) other than `data-*`, `aria-*` or an `on…` event (the compiler warns of it) | Write the property's camel-case name, for example `allowCustom` |
 | styling through guessed shadow-internal selectors | Prefer documented custom properties, parts, or theme hooks |
 | arbitrary one-off visual overrides where theme/custom properties would work | Prefer public styling affordances with fallbacks |
 
@@ -250,9 +250,9 @@ Applies only to patterns with multiple people or a "current user" concept. **N/A
 |-------|----------------|-----|
 | people rendered as data | a person shown as `{name}` text or a raw `<img>` | render **every** participant with `cf-profile-badge` bound to their profile cell; `cf-avatar` + snapshot only as an explicit offline fallback |
 | others rendered as `cf-avatar` when a live cell exists | `cf-avatar` used for co-participants even though their `#profile` cell is (or could be) stored on join | store each joiner's profile cell in the shared roster and badge it — cross-space reads resolve (CT-1667/1687). `cf-avatar` is only for snapshot-only cases |
-| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName` / `#profilePicture`, with `#profileAvatar` as the fallback when there is no picture) |
+| current viewer | a "type your name" / "who am I" text field used as the viewer's identity | resolve via `wish({ query: "#profile" })` (+ `#profileName`, and `profileFace()` from `patterns/system/profile-face/profile-face.ts` on the profile for its picture or avatar text) |
 | per-user isolation | stored DIDs / user-ids / name strings used to fake isolation | use `PerUser` / `PerSpace` scope; let the scope select the instance |
-| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a snapshot of the name and `profileLook(picture, avatar)` as a fallback) into the shared roster |
+| roster construction | a participant list built from typed names | join by profile cell: each viewer pushes their own live `#profile` cell (plus a snapshot of the name and `profileFace(profile)` as a fallback) into the shared roster |
 | identity comparison | dedup or "is this me?" by display-name equality | compare a cell reference with `equals()`, never the mutable name |
 | ownership / authorship | "who created / wrote this" stored as a bare name | snapshot the actor's profile, or attest with CFC `AuthoredByCurrentUser` / `RepresentsCurrentUser` |
 

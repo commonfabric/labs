@@ -4,6 +4,7 @@ import type {
   AgentDriver,
   AgentSourceConfig,
 } from "@commonfabric/agents-connector/types";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Runtime } from "@commonfabric/runner";
 import {
   bindCommandProducers,
@@ -27,9 +28,7 @@ import { defaultTargetLedgerPath } from "./target-state.ts";
 import { abortable } from "./abort.ts";
 
 function failureSummary(failures: unknown[]): string {
-  return failures.map((error) =>
-    error instanceof Error ? error.message : String(error)
-  ).join("; ");
+  return failures.map((error) => describeFailure(error)).join("; ");
 }
 
 export interface StartAgentsHostOptions {
@@ -65,7 +64,8 @@ export interface StartAgentsHostDependencies {
   ) => AgentsHost;
 }
 
-const defaultDependencies: StartAgentsHostDependencies = {
+/** The dependencies `startAgentsHost()` uses when its caller supplies none. */
+export const defaultStartAgentsHostDependencies: StartAgentsHostDependencies = {
   openFabric: openAgentFabricRuntime,
   targetLockPath: defaultTargetProcessLockPath,
   acquireProcessLock: AgentsHostProcessLock.acquire,
@@ -139,7 +139,8 @@ export class RunningAgentsHost {
 
 export async function startAgentsHost(
   options: StartAgentsHostOptions,
-  dependencies: StartAgentsHostDependencies = defaultDependencies,
+  dependencies: StartAgentsHostDependencies =
+    defaultStartAgentsHostDependencies,
 ): Promise<RunningAgentsHost> {
   const processLocks: HostProcessLock[] = [];
   const startupTasks = new Set<Promise<unknown>>();

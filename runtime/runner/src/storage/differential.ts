@@ -19,14 +19,6 @@ import type {
 } from "./interface.ts";
 import * as Address from "./transaction/address.ts";
 
-// A differential merges one notification batch's changes per address
-// IDENTITY — per scope instance (key-vocabulary.md §1 site 8), so two
-// instances of one doc in a batch never collapse into one change entry.
-// `identity` is the session the batch belongs to: the changes arrive
-// scope-NAMED on today's per-session wire, and the owning session's
-// identity maps each name to the same instance the session's reads map to.
-export const create = (identity: ScopeKeyIdentity) => new Changes(identity);
-
 interface Memory {
   get(entry: IMemoryAddress): State | undefined;
 }
@@ -73,6 +65,14 @@ const toAddress = (
   path: [...path],
 });
 
+/**
+ * Whether `path`, relative to a document's root, is the document's CFC
+ * envelope: the reserved `cfc` member that holds its schema hash and label
+ * map.
+ */
+export const isCfcEnvelopePath = (path: readonly string[]): boolean =>
+  path.length === 1 && path[0] === "cfc";
+
 const comparePaths = (
   left: readonly string[],
   right: readonly string[],
@@ -107,6 +107,20 @@ const collectChangedPaths = (
 
   if (before === undefined || after === undefined) {
     pushChangedPath(paths, currentPath, depth);
+    return;
+  }
+
+  // A document's CFC envelope changes as one value. Its readers decode the
+  // envelope whole, and the trigger index wakes every read at, above or below
+  // a changed path, so one change here wakes exactly the readers a change per
+  // leaf would. The label map inside is an array whose entries shift when a
+  // labeled list grows anywhere but its end, so per leaf it would cost one
+  // change per entry, each walking the trigger index again.
+  if (depth === 1 && isCfcEnvelopePath(currentPath.slice(0, 1))) {
+    const equal = isFabricObjectOrArray(before) && isFabricObjectOrArray(after)
+      ? valueEqualByWalk(before, after)
+      : valueEqual(before, after);
+    if (!equal) pushChangedPath(paths, currentPath, depth);
     return;
   }
 
@@ -311,9 +325,6 @@ export const checkout = (
   return checkout;
 };
 
-export const load = (states: Iterable<State>, identity: ScopeKeyIdentity) =>
-  create(identity).set(states);
-
 class Checkout {
   #model: Map<string, State> = new Map();
   constructor(readonly identity: ScopeKeyIdentity) {}
@@ -332,34 +343,17 @@ class Checkout {
   }
 }
 
+// A differential merges one notification batch's changes per address
+// IDENTITY — per scope instance (key-vocabulary.md §1 site 8), so two
+// instances of one doc in a batch never collapse into one change entry.
+// `identity` is the session the batch belongs to: the changes arrive
+// scope-NAMED on today's per-session wire, and the owning session's
+// identity maps each name to the same instance the session's reads map to.
 class Changes implements IMergedChanges {
   #model: Map<string, IMemoryChange> = new Map();
   constructor(readonly identity: ScopeKeyIdentity) {}
   *[Symbol.iterator]() {
     yield* this.#model.values();
-  }
-
-  /**
-   * Adds new state to the changeset.
-   */
-  set(states: Iterable<State>) {
-    for (const state of states) {
-      addStateChange(this, state, undefined, state.is);
-    }
-    return this;
-  }
-
-  /**
-   * Captures changes between what is in the given memory and
-   * provided state.
-   */
-  update(memory: Memory, states: Iterable<State>) {
-    for (const state of states) {
-      const before = memory.get(toAddress(state))?.is;
-      const after = state.is;
-      addStateChange(this, state, before, after);
-    }
-    return this;
   }
 
   add(change: IMemoryChange) {
@@ -373,9 +367,5 @@ class Changes implements IMergedChanges {
 
   toJSON() {
     return [...this.#model.values()];
-  }
-
-  close(): IMergedChanges {
-    return this;
   }
 }

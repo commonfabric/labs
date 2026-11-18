@@ -1,5 +1,4 @@
 {
-  "$comment": "Docs inherited from intersection constituents. Sources: RecipeBase, Schedulable.",
   "description": "A #recipe with ingredients.\n\nSchedulable on the #mealPlan.",
   "properties": {
     "ingredients": {

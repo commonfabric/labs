@@ -116,20 +116,21 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           ...(context.state.lookupSchemaHint(schemaTypeArg)?.declaresNoScope &&
             { declaresNoScope: true }),
           onDiagnostic: (diagnostic) => {
+            // A node in this file is reported where it is; any other is
+            // reported at the schema's authored use.
             const original = diagnostic.node &&
               ts.getOriginalNode(diagnostic.node);
+            if (original?.getSourceFile()?.fileName === sourceFile.fileName) {
+              context.reportDiagnosticOnce({ ...diagnostic, node: original });
+              return;
+            }
             const useRange = recoverAuthoredPosition(node) ??
               recoverAuthoredPosition(schemaUse);
+            const at = (range: ts.TextRange) =>
+              ts.setTextRange(context.factory.createIdentifier(""), range);
             context.reportDiagnosticOnce({
               ...diagnostic,
-              node: original?.getSourceFile()?.fileName === sourceFile.fileName
-                ? original
-                : useRange
-                ? ts.setTextRange(
-                  context.factory.createIdentifier(""),
-                  useRange,
-                )
-                : schemaUse,
+              node: useRange ? at(useRange) : schemaUse,
             });
           },
           // The program's own word on default-library membership; the
@@ -172,25 +173,19 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
         // If Type resolved to 'any' or the synthetic TypeNode intentionally
         // contains unknown, use the synthetic-node generator so the checker
         // does not recover a wider semantic type from the original source.
-        let schema: unknown;
-        if (
-          ((typeArg.pos === -1 &&
+        const schema = (typeArg.pos === -1 &&
             typeArg.end === -1 &&
             (type.flags & ts.TypeFlags.Any)) ||
-            containsAnyOrUnknownTypeNode(typeArg))
-        ) {
-          // Synthetic TypeNode path - use new method that shares context properly
-          schema = schemaGenerator.generateSchemaFromSyntheticTypeNode(
+            containsAnyOrUnknownTypeNode(typeArg)
+          ? schemaGenerator.generateSchemaFromSyntheticTypeNode(
             schemaTypeArg,
             checker,
             typeRegistry,
             schemaHints,
             sourceFile,
             generationOptions,
-          );
-        } else {
-          // Normal Type path
-          schema = schemaGenerator.generateSchema(
+          )
+          : schemaGenerator.generateSchema(
             type,
             checker,
             schemaTypeArg,
@@ -198,25 +193,26 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
             schemaHints,
             sourceFile,
           );
-        }
 
-        // Handle boolean schemas (true/false) - can't spread them
-        let finalSchema: unknown = typeof schema === "boolean"
-          ? schema
-          : { ...(schema as Record<string, unknown>), ...optionsObj };
-        finalSchema = attachUiContractFromSchemaHints(
-          finalSchema,
+        let finalSchema = attachUiContractFromSchemaHints(
+          schema,
           node,
           schemaTypeArg,
           schemaHints,
         );
         if (writeAuthorizedByIdentity && typeof finalSchema !== "boolean") {
           finalSchema = attachWriteAuthorizedByMarker(
-            finalSchema as Record<string, unknown>,
+            finalSchema,
             writeAuthorizedByIdentity,
           );
         }
-        finalSchema = resolvePolicyOfMarkers(finalSchema, context, node);
+        if (typeof finalSchema !== "boolean") {
+          finalSchema = resolvePolicyOfMarkersInRecord(
+            finalSchema,
+            context,
+            node,
+          );
+        }
         // A verb's authored event takes, at each cell, the capability its
         // handler earns there (`SchemaHint.contractCapabilities`).
         const contractCapabilities = context.state.lookupSchemaHint(
@@ -228,9 +224,10 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
             contractCapabilities,
           );
         }
+        // A boolean schema has no keywords to take the authored options.
         const emittedSchema = typeof finalSchema === "boolean"
           ? finalSchema
-          : { ...(finalSchema as Record<string, unknown>), ...optionsObj };
+          : { ...finalSchema, ...optionsObj };
         // This is the one place a pattern's declared result exists as the
         // schema it generated, whatever type the author named and whichever
         // inference path SchemaInjection took to reach it. SchemaInjection
@@ -294,8 +291,20 @@ function resolvePolicyOfMarkers(
       resolvePolicyOfMarkers(entry, context, diagnosticNode)
     );
   }
-  if (!isObjectOrArray(value)) return value;
-  const record = value as Record<string, unknown>;
+  return isObjectOrArray(value)
+    ? resolvePolicyOfMarkersInRecord(value, context, diagnosticNode)
+    : value;
+}
+
+/**
+ * Helper for `resolvePolicyOfMarkers()`, which resolves the markers in
+ * `record`, an object that is not an array.
+ */
+function resolvePolicyOfMarkersInRecord(
+  record: Record<string, unknown>,
+  context: TransformationContext,
+  diagnosticNode: ts.Node,
+): Record<string, unknown> {
   const marker = record.__ctPolicyIdentityOf;
   if (marker && typeof marker === "object" && !Array.isArray(marker)) {
     const identity = marker as { file?: unknown; path?: unknown };
@@ -354,7 +363,7 @@ function resolvePolicyOfMarkers(
         message:
           "PolicyOf requires a direct typeof reference to a compiler-verified exported exchangeRules() binding.",
       });
-      return value;
+      return record;
     }
     const { __ctPolicyIdentityOf: _, ...rest } = record;
     return {
@@ -433,10 +442,9 @@ function createNumericAst(
 }
 
 function attachWriteAuthorizedByMarker(
-  schema: boolean | Record<string, unknown>,
+  schema: Record<string, unknown>,
   identity: { file: string; path: string[]; moduleIdentity?: string },
-): boolean | Record<string, unknown> {
-  if (typeof schema === "boolean") return schema;
+): Record<string, unknown> {
   const ifc = schema.ifc && typeof schema.ifc === "object"
     ? schema.ifc as Record<string, unknown>
     : {};
@@ -452,7 +460,7 @@ function attachWriteAuthorizedByMarker(
 }
 
 function attachUiContractFromSchemaHints(
-  schema: unknown,
+  schema: boolean | Record<string, unknown>,
   sourceNode: ts.Node,
   typeNode: ts.TypeNode,
   schemaHints: WeakMap<
@@ -470,7 +478,7 @@ function attachUiContractFromSchemaHints(
       };
     }
   >,
-): unknown {
+): boolean | Record<string, unknown> {
   const hint = schemaHints.get(sourceNode)?.cfcUiContract ??
     schemaHints.get(ts.getOriginalNode(sourceNode))?.cfcUiContract ??
     schemaHints.get(typeNode)?.cfcUiContract ??
@@ -480,27 +488,21 @@ function attachUiContractFromSchemaHints(
   }
 
   if (typeof schema === "boolean") {
-    return schema === false ? { not: true, ifc: { uiContract: hint } } : {
-      ifc: { uiContract: hint },
-    };
-  }
-  if (!isObjectOrArray(schema)) {
-    return schema;
+    return attachUiContractToSchemaRecord(schema, hint);
   }
 
-  const recordSchema = schema as Record<string, unknown>;
-  const uiProperty = getUiPropertySchema(recordSchema);
+  const uiProperty = getUiPropertySchema(schema);
   if (uiProperty) {
     return {
-      ...recordSchema,
+      ...schema,
       properties: {
-        ...(recordSchema.properties as Record<string, unknown>),
+        ...(schema.properties as Record<string, unknown>),
         $UI: attachUiContractToSchemaRecord(uiProperty, hint),
       },
     };
   }
 
-  return attachUiContractToSchemaRecord(recordSchema, hint);
+  return attachUiContractToSchemaRecord(schema, hint);
 }
 
 function getUiPropertySchema(
@@ -699,7 +701,6 @@ function evaluateExpression(
   if (node.kind === ts.SyntaxKind.TrueKeyword) return true;
   if (node.kind === ts.SyntaxKind.FalseKeyword) return false;
   if (node.kind === ts.SyntaxKind.NullKeyword) return null;
-  if (node.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
   if (ts.isObjectLiteralExpression(node)) {
     return evaluateObjectLiteral(node, checker);
   }

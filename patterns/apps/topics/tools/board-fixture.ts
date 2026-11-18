@@ -17,6 +17,7 @@ import {
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { EntityDocument } from "@commonfabric/memory/v2";
 import { Server } from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "@commonfabric/runner/instance-naming";
 import type { SessionFactory } from "@commonfabric/runner/storage/v2";
 
 import {
@@ -109,7 +110,11 @@ export interface BoardServer {
    */
   open(space?: string): Promise<OpenedDocSource>;
 
-  /** Sessions as `openDocSource` opens them, on this server. */
+  /**
+   * Sessions as `openDocSource` opens them, on this server. A factory's
+   * sessions declare the naming mode `setInstanceNames()` last chose, and
+   * until then this build's default, as a `RemoteSessionFactory`'s do.
+   */
   Sessions: new (address: (space: MemorySpace) => URL) => SessionFactory;
 
   /** The storage endpoint each of those was given for the board's space. */
@@ -118,16 +123,34 @@ export interface BoardServer {
   close(): Promise<void>;
 }
 
-/** Starts a server holding the standard board. */
-export async function boardServer(): Promise<BoardServer> {
+/**
+ * Starts a server holding the standard board. `namesInstances` is the naming
+ * mode of the deployment the server stands in for, this build's default when
+ * it is left out: the server's posture (INV-16), and the mode the sessions of
+ * `write()`, `delete()`, `mount()` and `open()` declare. So the board's space
+ * is marked exactly when the deployment names instances.
+ */
+export async function boardServer(
+  { namesInstances = namesInstancesByDefault() }: {
+    namesInstances?: boolean;
+  } = {},
+): Promise<BoardServer> {
   const server = new Server({
     store: new URL(`memory://topics-tool-${crypto.randomUUID()}`),
     ...testSessionOpenServerOptions,
     subscriptionRefreshDelayMs: 0,
+    namesInstances: () => namesInstances,
   });
   const clients: Client[] = [];
-  const mount = async (options: MountOptions = {}, space = SPACE) => {
-    const client = await connect({ transport: loopback(server) });
+  const mount = async (
+    options: MountOptions = {},
+    space = SPACE,
+    instanceNames = namesInstances,
+  ) => {
+    const client = await connect({
+      transport: loopback(server),
+      instanceNames,
+    });
     clients.push(client);
     const auth: SessionOpenAuthFactory = testSessionOpenAuthFactory;
     return { client, session: await client.mount(space, options, auth) };
@@ -170,12 +193,18 @@ export async function boardServer(): Promise<BoardServer> {
     Sessions: class implements SessionFactory {
       readonly supportsAclBootstrap = true;
 
+      #instanceNames = namesInstancesByDefault();
+
       constructor(address: (space: MemorySpace) => URL) {
         addresses.push(address(SPACE).href);
       }
 
+      setInstanceNames(enabled: boolean): void {
+        this.#instanceNames = enabled;
+      }
+
       create(space: MemorySpace, _signer?: Signer, options?: MountOptions) {
-        return mount(options, space);
+        return mount(options, space, this.#instanceNames);
       }
     },
     async close() {

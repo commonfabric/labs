@@ -1,4 +1,5 @@
 import { createSession, Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getPieceSourceRevisions, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
@@ -69,7 +70,7 @@ try {
   };
 } catch (error) {
   outcome = {
-    error: error instanceof Error ? error.message : String(error),
+    error: describeFailure(error),
   };
 }
 await runtime.dispose();

@@ -32,6 +32,7 @@
  */
 
 import { BINARY_NAMES, type BinaryName } from "../build-binaries.ts";
+import type { CachedBinaryName } from "../ci-capabilities.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import {
   claimsIdentity,
@@ -113,6 +114,15 @@ function binarySuite(
 }
 
 /**
+ * The suite whose test builds each binary a lane keeps, which is what
+ * says how long building one takes.
+ */
+export const BUILDING_SUITE: Readonly<Record<CachedBinaryName, string>> = {
+  "toolshed-baked-default": "binaries",
+  "toolshed-baked-opposite": "binaries-opposite",
+};
+
+/**
  * The binary suites. The server-execution shell is the same build under
  * different compile-time defines, which is what a variant is: one test,
  * two configurations, two histories that never stand in for each other.
@@ -121,8 +131,10 @@ export function loadBinarySuites(): Suite[] {
   const defaults = serverExecutionCiLane("default");
   const opposite = serverExecutionCiLane("opposite");
   return [
-    binarySuite("binaries", BINARY_NAMES, { env: { ...defaults.environment } }),
-    binarySuite("binaries-opposite", ["toolshed"], {
+    binarySuite(BUILDING_SUITE["toolshed-baked-default"], BINARY_NAMES, {
+      env: { ...defaults.environment },
+    }),
+    binarySuite(BUILDING_SUITE["toolshed-baked-opposite"], ["toolshed"], {
       variant: opposite.recordVariant,
       env: { ...opposite.environment },
     }),

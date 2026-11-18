@@ -8,6 +8,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Result, Unit } from "../src/storage/interface.ts";
 import type { SessionFactory } from "../src/storage/v2.ts";
 import {
@@ -52,7 +53,10 @@ class WithheldWatchSessionFactory implements SessionFactory {
       setReceiver: (r) => base.setReceiver(r),
       setCloseReceiver: (r) => base.setCloseReceiver?.(r),
     };
-    const client = await MemoryV2Client.connect({ transport });
+    const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     const session = await client.mount(
       id as MemorySpace,
       {},

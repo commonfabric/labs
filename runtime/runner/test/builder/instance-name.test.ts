@@ -149,6 +149,26 @@ describe("instance-name", () => {
 
       expect(nameInstance(value, "a")).toBe(value);
     });
+
+    it("throws a `TypeError` for a name that is not a string", () => {
+      const Child = child();
+
+      expect(() =>
+        pattern<{ x: number }>(({ x }) => {
+          // The declared type refuses this call; the runtime check is for
+          // callers the compiler never saw.
+          // @ts-expect-error: a name is a string.
+          nameInstance(Child({ x }), 7);
+          return {};
+        })
+      ).toThrow(TypeError);
+      expect(() =>
+        pattern<{ x: number }>(({ x }) => {
+          nameInstance(Child({ x }), "7");
+          return {};
+        })
+      ).not.toThrow();
+    });
   });
 
   describe("instancePartialCause()", () => {

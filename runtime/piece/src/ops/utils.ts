@@ -1,8 +1,14 @@
 import { toCompactDebugString } from "@commonfabric/data-model";
 import {
+  type Cell,
+  cellTx,
   compileAndSavePattern,
+  type IExtendedStorageTransaction,
   isCfcEnforcementRejection,
+  isLink,
+  isStream,
   type RuntimeProgram,
+  type Stream,
 } from "@commonfabric/runner";
 import type { PiecesController } from "./pieces-controller.ts";
 
@@ -63,4 +69,46 @@ export function commitFailure(error: object): Error {
   const wrapped = new Error(message, { cause: error });
   if (typeof named.name === "string") wrapped.name = named.name;
   return wrapped;
+}
+
+/**
+ * The transaction `cell` is read through, when it is open and names the
+ * principal whose instance of a scoped document the cell addresses
+ * (`scopeKeyIdentity`); `undefined` otherwise, for a caller to read through
+ * a transaction of its own as it did before.
+ */
+export function instanceTx(
+  cell: Cell<unknown>,
+): IExtendedStorageTransaction | undefined {
+  const tx = cellTx(cell);
+  return tx !== undefined && tx.status().status === "ready" &&
+      tx.tx.scopeKeyIdentity !== undefined
+    ? tx
+    : undefined;
+}
+
+/**
+ * The `addPiece` stream `root`, a space's default pattern, declares. A read
+ * under a stream schema returns a stream even where the pattern declares no
+ * handler, so the stored declaration decides, and it is checked before
+ * anything is read through it: the event target it names may be foreign, and
+ * the transport authorizes that target before it observes or appends events.
+ *
+ * @throws When `root` declares no `addPiece` handler.
+ */
+export async function addPieceHandlerOf(
+  root: Cell<unknown>,
+): Promise<Stream<unknown>> {
+  const declaration = root.key("addPiece");
+  await declaration.sync();
+  const handler = isLink(declaration.getRaw())
+    ? await root.asSchema({
+      type: "object",
+      properties: { addPiece: { asCell: ["stream"] } },
+    }).key("addPiece").pull()
+    : undefined;
+  if (!isStream(handler)) {
+    throw new Error("The default pattern has no addPiece handler");
+  }
+  return handler;
 }

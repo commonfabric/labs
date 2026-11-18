@@ -1,13 +1,19 @@
 import {
   type Cell,
   Cfc,
+  computed,
+  type Default,
   equals,
+  type FabricBytes,
   handler,
+  ifElse,
+  lift,
   linksOf,
   NAME,
   pattern,
   profileOwnerOf,
   resultOwnerOf,
+  spaceDeleted,
   spaceOf,
   Stream,
   UI,
@@ -22,6 +28,7 @@ import ProfileHome, {
   pointAtInboxIfUnset,
   type ProfileInbox,
   type SetProfileNameEvent,
+  type SetProfilePictureEvent,
 } from "../profile-home/profile-home.tsx";
 
 // Trusted UI surfaces / actions. The create surface authorizes appending a new
@@ -60,15 +67,46 @@ export type SeedProfileNameEvent = {
 
 /**
  * What the seed step needs of the profile it seeds: the stored name (to write
- * only where none is stored yet) and the stream it writes through, and what
+ * only where none is stored yet) and the streams it writes through, and what
  * pointing the profile at Home's private inbox needs. The profile is the one
  * just created, so it is current-vintage by construction and carries
- * `setName`.
+ * `setName` and `setPicture`; the picture's stream is optional only so that a
+ * profile without it is still named.
  */
 export type SeedProfileTarget = InboxPointable & {
   name: string;
   setName: Stream<SetProfileNameEvent>;
+  setPicture?: Stream<SetProfilePictureEvent>;
 };
+
+/**
+ * The profile the user's host suggests for their first profile, as the
+ * runtime stores it (`offerProfileSuggestion` in
+ * `runtime/runner/src/profile-suggestion.ts`): a name to start the field
+ * with, and a picture the profile takes unless the user removes it first.
+ */
+export type ProfileSuggestion = {
+  name?: string;
+  picture?: FabricBytes;
+};
+
+/**
+ * The user's own decision about the picture the profile the surface creates
+ * starts with: `picture` holds the one they chose, and an empty choice means
+ * they removed it. Until they decide, the slot is `undefined` and the
+ * suggested picture stands.
+ */
+export type PictureChoice = { picture?: FabricBytes };
+
+/** The picture the profile takes: the user's choice, else the suggestion's. */
+function pictureToApply(
+  choice: PictureChoice | undefined,
+  suggestion: ProfileSuggestion | null | undefined,
+): FabricBytes | undefined {
+  const picture = choice === undefined ? suggestion?.picture : choice.picture;
+  // An empty picture is none: the seed step and `setPicture` take only bytes.
+  return picture?.length ? picture : undefined;
+}
 
 // Stores the creation name in the new profile's `name` cell, through
 // `setName` — the cell's owner-protected writer — so every `#profile` reader
@@ -95,10 +133,21 @@ export type SeedProfileTarget = InboxPointable & {
 // name unstored. Only a profile whose stored `name` is still empty is
 // written: a re-delivery of this event, or the same profile seeded
 // elsewhere, is left alone.
+//
+// The picture the user chose on the surface, or else the one a host's
+// profile suggestion holds, is set here too, through the profile's
+// `setPicture`, which this runtime runs as the profile's creator, so the picture's label names the owner as the face
+// readers require.
 export const seedProfileName = handler<
   SeedProfileNameEvent,
-  { privateInbox?: ProfileInbox }
->((event, { privateInbox }) => {
+  {
+    privateInbox?: ProfileInbox;
+    // The suggestion as the surface shows it (`shownSuggestion`), whose
+    // declared default ends the wait for a suggestion nobody wrote.
+    profileSuggestion?: ProfileSuggestion | null;
+    pictureChoice?: Writable<PictureChoice | undefined>;
+  }
+>((event, { privateInbox, profileSuggestion, pictureChoice }) => {
   if (event === undefined) {
     throw new Error(
       "Cannot seed a profile's name: the event lacks a name or a profile, " +
@@ -117,6 +166,39 @@ export const seedProfileName = handler<
   // otherwise wait for the next worker.
   pointAtInboxIfUnset(target, privateInbox);
   target.setName.send({ name });
+  const picture = pictureToApply(pictureChoice?.get(), profileSuggestion);
+  if (picture) target.setPicture?.send({ picture });
+});
+
+// CFC debt: the picture the user chooses here is not gated. Real CFC would
+// admit a write to `pictureChoice` only from a gesture on this trusted create
+// surface, as it admits the create itself. It cannot yet: `cf-avatar-input`
+// hands over the picked image in a `cf-change` event the component sends after
+// the file dialog closes, and the renderer vouches only for events the browser
+// marks trusted, so a gate here would refuse every real pick. A pattern that
+// reaches this surface's streams can therefore choose or remove the picture
+// the create then gives the new profile, as it can already set a profile's
+// picture through profile-home's ungated `setPicture`. The name and the create
+// stay gated. See README.md, "CFC debt".
+export type ChoosePictureState = {
+  pictureChoice: Writable<PictureChoice | undefined>;
+  remove?: boolean;
+};
+
+// Records the user's picture decision on the create surface: the image they
+// chose (`cf-avatar-input`'s change), or, bound with `remove`, no picture at
+// all. A host's suggestion is left as the host stored it. A change without
+// bytes decides nothing.
+export const choosePicture = handler<
+  SetProfilePictureEvent,
+  ChoosePictureState
+>((event, { pictureChoice, remove }) => {
+  if (remove) {
+    pictureChoice.set({});
+    return;
+  }
+  const picture = event?.picture ?? event?.detail?.bytes;
+  if (picture?.length) pictureChoice.set({ picture });
 });
 
 // Appends a freshly-created profile (its own `inSpace` space) to the home
@@ -307,19 +389,19 @@ export type ProfileLists = {
   profiles: Cell<BackwardsCompatibleProfile[]>;
 
   /** Home's default profile slot, `DefaultProfileSlot`, if bound. */
-  defaultProfile?: Cell<DefaultProfileSlot>;
+  defaultProfile?: Cell<DefaultProfileSlot> | undefined;
 
   /**
    * The space of a default a home chose before `defaultProfile`, Home's
    * `legacyDefaultProfileSpace`, if bound.
    */
-  legacyDefaultProfileSpace?: Cell<string | undefined>;
+  legacyDefaultProfileSpace?: Cell<string | undefined> | undefined;
 
   /** Home's `mru` list. */
   mru: Cell<unknown[]>;
 
   /** Home's `retiredProfiles` list, if bound. */
-  retiredProfiles?: Cell<unknown[]>;
+  retiredProfiles?: Cell<unknown[]> | undefined;
 };
 
 /**
@@ -389,10 +471,22 @@ export const liveProfileSpaces = (
 // one where any is not the field of that name of the result that owns the
 // retired list (`resultOwnerOf()`), as each of Home's is.
 //
+// A profile whose space is deleted is retired too, though it is never one of
+// the user's own: its document cannot be read. It is admitted in place of the
+// ownership test when `profiles` lists it and `spaceDeleted(space)`, asked
+// here, returns `true`, so an event naming a profile that is not deleted
+// meets the usual refusals. The refusals that keep `#profile` from moving
+// without the person choosing do not apply, since a deleted profile is none
+// of the live ones they protect. Where the memory server has not yet answered
+// for the space, the handler runs again once it has. The runtime that holds
+// the person's Home sends the retirement when it hears of the deletion, as it
+// sends the catalog's `markDeleted` (`retireDeletedProfileOf()`).
+//
 // Restoring removes every link in the list into the space of the profile the
 // row binds or the event names, whatever it names, so that a link the list
 // came to hold some other way can be cleared. A profile that is not retired
-// is left as it is.
+// is left as it is. A deleted profile is not restored: its space admits no
+// one.
 export const setProfileRetired = handler<
   ProfileRetirementEvent,
   {
@@ -418,6 +512,9 @@ export const setProfileRetired = handler<
   const { retiredProfiles } = state;
   const retired = linksOf(retiredProfiles) ?? [];
   if (!state.retired) {
+    if (spaceDeleted(space) === true) {
+      throw new Error("Cannot restore a profile whose space is deleted.");
+    }
     const kept = retired.filter((entry) => spaceOf(entry) !== space);
     if (kept.length !== retired.length) retiredProfiles.set(kept);
     return;
@@ -438,6 +535,18 @@ export const setProfileRetired = handler<
         "not one Home's own.",
     );
   }
+  if (retired.some((entry) => spaceOf(entry) === space)) return;
+  // A deleted profile is decided before its document is read, since a
+  // runtime that read it earlier still holds it and would count it live.
+  const listed = (linksOf(profiles) ?? []).find((entry) =>
+    spaceOf(entry) === space
+  );
+  if (listed !== undefined && spaceDeleted(space) === true) {
+    // The list's own link: a deleted profile's document cannot be read, so
+    // no link is followed to it.
+    retiredProfiles.set([...retired, listed]);
+    return;
+  }
   const live = liveProfileSpaces(
     {
       profiles,
@@ -448,7 +557,6 @@ export const setProfileRetired = handler<
     },
     spaceOf(retiredProfiles),
   );
-  if (retired.some((entry) => spaceOf(entry) === space)) return;
   if (!live.includes(space)) {
     throw new Error(
       "Cannot retire a profile that is not one of the profiles this home " +
@@ -596,24 +704,78 @@ export type ProfileCreateInput = {
    * points at an inbox already.
    */
   privateInbox?: ProfileInbox;
+
+  /**
+   * The profile the user's host suggests, which the `#profile` wish hands
+   * over. Its name starts the field in place of `defaultName`; its picture is
+   * shown, with a control that removes it, and the profile created takes the
+   * picture still shown. The user may remove it or choose their own, which
+   * the surface records for itself and leaves this suggestion as the host
+   * stored it; creating a profile leaves the suggestion stored for the host
+   * to replace, and the wish shows this surface only while the user has no
+   * profile.
+   */
+  profileSuggestion?: Writable<ProfileSuggestion | undefined>;
 };
+
+// The suggestion as the surface shows it and the create applies it: `null`
+// when there is none. For a user no host made a suggestion for, the link the
+// wish passes reaches a document nobody wrote, and a read whose schema
+// declares no default waits for that document forever (speculation.md),
+// stalling everything here that reads the suggestion, the create's seed step
+// included. This read's declared default ends the wait. It sits here
+// rather than on `profileSuggestion` itself because a default added to that
+// input could not be proved compatible with the pieces already running this
+// pattern (`deno task pattern-compat`).
+const shownSuggestion = lift<
+  { suggestion?: Default<ProfileSuggestion | null, null> },
+  ProfileSuggestion | null
+>(({ suggestion }) => suggestion ?? null);
 
 export type ProfileCreateOutput = {
   [NAME]: string;
   [UI]: VNode;
   createProfile: Stream<CreateProfileEvent>;
+
+  /** Chooses that picture (ungated: see README.md, "CFC debt"). */
+  choosePicture: Stream<SetProfilePictureEvent>;
+
+  /**
+   * Removes that picture (ungated: see README.md, "CFC debt"). The event's
+   * content is ignored.
+   */
+  removePicture: Stream<SetProfilePictureEvent>;
 };
 
 export default pattern<ProfileCreateInput, ProfileCreateOutput>(
-  ({ profiles, inputId, defaultName, privateInbox }) => {
-    const seedName = seedProfileName({ privateInbox });
+  ({ profiles, inputId, defaultName, privateInbox, profileSuggestion }) => {
+    // The picture decision in progress. Per session: it belongs to the view
+    // making it, as the profile picker's pending Remove does, so it neither
+    // reaches another device nor waits for the next create.
+    const pictureChoice = Writable.perSession.of<PictureChoice | undefined>(
+      undefined,
+    );
+    const suggestion = shownSuggestion({ suggestion: profileSuggestion });
+    const seedName = seedProfileName({
+      privateInbox,
+      profileSuggestion: suggestion,
+      pictureChoice,
+    });
     const createProfile = submitProfileCreation({
       profiles,
       seedName,
     });
+    const startingName = computed(() => suggestion?.name ?? defaultName ?? "");
+    const shownPicture = computed(() =>
+      pictureToApply(pictureChoice.get(), suggestion)
+    );
+    const chooseOwnPicture = choosePicture({ pictureChoice });
+    const removePicture = choosePicture({ pictureChoice, remove: true });
     return {
       [NAME]: "Create Profile",
       createProfile,
+      choosePicture: chooseOwnPicture,
+      removePicture,
       [UI]: (
         <cf-vstack
           id="profile-create-surface"
@@ -629,12 +791,48 @@ export default pattern<ProfileCreateInput, ProfileCreateOutput>(
               uncontrolled copy inside cf-submit-input) — it does not touch the
               trusted-click path. */
           }
+          {
+            /* The picture the profile will start with, which the seed step
+              sets as the owner's face. Unlike the create, choosing and
+              removing it are not gated (see choosePicture, "CFC debt"). */
+          }
+          <cf-hstack
+            gap="2"
+            align="center"
+            data-ui-region="profile-create-picture"
+          >
+            {ifElse(
+              shownPicture,
+              <cf-avatar
+                bytes={shownPicture}
+                name={startingName}
+                size="lg"
+                data-ui-region="profile-create-picture-preview"
+              />,
+              null,
+            )}
+            <cf-avatar-input
+              oncf-change={chooseOwnPicture}
+            />
+            {ifElse(
+              shownPicture,
+              <cf-button
+                id="profile-create-remove-picture"
+                variant="ghost"
+                size="sm"
+                onClick={removePicture}
+              >
+                Remove picture
+              </cf-button>,
+              null,
+            )}
+          </cf-hstack>
           <cf-submit-input
             inputId={inputId ?? "profile-name-input"}
             data-ui-action={TRUSTED_PROFILE_CREATE_ACTION}
             placeholder="Your name..."
             buttonText="Create profile"
-            initialValue={defaultName ?? ""}
+            initialValue={startingName}
             onClick={createProfile}
           />
         </cf-vstack>

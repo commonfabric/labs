@@ -42,12 +42,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
-import {
-  type Cell,
-  type Frame,
-  type JSONSchema,
-} from "../src/builder/types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { Cell, Frame, JSONSchema } from "../src/builder/types.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { benchDiagnostic } from "./bench-diagnostics.ts";
 import {
   accountNovelty,

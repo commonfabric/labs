@@ -1,4 +1,4 @@
-import { ConsoleMethod } from "./harness/console.ts";
+import type { ConsoleMethod } from "./harness/console.ts";
 
 export type ConsoleMessage = {
   metadata:

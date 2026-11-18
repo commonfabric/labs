@@ -12,6 +12,13 @@
  * instead, which explains itself where it lands.
  */
 
+import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  type HarnessSubagentProfile,
+  PATTERN_AUTHOR_SUBAGENT_PROFILE,
+} from "./contracts/subagent.ts";
+import type { BuiltinToolId } from "./contracts/tool-descriptor.ts";
+
 import { LOOM_COMMAND_UNTRUSTED_NOTICE } from "./tools/loom-commands.ts";
 import { RUNTIME_MODULE_IMPORT_LINE } from "./tools/run-pattern.ts";
 
@@ -67,22 +74,34 @@ export const PIECES_TOOL_GUIDANCE = [
   "- A SQLite database describes as `database`: each table's typed columns, the labels they carry, and under `fill` its row count and each column's non-NULL count. Read `fill` before querying: a column counting 0 is NULL on every row, so filtering on it returns nothing; `unread` means not counted, not empty. Read a database with `db.query` over the handle, not as a value.",
   "- A table with `rowLabelReads` has a per-row label rule over those columns: a query must select each by its own name (an alias does not count) or it is refused on the result's `error` rather than as rows; with `rowLabelReadsIncomplete` the rule needs columns not named, so every query is refused.",
   "- A research handle (the cfh:v: token research returned) describes with its findings under `research`, with its kit, confirmed patterns and described handles, each marked `unavailable` when this run does not hold its token; read it before researching the same question again.",
-  "- Changing a piece's source goes through \"pattern-author\": hand it the piece's handle and what should differ, and it revises the source in place, keeping the data. No parent holds the tools that read or replace a piece's source.",
 ].join("\n");
+
+/**
+ * How a piece's source is changed, for a run that may delegate to the profile
+ * that changes it. A run can come to hold a piece at any point — from a
+ * command's answer, a resolved slug or an input cell — so this reaches every
+ * task that does work, whatever its tags.
+ */
+export const PIECE_SOURCE_TOOL_GUIDANCE =
+  "Changing a piece's source goes through the \"pattern-author\" delegate_task profile: hand it the piece's handle and what should differ, and it revises the source in place, keeping the data. No parent holds the tools that read or replace a piece's source.";
 
 /** When to resolve a piece the user names, for any task that may name one. */
 export const RESOLVE_PIECE_TOOL_GUIDANCE =
-  "When the user names a piece by its slug, including in a question, call resolve_piece before author delegation or a registry lookup, and pass the resultRef it returns to the pattern-author child to read or revise the piece. A missing or refused address means asking for the exact slug or an attachment, not authoring a name matcher.";
+  "resolve_piece resolves a slug to a resultRef that can be passed to a pattern-author child to read or revise the piece. A missing or refused address does not establish the contents of a piece.";
 
 /** How to run the host's commands, for a task that finds or acts. */
 export const LOOM_COMMANDS_TOOL_GUIDANCE = [
   "Running the host's commands:",
   "- A listed command with target loom takes a loomId. Pass expectedVersion to refuse a stale write.",
   "- Batch independent calls into one run_command as {calls: [...]}; they run concurrently and answer in order.",
-  "- Under an enforcing mode, run_command runs only for a task bound as a direct command.",
   "- not_granted means this run may not run the command: do not retry; if the person should, offer it in your result.",
+  "- A component's ref in an answer is a handle this run holds for that piece; describe_handle shows what it holds and, when it can read the piece's pattern, the verbs it takes; a description with no verbs means they could not be read, not that it has none. A ref_unheld says why a component could not be held: do not look for its address another way.",
   `- ${LOOM_COMMAND_UNTRUSTED_NOTICE}`,
 ].join("\n");
+
+/** The command-policy warning only an enforcing run needs. */
+export const COMMAND_ENFORCEMENT_GUIDANCE =
+  "Under enforce-explicit, CFS-declared reads may run from context or unbound prompt slots. Writes, external effects, unknown effects, and mixed batches need a direct command. Under enforce-strict, every call needs a direct command.";
 
 /** How the loom retrieval tools answer, for a task that finds or acts. */
 export const LOOM_RETRIEVAL_TOOL_GUIDANCE =
@@ -93,7 +112,21 @@ export interface ToolGuidanceBacking {
   fabricSessionAvailable: boolean;
   loomCommandsAvailable: boolean;
   loomRetrievalAvailable: boolean;
+  allowedToolIds?: readonly BuiltinToolId[];
+
+  /** The profiles the run may delegate to; absent means none. */
+  subagentProfiles?: readonly HarnessSubagentProfile[];
+  cfcEnforcementMode?: CfcEnforcementMode;
 }
+
+/**
+ * Whether a run with these backings can have a piece's source changed: it may
+ * call `delegate_task`, and one profile it may name holds the source tools.
+ */
+const delegatesSourceChanges = (backing: ToolGuidanceBacking): boolean =>
+  (backing.allowedToolIds === undefined ||
+    backing.allowedToolIds.includes("delegate_task")) &&
+  (backing.subagentProfiles ?? []).includes(PATTERN_AUTHOR_SUBAGENT_PROFILE);
 
 /** The tool guidance a session with these backings opens with, every tag's. */
 export const toolGuidanceContextMessages = (
@@ -104,9 +137,27 @@ export const toolGuidanceContextMessages = (
       AUTHOR_TOOL_GUIDANCE,
       RESEARCH_TOOL_GUIDANCE,
       PIECES_TOOL_GUIDANCE,
+      ...(delegatesSourceChanges(backing) ? [PIECE_SOURCE_TOOL_GUIDANCE] : []),
       RESOLVE_PIECE_TOOL_GUIDANCE,
     ]
     : []),
-  ...(backing.loomCommandsAvailable ? [LOOM_COMMANDS_TOOL_GUIDANCE] : []),
-  ...(backing.loomRetrievalAvailable ? [LOOM_RETRIEVAL_TOOL_GUIDANCE] : []),
+  ...(backing.loomCommandsAvailable &&
+      (backing.allowedToolIds === undefined ||
+        backing.allowedToolIds.includes("run_command"))
+    ? [
+      LOOM_COMMANDS_TOOL_GUIDANCE,
+      ...(backing.cfcEnforcementMode === "enforce-explicit" ||
+          backing.cfcEnforcementMode === "enforce-strict"
+        ? [COMMAND_ENFORCEMENT_GUIDANCE]
+        : []),
+    ]
+    : []),
+  ...(backing.loomRetrievalAvailable &&
+      (backing.allowedToolIds === undefined ||
+        backing.allowedToolIds.some((tool) =>
+          tool.startsWith("loom_") && tool !== "loom_compose" &&
+          tool !== "loom_inspect" && tool !== "loom_authoring_context"
+        ))
+    ? [LOOM_RETRIEVAL_TOOL_GUIDANCE]
+    : []),
 ];

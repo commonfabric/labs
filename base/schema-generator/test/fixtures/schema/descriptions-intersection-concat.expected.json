@@ -1,5 +1,4 @@
 {
-  "$comment": "Docs inherited from intersection constituents. Sources: TypeA, TypeB.",
   "description": "Doc A\n\nDoc B",
   "properties": {
     "bar": {

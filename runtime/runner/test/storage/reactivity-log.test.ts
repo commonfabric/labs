@@ -7,12 +7,15 @@ import { toDocumentPath } from "@commonfabric/memory/v2";
 import { Runtime } from "../../src/runtime.ts";
 import { txToReactivityLog } from "../../src/scheduler.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import type { MemorySpace } from "../../src/storage/interface.ts";
+import type { CellScope } from "../../src/builder/types.ts";
 import {
+  declaredOnwardRead,
+  declaredOnwardTarget,
   ignoreReadForScheduling,
   markReadAsAttemptedWrite,
   reactivityLogFromActivities,
 } from "../../src/storage/reactivity-log.ts";
-import { getDirectTransactionReactivityLog } from "../../src/storage/transaction-inspection.ts";
 
 const signer = await Identity.fromPassphrase("ignored-attempted-writes");
 const space = signer.did();
@@ -66,7 +69,7 @@ describe("reactivity-log", () => {
         ignoreReadForScheduling,
         () => cell.withTx(tx).key("slot").set(1),
       );
-      const log = getDirectTransactionReactivityLog(tx)!;
+      const log = tx.getReactivityLog();
       expect(log.attemptedWrites).toContainEqual({
         space,
         scope: "space",
@@ -120,5 +123,43 @@ describe("reactivity-log", () => {
       await runtime.dispose();
       await storage.close();
     }
+  });
+
+  describe("declaredOnwardTarget()", () => {
+    it("returns the target a read was declared onward to, its scope defaulted", () => {
+      expect(
+        declaredOnwardTarget(
+          declaredOnwardRead({ space, id: "of:list", path: ["items"] }),
+        ),
+      ).toEqual({ space, id: "of:list", scope: "space", path: ["items"] });
+    });
+
+    it("returns `undefined` for a read not declared onward", () => {
+      expect(declaredOnwardTarget(ignoreReadForScheduling)).toBeUndefined();
+      expect(declaredOnwardTarget(undefined)).toBeUndefined();
+    });
+
+    it("throws for a target whose space is not a DID", () => {
+      // The argument's type rules this out, so it is cast where it is handed
+      // over, standing in for a caller the types do not reach.
+      expect(() =>
+        declaredOnwardTarget(declaredOnwardRead({
+          space: "not-a-did" as MemorySpace,
+          id: "of:list",
+          path: [],
+        }))
+      ).toThrow("declaredOnwardRead: malformed target");
+    });
+
+    it("throws for a target in a scope that is not a cell scope", () => {
+      expect(() =>
+        declaredOnwardTarget(declaredOnwardRead({
+          space,
+          id: "of:list",
+          scope: "galaxy" as CellScope,
+          path: [],
+        }))
+      ).toThrow("declaredOnwardRead: malformed target scope");
+    });
   });
 });

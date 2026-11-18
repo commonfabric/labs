@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 
-import { stripAnsi, visibleWidth } from "../lib/view/ansi.ts";
+import { stripAnsi } from "../lib/view/ansi.ts";
+import { visibleWidth } from "../lib/view/width.ts";
 import { renderLineColored } from "../lib/view/highlight.ts";
 import {
   _internal,
@@ -10,6 +11,7 @@ import {
   type ViewState,
 } from "../lib/view/render.ts";
 import { lineBg, styleFor, ui } from "../lib/view/theme.ts";
+import { buildWrapPlan } from "../lib/view/wrap.ts";
 import { bgCode, fgCode, parseDocument, SAMPLE } from "./view-helpers.ts";
 
 function baseView(over: Partial<ViewState> = {}): ViewState {
@@ -345,11 +347,11 @@ Deno.test("renderFrame: word-wrapped separators retain search highlighting", () 
   assertEquals(bgColumns(rows[2]), [true, true, false, false]);
 });
 
-Deno.test("renderFrame: repeated prefixes retain search highlighting", () => {
+Deno.test("renderFrame: word-wrap indentation is blank and unhighlighted", () => {
   const rows = renderFrame(
-    parseDocument("// foo bar baz"),
+    parseDocument("// foo bar baz qux"),
     baseView({
-      width: 7,
+      width: 8,
       height: 5,
       wrapMode: "word",
       matches: [{ line: 0, start: 0, end: 2 }],
@@ -357,22 +359,33 @@ Deno.test("renderFrame: repeated prefixes retain search highlighting", () => {
     }),
   );
 
-  assertEquals(bgColumns(rows[1]).slice(0, 3), [true, true, false]);
+  assertEquals(rows.slice(0, 3).map(stripAnsi), [
+    "// foo \\",
+    "   bar \\",
+    "baz qux ",
+  ]);
+  assertEquals(bgColumns(rows[0]).slice(0, 3), [true, true, false]);
+  assertEquals(bgColumns(rows[1]).slice(0, 3), [false, false, false]);
 });
 
-Deno.test("renderFrame: repeated prefixes retain selection highlighting", () => {
-  const doc = parseDocument("// foo bar baz");
+Deno.test("renderFrame: word-wrap indentation does not take the selection background", () => {
+  const doc = parseDocument("// foo bar baz qux");
   const rows = renderFrame(
     doc,
     baseView({
-      width: 8,
+      width: 9,
       height: 5,
       wrapMode: "word",
       selected: doc.flatStructure[0],
     }),
   );
 
-  assertEquals(bgColumns(rows[1]).slice(0, 4), [false, true, true, true]);
+  assertEquals(rows.slice(0, 3).map(stripAnsi), [
+    "╭// foo \\",
+    "│   bar \\",
+    "╰baz qux ",
+  ]);
+  assertEquals(bgColumns(rows[1]).slice(1, 5), [false, false, false, true]);
 });
 
 Deno.test("renderFrame: word wrapping does not break at a non-breaking space", () => {
@@ -1073,6 +1086,29 @@ Deno.test("renderFrame: a selected empty line keeps its wrapped guide", () => {
     }),
   ).map(stripAnsi);
   assertEquals(rows[1][0], "│");
+});
+
+Deno.test("renderFrame: a wrapped guide marks the end of a node on a line its wrap plan leaves out", () => {
+  const doc = parseDocument("ab\ncd");
+  const selected = {
+    ...doc.flatStructure[0]!,
+    startLine: 0,
+    endLine: 1,
+    startCol: 0,
+    endCol: 2,
+  };
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 6,
+      height: 4,
+      color: false,
+      selected,
+      wrapMode: "hard",
+      wrapPlan: buildWrapPlan(parseDocument("ab").lines, "pictures", 5),
+    }),
+  ).map(stripAnsi);
+  assertEquals(rows.slice(0, 2).map((row) => row[0]), ["╭", "╰"]);
 });
 
 Deno.test("renderFrame: a wrapped guide is blank outside the selected node", () => {

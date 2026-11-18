@@ -69,6 +69,10 @@ packages and type-checks attached tests but does not run them.
 
 ## Stale Computed Values After `cf cell set`
 
+This section describes a deployment with server execution off. Under server
+execution `cf cell get` pulls the value from the server, so it is current, and
+only `cf cell get --no-run` can return a stale one.
+
 **Gotcha:** `cf cell set` updates data but does NOT trigger computed re-evaluation. You must run `piece step` after `set` to get fresh computed values.
 
 ```bash

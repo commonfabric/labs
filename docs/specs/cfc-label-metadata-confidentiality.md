@@ -130,8 +130,9 @@ implemented." This is that revisit:
 
 1. **Close the raw seam.** `meta: "cfc"` over IPC either returns the same
    redacted view as `getCfcLabel` or is removed (no callers today — remove).
-2. **`inspectConfLabel`, `principalOf` and `principalsOf` are the only
-   pattern-facing surfaces**, all reading inside the observing transaction and
+2. **`inspectConfLabel`, `principalOf`, `principalsOf` and
+   `writtenPrincipalOf` are the only pattern-facing surfaces**, all reading
+   inside the observing transaction and
    taking their target as a cell. `inspectConfLabel` is implemented per
    §4.6.4.1: equality predicates only; result is a runtime-labeled value
    whose label joins the consumed metadata observations + query-input
@@ -214,7 +215,7 @@ consumes inbound views, redacting the outbound copies is safe.
   source's stored labels only to bind a `CurrentPrincipal` reader) while
   the IPC ingress stops consuming inbound views, all main-thread-facing view
   copies redact `Caveat.source`, and the §2 table lives at
-  `runner/src/cfc/label-field-classification.ts`._
+  `memory/v2/cfc-label-fields.ts`._
 - **Stage 1 (representation):** the cross-space persist transform
   (commitment/public per §2's table) behind a dial
   (`cfcLabelMetadataProtection: off | observe | enforce` — observe computes
@@ -262,11 +263,11 @@ consumes inbound views, redacting the outbound copies is safe.
   pattern-facing surfaces are the `inspectConfLabel` BUILTIN
   (`runner/src/builtins/inspect-conf-label.ts`, exposed as
   `commonfabric.inspectConfLabel`), whose node runs inside the observing
-  transaction, and `principalOf` and `principalsOf`, plain functions
-  (`runner/src/builder/principal-of.ts`) that read through the calling
-  handler's or computation's own transaction; all take their target as a
-  cell, so inspecting a label never reads the labeled payload; the display
-  path (`getCfcLabel`) is untouched.
+  transaction, and `principalOf`, `principalsOf` and `writtenPrincipalOf`,
+  plain functions (`runner/src/builder/principal-of.ts`) that read through
+  the calling handler's or computation's own transaction; all take their
+  target as a cell, so inspecting a label never reads the labeled payload; the
+  display path (`getCfcLabel`) is untouched.
   Consumption is a `labelMetadata` observation class beside
   value/shape/followRef, recorded explicitly
   (`recordCfcLabelMetadataObservation`) with the population-rule label and

@@ -48,6 +48,23 @@ function stubController(calls: string[]): PiecesController {
 }
 
 describe("warmPiece()", () => {
+  it("starts nothing under server execution", async () => {
+    const calls: string[] = [];
+    const warmed = await warmPiece(config, [], {
+      loadPieces: () =>
+        Promise.resolve(
+          {
+            ...stubController(calls),
+            runtime: { experimental: { serverExecution: true } },
+          } as unknown as PiecesController,
+        ),
+      resolvePieceReference: (_pieces, token, path) =>
+        Promise.resolve({ piece: token, pathAfter: [...path] }),
+    });
+    expect(calls).toEqual([]);
+    expect(warmed).toEqual({ piece: config.piece });
+  });
+
   it("starts the piece and leaves it running", async () => {
     const calls: string[] = [];
     await warmPiece(config, [], {

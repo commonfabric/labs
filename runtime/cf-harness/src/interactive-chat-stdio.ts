@@ -1,4 +1,5 @@
 import { resolve, toFileUrl } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
@@ -170,6 +171,13 @@ Environment:
                                        store's own; on Linux that file is the store's
                                        own, looked for once. The local Loom host
                                        refuses to start with it unset
+  CFC_VM_FORWARD_PORTS                 Host ports the sandbox reaches,
+                                       comma-separated: the darwin runsc
+                                       forwards them into its VM; on Linux
+                                       pasta forwards them and no other port of
+                                       the host's loopback, for a named runsc
+                                       too, which under bridge reaches no port
+                                       of it where none are listed
   CF_HARNESS_LOOM_AUTHORING_CONFIG     Default host authoring configuration file
   CF_HARNESS_FABRIC_API_URL            Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY           Default value for --fabric-identity
@@ -638,9 +646,7 @@ const parseRequestLine = (line: string): HarnessChatRequestEnvelope => {
     parsed = JSON.parse(line);
   } catch (error) {
     throw invalidRequestResponse(
-      `failed to parse chat request JSON: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `failed to parse chat request JSON: ${describeFailure(error)}`,
     );
   }
   if (!isRequestEnvelope(parsed)) {
@@ -679,7 +685,6 @@ export const runHarnessInteractiveChatNdjsonTransport = async (
     });
   const resolvedService = await service;
 
-  let cleanupError: unknown;
   try {
     for await (const rawLine of options.lines) {
       const line = rawLine.trim();
@@ -693,24 +698,21 @@ export const runHarnessInteractiveChatNdjsonTransport = async (
         response = isTransportErrorResponse(error)
           ? error
           : invalidRequestResponse(
-            error instanceof Error ? error.message : String(error),
+            describeFailure(error),
           );
       }
       await writeEnvelope(response);
     }
   } catch (error) {
     transportError = error;
-  } finally {
-    try {
-      await resolvedService.waitForIdle();
-    } catch (error) {
-      cleanupError = error;
-    }
-    try {
-      await options.closeService?.(resolvedService);
-    } catch (error) {
-      cleanupError ??= error;
-    }
+  }
+  // Settles every turn and never rejects, so the service is idle when closed.
+  await resolvedService.waitForIdle();
+  let cleanupError: unknown;
+  try {
+    await options.closeService?.(resolvedService);
+  } catch (error) {
+    cleanupError = error;
   }
   if (transportError !== undefined) {
     throw transportError;
@@ -810,8 +812,34 @@ export const runHarnessInteractiveChatStdio = async (
     await runHarnessInteractiveChatNdjsonTransport({
       lines: decodeUtf8Lines(options.input ?? Deno.stdin.readable),
       createService,
-      closeService: async () => {
-        await sessionStore?.close?.();
+      closeService: async (service) => {
+        // The sessions' Fabric runtimes hold sessions open with the fabric,
+        // so they are released, as the console releases them, before the
+        // store closes. A service the caller supplied is the caller's to
+        // release. The store closes whether or not the release fails, and a
+        // failure of each is reported rather than the second hiding the first.
+        const failures: unknown[] = [];
+        try {
+          if (options.createService === undefined) {
+            await service.releaseFabricRuntimes();
+          }
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          await sessionStore?.close?.();
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            "the Fabric runtimes failed to release and the session store failed to close",
+          );
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
       },
       writeLine: async (line) => {
         await writer.write(encoder.encode(`${line}\n`));
@@ -896,7 +924,7 @@ if (import.meta.main) {
   try {
     await runHarnessInteractiveChatStdioCli();
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(describeFailure(error));
     Deno.exit(1);
   }
 }

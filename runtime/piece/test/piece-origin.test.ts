@@ -343,6 +343,31 @@ describe("resolvePieceOriginSource", () => {
     expect(registrations).toEqual([]);
   });
 
+  it("goes on past the self-reference check when the piece's id is a `receipt:` over the same hash", async () => {
+    const registrations: unknown[] = [];
+    const runtime = {
+      mappedHostFor: () => undefined,
+      hostForSpace: () => new URL("https://toolshed.test"),
+      resolveSpaceHost: (...args: unknown[]) => {
+        registrations.push(args);
+        return Promise.resolve({ accepted: true });
+      },
+    } as unknown as Runtime;
+
+    // The scheme is part of the identity, so the `of:` entity the reference
+    // names is a different one, whatever becomes of the rest of this stub.
+    const refusal = await resolvePieceOriginSource(
+      runtime,
+      SPACE,
+      `cf://other.test/${SPACE}/of:fid1:${HASH}`,
+      "default",
+      { self: { space: SPACE, pieceId: `receipt:fid1:${HASH}` } },
+    ).then(() => undefined, (error: Error) => error.message);
+
+    expect(refusal).not.toBe("a piece cannot follow itself");
+    expect(registrations.length).toBe(1);
+  });
+
   it("does not register an unaccepted host while resolving another space", async () => {
     const otherSpace = "did:key:z6MkspaceBBBB" as MemorySpace;
     const registrations: unknown[] = [];

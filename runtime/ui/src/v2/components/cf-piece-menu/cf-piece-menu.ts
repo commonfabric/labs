@@ -30,6 +30,7 @@ import type {
   SpaceAclCapability,
   SpaceAclView,
 } from "@commonfabric/runtime-client";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -180,9 +181,7 @@ export function formatPieceValue(
   try {
     return JSON.stringify(display, null, 2) ?? String(display);
   } catch (error) {
-    return `<unrenderable: ${
-      error instanceof Error ? error.message : String(error)
-    }>`;
+    return `<unrenderable: ${describeFailure(error)}>`;
   }
 }
 
@@ -1313,10 +1312,8 @@ export class CFPieceMenu extends BaseElement {
     const visited = new Set<Element>([element]);
     let current: Element | null = element;
     while (current) {
-      const root: Node | undefined = typeof current.getRootNode === "function"
-        ? current.getRootNode()
-        : undefined;
-      const shadowHost: Element | null = root && "host" in root
+      const root = current.getRootNode();
+      const shadowHost: Element | null = "host" in root
         ? (root as ShadowRoot).host
         : null;
       const next: Element | null = current.assignedSlot ??
@@ -1333,9 +1330,8 @@ export class CFPieceMenu extends BaseElement {
   #composedShadowRoots(element: Element): ShadowRoot[] {
     const roots = new Set<ShadowRoot>();
     for (const item of [element, ...this.#composedAncestors(element)]) {
-      if (typeof item.getRootNode !== "function") continue;
       const root = item.getRootNode();
-      if (root && "host" in root) roots.add(root as ShadowRoot);
+      if ("host" in root) roots.add(root as ShadowRoot);
     }
     return [...roots];
   }
@@ -1536,7 +1532,7 @@ export class CFPieceMenu extends BaseElement {
       this.spaceAccess = access;
     } catch (error) {
       if (token !== this.readToken || runtime.signal.aborted) return;
-      this.accessError = error instanceof Error ? error.message : String(error);
+      this.accessError = describeFailure(error);
     }
   }
 
@@ -1569,7 +1565,7 @@ export class CFPieceMenu extends BaseElement {
       }
     } catch (error) {
       if (token !== this.readToken || runtime.signal.aborted) return;
-      this.accessError = error instanceof Error ? error.message : String(error);
+      this.accessError = describeFailure(error);
     } finally {
       if (token === this.readToken) this.accessActionPending = false;
     }
@@ -1588,7 +1584,7 @@ export class CFPieceMenu extends BaseElement {
       this.spaceAccess = access;
     } catch (error) {
       if (token !== this.readToken || runtime.signal.aborted) return;
-      this.accessError = error instanceof Error ? error.message : String(error);
+      this.accessError = describeFailure(error);
     } finally {
       if (token === this.readToken) this.accessActionPending = false;
     }
@@ -1700,9 +1696,7 @@ export class CFPieceMenu extends BaseElement {
     } catch (error) {
       if (token !== this.revisionReadToken) return;
       if (cell.runtime().signal.aborted) return;
-      this.revisionReadError = error instanceof Error
-        ? error.message
-        : String(error);
+      this.revisionReadError = describeFailure(error);
     } finally {
       if (token === this.revisionReadToken) this.revisionReadPending = false;
     }
@@ -1736,7 +1730,7 @@ export class CFPieceMenu extends BaseElement {
       // A disposal race (logout, runtime swap) cancels the read; that is
       // cancellation, not a failure to report.
       if (cell.runtime().signal.aborted) return;
-      this.readError = error instanceof Error ? error.message : String(error);
+      this.readError = describeFailure(error);
     }
   }
 
@@ -1802,7 +1796,7 @@ export class CFPieceMenu extends BaseElement {
     } catch (error) {
       if (!fresh()) return;
       if (cell.runtime().signal.aborted) return;
-      this.dataError = error instanceof Error ? error.message : String(error);
+      this.dataError = describeFailure(error);
     }
   }
 
@@ -1940,9 +1934,7 @@ export class CFPieceMenu extends BaseElement {
       } catch (error) {
         this.dispatchNote = {
           kind: "error",
-          text: `The payload is not valid JSON: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          text: `The payload is not valid JSON: ${describeFailure(error)}`,
         };
         return;
       }
@@ -1965,9 +1957,7 @@ export class CFPieceMenu extends BaseElement {
       if (cell.runtime().signal.aborted) return;
       this.dispatchNote = {
         kind: "error",
-        text: `Dispatch to ${action.name} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        text: `Dispatch to ${action.name} failed: ${describeFailure(error)}`,
       };
     } finally {
       this.#dispatching = false;
@@ -2019,9 +2009,7 @@ export class CFPieceMenu extends BaseElement {
       if (
         actionToken !== this.sourceActionToken || cell.runtime().signal.aborted
       ) return;
-      this.sourceActionError = error instanceof Error
-        ? error.message
-        : String(error);
+      this.sourceActionError = describeFailure(error);
       this.panel = "origin";
       // A failed attempt still records what it concluded — an origin that
       // could not be reached is a state of the piece, not just of this
@@ -2127,9 +2115,7 @@ export class CFPieceMenu extends BaseElement {
     } catch (error) {
       this.cloneError = cell.runtime().signal.aborted
         ? "The clone was canceled because the runtime stopped."
-        : error instanceof Error
-        ? error.message
-        : String(error);
+        : describeFailure(error);
     } finally {
       this.clonePending = false;
     }

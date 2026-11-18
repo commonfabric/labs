@@ -125,20 +125,24 @@ export class VDomRenderer {
 
     // Request the worker to start rendering
     const mountId = this.#mountId;
-    logger.timeStart("mount", String(mountId));
+    const mountStart = performance.now();
     try {
       const response = await this.#session.mount(mountId, cellRef);
-      const elapsed = logger.timeEnd("mount", String(mountId));
+      const elapsed = logger.timeDetailed(
+        () => `mount ${mountId}`,
+        mountStart,
+        "mount",
+      );
       if (this.#disposed) return async () => {};
       this.#rootNodeId = response.rootId;
 
       logger.debug("render-mount", () => [
-        `Mounted VDOM ${mountId} in ${elapsed?.toFixed(2)}ms`,
+        `Mounted VDOM ${mountId} in ${elapsed.toFixed(2)}ms`,
         `rootId=${response.rootId}`,
       ]);
     } catch (error) {
       // Reset state on failure so the renderer can be reused
-      logger.timeEnd("mount", String(mountId));
+      logger.timeDetailed(() => `mount ${mountId}`, mountStart, "mount");
       this.#mountId = null;
       this.#containerElement = null;
       throw error;
@@ -159,7 +163,7 @@ export class VDomRenderer {
     }
 
     const mountId = this.#mountId;
-    logger.timeStart("unmount", String(mountId));
+    const unmountStart = performance.now();
     this.#mountId = null;
 
     // Request the worker to stop rendering
@@ -180,9 +184,13 @@ export class VDomRenderer {
 
     this.#containerElement = null;
 
-    const elapsed = logger.timeEnd("unmount", String(mountId));
+    const elapsed = logger.timeDetailed(
+      () => `unmount ${mountId}`,
+      unmountStart,
+      "unmount",
+    );
     logger.debug("stop-rendering", () => [
-      `Stopped VDOM ${mountId} in ${elapsed?.toFixed(2)}ms`,
+      `Stopped VDOM ${mountId} in ${elapsed.toFixed(2)}ms`,
     ]);
   }
 
@@ -255,7 +263,8 @@ export class VDomRenderer {
       return;
     }
 
-    logger.timeStart("batch", String(notification.batchId));
+    const batchStart = performance.now();
+    const batch = () => `batch ${notification.batchId}`;
     try {
       // Apply the batch to the DOM
       // Children are inserted directly into the container (CONTAINER_NODE_ID)
@@ -279,14 +288,14 @@ export class VDomRenderer {
         );
       }
 
-      const elapsed = logger.timeEnd("batch", String(notification.batchId));
+      const elapsed = logger.timeDetailed(batch, batchStart, "batch");
       logger.debug("vdom-batch", () => [
         `Batch ${notification.batchId}: ${notification.ops.length} ops in ${
-          elapsed?.toFixed(2)
+          elapsed.toFixed(2)
         }ms`,
       ]);
     } catch (error) {
-      logger.timeEnd("batch", String(notification.batchId));
+      logger.timeDetailed(batch, batchStart, "batch");
       this.#onError?.(
         error instanceof Error ? error : new Error(String(error)),
       );

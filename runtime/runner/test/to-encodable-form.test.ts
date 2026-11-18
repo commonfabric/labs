@@ -28,11 +28,18 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 
 import {
   moduleWithAliasBindings,
+  moduleWithReusedGraphBindings,
   withAliasBindings,
 } from "../src/builder/to-encodable-form.ts";
+import {
+  KEYLESS_PATTERN_IDENTITY_PREFIX,
+  setArtifactEntryRef,
+} from "../src/builder/pattern-metadata.ts";
 import type { Module } from "../src/builder/types.ts";
+import type { AliasBinding } from "../src/alias-binding.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createCell, exportCell } from "../src/cell.ts";
+import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -373,6 +380,94 @@ describe("to-encodable-form", () => {
       expect(reads).toBe(0);
     });
 
+    it("refuses a graph's nodes that are not an inert array, rather than rebuilding them", () => {
+      let reads = 0;
+      const nodes: unknown[] = [];
+      Object.defineProperty(nodes, 0, {
+        enumerable: true,
+        get() {
+          reads++;
+          return { module: { type: "javascript" }, inputs: {}, outputs: {} };
+        },
+      });
+      const graphOf = (nodes: unknown) => ({
+        argumentSchema: {},
+        resultSchema: {},
+        nodes,
+      });
+
+      expect(() => withAliasBindings(graphOf(nodes))).toThrow(
+        "Not representable",
+      );
+      expect(reads).toBe(0);
+      expect(withAliasBindings(graphOf([]))).toEqual(graphOf([]));
+    });
+
+    it("refuses a graph node that is not an inert plain object, rather than rebuilding it", () => {
+      let reads = 0;
+      const node = {
+        module: { type: "javascript" },
+        outputs: {},
+        get inputs() {
+          reads++;
+          return {};
+        },
+      };
+      const graph = { argumentSchema: {}, resultSchema: {}, nodes: [node] };
+
+      expect(() => withAliasBindings(graph)).toThrow("Not representable");
+      expect(reads).toBe(0);
+    });
+
+    describe("given a cell", () => {
+      // A cell is bound to whatever the resolver names for it, and only from
+      // the frame it was made in. This cell is made outside any frame.
+
+      const argumentAlias: AliasBinding = {
+        $alias: { cell: "argument", path: [] },
+      };
+
+      it("returns the alias the resolver names for it", () => {
+        const cell = createCell(runtime, { space, path: [] });
+
+        expect(withAliasBindings({ held: cell }, () => argumentAlias))
+          .toEqual({ held: argumentAlias });
+      });
+
+      it("returns `undefined` in its place when the resolver names `null`", () => {
+        const cell = createCell(runtime, { space, path: [] });
+        const bound = withAliasBindings({ held: cell, kept: 1 }, () => null);
+
+        expect(bound).toEqual({ held: undefined, kept: 1 });
+      });
+
+      it("throws when the resolver names nothing for it, or there is no resolver", () => {
+        const cell = createCell(runtime, { space, path: [] });
+
+        expect(() => withAliasBindings({ held: cell }, () => undefined))
+          .toThrow("Cell not found in pattern aliases");
+        expect(() => withAliasBindings({ held: cell })).toThrow(
+          "Cell not found in pattern aliases",
+        );
+      });
+
+      it("throws for a cell made in another frame than the current one", () => {
+        const cell = createCell(runtime, { space, path: [] });
+        const frame = pushFrame({
+          space,
+          generatedIdCounter: 0,
+          reactives: new Set(),
+          runtime,
+        });
+        try {
+          expect(() => withAliasBindings({ held: cell }, () => argumentAlias))
+            .toThrow("Cell with parent cell not found in current frame");
+        } finally {
+          popFrame(frame);
+        }
+      });
+    });
+
     it("returns a graph holding deep-frozen copies of a pattern's schemas, leaving the pattern's as they were", () => {
       const graph = {
         argumentSchema: {
@@ -455,6 +550,89 @@ describe("to-encodable-form", () => {
       const arr = withAliasBindings([1, "x"]) as any;
       expect(arr).toEqual([1, "x"]);
       expect(Array.isArray(arr)).toBe(true);
+    });
+  });
+
+  describe("moduleWithReusedGraphBindings", () => {
+    const graphOfNoIdentity = () => ({
+      argumentSchema: {},
+      resultSchema: {},
+      result: { $alias: { cell: "result", path: ["title"] } },
+      nodes: [{
+        module: { type: "javascript", implementation: () => 1 },
+        inputs: { $alias: { cell: "argument", path: [] } },
+        outputs: {},
+      }],
+    });
+    const closedGraph = () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, { identity: "module", symbol: "default" });
+      return graph;
+    };
+    // A graph with a content identity whose result holds `held`.
+    const identifiedGraphHolding = (held: unknown) => {
+      const graph = { ...graphOfNoIdentity(), result: { held } };
+      setArtifactEntryRef(graph, { identity: "module", symbol: "default" });
+      return graph;
+    };
+    const moduleOf = (implementation: unknown) =>
+      ({ type: "pattern", implementation }) as unknown as Module;
+
+    it("binds a graph that reaches no outer cell once", () => {
+      const graph = closedGraph();
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second).not.toBe(first);
+      expect(second.implementation).toBe(first.implementation);
+    });
+
+    it("binds such a graph as moduleWithAliasBindings() does", () => {
+      const graph = closedGraph();
+      const reused = moduleWithReusedGraphBindings(moduleOf(graph));
+      const walked = moduleWithAliasBindings(moduleOf(graph));
+
+      expect(JSON.stringify(reused)).toBe(JSON.stringify(walked));
+      expect((reused.implementation as any).result.$alias.defer).toBe(1);
+    });
+
+    it("leaves moduleWithAliasBindings() walking the graph each time", () => {
+      const graph = closedGraph();
+      const first = moduleWithAliasBindings(moduleOf(graph));
+      const second = moduleWithAliasBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with no content identity again each time", () => {
+      // Only a content identity promises that the graph will not change.
+      const graph = graphOfNoIdentity();
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph with a keyless identity again each time", () => {
+      const graph = graphOfNoIdentity();
+      setArtifactEntryRef(graph, {
+        identity: `${KEYLESS_PATTERN_IDENTITY_PREFIX}built`,
+        symbol: "default",
+      });
+      const first = moduleWithReusedGraphBindings(moduleOf(graph));
+      const second = moduleWithReusedGraphBindings(moduleOf(graph));
+
+      expect(second.implementation).not.toBe(first.implementation);
+    });
+
+    it("binds a graph holding a cell again each time", () => {
+      const cell = createCell(runtime, { space, path: [] });
+      const graph = identifiedGraphHolding(cell);
+      const resolve = () => ({ $alias: { cell: "argument", path: [] } } as any);
+      const first = moduleWithReusedGraphBindings(moduleOf(graph), resolve);
+      const second = moduleWithReusedGraphBindings(moduleOf(graph), resolve);
+
+      expect(second.implementation).not.toBe(first.implementation);
     });
   });
 

@@ -43,6 +43,9 @@ export default pattern(() => {
                     }
                 },
                 error: true,
+                errorCode: {
+                    $ref: "#/$defs/WishErrorCode"
+                },
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -66,6 +69,9 @@ export default pattern(() => {
                     }
                 },
                 error: true,
+                errorCode: {
+                    $ref: "#/$defs/WishErrorCode"
+                },
                 $UI: {
                     $ref: "https://commonfabric.org/schemas/vnode.json"
                 }
@@ -73,7 +79,12 @@ export default pattern(() => {
             required: ["result", "candidates"]
         }
     },
-    required: ["profile", "bare"]
+    required: ["profile", "bare"],
+    $defs: {
+        WishErrorCode: {
+            "enum": ["no-match", "failed"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }

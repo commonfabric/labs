@@ -19,11 +19,14 @@ import {
   type EventAppendDeliveryOutcome,
   type IExtendedStorageTransaction,
   isStream,
+  isWithheldDelivery,
   type NormalizedFullLink,
   type Runtime,
   sendEvent,
+  startWithInputSources,
   transactionFailureMessage,
 } from "@commonfabric/runner";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { loadPiecePattern } from "./ops/piece-controller.ts";
 import { nearestName } from "./refusal.ts";
@@ -76,6 +79,12 @@ export interface SendVerbEventOptions {
   /** Wraps each span, for a caller that times them. */
   time?: <T>(span: VerbDispatchSpan, run: () => Promise<T>) => Promise<T>;
 
+  /**
+   * `false` sends the event without running its handler in this runtime, for
+   * a caller under server execution that has not started the piece.
+   */
+  echo?: false;
+
   /** @internal Seam for tests, which dispatch to a stand-in handler. */
   sendEvent?: typeof sendEvent;
 }
@@ -104,9 +113,14 @@ export interface VerbEventCommitted {
   /**
    * Waits for the handling itself to land — under server execution the
    * served handling's consequence, otherwise the commit already in hand — and
-   * returns its failure, if it failed there.
+   * returns its failure, if it failed there, or `withheld` for a handling
+   * whose outcome is withheld: one that read data its stream's space doesn't
+   * admit, which reports the same thing whether it committed or not
+   * (`isWithheldDelivery()`).
    */
-  handled(): Promise<{ status: "handled" } | VerbHandlingFailed>;
+  handled(): Promise<
+    { status: "handled" } | { status: "withheld" } | VerbHandlingFailed
+  >;
 }
 
 const defaultTime = <T>(
@@ -121,7 +135,10 @@ const isReceiptCollision = (error: VerbHandlingError): boolean =>
 
 /**
  * Sends `event` to the verb stream `stream` and returns once the caller's act
- * is durable, or the handling's failure where its commit was refused.
+ * is durable, or the handling's failure where its commit was refused. Under
+ * server execution the act is the event append, and a failure of the local
+ * echo of the handler is not the handling's: the served handling's outcome is
+ * what `handled()` returns.
  * `event` is dispatched as given, so a caller judges it first —
  * `verbEventForDispatch` is that gate.
  *
@@ -144,6 +161,11 @@ export async function sendVerbEvent(
   // The dispatch span runs to the first, and a readback waits for the second
   // before it reads the receipt.
   const handled = Promise.withResolvers<IExtendedStorageTransaction>();
+  // Whether the append was reported delivered. Under server execution the
+  // transaction that report carries is the local echo's, whose failure says
+  // nothing of the served handling; otherwise a delivered report carries an
+  // error only for a collision on the receipt.
+  let delivered = false;
   const tx = await time(
     "dispatch",
     () =>
@@ -156,7 +178,10 @@ export async function sendVerbEvent(
           // threw or whose commit was rejected — is reported below off
           // the transaction's status; only an append refused on an
           // otherwise clean transaction is reported here.
-          if (delivery.delivered || appendedTx.status().status === "error") {
+          if (delivery.delivered) {
+            delivered = true;
+            resolve(appendedTx);
+          } else if (appendedTx.status().status === "error") {
             resolve(appendedTx);
           } else {
             reject(new Error(`event append refused: ${delivery.refused}`));
@@ -182,6 +207,7 @@ export async function sendVerbEvent(
                 eventId: invocation.id,
                 session: invocation.session,
               }),
+              ...(options.echo === false ? { echo: false } : {}),
               onAppended,
             },
           );
@@ -200,7 +226,9 @@ export async function sendVerbEvent(
   const txStatus = tx.status();
   const deduplicated = txStatus.status === "error" &&
     isReceiptCollision(txStatus.error);
-  if (txStatus.status === "error" && !deduplicated) {
+  // A delivered append's echo that failed leaves the outcome to the served
+  // handling, which `handled()` reports.
+  if (txStatus.status === "error" && !deduplicated && !delivered) {
     return { status: "failed", error: txStatus.error };
   }
 
@@ -223,11 +251,12 @@ export async function sendVerbEvent(
       const handledTx = await time("handled", () => handled.promise);
       const handledStatus = handledTx.status();
       if (
-        handledStatus.status === "error" && handledTx !== tx &&
+        handledStatus.status === "error" &&
         !isReceiptCollision(handledStatus.error)
       ) {
         return { status: "failed", error: handledStatus.error };
       }
+      if (isWithheldDelivery(handledTx)) return { status: "withheld" };
       return { status: "handled" };
     },
   };
@@ -268,6 +297,10 @@ export type VerbCall =
   | { status: "refused"; message: string }
   /** Sent, and the handling failed: nothing it wrote was kept. */
   | { status: "failed"; message: string }
+  /** Sent, and the handling's outcome is withheld: it read data its stream's
+   * space doesn't admit, so whether it committed, and what it returned, is
+   * not told. */
+  | { status: "withheld"; message: string }
   | VerbCallSettled;
 
 /** A call whose handling landed. */
@@ -330,8 +363,9 @@ const isValueLessReceipt = (raw: unknown): boolean =>
  * converts to the link the verb stores. A name that is not a verb, and an
  * event the gate refuses, are refused before anything is sent.
  *
- * The piece is started in `runtime` if it is not running, and the handling
- * runs there. With an `invocation`, a retry naming the same pair settles on
+ * The piece is started in `runtime` if it is not running, after the pieces
+ * that enclose it (`startWithInputSources()`), and the handling runs
+ * there. With an `invocation`, a retry naming the same pair settles on
  * the original outcome rather than committing twice.
  */
 export async function callVerb(
@@ -339,7 +373,7 @@ export async function callVerb(
   piece: NormalizedFullLink,
   verb: string,
   event: unknown,
-  options: { invocation?: VerbInvocation } = {},
+  options: Pick<SendVerbEventOptions, "invocation" | "sendEvent"> = {},
 ): Promise<VerbCall> {
   const cell = runtime.getCellFromLink({ ...piece, schema: undefined });
   let pattern: Pattern;
@@ -350,9 +384,7 @@ export async function callVerb(
   } catch (error) {
     return {
       status: "refused",
-      message: `could not read the piece's pattern: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      message: `could not read the piece's pattern: ${describeFailure(error)}`,
     };
   }
   const verbs = resultVerbs(pattern);
@@ -377,7 +409,7 @@ export async function callVerb(
     };
   }
 
-  if (!await runtime.start(cell)) {
+  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
     return {
       status: "refused",
       message:
@@ -398,7 +430,7 @@ export async function callVerb(
     return {
       status: "failed",
       message: `the event for "${verb}" could not be sent: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -408,6 +440,14 @@ export async function callVerb(
       status: "failed",
       message: `the handler for "${verb}" failed, and nothing it wrote was ` +
         `kept: ${transactionFailureMessage(handling.error)}`,
+    };
+  }
+  // Its receipt may never have been written, and is not read.
+  if (handling.status === "withheld") {
+    return {
+      status: "withheld",
+      message: `the event for "${verb}" was handled, and its outcome is ` +
+        "withheld: the handler read data this space does not admit",
     };
   }
   const committed = sent as VerbEventCommitted;
@@ -430,7 +470,7 @@ export async function callVerb(
     return {
       ...settled,
       receipt: committed.receipt,
-      unread: error instanceof Error ? error.message : String(error),
+      unread: describeFailure(error),
     };
   }
   return {

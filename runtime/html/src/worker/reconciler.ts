@@ -93,6 +93,8 @@ import {
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
+  schemaLabelSummary,
+  UNREADABLE_LABELS,
 } from "./display-fit.ts";
 import { generateChildKeys } from "./keying.ts";
 import type {
@@ -197,8 +199,9 @@ export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
     ["cf-render", new Set(["cell"])],
     ["cf-picker", new Set(["items"])],
     // The sandbox admits same-origin images, and a same-origin relay
-    // (`/api/link-preview/<url>`) fetches any URL it is given.
-    ["cf-iframe", new Set(["context"])],
+    // (`/api/link-preview/<url>`) fetches any URL it is given. `script` runs
+    // in the guest document as `src` does, with the same reach.
+    ["cf-iframe", new Set(["context", "script"])],
     // Tiles come from a fixed host, but the viewport the data chooses tells
     // that host where to look.
     ["cf-map", new Set(["value", "center", "zoom", "bounds"])],
@@ -501,7 +504,6 @@ export class WorkerReconciler {
         this.#handlers.set(id, handler);
         return id;
       },
-      getHandler: (id) => this.#handlers.get(id),
     };
   }
 
@@ -1102,7 +1104,15 @@ export class WorkerReconciler {
    * `cf-render` cell is. A reference's read stops at the document it lands on
    * and leaves that document's contents to the render mounted from it.
    * Elsewhere a nested render root is decided on everything the bound cell
-   * reaches. A read that could not complete, one
+   * reaches. A binding whose entry is `complete` is decided on the read its
+   * component makes, `schema` as `componentReadSchema()` resolves it: a field
+   * the component does not read does not decide it, and a field it reads
+   * does, however the handle is typed, wherever the policy is one a nested
+   * render would be held to (`#rootPolicyCovers()`); elsewhere it is decided
+   * on everything the bound cell reaches, as an uncovered nested render root
+   * is. The entry is reviewed like the component itself, as
+   * {@link ComponentPropRead} says.
+   * A read that could not complete, one
    * whose space is out of reach or whose labels or links could not be read,
    * withholds the binding and is never taken for an empty read. While a
    * binding {@link ACCESS_PLACEHOLDER_BINDINGS} names is withheld because the
@@ -1140,9 +1150,13 @@ export class WorkerReconciler {
     let shown: boolean | undefined = replacing || undefined;
     let consumed: SinkConsumedLabel | undefined;
     let first = true;
-    const renders = componentReadContracts[state.tagName]?.[propName]?.renders;
-    const covered = renders !== undefined &&
-      this.#rootPolicyCovers(state.renderPolicy);
+    const contract = componentReadContracts[state.tagName]?.[propName];
+    const renders = contract?.renders;
+    // Whether the binding is decided on the reads its contract entry declares
+    // rather than on its handle's schema: a nested render root, or an entry
+    // whose read is complete.
+    const declared = renders !== undefined || contract?.complete === true;
+    const covered = declared && this.#rootPolicyCovers(state.renderPolicy);
     // The empty path is the binding's own reference, which the read of the
     // binding decides.
     const paths = renders?.filter((path) => path.length > 0) ?? [];
@@ -1197,16 +1211,17 @@ export class WorkerReconciler {
       }
     };
     // The component reads the binding under the schema the handle it is
-    // handed carries, or the one it projects that handle to.
-    const hostRead = renders === undefined ? read : read.asSchema(
-      covered
-        ? componentReadSchema(
+    // handed carries, or the one it projects that handle to. A declared read
+    // the policy does not cover is decided on everything the binding reaches.
+    const hostRead = !declared ? read : covered
+      ? read.asSchema(
+        componentReadSchema(
           state.tagName,
           propName,
           this.#bindingSchema(cell.getAsNormalizedFullLink().schema),
-        ) ?? true
-        : true,
-    );
+        ) ?? true,
+      )
+      : read.asSchema(true);
     // The binding hands the host a handle whose reads take in the whole
     // value, so its decision is made on the read they are decided on: each
     // value as the worker hands it to a host (`hostValueOf()`), so a field the
@@ -1740,13 +1755,19 @@ export class WorkerReconciler {
    * itself is the same whatever the retry state, so a placeholder updated in
    * place keeps it and its keyboard focus, and a press while a retry is in
    * flight shares that retry. An admission re-renders the content through the
-   * provider's `subscribe()`.
+   * provider's `subscribe()`. Content of a deleted space reads "Deleted"
+   * instead, marked `data-space-deleted`, with no control, since no retry can
+   * admit anyone.
    */
   #accessPlaceholderVNode(space: string): WorkerVNode {
     const props: WorkerProps = {
       "data-space-access-lost": "true",
       role: "status",
     };
+    if (this.#spaceAccess?.deleted?.(space) === true) {
+      props["data-space-deleted"] = "true";
+      return { type: "vnode", name: "span", props, children: ["Deleted"] };
+    }
     const children: WorkerRenderNode[] = ["Access unavailable"];
     const retries = this.#spaceAccess?.retries;
     if (retries !== undefined) {
@@ -1775,6 +1796,9 @@ export class WorkerReconciler {
    * what the placeholder shows does.
    */
   #accessPlaceholderKey(space: string): string {
+    if (this.#spaceAccess?.deleted?.(space) === true) {
+      return `access:${space}:deleted`;
+    }
     const state = this.#spaceAccess?.retries?.state(space);
     return state === undefined
       ? `access:${space}`
@@ -2102,17 +2126,9 @@ export class WorkerReconciler {
     try {
       labelView = this.#resolveCellLabelView(cell);
     } catch {
-      return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+      return UNREADABLE_LABELS;
     }
-    if (labelView === undefined) {
-      return {
-        labelSource: "schema",
-        confidentiality: confidentialityLabelsFromCellSchema(
-          cell,
-        ) as readonly CfcConfClause[],
-        integrity: [],
-      };
-    }
+    if (labelView === undefined) return schemaLabelSummary(cell);
     return {
       labelSource: "stored",
       confidentiality: confidentialityLabels(labelView),
@@ -2344,25 +2360,6 @@ export class WorkerReconciler {
     return textIntegrity.requiredIntegrity.every((required) =>
       integrity.some((atom) => deepEqual(atom, required))
     );
-  }
-
-  #readCellValue(cell: Cell<unknown>): unknown {
-    const readableCell = cell as Cell<unknown> & {
-      get?: (options?: { traverseCells?: boolean }) => unknown;
-      getRawUntyped?: (options?: { frozen?: false }) => unknown;
-    };
-    try {
-      if (typeof readableCell.get === "function") {
-        return readableCell.get({ traverseCells: true });
-      }
-    } catch {
-      // Fall back to the raw read below.
-    }
-    try {
-      return readableCell.getRawUntyped?.({ frozen: false });
-    } catch {
-      return undefined;
-    }
   }
 
   #readCellPolicyValue(cell: Cell<unknown>): unknown {
@@ -5206,13 +5203,4 @@ export class WorkerReconciler {
     }
     return String(value);
   }
-}
-
-/**
- * Create a new reconciler instance.
- */
-export function createReconciler(
-  options: WorkerReconcilerOptions,
-): WorkerReconciler {
-  return new WorkerReconciler(options);
 }

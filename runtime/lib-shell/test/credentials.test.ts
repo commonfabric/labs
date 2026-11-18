@@ -1,10 +1,13 @@
 import { assertEquals, assertExists } from "@std/assert";
+import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
   AUTH_METHOD_KEYFILE,
+  AUTH_METHOD_PASSPHRASE,
   clearStoredCredential,
   createKeyFileCredential,
   createPasskeyCredential,
+  createPassphraseCredential,
   getPublicKeyCredentialDescriptor,
   getStoredCredential,
   saveCredential,
@@ -89,6 +92,32 @@ Deno.test("malformed passkey credential IDs are ignored", () =>
       undefined,
     );
   }));
+
+Deno.test("passkey credential IDs decode from base64url into descriptor bytes", () => {
+  // "-_8" is unpadded base64url for the bytes 0xfb 0xff, spelled "+/8=" in
+  // base64.
+  expect(
+    getPublicKeyCredentialDescriptor(createPasskeyCredential("-_8")),
+  ).toEqual({ id: new Uint8Array([0xfb, 0xff]), type: "public-key" });
+});
+
+Deno.test("non-passkey credentials have no public key descriptor", () => {
+  expect(getPublicKeyCredentialDescriptor(null)).toBeUndefined();
+  expect(
+    getPublicKeyCredentialDescriptor(createKeyFileCredential("did:key:z6Mk")),
+  ).toBeUndefined();
+});
+
+Deno.test("passphrase credentials carry a fresh random ID each", () => {
+  const first = createPassphraseCredential();
+  const second = createPassphraseCredential();
+
+  expect(first.method).toBe(AUTH_METHOD_PASSPHRASE);
+  expect(first.id).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
+  expect(second.id).not.toBe(first.id);
+});
 
 Deno.test("PKCS8 keyfile import primitives round-trip into stored keyfile credential", () =>
   withMockLocalStorage(async () => {

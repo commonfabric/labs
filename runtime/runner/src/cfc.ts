@@ -1,7 +1,7 @@
-import {
+import type {
   JSONSchemaObj,
-  type JSONSchemaTypes,
-  type JSONValue,
+  JSONSchemaTypes,
+  JSONValue,
 } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -14,6 +14,7 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type {
   AsCellEntry,
@@ -22,7 +23,6 @@ import type {
   SchemaScope,
 } from "./builder/types.ts";
 import { BranchListWalk, REACHED_AGAIN } from "./cfc/branch-list-walk.ts";
-import type { CfcConfClause } from "./cfc/clause.ts";
 import { uniqueCfcAtoms } from "./cfc/observation.ts";
 import {
   cfcSchemaDocumentOf,
@@ -979,9 +979,12 @@ export class ContextualFlowControl {
 
   /**
    * Returns whether `schema` is one of the special values meaning it should
-   * always validate.
+   * always validate. Such an object schema has no `type`, so a schema this
+   * rejects is never `true`.
    */
-  static isTrueSchema(schema: JSONSchema): boolean {
+  static isTrueSchema(
+    schema: JSONSchema,
+  ): schema is true | (JSONSchemaObj & { readonly type?: undefined }) {
     return cfcSchemaIsTrue(schema);
   }
 
@@ -994,7 +997,13 @@ export class ContextualFlowControl {
     return cfcSchemaIsInternalKey(key);
   }
 
-  static isFalseSchema(schema: JSONSchema): boolean {
+  /**
+   * Returns whether `schema` admits no value. Such an object schema has a
+   * `not`, so a schema this rejects is never `false`.
+   */
+  static isFalseSchema(
+    schema: JSONSchema,
+  ): schema is false | (JSONSchemaObj & { readonly not: JSONSchema }) {
     return cfcSchemaIsFalse(schema);
   }
 

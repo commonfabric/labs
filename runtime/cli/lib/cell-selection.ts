@@ -35,6 +35,7 @@ import {
   type Runtime,
   sanitizeSchemaForLinks,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import {
@@ -46,6 +47,7 @@ import {
   resolveCfcSchemaRefs,
 } from "@commonfabric/runner/cfc/schema-refs";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isInstance,
   isObjectNotArray,
@@ -1153,9 +1155,7 @@ export async function parseSelectionProjection(
       contents = await (deps.readTextFile ?? Deno.readTextFile)(path);
     } catch (error) {
       throw new CellSelectionError(
-        `Could not read --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Could not read --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1164,9 +1164,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(contents);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON in --schema file "${path}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON in --schema file "${path}": ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1184,9 +1182,7 @@ export async function parseSelectionProjection(
       parsed = JSON.parse(trimmed);
     } catch (error) {
       throw new CellSelectionError(
-        `Invalid JSON passed to --schema: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Invalid JSON passed to --schema: ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -1713,8 +1709,9 @@ function ifcForSelection(
  * document outside itself.
  *
  * A schema holding no such reference comes back as the same object, and so
- * does one the decomposition refuses: a schema naming a document the registry
- * does not hold, or a shape the decomposition cannot represent.
+ * does one the decomposition refuses, a schema naming a document the registry
+ * does not hold or a shape the decomposition cannot represent, and one naming
+ * a document that does not fit the reference to it.
  */
 function selfContainedSchema(schema: JSONSchema): JSONSchema {
   if (!isObjectNotArray(schema) || !containsExternalSchemaRef(schema)) {
@@ -1726,7 +1723,12 @@ function selfContainedSchema(schema: JSONSchema): JSONSchema {
     });
     return recomposeSchema(rootRef, (hash) => documents.get(hash));
   } catch (error) {
-    if (error instanceof SchemaNotDecomposableError) return schema;
+    if (
+      error instanceof SchemaNotDecomposableError ||
+      error instanceof SchemaNotRecomposableError
+    ) {
+      return schema;
+    }
     throw error;
   }
 }
@@ -1940,7 +1942,7 @@ export function schemaMayBeArray(
       unresolvedRef: (error) => {
         throw new CellSelectionError(
           `Could not resolve source schema reference for ${flag}: ${
-            error instanceof Error ? error.message : String(error)
+            describeFailure(error)
           }`,
           { cause: error },
         );
@@ -3066,13 +3068,28 @@ function sourcePosition(
  * Reaches for the container's own document when the walk cannot see the
  * container: behind a link, or where the selection's read stopped above it,
  * which is what a marked collection's rejecting selector does.
+ *
+ * Each document the link chain reaches is loaded by name and awaited until it
+ * has arrived or is known absent. Crossing a link asks for its target only the
+ * first time any read of this storage manager crosses it, and does not wait for
+ * the answer, so a client that runs nothing (`cf` under server execution) can
+ * reach a container whose document no read has loaded and none will. A chain
+ * that ends at a document that stays absent after its load has no container,
+ * and reads as `undefined`.
  */
 async function storedContainer(position: WalkedPosition): Promise<unknown> {
   if (position.stored?.value !== undefined) return position.stored.value;
-  const stored = position.cell.getRaw({ lastNode: "value" });
-  if (stored !== undefined) return stored;
-  await position.cell.asSchema(false).pull();
-  return position.cell.getRaw({ lastNode: "value" });
+  const loaded = new Set<string>();
+  while (true) {
+    const stored = position.cell.getRaw({ lastNode: "value" });
+    if (stored !== undefined) return stored;
+    const reached = position.cell.resolveAsCell().asSchema(false);
+    const { space, scope, id } = reached.getAsNormalizedFullLink();
+    const document = `${space}\0${scope}\0${id}`;
+    if (loaded.has(document)) return undefined;
+    loaded.add(document);
+    await reached.sync();
+  }
 }
 
 /**
@@ -3245,9 +3262,7 @@ function transformReadsFor(runtime: Runtime): TransformReads {
 /** `error`, reported as a failure to apply a get transform. */
 function transformError(error: unknown): CellSelectionError {
   return new CellSelectionError(
-    `Could not apply get transform: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
+    `Could not apply get transform: ${describeFailure(error)}`,
     { cause: error },
   );
 }
@@ -3280,8 +3295,78 @@ async function sourceRootIsArray(cell: Cell<unknown>): Promise<boolean> {
 }
 
 /**
- * Applies `selection` to `sourceCell` through an actual runtime pattern graph,
- * returning the value the caller asked for.
+ * Helper for {@link selectFromRead}, which returns the elements of `value` that
+ * `selection`'s filter keeps where the selection treats the value as a list —
+ * it filters, or `projectsArrayItems` says its projection reaches into array
+ * items — and `value` itself where it does not.
+ *
+ * The source's shape was decided from an earlier read, and a write landing
+ * between the two can leave something other than an array where a list was
+ * expected; that throws rather than answering an empty list. An unset value is
+ * the empty array, as it is to the runner's list builtins.
+ */
+export function selectedElements(
+  value: unknown,
+  selection: CellSelection,
+  projectsArrayItems: boolean,
+): unknown {
+  const { filter } = selection;
+  if (filter === undefined && !projectsArrayItems) return value;
+  if (value !== undefined && !Array.isArray(value)) {
+    throw filter !== undefined
+      ? new CellSelectionError("--filter can only be applied to an array")
+      : arrayItemProjectionError(selection.projection!.flag);
+  }
+  return (value ?? []).filter((element: unknown) =>
+    filter === undefined ||
+    evaluateSelectionPredicate(filter.predicate, element)
+  );
+}
+
+/**
+ * Helper for {@link deriveSelectedValue}, which answers a selection under server
+ * execution: the server runs the piece, so the source is read through
+ * `readSchema` and the value in hand is shaped here, which starts nothing and
+ * commits nothing.
+ */
+async function selectFromRead(
+  source: Cell<unknown>,
+  readSchema: JSONSchema,
+  selection: CellSelection,
+  projection: ReturnType<typeof resolveProjection>,
+  space: MemorySpace,
+  deps: DeriveSelectedValueDependencies,
+): Promise<unknown> {
+  const read = source.asSchema(
+    sanitizeSchemaForLinks(readSchema, KeepAsCell.OnlyStream),
+  );
+  const value = await timeSelectionPhase("read", () => read.pull());
+  const selected = selectedElements(
+    value,
+    selection,
+    projection?.projectsArrayItems === true,
+  );
+  const implicitArrayTraversal = selection.projection?.kind === "concise";
+  const output = projection === undefined ? selected : projectValue(
+    selected,
+    projection.projectionSchema,
+    implicitArrayTraversal,
+  );
+  deps.onOutputCell?.(read);
+  return projection?.markers === undefined
+    ? output
+    : await composeLinkAddresses(
+      sourcePosition(source, space),
+      projection.markers,
+      output,
+      implicitArrayTraversal,
+    );
+}
+
+/**
+ * Applies `selection` to `sourceCell` and returns the value the caller asked
+ * for. Under server execution that is a read shaped here. Otherwise it goes
+ * through an actual runtime pattern graph.
  *
  * `runtime` and `space` say where that pattern runs, and are the caller's to
  * decide rather than the cell's: a path that crosses a link can land
@@ -3430,6 +3515,17 @@ export async function deriveSelectedValue(
     sourceMask = projectionMaskSchema;
   }
   const sourceReadSchema = selectSourceSchema(sourceSchema, sourceMask);
+
+  if (runtime.experimental.serverExecution === true) {
+    return await selectFromRead(
+      sourceValueCell,
+      sourceReadSchema,
+      selection,
+      projection,
+      space,
+      deps,
+    );
+  }
 
   const { commonfabric } = createBuilder({
     unsafeHostTrust: runtime.createUnsafeHostTrust({

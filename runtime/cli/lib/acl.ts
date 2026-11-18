@@ -1,4 +1,4 @@
-import { ACLManager } from "@commonfabric/runner";
+import { ACLManager, SpaceMembersRemainError } from "@commonfabric/runner";
 import {
   ACL,
   ACLUser,
@@ -13,6 +13,7 @@ import {
   type PieceResolutionDeps,
   type SpaceConfig,
 } from "./piece.ts";
+import { cliText } from "./cli-name.ts";
 import { throwOnSpaceAuthorizationError } from "./utils.ts";
 import { noteWroteTo } from "./write-receipt.ts";
 
@@ -28,6 +29,9 @@ export type AclConnectionDeps = Pick<PieceResolutionDeps, "loadPieces">;
 interface AclSession {
   /** The DID of the identity the connection acts as. */
   readonly principal: DID;
+
+  /** The DID of the space the connection opened. */
+  readonly space: DID;
 
   /** Throws the denial the space recorded so far, if any. */
   readonly check: () => void;
@@ -57,6 +61,7 @@ async function withAcl<T>(
     throwOnSpaceAuthorizationError(runtime.storageManager, space);
   const result = await run(new ACLManager(runtime, space), {
     principal: runtime.userIdentityDID,
+    space,
     check,
   });
   // Before the authorization check below, which throws on a denial recorded
@@ -140,6 +145,53 @@ export async function leaveAcl(
       // changed nothing.
       noteWroteTo(config.space);
       return "left";
+    },
+    { revokesSelf: true },
+    deps,
+  );
+}
+
+/**
+ * Deletes the space `config` names, as the identity it names, which has to be
+ * the space's sole member: the one principal its access list names, at
+ * OWNER. Deletion ends the space for everyone and for good (INV-15), so it
+ * runs only when `confirm` is the space's own DID, which a mistyped space
+ * name never resolves to. The memory server decides it again, and revokes
+ * every session on the space, this connection's included.
+ *
+ * @throws Error when `confirm` is not the space's DID, when the space has no
+ *   access list, when the list names anyone besides the identity (each named,
+ *   with what removes it), or when the memory server refuses the deletion.
+ */
+export async function deleteSpace(
+  config: SpaceConfig,
+  confirm: string,
+  deps: AclConnectionDeps = {},
+): Promise<void> {
+  await withAcl(
+    config,
+    async (acl, { principal: me, check, space }) => {
+      if (confirm !== space) {
+        throw new Error(
+          `--confirm ${confirm} is not the DID of the space ${config.space}, ` +
+            `which is ${space}; nothing was deleted.`,
+        );
+      }
+      await acl.get();
+      check();
+      try {
+        await acl.delete(me);
+      } catch (error) {
+        if (error instanceof SpaceMembersRemainError) {
+          throw new Error(
+            `${error.message}. Remove each with \`${
+              cliText("cf acl remove <did>")
+            }\` first; nothing was deleted.`,
+          );
+        }
+        throw error;
+      }
+      noteWroteTo(config.space);
     },
     { revokesSelf: true },
     deps,

@@ -3,6 +3,32 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 
 /**
+ * The lowest frequency bins, which carry mostly ambient noise, and which
+ * {@link sampleBarLevels} skips.
+ */
+const SKIPPED_BINS = 2;
+
+/**
+ * Sets each entry of `levels` to the level, from 0 to 1, of one bar: the
+ * value of a bin of `frequencies`, taken at even steps from the first bin
+ * after the skipped ones. Where there are more bars than bins to spread them
+ * over, every bar takes the first of those bins, or the last bin when there
+ * are no others.
+ */
+export function sampleBarLevels(
+  frequencies: Uint8Array,
+  levels: number[],
+): void {
+  const step = Math.floor(
+    (frequencies.length - SKIPPED_BINS) / levels.length,
+  );
+  for (let i = 0; i < levels.length; i++) {
+    const index = Math.min(SKIPPED_BINS + i * step, frequencies.length - 1);
+    levels[i] = frequencies[index] / 255;
+  }
+}
+
+/**
  * CFAudioVisualizer - Real-time audio waveform visualization
  *
  * @element cf-audio-visualizer
@@ -99,21 +125,7 @@ export class CFAudioVisualizer extends BaseElement {
       if (!this._stream || !this.analyser || !this._frequencyData) return;
 
       this.analyser.getByteFrequencyData(this._frequencyData);
-
-      // Sample data at regular intervals to match bar count
-      // Skip the first few bins (low frequencies that contain ambient noise)
-      const skipBins = 2;
-      const usableLength = this._frequencyData.length - skipBins;
-      const step = Math.floor(usableLength / barCount);
-
-      // Update buffer in place instead of creating new array
-      for (let i = 0; i < barCount; i++) {
-        const index = Math.min(
-          skipBins + i * step,
-          this._frequencyData.length - 1,
-        );
-        this._waveformBuffer[i] = this._frequencyData[index] / 255;
-      }
+      sampleBarLevels(this._frequencyData, this._waveformBuffer);
 
       // Trigger update by assigning the same reference
       // Lit will detect the change via the @property decorator

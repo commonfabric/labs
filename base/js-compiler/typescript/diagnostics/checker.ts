@@ -1,4 +1,4 @@
-import { type Diagnostic, type Program, type SourceFile } from "typescript";
+import type { Diagnostic, Program, SourceFile } from "typescript";
 import {
   type AuthoredSourceLookup,
   CompilerError,

@@ -17,11 +17,12 @@ export const linkAddress = (
   contextSpace: string | undefined,
 ): string | undefined => {
   if (!link.id) return undefined;
+  const space = link.space ?? contextSpace;
   return renderCellReference(
     {
       id: link.id,
-      space: link.space ?? contextSpace,
-      scope: link.scope,
+      ...(space !== undefined && { space }),
+      ...(link.scope !== undefined && { scope: link.scope }),
       path: (link.path ?? []).map(String),
     },
     contextSpace === undefined ? {} : { space: contextSpace, scope: "space" },

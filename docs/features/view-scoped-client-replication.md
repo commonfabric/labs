@@ -1,12 +1,13 @@
 # View-scoped client replication
 
 This experimental web-client mode uses the server's observed execution reads to
-choose the documents needed for rendering and local interaction previews. It
-requires server execution, an opted-in web client, and a Memory server that
-advertises `viewScopedReplicationV1`. The
+choose the documents needed for rendering and local interaction previews. A web
+client runs it by default under server execution, against a Memory server that
+advertises `viewScopedReplicationV1`; without server execution it does nothing.
+The
 [experimental flags registry](../development/EXPERIMENTAL_OPTIONS.md#viewscopedreplication--webviewscopedreplication)
-defines the global default and independent web override. Both client modes can
-use one space concurrently.
+defines the global default and independent web override, either of which turns
+it off. Both client modes can use one space concurrently.
 
 ## View ownership and delivery
 
@@ -50,6 +51,23 @@ rejects on session closure.
 Delivery selects complete documents. Selecting a field limits traversal into
 other documents; it does not hide unrelated fields within a delivered document.
 Path projection and navigation prefetch are separate work.
+
+## One-shot reads
+
+A client that reads a value once and exits needs no replication plan, but it
+needs what a renderer gets from one: the server has to be asked for the value,
+because a derivation nothing demands stays stale in the store, and it has to say
+when it has answered. `pullFromServer()` in `runtime/runner/src/served-read.ts`
+does that with a view of mode `read`. Its roots hold execution demand as any
+view's do. The planner walks nothing for it and selects nothing, and sends one
+plan marked `settled` once the serving loop owes nothing it knows of
+([protocol.md §3](../specs/server-side-execution/protocol.md#3-subscription-and-push)).
+A `read` view needs a server that accepts that mode, and no matching component
+contract, and it holds no handler observations. `pullFromServer()` returns `false`
+from a server that refuses the mode or has no view protocol.
+
+Any runtime can make such a read. It does not depend on the web client class or
+on view-scoped replication being requested for the runtime.
 
 ## Observed reads and component contracts
 

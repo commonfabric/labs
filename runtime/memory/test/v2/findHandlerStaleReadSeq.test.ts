@@ -100,8 +100,12 @@ describe("findHandlerStaleReadSeq()", () => {
     path = await Deno.makeTempFile({ suffix: ".sqlite" });
     engine = await open({ url: toFileUrl(path) });
     localSeq = 0;
-    const lease = new ExecutionLeaseCycle({ engine, space, holder });
-    if (!lease.acquire()) throw new Error("test lease acquire failed");
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    if (!await lease.acquire()) throw new Error("test lease acquire failed");
   });
 
   afterEach(async () => {

@@ -1077,6 +1077,91 @@ Deno.test("diff workspace: realWorkspace resolves via the repo root and blocks e
   }
 });
 
+Deno.test("diff workspace: the test Git attribute declares tests and non-tests", () => {
+  const root = Deno.makeTempDirSync();
+  try {
+    runGit(root, ["init", "-q"]);
+    Deno.writeTextFileSync(
+      join(root, ".gitattributes"),
+      "scripts/test-* test\nsrc/*.test.ts -test\n",
+    );
+    const ws = realWorkspace(root);
+    const paths = ["scripts/test-x.py", "src/app.test.ts", "src/app.ts"];
+    const declared = new Map([
+      ["scripts/test-x.py", true],
+      ["src/app.test.ts", false],
+    ]);
+    assertEquals(ws.declaredTests?.(paths), declared);
+    // Answers are kept for the session, so later lookups do not run Git again.
+    Deno.removeSync(join(root, ".gitattributes"));
+    assertEquals(ws.declaredTests?.(paths), declared);
+    assertEquals(
+      ws.declaredTests?.(["scripts/test-y.py"]),
+      new Map(),
+      "a path first asked about after the change sees the new attributes",
+    );
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
+Deno.test("diff workspace: test attributes follow a diff relative to a subdirectory", () => {
+  const root = Deno.makeTempDirSync();
+  try {
+    runGit(root, ["init", "-q"]);
+    Deno.writeTextFileSync(join(root, ".gitattributes"), "sub/*.t test\n");
+    Deno.mkdirSync(join(root, "sub"));
+    Deno.writeTextFileSync(join(root, "sub", "x.t"), "x\n");
+    // `git diff --relative`, run in sub/, names sub/x.t as x.t.
+    assertEquals(
+      realWorkspace(join(root, "sub")).declaredTests?.(["x.t"]),
+      new Map([["x.t", true]]),
+    );
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
+Deno.test("diff workspace: test attributes span batches and skip outside paths", () => {
+  const root = Deno.makeTempDirSync();
+  try {
+    runGit(root, ["init", "-q"]);
+    Deno.writeTextFileSync(
+      join(root, ".gitattributes"),
+      "*.t test\n*.u -test\n",
+    );
+    // Enough paths to need more than one Git invocation, with set, unset and
+    // unspecified attributes on each side of every boundary between them.
+    const extensions = ["t", "u", "v"];
+    const many = Array.from(
+      { length: 3000 },
+      (_, i) => `some/long/directory/name/file-${i}.${extensions[i % 3]}`,
+    );
+    const expected = new Map<string, boolean>();
+    for (const path of many) {
+      if (!path.endsWith(".v")) expected.set(path, path.endsWith(".t"));
+    }
+    assertEquals(realWorkspace(root).declaredTests?.(many), expected);
+    // Paths outside the repository, which Git would refuse, declare nothing
+    // and leave the paths beside them declared.
+    assertEquals(
+      realWorkspace(root).declaredTests?.(
+        ["../outside.t", "/elsewhere/x.t", "a/../../up.t", "inside.t"],
+      ),
+      new Map([["inside.t", true]]),
+    );
+    // Outside any repository nothing is declared.
+    const bare = Deno.makeTempDirSync();
+    try {
+      assertEquals(realWorkspace(bare).declaredTests?.(["x.t"]), new Map());
+    } finally {
+      Deno.removeSync(bare, { recursive: true });
+    }
+  } finally {
+    Deno.removeSync(root, { recursive: true });
+  }
+});
+
 Deno.test("diff workspace: removed lines use the complete old Git blob", () => {
   const root = Deno.makeTempDirSync();
   try {

@@ -25,6 +25,10 @@ import type {
   RunCommandOutput,
 } from "./tools/loom-commands.ts";
 import type {
+  ReportProgressInput,
+  ReportProgressOutput,
+} from "./tools/report-progress.ts";
+import type {
   SubmitResultInput,
   SubmitResultOutput,
 } from "./tools/submit-result.ts";
@@ -47,8 +51,8 @@ import {
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { maxOf } from "@commonfabric/collections/math";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -120,13 +124,11 @@ import type {
   HarnessSkillScriptExecution,
 } from "./contracts/skill.ts";
 import type {
+  DelegateTaskToolInput,
+  DelegateTaskToolOutput,
   HarnessRunLineage,
   HarnessSubagentResumeContext,
   HarnessSubagentRunRef,
-} from "./contracts/subagent.ts";
-import {
-  type DelegateTaskToolInput,
-  type DelegateTaskToolOutput,
 } from "./contracts/subagent.ts";
 import type { BuiltinToolId } from "./contracts/tool-descriptor.ts";
 import {
@@ -256,30 +258,27 @@ import {
   ACQUIRED_SKILL_MOUNT_PATH,
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
-import { type BashToolInput, type BashToolOutput } from "./tools/bash.ts";
+import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
   AcquireSkillToolOutput,
 } from "./tools/acquire-skill.ts";
-import {
-  type BrowserToolInput,
-  type BrowserToolOutput,
-} from "./tools/browser.ts";
-import {
-  type CallVerbToolInput,
-  type CallVerbToolOutput,
+import type { BrowserToolInput, BrowserToolOutput } from "./tools/browser.ts";
+import type {
+  CallVerbToolInput,
+  CallVerbToolOutput,
 } from "./tools/call-verb.ts";
 import type {
   ReadValueToolInput,
   ReadValueToolOutput,
 } from "./tools/read-value.ts";
-import {
-  type DescribeHandleToolInput,
-  type DescribeHandleToolOutput,
+import type {
+  DescribeHandleToolInput,
+  DescribeHandleToolOutput,
 } from "./tools/describe-handle.ts";
-import {
-  type EditFileToolInput,
-  type EditFileToolOutput,
+import type {
+  EditFileToolInput,
+  EditFileToolOutput,
 } from "./tools/edit-file.ts";
 import type { FinishTaskInput, FinishTaskOutput } from "./tools/finish-task.ts";
 import type {
@@ -287,36 +286,36 @@ import type {
   WeaverActionOutput,
 } from "./tools/weaver-action.ts";
 import type { HarnessClientActionRequester } from "./client-actions/coordinator.ts";
-import {
-  type ReadFileToolInput,
-  type ReadFileToolOutput,
+import type {
+  ReadFileToolInput,
+  ReadFileToolOutput,
 } from "./tools/read-file.ts";
-import {
-  type ReadSkillResourceToolInput,
-  type ReadSkillResourceToolOutput,
+import type {
+  ReadSkillResourceToolInput,
+  ReadSkillResourceToolOutput,
 } from "./tools/read-skill-resource.ts";
 import type {
   RecordFeedbackToolInput,
   RecordFeedbackToolOutput,
 } from "./tools/record-feedback.ts";
-import { getBuiltinTool } from "./tools/registry.ts";
+import { getBuiltinTool, getTypedBuiltinTool } from "./tools/registry.ts";
 import type {
   ReadPieceSourceToolInput,
   ReadPieceSourceToolOutput,
   RevisePieceToolInput,
   RevisePieceToolOutput,
 } from "./tools/piece-source.ts";
-import {
-  type RunPatternToolInput,
-  type RunPatternToolOutput,
+import type {
+  RunPatternToolInput,
+  RunPatternToolOutput,
 } from "./tools/run-pattern.ts";
 import type {
   AssignSlugToolInput,
   AssignSlugToolOutput,
 } from "./tools/assign-slug.ts";
-import {
-  type RunSkillScriptToolInput,
-  type RunSkillScriptToolOutput,
+import type {
+  RunSkillScriptToolInput,
+  RunSkillScriptToolOutput,
 } from "./tools/run-skill-script.ts";
 import type {
   SearchPatternsToolInput,
@@ -326,21 +325,21 @@ import type {
   SearchSkillsToolInput,
   SearchSkillsToolOutput,
 } from "./tools/search-skills.ts";
-import {
-  type ResearchToolInput,
-  type ResearchToolOutput,
+import type {
+  ResearchToolInput,
+  ResearchToolOutput,
 } from "./tools/research.ts";
-import {
-  type ViewImageToolInput,
-  type ViewImageToolOutput,
+import type {
+  ViewImageToolInput,
+  ViewImageToolOutput,
 } from "./tools/view-image.ts";
-import {
-  type WebFetchToolInput,
-  type WebFetchToolOutput,
+import type {
+  WebFetchToolInput,
+  WebFetchToolOutput,
 } from "./tools/web-fetch.ts";
-import {
-  type WriteFileToolInput,
-  type WriteFileToolOutput,
+import type {
+  WriteFileToolInput,
+  WriteFileToolOutput,
 } from "./tools/write-file.ts";
 
 export interface BuiltinToolInputMap {
@@ -382,6 +381,7 @@ export interface BuiltinToolInputMap {
   loom_profile: LoomProfileInput;
   list_commands: ListCommandsInput;
   run_command: RunCommandInput;
+  report_progress: ReportProgressInput;
   submit_result: SubmitResultInput;
 }
 
@@ -424,11 +424,8 @@ export interface BuiltinToolOutputMap {
   loom_profile: LoomRetrievalToolOutput;
   list_commands: ListCommandsOutput;
   run_command: RunCommandOutput;
+  report_progress: ReportProgressOutput;
   submit_result: SubmitResultOutput;
-}
-
-interface ToolOutputWithId {
-  outputId: string;
 }
 
 /** A structured-result schema and the host path its JSON file is kept at. */
@@ -476,6 +473,8 @@ export interface CreateHarnessEngineOptions
   sandboxRunscUnshare?: string;
   /** runsc runtime: the `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** runsc runtime: the host ports a container under pasta reaches. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /**
    * runsc runtime: the platform whose driver defaults apply, as
@@ -613,6 +612,12 @@ export interface CreateHarnessEngineOptions
    */
   structuredResult?: HarnessStructuredResultTarget;
 
+  /** Publishes a milestone with observed handles; false means publication failed. */
+  reportProgress?: (
+    message: string,
+    table: HarnessHandleTable | undefined,
+  ) => Promise<void | boolean>;
+
   /**
    * Host-supplied attachments or session-retained targets to mint handles for
    * at run start; see `establishInputCells`. Requires a fabric session — the
@@ -653,11 +658,6 @@ export interface BuiltinToolInvocationResult<
   resultRef: ToolResultRef;
   runState: HarnessRunState;
 }
-
-const isToolOutputWithId = (value: unknown): value is ToolOutputWithId =>
-  isObjectOrArray(value) &&
-  "outputId" in value &&
-  typeof value.outputId === "string";
 
 const resolveInitialCurrentDir = (
   sandbox: SandboxRuntime,
@@ -746,6 +746,7 @@ export class CfHarnessEngine {
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #reportProgress?: CreateHarnessEngineOptions["reportProgress"];
   readonly #structuredResult?: HarnessStructuredResultTarget;
   #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
@@ -993,6 +994,10 @@ export class CfHarnessEngine {
         "resumed run structured-result configuration does not match the recorded configuration",
       );
     }
+    this.#reportProgress = options.lineage?.role === "subagent" ||
+        options.runState?.lineage?.role === "subagent"
+      ? undefined
+      : options.reportProgress;
     this.#structuredResult = options.lineage?.role !== "subagent" &&
         options.runState?.lineage?.role !== "subagent"
       ? structuredClone(recordedStructuredResult ?? options.structuredResult)
@@ -1005,8 +1010,9 @@ export class CfHarnessEngine {
     // The engine builds the direct runsc runtime unless one is handed in. The
     // mounts below come from the configuration it builds from, so host-backed
     // tools resolve against the sandbox that actually executes.
-    const runscConfig = options.sandboxRuntime === undefined
-      ? resolveRunscSandboxConfig({
+    let runscConfig: RunscSandboxConfig | undefined;
+    if (options.sandboxRuntime === undefined) {
+      runscConfig = resolveRunscSandboxConfig({
         workspaceHostPath: options.workspaceHostPath ??
           (() => {
             throw new Error("runsc sandbox needs a workspaceHostPath");
@@ -1025,6 +1031,7 @@ export class CfHarnessEngine {
         ...(options.sandboxRunscSetpriv !== undefined
           ? { setpriv: options.sandboxRunscSetpriv }
           : {}),
+        forwardedHostPorts: options.sandboxRunscForwardedHostPorts,
         additionalMounts: options.additionalMounts,
         runId,
         ...(options.sandboxPlatform !== undefined
@@ -1037,18 +1044,18 @@ export class CfHarnessEngine {
         unnamedRuntimeNote: unnamedRuntimeMountNote(
           options.sandboxRuntimeChoice,
         ),
-      })
-      : undefined;
+      });
+      this.sandbox = new RunscSandboxRuntime(
+        runscConfig,
+        options.processRunner,
+      );
+    } else {
+      this.sandbox = options.sandboxRuntime;
+    }
     this.#ownedNativeConfig = runscConfig;
     this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
-    this.sandbox = runscConfig !== undefined
-      ? new RunscSandboxRuntime(runscConfig, options.processRunner)
-      : options.sandboxRuntime ??
-        (() => {
-          throw new Error("the engine has no sandbox runtime to run in");
-        })();
     this.workspaceHostPath = runscConfig?.workspaceHostPath ??
       options.workspaceHostPath;
     this.workspaceMountPath = normalizeSandboxRoot(
@@ -1384,6 +1391,11 @@ export class CfHarnessEngine {
    * said otherwise, so an injected factory with no connection config — a test
    * harness, a delegating parent — publishes like a configured one.
    */
+  /** Who this run's published patterns are made for (`config.patternIndex.origin`). */
+  get patternIndexOrigin(): "agent" | undefined {
+    return this.config.patternIndex?.origin;
+  }
+
   get patternIndexPublishEnabled(): boolean {
     return this.patternIndexAvailable &&
       this.config.patternIndex?.publish !== false;
@@ -1644,9 +1656,7 @@ export class CfHarnessEngine {
       await this.sandbox.close?.();
     } catch (error) {
       console.error(
-        `cf-harness: sandbox close failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `cf-harness: sandbox close failed: ${describeFailure(error)}`,
       );
     }
   }
@@ -1885,6 +1895,11 @@ export class CfHarnessEngine {
     return minted.token;
   }
 
+  /** Whether this run can return interim milestones. */
+  get progressAvailable(): boolean {
+    return this.#reportProgress !== undefined;
+  }
+
   /** Whether this run was configured with a structured-result schema. */
   get structuredResultAvailable(): boolean {
     return this.#structuredResult !== undefined;
@@ -2026,7 +2041,9 @@ export class CfHarnessEngine {
    * Establishes the run's input cells: mints tokens for host-supplied attachments
    * or session-retained targets, records them in run state, and returns them.
    * With no argument, cells already recorded are returned as they stand.
-   * An explicit list adds new attachments, refusing names already held.
+   * An explicit list adds new attachments. One that gives a held cell the name
+   * it is held under adds nothing, and one that gives that name to any other
+   * cell is refused.
    *
    * An input cell names a task target, so failure is closed and loud rather
    * than tolerated: cells configured on a
@@ -2042,9 +2059,13 @@ export class CfHarnessEngine {
     ) {
       return structuredClone(this.#runState.inputCells);
     }
-    const specs = additionalCells ?? this.#inputCells;
     const retained = this.#runState.inputCells ?? [];
-    assertInputCellNamesAvailable(specs, retained.map((cell) => cell.name));
+    const requested = additionalCells ?? this.#inputCells;
+    assertInputCellNamesAvailable(requested, retained);
+    // A name that passed while held is the held cell's, already minted.
+    const specs = requested.filter((spec) =>
+      !retained.some((cell) => cell.name === spec.name)
+    );
     if (specs.length === 0) return structuredClone(retained);
     if (this.#fabricSessionFactory === undefined) {
       throw new Error(
@@ -2488,9 +2509,7 @@ export class CfHarnessEngine {
         createHarnessFailureRecord({
           kind: "harness_error",
           source: "cell_labels",
-          detail: `cell label snapshot failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          detail: `cell label snapshot failed: ${describeFailure(error)}`,
           at: now,
         }),
         now,
@@ -2583,6 +2602,18 @@ export class CfHarnessEngine {
     return this.getRunState();
   }
 
+  /** Resolves a call's effect from its inputs and host metadata. */
+  async builtinToolEffectClass(
+    toolId: BuiltinToolId,
+    input: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) {
+    const tool = getBuiltinTool(toolId);
+    if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
+    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+      tool.descriptor.effectClass;
+  }
+
   /**
    * Runs one builtin tool and records its output on the run. A tool call is
    * one step of a run, not the run: the run's status is the driver's to
@@ -2598,7 +2629,7 @@ export class CfHarnessEngine {
     input: BuiltinToolInputMap[TToolId],
     options: { signal?: AbortSignal; sideEffectsAuthorized?: boolean } = {},
   ): Promise<BuiltinToolInvocationResult<TToolId>> {
-    const tool = getBuiltinTool(toolId);
+    const tool = getTypedBuiltinTool(toolId);
     if (tool === undefined) {
       throw new Error(`unknown builtin tool: ${toolId}`);
     }
@@ -2611,7 +2642,7 @@ export class CfHarnessEngine {
           options.sideEffectsAuthorized,
         ),
         input,
-      ) as BuiltinToolOutputMap[TToolId];
+      );
       return await this.recordBuiltinToolOutput(toolId, input, output, options);
     } catch (error) {
       if (options.signal?.aborted) {
@@ -2638,9 +2669,6 @@ export class CfHarnessEngine {
     output: BuiltinToolOutputMap[TToolId],
     options: { signal?: AbortSignal } = {},
   ): Promise<BuiltinToolInvocationResult<TToolId>> {
-    if (!isToolOutputWithId(output)) {
-      throw new Error(`builtin tool did not return an outputId: ${toolId}`);
-    }
     const artifactPath = await this.artifactStore?.persistToolOutput(
       toolId,
       output.outputId as ToolOutputId,
@@ -2757,78 +2785,17 @@ export class CfHarnessEngine {
     );
   }
 
-  #hostPathToWorkspacePath(path: string): string | undefined {
-    const hostPath = normalizeHostPath(path);
-    for (const mount of this.#hostMounts) {
-      const hostRoot = normalizeHostPath(mount.hostPath);
-      if (!isHostPathWithinRoot(hostRoot, hostPath)) {
-        continue;
-      }
-      const relativePath = relativeHostPath(hostRoot, hostPath);
-      if (relativePath === "") {
-        return normalizeSandboxRoot(mount.sandboxPath);
-      }
-      return normalizeSandboxPath(
-        `${normalizeSandboxRoot(mount.sandboxPath)}/${
-          relativePath.replaceAll("\\", "/")
-        }`,
-      );
-    }
-    return undefined;
-  }
-
-  async #isHostPathWithinWorkspace(
-    path: string,
-    options: { allowMissing?: boolean } = {},
-  ): Promise<boolean> {
+  async #isHostPathWithinWorkspace(path: string): Promise<boolean> {
     if (this.workspaceHostPath === undefined) {
       return false;
     }
-    const normalizedPath = normalizeHostPath(path);
     try {
       const hostRoot = await Deno.realPath(this.workspaceHostPath);
-      const hostPath = await Deno.realPath(normalizedPath);
+      const hostPath = await Deno.realPath(normalizeHostPath(path));
       return isHostPathWithinRoot(hostRoot, hostPath);
-    } catch (error) {
-      if (!options.allowMissing || !(error instanceof Deno.errors.NotFound)) {
-        return false;
-      }
-      return await this.#missingHostPathCanResolveWithinWorkspace(
-        normalizedPath,
-      );
-    }
-  }
-
-  async #missingHostPathCanResolveWithinWorkspace(path: string): Promise<
-    boolean
-  > {
-    if (this.workspaceHostPath === undefined) {
-      return false;
-    }
-    const lexicalRoot = normalizeHostPath(this.workspaceHostPath);
-    let realRoot: string;
-    try {
-      realRoot = await Deno.realPath(this.workspaceHostPath);
     } catch {
       return false;
     }
-    let candidate = normalizeHostPath(path);
-    while (isHostPathWithinRoot(lexicalRoot, candidate)) {
-      try {
-        const realCandidate = await Deno.realPath(candidate);
-        return isHostPathWithinRoot(realRoot, realCandidate);
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) {
-          return false;
-        }
-      }
-      const parent = dirname(candidate);
-      if (parent === candidate) {
-        return false;
-      }
-      candidate = parent;
-    }
-    return false;
   }
 
   async #realHostPath(path: string): Promise<string | undefined> {
@@ -2843,17 +2810,12 @@ export class CfHarnessEngine {
     path: string,
   ): Promise<string | undefined> {
     let candidate = normalizeHostPath(path);
-    while (true) {
-      const realPath = await this.#realHostPath(candidate);
-      if (realPath !== undefined) {
-        return realPath;
-      }
-      const parent = dirname(candidate);
-      if (parent === candidate) {
-        return undefined;
-      }
-      candidate = parent;
+    let realPath = await this.#realHostPath(candidate);
+    while (realPath === undefined && dirname(candidate) !== candidate) {
+      candidate = dirname(candidate);
+      realPath = await this.#realHostPath(candidate);
     }
+    return realPath;
   }
 
   async #isHostPathWithinArtifactRoot(
@@ -2877,34 +2839,6 @@ export class CfHarnessEngine {
       ? await this.#nearestExistingRealHostPath(normalizedPath)
       : await this.#realHostPath(normalizedPath);
     return realPath !== undefined && isHostPathWithinRoot(realRoot, realPath);
-  }
-
-  async #doesHostPathIntersectArtifactRoot(
-    path: string,
-    options: { allowMissing?: boolean } = {},
-  ): Promise<boolean> {
-    const root = this.artifactStore?.artifactRoot;
-    if (root === undefined) {
-      return false;
-    }
-    const normalizedRoot = normalizeHostPath(root);
-    const normalizedPath = normalizeHostPath(path);
-    if (
-      isHostPathWithinRoot(normalizedRoot, normalizedPath) ||
-      isHostPathWithinRoot(normalizedPath, normalizedRoot)
-    ) {
-      return true;
-    }
-    const realRoot = await this.#realHostPath(normalizedRoot);
-    if (realRoot === undefined) {
-      return false;
-    }
-    const realPath = options.allowMissing === true
-      ? await this.#nearestExistingRealHostPath(normalizedPath)
-      : await this.#realHostPath(normalizedPath);
-    return realPath !== undefined &&
-      (isHostPathWithinRoot(realRoot, realPath) ||
-        isHostPathWithinRoot(realPath, realRoot));
   }
 
   async #createCfcInvocationContext(options: {
@@ -3042,6 +2976,10 @@ export class CfHarnessEngine {
         ? { browserHost: this.#browserHost }
         : {}),
       handleValueOrigins: this.config.handleValueOrigins,
+      ...(this.#reportProgress === undefined ? {} : {
+        reportProgress: (message: string) =>
+          this.#reportProgress!(message, this.handleTable),
+      }),
       handleTable: this.handleTable,
       ...(this.#fabricSessionFactory !== undefined
         ? { getFabricSession: this.#fabricSessionFactory }
@@ -3062,6 +3000,9 @@ export class CfHarnessEngine {
           getPatternIndexClient: this.#patternIndexClientFactory,
           patternIndexPublishEnabled: this.patternIndexPublishEnabled,
           patternIndexPublishDiscoverable: this.patternIndexPublishDiscoverable,
+          ...(this.patternIndexOrigin !== undefined
+            ? { patternIndexOrigin: this.patternIndexOrigin }
+            : {}),
           patternIndexLedger: this.patternIndexLedger,
         }
         : {}),
@@ -3148,22 +3089,14 @@ export class CfHarnessEngine {
         this.sandbox.resolvePath(path, this.#runState.currentDir),
       resolveHostPath: (path: string) => this.#resolveHostPath(path),
       resolveHostRootPath: (path: string) => this.#resolveHostRootPath(path),
-      hostPathToWorkspacePath: (path: string) =>
-        this.#hostPathToWorkspacePath(path),
-      isHostPathWithinWorkspace: (
-        path: string,
-        options?: { allowMissing?: boolean },
-      ) => this.#isHostPathWithinWorkspace(path, options),
+      isHostPathWithinWorkspace: (path: string) =>
+        this.#isHostPathWithinWorkspace(path),
       isHostPathWithinArtifactRoot: (
         path: string,
         options?: { allowMissing?: boolean },
       ) => this.#isHostPathWithinArtifactRoot(path, options),
       imageAttachmentSnapshotDir: this.artifactStore
         ?.imageAttachmentSnapshotDir,
-      doesHostPathIntersectArtifactRoot: (
-        path: string,
-        options?: { allowMissing?: boolean },
-      ) => this.#doesHostPathIntersectArtifactRoot(path, options),
       setCurrentDir: (path: string) => {
         const resolved = this.sandbox.resolvePath(
           path,

@@ -2,16 +2,16 @@ import { internSchema } from "@commonfabric/data-model-schema";
 import { hashOf } from "@commonfabric/data-model";
 
 import type { CellScope } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import { effectTargetKey } from "../executor/effect-completion.ts";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
 import { ownedCell, ownedStoreLinks } from "./runtime-owned-store.ts";
 import { setResultCell } from "../result-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 
 /**
@@ -27,7 +27,7 @@ import type { IExtendedStorageTransaction } from "../storage/interface.ts";
  */
 export function streamData(
   inputsCell: Cell<{
-    url: string;
+    url?: string;
     options?: { body?: any; method?: string; headers?: Record<string, string> };
     result?: any;
   }>,
@@ -267,8 +267,15 @@ export function streamData(
           runtime.trackAsyncWork(
             settleAbandonedRequest(
               runtime,
-              "streamData",
-              effectKey,
+              {
+                builtinId: "streamData",
+                effectKey,
+                // Never served: the builtin refuses to run under server
+                // execution, so its runs carry no scope-key identity.
+                identity: undefined,
+                scope: outputScope,
+                attributeToBuiltin: true,
+              },
               (settleTx) => {
                 // The announcement rode the abandoned transaction, so it is
                 // made again whoever owns the answer now.

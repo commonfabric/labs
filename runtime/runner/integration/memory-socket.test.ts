@@ -5,6 +5,7 @@ import { fromFileUrl } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const fixtures = new URL("./fixtures/memory-tls/", import.meta.url);
 
@@ -13,7 +14,9 @@ describe("memory-socket", () => {
     // TLS termination forwards bytes to the ordinary memory server, leaving
     // framing, compression, authorization, and commits to the real protocol.
 
-    const memory = StandaloneMemoryServer.start();
+    const memory = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+    });
     const connections = new Set<Deno.Conn>();
     const forwarding: Promise<void>[] = [];
     const failures: unknown[] = [];

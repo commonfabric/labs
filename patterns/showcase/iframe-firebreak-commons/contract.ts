@@ -77,12 +77,3 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
     preferredTool: "water",
   },
 };
-
-export const IFRAME_PATTERN = {
-  name: "IframeFirebreakCommons",
-  displayName: "Firebreak Commons",
-  stateScope: "space",
-  outputScope: "user",
-  frameHeight: "100vh",
-  databases: {},
-} as const;

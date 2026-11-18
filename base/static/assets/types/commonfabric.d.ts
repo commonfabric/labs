@@ -479,6 +479,16 @@ export interface FabricHashConstructor {
 export declare const FabricHash: FabricHashConstructor;
 
 /**
+ * The state of a `FabricKeyPair` that holds material, which is also its
+ * encoded form: the algorithm name, and the two keys' bytes.
+ */
+export type KeyPairState = {
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
  * An immutable asymmetric key pair.
  *
  * An instance either holds handles -- two `CryptoKey`s, whose material this
@@ -492,6 +502,12 @@ export interface FabricKeyPair extends FabricPrimitive {
 
   readonly algorithm: string;
   readonly hasMaterial: boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  readonly state: KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys. The record is a new
@@ -527,37 +543,6 @@ export interface FabricKeyPairConstructor {
 export declare const FabricKeyPair: FabricKeyPairConstructor;
 
 /**
- * An immutable regular expression.
- *
- * The pattern is held as a flavor / source / flags triple rather than as a
- * JS `RegExp`, so that flavors with no JS representation can still be
- * carried. `value` reconstitutes a JS `RegExp` where one exists.
- */
-export interface FabricRegExp extends FabricPrimitive {
-  /** @inheritDoc */
-  readonly schemaType: "FabricRegExp";
-
-  readonly source: string;
-  readonly flags: string;
-  readonly flavor: string;
-
-  /**
-   * A fresh JS `RegExp` equivalent to this value, returned anew on each
-   * call so the internal instance is never aliased out. Throws for a flavor
-   * with no JS `RegExp` representation.
-   */
-  readonly value: RegExp;
-}
-
-export interface FabricRegExpConstructor {
-  new (regex: RegExp): FabricRegExp;
-  new (flavor: string, source: string, flags: string): FabricRegExp;
-  prototype: FabricRegExp;
-}
-
-export declare const FabricRegExp: FabricRegExpConstructor;
-
-/**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
  * failed, and is the one reason that carries a kind and a message.
@@ -579,16 +564,41 @@ export type UnavailableErrorKind =
   | "sync";
 
 /**
+ * The state of a `FabricUnavailable`, which is also its encoded form: the
+ * reason; for the `error` reason the kind; and the message when one is
+ * stored. A field that has nothing to say is absent rather than `null`, so
+ * that the state of a transient reason is exactly the reason.
+ */
+export type UnavailableState =
+  /** A transient reason, which carries nothing else. */
+  | { readonly reason: "pending" | "syncing" }
+  /**
+   * The `error` reason, with its kind, and its message when one is stored,
+   * which a message equal to the kind's default never is.
+   */
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
+
+/**
  * A marker standing in for data that is not available, saying why. It holds
  * no data of its own: the reason, and for the `error` reason the kind of
  * error and a message, are the whole of what it says. Only the `error` reason
  * carries a kind, and it always does; only the `error` reason may carry a
- * message, and `errorMessage` supplies one for its kind when none was given.
- * For the other two reasons every error member is `null`.
+ * message, and `message` supplies one for its kind when none was given. For
+ * the other two reasons every error member is `null`.
  */
 export interface FabricUnavailable extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
+
+  /**
+   * The state, a frozen record: the reason, the kind when there is one, and
+   * the message when one is stored.
+   */
+  readonly state: UnavailableState;
 
   /** Why the data is unavailable. */
   readonly reason: UnavailableReason;
@@ -600,14 +610,14 @@ export interface FabricUnavailable extends FabricPrimitive {
    * The message, when the reason is `error`: the one given at construction,
    * or the kind's default when none was. `null` for a transient reason.
    */
-  readonly errorMessage: string | null;
+  readonly message: string | null;
 
   /**
    * The message as given at construction, with no default supplied: `null`
    * for a transient reason, and for an `error` whose message is its kind's
    * default or was never given.
    */
-  readonly rawErrorMessage: string | null;
+  readonly rawMessage: string | null;
 
   /** Whether the reason is `pending`. */
   isPending(): boolean;
@@ -616,12 +626,12 @@ export interface FabricUnavailable extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
-   * to the non-`null` values the `error` reason always carries.
+   * Whether the reason is `error`, narrowing `errorKind` and `message` to the
+   * non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   };
 
   /**
@@ -635,7 +645,7 @@ export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
     errorKind?: UnavailableErrorKind | null,
-    errorMessage?: string | null,
+    message?: string | null,
   ): FabricUnavailable;
   prototype: FabricUnavailable;
 }
@@ -658,7 +668,6 @@ export type ConcreteFabricPrimitive =
   | FabricEpochNsec
   | FabricHash
   | FabricKeyPair
-  | FabricRegExp
   | FabricUnavailable;
 
 /**
@@ -1176,6 +1185,23 @@ export interface TextChange {
   /** Text that replaces the range; empty when absent. */
   readonly insert?: string;
 }
+
+/**
+ * The anchors of a collaborative field: the value of its anchors document,
+ * which `anchorsOf()` names. Each anchor is a point in the field's text,
+ * held as its offset under an id its writer chooses. An offset counts UTF-16
+ * code units, as a string index does, from 0 to the text's length.
+ *
+ * Memory carries every anchor through every collaborative edit of the field
+ * as it would a cursor: text inserted at an anchor lands after it, and an anchor inside
+ * deleted text lands where the deletion began. So a highlight from one anchor
+ * to another takes in text inserted at its start and leaves out text inserted
+ * at its end, and a highlight whose text is deleted is empty.
+ *
+ * A type alias, not an interface, because Memory stores and sends the map as
+ * a fabric value, and only an alias of an object type is assignable to one.
+ */
+export type FieldAnchors = { readonly [id: string]: number };
 
 /*
  * IAnyCell is an interface that is used by all calls and to which the runner
@@ -1835,7 +1861,19 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
+   */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 
@@ -2440,9 +2478,29 @@ type CellWrappedData<T> =
   | AnyBrandedCell<T>
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : never);
 export declare const CELL_LIKE: unique symbol;
+
+/**
+ * `undefined` where `K` is an optional key of `T`, and nothing elsewhere.
+ *
+ * A pattern body sees an optional field of its own input as `T | undefined`.
+ * Handing that field to another factory's optional input passes a reference to
+ * it, whether the field is there or not, so the input has to admit the
+ * `undefined` in the field's type. A literal `undefined`, or a computation that
+ * returns one, passes too, because its type cannot be told apart from the
+ * field's. Either is a value, not the property left out.
+ */
+// An index signature's key is not an optional property, though `Pick` over it
+// is satisfied by `{}` too; its values keep their declared type.
+type OptionalInputUndefined<T, K extends keyof T> = string extends K ? never
+  : number extends K ? never
+  : symbol extends K ? never
+  // deno-lint-ignore ban-types
+  : {} extends Pick<T, K> ? undefined
+  : never;
 
 /**
  * Helper type to transform Cell<T> to FactoryInput<T> in pattern/lift/handler inputs.
@@ -2509,7 +2567,8 @@ export type FactoryInput<T> =
   | ([NonNullable<T>] extends [VNode | UIRenderable] ? JSXElement : never)
   | (T extends Array<infer U> ? Array<FactoryInput<U>>
     : T extends ReadonlyArray<infer U> ? ReadonlyArray<FactoryInput<U>>
-    : T extends object ? { [K in keyof T]: FactoryInput<T[K]> }
+    : T extends object
+      ? { [K in keyof T]: FactoryInput<T[K]> | OptionalInputUndefined<T, K> }
     : T);
 
 /**
@@ -3311,12 +3370,27 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/** Latest user-facing milestone reported by an agent run. */
+export interface AgentProgress {
+  /** Literal user-facing milestone text. */
+  message: string;
+
+  /** One-based report number within this execution attempt. */
+  sequence: number;
+
+  /** ISO timestamp assigned by the host. */
+  updatedAt: string;
+}
+
 /**
  * The request an `agent()` node submits: a task, the cells it may read, and
  * the schema its answer takes. A runner the requester registered executes it
  * as the requester; the builtin's cell follows the run's record.
  */
 export interface BuiltInAgentParams {
+  /** Enables the progress tool and milestone-reporting instructions. */
+  progress?: boolean;
+
   /**
    * What the run is for, as context rather than a command. Labeled data
    * interpolated into this text becomes a value the request carries and the
@@ -3356,6 +3430,9 @@ export interface BuiltInAgentParams {
  * space and not the host that serves it.
  */
 export interface BuiltInAgentState<T> {
+  /** Latest reported milestone, retained when the run finishes. */
+  progress?: AgentProgress;
+
   pending: boolean;
   result?: T;
   error?: string;
@@ -3551,7 +3628,9 @@ export type PatternToolFunction = <
   // `sandboxId`); otherwise validate that E (after stripping cells) is a subset
   // of T.
   extraParams?: [keyof E & FrameworkProvidedKeys<T>] extends [never]
-    ? (StripCell<E> extends Partial<T> ? FactoryInput<E> : never)
+    ? (StripCell<E> extends
+      { [K in keyof T]?: T[K] | OptionalInputUndefined<T, K> } ? FactoryInput<E>
+      : never)
     : never,
 ) => PatternToolResult<E>;
 
@@ -3745,6 +3824,7 @@ export type AssertRenderPartsFunction = (
 type TestStepKey =
   | "assertion"
   | "action"
+  | "press"
   | "render"
   | "settle"
   | "label"
@@ -3775,6 +3855,14 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  * - `{ action }` sends an event into a stream. `event` is the payload;
  *   `trustedUi` names a trusted UI surface and the control inside it when the
  *   action must originate from rendered UI under enforcement.
+ * - `{ press, control }` clicks a control rendered in the `press` view, as a
+ *   person clicks it in a browser: the runner renders the view through the
+ *   browser's reconciler and DOM applicator, finds the one element whose text,
+ *   trimmed, is `control`, and dispatches a click on it, so the handler bound
+ *   there receives the event with the provenance its rendered markers give.
+ *   `within` names text an element around the control shows, for a view that
+ *   shows `control` more than once, such as a row of a list. `modifiers` names
+ *   the keys held during the click, such as `["meta"]` for a Cmd-click.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3793,6 +3881,12 @@ export type TestStep =
     action: Stream<unknown>;
     event?: unknown;
     trustedUi?: { surface: string; action: string };
+  }>
+  | OnlyTestStep<"press", {
+    press: unknown;
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
   }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
@@ -4071,32 +4165,39 @@ export type SqliteQueryRow<Row> = string extends keyof Row
 export interface ISqliteQueryable {
   query<Row = Record<string, unknown>>(
     sql: string,
+    // Each option but `scope` admits `undefined`, as the `sqliteQuery`
+    // factory's optional inputs do, so a pattern can forward an optional field
+    // of its own input.
     options?: {
-      params?: ReadonlyArray<unknown> | Record<string, unknown>;
+      params?: ReadonlyArray<unknown> | Record<string, unknown> | undefined;
       reactOn?: unknown;
 
       /** Application key echoed on this request's pending and settled states.
        * Changing it issues a new request even when SQL and params match. */
-      requestKey?: string;
+      requestKey?: string | undefined;
 
       /** CFC Phase 3: declared output ceiling (see SqliteQueryParams). */
-      maxConfidentiality?: ReadonlyArray<unknown>;
+      maxConfidentiality?: ReadonlyArray<unknown> | undefined;
 
       /** `"fail"` (default) | `"skip"` when a row exceeds the ceiling. */
-      onExceed?: "fail" | "skip";
+      onExceed?: "fail" | "skip" | undefined;
 
       /** CFC Phase 3.b: filter rows to those the acting reader may read (a
        *  declared existence release). Requires the table to opt in via
        *  `table(…, { allowReadClearance: true })`; never for aggregates. The
        *  count of withheld rows is reported as `withheld`. */
-      readClearance?: boolean;
+      readClearance?: boolean | undefined;
 
       /** Scope of the result cell. A `session`-scoped result is one each
        *  session reads alone and filters under its runtime read ceiling. Shared
        *  results retain their labels for cell-read enforcement. Absent, the
        *  result takes the narrowest of the db's scope, the pattern's output
        *  scope, and — when `readClearance` is set — `user`, since a cleared
-       *  result is one reader's view. */
+       *  result is one reader's view.
+       *
+       *  It is read when the pattern is built, before any input has a value,
+       *  so it is written in the pattern: a pattern input or a computed value
+       *  cannot supply it. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -4323,6 +4424,37 @@ export type DID = `did:${string}`;
  */
 export declare function isWellFormedDID(value: unknown): value is DID;
 
+/** A DID split into the parts that follow its `did:` prefix. */
+export interface ParsedDID {
+  /** The whole DID, as it was given. */
+  did: DID;
+
+  /**
+   * The method name: the text between the `did:` prefix and the next colon,
+   * or the whole remainder when no colon follows the prefix.
+   */
+  method: string;
+
+  /**
+   * The method-specific identifier: the text after the method's colon, and the
+   * empty string when no colon follows the method.
+   */
+  id: string;
+}
+
+/**
+ * Splits `value` into its method and its method-specific identifier, or
+ * returns `undefined` when `value` is not a DID. A DID here is any string that
+ * starts with `did:`, compared exactly, so `did:web:example.com:8080` parses
+ * to method `web` and id `example.com:8080`, and `did:key` to method `key` and
+ * the empty id. It checks no syntax beyond the prefix: ask `isWellFormedDID()`
+ * of a DID that is to be shown to a person or read as a principal.
+ *
+ * The runtime takes DIDs apart with this same function. It reads nothing but
+ * its argument, so it can be called anywhere a call to `isWellFormedDID()` can.
+ */
+export declare function parseDID(value: unknown): ParsedDID | undefined;
+
 /**
  * Returns the principal the running handler acts for: the authenticated actor
  * of the event it handles, or `undefined` for an event no principal sent.
@@ -4414,6 +4546,38 @@ export declare function principalsOf(
   kind: PrincipalClaimKind,
   options?: PrincipalReadOptions,
 ): DID[] | undefined;
+
+/**
+ * Returns the principal `target`'s value's own cell represents: the one
+ * principal that the label of the cell a write to `target` lands in names as
+ * the one the value represents, in the form the runtime writes, at that
+ * label's root, and only when no claim anywhere in the label names anyone
+ * else. The value's own cell is that cell when the value is the whole of it,
+ * the cell is in the space of the document holding `target`'s field, and the
+ * cell holds no link to a value elsewhere: a value at a path within a document
+ * reads with that document's label, and a link stored in the cell leads to a
+ * value it does not hold. `undefined` in every other case, for a value stored
+ * without a label, and for a `target` of `undefined`.
+ *
+ * The label says whom the cell's value represents, not who pointed `target` at
+ * that cell: the links on the way, write redirects among them, are followed. A
+ * cell in another space is refused, since its label says who wrote the value
+ * there, not that anyone put it at this field. Name the field through the
+ * document holding it, as `profile.key("picture")` does: a write redirect of
+ * your own to the field, stored in another space, is refused like any other. A
+ * write declared `RepresentsCurrentUser`, as a profile's `setPicture` is,
+ * labels the value with the principal it acts for, so comparing this with
+ * `profileOwnerOf()` says whether a profile's `picture` is one its owner set.
+ * Within the profile's space, a visitor can still point a face field at another
+ * cell the owner wrote there. It can be called where `principalOf()` can: in a
+ * reactive computation the result updates when the label or the links change,
+ * and in a handler a document still loading has the handler run again once it
+ * arrives. Calling it in a pattern body throws, and so does a label stored in a
+ * form the runtime cannot interpret.
+ */
+export declare function writtenPrincipalOf<T>(
+  target: AnyCell<T> | undefined,
+): DID | undefined;
 
 /**
  * Returns the person whose own profile `target` is, or `undefined` when it is
@@ -4526,15 +4690,50 @@ export type WishParams = {
   headless?: boolean;
 };
 
+/**
+ * Why a wish holds an `error`:
+ * - `"no-match"`: the wish looked and confirmed nothing matches, such as a
+ *   `#profile` wish for a user with no profile yet, or a hashtag search with
+ *   no match. A reader may offer to make one.
+ * - `"failed"`: the wish could not look, or what it found could not be read.
+ *
+ * A reader treats a code it does not know as `"failed"`.
+ */
+export type WishErrorCode = "no-match" | "failed";
+
 export type WishState<T> = {
   // A failed wish should have result of undefined and candidates of []
   result: T | undefined;
   candidates: T[];
   error?: any;
+  /** Set whenever `error` is, saying which kind of error it is. */
+  errorCode?: WishErrorCode;
   [UI]?: VNode;
 };
 
 export type NavigateToFunction = (cell: Reactive<any>) => Reactive<boolean>;
+
+/**
+ * `anchorsOf(field)` — the anchors document of a string field, as a cell: a
+ * read returns the field's anchors, or `undefined` until something writes
+ * them, and a write replaces them. Memory moves every anchor through every
+ * collaborative edit of the field. A `set()` of the field moves none, so a
+ * handler that replaces the text that way writes the anchors too. `field` is
+ * a field stored in a document; a constant, which has no edits, is refused.
+ *
+ * A handler that changes the anchors reads the field and the anchors, then
+ * writes the anchors it wants the field to hold. Its commit lands only while
+ * the field and the anchors are still what it read; where either moved, the
+ * handler runs again against what they hold now. A handler that also edits
+ * the field with `.applyChanges()` writes the anchors before the edit,
+ * against the text it read, and Memory moves them through the edit; a commit
+ * that writes them after the edit is refused. Give a handler the result as a
+ * `Writable<FieldAnchors | undefined>`.
+ */
+export type AnchorsOfFunction = (
+  field: FactoryInput<string>,
+) => Reactive<FieldAnchors | undefined>;
+
 export interface WishFunction {
   <T = unknown>(
     target: FactoryInput<WishParams>,
@@ -4880,6 +5079,24 @@ export type EqualsFunction = (
 ) => boolean;
 
 /**
+ * Returns a string that two values share exactly when `equals` returns `true`
+ * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
+ * distinct references in a list, or joins one list to another, in one pass
+ * where `equals` compares them in pairs. Inside a handler or a reactive
+ * computation it follows links first, as `equals` does, so an alias and the
+ * document it names share a key; elsewhere it compares links as given.
+ *
+ * Returns `undefined` for a value with no place in the graph — a fresh object
+ * literal, a primitive, `undefined` — which `equals` matches to nothing but
+ * itself. A key holds for the run that made it, as `equals` does: compare it
+ * with keys from the same run, and do not store it. Its form is not part of
+ * the contract.
+ */
+export type EqualsKeyFunction = (
+  value: AnyCell<any> | object | undefined,
+) => string | undefined;
+
+/**
  * Deep structural equality for two values, intended for `FabricValue`-shaped
  * data. Compares primitives with `Object.is` (so `NaN` equals `NaN` and `-0`
  * is distinct from `0`). Unlike `equals`, it compares values directly and does
@@ -4958,6 +5175,7 @@ export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;
 export declare const navigateTo: NavigateToFunction;
+export declare const anchorsOf: AnchorsOfFunction;
 export declare const inspectConfLabel: InspectConfLabelFunction;
 export declare const wish: WishFunction;
 
@@ -4973,6 +5191,7 @@ export declare const multiUserTest: <T extends MultiUserTestDescriptor>(
 export declare const cell: CellTypeConstructor<AsCell>["of"];
 
 export declare const equals: EqualsFunction;
+export declare const equalsKey: EqualsKeyFunction;
 export declare const valueEqual: ValueEqualFunction;
 export declare const byRef: ByRefFunction;
 export function getPatternEnvironment(): PatternEnvironment {
@@ -5141,6 +5360,55 @@ export type SpaceOfFunction = <T>(
 ) => DID | undefined;
 
 export declare const spaceOf: SpaceOfFunction;
+
+/**
+ * Returns the DID of the space `target`'s own link names, without following
+ * it or any link it reaches, and without reading anything in that space: so a
+ * pattern can tell which space a cell it holds by link is in, as a list of
+ * entries read as links needs to, at no cost in the space it names. A cell a
+ * value holds at a position typed `Cell<unknown>` is such a link, as is each
+ * cell `linksOf()` returns. Where the link names a document that links
+ * elsewhere in turn, this is the space of that document, not of the value it
+ * leads to, which `spaceOf()` returns.
+ *
+ * `undefined` means the answer is not known yet: `target` is `undefined`, or
+ * the run has named an `inSpace()` target whose space is not resolved yet, as
+ * for `spaceOf()`. Call it where `spaceOf()` can be called.
+ */
+export type SpaceOfLinkFunction = <T>(
+  target: AnyCell<T> | undefined,
+) => DID | undefined;
+
+export declare const spaceOfLink: SpaceOfLinkFunction;
+
+/**
+ * Returns whether the space `target` names is deleted, so a pattern that keeps
+ * a list of spaces can put away an entry whose space is gone. `target` is a
+ * cell, naming the space its value lives in as `spaceAccess()` does, or the
+ * space's own DID.
+ *
+ * `true` means the memory server has refused this runtime the space because
+ * it is deleted, which it is for good. `false` means the server has admitted
+ * the runtime to the space, or has refused it for another reason. `undefined`
+ * means there is no answer yet: in a reactive computation the server has not
+ * answered for the space yet, and the computation runs again once it has.
+ * Anywhere, it also means no memory server can answer for the space, or
+ * `target` is `undefined`. A handler does not see `undefined` for a space the
+ * server has yet to answer for: the runtime waits for the answer once the run
+ * ends, discarding what the run wrote, and runs the handler again, except for
+ * an event sent with `retries: false` that no serving runtime runs, which is
+ * dropped.
+ *
+ * Call it in a handler or a reactive computation (`computed()`, `lift()`).
+ * Calling it in a pattern body throws, as does a string `target` that is not a
+ * well-formed DID. Deletion is the same for every principal, so the answer
+ * does not depend on who asks, and carries no label of its own.
+ */
+export type SpaceDeletedFunction = (
+  target: AnyCell<unknown> | DID | undefined,
+) => boolean | undefined;
+
+export declare const spaceDeleted: SpaceDeletedFunction;
 
 /** The level `grantSpaceAccess()` sets an access-list entry to. */
 export type SpaceGrantLevel = "READ" | "WRITE" | "OWNER";

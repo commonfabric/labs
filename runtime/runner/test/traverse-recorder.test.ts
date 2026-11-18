@@ -8,16 +8,29 @@
  */
 
 import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
+
+import type { FabricValue } from "@commonfabric/data-model";
+import type { Entity, Revision, State } from "@commonfabric/memory/interface";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   fixtureDocKey,
   TraverseCaptureRecorder,
+  type TraverseFixture,
 } from "../src/traverse-recorder.ts";
-import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
+import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+} from "../src/storage/interface.ts";
+import { StoreObjectManager } from "../src/storage/query.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import type { SchemaPathSelector } from "../src/traverse.ts";
+import {
+  ManagedStorageTransaction,
+  type SchemaPathSelector,
+} from "../src/traverse.ts";
 
 const SPACE = "did:key:zTraverse" as IMemorySpaceAddress["space"];
 
@@ -36,6 +49,34 @@ function address(
 
 const selector = (path: string[]): SchemaPathSelector =>
   ({ path, schemaContext: undefined }) as unknown as SchemaPathSelector;
+
+/** A transaction reading from documents whose full values `docs` gives. */
+function txOver(
+  docs: Record<string, FabricValue>,
+): IExtendedStorageTransaction {
+  const store = new Map<string, Revision<State>>();
+  for (const [id, is] of Object.entries(docs)) {
+    store.set(`${id}/application/json`, {
+      the: "application/json",
+      of: id as Entity,
+      is,
+      since: 1,
+    });
+  }
+  return new ExtendedStorageTransaction(
+    new ManagedStorageTransaction(new StoreObjectManager(store)),
+  );
+}
+
+/** Reads the root of each of `ids` through `recorder`'s wrapper of `tx`. */
+function readThrough(
+  recorder: TraverseCaptureRecorder,
+  tx: IExtendedStorageTransaction,
+  ids: string[],
+): void {
+  const wrapped = recorder.wrapTx(tx);
+  for (const id of ids) wrapped.read(address(id, ["value"]));
+}
 
 describe("traverse-recorder", () => {
   describe("fixtureDocKey", () => {
@@ -252,6 +293,202 @@ describe("traverse-recorder", () => {
     it("describes a run that traversed nothing", () => {
       const fixture = new TraverseCaptureRecorder().toFixture("fx", "src.ts");
       expect(fixture.invocations).toEqual([]);
+    });
+
+    it("keeps a link's schema and a selector's local `$ref`", () => {
+      const recorder = new TraverseCaptureRecorder();
+      const local = {
+        $ref: "#/$defs/Name",
+        $defs: { Name: { type: "string" } },
+      } as const;
+      const link: NormalizedFullLink = {
+        space: SPACE,
+        id: "of:target",
+        scope: "space",
+        path: [],
+        schema: { type: "number" },
+      };
+      recorder.recordInvocation(
+        { address: address("of:doc") },
+        { path: ["value"], schema: local },
+        link,
+        { traverseCells: false },
+        undefined,
+      );
+
+      const fixture = recorder.toFixture("n", "s");
+      expect(fixture.links[0].schema).toEqual({ type: "number" });
+      expect(fixture.selectors[0].schema).toEqual(local);
+    });
+
+    it("throws for captured schema documents that name each other", () => {
+      // Content-addressed schema documents cannot form a cycle, so a capture
+      // holding one is corrupt.
+
+      const recorder = new TraverseCaptureRecorder();
+      readThrough(
+        recorder,
+        txOver({
+          "cid:fid1:cycle-a": {
+            value: 1,
+            schema: { $ref: "cid:fid1:cycle-b" },
+          },
+          "cid:fid1:cycle-b": {
+            value: 2,
+            schema: { $ref: "cid:fid1:cycle-a" },
+          },
+        }),
+        ["cid:fid1:cycle-a", "cid:fid1:cycle-b"],
+      );
+
+      expect(() => recorder.toFixture("n", "s")).toThrow(
+        "Circular captured schema documents",
+      );
+    });
+
+    it("keeps a document's schema naming a captured document that names nothing", () => {
+      const recorder = new TraverseCaptureRecorder();
+      readThrough(
+        recorder,
+        txOver({
+          "cid:fid1:chain-a": {
+            value: 1,
+            schema: { $ref: "cid:fid1:chain-b" },
+          },
+          "cid:fid1:chain-b": { value: 2 },
+        }),
+        ["cid:fid1:chain-a", "cid:fid1:chain-b"],
+      );
+
+      expect(recorder.toFixture("n", "s").docs).toEqual({
+        [fixtureDocKey({ space: SPACE, id: "cid:fid1:chain-a" })]: {
+          value: 1,
+          schema: { $ref: "cid:fid1:chain-b" },
+        },
+        [fixtureDocKey({ space: SPACE, id: "cid:fid1:chain-b" })]: {
+          value: 2,
+        },
+      });
+    });
+  });
+
+  describe("wrapTx", () => {
+    it("captures each document it reads once, as its full value", () => {
+      const recorder = new TraverseCaptureRecorder();
+      const tx = txOver({ "of:doc": { value: { a: 1 } } });
+      readThrough(recorder, tx, ["of:doc", "of:doc"]);
+
+      expect(recorder.toFixture("n", "s").docs).toEqual({
+        [fixtureDocKey({ space: SPACE, id: "of:doc" })]: { value: { a: 1 } },
+      });
+    });
+
+    it("captures nothing for an inline cell, which has no document", () => {
+      const recorder = new TraverseCaptureRecorder();
+      readThrough(recorder, txOver({}), ["snapshot:inline"]);
+
+      expect(recorder.toFixture("n", "s").docs).toEqual({});
+    });
+
+    it("hands members other than reads to the transaction it wraps", () => {
+      const tx = txOver({});
+      const wrapped = new TraverseCaptureRecorder().wrapTx(tx);
+
+      expect(wrapped.tx).toBe(tx.tx);
+      expect(wrapped.status()).toEqual(tx.status());
+    });
+  });
+
+  describe("flush", () => {
+    it("writes the fixture to the path, named after the file", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        const path = join(dir, "flushed.json");
+        const recorder = new TraverseCaptureRecorder();
+        recorder.recordInvocation(
+          { address: address("of:doc", ["value"]) },
+          selector(["value"]),
+          undefined,
+          { traverseCells: false },
+          undefined,
+        );
+        recorder.flush(path);
+
+        const fixture: TraverseFixture = JSON.parse(
+          await Deno.readTextFile(path),
+        );
+        expect(fixture.meta.name).toBe("flushed");
+        expect(fixture.meta.source).toBe(`CF_TRAVERSE_CAPTURE=${path}`);
+        expect(fixture.invocations.map((i) => i.address.id)).toEqual([
+          "of:doc",
+        ]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+  });
+
+  describe("capture configured from the environment", () => {
+    // Capture is configured when the module loads, so each case runs the
+    // helper, which records three invocations, in a process of its own and
+    // reads what its exit wrote.
+
+    const captureIn = async (
+      dir: string,
+      env: Record<string, string>,
+      permissions: string[],
+    ): Promise<TraverseFixture> => {
+      const path = join(dir, "env-capture.json");
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        args: (lock) => [
+          "run",
+          "--frozen",
+          `--lock=${lock}`,
+          ...permissions,
+          `--allow-write=${path}`,
+          fromFileUrl(
+            new URL("./traverse-recorder-capture-helper.ts", import.meta.url),
+          ),
+        ],
+        env: { ...env, CF_TRAVERSE_CAPTURE: path },
+      });
+      expect(output.success, new TextDecoder().decode(output.stderr)).toBe(
+        true,
+      );
+      return JSON.parse(await Deno.readTextFile(path));
+    };
+
+    it("stops recording at the cap `CF_TRAVERSE_CAPTURE_MAX` sets", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        const fixture = await captureIn(
+          dir,
+          { CF_TRAVERSE_CAPTURE_MAX: "2" },
+          ["--allow-env", "--allow-read"],
+        );
+        expect(fixture.meta.name).toBe("env-capture");
+        expect(fixture.invocations.map((i) => i.address.id)).toEqual([
+          "of:capture-0",
+          "of:capture-1",
+        ]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("records every invocation when the cap cannot be read", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        const fixture = await captureIn(
+          dir,
+          { CF_TRAVERSE_CAPTURE_MAX: "2" },
+          ["--allow-env=CF_TRAVERSE_CAPTURE", "--allow-read"],
+        );
+        expect(fixture.invocations.length).toBe(3);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 });

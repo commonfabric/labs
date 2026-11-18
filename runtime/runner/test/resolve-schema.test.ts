@@ -48,6 +48,12 @@ describe("resolveSchema", () => {
       expect(resolveSchema(false)).toBe(false);
     });
 
+    it("returns undefined for a stored schema that is neither a boolean nor an object", () => {
+      // A schema read back from storage arrives as JSON, so nothing typed
+      // keeps a number out.
+      expect(resolveSchema(JSON.parse("5"))).toBe(undefined);
+    });
+
     it("returns the boolean a `$ref` resolves to from a bare ref site", () => {
       // A local ref carries its `$defs` beside it, and those siblings merge
       // into the target, so a boolean arrives as one only with nothing at the
@@ -338,6 +344,58 @@ describe("resolveSchema", () => {
           integrity: [{ kind: "authored-by", subject: "alice" }],
         },
       });
+    });
+
+    it("selects the one `oneOf` branch the value matches", () => {
+      const schema: JSONSchema = {
+        oneOf: [{ type: "string" }, { type: "number" }],
+      };
+
+      expect(resolveSchemaForValue(schema, 5)).toEqual({ type: "number" });
+      expect(resolveSchemaForValue(schema, true)).toEqual(schema);
+    });
+
+    it("selects a `true` branch as `true`", () => {
+      const schema: JSONSchema = { anyOf: [true, { type: "string" }] };
+
+      expect(resolveSchemaForValue(schema, 5)).toBe(true);
+      expect(resolveSchemaForValue(schema, "x")).toEqual(schema);
+    });
+
+    it("matches a branch whose property is a `oneOf` only when exactly one of its branches matches", () => {
+      const withProperty = (property: JSONSchema): JSONSchema => ({
+        anyOf: [
+          { type: "object", properties: { k: property } },
+          { type: "object", properties: { k: { type: "boolean" } } },
+        ],
+      });
+      const exactlyOne = withProperty({
+        oneOf: [{ type: "string" }, { type: "number" }],
+      });
+      const both = withProperty({
+        oneOf: [{ type: "number" }, { type: "integer" }],
+      });
+
+      expect(resolveSchemaForValue(exactlyOne, { k: 1 })).toEqual({
+        type: "object",
+        properties: { k: { type: "number" } },
+      });
+      expect(resolveSchemaForValue(both, { k: 1 })).toEqual(both);
+    });
+
+    it("matches a branch whose property is `true` whatever the property holds", () => {
+      const schema: JSONSchema = {
+        anyOf: [
+          { type: "object", properties: { k: true } },
+          { type: "object", properties: { k: { type: "string" } } },
+        ],
+      };
+
+      expect(resolveSchemaForValue(schema, { k: 1 })).toEqual({
+        type: "object",
+        properties: { k: true },
+      });
+      expect(resolveSchemaForValue(schema, { k: "x" })).toEqual(schema);
     });
   });
 });

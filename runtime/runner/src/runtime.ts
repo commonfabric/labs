@@ -5,6 +5,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricValue,
 } from "@commonfabric/data-model";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -41,6 +42,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { PatternEnvironment, setPatternEnvironment } from "./builder/env.ts";
+import { namesInstances } from "./builder/instance-name.ts";
 import { popFrame, pushRuntimeDefaultFrame } from "./builder/pattern.ts";
 import type {
   AnyCell,
@@ -110,15 +112,22 @@ import {
 import { isRendererTrustedEvent } from "./cfc/ui-contract.ts";
 import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
-import { memoryHostForForeignOrigin } from "./deployment-meta.ts";
+import {
+  DEPLOYMENT_RESPONSE_BOUND_MS,
+  memoryHostForForeignOrigin,
+} from "./deployment-meta.ts";
 import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import {
   type DelegatedCarriage,
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
+import type { OwningRootAddress } from "./ensure-piece-running.ts";
+import { applyLocalExperimentalDefaults } from "./experimental-defaults.ts";
+import type { CompileClaims } from "./harness/compile-interleave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
 import { Engine } from "./harness/index.ts";
+import type { ModuleCompiler } from "./harness/module-compile.ts";
 import type { CompiledModuleArtifact } from "./harness/types.ts";
 import {
   immutableCellsFor,
@@ -159,6 +168,7 @@ import {
   type PieceSourceTransition,
   Runner,
   type RunnerRunOptions,
+  type RunnerStartOptions,
   type RunSyncedCommitResult,
   type RunSyncedOptions,
   type RunSyncedWithCommitOptions,
@@ -188,7 +198,6 @@ import {
   normalizeSpaceHost,
   parseMemoryUrl,
   type SpaceHostRegistration,
-  SpaceHostValidationError,
 } from "./space-host.ts";
 import { EffectsChannel } from "./speculation/effects-channel.ts";
 import {
@@ -211,6 +220,7 @@ import type {
   IStorageManager,
   IStorageProvider,
   MemorySpace,
+  ReleaseOptions,
   TransactionSealDestination,
   UnexaminedAbsence,
   URI,
@@ -421,7 +431,10 @@ export interface ExperimentalOptions {
    */
   agentBuiltin?: boolean | undefined;
 
-  /** Global default for server-selected view replication. Defaults to off. */
+  /**
+   * Global default for server-selected view replication, which only a web
+   * client under server execution requests. Unset, such a client requests it.
+   */
   viewScopedReplication?: boolean | undefined;
 
   /** Web client override; an explicit value takes precedence over the default. */
@@ -454,6 +467,18 @@ export interface ExperimentalOptions {
   localFold?: boolean | undefined;
 
   /**
+   * Record the principal a piece was created for on its result document, in
+   * the `creator` meta field, when a setup brings the piece into being, and
+   * give a piece from before the record one at its next source transition,
+   * from the owner its space's access list names for a space root and from
+   * the principal its owner-protected fields represent for any other piece
+   * (`docs/plans/piece-creator-owns-update-added-fields.md`). The record is
+   * what binds a field a later release adds to the piece's creator. Defaults
+   * to off; off, no record is written and a stored one is left as it is.
+   */
+  pieceCreatorRecord?: boolean | undefined;
+
+  /**
    * Compile a pattern factory call bound to a `const` as a named sub-pattern
    * instance, whose identity is the binding's name rather than its position
    * among its parent's anonymous roots
@@ -472,6 +497,19 @@ export interface ExperimentalOptions {
    * environment variable reaches it.
    */
   instanceNames?: boolean | undefined;
+
+  /**
+   * Take `cid:` schema documents by reference from a server that offers
+   * them (`syncCidReferencesV1`; `docs/specs/content-addressed-schemas.md`,
+   * "Delivery by reference"): this runtime's memory connections advertise
+   * the capability, and a server that advertises it too names the schema
+   * documents its registry holds by id, leaving this runtime to resolve or
+   * fetch their bodies. Defaults to off, which receives every body. Only
+   * the client side is switched here: a server offers it unless its
+   * deployment turns it off, and references flow only where both advertise
+   * it (`docs/development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1`).
+   */
+  syncCidReferences?: boolean | undefined;
 }
 
 /**
@@ -988,6 +1026,25 @@ export interface RuntimeOptions {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile this runtime takes, keyed by the modules it
+   * compiles, with whatever else shares its
+   * {@link RuntimeOptions.moduleByteCache}: the other runtimes of this realm,
+   * and where the cache is on disk, the other realms and processes that use
+   * it. Two that would compile the same modules at once then compile them once.
+   * When unset, this runtime compiles without waiting for any other.
+   */
+  compileTurns?: CompileClaims;
+
+  /**
+   * Where this runtime's compiles run their type-check, transform and emit
+   * step, when not in this realm: a compile worker, which keeps that step and
+   * the heap it takes off this runtime's thread. A compile instrumented for
+   * pattern coverage, or one that asks for its transformed program, runs here
+   * regardless. When unset, every compile runs here.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Statement-coverage collector for authored patterns. When set, every compile
    * this runtime performs is instrumented — the transformer injects a hit call
    * in front of each authored statement — and the collector receives the hits.
@@ -1271,6 +1328,7 @@ type RuntimeSetupOptions = {
   initialPieceSourceOrigin?: string;
   reapplyStoredSetup?: boolean;
   prepareForResume?: boolean;
+  runtimeStarted?: boolean;
 };
 
 /**
@@ -1372,6 +1430,28 @@ const externalObservationRefusal = (
 /** Maximum load waves an external observation traversal may discover. */
 const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
 
+/**
+ * Helper for `Runtime.prepareExternalContentObservation()`, which reads every
+ * document an observed value links to, wherever the link sits in the value,
+ * since writing the value stores each link whether its schema describes the
+ * place or not.
+ */
+const linksInValue = (
+  value: unknown,
+  links: CellLink[] = [],
+  seen = new WeakSet<object>(),
+): CellLink[] => {
+  if (isCellLink(value)) {
+    links.push(value);
+  } else if (typeof value === "object" && value !== null && !seen.has(value)) {
+    // A Cell is a link (`isCellLink`), so only plain data is walked, and an
+    // object reached twice is walked once.
+    seen.add(value);
+    for (const item of Object.values(value)) linksInValue(item, links, seen);
+  }
+  return links;
+};
+
 /** A document a commit retry's catch-up could not load, and the reason. */
 export type CommitRetryPullFailure = {
   space: MemorySpace;
@@ -1379,6 +1459,25 @@ export type CommitRetryPullFailure = {
   scope?: CellScope;
   error: unknown;
 };
+
+/**
+ * Writes `banner` as a line to `stderr`, the process's standard error in
+ * Deno, or to the console where there is none, as in a browser realm, which
+ * has no stdout contract. Never stdout in Deno: the cf CLI's machine-readable
+ * output (`cf piece ls` and the like) is consumed by scripts. Not
+ * `console.error()` or `console.warn()` either: the cf test console
+ * enforcement fails tests on those.
+ */
+export function writeOverrideBanner(
+  banner: string,
+  stderr: { writeSync(bytes: Uint8Array): number } | undefined,
+): void {
+  if (stderr === undefined) {
+    console.log(banner);
+    return;
+  }
+  stderr.writeSync(new TextEncoder().encode(banner + "\n"));
+}
 
 /**
  * Main Runtime class that orchestrates all services in the runner package.
@@ -1403,14 +1502,29 @@ export type CommitRetryPullFailure = {
 export class Runtime {
   #tearingDownWrites = false;
 
-  /** The release pass waiting for the scheduler to go idle, if any. */
+  /**
+   * The release pass not yet under way, if any: waiting for the one under
+   * way to finish, or for the scheduler to go idle.
+   */
   #documentRelease: Promise<void> | undefined;
+
+  /**
+   * Whether something other than a hold token's collection has asked for the
+   * release pass not yet under way, which then follows up on the tokens it
+   * finds live (`ReleaseOptions.followUpOnCollection`).
+   */
+  #documentReleaseFollowsUp = false;
+
+  /** The release pass under way, if any, settled whether or not it failed. */
+  #documentReleaseRunning: Promise<void> | undefined;
 
   /** Undoes what `#installDocumentRelease()` registered. */
   readonly #documentReleaseCancels: Cancel[] = [];
   readonly #writeTeardown = new AbortController();
   readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
   readonly #derivedInternalCellIds = new DerivedInternalCellIds();
+  readonly #compileTurns: CompileClaims | undefined;
+  readonly #moduleCompiler: ModuleCompiler | undefined;
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -1544,6 +1658,12 @@ export class Runtime {
     | undefined;
 
   /**
+   * Whether the serving loop holds the identity carriage of an effect whose
+   * request has gone out (installed _with_ the destination).
+   */
+  #dispatchedEffectCarriage: ((effectKey: string) => boolean) | undefined;
+
+  /**
    * The client speculation overlay (`speculation.md`): the _default_ seal
    * destination of every runtime under the flag that has no wave destination
    * installed. Created lazily on the first `edit()`; derivation-kind runs
@@ -1615,6 +1735,16 @@ export class Runtime {
     return this.#derivedInternalCellIds;
   }
 
+  /** See `RuntimeOptions.compileTurns`. */
+  get compileTurns(): CompileClaims | undefined {
+    return this.#compileTurns;
+  }
+
+  /** See `RuntimeOptions.moduleCompiler`. */
+  get moduleCompiler(): ModuleCompiler | undefined {
+    return this.#moduleCompiler;
+  }
+
   /**
    * Fires once this runtime stops minting write work, at the point in
    * `dispose()` where retries would otherwise re-run against a storage that
@@ -1680,13 +1810,27 @@ export class Runtime {
 
   /**
    * The writer-authority delegations this runtime has learned from verified
-   * source closures and integrity-valid compiled closures, by attesting
+   * source closures and integrity-valid compiled closures, from the source
+   * updates it committed, and from the pieces' `pieceSourceDelegations`
+   * members (`PatternManager.readInheritedAuthority()`), by attesting
    * space. `edit()` hands every transaction the registry's published
    * transitive snapshot, so an in-flight authorization decision cannot
    * change when another module loads, and authorization in one space can
    * never borrow another space's delegation metadata.
    */
   readonly #moduleDelegations = new ModuleDelegationRegistry();
+
+  /**
+   * The authored import list each module identity's compiled document
+   * attests, by the space whose compiler-stamped document this runtime read
+   * it from. Verifying a source closure in a space takes a module's list from
+   * here in place of parsing its source, and only from that space, since the
+   * stamp is trusted where it was read, as the compiled bodies are.
+   */
+  readonly #sourceImportAttestations = new Map<
+    MemorySpace,
+    Map<string, readonly string[]>
+  >();
 
   /**
    * Records that, in `space`, each successor identity in `delegations`
@@ -1701,6 +1845,36 @@ export class Runtime {
     delegations: ReadonlyMap<string, ReadonlySet<string>>,
   ): void {
     this.#moduleDelegations.register(space, delegations);
+  }
+
+  /**
+   * Records, for `space`, the authored import list a compiler-stamped compiled
+   * document there attests for each identity in `attestations`.
+   */
+  registerSourceImportAttestations(
+    space: MemorySpace,
+    attestations: ReadonlyMap<string, readonly string[]>,
+  ): void {
+    if (attestations.size === 0) return;
+    let bySpace = this.#sourceImportAttestations.get(space);
+    if (bySpace === undefined) {
+      bySpace = new Map();
+      this.#sourceImportAttestations.set(space, bySpace);
+    }
+    for (const [identity, imports] of attestations) {
+      bySpace.set(identity, imports);
+    }
+  }
+
+  /**
+   * The authored import list a compiled document read in `space` attests for
+   * `identity`, or `undefined` when this runtime has read none.
+   */
+  attestedSourceImports(
+    space: MemorySpace,
+    identity: string,
+  ): readonly string[] | undefined {
+    return this.#sourceImportAttestations.get(space)?.get(identity);
   }
 
   /**
@@ -1739,15 +1913,10 @@ export class Runtime {
     inputs: readonly unknown[],
   ): void {
     for (const input of inputs) {
+      // Validation recomputes the digest from the manifest, so two artifacts
+      // under one digest are equal and replacing one with the other changes
+      // nothing.
       const artifact = validateCfcPolicyArtifactManifest(input);
-      const existing = this.#policyManifests.get(artifact.policyDigest);
-      // Reaching this branch requires a collision in the canonical SHA-256
-      // digest: validation recomputes the digest for both artifacts.
-      if (existing !== undefined && !deepEqual(existing, artifact)) {
-        throw new Error(
-          `cfcPolicyManifest: immutable digest collision for ${artifact.policyDigest}`,
-        );
-      }
       this.#policyManifests.set(artifact.policyDigest, artifact);
       let spaces = this.#policyManifestSpaces.get(artifact.policyDigest);
       if (spaces === undefined) {
@@ -1775,8 +1944,8 @@ export class Runtime {
     }
     let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
-    const log = tx.getReactivityLog?.();
-    for (const address of [...(log?.writes ?? []), ...(log?.reads ?? [])]) {
+    const log = tx.getReactivityLog();
+    for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
@@ -1905,10 +2074,10 @@ export class Runtime {
         type: "application/json",
         path: ["value"],
       });
-      const alreadyWritten = tx.getReactivityLog?.().writes.some((address) =>
+      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
         address.space === link.space && address.id === link.id &&
         address.scope === link.scope
-      ) ?? false;
+      );
       if (!alreadyWritten) {
         if (!tx.addCommitPrecondition) {
           throw new Error(
@@ -1978,37 +2147,27 @@ export class Runtime {
       ...options.experimental,
     };
 
-    // Log any overridden experimental flags. Never on stdout: the cf CLI's
-    // machine-readable output (`cf piece ls` etc.) is consumed by scripts, and
-    // this banner made every command's stdout non-empty under a flag override.
-    // Not console.error/warn either: the cf test console enforcement fails
-    // tests on those. Direct process stderr in Deno; plain console in browser
-    // realms (no stdout contract there).
+    // Log any overridden experimental flags (`writeOverrideBanner()`).
+    // `serverExecution` at the first-party default is no override: a deployed
+    // entry point and every serving runtime state it explicitly, and only
+    // the other arm, selected per deployment, is worth announcing.
     const overrideFlags = Object.entries(this.experimental)
-      .filter(([_, v]) => v !== undefined)
+      .filter(([k, v]) =>
+        v !== undefined &&
+        !(k === "serverExecution" && v === SERVER_EXECUTION_DEFAULT_ENABLED)
+      )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
-      const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;
-      if (typeof Deno !== "undefined" && Deno.stderr) {
-        Deno.stderr.writeSync(new TextEncoder().encode(banner + "\n"));
-      } else {
-        console.log(banner);
-      }
+      writeOverrideBanner(
+        `Experimental flag overrides: ${overrideFlags.join(", ")}`,
+        globalThis.Deno?.stderr,
+      );
     }
 
-    // These flags are consumed from this Runtime instance. Normalize their
+    // Some flags are consumed from this Runtime instance. Normalize their
     // local defaults after override logging so an omitted option does not
     // appear as an explicit override.
-    this.experimental.computedCellIds ??= true;
-    this.experimental.plainResultReceipts ??= true;
-    this.experimental.lazyMaterialization ??= true;
-    this.experimental.agentBuiltin ??= true;
-    this.experimental.localFold ??= false;
-    // TODO(danfuzz): Turn this on only once a runtime whose naming mode
-    // differs from a space's data is kept away from that space;
-    // `instance-naming-modes.test.ts` pins what one does to it until then.
-    this.experimental.instanceNames ??= false;
-    this.experimental.localSessionDocuments ??= false;
+    applyLocalExperimentalDefaults(this.experimental);
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in
@@ -2084,7 +2243,6 @@ export class Runtime {
         try {
           route = normalizeSpaceHost(host);
         } catch (cause) {
-          if (!(cause instanceof SpaceHostValidationError)) throw cause;
           throw new Error(
             `Invalid spaceHostMap entry for ${space}`,
             { cause },
@@ -2114,6 +2272,7 @@ export class Runtime {
       // Create harness first (no dependencies on other services)
       this.harness = new Engine(this, {
         hideInternalStackFrames: options.hideInternalStackFrames,
+        interleaveCompile: this.servingPosture ? true : undefined,
       });
 
       this.storageManager = options.storageManager;
@@ -2132,7 +2291,19 @@ export class Runtime {
       this.storageManager.setSharedMemoryConnection?.(
         this.experimental.sharedMemoryConnection === true,
       );
+      // Declared before any session opens as well, since each open declares
+      // the mode and the server admits it by that (INV-16).
+      this.storageManager.setInstanceNames?.(
+        namesInstances(this.experimental),
+      );
+      // Declared before any session opens too, since each connection's
+      // `hello` advertises it.
+      this.storageManager.setSyncCidReferences?.(
+        this.experimental.syncCidReferences === true,
+      );
       this.moduleByteCache = options.moduleByteCache;
+      this.#compileTurns = options.compileTurns;
+      this.#moduleCompiler = options.moduleCompiler;
       this.patternCoverage = options.patternCoverage;
       // Validated + digested + frozen before the trust-snapshot provider
       // default below, whose `revision` covers the config digest (a trust
@@ -2395,18 +2566,28 @@ export class Runtime {
     | undefined;
 
   /**
-   * Server-execution v2 stage C tuning (T3; serving-loop.md §2/§3): the
-   * serving scheduler's mid-wave hook. A SERVING runtime's scheduler
-   * yields one macrotask between runs whenever its slice of continuous
-   * work is spent (scheduler/cooperative-yield.ts — that is what makes the
-   * wave's flush deadline honest and lets the lease-renew and push-flush
-   * timers fire mid-settle), and calls this observer synchronously at
-   * every such yield. The SpaceServer installs it at activation to renew
-   * the lease mid-wave once the wave has run longer than TTL/3 — a renew
-   * that never depends on the timer queue being serviced. Undefined
-   * everywhere else (the OFF arm and clients construct no yielder at all).
+   * Whether a piece's origin has been followed, asked before a start of the
+   * piece this runtime makes on its own, as `EnsurePieceOptions.originFollowed`
+   * (the event auto-start's). The SpaceServer installs it at activation: the
+   * serving runtime is the opener of every piece it serves, so the piece's
+   * source is brought up to date before the tenure's first start of it, and
+   * the serving loop follows the origin between waves, where the adopting
+   * write can commit (serving-loop.md §3e). Undefined everywhere else: a
+   * client follows a piece's origin when it opens it.
    */
-  servingYieldObserver: (() => void) | undefined;
+  pieceOriginFollowed: ((root: OwningRootAddress) => boolean) | undefined;
+
+  /**
+   * Resolves once every wave this runtime's seals have opened so far has
+   * finished committing: the state they staged is then the store's or
+   * withdrawn, and a transaction that commits directly (`directCommit`) may
+   * read it. The SpaceServer installs it on the serving runtime, where a
+   * sealed transaction's `commit()` resolves at the seal and the wave
+   * commits later; undefined everywhere else, where a committed transaction
+   * is durable on its own. A caller the loop awaits inside a cycle must not
+   * wait on it: the wave it waits for commits when that cycle ends.
+   */
+  sealsCommitted: (() => Promise<void>) | undefined;
 
   /**
    * Register an in-flight async builtin operation so `settled()` waits for it
@@ -2430,6 +2611,11 @@ export class Runtime {
       : addressKey(owner.getAsNormalizedFullLink());
     this.#pendingAsyncWork.set(tracked, ownerKey);
     tracked.finally(() => this.#pendingAsyncWork.delete(tracked));
+  }
+
+  /** Whether an operation `trackAsyncWork()` was given is still in flight. */
+  get hasAsyncWorkPending(): boolean {
+    return this.#pendingAsyncWork.size > 0;
   }
 
   /**
@@ -2785,9 +2971,24 @@ export class Runtime {
       sourceUpdate?: PreparedSourceUpdate;
     } = {},
   ): IExtendedStorageTransaction {
+    return this.#newTransaction(
+      options.changeGroup,
+      this.#moduleDelegationSnapshot(options.sourceUpdate),
+    );
+  }
+
+  /**
+   * Helper for `edit()` and `readTxProposingDelegations()`, which creates a
+   * transaction in `changeGroup`, pinned to the delegation snapshot
+   * `delegations`.
+   */
+  #newTransaction(
+    changeGroup: ChangeGroup | undefined,
+    delegations: ModuleDelegationSnapshot,
+  ): ExtendedStorageTransaction {
     const tx = this.storageManager.edit();
-    if (options.changeGroup !== undefined) {
-      tx.changeGroup = options.changeGroup;
+    if (changeGroup !== undefined) {
+      tx.changeGroup = changeGroup;
     }
     (tx as { writeTraceScopeId?: string }).writeTraceScopeId = this.id;
     const debugActionId = this.getWriteDebugContext();
@@ -2817,9 +3018,7 @@ export class Runtime {
     wrapped.setCfcClientIdentity(
       this.servingPosture ? undefined : this.userIdentityDID,
     );
-    wrapped.setCfcModuleDelegations(
-      this.#moduleDelegationSnapshot(options.sourceUpdate),
-    );
+    wrapped.setCfcModuleDelegations(delegations);
     setCfcTrustSnapshot(wrapped, this.trustSnapshotProvider());
     wrapped.configureSealDestination(
       this.#transactionSealDestination ?? this.#speculationDestination(),
@@ -2982,12 +3181,16 @@ export class Runtime {
     return this.#viewReplication ??= new ViewReplicationClient(this);
   }
 
-  /** Whether this client requests view replication, subject to session support. */
+  /**
+   * Whether this client requests view replication, subject to session
+   * support: a web client under server execution does unless the web
+   * override, or else the global default, is `false`.
+   */
   get viewScopedReplicationRequested(): boolean {
     return this.#clientClass === "web" &&
       this.experimental.serverExecution === true && !this.servingPosture &&
       (this.experimental.webViewScopedReplication ??
-        this.experimental.viewScopedReplication ?? false);
+        this.experimental.viewScopedReplication ?? true);
   }
 
   /** DIAGNOSTIC (tests): the lazily-created speculation overlay, if this
@@ -3076,6 +3279,12 @@ export class Runtime {
        * the run identity). Absent (or returning nothing) the run keeps
        * the wave-level fallback — the Phase-1 cardinality-1 posture. */
       runDemanderResolver?: ServerRunDemanderResolver;
+
+      /** Whether the serving loop's outbox holds the identity carriage of
+       * an effect whose request has gone out: captured when the run that
+       * staged the effect sealed, held until the effect retires
+       * (serving-loop.md §4). */
+      dispatchedEffectCarriage?: (effectKey: string) => boolean;
     } = {},
   ): void {
     if (this.experimental.serverExecution !== true) {
@@ -3094,6 +3303,7 @@ export class Runtime {
     this.#transactionSealDestination = destination;
     this.#serverRunStamper = options.runStamper;
     this.#serverRunDemanderResolver = options.runDemanderResolver;
+    this.#dispatchedEffectCarriage = options.dispatchedEffectCarriage;
   }
 
   /** The installed seal destination (the serving loop), if any —
@@ -3116,6 +3326,19 @@ export class Runtime {
     this.#transactionSealDestination = undefined;
     this.#serverRunStamper = undefined;
     this.#serverRunDemanderResolver = undefined;
+    this.#dispatchedEffectCarriage = undefined;
+  }
+
+  /**
+   * Whether `effectKey`'s request has gone out and the serving loop still
+   * holds the identity carriage the staging run's seal recorded: an effect
+   * completion committed now commits under that carriage (serving-loop.md
+   * §4). False for a request whose release check refused it, whose carriage
+   * retires without a request going out, and everywhere a serving loop
+   * installed no answer.
+   */
+  hasDispatchedEffectCarriage(effectKey: string): boolean {
+    return this.#dispatchedEffectCarriage?.(effectKey) ?? false;
   }
 
   /**
@@ -3222,12 +3445,16 @@ export class Runtime {
   /**
    * Lets the storage manager release the documents nothing reads (see
    * `releaseUnreadDocuments()`): it asks the scheduler whether an action
-   * reads a document, and forgets a load kicked for a document it drops, so
-   * that a later read of it kicks the load again.
+   * reads a document, forgets a load kicked for a document it drops, so
+   * that a later read of it kicks the load again, and asks for a pass when a
+   * hold token a pass followed up on has been collected.
    */
   #installDocumentRelease(): void {
     const manager = this.storageManager;
     const cancels = [
+      manager.subscribeHoldsCollected?.(() => {
+        void this.#requestDocumentRelease();
+      }),
       manager.addDocumentReader?.((address) =>
         this.scheduler.readsEntity(
           entityKey(
@@ -3257,18 +3484,67 @@ export class Runtime {
    * (`IStorageManager.releaseUnreadDocuments()`), and resolves when that
    * pass has run. Stopping a piece asks for one. A host asks for one when
    * something that read documents through this runtime has gone, such as a
-   * client whose subscriptions it cancelled. Calls made while a pass waits
-   * for the scheduler share it.
+   * client whose subscriptions it cancelled. A pass these ask for keeps a
+   * document a cell still holds, and follows up on that cell's hold token
+   * (`ReleaseOptions.followUpOnCollection`): once the token has been
+   * collected, which is when the cells holding the document have gone, the
+   * storage manager says so (`IStorageManager.subscribeHoldsCollected()`)
+   * and a pass of its own follows, which follows up on nothing. So a
+   * collection completes a release something asked for, and never begins
+   * one. Calls made before a pass begins
+   * share it. A call made while a pass is under way is answered by the next
+   * one, which waits for that one to finish and then for the scheduler. So at
+   * most one pass waits at a time, however many calls are made.
+   *
+   * A pass keeps a document loaded or read since the previous pass began, so
+   * that a read still under way finishes with it. Where it kept one for that
+   * reason alone, a second pass runs once the scheduler is next idle, and the
+   * call resolves when that has run too: the documents a stopped piece read
+   * are released by the pass after the one its stop asked for, which nothing
+   * else may ever ask for. The second pass asks for no third, and follows up
+   * on no token, so what a request follows up on is what its first pass
+   * found live.
    */
   releaseUnreadDocuments(): Promise<void> {
+    this.#documentReleaseFollowsUp = true;
+    return this.#requestDocumentRelease();
+  }
+
+  /**
+   * Helper for `releaseUnreadDocuments()`, and for a hold token's
+   * collection, which asks for a pass without following up on the tokens it
+   * finds live.
+   */
+  #requestDocumentRelease(): Promise<void> {
     this.#documentRelease ??= (async () => {
+      let options: ReleaseOptions;
       try {
+        // The pass under way may have begun before what this call is about
+        // let go of its documents, so it cannot answer the call.
+        await this.#documentReleaseRunning;
         await this.scheduler.idle();
       } finally {
         // A request made from here on asks for a pass of its own.
         this.#documentRelease = undefined;
+        options = { followUpOnCollection: this.#documentReleaseFollowsUp };
+        this.#documentReleaseFollowsUp = false;
       }
-      await this.storageManager.releaseUnreadDocuments?.();
+      const running = (async () => {
+        const deferred = await this.storageManager.releaseUnreadDocuments?.(
+          options,
+        );
+        if (deferred !== true) return;
+        await this.scheduler.idle();
+        await this.storageManager.releaseUnreadDocuments?.();
+      })();
+      const settled = running.catch(() => {});
+      this.#documentReleaseRunning = settled;
+      settled.then(() => {
+        if (this.#documentReleaseRunning === settled) {
+          this.#documentReleaseRunning = undefined;
+        }
+      });
+      await running;
     })().catch((error) => {
       documentReleaseLogger.warn("release-failed", () => [
         "releasing the documents nothing reads failed:",
@@ -3437,10 +3713,15 @@ export class Runtime {
    * After `fn` returns, while retry budget remains, the runtime may load
    * documents read as absent that the replica has not examined. If any exist,
    * it aborts the staged attempt and invokes `fn` with a fresh transaction
-   * before sending a commit. These reconciliation re-runs and retries after
+   * before sending a commit. After `fn` throws, the runtime does the same
+   * before reporting the throw: if a document the attempt read as absent
+   * exists, `fn` runs again with a fresh transaction, and the throw is
+   * reported only when none does, so a check that refuses on a document not
+   * loaded yet sees it loaded. These reconciliation re-runs and retries after
    * commit rejection share one `maxRetries` budget, in addition to the initial
-   * invocation. With no budget left, reconciliation is skipped and the current
-   * transaction proceeds to ordinary commit validation.
+   * invocation. With no budget left, reconciliation is skipped: the current
+   * transaction proceeds to ordinary commit validation, or the throw is
+   * reported.
    *
    * A retryable commit rejection also re-runs `fn` while budget remains.
    * Retryability is decided by the shared rejection vocabulary
@@ -3482,7 +3763,8 @@ export class Runtime {
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
-   *   throwing, which aborts the transaction.
+   *   throwing, which aborts the transaction, on an attempt that read no
+   *   absent document that exists or that has no retry budget left.
    */
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
@@ -3518,14 +3800,41 @@ export class Runtime {
     } catch (error) {
       // fn(tx) threw before commit -- abort the transaction so it isn't
       // orphaned, and surface the error as a Result instead of a rejection.
+      // A throw can follow from a read that found a document absent, as a
+      // check that refuses on the `undefined` does, so the attempt's absences
+      // are reconciled as a returning attempt's are (below): when one of them
+      // turns out to exist, `fn` runs again against it. The absences are
+      // named before the abort, which ends the transaction's reads. Naming
+      // them only decides whether to run again, so a failure to name them, or
+      // to count them, reports the throw as it is, or the owner's cancellation
+      // when that came first.
+      let reconciliation: number | Promise<number> = 0;
+      if (maxRetries > 0) {
+        try {
+          reconciliation = this.#awaitUnexaminedAbsences(tx);
+        } catch {
+          reconciliation = 0;
+        }
+      }
       tx.abort(error);
-      return Promise.resolve({
+      const thrown = {
         error: {
           name: "StorageTransactionAborted" as const,
           message: `editWithRetry action threw: ${error}`,
           reason: error,
         },
-      });
+      };
+      if (typeof reconciliation === "number") return Promise.resolve(thrown);
+      return reconciliation.then(
+        (present) => {
+          if (signal.aborted) return stoppedResult();
+          if (present > 0) {
+            return this.editWithRetry<T>(fn, maxRetries - 1, options);
+          }
+          return thrown;
+        },
+        () => signal.aborted ? stoppedResult() : thrown,
+      );
     }
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
@@ -4019,6 +4328,22 @@ export class Runtime {
       options.schema,
       tx,
     );
+    let finalTx: IExtendedStorageTransaction | undefined;
+    // Reads every document a link in the value names, through the link's
+    // own schema, wherever the link sits; relative links resolve against
+    // the target. Links inside a linked document follow that document's
+    // schema, as any read of it does.
+    const readStoredLinks = (
+      readTx: IExtendedStorageTransaction,
+      target: Cell<unknown>,
+    ) => {
+      for (const link of linksInValue(options.value)) {
+        const linked = parseLink(link, target);
+        this.getCellFromLink(linked, linked.schema, readTx).get({
+          traverseCells: true,
+        });
+      }
+    };
     try {
       await cell.sync();
       cell.set(options.value);
@@ -4078,8 +4403,11 @@ export class Runtime {
         posture: [...externalObservationPosture(preparedState)],
       };
 
-      // This read runs only after the staged write passed preparation, or in
-      // disabled mode where preparation is intentionally a no-op. Traversal
+      // The staged transaction is never committed: it admits the write before
+      // anything linked is loaded, and its traversal below loads what the
+      // value reaches. This read runs only after the staged write passed
+      // preparation, or in disabled mode where preparation is intentionally
+      // a no-op. Traversal
       // can discover an unloaded linked document and start its sync, so each
       // arrival is followed by another read until no link-target load remains.
       // Each pass drops current-instant read memoization so a value materialized
@@ -4091,6 +4419,7 @@ export class Runtime {
       for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
         tx.resetCurrentReadMemoization();
         cell.get({ traverseCells: true });
+        readStoredLinks(tx, cell);
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the
         // manager's settled pool, or a just-kicked load looks absent here.
@@ -4108,8 +4437,52 @@ export class Runtime {
           tx.getCfcState(),
         );
       }
-      tx.prepareCfc();
-      const finalPreparedState = tx.getCfcState();
+      // The traversal above loaded what the value reaches, but its reads
+      // come after the staged write, and a write's input check counts only
+      // the reads before that write (§8.10.3). The final check therefore runs
+      // in a fresh transaction that reads through the value first and writes
+      // it after, so what the traversal reaches is an input to the write.
+      // Writing the same value again in the staged transaction would not do:
+      // a write that changes nothing records no write attempt, so the bound
+      // stays at the first one. Everything the fresh transaction reads is
+      // loaded by now.
+      tx.abort("external content observation staged");
+      finalTx = this.edit();
+      const finalCell = this.getCell<unknown>(
+        options.space,
+        options.cause,
+        options.schema,
+        finalTx,
+      );
+      this.getImmutableCell(
+        options.space,
+        options.value,
+        options.schema,
+        finalTx,
+      ).get({ traverseCells: true });
+      // The schema-guided read above follows only what the target schema
+      // describes; each link the value stores is read as well, so a link in
+      // a place the schema leaves out still gates.
+      readStoredLinks(finalTx, finalCell);
+      // The staged traversal loaded everything these reads reach; a load
+      // they start would leave a hole the input check reads as nothing.
+      // Link resolution registers its load in a promise continuation, so
+      // let that run before asking.
+      await Promise.resolve();
+      if ((this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) > 0) {
+        throw externalObservationRefusal(
+          "external content observation reached an unloaded document",
+          finalTx.getCfcState(),
+        );
+      }
+      finalCell.set(options.value);
+      // Read the written value back as well: the read through the immutable
+      // cell carries only the labels of the documents the value links to,
+      // and the receipt's flow and consumed labels also need the ones the
+      // target schema gives the written value itself.
+      finalCell.get({ traverseCells: true });
+      this.prepareTxForCommit(finalTx);
+      const finalPreparedState = finalTx.getCfcState();
       if (
         !enforcementDisabled &&
         finalPreparedState.prepare.status !== "prepared"
@@ -4154,9 +4527,9 @@ export class Runtime {
           finalPreparedState,
         );
       }
-      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
-      const consumed = collectConsumedLabel(tx);
-      const source = cell.getAsNormalizedFullLink();
+      const flow = deriveFlowJoin(finalTx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(finalTx);
+      const source = finalCell.getAsNormalizedFullLink();
       const observation = cloneIfNecessary({
         source: {
           space: source.space,
@@ -4183,7 +4556,7 @@ export class Runtime {
       const receipt = Object.freeze({});
       externalObservationReceipts.set(receipt, {
         runtime: this,
-        sourceTx: tx,
+        sourceTx: finalTx,
         targetTx: options.targetTx,
         space: options.space,
         producer: options.producer,
@@ -4195,6 +4568,9 @@ export class Runtime {
     } finally {
       if (tx.status().status === "ready") {
         tx.abort("external content observation recorded");
+      }
+      if (finalTx?.status().status === "ready") {
+        finalTx.abort("external content observation recorded");
       }
     }
   }
@@ -4283,6 +4659,32 @@ export class Runtime {
       return tx;
     }
     return this.#createReadTx();
+  }
+
+  /**
+   * A transaction that cannot write, pinned for `space` to the published
+   * delegations with `delegations` layered over them, as the setup
+   * transaction of a source update proposing them is (see `edit()`), and
+   * reading as `scopeKeyIdentity`'s instance where it names one. A review
+   * reads through it to judge a candidate by `delegations`, which judges it as
+   * the update's commit will only as far as they are the update's own
+   * proposal (see `PatternManager.proposedSourceUpdateDelegations()`); being
+   * unable to write, it authorizes nothing.
+   */
+  readTxProposingDelegations(
+    space: MemorySpace,
+    delegations: ReadonlyMap<string, ReadonlySet<string>>,
+    scopeKeyIdentity?: ScopeKeyIdentity,
+  ): IExtendedStorageTransaction {
+    const tx = this.#newTransaction(
+      undefined,
+      this.#moduleDelegations.snapshotWith(space, delegations),
+    );
+    if (scopeKeyIdentity !== undefined) {
+      tx.tx.scopeKeyIdentity = scopeKeyIdentity;
+    }
+    tx.setReadOnly("runtime.readTxProposingDelegations()");
+    return tx;
   }
 
   #createReadTx(): IExtendedStorageTransaction {
@@ -4465,6 +4867,9 @@ export class Runtime {
   /**
    * Makes a read-only cell whose content is `data`, carried entirely in the
    * runtime's snapshot store behind a compact URI; there is no stored document to fetch.
+   * The snapshot lives as long as its frozen value, the returned cell, or a
+   * cell or link derived from it does; a bare id string taken from it does not
+   * keep it, and `portableSnapshotId()` makes one that does not need it.
    *
    * **Contract note:** `data` is an arbitrary value, deliberately NOT limited
    * to `FabricValue`. Callers pass, among other things, `Cell` objects (wish
@@ -4515,7 +4920,7 @@ export class Runtime {
     // immutable data.
     const store = immutableCellsFor(this);
     const readerSchema = internCellLinkSchema(schema);
-    const snapshot = store.create(
+    const snapshot = store.createOwned(
       fabricFromConvertibleJsValue(
         flattenBuilderArtifacts(data, {
           isLeaf: isRendererTrustedEvent,
@@ -4762,7 +5167,6 @@ export class Runtime {
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
     const spaces = links.flatMap((link) => {
-      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
       return space === home.space ? [] : [space];
     });
@@ -4829,15 +5233,21 @@ export class Runtime {
     const provider = this.storageManager.open(space);
     const aclUri = aclDocId(space) as URI;
     const spaceCell = this.getSpaceCell(space);
+    const spaceId = spaceCell.getAsNormalizedFullLink().id;
     const loads = await Promise.all([
       provider.sync(aclUri),
-      provider.sync(spaceCell.getAsNormalizedFullLink().id),
+      provider.sync(spaceId),
     ]);
     const denied = this.storageManager.spaceAccessError?.(space) ??
       this.storageManager.authorizationError?.(space);
     if (denied !== undefined) return true;
     for (const { error } of loads) {
       if (error !== undefined) throw error;
+    }
+    // Neither reads as absent while a quarantine holds it back.
+    for (const id of [aclUri, spaceId]) {
+      const failure = await provider.replica.quarantineFailure?.(id);
+      if (failure !== undefined) throw failure;
     }
     const tx = this.edit();
     try {
@@ -5033,6 +5443,24 @@ export class Runtime {
     }
   }
 
+  /**
+   * Returns the space that `space`'s allocation record names for the
+   * `PatternFactory.inSpace(name)` target `name`, once the record has loaded,
+   * or `undefined` when `space` records none, as before any run asked for
+   * that name. Reads only: unlike {@link resolveInSpaceName}, it creates no
+   * space and writes no record, so a caller can ask which space a name
+   * stands for without bringing it into being.
+   */
+  async recordedInSpaceName(
+    space: MemorySpace,
+    name: string,
+  ): Promise<MemorySpace | undefined> {
+    const record = this.#inSpaceAllocationCell(space, name);
+    await record.sync();
+    const recorded = record.get()?.did;
+    return isDID(recorded) ? recorded : undefined;
+  }
+
   #inSpaceAllocationCell(
     space: MemorySpace,
     name: string,
@@ -5137,8 +5565,11 @@ export class Runtime {
     );
   }
 
-  start<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.start(resultCell);
+  start<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.start(resultCell, options);
   }
 
   /**
@@ -5146,8 +5577,11 @@ export class Runtime {
    * it instantiates, rejecting when that commit failed; see
    * `Runner.startWithCommit()`.
    */
-  startWithCommit<T = any>(resultCell: Cell<T>): Promise<boolean> {
-    return this.runner.startWithCommit(resultCell);
+  startWithCommit<T = any>(
+    resultCell: Cell<T>,
+    options?: RunnerStartOptions,
+  ): Promise<boolean> {
+    return this.runner.startWithCommit(resultCell, options);
   }
 
   /**
@@ -5417,7 +5851,6 @@ export class Runtime {
     try {
       return normalizeSpaceHost(host);
     } catch (cause) {
-      if (!(cause instanceof SpaceHostValidationError)) throw cause;
       throw new Error(
         `Invalid host for space ${space}`,
         { cause },
@@ -5443,7 +5876,9 @@ export class Runtime {
   /**
    * True iff the default host AND every distinct mapped host are
    * reachable — one runtime can span hosts, so health is the
-   * conjunction over all of them. The optional signal cancels the requests.
+   * conjunction over all of them. A host with no response within
+   * {@link DEPLOYMENT_RESPONSE_BOUND_MS} counts as unreachable. The optional
+   * signal cancels the requests.
    */
   async healthCheck(signal?: AbortSignal): Promise<boolean> {
     // Overlapping calls each capture into their own generation; only the
@@ -5452,22 +5887,26 @@ export class Runtime {
     const generation = ++this.#healthCheckGeneration;
     this.#serverGitSha = null;
     const defaultHost = this.apiUrl.toString();
-    const hosts = new Set([defaultHost]);
-    for (
-      const host of [
-        ...Object.values(this.spaceHostMap ?? {}),
-        ...this.#dynamicHosts.values(),
-      ]
-    ) {
-      try {
-        hosts.add(new URL(host).toString());
-      } catch {
-        return false; // a malformed mapped host is unhealthy by definition
-      }
-    }
+    // Every mapped host is already a normalized origin, so equal hosts are
+    // equal strings.
+    const hosts = new Set([
+      defaultHost,
+      ...Object.values(this.spaceHostMap ?? {}),
+      ...this.#dynamicHosts.values(),
+    ]);
+    const deadline = new AbortController();
+    const timer = setTimeout(
+      () => deadline.abort(new DOMException("timed out", "TimeoutError")),
+      DEPLOYMENT_RESPONSE_BOUND_MS,
+    );
+    const requestSignal = signal === undefined
+      ? deadline.signal
+      : AbortSignal.any([signal, deadline.signal]);
     const checks = [...hosts].map(async (host) => {
       try {
-        const res = await fetch(new URL("/_health", host), { signal });
+        const res = await fetch(new URL("/_health", host), {
+          signal: requestSignal,
+        });
         if (
           host === defaultHost && generation === this.#healthCheckGeneration
         ) {
@@ -5480,6 +5919,10 @@ export class Runtime {
         return false;
       }
     });
-    return (await Promise.all(checks)).every(Boolean);
+    try {
+      return (await Promise.all(checks)).every(Boolean);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }

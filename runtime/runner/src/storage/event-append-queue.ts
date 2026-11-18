@@ -50,13 +50,15 @@
 
 import { spliceAll } from "@commonfabric/collections/splice";
 import { getLogger } from "@commonfabric/logger";
-import {
-  type ClientCommit,
-  type EventAppendDecl,
-  type StreamEventEntry,
-  type StreamLinkRef,
+import type {
+  ClientCommit,
+  EventAppendDecl,
+  StreamEventEntry,
+  StreamLinkRef,
 } from "@commonfabric/memory/v2";
+import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const logger = getLogger("event-append-queue", {
   enabled: true,
@@ -304,6 +306,16 @@ export class EventAppendQueue {
     });
   }
 
+  /** The token buckets of the streams pacing holds, by stream. */
+  get accessForTestingOnly(): {
+    readonly buckets: ReadonlyMap<
+      string,
+      { readonly tokens: number; readonly refilledAt: number }
+    >;
+  } {
+    return { buckets: this.#buckets };
+  }
+
   /** Live entries (pending discharge), fired order. */
   get pending(): readonly QueuedEventAppend[] {
     return this.#queue;
@@ -473,8 +485,11 @@ export class EventAppendQueue {
           // Housekeeping: a quiet stream's bucket refills to full and
           // can be forgotten (a fresh bucket starts full).
           if (this.#buckets.size > 64) {
-            for (const [key, other] of this.#buckets) {
-              if (key !== streamKey && other.tokens >= pacing.burst) {
+            for (const key of this.#buckets.keys()) {
+              if (
+                key !== streamKey &&
+                this.#refilledTokens(pacing, key, at).tokens >= pacing.burst
+              ) {
                 this.#buckets.delete(key);
               }
             }
@@ -527,7 +542,7 @@ export class EventAppendQueue {
         attempt = 0;
       } catch (error) {
         const name = (error as { name?: string })?.name ?? "";
-        const message = error instanceof Error ? error.message : String(error);
+        const message = describeFailure(error);
         if (name === "EventAppendDuplicateError") {
           // The first append landed; its consequences are (or will be)
           // the authoritative outcome (events.md §5).
@@ -542,10 +557,14 @@ export class EventAppendQueue {
         } | undefined;
         // A current ACL denial proves this append was not admitted. A
         // session challenge race remains retryable and carries no such basis.
-        const aclRefusal = name === "AuthorizationError" &&
-          verdict?.permanentEvidence === true &&
-          typeof verdict.aclRevision === "number" &&
-          verdict.retriable !== true;
+        // A deleted space admits nothing again, and the error a session
+        // revoked for the deletion closes with carries only `deleted`, so
+        // that marker alone is a refusal (INV-15).
+        const aclRefusal = isDeletedSpaceError(error) ||
+          (name === "AuthorizationError" &&
+            verdict?.permanentEvidence === true &&
+            typeof verdict.aclRevision === "number" &&
+            verdict.retriable !== true);
         if (REFUSED_ERROR_NAMES.has(name) || aclRefusal) {
           logger.warn("event-append-refused", () => [
             `event append ${next.eventId} refused deterministically; ` +

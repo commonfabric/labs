@@ -10,16 +10,16 @@ import type {
   HarnessToolCall,
   HarnessTranscriptMessage,
 } from "../contracts/transcript.ts";
-import {
-  type OpenAIChatCompletionAttemptDiagnostic,
-  type OpenAIChatCompletionMessage,
-  type OpenAIChatCompletionRequest,
-  type OpenAIChatCompletionRequestTool,
-  type OpenAIChatCompletionResponse,
-  type OpenAIChatCompletionTool,
-  type OpenAIChatMessageContent,
+import type {
+  OpenAIChatCompletionAttemptDiagnostic,
+  OpenAIChatCompletionMessage,
+  OpenAIChatCompletionRequest,
+  OpenAIChatCompletionRequestTool,
+  OpenAIChatCompletionResponse,
+  OpenAIChatCompletionTool,
+  OpenAIChatMessageContent,
   OpenAICompatibleGatewayClient,
-  type OpenAIResponsesRequest,
+  OpenAIResponsesRequest,
 } from "../gateway/openai-client.ts";
 import {
   addFirstUserPromptCacheBreakpoint,
@@ -40,6 +40,7 @@ import {
   type HarnessModelTurnResult,
   observedModelId,
 } from "./client.ts";
+import { emptyReplyDiagnostic } from "./empty-reply.ts";
 import {
   assertOpenAIReasoningEffortSupported,
   supportedOpenAIReasoningEfforts,
@@ -469,8 +470,15 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.model,
       normalizeOpenAIUsage(response.usage),
     );
+    const assistant = createAssistantMessage(response);
+    const emptyReply = emptyReplyDiagnostic(
+      assistant,
+      "chat-completions",
+      response,
+    );
     return {
-      assistant: createAssistantMessage(response),
+      assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       observedModel: observedModelId(response.model),
       ...(usage !== undefined ? { usage } : {}),
     };
@@ -483,7 +491,6 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.transcript,
       request.model,
       this.providerId,
-      GATEWAY_RESPONSES_LABEL,
       undefined,
       // `--resume-run X --model other` is allowed here (the CLI pins the
       // provider on resume, not the model), so a continuation from the old
@@ -560,14 +567,17 @@ export class OpenAICompatibleGatewayModelClient implements HarnessModelClient {
       request.model,
       normalizeOpenAIUsage(response.usage),
     );
+    const assistant = normalizeTerminalResponse(
+      response as unknown as Record<string, unknown>,
+      request.model,
+      this.providerId,
+      GATEWAY_RESPONSES_LABEL,
+    );
+    const emptyReply = emptyReplyDiagnostic(assistant, "responses", response);
     return {
       observedModel: observedModelId(response.model),
-      assistant: normalizeTerminalResponse(
-        response as unknown as Record<string, unknown>,
-        request.model,
-        this.providerId,
-        GATEWAY_RESPONSES_LABEL,
-      ),
+      assistant,
+      ...(emptyReply !== undefined ? { emptyReply } : {}),
       ...(usage !== undefined ? { usage } : {}),
     };
   }

@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { stripAnsi } from "../lib/view/ansi.ts";
 import { type GitRunner, realGit } from "../lib/view/commitmsg.ts";
 import { parseDiff } from "../lib/view/diff.ts";
@@ -3074,7 +3075,7 @@ diff --git a/b.ts b/b.ts
         try {
           saveSource(src, edited, GIT_SHOW);
         } catch (caught) {
-          error = caught instanceof Error ? caught.message : String(caught);
+          error = describeFailure(caught);
         }
         expect(error, error || "save did not fail").toContain(
           "commit hook rejected",

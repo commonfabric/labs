@@ -9,6 +9,7 @@ import { Database } from "@db/sqlite";
 import { openSpace } from "../db.ts";
 import { reconstructDocument } from "../reconstruct.ts";
 import { listEntityModels } from "../model.ts";
+import { summarizeSpace } from "../queries.ts";
 
 // NOTE: no `scope_key` column on `revision` — the legacy schema.
 const LEGACY_SCHEMA = `
@@ -91,6 +92,43 @@ Deno.test("scope_key shim: a DB without scope_key still inspects", async () => {
       assertEquals(models.map((m) => m.id).sort(), ["of:a", "of:b"]);
     } finally {
       space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("scope_key shim: a DB whose head predates the current-op migration still summarizes", async () => {
+  // The summary looks for a deletion tombstone through the ACL document's
+  // head, which on this DB has no `op`. Its ACL document's payload does not
+  // decode, and holds no tombstone.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
+  const dbPath = `${dir}/legacy.sqlite`;
+  try {
+    seed(dbPath);
+    const db = new Database(dbPath);
+    db.exec(
+      `CREATE TABLE branch (name TEXT, head_seq INTEGER, status TEXT);
+       INSERT INTO revision (id, seq, op_index, op, data, commit_seq)
+         VALUES ('of:did:key:zX', 2, 0, 'set', 'not json', 2);
+       INSERT INTO head (branch, id, seq, op_index)
+         VALUES ('', 'of:did:key:zX', 2, 0)`,
+    );
+    db.close();
+    for (const dropHead of [false, true]) {
+      if (dropHead) {
+        const db = new Database(dbPath);
+        db.exec("DROP TABLE head");
+        db.close();
+      }
+      const space = openSpace(dbPath);
+      try {
+        const summary = summarizeSpace(space);
+        assertEquals(summary.revisions, 3);
+        assertEquals(summary.deletion, undefined);
+      } finally {
+        space.close();
+      }
     }
   } finally {
     await Deno.remove(dir, { recursive: true });

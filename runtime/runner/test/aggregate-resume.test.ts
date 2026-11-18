@@ -2,9 +2,11 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { aggregate } from "../src/builtins/aggregate.ts";
 import { useCancelGroup } from "../src/cancel.ts";
+import { MAX_PATH_RESOLUTION_LENGTH } from "../src/link-resolution.ts";
 import { isRawBuiltinResult } from "../src/module.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -239,4 +241,144 @@ describe("aggregate resume", () => {
       }
     });
   }
+
+  describe("a resume torn down or never settling", () => {
+    async function withRuntime(
+      body: (runtime: Runtime) => Promise<void>,
+    ): Promise<void> {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        await body(runtime);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    }
+
+    for (const cancelDuringResultSync of [false, true]) {
+      it(`${cancelDuringResultSync ? "writes nothing when cancelled" : "writes the count when left running"} while its result store syncs`, async () => {
+        await withRuntime(async (runtime) => {
+          const [cancel, addCancel] = useCancelGroup();
+          const setup = runtime.edit();
+          const inputs = runtime.getCell<
+            { list: number[]; operation: "count" }
+          >(signer.did(), "cancelled inputs", undefined, setup);
+          inputs.set({ list: [1, 2, 3], operation: "count" });
+          const parent = runtime.getCell(
+            signer.did(),
+            "cancelled parent",
+            undefined,
+            setup,
+          );
+          parent.set({});
+          await setup.commit().settled;
+          const output = runtime.getCell<unknown>(
+            signer.did(),
+            "cancelled output",
+          );
+          const sent: unknown[] = [];
+          const builtin = aggregate(
+            inputs,
+            (_tx, value) => sent.push(value),
+            addCancel,
+            undefined,
+            parent,
+            runtime,
+            output.getAsNormalizedFullLink(),
+            true,
+          );
+          if (!isRawBuiltinResult(builtin)) {
+            throw new Error("Expected coordinator");
+          }
+          const [store] = builtin.storeWrites!;
+          const { storageManager } = runtime;
+          const syncCell = storageManager.syncCell.bind(storageManager);
+          let storeSyncs = 0;
+          storageManager.syncCell = (cell, options) => {
+            if (cell.getAsNormalizedFullLink().id === store.id) {
+              storeSyncs++;
+              if (cancelDuringResultSync) cancel();
+            }
+            return syncCell(cell, options);
+          };
+          const tx = runtime.edit();
+          try {
+            await builtin.action(tx);
+            expect(storeSyncs).toBeGreaterThan(0);
+            const written = runtime.getCellFromLink(store, undefined, tx)
+              .getRaw();
+            if (cancelDuringResultSync) {
+              expect(written).toBeUndefined();
+              expect(sent).toEqual([]);
+            } else {
+              expect(written).toBe(3);
+              expect(sent).toHaveLength(1);
+            }
+          } finally {
+            tx.abort();
+            cancel();
+          }
+        });
+      });
+    }
+
+    it("throws once confirming a list link that moves on every pass reaches the resolution limit", async () => {
+      // Each pass syncs the document the list link resolved to and resolves
+      // the link afresh, stopping when the two agree. A link another writer
+      // keeps moving never agrees, so the passes are bounded.
+
+      await withRuntime(async (runtime) => {
+        let resolutions = 0;
+        type Moving = {
+          sync(): Promise<Moving>;
+          withTx(): Moving;
+          resolveAsCell(): Moving;
+          equalLinks(): boolean;
+        };
+        const moving = (): Moving => {
+          const target: Moving = {
+            sync: () => Promise.resolve(target),
+            withTx: () => target,
+            resolveAsCell: () => {
+              resolutions++;
+              return moving();
+            },
+            equalLinks: () => false,
+          };
+          return target;
+        };
+        const inputs = { withTx: () => inputs, key: () => moving() };
+        const parent = runtime.getCell(signer.did(), "moving parent");
+        const output = runtime.getCell(signer.did(), "moving output");
+        const [cancel, addCancel] = useCancelGroup();
+        const builtin = aggregate(
+          inputs as unknown as Parameters<typeof aggregate>[0],
+          () => {},
+          addCancel,
+          undefined,
+          parent,
+          runtime,
+          output.getAsNormalizedFullLink(),
+          true,
+        );
+        if (!isRawBuiltinResult(builtin)) {
+          throw new Error("Expected coordinator");
+        }
+        const tx = runtime.edit();
+        try {
+          await expect(builtin.action(tx)).rejects.toThrow(
+            "Aggregate input link resolution limit reached",
+          );
+          expect(resolutions).toBe(MAX_PATH_RESOLUTION_LENGTH + 1);
+        } finally {
+          tx.abort();
+          cancel();
+        }
+      });
+    });
+  });
 });

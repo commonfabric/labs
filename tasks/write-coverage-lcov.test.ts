@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertRejects,
+  assertStringIncludes,
+} from "@std/assert";
 import { dirname, fromFileUrl, join, toFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
@@ -7,6 +12,7 @@ import {
   normalizeLcovInstancePaths,
   parseFilesMissingTranspiledSource,
   parseFilesWithNoSource,
+  relativeLcovSourcePaths,
 } from "./write-coverage-lcov.ts";
 import { isTrackedSourcePath } from "./coverage-metrics.ts";
 
@@ -25,6 +31,28 @@ Deno.test("normalizeLcovInstancePaths strips a per-instance query from SF lines"
 Deno.test("normalizeLcovInstancePaths leaves a plain path and non-SF lines unchanged", () => {
   const input = "SF:/a/b/foo.ts\nDA:1,1\nFN:2,x\nend_of_record";
   assertEquals(normalizeLcovInstancePaths(input), input);
+});
+
+Deno.test("relativeLcovSourcePaths makes a path inside the root relative to it", () => {
+  assertEquals(
+    relativeLcovSourcePaths(
+      [
+        "SF:/home/me/checkout 🦆/runtime/a/mod.ts",
+        "DA:1,1",
+        "end_of_record",
+        "SF:/home/me/checkout 🦆 other/b.ts",
+        "SF:/elsewhere/c.ts",
+      ].join("\n"),
+      "/home/me/checkout 🦆",
+    ),
+    [
+      "SF:runtime/a/mod.ts",
+      "DA:1,1",
+      "end_of_record",
+      "SF:/home/me/checkout 🦆 other/b.ts",
+      "SF:/elsewhere/c.ts",
+    ].join("\n"),
+  );
 });
 
 //
@@ -540,4 +568,20 @@ Deno.test("collectCoverageProfileFiles returns empty for a missing directory", a
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+Deno.test("collectCoverageProfileFiles surfaces a directory that cannot be read", async () => {
+  // Only a directory that is not there reads as empty. One that is there and
+  // refuses to be read would otherwise drop its profiles from the report.
+  const readDir = (): AsyncIterable<Deno.DirEntry> => ({
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.reject(new Deno.errors.PermissionDenied("refused")),
+    }),
+  });
+
+  await assertRejects(
+    () => collectCoverageProfileFiles("/coverage-root", readDir),
+    Deno.errors.PermissionDenied,
+    "refused",
+  );
 });

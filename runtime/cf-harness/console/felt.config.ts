@@ -1,4 +1,4 @@
-import { type Config } from "@commonfabric/felt";
+import type { Config } from "@commonfabric/felt";
 
 /**
  * The console's build: the operator's page, and the live pane one session is

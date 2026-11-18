@@ -630,9 +630,8 @@ const confirmPendingClassification = handler<
     labeledAt: Date.now(),
     wasCorrection: false,
     isInteresting: result.confidence < 0.7,
-    interestingReason: result.confidence < 0.7
-      ? "Low confidence, user confirmed"
-      : undefined,
+    ...(result.confidence < 0.7 &&
+      { interestingReason: "Low confidence, user confirmed" }),
   });
   pendingClassifications.set(
     pendingList.filter((p) => !equals(pending, p)),
@@ -1059,9 +1058,8 @@ const confirmClassificationHandler = handler<
     labeledAt: Date.now(),
     wasCorrection: false,
     isInteresting: result.confidence < 0.7,
-    interestingReason: result.confidence < 0.7
-      ? "Low confidence, user confirmed"
-      : undefined,
+    ...(result.confidence < 0.7 &&
+      { interestingReason: "Low confidence, user confirmed" }),
   };
 
   examples.push(example);
@@ -1290,9 +1288,8 @@ const acceptCurrentClassificationHandler = handler<
     labeledAt: Date.now(),
     wasCorrection: false,
     isInteresting: classification.confidence < 0.7,
-    interestingReason: classification.confidence < 0.7
-      ? "Low confidence, user confirmed"
-      : undefined,
+    ...(classification.confidence < 0.7 &&
+      { interestingReason: "Low confidence, user confirmed" }),
   });
   currentItem.set(null);
 });

@@ -139,7 +139,7 @@ Status legend:
 | # | behavior | today (anchor) | v2 doc § | status |
 | --- | --- | --- | --- | --- |
 | 63 | Commit classes / `derivedThrough` / `consequenceOf` metadata | `runtime/memory/v2.ts` (`CommitClass`), `executor/engine-wave-sink.ts` (`derivedThrough` set on the wave commit; `executor/watermark.ts` describes it), `runtime/memory/v2/engine.ts` (commit-row `annotations`, `consequenceOf` carriage in `applyWaveCommit`) | protocol §1, §7 | COVERED |
-| 64 | `execution_lease` table | `runtime/memory/v2/engine.ts` (the `execution_lease` DDL; the derived-class lease check in `applyCommitTransaction`) | serving-loop §Anchors, §2 | COVERED |
+| 64 | the lease in memory | `runtime/memory/v2/execution-lease.ts` (the map); `runtime/memory/v2/engine.ts` (the derived-class lease check in `applyCommitTransaction`) | serving-loop §2 | COVERED |
 | 65 | `externalSinkDisposition` / client egress suppression | not present on main; egress is CFC sink-request verification at release (`verifySinkRequestRelease` in `cfc/sink-request.ts`) | README §3.1, §3.4 | GAP |
 | 66 | Settled-ness watermark; `waitForSettled` | not present today (tests poll `settled()`/text) | protocol §4, testing §3 | COVERED |
 | 67 | Mergeable ops (push/addUnique/increment; op poisoning on whole-value set) | `storage/mergeable-ops.ts`, `cell.ts` (the op poisoning in `Cell.set()`) | README §1 (authored machinery unchanged) | COVERED |
@@ -267,11 +267,68 @@ For a stream a nested pattern defines, that structure is the enclosing
 piece's graph: the stream belongs to the nested instance, whose inputs
 the enclosing instance derives, so the auto-start starts the pieces
 those inputs come from first and leaves the nested instance to run as
-their child (`EnsurePieceOptions.startInputSources`). An argument whose
-links cannot be read fails the start rather than running the handler
-over what those pieces derived last. A client under server execution
-runs the handler only as its speculative echo, which the served run
-replaces, so its auto-start starts the nested instance alone.
+their child (`EnsurePieceOptions.startInputSources`). On a serving
+runtime each of those pieces has its origin followed before it starts,
+as the event's own piece does (serving-loop.md §3e), and a start one of
+them is still owed defers the event until the follow has run: a nested
+handler is not run against what the enclosing piece derived from the
+source it had. An argument whose links cannot be read fails the start
+rather than running the handler over what those pieces derived last. A
+client under server execution runs the handler only as its speculative
+echo, which the served run replaces, so its auto-start starts the nested
+instance alone. A start that names a piece on its own, as a client's open,
+a `cf` command's and the agent harness's start of a piece do, starts the
+pieces that ENCLOSE it first wherever the runtime's run of a handler counts
+(`startWithInputSources()` in `ensure-piece-running.ts`), with the same walk
+restricted to them (`EnsurePieceOptions.enclosingSourcesOnly`): once a
+nested instance runs, no event starts its enclosing instance, so a nested
+instance opened alone would run every later event's handler against inputs
+nothing in the runtime derives. A piece whose output the opened piece's
+argument links to, as `cf piece link` wires one, is not started by the open;
+an event's auto-load of a piece that is not running starts it. An open
+that follows the opened piece's origin follows each enclosing piece's
+origin first. The opened piece
+is started in its own right after them, so it keeps running when one of them
+stops; each enclosing piece is started in its own right too, and runs until
+it is stopped itself or the runtime ends, as a piece an event's auto-load
+starts does. That start is best effort: an enclosing
+piece that cannot start, one whose origin's follow cannot be settled, and an
+argument whose links cannot be read leave the opened piece to start alone,
+with a warning naming it, so an open fails only where the piece's own start
+does. A serving runtime's demand start walks the same restricted chain before
+it starts a piece a demand reaches (`#attemptStructureLoad()` in
+`space-server.ts`): a session's demand can reach a nested instance's documents
+without reaching any of the enclosing instance's that the demand pass starts a
+piece from, as when the session reads through a link that names the nested
+instance's result and never opens the enclosing instance, and the nested
+instance would then run alone. Unlike an open's, the walk there is not best
+effort (`EnsurePieceOptions.sourcesRequired`): an enclosing piece that does not
+start holds the demanded root back, as an enclosing piece owed its origin's
+follow does (serving-loop.md §3e), and an error starting that piece or reading
+the links that name it is the demanded root's error, so the demand pass
+retries, parks and reports it as it does a piece of its own. An enclosing piece
+that can never start leaves the demanded root pending for good, with the stuck
+warning a root deferred that long gets. A link whose `result` chain cycles or
+runs too deep names no source and is passed over, as it is for an open. The
+pieces the walk finds enclosing a piece are recorded for the tenure
+(`EnsurePieceOptions.onSourceRoot`), and every key resolving to that piece is
+indexed under them, whenever it arrives: the runs of an enclosing piece, and of
+every piece nested in it, are supplied that key's demanders, as a demand of the
+enclosing piece itself would supply them, each computing only the demanders'
+own instances, a demander arriving later re-arms them, and a failed start
+commit of an enclosing piece parks the key. A nested node the enclosing piece's
+graph sets up runs as that graph's child and lives as long as that piece does,
+where an opened one is started in its own right; an instance a builtin such as
+`map` builds starts in its own right after the piece that built it, and its
+keys are indexed under the piece of the callback that builds it alone, not the
+pieces enclosing that one; each enclosing piece runs for the rest of the
+tenure. Two routes still start a nested instance alone on a serving runtime: a
+demand of a piece the walk finds no enclosing piece for, as for a child a
+handler made, and an event's auto-load (`startEventPiece()`), which is best
+effort, so an event to a nested instance whose enclosing piece cannot start
+runs its handler alone. A key whose owning piece started some other way than
+through a walk, by an event or as the child of an enclosing piece demanded
+itself, is indexed under nothing.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their
@@ -303,7 +360,7 @@ receipts as a value surface or re-spec the verb contract. ~~Flag as a
 Phase 3 decision.~~ **(b) RULED 2026-08-29 (owner: serving-side
 receipt/result write): receipts are carried as a value surface — the
 SERVING side writes every handling's receipt (the `{}` witness
-included) in the handler run's own wave, at the same cause-derived
+included) in the handler run's own wave, at the same `receipt:`
 address, write-once by CAS (lost CAS = loud no-op); the readback
 contract is unchanged. Normative text: events.md §4 "Result
 carriage".**
@@ -512,7 +569,7 @@ modeling ruling generalizes this into the transaction identity model
 (protocol.md §1): envelope identity for single-session authored
 transactions, per-action-run annotations inside the server-driven wave
 commit — closing ledger LD3 (the shared `scope_key` vocabulary,
-key-vocabulary.md §3) and LD5 (the lease-holder read row, protocol.md
+key-vocabulary.md §3) and LD5 (the explicit-instance read row, protocol.md
 §2). scopes.md §7 M3 resolves the same way — `resolveScopeKey`'s
 session-fed admission path (`#decideTransaction()` in
 `runtime/memory/v2/server.ts` handing `session.principal` and
@@ -562,12 +619,13 @@ with the disposition still stands: the sync-path comment in
 `scheduler/invalidation.ts` (pushes had to stay unshaped for adoption)
 lost its reason, so the shaping decision is due a re-check (N10).
 
-**N64 (execution_lease).** serving-loop §Anchors and §2 describe
-`execution_lease` as an existing table, and it is:
-`runtime/memory/v2/engine.ts` creates it (one row per space: `space`,
-`holder`, `expires_at` — §2's shape), and `applyCommitTransaction`
-there makes the derived-class admission equality check against the
-live row.
+**N64 (the lease in memory).** serving-loop §2 describes a map from space to
+holder that each memory server keeps in memory, and it is:
+`ExecutionLeases` in `runtime/memory/v2/execution-lease.ts`, which a `Server`
+shares with every engine it opens, and `applyCommitTransaction` in
+`runtime/memory/v2/engine.ts` makes the derived-class admission equality check
+against it. The engine's schema still creates an `execution_lease` table, which
+nothing reads or writes.
 
 **N65 (egress suppression is new construction).** README §3.4
 requires "client suppresses egress" and "server performs egress" to

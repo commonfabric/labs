@@ -93,7 +93,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -124,7 +124,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -183,7 +183,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -216,7 +216,7 @@ describe("Engine in SES mode", () => {
     expect(bodies).toContain("__cfHelpers.h.fragment");
     expect(bodies).not.toContain(".fragment =");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -252,7 +252,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data(buildYears())");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -284,7 +284,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data(Object.fromEntries(");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -314,7 +314,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data(/^[a-z]+$/)");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -344,7 +344,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data({");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -380,7 +380,7 @@ describe("Engine in SES mode", () => {
     );
     expect(joinedBodies(graph)).toContain("__cf_data(new");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -502,7 +502,7 @@ describe("Engine in SES mode", () => {
       /exports\.INTERNAL_MODULE_TYPES = commonfabric_\d+\.__cfHelpers\.__cf_data\(new Set\(\["type-picker"\]\)\);/,
     );
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,

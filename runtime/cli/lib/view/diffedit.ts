@@ -15,6 +15,7 @@ import { basename, dirname } from "@std/path";
 
 import { spliceAll } from "@commonfabric/collections/splice";
 import { maxOf } from "@commonfabric/collections/math";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { BlameRequest, BlameTarget } from "./blame.ts";
 import type { Document, Line, Span, ViewMode } from "./model.ts";
@@ -97,7 +98,6 @@ export function diffSource(
   // The HEAD commit's message region in the given lines, or null. The regions
   // shift as the diff is edited, so they are re-derived from the current text.
   const editableMessage = (lines: readonly string[]): CommitMessage | null => {
-    if (!shownHead) return null;
     for (const m of findCommitMessages(lines)) {
       if (matchesShownHead(m.sha)) return m;
     }
@@ -106,7 +106,6 @@ export function diffSource(
   const representedCommit = (
     lines: readonly string[],
   ): { sha: string } | null => {
-    if (!shownHead) return null;
     for (const commit of findCommitHeaders(lines)) {
       if (matchesShownHead(commit.sha)) return { sha: commit.sha };
     }
@@ -126,11 +125,16 @@ export function diffSource(
     hunks: saveHunks,
   };
   let blameRoot: string | null | undefined;
-  const blameTargets = (text: string) =>
-    diffBlameTargets(text, ws, () => {
+  let saved: { baseline: string; commits: CommitLines } | undefined;
+  const blameTargets = (text: string, baseline: string) => {
+    if (saved?.baseline !== baseline) {
+      saved = { baseline, commits: commitLines(baseline) };
+    }
+    return diffBlameTargets(text, saved.commits, ws, () => {
       if (blameRoot === undefined) blameRoot = git?.repoRoot?.() ?? null;
       return blameRoot;
     });
+  };
   let countContextText: string | undefined;
   let countContexts: readonly DiffCountFileContext[] = [];
   const diffCountContexts = (text: string) => {
@@ -152,6 +156,7 @@ export function diffSource(
       label: null,
       isDiff: true,
       diffCountContexts,
+      declaredTests: ws.declaredTests,
       blameTargets,
       editable: false,
       reason:
@@ -270,6 +275,7 @@ export function diffSource(
       : `${files.length} files`,
     isDiff: true,
     diffCountContexts,
+    declaredTests: ws.declaredTests,
     blameTargets,
     editable: true,
     policy,
@@ -430,10 +436,8 @@ export function diffSource(
         if (before === null) {
           throw new Error(`Could not read ${path}; no files were saved.`);
         }
+        // `changes` holds only files that have a baseline.
         const expected = expectedFiles.get(path);
-        if (expected === undefined) {
-          throw new Error(`No saved baseline exists for ${path}.`);
-        }
         if (before !== expected && before !== contents) {
           throw new Error(
             `${path} changed after this view opened; no files were saved.`,
@@ -486,7 +490,7 @@ export function diffSource(
             rollbackErrors.push(String(rollbackError));
           }
         }
-        const detail = error instanceof Error ? error.message : String(error);
+        const detail = describeFailure(error);
         const suffix = rollbackErrors.length > 0
           ? `; restoring files failed: ${rollbackErrors.join("; ")}`
           : "";
@@ -1086,14 +1090,7 @@ function expandContext(
     );
   }
   const text = applyExpansion(current, target, up, ctx, k);
-  const newBaseline = applyExpansion(
-    baseline,
-    baseHunk,
-    up,
-    baseCtx,
-    k,
-  );
-  if (text === null || newBaseline === null) return null;
+  const newBaseline = applyExpansion(baseline, baseHunk, up, baseCtx, k);
   if (revealsUnterminatedEof) {
     hunks[index].oldNoTrailingNewline = true;
     hunks[index].newNoTrailingNewline = true;
@@ -1190,7 +1187,6 @@ function expansionLineEndingProvenance(
     }
     const ending = revealed[newSideIndex];
     if (line[0] !== "-") newSideIndex++;
-    if (ending === undefined) return undefined;
     return {
       ending,
       bodyCarriesCrlfEnding: ending === "\r\n" && !diffUsesCrlfTransport,
@@ -1200,7 +1196,6 @@ function expansionLineEndingProvenance(
 
 /** Add Git's marker after context that reaches an unterminated file end. */
 function appendNoNewlineMarker(lines: string[], crlfDiff: boolean): void {
-  if (lines.length === 0) return;
   const transport = crlfDiff ? "\r" : "";
   const marker = `\\ No newline at end of file${transport}`;
   const paired = lines.at(-1)?.startsWith("+") &&
@@ -1289,20 +1284,15 @@ function applyExpansion(
   up: boolean,
   ctx: string[],
   k: number,
-): string | null {
+): string {
   const lines = text.split("\n");
   const h = hunk.headerLine;
   const bodyEnd = hunk.endLine + 1;
   const headerEnding = lines[h].endsWith("\r") ? "\r" : "";
   const headerText = headerEnding ? lines[h].slice(0, -1) : lines[h];
-  const m = headerText.match(
-    /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/,
-  );
-  if (!m) return null;
-  let oldStart = parseInt(m[1], 10);
-  let oldCount = m[2] !== undefined ? parseInt(m[2], 10) : 1;
-  let newStart = parseInt(m[3], 10);
-  let newCount = m[4] !== undefined ? parseInt(m[4], 10) : 1;
+  // The parser matched the header, so its ranges end at the first " @@".
+  const suffix = headerText.slice(headerText.indexOf(" @@") + 3);
+  let { oldStart, oldCount, newStart, newCount } = hunk;
   if (up) {
     oldStart += oldCount === 0 ? 1 - k : -k;
     newStart += newCount === 0 ? 1 - k : -k;
@@ -1312,9 +1302,8 @@ function applyExpansion(
   }
   oldCount += k;
   newCount += k;
-  const header = `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${
-    m[5] ?? ""
-  }${headerEnding}`;
+  const header =
+    `@@ -${oldStart},${oldCount} +${newStart},${newCount} @@${suffix}${headerEnding}`;
   const out = up
     ? [...lines.slice(0, h), header, ...ctx, ...lines.slice(h + 1)]
     : [
@@ -1851,7 +1840,7 @@ function diffLogicalEnd(
   row: number,
 ): number {
   const line = lines[row] ?? "";
-  const length = [...line].length;
+  const length = cpLen(line);
   if (!line.endsWith("\r")) return length;
   const hunk = model ? hunkAt(model, row)?.hunk : undefined;
   const noTrailingNewline = lines[row + 1]?.replace(/\r$/, "") ===
@@ -2142,18 +2131,15 @@ function nearbyLineEnding(
   count: number,
   fallback: Exclude<FileLineEnding, "">,
 ): Exclude<FileLineEnding, ""> {
-  for (const line of lines.slice(start, start + count)) {
-    if (line.ending !== "") return line.ending;
-  }
-  for (let index = start - 1; index >= 0; index--) {
-    const ending = lines[index]?.ending;
-    if (ending) return ending;
-  }
-  for (let index = start + count; index < lines.length; index++) {
-    const ending = lines[index]?.ending;
-    if (ending) return ending;
-  }
-  return fallback;
+  // Only a file's last line lacks an ending, so the nearest ending is on the
+  // range's first line, one of the two lines before it, or the line after it.
+  const nearest = [
+    count > 0 ? lines[start] : undefined,
+    lines[start - 1],
+    lines[start - 2],
+    lines[start + count],
+  ].find((line) => line?.ending);
+  return nearest?.ending || fallback;
 }
 
 function nearbyProvenanceEnding(
@@ -2298,10 +2284,15 @@ function mutableHunks(
  * while the file still holds the hunk's new side at the hunk's lines. A target
  * carries its line's text, which the blamed file's line must also have. A file
  * the workspace no longer has is found at its path under `root()`, the top of
- * the repository, when a commit header precedes it.
+ * the repository, when a commit header precedes it. A commit header, and the
+ * lines after it that are not part of a diff, hold the commit's metadata and
+ * message. Each of those lines is attributed to that commit while it is
+ * unchanged from the same commit's lines in `saved`, the text as last loaded
+ * or saved.
  */
 function diffBlameTargets(
   text: string,
+  saved: CommitLines,
   ws: DiffWorkspace,
   root: () => string | null,
 ): (BlameTarget | null)[] {
@@ -2310,6 +2301,22 @@ function diffBlameTargets(
   const model = parseDiff(text);
   if (!model) return targets;
   const commits = findCommitHeaders(lines);
+  const cwd = commits.length === 0 ? null : root();
+  if (cwd !== null) {
+    const seen = new Map<string, number>();
+    for (const { sha, start, end } of commitRegions(commits, model)) {
+      const request = { cwd, rev: sha };
+      // The nth region of a commit is matched with its nth saved region.
+      const nth = seen.get(sha) ?? 0;
+      seen.set(sha, nth + 1);
+      const current = lines.slice(start, end).map(withoutTransportCR);
+      unchangedLines(current, saved.get(sha)?.[nth] ?? []).forEach(
+        (unchanged, i) => {
+          if (unchanged) targets[start + i] = { request, line: 0 };
+        },
+      );
+    }
+  }
   for (const file of model.files) {
     const path = file.newPath;
     if (path === undefined) continue;
@@ -2353,6 +2360,91 @@ function diffBlameTargets(
     }
   }
   return targets;
+}
+
+/** The lines of each of `commits`, the commit headers of the diff `model`
+ * parsed: the header, and the run of lines after it that are not part of a
+ * diff, ending at the first line of a diff or at the next commit header. */
+function commitRegions(
+  commits: readonly CommitHeader[],
+  model: DiffModel,
+): { sha: string; start: number; end: number }[] {
+  return commits.map((commit, index) => {
+    const limit = commits[index + 1]?.line ?? model.lines.length;
+    let end = commit.line + 1;
+    while (end < limit && model.lines[end]?.kind === "other") end++;
+    return { sha: commit.sha, start: commit.line, end };
+  });
+}
+
+/** The lines of each region {@link commitRegions} finds in a text, by
+ * commit, in the order the regions appear. */
+type CommitLines = ReadonlyMap<string, readonly (readonly string[])[]>;
+
+/** The {@link CommitLines} of `text`. */
+function commitLines(text: string): CommitLines {
+  const lines = text.split("\n");
+  const model = parseDiff(text);
+  const regions = model ? commitRegions(findCommitHeaders(lines), model) : [];
+  const out = new Map<string, string[][]>();
+  for (const { sha, start, end } of regions) {
+    const list = out.get(sha) ?? [];
+    list.push(lines.slice(start, end).map(withoutTransportCR));
+    out.set(sha, list);
+  }
+  return out;
+}
+
+/** The most pairs of lines {@link unchangedLines} compares, which bounds the
+ * memory and time one comparison takes. */
+const MAX_COMPARED_LINE_PAIRS = 1 << 22;
+
+/** For each of `current`'s lines, whether it is in one longest sequence of
+ * lines that `current` and `before` share in the same order. When the lines
+ * between those the two share at either end would need more than
+ * {@link MAX_COMPARED_LINE_PAIRS} comparisons, none of them counts as
+ * shared. */
+function unchangedLines(
+  current: readonly string[],
+  before: readonly string[],
+): boolean[] {
+  // Some longest such sequence pairs the lines the two share at either end,
+  // so only the lines between need comparing.
+  let head = 0;
+  while (
+    head < Math.min(current.length, before.length) &&
+    current[head] === before[head]
+  ) head++;
+  let tail = 0;
+  while (
+    tail < Math.min(current.length, before.length) - head &&
+    current[current.length - 1 - tail] === before[before.length - 1 - tail]
+  ) tail++;
+  const unchanged = current.map((_, i) =>
+    i < head || i >= current.length - tail
+  );
+  const a = current.slice(head, current.length - tail);
+  const b = before.slice(head, before.length - tail);
+  if (a.length * b.length > MAX_COMPARED_LINE_PAIRS) return unchanged;
+  // shared[i * width + j] is the length of the longest such sequence in a[i..]
+  // and b[j..].
+  const width = b.length + 1;
+  const shared = new Uint32Array((a.length + 1) * width);
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      shared[i * width + j] = a[i] === b[j]
+        ? shared[(i + 1) * width + j + 1] + 1
+        : Math.max(shared[(i + 1) * width + j], shared[i * width + j + 1]);
+    }
+  }
+  for (let i = 0, j = 0; i < a.length && j < b.length;) {
+    if (a[i] === b[j]) {
+      unchanged[head + i++] = true;
+      j++;
+    } else if (shared[(i + 1) * width + j] >= shared[i * width + j + 1]) i++;
+    else j++;
+  }
+  return unchanged;
 }
 
 /** The commit header that owns each parsed hunk, in document order. */

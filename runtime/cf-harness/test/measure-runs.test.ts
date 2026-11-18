@@ -4,7 +4,6 @@ import { fromFileUrl } from "@std/path";
 
 import {
   classifyPatternSource,
-  describeError,
   emptyTotals,
   familyIdOf,
   foldTotals,
@@ -544,21 +543,6 @@ describe("measure-runs", () => {
       expect(classifyPatternSource(
         'import Rating from "cf:pattern:abc";\nimport Local from "./local.ts";\nexport default Local;\n',
       )).toBe("composition");
-    });
-  });
-
-  describe("describeError()", () => {
-    it("returns an `Error`'s message", () => {
-      expect(describeError(new Error("fetch failed"))).toBe("fetch failed");
-    });
-
-    it("returns the string form of a thrown value that is not an `Error`", () => {
-      // A rejected fetch is not the only way into a catch here, and a thrown
-      // string would otherwise render as the word "undefined".
-      expect(describeError("the socket went away")).toBe(
-        "the socket went away",
-      );
-      expect(describeError(undefined)).toBe("undefined");
     });
   });
 

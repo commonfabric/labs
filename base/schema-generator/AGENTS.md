@@ -38,7 +38,10 @@ subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
 - Fail-loud inventory: `Map`/`Set`/`WeakMap`, `Cell<Stream<T>>`,
   `Default<undefined>`, unresolvable DeepDefault keys, and circular aliases
   THROW rather than degrade. An unformattable type also throws (complete
-  formatter coverage is asserted).
+  formatter coverage is asserted). A symbol type is refused by the
+  `schema-type:symbol` error diagnostic, not by a throw. A well-known symbol
+  such as `Symbol.iterator` reads as `false` with no diagnostic (mapping spec
+  §4.0.1).
 - CFC alias recognition is NAME-keyed with no source-file check (unlike
   `Default`'s brand check) — a user type named e.g. `Integrity` will lower to
   `ifc` metadata. Known foot-gun; don't "fix" silently, it's load-bearing for

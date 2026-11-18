@@ -2,12 +2,18 @@ import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 
+import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import {
+  decomposeSchema,
+  STORED_ARGUMENT_SCHEMA_REFUSAL,
+} from "@commonfabric/runner";
 
 import {
   schemaRelaxedForComparison,
   strandedKeys,
 } from "../runtime/piece/test/state-continuity-harness.ts";
+import { registerSchemaDocument } from "../runtime/runner/src/schema-registry.ts";
 import {
   companionFileName,
   companionSpace,
@@ -20,7 +26,6 @@ import {
   autoGenerationsToPrune,
   collectVintages,
   describeCaptureOutcome,
-  describeError,
   describePinOutcome,
   hoistSupersessionReason,
   isClean,
@@ -69,7 +74,6 @@ import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
-import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "@commonfabric/runner";
 
 const ID_A = "bafyaaaa";
 const ID_B = "bafybbbb";
@@ -84,6 +88,21 @@ const findingKeys = (
 ): string[] => strandedKeys(before, after).map((finding) => finding.key);
 
 describe("vintage paths", () => {
+  it("returns `undefined` for a fixture-named file outside a test and tier directory", () => {
+    const name = vintageFileName(
+      stampFor(new Date("2026-07-29T16:33:28.000Z")),
+      ID_A,
+    );
+
+    expect(parseVintagePath(`root/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root//pinned/${name}`, "root")).toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx//${name}`, "root"))
+      .toBeUndefined();
+    expect(parseVintagePath(`root/a.test.tsx/pinned/${name}`, "root"))
+      .toMatchObject({ testKey: "a.test.tsx", tier: PINNED });
+  });
+
   it("round-trips a path it built itself", () => {
     const stamp = stampFor(new Date("2026-07-29T16:33:28.000Z"));
     const path = `${vintageDir("system/home/home.test.tsx", PINNED)}/${
@@ -307,6 +326,19 @@ describe("coverage", () => {
 });
 
 describe("collectVintages", () => {
+  it("throws when the tree cannot be read, and returns nothing when it is absent", async () => {
+    const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
+    try {
+      await Deno.writeTextFile(`${root}/file`, "");
+
+      await expect(collectVintages(`${root}/file`)).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await collectVintages(`${root}/absent`)).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("finds fixtures at any depth and ignores non-fixtures", async () => {
     const root = await Deno.makeTempDir({ prefix: "vintage-collect-" });
     try {
@@ -677,14 +709,6 @@ describe("path and error helpers", () => {
     );
     expect(relativeToRepo("/elsewhere/x.gz", "/repo")).toBe("/elsewhere/x.gz");
   });
-
-  it("describes a non-Error throw without rendering it useless", () => {
-    // `String({})` is "[object Object]", which satisfies a truthiness check
-    // while destroying the reason — the class of bug that made an earlier
-    // rejection assertion pass for nothing.
-    expect(describeError(new Error("boom"))).toBe("boom");
-    expect(describeError("plain string")).toBe("plain string");
-  });
 });
 
 describe("stranded-state comparison", () => {
@@ -828,6 +852,161 @@ describe("stranded-state comparison", () => {
       expect(findings[0].lost, `${JSON.stringify(before)} should FAIL`)
         .toBe(true);
     }
+  });
+
+  describe("a schema held inline and then as a reference", () => {
+    const rowsWith = (
+      row: Record<string, JSONSchema>,
+      comment?: string,
+    ): JSONSchemaObj => ({
+      type: "array",
+      items: { $ref: "#/$defs/Row" },
+      $defs: {
+        Row: {
+          type: "object",
+          properties: row,
+          ...(comment === undefined ? {} : { $comment: comment }),
+        },
+      },
+    });
+
+    /** A reference to `schema`, whose documents the registry holds. */
+    const refTo = (schema: JSONSchemaObj) => {
+      const { rootRef, documents } = decomposeSchema(schema);
+      for (const [hash, document] of documents) {
+        registerSchemaDocument(hash, document);
+      }
+      return { $ref: rootRef };
+    };
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const note = `${NOTE} for: { summary?: string | undefined; }.`;
+    const row = { name: { type: "string" }, note: { type: "string" } } as const;
+
+    it("reports nothing for the same content", () => {
+      const schema = rowsWith(row, note);
+      expect(strandedKeys({ schema }, { schema: refTo(schema) })).toEqual([]);
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs", () => {
+      const before = rowsWith(row, note);
+      const after = refTo(rowsWith(row, `${NOTE} for: { summary?: string; }.`));
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
+    it("reports nothing when the note differs after a comment the schema already held", () => {
+      const held = "Conflicting docs across declarations; using first";
+      const before = rowsWith(row, `${held} ${note}`);
+      const after = refTo(
+        rowsWith(row, `${held} ${NOTE} for: { summary?: string; }.`),
+      );
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+    });
+
+    it("grades a difference in the comment before the note as lost", () => {
+      const after = refTo(
+        rowsWith(row, `Conflicting docs for index signatures; ${note}`),
+      );
+      const findings = strandedKeys({
+        schema: rowsWith(row, `Conflicting docs across declarations; ${note}`),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("reports nothing when only a `description` differs", () => {
+      const before = { ...rowsWith(row), description: "Glazed rows." };
+      const after = refTo({ ...rowsWith(row), description: "Frosted rows." });
+      expect(strandedKeys({ schema: before }, { schema: after })).toEqual([]);
+      expect(strandedKeys({ schema: after }, { schema: before })).toEqual([]);
+    });
+
+    it("grades a dropped field as lost, with the note differing as well", () => {
+      const { note: _note, ...fewer } = row;
+      const after = refTo(
+        rowsWith(fewer, `${NOTE} for: { summary?: string; }.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades any other `$comment` difference as lost", () => {
+      const after = refTo(rowsWith(row, "rejectedProperty"));
+      const findings = strandedKeys({
+        schema: rowsWith(row, "missingProperty"),
+      }, {
+        schema: after,
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades a reference the registry cannot read as lost", () => {
+      const { rootRef } = decomposeSchema(
+        rowsWith(row, `${NOTE} unregistered.`),
+      );
+      const findings = strandedKeys({ schema: rowsWith(row, note) }, {
+        schema: { $ref: rootRef },
+      });
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+
+    it("grades nothing in the place of a reference as lost", () => {
+      const findings = strandedKeys({ schema: refTo(rowsWith(row)) }, {});
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["schema", true],
+      ]);
+    });
+  });
+
+  describe("a schema held inline on both sides", () => {
+    // A stored pattern carries its schemas written out, as `summaryIndex`'s
+    // `search` does in the committed `default-app.tsx` fixture.
+
+    const NOTE = "Docs inherited from intersection constituents. Missing docs";
+    const searchWith = (comment?: string) => ({
+      search: {
+        pattern: {
+          argumentSchema: {
+            type: "object",
+            properties: { query: { type: "string" } },
+            ...(comment === undefined ? {} : { $comment: comment }),
+          },
+        },
+      },
+    });
+
+    it("reports nothing when only the generator's inherited-docs note differs or goes", () => {
+      const before = searchWith(
+        `${NOTE} for: { summary?: string | undefined; }.`,
+      );
+      const after = searchWith(`${NOTE} for: { summary?: string; }.`);
+      expect(strandedKeys(before, after)).toEqual([]);
+      expect(strandedKeys(before, searchWith())).toEqual([]);
+    });
+
+    it("grades the comment before the note as lost when it goes", () => {
+      const held =
+        "Conflicting docs across intersection constituents; using first";
+      const findings = strandedKeys(
+        searchWith(`${held} ${NOTE} for: { summary?: string; }.`),
+        searchWith(),
+      );
+      expect(findings.map(({ key, lost }) => [key, lost])).toEqual([
+        ["search", true],
+      ]);
+    });
   });
 
   it("grades PARTIAL loss as lost, not merely changed", () => {

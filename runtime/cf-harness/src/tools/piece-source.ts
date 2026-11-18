@@ -22,6 +22,19 @@
  * here is the kind of content that route exposes — program text a third
  * party authored — rather than the route.
  *
+ * A revision is also a version of the pattern the piece ran. When the run
+ * contributes to the pattern index it is queued on the session's ledger
+ * revised from the piece's previous pattern, so it joins that pattern's
+ * version history (or is credited as a remix of someone else's) as a
+ * `run_pattern` naming the piece in `revises` does. It keeps its
+ * predecessor's description unless the caller gives a new one. It is
+ * recorded, never offered to search: no render was checked. It names its
+ * piece as where it is deployed but not as a slot: the piece's previous
+ * pattern already finds the history, and a slot would outrank it — filing
+ * the version wherever the piece's key was first bound, which a piece still
+ * held unsent by another session's ledger, or one whose source came from
+ * elsewhere, gets wrong.
+ *
  * Neither tool undoes anything. A revision is reversible from the piece menu
  * `cf-render` gives every host, which lists the recorded revisions and offers
  * an earlier one; a session that could revert could discard a person's change
@@ -29,6 +42,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { pieceId } from "@commonfabric/piece";
 import {
   type PatternCompatibilityReport,
@@ -39,7 +53,14 @@ import {
   type PieceSourceState,
   readPieceSourceState,
 } from "@commonfabric/piece/ops";
-import { type Cell, getPatternIdentityRef } from "@commonfabric/runner";
+import {
+  type Cell,
+  getPatternIdentityRef,
+  PatternManager,
+} from "@commonfabric/runner";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
+import { PATTERN_DISCOVERABILITY_REASONS } from "../pattern-index/publish-render-gate.ts";
 import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
 import {
   createLLMFriendlyLink,
@@ -49,7 +70,6 @@ import {
   type DisclosedCfcLabel,
   disclosedCfcLabels,
 } from "../cfc-label-disclosure.ts";
-import { errorMessage } from "../error-message.ts";
 import type { HarnessForeignSpaces } from "../foreign-spaces.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
@@ -124,6 +144,15 @@ export interface RevisePieceToolInput {
   token: string;
   sourceText: string;
   expectedRevisionId?: string;
+
+  /**
+   * What the revised pattern does, in one line, when the revision changes
+   * that. Without it the version keeps its predecessor's description.
+   */
+  description?: string;
+
+  /** Tags for the version, with `description`; otherwise inherited. */
+  hashtags?: readonly string[];
 }
 
 export interface RevisePieceToolSuccessOutput {
@@ -172,7 +201,7 @@ export const readPieceSourceToolDescriptor: HarnessToolDescriptor = {
   toolId: "read_piece_source",
   title: "Read Piece Source",
   description:
-    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write.",
+    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write. To run a revised copy as a new piece instead, pass this token as run_pattern's revises.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -247,6 +276,17 @@ export const revisePieceToolDescriptor: HarnessToolDescriptor = {
         type: "string",
         description:
           "The sourceRevisionId read_piece_source reported. Supplied, a piece that moved since that read refuses this write rather than taking it.",
+      },
+      description: {
+        type: "string",
+        description:
+          "Only when the revision changes what the pattern does: one new line saying what it now does. Otherwise the version keeps the previous description.",
+      },
+      hashtags: {
+        type: "array",
+        items: { type: "string" },
+        description:
+          "With description: words someone searching for this capability would type.",
       },
     },
     required: ["token", "sourceText"],
@@ -337,7 +377,7 @@ export const resolvePiece = async (
     return {
       ok: false,
       message: `${toolId} could not load the referenced piece: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -391,7 +431,7 @@ export const sessionPieces = async (
     return {
       ok: false,
       message: `${toolId} could not establish the fabric session: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -428,7 +468,7 @@ export const readPieceSourceTool: HarnessToolDefinition<
     } catch (error) {
       return fail(
         `read_piece_source could not read the piece's source: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       );
     }
@@ -475,6 +515,73 @@ const spaceIsPopulated = async (pieces: PiecesController): Promise<boolean> => {
   }
 };
 
+/**
+ * Queues an applied revision as a version on the session's ledger when the
+ * run contributes to the index. A person's own agent names the piece it is
+ * deployed to, as `run_pattern` does, so their use of the piece finds it. The
+ * pattern the piece ran before is what it was revised from; the ledger
+ * decides from it which history the version joins and, without a new
+ * description, what the version is described as. A revision that left the
+ * pattern as it was is no new version.
+ */
+const stageRevisedVersion = async (
+  context: HarnessToolContext,
+  input: RevisePieceToolInput,
+  revision: {
+    program: { main: string; files: { name: string; contents: string }[] };
+    space: string;
+    pieceId: string;
+    identity: string;
+    previous: string | undefined;
+  },
+): Promise<void> => {
+  // Model input: a field of the wrong type is no description, rather than a
+  // throw after the revision has already been applied.
+  const description = typeof input.description === "string"
+    ? input.description.trim()
+    : undefined;
+  const hashtags = Array.isArray(input.hashtags)
+    ? input.hashtags.filter((tag) => typeof tag === "string")
+    : [];
+  const ledger = context.patternIndexLedger;
+  if (
+    ledger === undefined || context.getPatternIndexClient === undefined ||
+    context.patternIndexPublishEnabled !== true ||
+    revision.previous === undefined ||
+    revision.previous === revision.identity ||
+    // Named only within the session that minted it: no other runtime could
+    // ever load an entry published under it.
+    PatternManager.isKeylessPatternIdentity(revision.identity)
+  ) {
+    return;
+  }
+  const pieceRef = context.patternIndexOrigin === "agent"
+    ? await deployedPieceRef(revision.space, revision.pieceId)
+    : undefined;
+  ledger.stage(
+    {
+      patternId: revision.identity,
+      ...(pieceRef !== undefined
+        ? { origin: "agent" as const, deployedTo: pieceRef }
+        : {}),
+      program: revision.program,
+      ...(description !== undefined && description !== ""
+        ? { description, hashtags }
+        : {}),
+      ...(context.taskText !== undefined
+        ? { directQuery: context.taskText }
+        : description !== undefined && description !== ""
+        ? { directQuery: description }
+        : {}),
+      dependencies: patternIndexDependencies(revision.program.files),
+      nonDiscoverable: {
+        reason: PATTERN_DISCOVERABILITY_REASONS["recorded-automatically"],
+      },
+    },
+    { revisedFrom: revision.previous },
+  );
+};
+
 export const revisePieceTool: HarnessToolDefinition<
   RevisePieceToolInput,
   RevisePieceToolOutput
@@ -510,7 +617,7 @@ export const revisePieceTool: HarnessToolDefinition<
       controller = await pieces.get(piece.id);
     } catch (error) {
       return fail(
-        `revise_piece could not open the piece: ${errorMessage(error)}`,
+        `revise_piece could not open the piece: ${describeFailure(error)}`,
       );
     }
 
@@ -527,7 +634,7 @@ export const revisePieceTool: HarnessToolDefinition<
       } catch (error) {
         return fail(
           `revise_piece could not read the piece's current revision: ${
-            errorMessage(error)
+            describeFailure(error)
           }`,
         );
       }
@@ -549,7 +656,9 @@ export const revisePieceTool: HarnessToolDefinition<
       report = await controller.checkPattern(program);
     } catch (error) {
       return fail(
-        `revise_piece could not compile the candidate: ${errorMessage(error)}`,
+        `revise_piece could not compile the candidate: ${
+          describeFailure(error)
+        }`,
       );
     }
     if (!report.compatible) {
@@ -597,13 +706,20 @@ export const revisePieceTool: HarnessToolDefinition<
         );
       }
       return fail(
-        `revise_piece could not apply the revision: ${errorMessage(error)}`,
+        `revise_piece could not apply the revision: ${describeFailure(error)}`,
       );
     }
     const resultRef = createLLMFriendlyLink(
       controller.getCell().getAsNormalizedFullLink(),
       pieces.getSpace(),
     );
+    await stageRevisedVersion(context, input, {
+      program,
+      space: pieces.getSpace(),
+      pieceId: piece.id,
+      identity: receipt.ref.identity,
+      previous: previousPattern?.identity,
+    });
     return {
       outputId,
       status: "ok",

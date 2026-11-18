@@ -1,7 +1,7 @@
 /**
  * dau tile tests: collect(ctx) -> TileView against a stubbed SigNoz. No network:
  * globalThis.fetch is swapped for the duration of a test and put back afterwards.
- * The pure helpers (foldSeries, parseExcludes) are pinned in
+ * The pure helper foldSeries is pinned in
  * ../tiles.test.ts; what is pinned here is the tile's own reading of a response.
  */
 
@@ -23,14 +23,29 @@ function ctx(env: Record<string, string> = {}): Ctx {
 }
 
 const ser = (did: string, pts: [number, number][]) => ({
-  labels: [{ key: { name: "user.did" }, value: did }],
+  labels: [{ key: { name: "enduser.id" }, value: did }],
   values: pts.map(([timestamp, value]) => ({ timestamp, value })),
 });
 
-// The v5 query_range envelope SigNoz answers with, down to the series.
-const envelope = (aggregations: unknown) => ({
-  data: { data: { results: [{ aggregations }] } },
-});
+type Ser = ReturnType<typeof ser>;
+
+// The v5 query_range envelope SigNoz answers with, down to the series: query A's series
+// per person, and query B's one series counting every span the service sent on each
+// day in `exported`, which defaults to the days on which anyone in query A was seen.
+const envelope = (aggregations: { series: Ser[] }[] | null, exported?: number[]) => {
+  const seen = exported ??
+    [...new Set((aggregations ?? []).flatMap((a) => a.series.flatMap((x) => x.values.map((v) => v.timestamp))))];
+  return {
+    data: {
+      data: {
+        results: [
+          { queryName: "A", aggregations },
+          { queryName: "B", aggregations: [{ series: [{ values: seen.map((timestamp) => ({ timestamp, value: 1 })) }] }] },
+        ],
+      },
+    },
+  };
+};
 
 // Runs `body` with fetch replaced by `stub`, and hands back every request the
 // tile made so a test can assert on what was asked for.
@@ -55,7 +70,8 @@ async function withFetch<T>(
 const json = (payload: unknown) =>
   new Response(JSON.stringify(payload), { headers: { "Content-Type": "application/json" } });
 
-const ok = (aggregations: unknown) => () => json(envelope(aggregations));
+const ok = (aggregations: { series: Ser[] }[] | null, exported?: number[]) => () =>
+  json(envelope(aggregations, exported));
 
 Deno.test("dau: the headline is the last complete UTC day, not the part-day in progress", async () => {
   const series = [
@@ -68,9 +84,9 @@ Deno.test("dau: the headline is the last complete UTC day, not the part-day in p
     () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
   );
   assertEquals(v.status, "good");
-  // Yesterday saw three identities; today's two are ignored while the bucket fills.
+  // Yesterday saw three people; today's two are ignored while the bucket fills.
   assertEquals(v.value, "3");
-  assertEquals(v.sub, "active identities · toolshed-production");
+  assertEquals(v.sub, "active users · toolshed-production");
   assert((v.extra ?? "").startsWith("<svg"), "a sparkline is drawn for the observed days");
 });
 
@@ -84,7 +100,7 @@ Deno.test("dau: named service names itself in the query and in the sub line", as
         PROD_SERVICE: "toolshed-staging",
       })),
   );
-  assertEquals(v.sub, "active identities · toolshed-staging");
+  assertEquals(v.sub, "active users · toolshed-staging");
   assertEquals(requests.length, 1);
   assertEquals(requests[0].url, "https://signoz.example/api/v5/query_range");
   assertEquals(requests[0].headers.get("SIGNOZ-API-KEY"), "secret");
@@ -92,9 +108,14 @@ Deno.test("dau: named service names itself in the query and in the sub line", as
   const spec = body.compositeQuery.queries[0].spec;
   assertEquals(
     spec.filter.expression,
-    "service.name = 'toolshed-staging' AND name IN ('memory.transact', 'memory.subscriber.sync') AND user.did EXISTS",
+    "service.name = 'toolshed-staging' AND name IN ('memory.session.open', 'memory.transact', 'memory.subscriber.sync') AND enduser.id EXISTS",
   );
-  assertEquals(spec.groupBy[0].name, "user.did");
+  assertEquals(spec.groupBy[0].name, "enduser.id");
+  // Query B counts everything the service sent, which is what says it is exporting.
+  const exporting = body.compositeQuery.queries[1].spec;
+  assertEquals(exporting.name, "B");
+  assertEquals(exporting.filter.expression, "service.name = 'toolshed-staging'");
+  assertEquals(exporting.groupBy, undefined);
   assertEquals(spec.stepInterval, 86_400);
   // The window is aligned to UTC midnight and reaches back over the retained fortnight.
   assertEquals(body.end, TODAY + DAY_MS);
@@ -113,22 +134,7 @@ Deno.test("dau: an unsafe PROD_SERVICE cannot reach the query expression", async
   );
   const body = await requests[0].json();
   assertStringIncludes(body.compositeQuery.queries[0].spec.filter.expression, "service.name = 'toolshed-production'");
-  assertEquals(v.sub, "active identities · toolshed-production");
-});
-
-Deno.test("dau: DAU_EXCLUDE_DIDS takes service principals out of the count", async () => {
-  const series = [
-    ser("did:key:alice", [[day(1), 10]]),
-    ser("did:key:server", [[day(1), 900]]),
-  ];
-  const env = { SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" };
-  const both = await withFetch(ok([{ series }]), () => dau.collect(ctx(env)));
-  assertEquals(both.result.value, "2");
-  const humans = await withFetch(
-    ok([{ series }]),
-    () => dau.collect(ctx({ ...env, DAU_EXCLUDE_DIDS: "did:key:server" })),
-  );
-  assertEquals(humans.result.value, "1");
+  assertEquals(v.sub, "active users · toolshed-production");
 });
 
 Deno.test("dau: a service that exports nothing -> gray, not zero", async () => {
@@ -275,7 +281,66 @@ Deno.test("dau: a single complete day is a number with no chart and no span", as
     () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
   );
   assertEquals(v.status, "good");
-  assertEquals(v.value, "2"); // the two identities seen on that day
+  assertEquals(v.value, "2"); // the two people seen on that day
   assertEquals(v.extra, "");
   assertEquals(v.duration, undefined);
+});
+
+Deno.test("dau: history that stops before yesterday -> gray, naming the last day seen", async () => {
+  // A deployment that stopped exporting three days ago still has its history in
+  // retention. That history is not yesterday's count, and reading it as one would put
+  // a green number on the dashboard for a service nobody can see.
+  const { result: v } = await withFetch(
+    ok([{ series: [ser("did:key:alice", [[day(5), 2], [day(3), 4]]), ser("did:key:bob", [[day(3), 1]])] }]),
+    () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
+  );
+  assertEquals(v.status, "unknown");
+  assertEquals(v.value, "—");
+  assertEquals(v.sub, `no toolshed-production spans since ${new Date(day(3)).toISOString().slice(0, 10)}`);
+  assertEquals(v.duration, 3 * DAY_MS); // the chart still shows the history it has
+});
+
+Deno.test("dau: a yesterday the service exported with nobody in it is a zero", async () => {
+  // Query B shows the service sending spans every day, so nobody being seen yesterday
+  // means nobody was there.
+  const { result: v } = await withFetch(
+    ok([{ series: [ser("did:key:alice", [[day(3), 2]])] }], [day(3), day(2), day(1), day(0)]),
+    () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
+  );
+  assertEquals(v.status, "good");
+  assertEquals(v.value, "0");
+  assertEquals(v.duration, 3 * DAY_MS); // day-3 through yesterday
+});
+
+Deno.test("dau: a service exporting only spans nobody stands for counts zero, not stale", async () => {
+  // Serving loops and service principals send spans without enduser.id. A quiet
+  // deployment is still a deployment that exports.
+  const { result: v } = await withFetch(
+    ok([{ series: [] }], [day(2), day(1)]),
+    () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
+  );
+  assertEquals(v.status, "good");
+  assertEquals(v.value, "0");
+  assertEquals(v.extra, "");
+});
+
+Deno.test("dau: spans today do not stand in for a yesterday the service did not export", async () => {
+  // Tracing was off yesterday and came back today. Yesterday is unknown, not quiet.
+  const { result: v } = await withFetch(
+    ok([{ series: [ser("did:key:alice", [[day(3), 2], [day(0), 1]])] }]),
+    () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
+  );
+  assertEquals(v.status, "unknown");
+  assertEquals(v.sub, `no toolshed-production spans since ${new Date(day(3)).toISOString().slice(0, 10)}`);
+});
+
+Deno.test("dau: a response without the service-wide series reads as not exporting", async () => {
+  // Query A's people alone cannot say the service exported yesterday, so the tile
+  // does not claim a count it cannot vouch for.
+  const { result: v } = await withFetch(
+    () => json({ data: { data: { results: [{ queryName: "A", aggregations: [{ series: [ser("did:key:alice", [[day(1), 3]])] }] }] } } }),
+    () => dau.collect(ctx({ SIGNOZ_URL: "https://signoz.example", SIGNOZ_API_KEY: "k" })),
+  );
+  assertEquals(v.status, "unknown");
+  assertEquals(v.sub, "no toolshed-production spans");
 });

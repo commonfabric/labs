@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   extractMessage,
   findCommitHeaders,
@@ -249,7 +250,7 @@ Deno.test({
       try {
         runner.amendCommit("amended", new Map([[path, "pager\n"]]), head);
       } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
+        error = describeFailure(caught);
       }
       assert(error.length > 0, "the raced amend failed");
       assertEquals(runner.headSha(), concurrent);

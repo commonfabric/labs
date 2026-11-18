@@ -36,11 +36,8 @@ FIXTURE=runtime/cli/integration/pattern/tracker.tsx
 
 # `cf` is this checkout's CLI as a shell function. That is what lets a command
 # be a plain array of words rather than a string assembled twice.
-if [ -n "${CF_BINARY:-}" ]; then
-  cf() { "$CF_BINARY" "$@"; }
-else
-  cf() { deno task --quiet --cwd "$REPO_ROOT" cf "$@"; }
-fi
+source "$SCRIPT_DIR/cf-launcher.sh"
+cf() { "${CF[@]}" "$@"; }
 
 # The connection lives in the environment cf documents, so it stays off every
 # command line. The space cannot: cf has no environment variable for it, so

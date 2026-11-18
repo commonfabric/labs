@@ -1,7 +1,7 @@
 import { ensureDir } from "@std/fs";
 
-import { type BuiltInLLMMessage } from "@commonfabric/api";
-import { type LLMRequest } from "@commonfabric/llm/types";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
+import type { LLMRequest } from "@commonfabric/llm/types";
 
 import { colors, timestamp } from "./cli.ts";
 import env from "@/env.ts";
@@ -9,7 +9,7 @@ import env from "@/env.ts";
 export const CACHE_DIR = `${env.CACHE_DIR}/llm-api-cache`;
 
 export interface CacheItem {
-  messages: BuiltInLLMMessage[]; //Array<{ role: string; content: string }>;
+  messages: readonly BuiltInLLMMessage[];
   object?: Record<string, unknown>;
   model?: string;
   system?: string;

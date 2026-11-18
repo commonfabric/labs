@@ -59,7 +59,6 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
-  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
@@ -1119,34 +1118,13 @@ describe("JsonCodecEngine", () => {
       expect(d.value).toBe(19723n);
     });
 
-    it("round-trips `FabricRegExp` at top level and in nested structures", () => {
-      const top = roundTrip(
-        new FabricRegExp(/ab+c/gi),
-      ) as unknown as FabricRegExp;
-      expect(top).toBeInstanceOf(FabricRegExp);
-      expect(top.source).toBe("ab+c");
-      expect(top.flags).toBe("gi");
-      expect(top.flavor).toBe("es2025");
-
-      const obj = {
-        pattern: new FabricRegExp(/\d+/g),
-        label: "digits",
-      };
-      const result = roundTrip(obj) as Record<string, FabricValue>;
-      expect(result.label).toBe("digits");
-      const re = result.pattern as unknown as FabricRegExp;
-      expect(re).toBeInstanceOf(FabricRegExp);
-      expect(re.source).toBe("\\d+");
-      expect(re.flags).toBe("g");
-    });
-
     it("round-trips `FabricUnavailable` at top level and in nested structures", () => {
       const top = roundTrip(
         new FabricUnavailable("error", "general", "boom"),
       ) as unknown as FabricUnavailable;
       expect(top).toBeInstanceOf(FabricUnavailable);
       expect(top.reason).toBe("error");
-      expect(top.errorMessage).toBe("boom");
+      expect(top.message).toBe("boom");
 
       const obj = {
         status: new FabricUnavailable("pending"),
@@ -1452,6 +1430,39 @@ describe("JsonCodecEngine", () => {
       expect(result.a).toBe(1);
       expect(result.b).toBe(undefined);
       expect("b" in result).toBe(true);
+    });
+
+    describe("an enumerable key inherited from `Object.prototype`", () => {
+      // `JSON.parse()` makes each member an own property, so an inherited key
+      // reaches the decode's walk only through a polluted `Object.prototype`.
+      // The pollution lasts for the decode alone.
+
+      /** Returns what decoding `text` returns while the prototype is polluted. */
+      function decodePolluted(text: string): FabricValue {
+        const { jsonCodecEngine, runtime } = makeTestCodec();
+        Object.defineProperty(Object.prototype, "polluted", {
+          value: 1,
+          enumerable: true,
+          configurable: true,
+        });
+        try {
+          return jsonCodecEngine.decode(text, runtime);
+        } finally {
+          Reflect.deleteProperty(Object.prototype, "polluted");
+        }
+      }
+
+      it("returns a plain object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"a":1}`);
+        expect(Object.keys(result as object)).toEqual(["a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
+
+      it("returns an `/object`-unwrapped object holding its own keys alone", () => {
+        const result = decodePolluted(`${ENCODING_PREFIX}{"/object":{"/a":1}}`);
+        expect(Object.keys(result as object)).toEqual(["/a"]);
+        expect(Object.hasOwn(result as object, "polluted")).toBe(false);
+      });
     });
 
     describe("key ordering (Section 10)", () => {
@@ -2104,6 +2115,18 @@ describe("JsonCodecEngine", () => {
       expect(unknown.state).toEqual({ some: "data" });
     });
 
+    it("round-trips `UnknownValue` with a namespaced tag through encode/decode", () => {
+      const us = new UnknownValue("sys.beep.Boop@1", { some: "data" });
+      expect(toEncodedFormat(us)).toEqual({
+        "/sys.beep.Boop@1": { some: "data" },
+      });
+      const result = roundTrip(us);
+      expect(result).toBeInstanceOf(UnknownValue);
+      const unknown = result as unknown as UnknownValue;
+      expect(unknown.wireTypeTag).toBe("sys.beep.Boop@1");
+      expect(unknown.state).toEqual({ some: "data" });
+    });
+
     it("rejects a `/hole` outside array context rather than calling it unknown", () => {
       // Per spec §9, `UnknownValue` is for a syntactically well-formed tag no
       // codec claims. `hole` is a meta-tag, meaningful only among array
@@ -2112,6 +2135,28 @@ describe("JsonCodecEngine", () => {
       const data = { "/hole": 5 } as JsonCodecValue;
 
       expect(() => fromEncodedFormat(data)).toThrow(/malformed tag/);
+    });
+
+    it("round-trips `UnknownValue` under type tags in any case", () => {
+      for (const tag of ["bytes@1", "Sys.Boop@1", "sys.boop@1"]) {
+        const us = new UnknownValue(tag, { some: "data" });
+        expect(toEncodedFormat(us)).toEqual({ [`/${tag}`]: { some: "data" } });
+        const result = roundTrip(us) as unknown as UnknownValue;
+        expect(result).toBeInstanceOf(UnknownValue);
+        expect(result.wireTypeTag).toBe(tag);
+      }
+    });
+
+    it("round-trips `UnknownValue` under a meta-tag's name with a version", () => {
+      // With a version, each is a type tag like any other, even among array
+      // elements, where a bare `/hole` is a run of holes.
+
+      for (const tag of ["quote@1", "object@1", "hole@1"]) {
+        const us = new UnknownValue(tag, 1);
+        const result = roundTrip([us]) as unknown as UnknownValue[];
+        expect(result[0]).toBeInstanceOf(UnknownValue);
+        expect(result[0]!.wireTypeTag).toBe(tag);
+      }
     });
   });
 

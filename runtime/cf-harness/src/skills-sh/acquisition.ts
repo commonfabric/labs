@@ -12,6 +12,7 @@
 
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import {
@@ -154,7 +155,7 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 
 const safeHostileText = (value: unknown): string =>
   sanitizeRegistryString(
-    value instanceof Error ? value.message : String(value),
+    describeFailure(value),
   );
 
 const acquisitionError = (

@@ -1,11 +1,11 @@
 import { isDID } from "@commonfabric/identity/did";
 
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { type FabricUrlTarget, parseFabricUrl } from "../fabric-url.ts";
 import { getMetaLink } from "../link-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { RawBuiltinResult } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
+import type { Action } from "../scheduler.ts";
 import type { URI } from "../sigil-types.ts";
 import { slugIdForSpace } from "../slugs.ts";
 import {
@@ -231,15 +231,16 @@ function resolveSpace(
 }
 
 /**
- * The URI of the cell a target addresses. A slug addresses the redirect
- * document that names the piece rather than the piece itself, which is why
- * hashing it is enough: reads follow the redirect.
+ * The URI of the cell a target addresses, which names exactly one of an id and
+ * a slug. A slug addresses the redirect document that names the piece rather
+ * than the piece itself, which is why hashing it is enough: reads follow the
+ * redirect.
  */
 function entityUri(
   space: MemorySpace,
   target: { id?: string; slug?: string },
 ): URI | undefined {
-  if (target.id !== undefined) return target.id as URI;
-  if (target.slug === undefined) return undefined;
-  return `of:${slugIdForSpace(space, target.slug)}` as URI;
+  return target.slug === undefined
+    ? target.id as URI | undefined
+    : `of:${slugIdForSpace(space, target.slug)}` as URI;
 }

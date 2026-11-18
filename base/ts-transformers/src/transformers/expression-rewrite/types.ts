@@ -1,11 +1,11 @@
-import ts from "typescript";
+import type ts from "typescript";
 
 import type {
   DataFlowAnalysis,
   NormalizedDataFlow,
   ReactiveContextKind,
 } from "../../ast/mod.ts";
-import { TransformationContext } from "../../core/mod.ts";
+import type { TransformationContext } from "../../core/mod.ts";
 import type { ExpressionContainerKind } from "../expression-site-types.ts";
 
 export type ReactiveHelperName =
@@ -30,13 +30,6 @@ export interface RewriteParams {
   readonly containerKind?: ExpressionContainerKind;
 
   /**
-   * True when inside a safe callback wrapper (action, handler, computed, etc.)
-   * where opaque reading is allowed. In safe contexts, we still need to apply
-   * semantic transformations (&&->when, ||->unless) but NOT lift-applied wrappers.
-   */
-  readonly inSafeContext?: boolean;
-
-  /**
    * When true, reactive compute wrappers introduced during rewriting should
    * be emitted as a lift-applied form bound to its captured inputs
    * (`__cfHelpers.lift(cb)(inputs)`) rather than a zero-input thunk
@@ -53,7 +46,6 @@ export interface RewriteParams {
 
 export interface EmitterContext extends RewriteParams {
   readonly dataFlows: readonly NormalizedDataFlow[];
-  readonly inSafeContext: boolean;
   readonly reactiveContextKind: ReactiveContextKind;
   readonly containerKind?: ExpressionContainerKind;
   readonly preferInputBoundWrappers: boolean;

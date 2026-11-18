@@ -20,6 +20,8 @@ import { hclGrammar } from "./hcl.ts";
 export const hclLanguage: Language = {
   id: "hcl",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

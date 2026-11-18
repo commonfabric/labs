@@ -1013,6 +1013,17 @@ describe("compactStore", () => {
           encodeMemoryBoundary({ value: { n: 15 } } as never)
         }' WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
       )).rejects.toThrow("the planned patch boundary");
+      // The same boundary rewritten as a delete: it reconstructs to nothing.
+      await fresh(standard);
+      await expect(tamper(
+        `UPDATE revision SET op = 'delete', data = NULL WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
+      )).rejects.toThrow("reconstructs to no document at its patch boundary");
+      // A column dropped: the engine's migration adds it back on opening,
+      // which the run notices by the schema it then finds.
+      await fresh(standard);
+      await expect(tamper(`ALTER TABLE "commit" DROP COLUMN holder`)).rejects
+        .toThrow("opening the store through the engine changed its schema");
+      expect(await Deno.stat(out).catch(() => undefined)).toBeUndefined();
       // A planned set boundary rewritten as a patch.
       await fresh((e) => {
         standard(e);
@@ -1046,6 +1057,21 @@ describe("compactStore", () => {
       ).rejects.toThrow(
         "branch.status is declared TEXT NOT NULL DEFAULT 'live' where the engine declares TEXT NOT NULL DEFAULT 'active'",
       );
+    });
+
+    it("refuses a deleted space's store, and sends its operator to reaping", async () => {
+      await build((e) => {
+        standard(e);
+        applyCommit(e, {
+          sessionId: "s:a",
+          commit: ops(50, [
+            setOp(ACL, { deleted: { by: "did:key:z6Mk-compact-deleter" } }),
+          ]),
+        });
+      });
+      await expect(
+        compactStore({ store, out, selection: { prefixes: ["computed:"] } }),
+      ).rejects.toThrow("reclaimed by reaping it (`cf space reap`)");
     });
 
     it("refuses an ACL document whose value is not an ACL", async () => {

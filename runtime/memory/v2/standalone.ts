@@ -35,12 +35,12 @@ import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
 import { verifyConnectionAuthorization } from "./connection-auth.ts";
 import {
   encodeMemoryCompressionControlMessage,
-  isMemoryMessageFrame,
   MemoryMessageCompressionChannel,
   parseMemoryCompressionControlMessage,
 } from "./message-compression.ts";
 import * as MemoryServer from "./server.ts";
 import { verifySessionOpenAuthorization } from "./session-open-auth.ts";
+import { upgradeMemoryWebSocket } from "./websocket-upgrade.ts";
 
 const standaloneMemoryAudience = (await Identity.fromPassphrase(
   "common tools standalone memory audience",
@@ -133,6 +133,10 @@ export class StandaloneMemoryServer {
        *  is signed. */
       connectionAuth?: boolean;
 
+      /** The invitation host, as `Server` takes it. Default: none, and the
+       *  server administers and redeems no invitations on a session. */
+      inviteHost?: string;
+
       /** Answers the non-websocket requests this address receives. Anything
        *  it declines, by answering `undefined`, is told to upgrade. */
       serve?: (
@@ -144,6 +148,19 @@ export class StandaloneMemoryServer {
        * non-persistent store, which only this thread can reach.
        */
       store?: URL;
+
+      /**
+       * The server's posture (INV-16), as `Server` takes it. Default: none,
+       * and the server names no instances.
+       */
+      namesInstances?: () => boolean;
+
+      /**
+       * Receives a line for each operation of each commit a client sends, as
+       * the connection takes the commit. Default: `console.error` where
+       * `CF_DEBUG_MEMORY_WRITES` is `1`, and no trace otherwise.
+       */
+      traceWrite?: (line: string) => void;
     } = {},
   ): StandaloneMemoryServer {
     const memory = new MemoryServer.Server({
@@ -156,6 +173,12 @@ export class StandaloneMemoryServer {
         audience: standaloneMemoryAudience,
       },
       acl: options.acl,
+      ...(options.inviteHost === undefined
+        ? {}
+        : { inviteHost: options.inviteHost }),
+      ...(options.namesInstances === undefined
+        ? {}
+        : { namesInstances: options.namesInstances }),
     });
     const channels = new Set<MemoryMessageCompressionChannel>();
     const http = Deno.serve({
@@ -175,7 +198,7 @@ export class StandaloneMemoryServer {
           response ?? upgradeRequired()
         );
       }
-      const { socket, response } = Deno.upgradeWebSocket(request);
+      const { socket, response } = upgradeMemoryWebSocket(request);
       socket.binaryType = "arraybuffer";
       const connectionTag = nextConnectionTag++;
       let compressionNegotiated = false;
@@ -208,17 +231,14 @@ export class StandaloneMemoryServer {
         channels.delete(channel);
         connection.close();
       }
-      const debugWrites = Deno.env.get("CF_DEBUG_MEMORY_WRITES") === "1";
+      const traceWrite = options.traceWrite ??
+        (Deno.env.get("CF_DEBUG_MEMORY_WRITES") === "1"
+          ? console.error
+          : undefined);
       socket.addEventListener("message", (event) => {
-        const frame = event.data;
-        if (!isMemoryMessageFrame(frame)) {
-          socket.close(
-            1003,
-            "memory websocket expects text or binary frames",
-          );
-          closeConnection();
-          return;
-        }
+        // The socket's `binaryType` is `arraybuffer`, so a frame is text or
+        // an `ArrayBuffer`.
+        const frame: string | ArrayBuffer = event.data;
         if (!sawFirstMessage) {
           if (typeof frame !== "string") {
             socket.close(
@@ -243,7 +263,6 @@ export class StandaloneMemoryServer {
           closeConnection();
           return;
         }
-        if (closed) return;
         channel.receive(frame, (payload) => {
           const control = parseMemoryCompressionControlMessage(payload);
           if (control && helloReceived) {
@@ -260,8 +279,8 @@ export class StandaloneMemoryServer {
           // hold every later frame behind this one, whichever spaces they
           // name.
           connection.receive(payload).catch(failChannel);
-          if (debugWrites) {
-            logCommitOperations(connectionTag, payload);
+          if (traceWrite !== undefined) {
+            traceCommitOperations(connectionTag, payload, traceWrite);
           }
         });
       });
@@ -299,8 +318,15 @@ export class StandaloneMemoryServer {
   }
 }
 
-/** Logs received commit operations after the connection's admission parser. */
-function logCommitOperations(connectionTag: number, payload: string): void {
+/**
+ * Traces the operations of a received commit, read by the connection's
+ * admission parser, to `traceWrite`.
+ */
+function traceCommitOperations(
+  connectionTag: number,
+  payload: string,
+  traceWrite: (line: string) => void,
+): void {
   try {
     // Observation only: receive() owns capability admission. Expand metadata
     // here so compact and inline requests produce the same diagnostic.
@@ -316,7 +342,7 @@ function logCommitOperations(connectionTag: number, payload: string): void {
         : op.op === "set"
         ? ` keys=${JSON.stringify(Object.keys(op.value.value ?? {}))}`
         : "";
-      console.error(
+      traceWrite(
         `[memwrite conn=${connectionTag}] op=${op.op} id=${
           String(id).slice(0, 24)
         } scope=${scope ?? "(space)"}${detail}`,

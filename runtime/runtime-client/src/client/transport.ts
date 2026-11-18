@@ -1,5 +1,5 @@
-import { EventEmitter } from "./emitter.ts";
-import {
+import type { EventEmitter } from "./emitter.ts";
+import type {
   IPCClientMessage,
   IPCClientNotification,
   IPCRemoteMessage,

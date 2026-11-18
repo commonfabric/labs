@@ -195,6 +195,8 @@ describe("wish-home-root", () => {
       const { found, stop } = await runWish("#profile", "profile wish");
       try {
         expect(found.get()?.error).toBe("No profile exists yet");
+        // Confirmed none, which a reader may offer to create.
+        expect(found.get()?.errorCode).toBe("no-match");
         await createSurface(found);
         expect(homeSlot()).toBeUndefined();
       } finally {
@@ -362,11 +364,11 @@ describe("wish-home-root", () => {
       id: holder,
     });
     const lease = new ExecutionLeaseCycle({
-      engine: await server.engineForSpace(service.did()),
+      leases: server.executionLeases,
       space: service.did(),
       holder,
     });
-    expect(lease.acquire()).toBe(true);
+    expect(await lease.acquire()).toBe(true);
     const runtime = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager,
@@ -431,7 +433,7 @@ describe("wish-home-root", () => {
     } finally {
       cancels.forEach((cancel) => cancel());
       await runtime.dispose({ closeStorage: false });
-      lease.release();
+      await lease.release();
       await storageManager.close();
       await server.close();
     }

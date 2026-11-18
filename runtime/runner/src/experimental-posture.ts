@@ -70,11 +70,17 @@ export const EXPERIMENTAL_ENV_VARS = {
   // The local fold of a refused derived write is default-off; env-reachable
   // so a process can opt in with an explicit "true".
   localFold: "EXPERIMENTAL_LOCAL_FOLD",
+  // The creator record is default-off; env-reachable so a process can opt in
+  // with an explicit "true".
+  pieceCreatorRecord: "EXPERIMENTAL_PIECE_CREATOR_RECORD",
   // Instance naming is default-off, and reachable programmatically only: one
   // process naming instances binds a parent's children to other documents
   // than the rest of its space does, so no environment may turn it on before
   // a runtime of the other naming mode is kept away from a space.
   instanceNames: null,
+  // Taking schema documents by reference is default-off; env-reachable so a
+  // process can opt in with an explicit "true".
+  syncCidReferences: "EXPERIMENTAL_SYNC_CID_REFERENCES",
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
@@ -132,13 +138,15 @@ export type ExperimentalFlagAuthority = "server" | "client";
  * on this?" is a decision on record rather than whatever the default happened
  * to be.
  *
- * Every flag is server-authoritative today. That is the safe direction rather
- * than a coincidence — each one is visible in what gets written (the link and
- * entity-id encodings, receipt contents, schema references), in what the
- * server admits (commit preconditions, per-class admission), in which side
- * runs the compute at all, or in which documents a subscription ships.
- * `"client"` is here for the flag that gates a purely local experiment;
- * nothing qualifies yet.
+ * Server-authoritative is the safe direction rather than a coincidence —
+ * almost every flag is visible in what gets written (the link and entity-id
+ * encodings, receipt contents, schema references), in what the server admits
+ * (commit preconditions, per-class admission), in which side runs the compute
+ * at all, or in which documents a subscription ships. `"client"` is for a
+ * flag whose effect stays with the client that sets it: `syncCidReferences`,
+ * a client's opt-in to a delivery form its server offers on its own. It
+ * changes what crosses that client's own connections, but no stored data and
+ * nothing another client sees.
  */
 export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Link serialization: the two encodings are a hard mismatch, which the
@@ -185,10 +193,19 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // deployment that turns the fold off is deciding, for every client it
   // serves, between the value a fold keeps and the re-runs its absence costs.
   localFold: "server",
+  // The serving side binds an update-added owner field to the record, so
+  // whether pieces carry one is the deployment's decision, not a client's.
+  pieceCreatorRecord: "server",
   // Decides the identity a compiled pattern gives a `const`-bound child, so
   // two runtimes on different values bind one parent's children to
   // different documents.
   instanceNames: "server",
+  // The one client-side choice: a client opts in to taking schema documents
+  // by reference, and the server's own offer (`ServerOptions` of the memory
+  // server) is the deployment's half. It changes what crosses that client's
+  // connections, references and the body fetches they lead to, but not what
+  // is stored or what any other client receives.
+  syncCidReferences: "client",
 } as const satisfies Record<
   keyof ExperimentalOptions,
   ExperimentalFlagAuthority
@@ -281,8 +298,7 @@ export function adoptServerExperimentalOptions(
   env: ExperimentalOptions,
   /**
    * The classification to resolve against. Defaults to the registry, and is
-   * a parameter so the `"client"` arm stays exercised while no first-party
-   * flag carries it.
+   * a parameter so a test can classify any flag either way.
    */
   authorities: Record<
     keyof ExperimentalOptions,
@@ -302,4 +318,58 @@ export function adoptServerExperimentalOptions(
     if (published !== undefined) opts[key] = published;
   }
   return opts;
+}
+
+/**
+ * The environment variable through which a server follows another
+ * deployment's posture: the `experimental` object that deployment publishes
+ * on {@link SERVER_EXPERIMENTAL_PATH}, as JSON. A local toolshed one client
+ * shares with a hosted deployment runs this way, since a client that talks to
+ * both can run only one posture.
+ */
+export const FOLLOWED_POSTURE_ENV = "EXPERIMENTAL_FOLLOWED_POSTURE";
+
+/**
+ * `ExperimentalOptions` for a server that may follow another deployment's
+ * posture ({@link FOLLOWED_POSTURE_ENV}): its own environment's flags
+ * ({@link experimentalOptionsFromEnv}), and each server-authoritative flag
+ * the followed posture publishes that the environment leaves unset, as a
+ * deployed client adopts its server's ({@link adoptServerExperimentalOptions}).
+ * Without a followed posture, the environment's flags alone. A followed
+ * posture of `null`, what a deployment publishes before its Runtime exists,
+ * adopts nothing, as it does for a client.
+ *
+ * @throws Error when the followed posture is neither a JSON object nor
+ * `null`: whoever set it meant this server to follow it, and a server that
+ * ran its own defaults instead would disagree with the clients it shares.
+ */
+export function experimentalOptionsWithFollowedPosture(
+  env: EnvReader,
+  logPrefix?: string,
+): ExperimentalOptions {
+  const own = experimentalOptionsFromEnv(env, logPrefix);
+  const raw = env(FOLLOWED_POSTURE_ENV);
+  if (raw === undefined) return own;
+  let followed: unknown;
+  try {
+    followed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(
+      `${FOLLOWED_POSTURE_ENV} is not JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  if (
+    followed !== null &&
+    (typeof followed !== "object" || Array.isArray(followed))
+  ) {
+    throw new Error(
+      `${FOLLOWED_POSTURE_ENV} is ${debugStr`$quote${raw}`}; expected the JSON object a deployment publishes as its posture, or null`,
+    );
+  }
+  return adoptServerExperimentalOptions(
+    parseServerExperimentalOptions(followed),
+    own,
+  );
 }

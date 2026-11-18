@@ -28,6 +28,7 @@ import {
 import type { MemorySpace } from "@commonfabric/runner/storage/cache.deno";
 import { addressKey } from "@commonfabric/runner/shared";
 import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { LaneTransition } from "./local-jobs/readiness.ts";
 
@@ -86,6 +87,9 @@ export interface ClaimedAgentRun {
    * time since the run started.
    */
   renewLease: () => Promise<void>;
+
+  /** Publishes a labeled milestone while this attempt still owns the run. */
+  publishProgress?: (link: NormalizedFullLink) => Promise<boolean>;
 }
 
 export interface AgentRunnerOptions {
@@ -106,6 +110,9 @@ export interface AgentRunnerOptions {
 
   /** The tool names this runner offers. */
   tools: readonly string[];
+
+  /** Whether the executor supports opt-in milestone publication. */
+  progress?: boolean;
 
   /** How many runs this process holds at once. */
   maxConcurrent: number;
@@ -143,6 +150,7 @@ type FollowedRecord = {
   runtime: Runtime;
   record: Cell<AgentRunRecord>;
   stopFollowing: () => void;
+  reportedUnsupportedProgress?: boolean;
 };
 
 /** A run this runner holds. */
@@ -159,7 +167,8 @@ const recordKey = (host: string, link: NormalizedFullLink): string =>
 /**
  * One user's runner over their agent queue. `start()` registers it and
  * begins following the queue; `stop()` aborts the runs it holds and stops
- * following. `idle()` resolves once no scan is pending and no run is held.
+ * following. `idle()` resolves once no scan is pending and no run is held;
+ * a run a scan lets go of when its lease expires stops being held then.
  */
 export class AgentRunner {
   readonly #options: AgentRunnerOptions;
@@ -169,6 +178,7 @@ export class AgentRunner {
   #registeredAt: string | undefined;
   #stopQueue: (() => void) | undefined;
   #scan: Promise<void> | undefined;
+  #scanStarted = Promise.withResolvers<void>();
   #scanRequested = false;
   #cancelScheduledWake: (() => void) | undefined;
   #stopped = false;
@@ -199,9 +209,7 @@ export class AgentRunner {
       } catch (cleanupError) {
         this.#options.report?.(
           `agent runner: could not clear a failed registration: ${
-            cleanupError instanceof Error
-              ? cleanupError.message
-              : String(cleanupError)
+            describeFailure(cleanupError)
           }`,
         );
       }
@@ -209,7 +217,11 @@ export class AgentRunner {
     }
   }
 
-  /** Aborts held runs, waits for them to end, and stops following. */
+  /**
+   * Aborts held runs, waits for them to end, and stops following. A run a
+   * scan has already let go of, because its lease expired, is no longer held,
+   * so it is not waited for, whether or not its execution has settled.
+   */
   async stop(): Promise<void> {
     this.#stopped = true;
     this.#cancelScheduledWake?.();
@@ -237,8 +249,15 @@ export class AgentRunner {
   /** Resolves once no scan is pending and no run is held. */
   async idle(): Promise<void> {
     while (this.#scan !== undefined || this.#active.size > 0) {
-      await Promise.all([
-        this.#scan,
+      // A scan can drop a held run whose execution never settles, so a scan
+      // is waited for on its own, and a wait on the held runs ends when one
+      // of them finishes or a scan starts.
+      if (this.#scan !== undefined) {
+        await this.#scan;
+        continue;
+      }
+      await Promise.race([
+        this.#scanStarted.promise,
         ...[...this.#active.values()].flatMap((run) =>
           run.finished === undefined ? [] : [run.finished]
         ),
@@ -257,6 +276,7 @@ export class AgentRunner {
     return this.#options.registerRunner({
       host: runnerHost,
       tools: [...tools],
+      ...(this.#options.progress === true ? { progress: true } : {}),
       registrationId: this.#options.runnerId,
       registeredAt: this.#registeredAt!,
       ...(lastClaimAt !== undefined ? { lastClaimAt } : {}),
@@ -287,6 +307,8 @@ export class AgentRunner {
     if (this.#stopped) return;
     this.#scanRequested = true;
     if (this.#scan !== undefined) return;
+    this.#scanStarted.resolve();
+    this.#scanStarted = Promise.withResolvers<void>();
     this.#scan = (async () => {
       try {
         while (this.#scanRequested && !this.#stopped) {
@@ -296,12 +318,10 @@ export class AgentRunner {
       } catch (error) {
         this.#options.readiness?.({
           state: "down",
-          reason: error instanceof Error ? error.message : String(error),
+          reason: describeFailure(error),
         });
         this.#options.report?.(
-          `agent runner: a queue scan failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `agent runner: a queue scan failed: ${describeFailure(error)}`,
         );
         this.#scheduleWake(new Date(this.#now().getTime() + 1_000));
       } finally {
@@ -348,13 +368,9 @@ export class AgentRunner {
           stopFollowing: record.sink(() => this.#requestScan()),
         });
       } catch (error) {
-        failure ??= `Could not follow ${key}: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        failure ??= `Could not follow ${key}: ${describeFailure(error)}`;
         this.#options.report?.(
-          `agent runner: could not follow ${key}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `agent runner: could not follow ${key}: ${describeFailure(error)}`,
         );
       }
     }
@@ -389,7 +405,22 @@ export class AgentRunner {
         const offered = (value.tools ?? []).every((tool) =>
           this.#options.tools.includes(tool)
         );
-        if (offered) queued.push({ key, followed, at: value.submittedAt });
+        if (
+          offered && value.progressRequested === true &&
+          this.#options.progress !== true &&
+          !followed.reportedUnsupportedProgress
+        ) {
+          followed.reportedUnsupportedProgress = true;
+          this.#options.report?.(
+            `agent runner: leaving request ${value.requestHash} queued because this runner does not support progress`,
+          );
+        }
+        if (
+          offered &&
+          (value.progressRequested !== true || this.#options.progress === true)
+        ) {
+          queued.push({ key, followed, at: value.submittedAt });
+        }
         continue;
       }
 
@@ -516,6 +547,7 @@ export class AgentRunner {
       if (current.key("state").get() !== "queued") return false;
       if (current.key("cancelRequestedAt").get() !== undefined) return false;
       current.key("state").set("claimed");
+      current.key("progress").setRaw(undefined);
       current.key("stateSince").set(stamp);
       current.key("claim").set({ runner: this.#options.runnerId, leaseUntil });
       current.key("attempts").set((current.key("attempts").get() ?? 0) + 1);
@@ -538,7 +570,7 @@ export class AgentRunner {
    */
   async #writeHeld(
     { runtime, record }: FollowedRecord,
-    write: (current: Cell<AgentRunRecord>) => void,
+    write: (current: Cell<AgentRunRecord>) => void | boolean,
   ): Promise<boolean> {
     const { ok } = await runtime.editWithRetry((tx) => {
       const current = record.withTx(tx);
@@ -547,8 +579,7 @@ export class AgentRunner {
       if (current.key("claim").get()?.runner !== this.#options.runnerId) {
         return false;
       }
-      write(current);
-      return true;
+      return write(current) !== false;
     });
     return ok === true;
   }
@@ -580,12 +611,40 @@ export class AgentRunner {
         if (value === undefined) {
           throw new Error("the claimed record does not read");
         }
+        const attempt = value.attempts;
         this.#options.report?.(`agent runner: running ${value.requestHash}`);
         execution = await this.#options.execute({
           record: value,
           link: record.getAsNormalizedFullLink(),
           host,
           signal: abort.signal,
+          ...(this.#options.progress === true
+            ? {
+              publishProgress: async (link: NormalizedFullLink) => {
+                if (
+                  abort.signal.aborted ||
+                  this.#active.get(key)?.token !== active.token
+                ) return false;
+                return await this.#writeHeld(followed, (current) => {
+                  if (
+                    current.key("cancelRequestedAt").get() !== undefined ||
+                    current.key("attempts").get() !== attempt ||
+                    abort.signal.aborted ||
+                    this.#active.get(key)?.token !== active.token ||
+                    current.key("progressRequested").get() !== true
+                  ) return false;
+                  // Replace the return link without reading through the prior
+                  // report, whose confidentiality belongs to that report.
+                  current.key("progress").setRawUntyped(
+                    followed.runtime.getCellFromLink(link).getAsLink({
+                      includeSchema: true,
+                    }),
+                  );
+                  current.key("claim").key("leaseUntil").set(leaseUntil());
+                });
+              },
+            }
+            : {}),
           renewLease: async () => {
             if (this.#active.get(key)?.token !== active.token) return;
             const renewed = await this.#writeHeld(followed, (current) => {
@@ -597,9 +656,7 @@ export class AgentRunner {
       }
     } catch (error) {
       this.#options.report?.(
-        `agent runner: a run failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `agent runner: a run failed: ${describeFailure(error)}`,
       );
       execution = { outcome: "failed", errorCode: PROVIDER_FAILURE };
     }
@@ -612,9 +669,7 @@ export class AgentRunner {
           await this.#finish(followed, execution, abort);
         } catch (error) {
           this.#options.report?.(
-            `agent runner: terminal write failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
+            `agent runner: terminal write failed: ${describeFailure(error)}`,
           );
         }
       }

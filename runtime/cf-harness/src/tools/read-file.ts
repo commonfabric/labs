@@ -1,5 +1,6 @@
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
@@ -8,7 +9,6 @@ import {
   classifyPathResolutionError,
   createStructuredFileToolErrorOutput,
   detailFromShellFailure,
-  detailFromUnknownError,
   type StructuredFileToolErrorOutput,
   structuredFileToolErrorOutputSchema,
 } from "./file-errors.ts";
@@ -96,7 +96,7 @@ export const readFileTool: HarnessToolDefinition<
       return createStructuredFileToolErrorOutput(context, "read_file", {
         path: input.path,
         code: classifyPathResolutionError(error),
-        detail: detailFromUnknownError(error),
+        detail: describeFailure(error),
       });
     }
     if (await isResolvedPathInsideArtifactRoot(context, resolvedPath)) {

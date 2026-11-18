@@ -17,6 +17,7 @@ import type { Document, Line, ViewMode } from "./model.ts";
 import type { DiffHunk, DiffModel } from "./diff.ts";
 import type { DiffCountFileContext } from "./diffcounts.ts";
 import type { LineEndingProvenance } from "./editbuffer.ts";
+import type { DeclaredTests } from "./fold.ts";
 import type {
   Highlighter,
   Language,
@@ -97,6 +98,10 @@ export interface EditableSource {
   diffCountContexts?(
     text: string,
   ): readonly DiffCountFileContext[] | undefined;
+
+  /** For a diff, which of its paths the repository declares to be tests or not
+   * tests, overriding what their names suggest. */
+  readonly declaredTests?: DeclaredTests;
 
   /** False when there is no underlying file to edit or the selected language
    * is read-only. `reason` is shown when a cursor move is attempted on a
@@ -237,10 +242,14 @@ export interface EditableSource {
    * opens in its directory. */
   readonly path?: string;
 
-  /** What `git blame` attributes each line of `text` to, indexed by line, or
-   * null for a line with no file line behind it. Absent when no line of this
-   * source has one. */
-  blameTargets?(text: string): readonly (BlameTarget | null)[];
+  /** What each line of `text` is attributed to, indexed by line: a line of a
+   * file for `git blame`, or a commit for a line of that commit's header or
+   * message; null for a line with neither behind it. `baseline` is the text
+   * as last loaded or saved. Absent when no line of this source has one. */
+  blameTargets?(
+    text: string,
+    baseline: string,
+  ): readonly (BlameTarget | null)[];
 }
 
 /**

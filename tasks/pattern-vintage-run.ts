@@ -11,6 +11,7 @@
  */
 
 import { exists } from "@std/fs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import type { Identity } from "@commonfabric/identity";
@@ -19,7 +20,6 @@ import {
   AUTO,
   autoGenerationsToPrune,
   collectVintages,
-  describeError,
   hoistSupersessionReason,
   newestAutoGeneration,
   patternKeyFromMain,
@@ -645,7 +645,7 @@ export async function replayVintage(
           ...where,
           detail:
             `${entry.main} no longer resolves: ${
-              describeError(error)
+              describeFailure(error)
             }. If it moved deliberately, the fixture records a path that is no ` +
             `longer there: ${remedy}`,
         });
@@ -679,7 +679,7 @@ export async function replayVintage(
         report.failures.push({
           ...where,
           detail: `${entry.main} no longer compiles: ${
-            describeError(error)
+            describeFailure(error)
           }. Fix the source; if it was removed deliberately, ${remedy}`,
         });
         continue;
@@ -1188,6 +1188,11 @@ export async function captureVintage(
       storageHost: {
         identity: roots.signer,
         storageManager: vintage.storageManager as never,
+        // A fixture records the state a version's handlers write, which does
+        // not depend on which side runs them, and a run that resolves ON
+        // refuses this store. So the capture runs on the OFF arm whatever the
+        // environment selects.
+        serverExecution: false,
         // Pin the test's root so the replay can find it; the runner otherwise
         // causes it with Date.now().
         resultCause: vintageRootCause(),
@@ -1376,7 +1381,7 @@ export async function captureMissing(
       // Report every failure rather than dying on the first: a run that
       // captures 9 of 10 and then throws leaves the tree half-seeded with no
       // statement about which one is the problem.
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };
@@ -1461,7 +1466,7 @@ export async function captureChangedGenerations(
       kind: "captured",
       captured,
       pruned,
-      problems: [...problems, `  retention: ${describeError(error)}`],
+      problems: [...problems, `  retention: ${describeFailure(error)}`],
     };
   }
   return { kind: "captured", captured, pruned, problems };
@@ -1503,7 +1508,7 @@ export async function pinNewestGeneration(
     return {
       kind: "failed",
       from: newest.path,
-      detail: describeError(error),
+      detail: describeFailure(error),
     };
   }
 }
@@ -1534,7 +1539,7 @@ export async function captureGenerations(
     try {
       captured.push(await captureVintage(roots, key, now, AUTO));
     } catch (error) {
-      problems.push(`  ${key}: ${describeError(error)}`);
+      problems.push(`  ${key}: ${describeFailure(error)}`);
     }
   }
   return { captured, problems };

@@ -39,6 +39,7 @@ export type BuiltinToolId =
   | "loom_profile"
   | "list_commands"
   | "run_command"
+  | "report_progress"
   | "submit_result";
 
 export const DEFAULT_PARENT_TOOL_IDS = [
@@ -231,6 +232,9 @@ export interface HarnessToolBackingAvailability {
   /** Whether the run was configured with a structured-result schema. */
   structuredResultAvailable?: boolean;
 
+  /** Whether the host supplied a milestone return channel. */
+  progressAvailable?: boolean;
+
   /** Whether the host opted this run in to asking the client to act. */
   clientActionsAvailable?: boolean;
 }
@@ -261,6 +265,7 @@ export const withheldToolIds = (
     ...(availability.structuredResultAvailable
       ? []
       : STRUCTURED_RESULT_TOOL_IDS),
+    ...(availability.progressAvailable ? [] : ["report_progress" as const]),
     ...(availability.clientActionsAvailable ? [] : CLIENT_ACTION_TOOL_IDS),
   ]);
 
@@ -295,6 +300,7 @@ export const parentToolIdsForBacking = (
     ...(availability.structuredResultAvailable
       ? STRUCTURED_RESULT_TOOL_IDS
       : []),
+    ...(availability.progressAvailable ? ["report_progress" as const] : []),
     ...(availability.clientActionsAvailable ? CLIENT_ACTION_TOOL_IDS : []),
   ].filter((toolId, index, ids) =>
     !withheld.has(toolId) && ids.indexOf(toolId) === index

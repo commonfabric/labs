@@ -10,6 +10,11 @@
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import {
+  type CompileClaims,
+  CompileTurns,
+} from "../harness/compile-interleave.ts";
+import type { ModuleCompiler } from "../harness/module-compile.ts";
+import {
   type ExperimentalOptions,
   type ModuleByteCache,
   Runtime,
@@ -73,6 +78,22 @@ export type ServingRuntimeFactoryOptions = {
   moduleByteCache?: ModuleByteCache;
 
   /**
+   * The turns at a cold compile the serving runtimes take with whatever else
+   * shares {@link moduleByteCache}: for a cache on disk, the other realms and
+   * processes that use it. Absent, the factory's runtimes take turns among
+   * themselves. Unused without a byte cache.
+   */
+  compileClaims?: CompileClaims;
+
+  /**
+   * Where every serving runtime the factory builds runs the type-check,
+   * transform and emit step of its compiles: a compile worker, which keeps
+   * that step and its heap off the thread the serving loop runs on. Absent,
+   * each runtime compiles on that thread.
+   */
+  moduleCompiler?: ModuleCompiler;
+
+  /**
    * Called with each serving runtime's storage manager before the runtime
    * that uses it is constructed, so a test can replace one of its providers'
    * methods. The returned function, if any, runs once the runtime, and with
@@ -92,6 +113,12 @@ export type ServingRuntimeFactoryOptions = {
 export function servingRuntimeFactory(
   options: ServingRuntimeFactoryOptions,
 ): ExecutorHostOptions["createRuntime"] {
+  // A serving runtime yields while it compiles, so the runtimes that share a
+  // byte cache take turns, which keeps it compiling a program once.
+  const sharedByteCache = options.moduleByteCache === undefined ? {} : {
+    moduleByteCache: options.moduleByteCache,
+    compileTurns: options.compileClaims ?? new CompileTurns(),
+  };
   return (space, context) => {
     const storageManager = LoopbackStorageManager.connect(options.server, {
       as: options.identity,
@@ -104,6 +131,7 @@ export function servingRuntimeFactory(
       ...(context.foreignScopedReadGrant === undefined
         ? {}
         : { foreignScopedReadGrant: context.foreignScopedReadGrant }),
+      ...(context.route === undefined ? {} : { route: context.route }),
     });
     // Installed ahead of the runtime, so no read this factory could ever
     // perform reaches the session.
@@ -124,9 +152,10 @@ export function servingRuntimeFactory(
         ...options.experimental,
         ...SERVING_RUNTIME_EXPERIMENTAL,
       },
-      ...(options.moduleByteCache === undefined
+      ...sharedByteCache,
+      ...(options.moduleCompiler === undefined
         ? {}
-        : { moduleByteCache: options.moduleByteCache }),
+        : { moduleCompiler: options.moduleCompiler }),
     });
     return Promise.resolve({
       runtime,

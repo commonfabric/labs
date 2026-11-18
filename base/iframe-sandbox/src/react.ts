@@ -5,10 +5,10 @@
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 
-import {
-  type FabricClient,
-  type ResourceSnapshot,
-  type SqliteQueryInput,
+import type {
+  FabricClient,
+  ResourceSnapshot,
+  SqliteQueryInput,
 } from "./guest.ts";
 
 type DependencyList = readonly unknown[];

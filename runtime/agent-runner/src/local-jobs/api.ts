@@ -22,7 +22,14 @@
  *   Omission retains every profile mount; `[]` grants none. Mount selection
  *   participates in idempotency and is inherited by follow-ups. An ungranted
  *   name or writable access to a readonly grant is `400 beyond_profile`.
- * - `GET /jobs?limit=n` — the newest jobs, newest first.
+ * - `GET /jobs?limit=n` — the newest matching jobs, with optional `caller`
+ *   and `profile` filters. `contextKey` and `contextValue` together match a
+ *   top-level context string or a string member of its array. Values may be
+ *   empty and have at most 4,096 UTF-16 code units; names and cursor ids
+ *   are nonempty and have at most 200. `nextCursor` is the id of the last
+ *   returned job when more match, otherwise null; pass it as
+ *   `before` with the same filters to continue. New jobs do not shift pages.
+ *   These are read filters on the private socket, not authority grants.
  * - `GET /jobs/<id>` — one job.
  * - `POST /jobs/<id>/messages` — accept `{caller, idempotencyKey, message,
  *   instructions?, imageAttachments?, inputs?, foreignSpaces?}` on the
@@ -56,6 +63,7 @@ import {
 } from "@commonfabric/cf-harness/task-classification";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { decodeHarnessInlineImage } from "@commonfabric/cf-harness/image-attachments";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { LocalJobBrowserHost } from "./browser-host.ts";
@@ -79,6 +87,9 @@ import {
 
 /** Longest idempotency key, caller or profile name a request may carry. */
 const MAX_NAME_LENGTH = 200;
+
+/** Largest context value accepted by a listing query, in UTF-16 code units. */
+const MAX_CONTEXT_VALUE_LENGTH = 4096;
 
 /** Largest JSON enqueue or message body accepted by the private socket. */
 const MAX_ENQUEUE_BYTES = 1024 * 1024;
@@ -188,11 +199,7 @@ const attachmentsOf = (
   try {
     images = imagesOf(imageAttachments);
   } catch (error) {
-    return {
-      error: error instanceof Error
-        ? error.message
-        : "Invalid image attachments.",
-    };
+    return { error: describeFailure(error) };
   }
   if (
     inputs !== undefined &&
@@ -520,16 +527,10 @@ const eventStream = (
     start(controller) {
       let closed = false;
       const close = () => {
-        if (closed) return;
         cleanup();
-        try {
-          controller.close();
-        } catch {
-          // The reader already went away.
-        }
+        controller.close();
       };
       cleanup = () => {
-        if (closed) return;
         closed = true;
         unsubscribe();
         clearInterval(heartbeat);
@@ -753,7 +754,64 @@ async (request: Request): Promise<Response> => {
           "`limit` must be a whole number from 1 to 100.",
         );
       }
-      return json(200, { jobs: store.list(limit) });
+      const of: {
+        caller?: string;
+        profile?: string;
+        contextKey?: string;
+        contextValue?: string;
+        before?: string;
+      } = {};
+      for (
+        const field of [
+          "caller",
+          "profile",
+          "contextKey",
+          "contextValue",
+          "before",
+        ] as const
+      ) {
+        const named = url.searchParams.getAll(field);
+        if (named.length === 0) continue;
+        const minLength = field === "contextValue" ? 0 : 1;
+        const maxLength = field === "contextValue"
+          ? MAX_CONTEXT_VALUE_LENGTH
+          : MAX_NAME_LENGTH;
+        if (
+          named.length > 1 || named[0].length < minLength ||
+          named[0].length > maxLength
+        ) {
+          return refuse(
+            400,
+            "invalid_request",
+            `\`${field}\`, when named, must occur once and contain ${minLength} to ${maxLength} UTF-16 code units.`,
+          );
+        }
+        of[field] = named[0];
+      }
+      if (
+        (of.contextKey === undefined) !== (of.contextValue === undefined) ||
+        (of.contextKey !== undefined &&
+          !/^[A-Za-z_][A-Za-z0-9_]*$/.test(of.contextKey))
+      ) {
+        return refuse(
+          400,
+          "invalid_request",
+          "`contextKey` and `contextValue` must be supplied together; the key must be a simple identifier.",
+        );
+      }
+      if (of.before !== undefined && store.get(of.before) === undefined) {
+        return refuse(
+          400,
+          "invalid_request",
+          "`before` must name a retained job.",
+        );
+      }
+      const matches = store.list(limit + 1, of);
+      const jobs = matches.slice(0, limit);
+      return json(200, {
+        jobs,
+        nextCursor: matches.length > limit ? jobs[jobs.length - 1].id : null,
+      });
     }
     if (request.method === "POST") {
       let body: unknown;

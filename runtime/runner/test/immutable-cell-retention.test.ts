@@ -32,10 +32,17 @@ describe("immutable-cell-retention", () => {
       cell: { held: "cell" },
       link: { held: "link" },
       explicit: { held: "explicit" },
+      droppedStoreReleased: true,
       queued: { held: "queued" },
       parsed: { held: "parsed" },
       relative: { held: "relative" },
       failedSchemaRetained: false,
+      immutableCell: {
+        dropped: true,
+        droppedPrimitive: true,
+        held: { owned: "held" },
+        portable: { owned: "portable" },
+      },
     });
   });
 });

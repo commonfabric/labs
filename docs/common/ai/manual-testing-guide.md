@@ -18,9 +18,10 @@ For handler-based checks:
 3. run `piece step`
 4. inspect resulting state
 
-Always remember that `cf cell set` and `cf piece call` do not trigger recomputation
-on their own. The follow-up `piece step` is part of the test, not optional
-cleanup.
+With server execution off, `cf cell set` and `cf piece call` do not trigger
+recomputation on their own, and the follow-up `piece step` is part of the test,
+not optional cleanup. Under server execution a read pulls the current value from
+the server, and the step adds nothing.
 
 ## Browser Validation Loop
 

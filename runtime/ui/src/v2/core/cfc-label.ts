@@ -1,32 +1,14 @@
 /**
  * Shared helpers for reading CFC labels on the trusted main thread.
  *
- * These let a trusted component query a cell's runtime-attested CFC label (over
- * IPC) and pull the owner a profile badge shows out of its
+ * These let a trusted component decide whether a cell's runtime-attested CFC
+ * label is public, and pull the owner a profile badge shows out of its
  * `represents-principal` integrity atoms.
  */
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
-import { authorPrincipalCandidates } from "@commonfabric/runner/cfc/represents-principal";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 export type { CfcLabelView };
-
-export type CfcLabelQueryable = {
-  getCfcLabel(): Promise<CfcLabelView | undefined>;
-};
-
-export type CfcLabelResolvable = {
-  resolveAsCell(): Promise<unknown> | unknown;
-};
-
-export const canQueryCfcLabel = (value: unknown): value is CfcLabelQueryable =>
-  isObjectOrArray(value) &&
-  typeof (value as { getCfcLabel?: unknown }).getCfcLabel === "function";
-
-const canResolveAsCell = (value: unknown): value is CfcLabelResolvable =>
-  isObjectOrArray(value) &&
-  typeof (value as { resolveAsCell?: unknown }).resolveAsCell === "function";
 
 /**
  * Egress check (host-embedding seam — see `docs/features/host-embedding.md`
@@ -59,37 +41,4 @@ export const cfcLabelViewIsPublic = (
   return true;
 };
 
-/**
- * Reads a cell's CFC label view, resolving the cell first if the handle itself
- * doesn't expose `getCfcLabel` (e.g. an unresolved link). Returns undefined if
- * no label can be read.
- */
-export const readCfcLabelView = async (
-  value: unknown,
-): Promise<CfcLabelView | undefined> => {
-  if (canQueryCfcLabel(value)) {
-    return await value.getCfcLabel();
-  }
-  if (canResolveAsCell(value)) {
-    const resolved = await value.resolveAsCell();
-    if (canQueryCfcLabel(resolved)) {
-      return await resolved.getCfcLabel();
-    }
-  }
-  return undefined;
-};
-
-/**
- * The principal a label says its value belongs to: the one DID
- * `authorPrincipalCandidates` finds in the `represents-principal` atoms of
- * the entries it reads. `nameWritten` says whether the value holds a name its
- * owner wrote: then the root and `name` count, and otherwise every entry the
- * label holds does. `undefined` when those name no principal or more than one.
- */
-export const ownerPrincipalFromLabel = (
-  view: CfcLabelView | undefined,
-  nameWritten: boolean,
-): string | undefined => {
-  const candidates = authorPrincipalCandidates(view, nameWritten);
-  return candidates.length === 1 ? candidates[0] : undefined;
-};
+export { ownerPrincipalFromLabel } from "@commonfabric/runner/cfc/represents-principal";

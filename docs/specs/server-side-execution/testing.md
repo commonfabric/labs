@@ -72,17 +72,18 @@ stable role rather than by the current value:
 - `opposite` explicitly selects the inverse and uses a toolshed whose browser
   shell has that same value baked in.
 
-Whichever role resolves ON also sets `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`
-to `true` for its Toolshed servers, its baked shell and its integration suites'
-test processes, so the ON arm is exercised with web view-scoped replication.
+Web view-scoped replication is on by default under server execution, so the
+ON arm is exercised with it while CI sets no variable for it on either arm.
 
 `tasks/server-execution-ci.ts` is the single mapping from those roles to the
 resolved value, label, record variant, runtime environment, baked shell define,
 and posture probe. Changing the first-party default therefore swaps which role
 is ON and which is OFF without rewriting workflow topology. Before each suite,
-the probe checks `/api/meta.experimental.serverExecution`, that
-`/api/meta.experimental.webViewScopedReplication` is `true` exactly on the ON
-arm, the shell define, and presence (ON) or absence (OFF) of
+the probe checks `/api/meta.experimental.serverExecution`, that the ON arm
+does not publish web view-scoped replication off (a `false`
+`/api/meta.experimental.webViewScopedReplication`, or a `false`
+`viewScopedReplication` with the web override unset; both unset mean on), the
+shell define, and presence (ON) or absence (OFF) of
 `/api/health/stats.servingLoop`; a mixed
 server/client/shell posture is never a valid arm exercise.
 

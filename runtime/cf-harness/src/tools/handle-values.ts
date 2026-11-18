@@ -25,6 +25,7 @@
  * that takes an address refuses one.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   cfcObservationFitsCeiling,
   type IFCLabel,
@@ -58,9 +59,6 @@ export type HandleValueResolutionContext = Pick<
   HarnessToolContext,
   "getFabricSession" | "handleTable" | "cfcReadMaxConfidentiality"
 >;
-
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * The origin of `url` when it is an http(s) URL, and `undefined` otherwise.
@@ -177,7 +175,7 @@ export const resolveHandleValue = async (
   } catch (error) {
     return {
       error: `${label} could not establish the fabric session: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -201,7 +199,7 @@ export const resolveHandleValue = async (
   } catch (error) {
     return {
       error: `${label} could not load the referenced value: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -215,7 +213,7 @@ export const resolveHandleValue = async (
   } catch (error) {
     return {
       error: `${label} could not read the referenced value: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }

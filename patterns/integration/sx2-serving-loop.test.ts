@@ -35,6 +35,7 @@ import {
   waitForSettled,
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import type { MemorySpace } from "@commonfabric/runner";
 import {
   initializePiecesController,
@@ -149,7 +150,10 @@ describe("sx2 serving loop (Phase 2 gates)", () => {
       const space = piece.getCell().getAsNormalizedFullLink()
         .space as MemorySpace;
       await runtime.storageManager.synced();
-      await waitForSettled(runtime, space, 1, { timeoutMs: 30_000 });
+      await withStuckNet(
+        waitForSettled(runtime, space, 1),
+        "the watermark to cover seq 1",
+      );
     }
   });
 
@@ -206,11 +210,9 @@ describe("sx2 serving loop (Phase 2 gates)", () => {
     // creation window already passed would resolve vacuously) — the
     // three authored inputs each advanced the space head by at least
     // one, so W must reach past watermarkBefore + 3.
-    const settledSeq = await waitForSettled(
-      runtime,
-      space,
-      watermarkBefore + 3,
-      { timeoutMs: 30_000 },
+    const settledSeq = await withStuckNet(
+      waitForSettled(runtime, space, watermarkBefore + 3),
+      "the watermark to cover the three authored inputs",
     );
     assert(
       settledSeq >= watermarkBefore + 3,
@@ -301,11 +303,9 @@ describe("sx2 serving loop (Phase 2 gates)", () => {
       }
     }
     await runtime.storageManager.synced();
-    const settledSeq = await waitForSettled(
-      runtime,
-      space,
-      watermarkBefore + 1,
-      { timeoutMs: 30_000 },
+    const settledSeq = await withStuckNet(
+      waitForSettled(runtime, space, watermarkBefore + 1),
+      "the watermark to cover the authored input",
     );
     assert(settledSeq >= watermarkBefore + 1);
     // The value arrives on the ordinary subscription push, which the

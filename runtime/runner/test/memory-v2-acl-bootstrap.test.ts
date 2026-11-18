@@ -16,6 +16,7 @@ import {
   selectDocHead,
 } from "@commonfabric/memory/v2/engine";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -81,6 +82,7 @@ class RecordingLoopbackSessionFactory implements SessionFactory {
   ) {
     this.principals.push(signer?.did() ?? "<anonymous>");
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: this.#transport(this.#server),
     });
     const session = await client.mount(
@@ -124,6 +126,7 @@ const createServer = (
   } = {},
 ): MemoryV2Server.Server =>
   new MemoryV2Server.Server({
+    namesInstances: namesInstancesByDefault,
     store: options.store ?? new URL(`memory://${label}`),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },

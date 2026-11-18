@@ -75,6 +75,14 @@ sized so only a multi-minute jump reaches it — except the stuck detector,
 which a competing ceiling keeps lower; its section explains. When an event
 boundary does exist, use it, and neither kind of exception arises.
 
+A deployed client's wait on its server keeps a bound of the second kind, for
+want of an event from a server that has stopped responding: the read of
+`/api/meta` and `Runtime.healthCheck` each end at 60 seconds. An early fire on
+the read leaves a client on its own flags, with an error saying so, and one on
+the health check fails its startup. [The rationale
+document](waiting-in-tests-rationale.md#a-deployed-clients-wait-on-its-server)
+records what that bound is measured from.
+
 One bound sits between the two kinds, and is written down here because its cost
 is easy to understate. The browser load summary in
 `patterns/integration/cfc-browser-helpers.ts` gives the worker a budget
@@ -244,7 +252,9 @@ card's profile surface toggles display through its entrance, a re-render relays
 out the region, or a piece re-render replaces the control with an equivalent one.
 So `clickMarked` settles the control and works out where to click it in a single
 page turn. That turn holds until the tagged control's bounding box is unchanged
-across two consecutive animation frames. It then scrolls the control into view
+across two consecutive animation frames. In a document that is not being
+rendered, which produces no frames, each of those steps is one turn of the
+event loop instead (`ProbeApi.nextFrame`). It then scrolls the control into view
 and measures the point without handing control back to the test process in
 between. The hold is frame-driven and drops its baseline whenever the box
 disappears. A control hidden partway through is picked up once it returns rather
@@ -364,6 +374,12 @@ stimulus, including one delivered to another browser sharing the same piece, use
 `waitForSettledText`, which settles the page on every check. The lunch-poll
 two-browser vote test uses it for all of its cross-browser waits.
 
+That wait asks whether the element contains the text, so a rendering from before
+the stimulus satisfies it if it already contains that text: `two:` is part of
+`two: green`, and a wait for the row to empty would hold from the start. When a
+stimulus shortens what is drawn, pass `{ exact: true }`, which compares the
+element's whole text with its whitespace collapsed.
+
 **Non-browser and off-page waits** have no page to observe. Resolve a `defer()`
 (from `base/async/src/defer.ts`) inside a callback the test already registers
 — a cell `sink`/`subscribe`, a storage subscription's `next`, a scheduler
@@ -401,10 +417,10 @@ A set of edges carries them, and
   counters move inside a cycle and are visible only as numbers afterwards, so
   `awaitEach(log, predicate)` re-reads them when one has run.
 - `SpaceServerOptions.onRootEnsure` reports each space-root ensure attempt's
-  outcome. A skip writes nothing at all, and a deadline failure reports
-  `failed` while the ensure it gave up on runs on detached and may write later,
-  so at the moment either is reported there is no commit for a test to wait
-  on.
+  outcome. A skip writes nothing at all, and a failure (a pattern-source fetch
+  that went past its deadline, or a compile or creation that threw) is
+  reported after the ensure has ended, so at the moment either is reported
+  there is no commit for a test to wait on.
 - `SpaceServerOptions.onEventDrainPass` reports the end of a drain pass, which
   is where `events.processed` moves. A pass ends before the settle that
   follows it, so a wait on that counter at the cycle boundary instead sleeps
@@ -433,7 +449,12 @@ contract as a client applies it, so past the barrier a consequence that never
 arrived is an absence to assert on. It is a barrier, not a delivery signal: a
 wave that requeues the event it drained still commits, and its advance still
 covers that event's seq, so a test whose subject is the re-run's own output
-waits for that output on the replica.
+waits for that output on the replica. The runtime and storage barriers do not
+cover the serving loop: `settled()` on a serving runtime, and a client's
+`storageManager.synced()` and `idle()`, can all resolve before the loop has
+drained the commit at all, and a client that runs the pattern itself shows its
+own speculation of the served node until W covers the commit
+([speculation.md §4](../specs/server-side-execution/speculation.md)).
 
 `ArrivalLog` records what a callback the test already registers hands it — a
 navigate callback, a scheduler `onError`, a fault injector, a settle gate — with
@@ -441,6 +462,16 @@ a promise per arrival, so a test waits on the arrival rather than on a count
 turning true. A test that installs its own gate or fault seam owns that seam's
 edge already: record each hit on a log rather than incrementing a counter, and
 the counter's readers become the log's, with a wait available for free.
+
+`ExecutorHost.whenQuiescent()` is the barrier for a whole cascade rather than
+for one seq: it resolves once every tenure's loop has come to rest with nothing
+it can do on its own, across spaces, and it covers what the watermark does not,
+such as an event a served handler fired that a later wave serves. Its value
+stays the same until a loop does anything further, so a caller that has let its
+own runtime react to what the wait delivered asks again and compares. `cf test`
+settles on it ([The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process)). It lives on the host, so a
+loop in a worker does not offer it.
 
 A serving-side value that exists only in the SERVING runtime's view — a write
 sealed into an open wave, which the store does not hold yet — has no edge in
@@ -464,7 +495,7 @@ has no other boundary, and adding one is the alternative the note above prefers
 to keeping a poll.
 
 These waits carry a stuck-condition net, which the waits in the sections above
-do not. A live SpaceServer renews its lease on a repeating timer, so a process
+do not. A live SpaceServer keeps its idle-park timer armed, so a process
 running one never goes quiet and the fail-fast described below never fires;
 without a net a wait whose condition never arrives burns the whole job instead
 of failing. `stuckNet` in `@commonfabric/test-support/stuck-net` is that net,
@@ -545,7 +576,7 @@ two runtimes over an in-process memory server. It does not carry over to the
 browser waits above, where a live DevTools Protocol connection holds the loop
 open and a waiter that never fires would hang instead. A client talking to a
 live server holds the loop open the same way, and so does a process running a
-live SpaceServer, whose lease renews on a repeating timer. A wait against one
+live SpaceServer, whose idle-park timer stays armed. A wait against one
 runs to the ambient test or CI limit rather than failing fast, which is what
 the stuck-condition net above is for. The CLI suite's readiness probe is such a
 client. It disposes its controller once the wait returns, which also keeps a
@@ -601,9 +632,12 @@ By the time the marker arrives, the server holds what the announcing participant
 wrote before it, so the reads that follow resolve against a server that has it.
 On the server-execution arm what a participant's handlers write is the serving
 loop's, and the participant announces only once every event it fired has its
-consequence back at its own runtime, so that holds for those writes too; an
-event a served handler fires on its own account is no participant's, and is not
-covered.
+consequence back at its own runtime and the serving loop has finished what that
+set off, so that holds for those writes too, and for what an event a served
+handler fires on its own account writes. It does not hold for an event left
+waiting on something outside the loop, which [The ON topology in one
+process](TESTING.md#the-on-topology-in-one-process) describes: what that event
+goes on to write can land after the marker.
 Two mechanisms deliver it and both are ordered behind the marker. A document
 already in the awaiting replica's watch set arrives in a fan-out frame the
 server computes by diffing current storage, so a frame carrying the marker
@@ -705,11 +739,12 @@ Two pieces of machinery come up often enough in unit tests, and dispatch
 differently enough from each other, that guessing at their timing is where fixed
 delays tend to creep back in.
 
-The **scheduler** delivers a runtime-backed cell's updates through `queueTask`
-(`runtime/runner/src/scheduler/diagnostics.ts`), which is `setTimeout(fn, 0)`.
-That is a macrotask, so yielding to the microtask queue never reaches a change
-made through a real cell, however many times the test yields. Wait for these
-with `runtime.idle()`, which resolves once the scheduler has settled.
+The **scheduler** delivers a runtime-backed cell's updates in passes, each on a
+turn of the event loop that `armTurn` (`base/async/src/turn.ts`) claims
+through a zero-delay timer and a `setImmediate` at once. That is a macrotask, so
+yielding to the microtask queue never reaches a change made through a real cell,
+however many times the test yields. Wait for these with `runtime.idle()`, which
+resolves once the scheduler has settled.
 
 The **worker reconciler** (`runtime/html/src/worker/reconciler.ts`) is
 synchronous apart from one line. It queues its VDOM ops as it renders and
@@ -931,7 +966,7 @@ transport itself delivers each server frame on its own turn, so
 `clock.settle()` drains in-flight deliveries without letting any coalescing
 window elapse.
 
-Both take that turn through `armTurn` in `runtime/memory/v2/turn.ts`, which
+Both take that turn through `armTurn` in `base/async/src/turn.ts`, which
 claims it twice over: a zero-delay timer, which is what `settle()` counts, and
 a `setImmediate`, which is the same turn for a fraction of the cost. Whichever
 arrives first runs the handler and cancels the other. So an outstanding turn
@@ -943,7 +978,7 @@ its event loop for a timer.
 
 `runtime/runtime-client` keeps its unit tests on the real clock. Most of its
 tests need no wait at all, or only a macrotask drain — a `setTimeout(fn, 0)`
-that lets the scheduler's own `queueTask` dispatch land, an awaited round-trip,
+that lets the scheduler's own pass land, an awaited round-trip,
 or a sink fire once. Those drains cross one macrotask boundary, carry no
 real-time floor, and stay as they are. A positive-delay sleep is still the
 shape to avoid here: the waits that once needed one are event-driven instead —
@@ -1234,7 +1269,7 @@ boundary the test can await without adding one to production code.
   rather than a poll this section endorses, and the helper stays for as long as
   they do and no longer. Its deadline is a
   stuck-condition backstop of the same kind, for the same reason — the serving
-  loop holds the event loop open through its lease-renew interval, so the
+  loop holds the event loop open through its timers, so the
   fail-fast described above never fires. What the poll interval under it costs
   is a latency floor on every one of those waits, and that is what converting a
   file removes. The failure names elapsed milliseconds and the poll count, which
@@ -1415,12 +1450,12 @@ read, and what the page held at the moment it gave up: the document's URL,
 title, and HTTP status, whether the shell's `x-root-view` element is in it,
 whether `globalThis.app` is there and which view it holds, the requests its
 runtime has sent the worker and has no reply to, the messages that worker has
-logged at `warn` or `error` with how often, and the tail of console messages
-`Page.applyConsoleFormatter` retains in the page. Reading the worker's logs is
-a round trip the others do not need, so a worker that has stopped answering
-costs the report that one line, which says so, and nothing else. The page half
-of that is `readShellPageProbe` in
-`runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
+logged at `warn` or `error` with how often, the text of the earliest few it
+logged at `error`, and the tail of console messages `Page.applyConsoleFormatter`
+retains in the page. Reading the worker's logs is a round trip the others do not
+need, so a worker that has stopped answering costs the report that one line,
+which says so, and nothing else. The page half of that is `readShellPageProbe`
+in `runtime/integration/shell-page-probe.ts`; `describeStateWaitFailure` in
 `shell-utils.ts` assembles the whole block, and a test may call it directly to
 report a wait of its own the same way.
 
@@ -1437,13 +1472,26 @@ the run waits out the full minute and reports nothing that names the cause.
 `waitForCondition` carries the same block, and carries it for every wait rather
 than for a wrapped few. A wait that reaches the stuck-condition net renders the
 source the page ran, the arguments it was handed one to a line, the last throw
-the predicate itself made where it made one, and the page it ran out against;
-`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles
-that. The source is usually what names the wait, waits carrying no names of
-their own, and where several sites share one predicate the arguments are what
-tell them apart. The predicate's own throw is the part nothing else can supply:
-a predicate that throws on every evaluation leaves a page identical to one a
-predicate merely reads as false.
+the predicate itself made where it made one, what the loggers of the test's own
+process have recorded at `error`, and the page it ran out against;
+`describeConditionWaitFailure` in `runtime/integration/utils.ts` assembles that.
+The source is usually what names the wait, waits carrying no names of their own,
+and where several sites share one predicate the arguments are what tell them
+apart. The predicate's own throw is the part nothing else can supply: a
+predicate that throws on every evaluation leaves a page identical to one a
+predicate merely reads as false. The test process's errors are the other part: a
+test's own runtime logs there rather than in any page's worker, so a page can
+sit idle over a refusal that only that process recorded.
+
+The predicate is an opaque function, so the probe it is handed records the
+selectors it asks `collect()` for, and the report gives each one's matches at
+the moment of the report, how many of those are rendered, and the most it
+matched at any check during the wait. That tells apart an element that never
+existed, one that came and went, and one that exists and failed the rest of the
+condition. A predicate that reads the page without `collect()` gets a line
+saying it collected nothing. A waiter is installed in one document, so a wait
+whose document a navigation replaced has no predicate left to run, and the
+report says that too.
 
 The net is five minutes and no test can sit through one, so its length for a
 single wait is read from `CF_WAIT_FOR_CONDITION_TIMEOUT_MS`. That exists for

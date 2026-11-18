@@ -13,7 +13,7 @@ workloads, byte-identical across arms, adjacent runs, counters over
 latencies, no latency quoted above load ~5, causation by ablation.
 
 The executor and its two execution postures are implemented in the current
-repository. The first-party default is OFF; explicit `true` selects ON.
+repository. The first-party default is ON; explicit `false` selects OFF.
 OW28's served `compileAndRun` path and scoped child lifecycle have direct
 acceptance coverage. The coverage register tracks the Phase 7 gate evidence
 and independently scoped follow-ups.
@@ -37,13 +37,27 @@ records the current dispositions; the
 records the omission evidence and the bounded status investigation.
 The first-party default and flip records belong to the
 [`serverExecution` registry](../development/EXPERIMENTAL_OPTIONS.md#serverexecution).
-The ON soak is paused. A renewed ON rollout follows the Phase 7 gate
-dispositions and the owner's rollout decision; the flip record alone does not
-establish current readiness.
+The default is ON again since 2026-11-11 and the ON soak runs on main; the
+post-soak removal PR (Phase 7 task 2) retires the flag and the OFF path.
+
+**Delta 2026-11-11 (the re-FLIP): `SERVER_EXECUTION_DEFAULT_ENABLED` →
+`true` by the owner's rollout decision, as the data-only change the
+2026-09-02 hygiene provides for: the constant plus current-status prose, with
+no workflow, test, or role edit. The two-arm lanes resolve `default` = ON and
+`opposite` = OFF (the explicit-`false` guard on the opposite-built shell,
+with the `server-execution-off` record variant). Explicit `false` selects
+OFF per deployment and is the rollback lever. The ON soak resumes at this
+change's merge.**
+
+**Delta 2026-10-31 (the verbs on the space's memory session): under ON, a
+lifecycle verb travels only as a `pattern.lifecycle` memory request on the
+space's session, which reaches the process that serves the space; the toolshed
+serves no HTTP route for the verbs (`docs/features/server-pattern-lifecycle.md`,
+"Sending a verb").**
 
 **Delta 2026-09-11 (the served source update): `setsrc` is a served verb.
-Under ON, `cf piece setsrc` sends the resolved program to
-`/api/pattern-lifecycle/setsrc`; the serving runtime uploads it as a verb
+Under ON, `cf piece setsrc` sends the resolved program to the space's
+serving runtime, which uploads it as a verb
 of its own and, in the cycle after, commits the update's setup transaction
 DIRECTLY to the store — the loop's own derived-class commit outside the
 wave, its written docs re-verified against the seq it was stamped at — so
@@ -56,8 +70,8 @@ client-side. OFF is byte-identical.**
 **Delta 2026-09-09 (the lifecycle verbs as server calls): the seed archived
 at `docs/history/plans/server-pattern-verbs-seed.md` is BUILT for `upload`
 and `instantiate`. Under ON, `cf piece new` sends the resolved program to
-`/api/pattern-lifecycle/*`, and the space's serving runtime compiles,
-materializes, and commits inside a wave cycle
+the space's serving runtime, which compiles, materializes, and commits
+inside a wave cycle
 (`docs/features/server-pattern-lifecycle.md`), the registry entry and the
 slug in the creation's own transaction; the receipt returns once that wave
 has committed and the verb's durability read has passed, ahead of the
@@ -503,12 +517,12 @@ load walk, COMMITTING NOTHING in the recovery arm. Not #6208's
 re-commit retry (census-proved non-convergent, closed — its
 `isStaleConfirmedReadConflict` discriminator and
 `awaitCommitRetryReadiness` extraction are cherry-picked as live
-pieces of this build); not the old refuse-to-start. ON-only (the
-coordinator's conservative default; OFF byte-identical, pinned —
-under OFF the refusal means another CLIENT raced and cross-tab mutex
-semantics own that story). OW62 is RE-FRAMED from adopt-not-start to
-START-WITHOUT-COMMIT (clients start speculatively; server-state
-wins); its remaining open piece is the stage-2
+pieces of this build); not the old refuse-to-start. Both arms:
+under OFF the refusal means another client, a second tab of the same
+user among them, set the piece up first, and the client that lost
+needs the piece's context as much. OW62 is RE-FRAMED from
+adopt-not-start to START-WITHOUT-COMMIT (clients start speculatively;
+server-state wins); its remaining open piece is the stage-2
 unmaterialized-fallback question. Binding sentence: serving-loop.md
 §3d's RULED 2026-08-24 refusal-arm paragraph; full record: the
 register's OW45 CATCH-UP-AND-START block (ruling + owner model
@@ -1420,7 +1434,9 @@ Stages, one PR each except C, which is a three-PR train (below):
       enforces the one equality check under the flag, judged by the
       memory server's clock (an expired row matches nobody). Landed
       dark: nothing drives the renew cadence until stage F's
-      SpaceServer.
+      SpaceServer. *(The lease has since moved into the memory server's
+      memory, with no renewal or expiry:
+      [`serving-loop.md` §2](../specs/server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally).)*
 - [x] **C — main reduction** (a THREE-PR TRAIN, not one PR — the
       surface is ~25 source files across five packages plus ~110
       goldens, and the seams below are where it cuts cleanly):

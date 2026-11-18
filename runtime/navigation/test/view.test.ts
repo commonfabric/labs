@@ -307,7 +307,7 @@ describe("view", () => {
   });
 
   it("decodes the space segment and no other", () => {
-    // Reading the mark means reading through an escape of it, so `%40space`
+    // A space name is percent-encoded in a URL, marked or not, so `%40space`
     // reaches the space `@space` reaches — and the decoding stops there.
     // Every other segment is carried in the spelling the URL wrote, because
     // holding one to a grammar is the resolver's question and not this one's.
@@ -319,11 +319,16 @@ describe("view", () => {
         pieceSlug: "top",
         pieceMember: "4%32",
       });
-    // An unmarked space is carried whole, so the two differ only by the mark.
     expect(urlToAppView(new URL("http://common.test/%40space%20x/demo")))
       .toEqual({ spaceName: "space x", pieceSlug: "demo" });
     expect(urlToAppView(new URL("http://common.test/space%20x/demo")))
-      .toEqual({ spaceName: "space%20x", pieceSlug: "demo" });
+      .toEqual({ spaceName: "space x", pieceSlug: "demo" });
+    expect(urlToAppView(new URL("http://common.test/a%2Fb/top/42")))
+      .toEqual({ spaceName: "a/b", pieceSlug: "top", pieceMember: "42" });
+    // A `%` that starts no escape was written without escaping, so the name
+    // holding it reads as it is spelled.
+    expect(urlToAppView(new URL("http://common.test/100%/demo")))
+      .toEqual({ spaceName: "100%", pieceSlug: "demo" });
   });
 
   it("reads one segment after a slug as the member", () => {
@@ -622,6 +627,101 @@ describe("view", () => {
     expect(() => appViewToUrlPath({ spaceName: SPACE_DID })).toThrow(
       "A space name must not be a DID",
     );
+  });
+
+  it("throws when asked for the URL of a view whose space name is empty", () => {
+    // The address it would write reads back as the home view, or as the space
+    // its piece names.
+    expect(() => appViewToUrlPath({ spaceName: "" })).toThrow(
+      "A space name must not be empty",
+    );
+    expect(() => appViewToUrlPath({ spaceName: "", pieceSlug: "top" }))
+      .toThrow("A space name must not be empty");
+  });
+
+  it("reads back every space it writes the URL of", () => {
+    // A space name answers to no grammar, so it can hold whatever ends a
+    // segment, starts a query or a fragment, or reads as an escape. A name
+    // can also be what the reader takes for something other than a name: the
+    // space's mark, a dot segment, the embed prefix.
+    const names = [
+      "space",
+      "topics space",
+      "a/b",
+      "a?b",
+      "a#b",
+      "a%b",
+      "a%20b",
+      "%40space",
+      "a\\b",
+      "caf\u00e9 \u{1f9f6}",
+      "@space",
+      "@",
+      "@@",
+      ".",
+      "..",
+      ".embed",
+      "DID:key:z6Mk",
+    ];
+    const spaces = [
+      ...names.map((spaceName) => ({ spaceName })),
+      spaceViewRef(undefined, SPACE_DID),
+    ];
+    for (const space of spaces) {
+      const views: AppView[] = [
+        space,
+        { ...space, pieceSlug: "top", pieceMember: "42" },
+        { ...space, pieceId: "of:fid1:document", piecePath: ["detail"] },
+        { ...space, pieceSlug: "top", mode: "embed" },
+      ];
+      for (const view of views) {
+        const url = new URL(appViewToUrlPath(view), "https://fabric.example");
+        const read = urlToAppView(url);
+        expect(
+          isAppViewEqual(read, view),
+          `${url.pathname} read as ${JSON.stringify(read)}`,
+        )
+          .toBe(true);
+      }
+    }
+  });
+
+  it("writes a space name in the spelling a URL keeps", () => {
+    expect(appViewToUrlPath({ spaceName: "topics space", pieceSlug: "top" }))
+      .toBe("/topics%20space/top");
+    expect(appViewToUrlPath({ spaceName: "a/b?c#d%e" })).toBe(
+      "/a%2Fb%3Fc%23d%25e",
+    );
+    // The mark is what the reader removes, so a name it would otherwise take
+    // for something else goes behind one.
+    expect(appViewToUrlPath({ spaceName: "@space" })).toBe("/@%40space");
+    expect(appViewToUrlPath({ spaceName: ".." })).toBe("/@..");
+    expect(appViewToUrlPath({ spaceName: ".embed", pieceSlug: "top" })).toBe(
+      "/@.embed/top",
+    );
+  });
+
+  it("writes the URL of every space it reads out of one", () => {
+    // The shell writes the address it opened back into its history, so an
+    // address in circulation that names a space has to name one it can write.
+    for (
+      const path of [
+        "/space/demo",
+        "/topics%20space/top/2",
+        "/@topics%20space/top/2",
+        "/%40%40space/demo",
+        "/100%/demo",
+        "/a%2Fb/demo",
+        "/@./demo",
+        "/@.embed/demo",
+        "/.embed/@.embed/demo",
+      ]
+    ) {
+      const view = urlToAppView(new URL(path, "https://fabric.example"));
+      expect(
+        urlToAppView(new URL(appViewToUrlPath(view), "https://fabric.example")),
+      ).toEqual(view);
+    }
   });
 
   it("addresses a space by its DID when it has one, else by name", () => {

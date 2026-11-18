@@ -249,7 +249,7 @@ describe("fvj1-conformance", () => {
     }
   });
 
-  it("has a case whose value is an instance of each concrete class but those with stub codecs", () => {
+  it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap((c) =>
       "make" in c ? [c.make()] : []
     );
@@ -320,22 +320,6 @@ describe("fvj1-conformance", () => {
       });
     });
 
-    it("returns an entry requiring the flavors a case marks", () => {
-      const entry = JSON.parse(
-        fvj1ConformanceFixtureTextForTestingOnly([
-          {
-            name: "unconstructed",
-            section: "s",
-            text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025",' +
-              '"source":"("}}',
-            requires: { flavors: ["es2025"] },
-          },
-        ]),
-      ).cases[0];
-
-      expect(entry.requires).toEqual({ flavors: ["es2025"] });
-    });
-
     it("returns an entry requiring the length of an array past the floor", () => {
       const length = SIZE_FLOORS_FOR_TESTING_ONLY.arrayLength + 1;
       const entry = JSON.parse(
@@ -368,6 +352,21 @@ describe("fvj1-conformance", () => {
       ).cases[0];
 
       expect(entry.requires).toEqual({ propertyCount: count });
+    });
+
+    it("returns an entry requiring the size of a bigint past the floor", () => {
+      const count = SIZE_FLOORS_FOR_TESTING_ONLY.bigintBytes + 1;
+      const entry = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "big",
+            section: "s",
+            make: () => 1n << BigInt((count - 1) * 8),
+          },
+        ]),
+      ).cases[0];
+
+      expect(entry.requires).toEqual({ bigintBytes: count });
     });
 
     it("returns entries requiring the length of a string, a byte sequence and a symbol's key past their floors, and a depth past its floor", () => {
@@ -470,6 +469,32 @@ describe("fvj1-conformance", () => {
       ]);
       const { divergence } = JSON.parse(text).cases[0];
       expect(Object.keys(divergence)).toEqual(["note", "decode", "encode"]);
+    });
+
+    it("throws given a value that encodes unlike what its text decodes to", () => {
+      // The getter returns 1 to the first two reads, which take the text and
+      // the probes, and 2 to the third, which encodes the value itself. The
+      // text then decodes to a value with the probes taken, which encodes
+      // unlike the value.
+
+      let reads = 0;
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "drifting",
+            section: "s",
+            make: () => ({
+              get a() {
+                reads++;
+                return (reads <= 2) ? 1 : 2;
+              },
+            }),
+          },
+        ])
+      ).toThrow(
+        'drifting: encodes to {"text":"fvj1:{\\"a\\":2}"}, but what its text ' +
+          'decodes to encodes to {"text":"fvj1:{\\"a\\":1}"}.',
+      );
     });
 
     it("throws given a refused text whose lenient decode yields more than one problematic value", () => {

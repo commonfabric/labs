@@ -1,13 +1,14 @@
 import { MiddlewareHandler } from "@hono/hono";
 import {
   context,
+  defaultTextMapGetter,
   Span,
   SpanStatusCode,
-  type TextMapGetter,
   trace,
 } from "@opentelemetry/api";
 import { W3CTraceContextPropagator } from "@opentelemetry/core";
 import { getTracerProvider } from "@/lib/otel.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 // Dynamically resolve the tracer so we don't capture the no-op global tracer
 const obtainTracer = () => {
@@ -21,12 +22,8 @@ const obtainTracer = () => {
 // the caller's trace (e.g. the browser shell, which stamps traceparent on its
 // telemetry/API calls). No global propagator is registered under Deno, so build
 // one explicitly. When no traceparent is present, `extract` returns the input
-// context unchanged and the span starts as a fresh root — identical to before.
+// context unchanged and the span starts as a fresh root.
 const propagator = new W3CTraceContextPropagator();
-const headersGetter: TextMapGetter<Headers> = {
-  keys: (carrier) => [...carrier.keys()],
-  get: (carrier, key) => carrier.get(key) ?? undefined,
-};
 
 /**
  * Creates a middleware that adds OpenTelemetry tracing to all routes
@@ -37,10 +34,11 @@ export function otelTracing(): MiddlewareHandler {
     const method = c.req.method;
 
     // Start the request span as a child of any inbound traceparent context.
+    // `Headers` names are lower case, as the propagator asks for them.
     const parentCtx = propagator.extract(
       context.active(),
-      c.req.raw.headers,
-      headersGetter,
+      Object.fromEntries(c.req.raw.headers),
+      defaultTextMapGetter,
     );
 
     await context.with(
@@ -76,7 +74,7 @@ export function otelTracing(): MiddlewareHandler {
             span.setAttribute("error", true);
             span.setAttribute(
               "error.message",
-              error instanceof Error ? error.message : String(error),
+              describeFailure(error),
             );
             span.setAttribute(
               "error.type",
@@ -84,7 +82,7 @@ export function otelTracing(): MiddlewareHandler {
             );
             span.setStatus({
               code: SpanStatusCode.ERROR,
-              message: error instanceof Error ? error.message : String(error),
+              message: describeFailure(error),
             });
 
             if (error instanceof Error && error.stack) {
@@ -156,12 +154,12 @@ export async function createSpan<T>(
   } catch (error) {
     span.setStatus({
       code: SpanStatusCode.ERROR,
-      message: error instanceof Error ? error.message : String(error),
+      message: describeFailure(error),
     });
     span.setAttribute("error", true);
     span.setAttribute(
       "error.message",
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
     );
     span.end();
     throw error;

@@ -140,15 +140,18 @@ export function constant(atom: FabricValue): { constant: FabricValue } {
   return { constant: atom };
 }
 
-/** Separate conjunctive clauses, one per atom — today's only confidentiality
- *  combinator (every principal an independent requirement). */
+/** Conjunctive composition of terms; each term contributes its own clauses, so
+ *  each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`).
+ *  The conjunctive counterpart of `any()`. */
 export function all(...terms: FabricValue[]): { allOf: FabricValue[] } {
   return { allOf: terms };
 }
 
 /** ONE authored OR-clause: any alternative satisfies it (CFC spec §3.1.8).
- *  Serializes, but `table()` REJECTS it until the runtime ships the
- *  clause-aware label profile — never silently lowered to all-of. */
+ *  `table()` accepts it when every alternative is a single principal-like
+ *  term (`principal()`, `dbOwner()`, `constant()`, or a `whenMatches()` gating
+ *  one of those); an `all()` or nested `any()` alternative is refused. The
+ *  clause stays structural in the label — never silently lowered to all-of. */
 export function any(...terms: FabricValue[]): { anyOf: FabricValue[] } {
   return { anyOf: terms };
 }
@@ -403,7 +406,7 @@ function validateConfTerm(
   if ("anyOf" in node) return validateConfAnyOf(node, columns);
   if ("intersect" in node) {
     return "intersect() is integrity-only (the trust-floor meet); " +
-      "confidentiality combines by all() — and any() once OR-clauses land";
+      "confidentiality combines by all() and any()";
   }
   if ("authoredBy" in node || "endorsedBy" in node) {
     return "authoredBy()/endorsedBy() are integrity terms, not confidentiality";

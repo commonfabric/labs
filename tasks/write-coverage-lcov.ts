@@ -25,6 +25,23 @@ export function normalizeLcovInstancePaths(lcov: string): string {
 }
 
 /**
+ * Rewrite the `SF:` path of each file inside `root` to its POSIX path relative
+ * to `root`, leaving a path outside it unchanged. A report written this way
+ * names the same files whichever directory the checkout was in when the tests
+ * ran, so a reader in another checkout of the same tree resolves each path
+ * against its own root.
+ */
+export function relativeLcovSourcePaths(lcov: string, root: string): string {
+  return lcov.split(/\r?\n/).map((line) => {
+    const source = line.slice(3);
+    return line.startsWith("SF:") &&
+        source.startsWith(`${root}${path.SEPARATOR}`)
+      ? `SF:${path.relative(root, source).split(path.SEPARATOR).join("/")}`
+      : line;
+  }).join("\n");
+}
+
+/**
  * Collect every `.json` coverage profile file under `dir`, descending into
  * subdirectories. A missing directory, including one removed mid-walk, yields
  * an empty result rather than an error.
@@ -301,7 +318,10 @@ export async function writeLcovReport(
 
   await Deno.writeTextFile(
     outputPath,
-    normalizeLcovInstancePaths(await Deno.readTextFile(outputPath)),
+    relativeLcovSourcePaths(
+      normalizeLcovInstancePaths(await Deno.readTextFile(outputPath)),
+      REPO_ROOT,
+    ),
   );
 
   // The report of everything that did convert is on disk either way, so it can

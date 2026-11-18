@@ -136,7 +136,7 @@ describe("Engine implementation identity", () => {
     };
 
     const compiled = await engine.compileToRecordGraph(program);
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,

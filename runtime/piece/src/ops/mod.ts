@@ -91,6 +91,17 @@ export {
   joinVisitedRoomOf,
 } from "./join-visited-room.ts";
 export {
+  adoptCatalogRoomsOf,
+  ADOPTION_BATCH_SIZE,
+  adoptionRequestId,
+} from "./adopt-catalog-rooms.ts";
+export {
+  type DeletionMarkDecision,
+  markDeletedSpaceOf,
+  type ProfileRetirementDecision,
+  retireDeletedProfileOf,
+} from "./mark-deleted-space.ts";
+export {
   type OfferDecision,
   type OfferRefusal,
   ShareIntake,
@@ -113,6 +124,7 @@ export {
   type PieceSourceActionResult,
   PieceSourceChangedError,
   type PieceSourceCompatibilityIssues,
+  type PieceSourcePreparation,
   type PreparedPieceSourceChange,
 } from "./piece-controller.ts";
 export {
@@ -138,11 +150,18 @@ export {
 } from "./piece-input-path.ts";
 export {
   completeServedRegistration,
+  confirmServedFollow,
   confirmServedInstantiate,
   confirmServedRegistration,
   confirmServedSetSource,
   finishServedRegistration,
   prepareServedRegistration,
+  readServedInstantiateReceipt,
+  servedFollowPieceSource,
+  type ServedFollowPreparation,
+  type ServedFollowReceipt,
+  type ServedFollowRequest,
+  type ServedInstance,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   type ServedInstantiateRequest,
@@ -150,6 +169,7 @@ export {
   type ServedLifecycleRefusalCode,
   type ServedPatternRef,
   type ServedPatternSource,
+  servedPrepareFollow,
   type ServedRegistrationOutcome,
   type ServedRegistrationPreparation,
   servedSetPieceSource,

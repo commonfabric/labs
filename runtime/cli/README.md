@@ -370,9 +370,12 @@ For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home/profile-home.tsx
 --dangerously-allow-incompatible-schema`
 with the profile owner’s identity and API URL. Inspect the incompatibility
-before accepting it; the new inbox contract uses a piece link. The command
-refuses deployments that serve piece lifecycle verbs, where `follow` is not yet
-served.
+before accepting it; the new inbox contract uses a piece link.
+
+Against a deployment that serves piece lifecycle verbs, the serving runtime
+resolves the origin, reviews the candidate and commits the follow, and the
+command reports the same outcomes, pins included
+([Where a piece is created](#where-a-piece-is-created)).
 
 ## Pattern test read costs
 
@@ -571,11 +574,11 @@ structure tree lists sections with the keys and hosts in each.
 The binary language handles known binary filenames, input containing a NUL byte,
 and input that is not valid UTF-8. It starts in a read-only rendered view with
 16 bytes per hex-dump row. Printable ASCII bytes appear at the right of each
-row. Other bytes use the same control-picture glyphs as the pager's
-non-printable display mode. Use `--language binary` or its `bytes` alias to
-select it explicitly for piped input. Interactive views retain at most 256 KiB
-and report the omitted byte count when the complete size is known. Use `--plain`
-to stream the complete dump without building it in memory.
+row. Other bytes use the same control-picture glyphs as the pager's pictures
+mode. Use `--language binary` or its `bytes` alias to select it explicitly for
+piped input. Interactive views retain at most 256 KiB and report the omitted
+byte count when the complete size is known. Use `--plain` to stream the complete
+dump without building it in memory.
 
 Each language selects how bytes are decoded. Text languages currently require
 valid UTF-8. The binary language keeps each raw byte unchanged. An explicit
@@ -602,16 +605,34 @@ Ctrl-F / Ctrl-B also page down / up. Pages follow the dialog's visible height,
 with one row of overlap. While browsing, `j` / `k` and `J` / `K` move down / up,
 Space and `b` / `B` page down / up, and `g` / `G` jump to the top / bottom.
 Ctrl-N / Ctrl-P move down / up, and Ctrl-D / Ctrl-U move half a page.
-Confirmation prompts use navigation keys to move button focus; Space activates
-the focused button. Pressing the primary mouse button on a button pushes it, and
-releasing it over the same button activates that button. Releasing it anywhere
-else, or pressing a key first, lets go of the button without activating it.
-Printable keys enter text while a filter is active.
+Confirmation prompts use navigation keys to move the focus among their controls,
+except while an input line has it; Space activates the focused button. Pressing
+the primary mouse button on a button pushes it, and releasing it over the same
+button activates that button. Releasing it anywhere else, or pressing a key
+first, lets go of the button without activating it. Printable keys enter text
+while a filter is active.
+
+Some dialogs also hold check boxes, radio buttons, and input lines, drawn as
+Turbo Vision draws them. On a screen too short for all of a dialog's fields, its
+buttons stay in view and its fields scroll to show the focused one. Tab and
+Shift-Tab, like the navigation keys, move the focus through those first and then
+through the buttons. Space toggles the focused check box, and so does a click on
+it. Moving the focus to an input line selects its text, so that typing replaces
+it. While an input line is focused, every key but Tab, Shift-Tab, Enter, Escape,
+and Alt with a letter goes to it: typed text goes in, Backspace and Delete (or
+Ctrl-D) delete a character, Alt-Backspace deletes the word before the cursor,
+and Left, Right, Home, and End (or Ctrl-B, Ctrl-F, Ctrl-A, and Ctrl-E) move its
+cursor. A click on an input line puts its cursor where the click lands, and a
+click on its label selects its text. An arrow at either end of the line says
+that its text runs on past that end. A check box's highlighted letter toggles
+it, an input line's moves the focus to it, and a button's activates it; while an
+input line is focused, Alt with the letter does. Enter activates the default
+button wherever the focus is, unless it is on another button.
 
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, and `M` file-visibility keys remain
+and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
 active. On a commit row, `f` hides all of that commit's files. Pressing it again
 shows them. Each commit row reports its total added and removed lines under the
 selected count policy. The list's summary reports added and removed lines for
@@ -629,6 +650,35 @@ only whitespace or comments. It compares the remaining lines without comments or
 whitespace across the complete diff, so code moved between files does not count
 as an addition and a removal.
 
+Press `S` in that list to order the files within each commit, or all the files
+of a diff with no commit, by net line change. Press it again to restore the
+order of the diff. The list keeps its order when it is closed and opened again.
+The files that add the most lines beyond those they remove come first, and the
+files that remove the most beyond those they add come last, so a file with 100
+added and 10 removed lines precedes one with 1,000 of each, which precedes one
+with 10 added and 100 removed. Between files with the same net change, the one
+with more changed lines in total comes first. The order uses the counts of the
+selected count policy, and the policy line in the summary says when the list is
+sorted.
+
+Press `C` in a diff or in its list to hide the files whose changes touch only
+comments, and press it again to show them. `C` compares the complete file before
+and after the change, using the comments that syntax highlighting finds. It
+therefore selects only files in a language whose highlighting marks comments, in
+a diff whose `index` line names both versions of the file (as `git diff` does),
+and only when the versions the viewer rebuilds from the repository or the
+working tree are the ones named. Editing a comment's text, or adding or removing
+a line that holds only comments and whitespace, leaves the code as it was. Where
+such a line can be content or an error, as in XML text, a YAML scalar, or JSON,
+adding or removing it changes the file too. A line that follows code ending with
+a backslash continues that code, and a first line that starts with `#!` names
+the program that runs the file, so both are read exactly as written. Adding or
+removing a comment on a line that holds anything else changes the code, and so
+does a change to blank lines or other whitespace. Each side is read on its own,
+so a comment marker that turns unchanged lines into a comment changes the code.
+`C` never selects a renamed or new file, a file whose mode changes, or a file
+whose byte order mark is added or removed.
+
 Markdown files can switch between the source and a rendered terminal view with
 `V`. The rendered view formats headings, emphasis, links, quotes, lists, task
 markers, tables, rules, and code. The same view is available for Markdown files
@@ -638,18 +688,152 @@ positions, and hunk expansion remain in place.
 Press `P` to push the branch checked out in the repository the viewer runs in,
 as it stands, to the branch of the same name on `origin`. The push is forced,
 but fails rather than discard commits on `origin` that the branch has never
-included, even when they have been fetched. A dialog shows git's output as it
-arrives, with an Abort button that stops the push. When the push ends, the
-dialog adds how it ended, and two buttons replace Abort. Close leaves that
-summary in the status line. Quit (`Q`) closes the viewer, first offering to save
-any unsaved edits. When the server's reply offers a page for creating a pull
-request, the viewer opens it in the browser. Git asks nothing on the terminal
-while the viewer holds it; a question such as a key's passphrase goes to the
-program `SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
+included, even when they have been fetched. A dialog says which branch it pushes
+where, then shows git's output as it arrives, with an Abort button that stops
+the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
+the output, and Left and Right move the focus between the buttons. When color is
+on, each web address in the dialog is a link for terminals that open links. When
+the push ends, the dialog adds how it ended, and two buttons replace Abort.
+Close leaves that summary in the status line. Quit (`Q`) closes the viewer,
+first offering to save any unsaved edits. Git asks nothing on the terminal while
+the viewer holds it; a question such as a key's passphrase goes to the program
+`SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
 `origin`'s default branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+When `origin` already has the branch, as git last fetched or pushed it, the
+dialog asks before pushing. It says which commit `origin`'s branch is at, and
+what pushing would do to it: add commits, replace it, removing the commits that
+the checkout does not have, or leave it as it is. In a shallow checkout, whose
+history git cannot count to the end, it says so in place of the counts. It also
+gives the number and address of the pull request open from the branch, which it
+looks for as `L` does, below, or says that there is none, or why it could not
+look; Abort stops that search, and the dialog asks without it. Push (`u`) then
+pushes, its output following the question, and Cancel takes the dialog down. No
+button is the default, so Enter does nothing until a button has the focus, and
+pressing `P` again does not push.
+
+When git fails to push or is aborted, as it can when the network is unreliable,
+a Retry push button (`P`) pushes again, unless git says the push was rejected,
+or GitHub says the account has no permission to push, which pushing again cannot
+change. Each later push's output follows the earlier one's in the same dialog.
+
+Once the push succeeds, the settings say what happens next, and the radio
+buttons under "Pull requests" choose one of the four ways below. The first and
+the third act on the page for creating a pull request that the server's reply
+may offer, which GitHub does when the branch has new commits and no open pull
+request. The second and the fourth create the pull request after any push that
+succeeds, including one that had nothing new to push, unless the branch already
+has an open pull request, which they look for as `L` does, below. The pull
+request goes to the GitHub repository of the remote named `upstream`, `github`,
+or `origin`, whichever is the first to name one, and merges into that remote's
+default branch, from the branch on `origin`. Its title and description are the
+subject and the rest of the message of the branch's oldest commit that the
+default branch, as last fetched, does not have, leaving out merges and commits
+whose changes that branch already has.
+
+- "Just push, and link to them": the summary gives the page's address, which the
+  status line makes a link for terminals that open links.
+- "Use the GitHub API": the viewer creates the pull request with GitHub's REST
+  API, using `GH_TOKEN`, `GITHUB_TOKEN`, or else the token `gh auth token`
+  prints.
+- "Show them in the browser", the default: the viewer opens the page in the
+  browser.
+- "Use touch-gate and a security key": the viewer asks a touch-gate server to
+  create the pull request with the token the settings name. The dialog asks, in
+  brighter text, for the named security key to be touched, as "Touch the
+  “carthusian” security key to create a PR.", and the server acts only once it
+  is. As soon as the security key is touched, the dialog says so, before the
+  viewer sends the server the approval. When a security key fails, the summary
+  says what libfido2's error means, as "the security key stopped answering",
+  followed by the tool and the error's name, or else gives what the tool
+  printed. The server's address, its certificate, the secret its clients share,
+  and the registered security keys come from `~/.config/touch-gate`, as the
+  touch-gate project's client keeps them, and the viewer talks to the security
+  key through libfido2's `fido2-token` and `fido2-assert` tools.
+
+When creating the pull request with the GitHub API or touch-gate fails, or is
+aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
+again, with the settings as they are then, its output following the failed
+attempt's. Trying again looks for an open pull request first, in case the failed
+attempt created one.
+
+When GitHub refuses a creation or a merge, whether the viewer asked it directly
+or through touch-gate, the summary gives GitHub's status and the message its
+reply gives, as "GitHub answered 405: Merge already in progress". The button
+that tries again is left out when the status says the request itself cannot
+succeed: 404 (not found), 405 (not allowed), 409 (in conflict), or 422 (not
+valid).
+
+Press `L` to land the checked-out branch's open pull request; `l` pans right,
+and `h` and `H` pan left. A dialog like the push's opens at once, saying what it
+looks for, and its Abort button stops the search. The viewer looks for the pull
+request in `~/.cache/github-prs.tsv`, a list of open pull requests that another
+program keeps, one a line as its repository, branch, and number separated by
+tabs. The list does not say whose fork a branch is in, so unless it names
+exactly one pull request for the branch, the viewer asks GitHub. When the branch
+has no open pull request, or the viewer cannot land it, the dialog says so. With
+the first radio button, the dialog gives the pull request's address. With the
+third, the viewer opens the pull request in the browser, or, when no browser can
+be opened, gives its address as the first does. With the second or the fourth,
+the viewer asks GitHub's GraphQL API how GitHub's page would merge the pull
+request: by the method the token's account last used, or else by the
+repository's default. GitHub's merge API itself merges with a merge commit
+unless told otherwise, which a repository that allows only squashing or rebasing
+refuses. With the second radio button, the dialog then asks whether to merge
+that way, with Merge and Cancel buttons in place of Abort. No button is its
+default: Enter does nothing until Tab or an arrow key has moved the focus to a
+button, while a button's letter acts at once. With the fourth, the touch of the
+security key approves the merge, so the viewer asks nothing first. The viewer
+merges the pull request with GitHub's API or touch-gate in the same dialog, its
+output following what the dialog found. The merge happens only while the pull
+request's head is the commit the viewer has checked out. Asking for the merge
+method needs a GitHub token, from the same places the API uses. When the merge
+fails or is aborted, a Merge PR button (`P`) merges the same pull request, at
+the same commit and by the same method, again, with the settings as they are
+then, without looking for it again and without asking first. When a creation or
+a merge is aborted after its request was sent, it may have happened anyway, and
+the summary says so.
+
+Press `O` to open the settings dialog. Below the radio buttons, an input line
+holds the name of the token the touch-gate server uses. Its check box, "Quit
+when the pull request opens or merges", has the viewer quit as soon as it
+creates or merges the pull request, printing its address as described below, and
+otherwise has it watch the GitHub webhook relay while the push or land dialog is
+up. The relay passes on each delivery of the organization's GitHub webhook as it
+arrives, and keeps none for a subscriber that was not connected;
+`github-webhook-relay/README.md` in the infra repository describes it. The
+dialog's last input line holds the `host:port` of the relay's subscriber
+listener. When the push succeeds and the server offers a page for creating a
+pull request, or `L` finds the pull request with the first or third radio
+button, the viewer connects to the relay, and gives the address or opens the
+page once it has connected or failed to. While it connects, Abort, or an
+interrupt, gives up on the connection. When a delivery reports that a pull
+request was opened from the pushed branch, at the pushed commit, in the GitHub
+repository that `origin` names, or that the pull request `L` found merged, the
+dialog gives the pull request's address and says it is quitting, and two seconds
+later the viewer closes the dialog and quits as Quit does, unless the dialog was
+closed meanwhile. Pressing Quit in that moment quits at once, for the pull
+request all the same. Quitting once the viewer creates or merges the pull
+request works the same way. Once the screen is restored, it prints the pull
+request's address on the terminal. The address is printed only when the viewer
+quit for it, so a quit after cancelling the save prompt it raised prints
+nothing. With the check box on, the dialog says under its output whether the
+viewer is connecting or watching, or why it is not watching: no relay is set,
+`origin` is not on GitHub, or the connection failed or ended. Closing the dialog
+stops the watch.
+
+The viewer keeps these settings in git's configuration, as the strings
+`cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
+`cf-view.touchGateToken`, the boolean `cf-view.quitOnPullRequest`, and the
+string `cf-view.webhookRelay`, so the `git config` command can set them too. OK
+saves each setting that differs from what the dialog opened showing. It saves it
+in the configuration file that git read the setting's value from, which may be a
+file another one includes, so that git then reads the new value. A value read
+from the machine's own configuration file, or set nowhere, is saved in the
+user's global configuration file instead.
 
 In the main view, `b` shows or hides the blame column in place of paging up;
 Page Up and Ctrl-B still page up there. The column takes the right 20 columns of
@@ -667,14 +851,40 @@ text, so edited lines read `uncommitted` before they are saved. In a diff, a
 file that follows a commit header is blamed as it stands in that commit. Any
 other hunk is blamed as its file stands in the working tree, and only while that
 file still holds the hunk's added and context lines where the hunk places them.
-Removed lines show nothing. The column fills in as `git blame` finishes for each
-file in view. When git cannot blame a file, the status line says why, and the
-viewer does not try that file again.
+A commit header, and the lines after it that are not part of the diff, such as
+the commit's author, date, and message, show the commit's own entry when the
+viewer can find the commit's repository: when the commit was authored, and its
+author. Such a line edited since the view was loaded or last saved shows
+nothing. Removed lines show nothing. The column fills in as git finishes reading
+each file and commit in view. Turning the column on when no line on the screen
+can be blamed says so in the status line. When git cannot blame a file, the
+status line says why, and the viewer does not try that file again.
 
 Press `\` in the interactive pager to cycle through unwrapped lines, hard
 wrapping, and word wrapping. Hard wrapping fills every screen row before it
-continues. Word wrapping breaks at whitespace and repeats the line's leading
-punctuation and whitespace on each continuation row.
+continues. Word wrapping breaks at whitespace and indents each continuation row
+by the width of the line's leading punctuation and whitespace. A row is drawn
+unindented when it could hold the rest of the line only without the indentation,
+or when it is too narrow for the indentation and any text. Either way, a row
+does not start in the middle of a character that takes two columns, such as a
+Han character or an emoji. A character the edge of the screen would cut in two
+when lines are not wrapped is left blank.
+
+Press `c` to cycle how non-printable characters are shown. The pager starts in
+the ANSI color mode, which applies color escape sequences to the text that
+follows them instead of showing them. It also advances each tab to the next
+column that is a multiple of 4, counting the columns drawn from the start of the
+line. It draws a character overstruck through backspaces once, the way a printer
+would: struck over itself it is bold, and struck over an underscore it is
+underlined. Other characters struck together draw the last one struck, as a
+terminal would. This is how `man` marks emphasis, so a manual page that `man`
+formats for `cf view` keeps its bold and underlined text. Other control
+characters appear as their control-picture glyphs, such as `␇` for a bell. The
+hidden mode drops every complete escape sequence that starts with `ESC [`, and
+shows each run of other control characters, including the escape characters of
+other sequences, as one `…`. The pictures mode draws each control character as
+its control-picture glyph, such as `␉` for a tab, one column per character.
+Editing always uses the pictures mode.
 
 Redirected text output keeps the source text verbatim by default and adds ANSI
 color only when the selected color mode permits it. Binary output uses its
@@ -985,7 +1195,8 @@ see whether the write committed.
 ## Cell references
 
 `cf cell` holds the commands that act on a cell: `get` and `set` for its value,
-`get-label` and `set-label` for the CFC label on it. Each takes a reference.
+`get-label`, `set-label` and `release-by-intent` for the CFC label on it. Each
+takes a reference.
 
 A reference names a cell, and one grammar covers every part of the name:
 
@@ -1219,10 +1430,17 @@ authority atomically with the source pointer and revision; a refused setup
 publishes no proposed authority. Successful source updates require an owned,
 durable setup transaction. Against a deployment that runs the serving loop, that
 transaction is the serving runtime's: the command sends the resolved program and
-the piece's id to the deployment's pattern-lifecycle route, and the update
-commits there, directly to the store (see
+the piece's id as a pattern-lifecycle verb, and the update commits there,
+directly to the store (see
 [Where a piece is created](#where-a-piece-is-created)). The check stays in this
 process on every deployment.
+
+A source update detaches the piece from the origin it follows. With
+`--origin <origin>`, a `system:` ref or a fabric URL, the update records that
+origin with its revision instead: the piece runs the source the command names,
+and takes what the origin serves the next time it is opened. An embedder that
+deploys its own copy of a first-party pattern uses this to keep the piece on the
+pattern's later releases.
 
 Preflight uses setup's stored-argument validation: optional fields holding
 `undefined` count as absent, and unreadable linked values defer to reactive
@@ -1272,8 +1490,10 @@ landed since.
 `cf piece render --cell <reference>` starts the piece in the command's own
 process, renders its UI against an in-process document, and prints the HTML.
 `--no-start` renders the piece's stored state instead of starting it, and
-`--json` prints the HTML inside a JSON record. The references it accepts are
-described under [Cell references](#cell-references).
+`--json` prints the HTML inside a JSON record. Under server execution the
+command starts nothing either way, and renders the view it pulled from the
+server. The references it accepts are described under
+[Cell references](#cell-references).
 
 Without `--watch` the command prints once and exits. It prints when three things
 hold at once: the piece has nothing left to compute, nothing it asked storage
@@ -1308,33 +1528,33 @@ print.
 
 `cf space compact <store.sqlite> --documents <prefix> [--out <path>]` compacts a
 space store's revision history and writes the result as a fresh file. It is
-[the compaction plan](../../docs/plans/compact-space.md)'s tool, the one
-`cf space` command that rewrites a store's rows rather than copying or restoring
-a file. The write path runs offline against a copy of a backup, never against a
-file a server has open: the operator stops the owning instance, takes the
-backup, compacts a copy of it, verifies the result against the backup, and
-installs it, in the order that plan's §4 gives. `--dry-run` prints the report
-below and writes nothing; `--verify` checks a result against its backup; both
-open their files read-only and may be run on a snapshot taken while the space is
-still served.
+[the compaction plan](../../docs/plans/compact-space.md)'s tool, and with
+`cf space reap` one of the two `cf space` commands that rewrite a store's rows
+rather than copying or restoring a file. The write path runs offline against a
+copy of a backup, never against a file a server has open: the operator stops the
+owning instance, takes the backup, compacts a copy of it, verifies the result
+against the backup, and installs it, in the order that plan's §4 gives.
+`--dry-run` prints the report below and writes nothing; `--verify` checks a
+result against its backup; both open their files read-only and may be run on a
+snapshot taken while the space is still served.
 
 It takes the store's file path rather than a space name, for the reason the
 [staging copy procedure](../../docs/development/staging-space-copy.md) gives:
 the directory's neighbors are the authority on where a space's file is.
-`--documents` names the instances by id prefix (`of:`, `computed:` or `cid:`),
-and may repeat; the ACL document is never selected. `--scope` restricts the
-selection to `space`, `user` or `session` instances; repeated or nested prefixes
-count as one selection. The cut is the head of every selected instance unless
-`--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the store's own format
-and no other) or `--keep-last <n>` bounds it, and a row survives if any bound
-keeps it. `--keep-payloads <duration>` (default `24h`) is the window, measured
-from the newest client commit, within which commits keep their payload; outside
-it a commit's payload is replaced by a marker carrying a hash of what it held,
-unless its seq is 1, an `op_*` row references it, or it is a compaction commit,
-whether or not a surviving revision still points at the commit. A hollowed
-commit is still a row in the log, told apart from an elided write by its marker;
-what is gone is its contents, which the backup keeps. A commit whose payload
-survives stays inspectable in full.
+`--documents` names the instances by id prefix (`of:`, `computed:`, `receipt:`
+or `cid:`), and may repeat; the ACL document is never selected. `--scope`
+restricts the selection to `space`, `user` or `session` instances; repeated or
+nested prefixes count as one selection. The cut is the head of every selected
+instance unless `--before-seq`, `--before <YYYY-MM-DD HH:MM:SS>` (UTC, in the
+store's own format and no other) or `--keep-last <n>` bounds it, and a row
+survives if any bound keeps it. `--keep-payloads <duration>` (default `24h`) is
+the window, measured from the newest client commit, within which commits keep
+their payload; outside it a commit's payload is replaced by a marker carrying a
+hash of what it held, unless its seq is 1, an `op_*` row references it, or it is
+a compaction commit, whether or not a surviving revision still points at the
+commit. A hollowed commit is still a row in the log, told apart from an elided
+write by its marker; what is gone is its contents, which the backup keeps. A
+commit whose payload survives stays inspectable in full.
 
 A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
@@ -1342,26 +1562,26 @@ would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
 a second branch, one with no commit 1, one with foreign-key violations, one
 holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, or a store or result path
-under a directory a local server serves; then opens the store through the engine
-with an exclusive lock and, in order: inserts the compaction commit at the next
-seq, a `system` commit under the `compaction:<run id>` session with the plan as
-its payload; compacts each selected instance in its own transaction — the oldest
-row the cut keeps becomes the base, rewritten as a `set` holding the engine's
-reconstruction at exactly that row if it was a patch, and attributed to the
-compaction commit whatever its op, with the rows and snapshots behind it
-deleted; hollows the payloads outside the window in seq-ranged batches; writes
-the audit revision on the space's ACL document, a whole-document `set` of the
-document as it stands with a `compaction` member beside `value`, when the store
-has a live one (a space with no ACL document gets none, and a tombstoned one is
-left as it is, since a `set` would recreate it); checks the foreign keys and the
-file's integrity; and writes the result with `VACUUM
-INTO` to `--out`,
-`<store>.compacted.sqlite` beside the source by default, never overwriting. A
-run interrupted anywhere leaves a store every reader can use, and running it
-again resumes it under a second compaction commit. The run's own summary follows
-the plan on stdout; progress goes to stderr; `--json` emits the summary as one
-document.
+one with a non-empty `-wal` or `-journal` beside it, one another connection
+holds, or a store or result path under a directory a local server serves; then
+opens the store through the engine with an exclusive lock and, in order: inserts
+the compaction commit at the next seq, a `system` commit under the
+`compaction:<run id>` session with the plan as its payload; compacts each
+selected instance in its own transaction — the oldest row the cut keeps becomes
+the base, rewritten as a `set` holding the engine's reconstruction at exactly
+that row if it was a patch, and attributed to the compaction commit whatever its
+op, with the rows and snapshots behind it deleted; hollows the payloads outside
+the window in seq-ranged batches; writes the audit revision on the space's ACL
+document, a whole-document `set` of the document as it stands with a
+`compaction` member beside `value`, when the store has a live one (a space with
+no ACL document gets none, and a tombstoned one is left as it is, since a `set`
+would recreate it); checks the foreign keys and the file's integrity; and writes
+the result with `VACUUM
+INTO` to `--out`, `<store>.compacted.sqlite` beside the
+source by default, never overwriting. A run interrupted anywhere leaves a store
+every reader can use, and running it again resumes it under a second compaction
+commit. The run's own summary follows the plan on stdout; progress goes to
+stderr; `--json` emits the summary as one document.
 
 `cf space compact <result.sqlite> --verify --against <backup.sqlite>` checks a
 result against the store it was compacted from, read-only on both, and exits
@@ -1395,6 +1615,43 @@ commit would take, and the preconditions a run checks, foreign-key integrity
 among them. The payload accounting reads every commit's payload and is the slow
 part of the plan. `--json` emits the same report as JSON.
 
+## Reaping a deleted space's store
+
+`cf space reap <store.sqlite> [--out <path>]` reclaims a deleted space's storage
+([reaping a deleted space](../../docs/specs/random-space-identities.md#reaping-a-deleted-space)).
+It takes only a store whose access-control document holds a deletion tombstone,
+and refuses any other, a store with a commit after the deletion, a store with a
+log beside it that is not empty, a store another connection holds, one the
+server would migrate on opening it, and a result path that exists or sits in a
+served directory. Whether a connection holds the store is asked of SQLite, by
+taking the file's exclusive lock: any connection to a WAL-mode store prevents
+that, as does one to a rollback-mode store inside a transaction, but an idle
+connection to a rollback-mode store holds no lock to see, so that the store is a
+copy nothing has open is still the procedure's to ensure. It reads the store, a
+copy of the space's backup, without writing it, and writes the result fresh,
+`<store>.reaped.sqlite` beside it by default. The result keeps the deletion
+commit's row, the invocation and authorization rows it references, the deletion
+tombstone's revision and head rows, and the default branch's row; every other
+row of every table goes. So the space goes on refusing every principal as
+deleted, under the same `aclRevision`, and its server sequence stays the
+deletion commit's.
+
+Before it reports, the command checks the result against the store it was reaped
+from, read-only on both: integrity and foreign keys; the store's access-control
+document a deletion tombstone at the server sequence; and, for every table, the
+kept rows byte-identical and no other row, and no table the store lacks. A
+result that fails a check is removed and the command exits nonzero. `--dry-run`
+reports what would be kept and removed, and writes nothing. The space's cell
+databases are files beside the live store, not in it, so the report names them,
+`cell-<hash>-*.sqlite`, and `--dry-run --live <live.sqlite>` lists the files
+under that prefix beside the space's live store, which the install moves. The
+prefix is a 32-bit hash of the DID, so when another store sits there whose
+prefix is the same, the files under it cannot be told apart by name: the list is
+empty, and the report names that store. The install that puts the result in
+place of the live store moves the listed files out of the live directory, beside
+the copy of the live store it keeps. `cf inspect summary` reads a reaped store
+as the deleted space it is.
+
 ## Creating a space
 
 `cf space create [--label <label>]` creates a space and prints its DID. The DID
@@ -1419,6 +1676,19 @@ installs or replaces a Home root.
 [Custom Home pattern](../../docs/common/conventions/HOME_SPACE.md#custom-home-pattern)
 walks through it.
 
+## Deleting a space
+
+`cf space delete --space <space> --confirm <space-DID>` deletes a space as its
+sole member, for everyone and for good
+([deleting a space](../../docs/specs/random-space-identities.md#deleting-a-space)).
+It refuses while the access list names any principal besides the identity the
+command connects as, `"*"` included, and names those principals, so that each
+one's removal is a `cf acl remove` of its own. It runs only when `--confirm` is
+the space's own DID, which a mistyped `--space` never resolves to. The memory
+server decides the deletion again, refusing a Home and a list that changed
+since, and revokes every session on the space. Deleting a self-owned space
+through a delegation chain is not part of this command.
+
 ## Where a piece is created
 
 `cf piece new <main> --input-file <path>` reads a JSON object and uses it as the
@@ -1438,34 +1708,51 @@ existing key does not update the note or create another one.
 Against a deployment that runs the serving loop — one whose published posture
 selects `EXPERIMENTAL_SERVER_EXECUTION`, which the connection adopts —
 `cf piece new` does not compile or commit in this process. It resolves the
-program from disk, pins its fabric imports, and sends it to the deployment's
-pattern-lifecycle route, signed with the identity the command connects as; the
-space's serving runtime compiles it, creates the piece, and answers with the
-receipt the command prints. Where the deployment enforces ACLs, the identity
-must hold WRITE or OWNER on the space; a deployment with enforcement off admits
-any signed caller, as its memory server does. Setup, slug, and creation receipt
-commit together, so a taken name refuses before anything is created.
-Registration then invokes the default pattern's `addPiece` handler and waits for
-its durable consequence and registry readback. A failure names the created piece
-and a retry key; repeat `cf piece new` with `--request-key <key>` to resume that
-creation. The space root is the serving loop's to ensure rather than this
-command's. What stays in this process after the receipt is what opening a piece
-does anyway: the start, which `--no-start` skips; `--no-start` also asks the
-serving loop not to derive the piece until something demands it. The receipt
-returns once the piece is durable and registered, including with `--no-start`;
-the serving loop derives it on demand, so a reader that needs the derived value
-pulls it. Against any other deployment, and under `cf test`, the command
-performs every step itself, as before. `cf piece setsrc` requests the same way
-against a serving deployment: it resolves and pins the program, sends it with
-the piece's id, and prints the receipt of the setup transaction the serving
-runtime committed — directly to the store, since a source update publishes
-module update authority that requires a transaction committing to storage
-itself. What stays in this process is the refresh a client-side update runs
-after its commit: the command starts the piece it holds and reports that outcome
-beside the receipt, exiting non-zero when the refresh fails over a durable
-commit. A piece addressed at a scope keeps the client-side path.
-`cf piece setsrc --check` performs every step in this process on every
-deployment. The contract, including the refusals and their codes, is
+program from disk, pins its fabric imports, and sends it as a
+`pattern.lifecycle` request on the space's memory session, as the identity the
+command connects as. That session reaches the toolshed process serving the
+space. Against a memory server that does not take the request, the command fails
+with `lifecycle-unsupported` before anything is sent. A request takes at most 8
+MiB in UTF-8, and at most 4 MiB on a connection through the memory router; a
+larger one is refused before it is sent. The space's serving runtime compiles
+the program, creates the piece, and answers with the receipt the command prints.
+Where the deployment enforces ACLs, the identity must hold WRITE or OWNER on the
+space; a deployment with enforcement off admits any authenticated caller, as its
+memory server does. Setup, slug, and creation receipt commit together, so a
+taken name refuses before anything is created. Registration then invokes the
+default pattern's `addPiece` handler and waits for its durable consequence and
+registry readback. A failure names the created piece and a retry key; repeat
+`cf piece new` with `--request-key <key>` to resume that creation. The space
+root is the serving loop's to ensure rather than this command's. What stays in
+this process after the receipt is what opening a piece does anyway: the start,
+which `--no-start` skips; `--no-start` also asks the serving loop not to derive
+the piece until something demands it. The receipt returns once the piece is
+durable and registered, including with `--no-start`; the serving loop derives it
+on demand, so a reader that needs the derived value pulls it. Against any other
+deployment, and under `cf test`, the command performs every step itself.
+`cf piece setsrc` requests the same way against a serving deployment: it
+resolves and pins the program, sends it with the piece's id, and prints the
+receipt of the setup transaction the serving runtime committed — directly to the
+store, since a source update publishes module update authority that requires a
+transaction committing to storage itself. What stays in this process is the
+refresh a client-side update runs after its commit: the command starts the piece
+it holds and reports that outcome beside the receipt, exiting non-zero when the
+refresh fails over a durable commit. A piece addressed at a scope (`<id>@user`,
+`<id>@session`) is sent with its scope, and the serving runtime changes your
+instance of it. `cf piece setsrc --check` performs every step in this process on
+every deployment. `cf piece follow` sends the piece's id and the origin, with
+its pins and override, as the `follow` verb; the serving runtime resolves the
+origin, reviews what it serves, and commits the transition that records it. The
+command then asks the server for the piece's result, and reports a failure of
+that over the durable follow and sends a scoped piece's scope, as `setsrc` does.
+A deployment whose memory server does not advertise that its lifecycle verbs
+take an origin (`patternLifecycleOrigins`) is told, before anything is sent,
+that it does not serve `follow` yet, and `setsrc --origin` is refused there the
+same way, as `origin-unsupported`; one that does not advertise that they take a
+scope (`patternLifecycleScopes`) is sent no scoped `setsrc` or `follow`, which
+is refused as `scope-unsupported`. Under server execution neither command
+changes a piece's source in this process. The contract, including the refusals
+and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -1717,6 +2004,34 @@ echo '{"confidentiality":[]}' \
   | cf cell set-label --cell ID queue --dangerously-allow-lowering-confidentiality
 ```
 
+A link stored at the path carries a label of its own, and its target's labels
+are stored at the target. A lowering at a link that is not a write redirect
+lowers the link's own label and leaves its target's alone. A write redirect is
+followed, as a write follows it, and the lowering lands where it leads. Pass
+`--link-slot` to lower the redirect's own label instead, leaving its target's
+alone. It is needed when the clause to remove is on the redirect itself, such as
+a stamp a write after a labeled read left on the link: without the flag, the
+lowering refuses, naming the clause as the label of a write redirect the path
+follows. `get-label` at the path shows the redirect's own label beside its
+target's, so the refusal is the signal to tell the two apart.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID profile --dangerously-allow-lowering-confidentiality --link-slot
+```
+
+A `*` segment in the path stands for any segment, as it does in the label
+`get-label` shows. Such a path lowers the wildcard label stored there, which
+covers every element or field at that depth, and the label stored at each
+element or field it matches; the path needs no value of its own, only the one
+holding the `*`. A path naming one element or field leaves the wildcard label
+alone, so lower a wildcard label through a path with `*` in its place.
+
+```bash
+echo '{"confidentiality":[]}' \
+  | cf cell set-label --cell ID 'entries/*' --dangerously-allow-lowering-confidentiality
+```
+
 The identity may lower confidentiality only in its own space, the space whose
 DID is the identity's, and only for clauses whose every alternative stands for
 the identity alone: its DID, a `User`, `Context` or `Resource` atom naming it,
@@ -1725,12 +2040,83 @@ or its own space as `Space` or `PersonalSpace`. A `User` subject or a
 place of the DID. A clause with any other alternative refuses the whole
 lowering, and every clause stays in place. So does a clause the path still shows
 afterwards that the input does not name, from a position the lowering does not
-rewrite: an ancestor's or a wildcard label, a branch of the stored schema, or
-the piece's own schema, which a change to the pattern lowers. Each lowering
-commits with a create-only receipt in that space, readable by the identity
-alone, recording the clauses removed and digests of the stored metadata before
-and after. Reads served before the lowering keep the label they were served
-under.
+rewrite: an ancestor's label, a wildcard label covering a segment the path names
+concretely, the label of a write redirect the path follows, a branch of the
+stored schema, or the piece's own schema, which a change to the pattern lowers.
+Each lowering commits with a create-only receipt in that space, readable by the
+identity alone, recording the clauses removed, the paths they were removed at,
+and digests of the stored metadata before and after. Reads served before the
+lowering keep the label they were served under.
+
+`cf cell release-by-intent` is the owner's release of clauses that are not
+theirs alone, such as the stamps an earlier setup left on a result's membership
+naming other principals whose data the result does not hold. A lowering with
+`set-label` refuses those; this command releases them on a request the space's
+owner signs. That is the owner release by intent (§8.12.7 route 2d) proposed in
+[specs#90](https://github.com/commonfabric/specs/pull/90), which this runtime
+implements ahead of its ruling. Without `--clause` it only lists the
+confidentiality clauses the label map stores at the path, each with its
+canonical clause digest and the labels holding it (component and observation
+class), and the space's owner, and changes nothing. A clause's plaintext and
+committed spellings are two clauses, each with its own digest. The space's owner
+is the owner its access list names; where the space stores no access list, it is
+the identity whose DID is the space's, as for a home space; and a stored list
+naming no valid concrete owner gives the space no owner, so no release by intent
+is possible there:
+
+```bash
+cf cell release-by-intent --cell ID
+```
+
+Each `--clause` names a clause to release by its digest, or by a prefix of it
+that begins no other stored clause's digest; an ambiguous prefix is refused,
+naming the digests it begins. A named clause comes off every label stored at the
+path, whoever it stands for: the declared label and the stored schema's
+declaration, the labels derived from what was written there (the existence entry
+and the membership entries included), and a link's own label. Labels at other
+paths, an ancestor's included, the value, and integrity labels are not changed.
+A clause the stored schema declares is declared again by the next write through
+that schema.
+
+```bash
+cf cell release-by-intent --cell ID --clause 3gYWzS --clause oYjOtO
+```
+
+The path names one stored position. The links it crosses are followed to the
+document it lands in, and a link stored at the path is not, so a link slot's own
+label is what it releases. A `*` segment names the wildcard position stored
+there, such as the per-element templates a list's membership is stamped on, and
+none of the elements or fields it covers. A clause stamped across a container is
+usually stored at several positions, the container's own path and its `*`
+position among them, so the listing names, beside the clauses at the path, the
+document's other positions holding any of them; each is a release of its own,
+and a release reaches none of them.
+
+```bash
+cf cell release-by-intent --cell ID '*' --clause 3gYWzS --clause oYjOtO
+```
+
+Before anything is signed, the command shows the document, the path, the signer,
+each clause that comes off and each that stays, and the other positions still
+holding a clause it releases, and asks for the word `release` to be typed. Only
+then does it sign the request with the identity and commit the release together
+with its record, a create-only document in the space holding the signed request,
+the owner, the document and path, the released clauses' digests, and digests of
+the stored labels before and after; the record is readable by the owner. With
+`--clause`, the command runs only with standard input and standard error at a
+terminal, so what it shows reaches the owner who confirms it, and refuses before
+it builds or signs anything otherwise; it refuses as well when the identity is
+not the space's owner. No option skips the confirmation: the signature stands
+for the owner's own decision, made in person, which is the one thing the store
+cannot check.
+
+The store checks the rest at the commit: that the signature verifies, that the
+signer is the space's owner, that the request names the space, document and path
+the commit changes, that every clause it names is stored there, that the stored
+labels are still the ones the request was made against, and that the request has
+not been used before. Any failure refuses the release whole. A request is used
+once: running the command again builds a new request against the labels as they
+are then. Reads served before the release keep the label they were served under.
 
 ## Invocation sessions
 
@@ -1771,10 +2157,19 @@ for the runner to observe. A repeated cancellation keeps the first timestamp,
 and a terminal record is unchanged. Cancellation does not synchronously change
 the run's state; the runner acknowledges it by ending the run `cancelled`.
 
-All three commands take `--identity` / `CF_IDENTITY` and `--api-url` /
+`cf agent remove <run> [--json]` takes a finished run off the home queue, so
+`ls` and `show` stop finding it. The record stays where it is, and the piece
+that requested it keeps following it. It removes the one entry at the address
+the record's id gives it, which is where the `agent` builtin lists every run. A
+run that has not ended is refused (cancel it first), and so is a run the queue
+lists more than once or anywhere else; nothing is removed then. Removing an
+entry lowers no label: the entry's document keeps what it holds, and the queue
+stops naming it, so reading the queue no longer reaches that entry's labels.
+
+All four commands take `--identity` / `CF_IDENTITY` and `--api-url` /
 `CF_API_URL`. The API URL names the home toolshed; each queue entry determines
-the host used to read or cancel that record. Completion offers the state
-vocabulary and live run ids from the home queue.
+the host used to read, cancel, or remove that record. Completion offers the
+state vocabulary and live run ids from the home queue.
 
 ## Agent runner
 
@@ -1915,7 +2310,8 @@ instructions?, context?, resultSchema?, tools?, maxModelTurns?, maxInputBytes?,
 maxOutputTokens?, imageAttachments?, depth?, tags?, domains?, reasoningEffort?,
 browserHost?, inputs?, foreignSpaces?, interactive?, hostMounts?}`
 with `POST /jobs`, bounded at 1 MiB of UTF-8 JSON before parsing, reads a job
-with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n`, stops one with
+with `GET /jobs/<id>` or the newest with `GET /jobs?limit=n` (narrowed to one
+caller's or one profile's jobs with `caller=` and `profile=`), stops one with
 `POST /jobs/<id>/cancel`, and watches one with
 `GET /jobs/<id>/events?after=<seq>`, a stream of server-sent events that ends
 after the job's terminal state. A request's `depth` (`quick`, `standard` or
@@ -1932,6 +2328,17 @@ it `down` with that reason, and a failed start leaves it `refused` with the
 error. Observed queue scan or record-follow failures mark it `down`; a
 successful scan marks it `up`. An idle queue is healthy: this does not detect a
 subscription that silently stops delivering changes.
+
+The listing also accepts `contextKey` and `contextValue` together: a simple
+identifier naming a top-level context field, and the string it equals or its
+array contains. The value may be empty and is limited to 4,096 UTF-16 code
+units; names and cursor ids are nonempty and limited to 200. Each filter and
+cursor parameter may occur only once. All filters apply before the limit. The
+response's `nextCursor` is the id of the last returned job when more match, and
+null at the end of retained history; otherwise pass it as `before`, keeping the
+same filters, to read the next page. Jobs added between pages do not shift the
+continuation. An unknown cursor is refused. These are read filters on the
+private socket, not grants of authority over a job.
 
 `interactive` is an optional boolean indicating that a person is waiting.
 Interactive queued jobs start ahead of every queued background job, oldest first
@@ -2031,18 +2438,19 @@ contract before that restriction is widened.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
-`openai-codex`, make one provider attempt without transport retries, check the
-final UTF-8 request body before sending it, and set the provider's output-token
-ceiling, including reasoning tokens. The byte check includes instructions,
-history and tool schemas and rejects oversized context without discarding it.
-The same model client carries these limits into research and delegated calls. A
-run under the gateway provider refuses these limits as its model client is
-built, before any model call. An input-byte ceiling is not a token count;
-callers budgeting tokens must reserve separate provider framing headroom.
-Provider-added native-search context and image token expansion require separate
-accounting; the serialized byte check does not bound them. A response that
-reaches its output-token ceiling ends as a provider failure, with no partial
-structured result admitted.
+`openai-codex`, make one provider attempt without transport retries (a request
+whose access token the provider refuses is issued once more with a refreshed
+token), check the final UTF-8 request body before sending it, and set the
+provider's output-token ceiling, including reasoning tokens. The byte check
+includes instructions, history and tool schemas and rejects oversized context
+without discarding it. The same model client carries these limits into research
+and delegated calls. A run under the gateway provider refuses these limits as
+its model client is built, before any model call. An input-byte ceiling is not a
+token count; callers budgeting tokens must reserve separate provider framing
+headroom. Provider-added native-search context and image token expansion require
+separate accounting; the serialized byte check does not bound them. A response
+that reaches its output-token ceiling ends as a provider failure, with no
+partial structured result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature
@@ -2207,6 +2615,25 @@ have changed things. Its recorded checkpoint can seed a new follow-up, whether
 the message waited through the restart or arrived afterward. The new run retains
 completed work and marks the prior request as interrupted.
 
+## What a run loads
+
+A run of `cf` loads only the command it addresses. `commands/root.ts` names
+every top-level command with its description and a function that loads it, so
+`cf --help` loads no command and `cf piece call` loads `piece` alone. The root's
+help prints those descriptions, and a test holds them equal to what each command
+declares, so a change to a top-level command's description or positionals is
+made in both places. A new top-level command is a new entry in that table.
+`commands/main.ts` is the whole tree, loaded, for the tools that walk it.
+
+Most of what starting `cf` costs is Deno reading the modules a run can reach
+([`docs/development/imports.md`](../../docs/development/imports.md#what-starting-a-program-reads)),
+so a command that only talks to a running piece reads neither the compiler nor
+the memory engine. `test/start-graph.test.ts` holds those limits. A path in
+`piece` or `cell` that needs the compiler loads it where it needs it, with
+`await import(...)`. The launcher starts `cf` with
+`--unstable-lazy-dynamic-imports`, without which Deno reads what those imports
+name anyway. A compiled binary embeds them all and loads the same subset.
+
 ## One deployment per process
 
 A `cf` process talks to one deployment. Opening a connection writes settings
@@ -2258,16 +2685,48 @@ memo, which names a space once for the life of the process.
 - The launcher spawns the child CLI with `deno run --quiet` so Deno's own
   warnings (npm "Ignored build scripts" banner) never reach users.
 
-### What a read waits for under server execution
+### What a read and a call do under server execution
 
-With server execution on, a read first waits until the serving runtime has
-reacted to every authored commit at or below the server's head as it stands when
-the read begins. The serving runtime runs the handlers and derives what a read
-returns. A `cf cell set` that sends an event returns with the event committed
-and that run still ahead, and a `cf piece call` returns that way under
-`--no-wait`, so the wait is what makes a `cf cell get` that follows one, from
-the same process or another, read what the run stored. With server execution
-off, this runtime runs what it reads, and no such wait occurs.
+With server execution on, the serving runtime runs the handlers and derives what
+a read returns, and `cf` runs no piece. `cf piece call` sends the event, waits
+for the server to confirm the handling, and reads the result off the handling's
+receipt, without loading the pattern unless a payload needs its event contract.
+A tool is the exception: it runs to completion in the command's own process, and
+so does the wish behind `cf wish`.
+
+`cf piece new`, `cf piece setsrc`, and `cf piece link` start nothing either.
+`--no-start` on `cf piece new` still asks the serving loop not to derive the
+piece until something demands it, and on `cf piece link` it changes nothing.
+`--select`, `--schema`, and `--filter` shape what a read returned, with no
+pattern graph and no commit.
+
+`cf cell get`, `cf piece inspect`, `cf piece view`, `cf piece step`, and
+`cf piece
+render` pull what they read from the server. A pull first waits until
+the serving runtime has reacted to every authored commit at or below the
+server's head as it stands when the read begins. A `cf cell set` that sends an
+event returns with the event committed and that run still ahead, and a
+`cf piece call` returns that way under `--no-wait`, so this is what makes a read
+that follows one, from the same process or another, see what the run stored. A
+server that does not report which commits are authored gets no such wait, and
+the command says so on stderr, since the read may not show a run a send just
+started.
+
+A pull then asks the server for the value, as a client rendering it would, and
+waits until the serving loop has settled with that demand included
+(`pullFromServer()`, `docs/features/view-scoped-client-replication.md`), so a
+derived value nothing else was demanding is current when it is read. A server
+with no view protocol, or one that predates `read` views, gets no such request:
+the command says so on stderr and reads what the server has stored.
+
+`cf piece step` is therefore only a pull, and writes nothing, and `--step` on
+`cf
+cell get` adds nothing to the read. `cf cell get --no-run` skips both waits
+and returns what the store holds now, which for a derived value nothing has
+demanded yet is nothing, reported as `null`.
+
+With server execution off, this runtime runs what it reads, and none of this
+applies.
 
 ### What a call refuses before it dispatches
 
@@ -2362,10 +2821,11 @@ cf cell get --cell ID items \
 
 A path read first resolves the piece's canonical result and metadata, then pulls
 the selected path. It does not first synchronize the producer's entire result
-schema. Reading the root still requests the whole result. `--step` also starts
-the piece and waits for asynchronous work, including session-scoped store
-queries and their reactive updates, to settle before reading. Its execution can
-demand inputs beyond the selected output. Missing-path diagnostics can require a
+schema. Reading the root still requests the whole result. With server execution
+off, `--step` also starts the piece and waits for asynchronous work, including
+session-scoped store queries and their reactive updates, to settle before
+reading, and its execution can demand inputs beyond the selected output. Under
+server execution it starts nothing. Missing-path diagnostics can require a
 broader root read.
 
 `cf piece call` writes them **past the `--` that closes the callable's
@@ -2381,7 +2841,7 @@ cf piece call --cell ID listTopics -- --filter '.status == "open"'
 `wish` writes them beside the target it resolves:
 
 ```bash
-cf wish '#profile' -i ./claude.key --select name,avatar
+cf wish '#profile' -i ./claude.key --select name,bio
 cf wish '#mentionable' -i ./claude.key -s my-space --filter '.status == "open"'
 ```
 
@@ -2872,9 +3332,9 @@ the launcher's current directory. This preserves `deno task cf` behavior from a
 caller directory. Direct sandbox or wrapper callers should pass `--cwd` when
 they need to ignore a stale inherited `INIT_CWD`.
 
-The child CLI process inherits the parent environment. The launcher only adds
-`CF_CLI_NAME=cf`, so caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental
-flags, and CFC/sandbox-related environment variables continue to flow through.
+The child CLI process inherits the parent environment unchanged, so
+caller-provided `CF_API_URL`, `CF_IDENTITY`, experimental flags, and
+CFC/sandbox-related environment variables continue to flow through.
 
 From the Labs checkout:
 
@@ -2901,6 +3361,181 @@ deno run --allow-run --allow-env --allow-read vendor/labs/runtime/cli/launcher.t
 
 Use `--launcher-help` for launcher-specific help. Normal CLI flags such as
 `--help` are passed through to `cf`.
+
+## Keeping, sharing and publishing in the pattern index
+
+The pattern index is where a person's patterns are kept while they work on them,
+and where shared and published patterns are found. `cf index` holds the
+membership commands and `cf pattern` the rest: `cf index join` once, after which
+each deploy of the person's own pattern is kept as a private version
+(`cf pattern history`, `cf pattern rollback`); `cf pattern share` shares one
+anonymously, `cf pattern publish` under the person's name, and `cf pattern ls`
+(also `cf pattern mine`) says where shared ones stand. Every call to the index
+signs with the identity (`--identity` or `CF_IDENTITY`), except the invite
+redemption in `cf index join`, which the index-only root key it creates signs
+(see "Joining"). All of them talk to the index `--pattern-index-url` or
+`CF_PATTERN_INDEX_URL` names, the deployment's by default.
+
+### Joining
+
+The index admits people by invite. `cf index join` reads the invite link from
+stdin, which keeps the secret code in its fragment out of shell history and
+transcripts, or takes it as an argument. It makes a key for the index alone,
+redeems the invite with it so it becomes the root of the person's membership,
+and has that root delegate `/index` to the `cf` identity. The person's own
+identity never becomes their index root, so nothing the index learns links to
+their spaces or profile. The root key and the chains it issued are kept under
+`$XDG_STATE_HOME/commonfabric/pattern-index/<host>/` (or `~/.local/state/…`, or
+`CF_PATTERN_INDEX_HOME`), private to the user; that directory is the person's
+standing on the index and is worth backing up. Joining again redeems nothing,
+and a join whose redemption landed without its answer arriving is completed by
+running it again.
+
+A link to a signing key holds for at most 90 days, so every index call from `cf`
+renews it from the kept root when it has under a week left. Other keys act for
+the same person through chains the root issues:
+
+- `cf delegation issue --index --to <did> --out <file>` writes the chain another
+  key presents: a Loom instance key, or a second machine, which then runs
+  `cf index join --chain <file>` instead of redeeming a second invite. A chain
+  adopted this way is not renewed where the root is not kept; the root's machine
+  issues a new one before it lapses.
+- `cf delegation issue --index-root --to <did> --out <file>` writes the
+  single-use delegation that moves the membership to a new root key, which
+  presents it with `cf index move-root <file>`. Chains from the old root stop
+  working.
+
+`cf index sharing` shows the person's give-to-get setting, the same one their
+loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
+change it. On, which is the default, their patterns are shared anonymously once
+they open them in their loom and they pass the privacy check, and they see what
+others share; off, nothing of theirs is shared on its own (what they shared with
+`cf pattern share` stays shared until `cf pattern unshare`), and search and
+listings show them only patterns published under a name, though a shared pattern
+opened by its id, as an import or `--from-index` does, still works.
+`--self-built` says whether that covers the patterns they build themselves in
+`cf` and Claude Code.
+
+`cf index whoami` says which member the index sees the identity as. An admin
+admits a key without an invite with `cf index admit <did>`.
+
+### Private versions
+
+On an index that keeps versions, each `cf piece new <file>` and
+`cf piece setsrc` of a pattern the person owns is kept as a version only they
+can read, once the deploy commits, and the deploy prints one line saying which
+version it is (`piece new --json` carries it as `version`, whose `status` is
+`recorded`, `unchanged`, `not-joined`, `skipped` or `failed`). A deploy whose
+source the newest version already has keeps no new one and says so
+(`unchanged`). An index from before private versions is sent nothing, and the
+deploy prints no version line (`--json` reports `skipped`). A version holds the
+source as deployed, personal details included, so it is kept where only its
+owner can read it, and admins cannot see it. The versions of one entry file form
+its lineage, which the index finds by a slot `cf` computes. In a git checkout
+with an `origin` remote the slot is a hash of the remote and the file's path in
+the repository, so every worktree and clone continues one lineage. Elsewhere it
+is the absolute path keyed with a secret kept in this machine's index store, so
+the index cannot confirm a guessed path; moving such a file starts a new
+lineage. A deploy from the index (`--from-index`), a `setsrc --origin` deploy (a
+system or repository pattern), and a file fetched from someone else's pattern
+and deployed unchanged keep no version; an edited one is kept as the person's
+remix of it. When this machine never joined an index, a deploy makes no index
+call and says so once. The index write never changes a deploy's outcome: a
+failure is reported in one line and the deploy's exit status stands.
+
+A deploy never shares a version by itself: drafts land many times an hour. The
+index shares a version once it settles, when its owner opens it in a loom, and
+only while their sharing setting (kept by the index; `cf index sharing` and
+Loom's settings change it) covers what they build; the deploy's line says so,
+and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
+shares one at once. The index write follows the deploy's commit and never
+changes its outcome, but the command waits for it before exiting.
+
+`cf pattern history` lists the person's lineages; `cf pattern history <entry>`
+lists one entry's versions, newest first, and where each stands.
+`cf pattern rollback <entry> <version>` writes an earlier version's files over
+the entry's, then makes it the newest version in the index. It refuses when a
+file it would write over holds something no version keeps, since nothing could
+bring that back, unless `--force`, and it never writes outside the pattern's
+directory. Naming the current version with `--force` writes its files back
+without a new version. Running pieces keep the source they have until the next
+`cf piece setsrc`.
+
+### Sharing
+
+`cf pattern share <entry file>` compiles the pattern as `cf piece new` does,
+against the same fabric (`--api-url`, `--space`), so that the id it shares under
+is the one a deploy computes; `--test`, `--datafile`, `--main-export` and
+`--root` package it the same way and must match how the piece was deployed. The
+description is the first paragraph of the entry's doc comment, which may follow
+`//` lines and imports, and the tags are its `@hashtags` and `@keywords` lines;
+`--description`, `--hashtags` and `--keywords` override them. An identity that
+is no member is refused before anything compiles. What it shares is a version of
+the entry's lineage. Others who share see it under a pseudonym of that lineage
+alone, never linked to the person's other lineages, beside a coarse tier of how
+much their other shared work is used.
+
+Before sharing, it asks the index's own privacy question locally: it fetches the
+prompt the index's privacy check runs and sends it, with the pattern, to the
+fabric toolshed's LLM. When the answer is that the pattern would reveal
+something identifying, it asks for a generalized version, with specific values
+lifted into arguments and fields renamed away from personal names, at most
+twice, recompiling and checking each. A rewrite may change only the files the
+findings name. A rewrite that passes is written over those files only when git
+tracks each one, it has no uncommitted edits, it is not a symbolic link, and it
+has not changed since it was read (`--allow-dirty` waives the git checks), or,
+outside git or over uncommitted edits, once the source as it stood is kept as a
+private version, which `cf pattern rollback` restores. The command then names
+the kinds of change and the files, never a value, and says how to take it back.
+When a rewrite passes but cannot be written, nothing is shared and the command
+exits 1, saying what to do. When no rewrite passes, the pattern is shared as it
+is, with the findings shown. The index's own check then holds it unlisted until
+they are fixed: it is in no one else's search or listing, and only its author
+and admins see it listed, though anyone given its id can still open it, as with
+any unlisted pattern. When the LLM call fails, the local check is skipped with
+one line saying so; the index checks every listing request either way.
+`--skip-local-check` skips it on purpose.
+
+A share names the id last shared from the same entry file on this machine as its
+predecessor (`priorPatternId`), so the new version keeps the old one's standing.
+A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
+created is published as a remix of that pattern (`remixedFrom`), or as a new
+version of it when it was the caller's own; `--remixed-from` names the source
+where `cf` has no record. Sharing then requests a listing. Past the index's
+daily limit it says when the limit resets, and running the same command then
+requests it again. The next step it prints is deploying the pattern with
+`cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
+author opens it in a loom.
+
+`cf pattern unshare <entry>` takes the pattern out of others' searches and
+listings and shares no later version until `cf pattern share` runs again. A
+version already shared stays readable by its id, so imports of it keep working.
+
+### Publishing under a name
+
+`cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
+then names the person as its author under one of their Common Fabric profiles
+(`--profile <space>`, the one `#profile` answers with by default). Only that
+lineage is named; the person's other lineages stay anonymous and are not linked
+to it. Without `--as "<the profile's name>"` it prints one line saying the name
+will be shown to every member and cannot be unseen, and names nothing: repeating
+the name is how an agent shows it asked the person. The index takes the profile
+only with proof that it is the person's: the delegation the profile space issued
+to their identity, which Home records. A profile made before profiles owned
+themselves has none and cannot be published under yet. Everything that can
+refuse the naming is checked before anything is shared; a naming the index
+refuses afterwards leaves the pattern shared, says so, and exits 1.
+`cf pattern unpublish <entry>` stops showing the name from then on; the lineage
+stays shared under its pseudonym.
+
+### Where patterns stand
+
+`cf pattern ls` lists the caller's patterns, one row per lineage (a pattern and
+its later versions): whether the newest version is being checked, held (with the
+findings to fix and the command that republishes it), in error waiting for an
+admin re-run, or listed, and then its bucket, its use counts, and what moves it
+on.
 
 ## JSON command contract
 
@@ -2942,7 +3577,21 @@ The supported output switches are:
   accepted, documented no-ops for callers that select JSON explicitly.
 - `cf delegation show --json` prints one row per delegation of each chain the
   file holds; `cf delegation issue --out <file> --json` reports the write as one
-  object naming the file, the space, the audience, and the chain's length.
+  object naming the file, the space, the audience, and the chain's length; with
+  `--index` or `--index-root` the object names the command and the index root
+  instead of a space, and the expiry.
+- `cf index join --json` and `cf index move-root --json` print
+  `{handle, role, root, signer, joined, storeDir, rootKeptHere}`, where
+  `rootKeptHere` says whether backing up `storeDir` keeps the root key;
+  `cf index whoami --json` prints the handle, the role and the signer.
+- `cf pattern share --json` prints the share report. Its `outcome` is `shared`,
+  with the id, the version, whether it was new, the listing request's outcome
+  and the next step, or `blocked`, with nothing shared and the next step. Both
+  carry the local check's outcome: findings and changes by category and file,
+  never a value. `cf pattern publish --json` prints the same report with a
+  `named` line once the name is shown. `cf pattern ls --json` prints its rows,
+  `cf pattern history --json` the versions (or, without an entry, the lineages),
+  and `cf pattern rollback --json` what it restored and wrote.
 - `cf check --json` compiles without evaluating and prints one object with a
   `files` array. Each entry has the input `path` and the compiled module bodies
   in `output`.
@@ -3353,8 +4002,14 @@ than passing quietly.
 
 `cf space invite` uses generic invitation service version 1. All commands take
 `--api-url`, `--identity`, and an explicit space DID through `--space`, or the
-corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables. They return
-JSON and require no existing memory session to redeem.
+corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables, and return
+JSON. Each command sends on a memory session on the space as the signing
+identity, which reaches the toolshed process serving the space: `create`,
+`list`, `revoke`, and `receipts` as a `space.invite` request, and `redeem` as
+the invitation a `session.open` carries, since the redeeming identity holds no
+grant on the space until the invitation is redeemed. Against a memory server
+that does not take the operation there, the command sends the signed HTTP
+request instead.
 
 - `cf space invite create --access READ --ttl 3600 --max-uses 2` creates an
   invitation. Access is READ, WRITE, or OWNER, TTL is 1–2,592,000 seconds, and
@@ -3376,7 +4031,7 @@ the one word after `--`, which comes after every option:
 `cf space invite revoke -- -Pj4…` or
 `cf space invite redeem --code-file code.txt -- -Pj4…`.
 
-Creation saves its credentials before sending HTTP. With
+Creation saves its credentials before sending the request. With
 `--request-file <path>`, the command requires a private parent directory (0700)
 and exclusively creates a private file (0600), or loads an existing private
 regular file. Existing files are never overwritten; symlinks, malformed data,
@@ -3394,7 +4049,7 @@ Without `--request-file`, each creation saves a new file under
 returned as `requestFile` in successful JSON output. The file contains the
 bearer code and remains local until the caller removes it. Keep it private and
 retain it while a creation outcome is uncertain. Saving and syncing the file
-precedes HTTP; this supports process restart recovery, without promising
+precedes sending; this supports process restart recovery, without promising
 recovery from filesystem or power failure. Errors never print the file contents.
 
 Only explicit owners can create, list, revoke, or list receipts. One distinct

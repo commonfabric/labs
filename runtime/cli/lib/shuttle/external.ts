@@ -35,7 +35,7 @@
 import { fromFileUrl, resolve, toFileUrl } from "@std/path/posix";
 
 import { holdsControlCharacter } from "./place.ts";
-import { type RecordEntry } from "./record.ts";
+import type { RecordEntry } from "./record.ts";
 
 /**
  * The one plane a location may stand on.

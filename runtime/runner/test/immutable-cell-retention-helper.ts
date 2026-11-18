@@ -5,7 +5,12 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import { convertCellsToLinks } from "../src/cell.ts";
-import { immutableCellsFor, immutableSnapshot } from "../src/immutable-cell.ts";
+import { portableSnapshotId } from "../src/data-uri.ts";
+import {
+  immutableCellsFor,
+  ImmutableCellStore,
+  immutableSnapshot,
+} from "../src/immutable-cell.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 
@@ -101,12 +106,49 @@ function failedReaderSchema() {
 }
 const failedSchema = failedReaderSchema();
 const explicitId = store.create({ held: "explicit" }).id;
+// A store reclaimed without disposal releases the identifiers it retained.
+function retainInDroppedStore(): void {
+  new ImmutableCellStore().create({ held: "dropped store" });
+}
+retainInDroppedStore();
+// An immutable cell's snapshot lives as long as a cell or link naming it does,
+// and an id string taken from it does not keep it.
+function droppedImmutableCell(value: unknown) {
+  const id = runtime.getImmutableCell(signer.did(), value)
+    .getAsNormalizedFullLink().id;
+  return { id, weak: new WeakRef(immutableSnapshot(id)) };
+}
+const droppedCell = droppedImmutableCell({ owned: "dropped" });
+const droppedPrimitive = droppedImmutableCell(42);
+const heldImmutableCell = runtime.getImmutableCell(signer.did(), {
+  owned: "held",
+});
+const portableId = portableSnapshotId(
+  runtime.getImmutableCell(signer.did(), { owned: "portable" })
+    .getAsNormalizedFullLink().id,
+);
+function expired(id: string): boolean {
+  try {
+    immutableSnapshot(id as `snapshot:${string}`);
+    return false;
+  } catch {
+    return true;
+  }
+}
 sources.length = 0;
 // WeakRef targets survive the job that created them; collection follows a turn.
 await yieldToEventLoop();
 gc();
 await yieldToEventLoop();
 gc();
+// A reclaimed store releases its claim from a finalizer, which runs in a task of
+// its own after a collection.
+await yieldToEventLoop();
+// Once the dropped store's claim is released, a store retaining equal content
+// is its identifier's only owner, so disposing that store expires it.
+const replacement = new ImmutableCellStore();
+const reclaimed = replacement.create({ held: "dropped store" });
+replacement.dispose();
 const report = {
   retainedBefore,
   distinctIds: distinctIds.size,
@@ -120,6 +162,14 @@ const report = {
   failedSchemaRetained: failedSchema.deref() !== undefined,
   queued: runtime.getCellFromLink(queued.link).getRaw(),
   explicit: immutableSnapshot(explicitId).value,
+  droppedStoreReleased: expired(reclaimed.id),
+  immutableCell: {
+    dropped: droppedCell.weak.deref() === undefined && expired(droppedCell.id),
+    droppedPrimitive: droppedPrimitive.weak.deref() === undefined &&
+      expired(droppedPrimitive.id),
+    held: heldImmutableCell.getRaw(),
+    portable: runtime.getCellFromLink({ ...base, id: portableId }).getRaw(),
+  },
 };
 // Keep both the runtime and source keys live through the collection above.
 if (relative.handle === undefined) throw new Error("Lost relative handle");

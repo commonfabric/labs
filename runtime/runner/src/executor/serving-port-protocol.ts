@@ -17,7 +17,6 @@ import { ProtocolError } from "@commonfabric/memory/v2";
 import type {
   AdmittedCommitNotice,
   DemandChangeReason,
-  ServedAclChange,
   ServedAclChangeVerdict,
   Server,
   SessionDemand,
@@ -28,11 +27,18 @@ import {
   type getLoggerCountsBreakdown,
   type TimingStatsBreakdown,
 } from "@commonfabric/logger";
-import type { SpaceAccessChange } from "../builder/types.ts";
+import type { CollectedMemory } from "../collected-memory.ts";
+import type {
+  EncodedCompileFailure,
+  EncodedModule,
+} from "../harness/compile-worker-protocol.ts";
+import type { ModuleCompileRequest } from "../harness/module-compile.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import type { MemorySpace, Result } from "../storage/interface.ts";
+import type { HostOccupancy } from "./host.ts";
+import type { ServedAclChangeData } from "./served-acl-change.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
-import type { ServingLoopStats } from "./stats.ts";
+import type { ServingLoopCounters, ServingLoopStats } from "./stats.ts";
 import { LifecycleVerbFailure } from "./lifecycle-verb.ts";
 import type {
   LifecyclePhaseTiming,
@@ -60,15 +66,6 @@ export type PortLike = {
     listener: (event: MessageEvent) => void,
   ): void;
   start?(): void;
-};
-
-/**
- * A served access-list change as it crosses the port: the function that
- * applies it replaced by the list of changes it applies, from which the other
- * side rebuilds the function.
- */
-export type ServedAclChangeData = Omit<ServedAclChange, "change"> & {
-  readonly changes: readonly SpaceAccessChange[];
 };
 
 /** The entry `Server.commitDelegatedAppend()` takes. */
@@ -110,6 +107,28 @@ export type ServingWorkerPolicy = {
   ]: SpaceServerPolicy[Key];
 };
 
+/** What a serving worker says of its memory at each heartbeat. */
+export type WorkerHeartbeat = {
+  /**
+   * The worker's JavaScript heap as it stands, in bytes, which the pool's
+   * heap budget adds up.
+   */
+  readonly heapUsed: number;
+
+  /**
+   * The memory outside the heap that V8 accounts to the worker, array
+   * buffers included, in bytes. No heap limit bounds it.
+   */
+  readonly external: number;
+
+  /**
+   * Whether the worker's heap has reached its limit since the worker began
+   * to serve (`watchHeapLimit()`). What it was doing then is gone, and it
+   * may take no further message.
+   */
+  readonly heapLimitReached: boolean;
+};
+
 /** What the worker's entry module needs to build its host. */
 export type ServingWorkerInit = {
   /** The service identity's key pair, encoded for the realm crossing. */
@@ -117,6 +136,9 @@ export type ServingWorkerInit = {
 
   /** The lease holder's process component this worker start adopts. */
   readonly processInstanceId: string;
+
+  /** How often the worker posts `worker.heartbeat`. */
+  readonly heartbeatIntervalMs: number;
 
   /** The serving runtimes' patterns and compile base. */
   readonly apiUrl: string;
@@ -129,7 +151,46 @@ export type ServingWorkerInit = {
 
   /** The serving runtimes' experimental options. */
   readonly experimental: ExperimentalOptions | undefined;
+
+  /**
+   * The deployment's memory endpoint, through which the worker's host
+   * reaches each space's owner (`ExecutorHostOptions.route`); absent, the
+   * host crosses through the process's own server.
+   */
+  readonly route: string | undefined;
+
+  /**
+   * Whether the worker's serving runtimes compile on the server's thread,
+   * through `compiler.compile`, in the compile workers the process shares.
+   * Absent or false, they compile where the worker's entry module says.
+   */
+  readonly compileOnHost: boolean | undefined;
+
+  /**
+   * The shared compiled-module cache directory
+   * (`openSharedCompileCache()`) the worker's serving runtimes read and put
+   * compiled modules in, and take their turns at a cold compile through.
+   * Absent, they use the cache the worker's entry module gives, if any.
+   */
+  readonly compileCacheDir: string | undefined;
 };
+
+/** A compile `compiler.compile` ran, as its answer crosses. */
+export type PortCompileAnswer =
+  | {
+    readonly kind: "compiled";
+    readonly modules: readonly (readonly [string, EncodedModule])[];
+  }
+  | {
+    readonly kind: "failed";
+    readonly failure: EncodedCompileFailure;
+
+    /**
+     * Whether the failure is of the place the compile ran, such as a compile
+     * worker that died, rather than of its inputs.
+     */
+    readonly place: boolean;
+  };
 
 /** What the worker asks of the thread that holds the memory server. */
 export type PlaneRequests = {
@@ -139,6 +200,18 @@ export type PlaneRequests = {
    */
   "space.open": { params: { space: string }; result: { url: string } };
 
+  "server.acquireExecutionLease": {
+    params: { space: string; holder: string };
+    result: boolean;
+  };
+  "server.releaseExecutionLease": {
+    params: { space: string; holder: string };
+    result: void;
+  };
+  "server.commitDeliveryFailureNotice": {
+    params: { notice: Parameters<Server["commitDeliveryFailureNotice"]>[0] };
+    result: void;
+  };
   "server.idle": { params: null; result: void };
   "server.flushSessions": {
     params: { spaces: string[] | undefined };
@@ -195,15 +268,11 @@ export type PlaneRequests = {
   /**
    * Commits one wave batch (a `WaveSpaceCommit` in the memory boundary's
    * encoding) under the worker's counter value, through the sink the server's
-   * thread keeps for `sessionId`. `homeRefused` reports that applying a home
-   * batch threw, which the worker's sink turns into its own refusal hook.
+   * thread keeps for `sessionId`.
    */
   "sink.commitWave": {
     params: { sessionId: string; localSeq: number; batch: string };
-    result: {
-      result: Result<{ seq: number }, WaveCommitRejection>;
-      homeRefused: boolean;
-    };
+    result: Result<{ seq: number }, WaveCommitRejection>;
   };
   "sink.commitSpaceAccessChange": {
     params: {
@@ -218,6 +287,15 @@ export type PlaneRequests = {
     params: { transport: number; payload: string };
     result: void;
   };
+
+  /**
+   * Runs a compile in the compile workers the server's thread holds for the
+   * whole process (`ServingWorkerInit.compileOnHost`).
+   */
+  "compiler.compile": {
+    params: { request: ModuleCompileRequest };
+    result: PortCompileAnswer;
+  };
 };
 
 /** What the worker tells the server's thread without waiting on an answer. */
@@ -228,17 +306,30 @@ export type PlaneNotices = {
    */
   "worker.ready": null;
 
+  /**
+   * The worker's thread still runs, which the watchdog on the server's thread
+   * reads from any message of the worker's the same way (serving-loop.md §2).
+   */
+  "worker.heartbeat": WorkerHeartbeat;
+
   "server.noteExecutorCommit": { notice: AdmittedCommitNotice };
-  "server.noteLeaseReacquired": {
-    notice: { space: string; principal: string };
-  };
   "loopback.close": { transport: number };
   "host.stats": { stats: ServingLoopStats };
+
+  /**
+   * The counters without the settle blocks, posted ahead of each wave
+   * commit. They update the copy the last `host.stats`
+   * left, which the next `host.stats` replaces whole.
+   */
+  "host.counters": { counters: ServingLoopCounters };
   "host.activationSettled": {
     space: MemorySpace;
     outcome: "active" | "refused" | "failed";
   };
   "host.spaceParked": { space: MemorySpace; reason: string };
+
+  /** What the worker's host holds, posted each time the host reports it. */
+  "host.occupancy": { occupancy: HostOccupancy };
 };
 
 /** What the server's thread asks of the worker. */
@@ -246,16 +337,47 @@ export type BridgeRequests = {
   /** The worker entry's first request, answered once its host serves. */
   "worker.init": {
     params: ServingWorkerInit;
-    result: { lifetimeLock: string | undefined };
+    result: {
+      lifetimeLock: string | undefined;
+
+      /**
+       * V8's limit on the worker's heap as the worker reads it
+       * (`heap_size_limit`), in bytes: the limit it was started with plus the
+       * young generation, unless a process-wide `--max-old-space-size`
+       * replaced it.
+       */
+      heapSizeLimit: number;
+    };
   };
 
   "host.stats": { params: null; result: ServingLoopStats };
   "host.diagnostics": { params: null; result: ServingLoopDiagnostics };
+  "host.collectedMemory": { params: null; result: CollectedMemory };
+
+  /** Writes the sampling heap profile of the worker's isolate into `directory`. */
+  "host.heapProfile": {
+    params: { directory: string };
+    result: { path: string };
+  };
   "host.runLifecycleVerb": {
     params: { space: MemorySpace; verb: LifecycleVerbDescriptor };
     result: LifecycleVerbRun;
   };
   "host.close": { params: null; result: void };
+
+  /**
+   * Closes the worker's host if it holds nothing by the time the request is
+   * handled, every message posted ahead of it handled first: nothing at all,
+   * or with `evenIfParked` nothing but runtimes kept from idle parks. The
+   * answer is what the host counted and its realm logged, final since the
+   * host has closed, or `null` from a host that holds more and stays open.
+   */
+  "host.retire": {
+    params: { evenIfParked: boolean };
+    result:
+      | { stats: ServingLoopStats; diagnostics: ServingLoopDiagnostics }
+      | null;
+  };
 };
 
 /** What the server's thread tells the worker without waiting on an answer. */
@@ -267,9 +389,18 @@ export type BridgeNotices = {
     reason: DemandChangeReason | undefined;
     principal: string | undefined;
     sessionId: string | undefined;
+    servingOwn: true | undefined;
+    notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
+
+  /**
+   * An admitted commit wrote `space`'s access-list document. Sent to the
+   * workers that do not serve `space`, which hear of its commits no other
+   * way and may hold a session on it as a cross-space replica.
+   */
+  "observer.spaceAclChanged": { space: string };
   "loopback.frame": { transport: number; frame: string };
 };
 
@@ -330,8 +461,8 @@ const faultOf = (error: unknown): PortFault => {
  * The error a fault stands for on this side. An untimed `ProtocolError`
  * keeps its class: the outbox classifies delegated-append refusals by it.
  * Lifecycle failures instead retain their timing envelope and reconstruct
- * the underlying error as its cause. Lifecycle routes classify those
- * failures by name and code, which the envelope also keeps.
+ * the underlying error as its cause. A lifecycle verb's caller classifies
+ * those failures by name and code, which the envelope also keeps.
  */
 const errorOf = (fault: PortFault): Error => {
   const error = fault.name === "ProtocolError"
@@ -377,6 +508,7 @@ export class PortEndpoint<
   readonly #listener: (event: MessageEvent) => void;
   #nextId = 1;
   #closed: Error | undefined;
+  #messagesReceived = 0;
 
   constructor(port: PortLike, onFault: (error: Error) => void) {
     this.#port = port;
@@ -389,6 +521,11 @@ export class PortEndpoint<
   /** Whether `close()` has run. */
   get closed(): boolean {
     return this.#closed !== undefined;
+  }
+
+  /** How many messages of any kind have arrived from the other side. */
+  get messagesReceived(): number {
+    return this.#messagesReceived;
   }
 
   /**
@@ -481,6 +618,7 @@ export class PortEndpoint<
   }
 
   #receive(envelope: Envelope): void {
+    this.#messagesReceived += 1;
     switch (envelope.t) {
       case "req":
         this.#answer(envelope);

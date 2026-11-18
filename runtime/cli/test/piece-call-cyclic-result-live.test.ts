@@ -555,7 +555,7 @@ describe("cf piece call on a piece that points back at its container", () => {
       // mutation, and the message says so rather than leaving a stack trace to
       // read as "the call failed".
       expect(message).toContain("COMMITTED");
-      expect(message).toContain("cf cell get --cell of:");
+      expect(message).toContain("cf cell get --cell receipt:");
       expect(message).toContain("declared result leaves the closing position");
 
       // And the write did land.
@@ -586,7 +586,7 @@ describe("cf piece call on a piece that points back at its container", () => {
           'closes a circle at "/item/parent/children/0"',
         );
         expect(message).toContain("COMMITTED");
-        expect(message).toContain("cf cell get --cell of:");
+        expect(message).toContain("cf cell get --cell receipt:");
         expect(message).not.toContain("leaves the closing position");
         // No pattern was loaded to look for a declaration, because this
         // resolution attaches no thunk to reach one through.

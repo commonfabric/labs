@@ -5,4 +5,7 @@ if (!customElements.get("cf-attachments-bar")) {
 }
 
 export { CFAttachmentsBar };
-export type { CFAttachmentsBar as CFAttachmentsBarElement } from "./cf-attachments-bar.ts";
+export type {
+  CFAttachmentsBar as CFAttachmentsBarElement,
+  PinnedCell,
+} from "./cf-attachments-bar.ts";

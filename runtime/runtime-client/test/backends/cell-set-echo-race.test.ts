@@ -25,6 +25,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -133,10 +134,14 @@ class InProcessWorkerTransport extends EventEmitter<RuntimeTransportEvents>
       throw new Error("This test sends no one-way client notifications");
     }
     const { msgId, data } = message;
-    // Initialize/Dispose are worker-entry concerns (backends/web-worker), not
-    // RuntimeProcessor handlers; the harness acks them directly.
+    // Initialize, Attach, SetForwardWorkerConsole and Dispose are answered by
+    // the worker entry and client registry, not RuntimeProcessor handlers; the
+    // harness acks them directly.
     if (
-      data.type === RequestType.Initialize || data.type === RequestType.Dispose
+      data.type === RequestType.Initialize ||
+      data.type === RequestType.Attach ||
+      data.type === RequestType.SetForwardWorkerConsole ||
+      data.type === RequestType.Dispose
     ) {
       this.outbox.push({ msgId } as IPCRemoteMessage);
       return;
@@ -154,7 +159,7 @@ class InProcessWorkerTransport extends EventEmitter<RuntimeTransportEvents>
           this.outbox.push(
             {
               msgId,
-              error: error instanceof Error ? error.message : String(error),
+              error: describeFailure(error),
             } as IPCRemoteMessage,
           ),
       );

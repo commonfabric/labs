@@ -6,11 +6,11 @@ import "@commonfabric/test-support/equal-ignoring-symbols";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { type FactoryInput, type JSONSchema } from "../src/builder/types.ts";
+import type { FactoryInput, JSONSchema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -184,6 +184,39 @@ describe("Pattern Runner - Reduce", () => {
 
     const value = await result.pull();
     expect((value as any).total).toBe(0);
+  });
+
+  it("returns the initial value where the input holds `null` rather than an array", async () => {
+    const sumPattern = pattern<{ values: number[] }>(
+      ({ values }) => {
+        const total = values.reduce(
+          (acc: number, x: number) => acc + x,
+          7,
+        );
+        return { total };
+      },
+    );
+
+    const resultCell = runtime.getCell(
+      space,
+      "reduce-absent",
+      {
+        type: "object",
+        properties: { total: { type: "number" } },
+      } as const satisfies JSONSchema,
+      tx,
+    );
+
+    const result = runtime.run(
+      tx,
+      sumPattern,
+      { values: null } as unknown as { values: number[] },
+      resultCell,
+    );
+    await commitTx();
+
+    const value = await result.pull();
+    expect((value as any).total).toBe(7);
   });
 
   it("should handle reduce with filtering", async () => {

@@ -29,11 +29,8 @@ FIXTURE=runtime/cli/integration/pattern/thermostat.tsx
 
 # `cf` is this checkout's CLI as a shell function. That is what lets a command
 # be a plain array of words rather than a string assembled twice.
-if [ -n "${CF_BINARY:-}" ]; then
-  cf() { "$CF_BINARY" "$@"; }
-else
-  cf() { deno task --quiet --cwd "$REPO_ROOT" cf "$@"; }
-fi
+source "$SCRIPT_DIR/cf-launcher.sh"
+cf() { "${CF[@]}" "$@"; }
 
 # The connection lives in the environment cf documents, so it stays off every
 # command line. The space cannot: cf has no environment variable for it, so
@@ -229,10 +226,11 @@ say "Those are two cells, not two views of one. A read goes to the result"
 say "cell; --input sends it to the arguments cell instead, which holds only"
 say "what the pattern declared as input — here, links to target and zones."
 run cf cell get -s "$SPACE" --piece thermostat --input
-say "So a derived field has no position in the arguments cell at all, and"
-say "asking for one there names the keys that are:"
+say "So a derived field has no position in the arguments cell at all. The"
+say "input schema decides which positions it has, so asking there for one"
+say "the schema does not declare is refused by name:"
 refused "a derived field lives on the result cell, not on the arguments cell" \
-  "Available keys: target, zones" \
+  "current pattern's input schema" \
   cf cell get -s "$SPACE" --piece thermostat targetFahrenheit --input
 
 act "3 · A read is a query: name the shape you want"

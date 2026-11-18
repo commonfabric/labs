@@ -610,6 +610,20 @@ export default pattern<{ u: unknown }>(({ u }) => ${result});`,
       });
     }
 
+    it("reports `pattern-result:unknown-type` for an `unknown` member of an anonymous class instance keyed by a string starting `__@`", async () => {
+      // The checker escapes a string key starting `__` with one more leading
+      // underscore, which is what tells it apart from a symbol key.
+
+      const { diagnostics } = await transformWithMake(
+        `function makeOdd() { return new (class { v = 1; "__@x": unknown = "u"; })(); }
+export default pattern<Record<string, never>>(() => ({ a: makeOdd() }));`,
+      );
+
+      expect(diagnostics.map(({ severity, type }) => ({ severity, type })))
+        .toEqual([{ severity: "error", type: "pattern-result:unknown-type" }]);
+      expect(diagnostics[0]!.message).toContain("a.__@x");
+    });
+
     it("reads a pattern's inferred result holding a type that refers to itself through `typeof`", async () => {
       // The type of `tree` has no name, and holds itself through `typeof`.
       const { root, diagnostics } = await transformWithMake(

@@ -18,6 +18,7 @@ const Router = router
   .openapi(routes.index, handlers.index)
   .openapi(routes.stats, handlers.stats)
   .openapi(routes.servingLoopRealm, handlers.servingLoopRealm)
+  .openapi(routes.collectedMemory, handlers.collectedMemory)
   .openapi(routes.documentInterests, handlers.documentInterests)
   .openapi(routes.dash, handlers.dash);
 

@@ -93,8 +93,8 @@
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
  * | preferredProfileSpace      | core-default (none — the home's order); delta on |
- * |                            | browserWorker (the host acting as one of the     |
- * |                            | user's profiles says which)                      |
+ * |                            | browserWorker and remoteClient (the host acting  |
+ * |                            | as one of the user's profiles says which)        |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
  * |                            | remoteClient / browserWorker (patterns fetch     |
  * |                            | against the real deployment, not the builder's   |
@@ -136,6 +136,12 @@
  * |                            | toolshed ExecutorHost wiring and the executor    |
  * |                            | test harnesses) marks the serving posture, and   |
  * |                            | it hand-rolls its options deliberately           |
+ * | compileTurns               | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory builds runtimes that      |
+ * |                            | yield while they compile and share a byte cache  |
+ * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
+ * |                            | only that same factory hands its runtimes the    |
+ * |                            | compile worker its serving host owns             |
  *
  * One named departure a caller can opt into: `cfcPosture: "max-enforcement"`
  * (a `CoreParams` field) lays the {@link MAX_ENFORCEMENT_CFC_OPTIONS} bundle
@@ -233,6 +239,8 @@ export const RUNTIME_OPTION_KEYS = [
   "onPatternInstantiated",
   "fetch",
   "servingPosture",
+  "compileTurns",
+  "moduleCompiler",
 ] as const satisfies readonly (keyof RuntimeOptions)[];
 
 export type RuntimeOptionKey = (typeof RUNTIME_OPTION_KEYS)[number];
@@ -252,6 +260,8 @@ export {
   EXPERIMENTAL_FLAG_AUTHORITY,
   type ExperimentalFlagAuthority,
   experimentalOptionsFromEnv,
+  experimentalOptionsWithFollowedPosture,
+  FOLLOWED_POSTURE_ENV,
   parseFlagValue,
   parseServerExperimentalOptions,
   SERVER_EXPERIMENTAL_PATH,
@@ -599,6 +609,13 @@ export interface RemoteClientPresetParams extends CoreParams {
   cfcReadOnExceed?: CfcReadOnExceed;
 
   /**
+   * The profile `#profile` answers with
+   * (`RuntimeOptions.preferredProfileSpace`), for a client acting as one of
+   * the user's profiles.
+   */
+  preferredProfileSpace?: MemorySpace;
+
+  /**
    * The client class the runtime declares. A remote client is unclassed; one
    * standing in for a browser tab, as the pattern integration harness's
    * sessions do, declares `"web"`, and then follows the web client's flags,
@@ -766,6 +783,9 @@ export const runtimePresets = {
         ? { cfcWriteFloor: params.cfcWriteFloor }
         : {}),
       ...readCeilingOptions(params),
+      ...(params.preferredProfileSpace !== undefined
+        ? { preferredProfileSpace: params.preferredProfileSpace }
+        : {}),
       ...(params.clientClass !== undefined
         ? { clientClass: params.clientClass }
         : {}),

@@ -50,6 +50,26 @@ Shared, because they are the runtime's rather than any document's: the identity
 the runtime signs as, the storage manager and its memory session, the compile
 cache, and the security context below.
 
+## Peer build diagnostics
+
+The Initialize and Attach envelopes optionally carry `runtimeBuild`, the
+commit baked into the sending bundle. The worker answers with its own marker.
+`RuntimeClient.buildDiagnostics` reports the library and worker commits and a
+`same`, `different`, or `unknown` relation. Each side also records the pair in
+its `peer-build` debug event. Source runs without a baked commit and older peers
+without a marker report unknown provenance. Caller-supplied client attribution
+is separate from these loaded-build markers.
+
+A memory `session.open` response optionally carries `serverBuild`, the commit
+baked into the serving Toolshed process. `SpaceSession.buildDiagnostics` compares
+that commit with the client bundle's and refreshes it on every successful reopen,
+including clearing it when the peer no longer supplies one. This identifies the
+Toolshed process, not the socket router or a separately launched execution worker.
+
+Build differences do not establish incompatibility and never reject a handshake.
+The memory protocol's capability flags and the attachment security context govern
+whether the peers can perform the requested operation.
+
 ## The security context, and why an attach is refused rather than merged
 
 `InitializationData` carries the CFC enforcement mode, the flow-label dial, the

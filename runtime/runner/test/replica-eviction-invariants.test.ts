@@ -29,7 +29,7 @@ import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { Runtime } from "../src/runtime.ts";

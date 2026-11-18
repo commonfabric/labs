@@ -5,11 +5,14 @@ import { stub } from "@std/testing/mock";
 import { StaticCache } from "@commonfabric/static";
 import { transformCfDirective } from "@commonfabric/ts-transformers";
 
+import ts from "typescript";
+
 import {
   type AuthoredSourceLookup,
   CompilerError,
   getTypeScriptEnvironmentTypes,
   InMemoryProgram,
+  type Program,
   type SourceMap,
   type TransformerDiagnosticInfo,
   TransformerError,
@@ -105,6 +108,35 @@ const TESTS: TestDef[] = [
       "export default add('1', 2);",
       "",
     ].join("\n"),
+  },
+  {
+    // An optional property may be absent; it may not be written holding
+    // `undefined` (`exactOptionalPropertyTypes`).
+    name: "Throws: undefined written into an optional property when authoring",
+    source: "const o: { a?: number } = { a: undefined }; export default o;",
+    expectedError: "exactOptionalPropertyTypes",
+  },
+  {
+    // Stored source admitted before the flag was the rule loads: it is
+    // checked again without the flag when it fails under it.
+    name:
+      "Undefined written into an optional property compiles under storedSource",
+    source: "const o: { a?: number } = { a: undefined }; export default o;",
+    storedSource: true,
+  },
+  {
+    // Source authored under the flag still loads as stored source: an index
+    // signature beside an optional property type-checks only with the flag
+    // (TS2411 without it), so the fallback must not replace the first check.
+    name:
+      "Index signature beside an optional property compiles under storedSource",
+    source: [
+      "type M = { n: number };",
+      "type C = { doc?: M | null; [k: string]: M | null };",
+      "const c: C = {};",
+      "export default c;",
+    ].join("\n"),
+    storedSource: true,
   },
   {
     // storedSource must not weaken real type errors — only hygiene codes.
@@ -480,6 +512,134 @@ export function render() {
     );
   });
 
+  it("throws a program-wide diagnostic, such as a missing type library", () => {
+    const compiler = new TypeScriptCompiler({});
+
+    expect(() =>
+      compiler.compileToModules({
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      })
+    ).toThrow("File '$types/es2023.d.ts' not found.");
+  });
+
+  it("compileToModulesCollecting reports a program-wide diagnostic under no file", () => {
+    // A compiler given no type libraries misses the ones the options name,
+    // which is a diagnostic about the program rather than about a file.
+    const compiler = new TypeScriptCompiler({});
+
+    const collected = compiler.compileToModulesCollecting({
+      main: "/main.ts",
+      files: [{ name: "/main.ts", contents: "export default 1;" }],
+    });
+
+    expect(collected.diagnostics).toContainEqual({
+      file: "",
+      message: expect.stringContaining("File '$types/es2023.d.ts' not found."),
+    });
+    expect(collected.diagnostics.some((d) => d.file === "/main.ts")).toBe(
+      false,
+    );
+  });
+
+  it("compileToModulesCollecting reports a syntax error at its line", () => {
+    const compiler = new TypeScriptCompiler(types);
+
+    const collected = compiler.compileToModulesCollecting({
+      main: "/main.ts",
+      files: [{ name: "/main.ts", contents: "export const a = 1;\n}x" }],
+    });
+
+    expect(collected.diagnostics).toContainEqual({
+      file: "/main.ts",
+      message: "2: Declaration or statement expected.",
+    });
+  });
+
+  it("compileToModulesCollecting reports transformer errors and no warnings", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const diagnostic = (
+      severity: TransformerDiagnosticInfo["severity"],
+    ): TransformerDiagnosticInfo => ({
+      severity,
+      type: "test",
+      message: `a transformer ${severity}`,
+      fileName: "/main.ts",
+      line: 1,
+      column: 1,
+      start: 0,
+      length: 1,
+    });
+
+    const collected = compiler.compileToModulesCollecting(
+      {
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      },
+      {
+        beforeTransformers: () => ({
+          factories: [],
+          getDiagnostics: () => [diagnostic("warning"), diagnostic("error")],
+        }),
+      },
+    );
+
+    expect(collected.diagnostics).toEqual([
+      { file: "/main.ts", message: "1: a transformer error" },
+    ]);
+  });
+
+  it("compileToModulesCollecting checks against a runtime module's declarations and emits no module for them", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const program = (argument: string) => ({
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents:
+            `import { add } from '@std/math';\nexport default add(${argument}, 2);`,
+        },
+        {
+          name: "@std/math.d.ts",
+          contents:
+            "export declare function add(x: number, y: number): number;",
+        },
+      ],
+    });
+
+    const clean = compiler.compileToModulesCollecting(program("1"), {
+      runtimeModules: ["@std/math"],
+    });
+    expect(clean.diagnostics).toEqual([]);
+    expect([...clean.modules.keys()]).toEqual(["/main.ts"]);
+
+    const wrong = compiler.compileToModulesCollecting(program("'1'"), {
+      runtimeModules: ["@std/math"],
+    });
+    expect(wrong.diagnostics).toContainEqual({
+      file: "/main.ts",
+      message:
+        "2: Argument of type 'string' is not assignable to parameter of type 'number'.",
+    });
+  });
+
+  it("compileToModulesCollecting throws when two sources collide on one emit target", () => {
+    const compiler = new TypeScriptCompiler(types);
+
+    expect(() =>
+      compiler.compileToModulesCollecting({
+        main: "/main.ts",
+        files: [
+          { name: "/main.ts", contents: "import './a.tsx'; export {};" },
+          { name: "/a.ts", contents: "export const a = 1;" },
+          { name: "/a.tsx", contents: "export const b = 2;" },
+        ],
+      })
+    ).toThrow(
+      "Ambiguous emit target: '/a.ts' and '/a.tsx' both compile to '/a.js'",
+    );
+  });
+
   it("compileToModulesCollecting times each authored file separately", async () => {
     // What a batch caller charges each of the programs it unioned. Only
     // authored files carry a figure: the declaration libs emit nothing and
@@ -670,6 +830,80 @@ export function render() {
     );
   });
 
+  it("throws for a program whose main module it does not hold", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const artifact = {
+      main: "/main.ts",
+      files: [{ name: "/other.ts", contents: "export default 1;" }],
+    };
+
+    expect(() => compiler.compileToModules(artifact)).toThrow(
+      'No main module "/main.ts" in source.',
+    );
+    expect(() => compiler.compileToModulesCollecting(artifact)).toThrow(
+      'No main module "/main.ts" in source.',
+    );
+  });
+
+  it("hands the transformed program to getTransformedProgram", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const renameOne: ts.TransformerFactory<ts.SourceFile> =
+      (context) => (sourceFile) =>
+        ts.visitEachChild(
+          sourceFile,
+          function visit(node): ts.Node {
+            return ts.isNumericLiteral(node) && node.text === "1"
+              ? ts.factory.createNumericLiteral(2)
+              : ts.visitEachChild(node, visit, context);
+          },
+          context,
+        );
+    const transformed: Program[] = [];
+
+    compiler.compileToModules(
+      {
+        main: "/main.ts",
+        files: [
+          {
+            name: "/main.ts",
+            contents: "import { one } from './dep.ts';\nexport default one;",
+          },
+          { name: "/dep.ts", contents: "export const one = 1;" },
+        ],
+      },
+      {
+        beforeTransformers: () => [renameOne],
+        getTransformedProgram: (program) => transformed.push(program),
+      },
+    );
+
+    expect(transformed).toEqual([{
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents: "import { one } from './dep.ts';\nexport default one;\n",
+        },
+        { name: "/dep.ts", contents: "export const one = 2;\n" },
+      ],
+    }]);
+  });
+
+  it("hands no transformed program over when nothing transforms it", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const transformed: Program[] = [];
+
+    compiler.compileToModules(
+      {
+        main: "/main.ts",
+        files: [{ name: "/main.ts", contents: "export default 1;" }],
+      },
+      { getTransformedProgram: (program) => transformed.push(program) },
+    );
+
+    expect(transformed).toEqual([]);
+  });
+
   it("Typechecks a runtime dependency, providing typedefs", async () => {
     const compiler = new TypeScriptCompiler(types);
     const program = new InMemoryProgram("/main.tsx", {
@@ -719,6 +953,30 @@ export function render() {
     };
     expect(() => compiler.compileToModules(badProgram, { specifierAliases }))
       .toThrow(`has no exported member 'missing'.`);
+  });
+
+  it("resolves a specifier alias naming a `.ts` file", () => {
+    const compiler = new TypeScriptCompiler(types);
+    const specifierAliases = new Map([["x-scheme:thing", "/dep.ts"]]);
+    const program = (imported: string) => ({
+      main: "/main.ts",
+      files: [
+        {
+          name: "/main.ts",
+          contents:
+            `import { ${imported} } from "x-scheme:thing";\nexport const run = ${imported};`,
+        },
+        { name: "/dep.ts", contents: `export const value: string = "ok";` },
+      ],
+    });
+
+    expect(
+      compiler.compileToModules(program("value"), { specifierAliases })
+        .get("/main.ts")!.js,
+    ).toContain('require("x-scheme:thing")');
+    expect(() =>
+      compiler.compileToModules(program("missing"), { specifierAliases })
+    ).toThrow(`has no exported member 'missing'.`);
   });
 
   it("Resolves nested relative type imports from runtime module typedefs", async () => {
@@ -881,4 +1139,178 @@ export default add(5, "5");`,
       }
     });
   }
+
+  describe("what a factory input admits under exactOptionalPropertyTypes", () => {
+    // The pattern compiler reads `x?: T` as a property that may be absent,
+    // and `FactoryInput` makes one exception: an optional input admits
+    // `undefined`, so that a pattern can forward its own optional input,
+    // which it sees as `T | undefined`, to another factory. The type cannot
+    // tell that reference from a literal `undefined` or a computation that
+    // returns one, so those are admitted too; the table says so, as what is
+    // accepted. `db.query`'s options admit it for the same reason, as the
+    // `sqliteQuery` factory's inputs do, except `scope`, which is read when
+    // the pattern is built, so no forwarded input can supply it. An optional
+    // property's indexed type includes `undefined`, so `key().set()` admits it
+    // too. Required inputs, index-signature values, required `patternTool()`
+    // prefills, and optional-property writes through `update()` keep the
+    // stricter rule.
+
+    const SUB = [
+      "import { computed, pattern, patternTool, UI } from 'commonfabric';",
+      "type Index = { n: number };",
+      "const Sub = pattern<{ index?: Index }, { n: number }>(",
+      "  ({ index }) => ({ n: index?.n ?? 0 }),",
+      ");",
+      "const Strict = pattern<{ index: Index }, { n: number }>(",
+      "  ({ index }) => ({ n: index.n }),",
+      ");",
+    ].join("\n");
+
+    const CASES: { name: string; body: string; refused?: string }[] = [
+      {
+        name: "admits an optional input forwarded to an optional input",
+        body: [
+          "export default pattern<{ index?: Index }, { n: number }>(({ index }) => {",
+          "  const sub = Sub({ index });",
+          "  return { n: sub.n };",
+          "});",
+        ].join("\n"),
+      },
+      {
+        name: "admits a literal undefined at an optional input (accepted)",
+        body:
+          "export default pattern(() => ({ n: Sub({ index: undefined }).n }));",
+      },
+      {
+        name:
+          "admits a computation that may yield undefined at an optional input (accepted)",
+        body: [
+          "export default pattern<{ on: boolean }, { n: number }>(({ on }) => {",
+          "  const index = computed((): Index | undefined =>",
+          "    on ? { n: 1 } : undefined,",
+          "  );",
+          "  return { n: Sub({ index }).n };",
+          "});",
+        ].join("\n"),
+      },
+      {
+        name:
+          "admits a computation that may yield undefined at an optional result field (accepted)",
+        body: [
+          "export default pattern<{ on: boolean }, { m?: number }>(({ on }) => ({",
+          "  m: computed((): number | undefined => (on ? 1 : undefined)),",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name: "admits undefined at a cf element attribute, which unsets it",
+        body: [
+          "export default pattern<{ src?: string }>(({ src }) => ({",
+          "  [UI]: <cf-avatar src={src} name='x' />,",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name:
+          "admits undefined at an optional key of patternTool's extraParams",
+        body: "export default patternTool(Sub, { index: undefined });",
+      },
+      {
+        name: "admits an optional input forwarded to a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; requestKey?: string }>(",
+          "  ({ db, requestKey }) => db.query('SELECT 1', { requestKey }),",
+          ");",
+        ].join("\n"),
+      },
+      {
+        name: "refuses a value of another type at a `db.query` option",
+        body: [
+          "import { type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb }>(",
+          "  ({ db }) => db.query('SELECT 1', { requestKey: 1 }),",
+          ");",
+        ].join("\n"),
+        refused: "not assignable",
+      },
+      {
+        name: "refuses an optional input forwarded to `db.query`'s `scope`",
+        body: [
+          "import { type CellScope, type SqliteDb } from 'commonfabric';",
+          "export default pattern<{ db: SqliteDb; scope?: CellScope }>(",
+          "  ({ db, scope }) => db.query('SELECT 1', { scope }),",
+          ");",
+        ].join("\n"),
+        refused: "'{ scope: CellScope | undefined; }' is not assignable",
+      },
+      {
+        name: "refuses undefined at a required input",
+        body:
+          "export default pattern(() => ({ n: Strict({ index: undefined }).n }));",
+        refused: "'undefined' is not assignable",
+      },
+      {
+        name: "refuses undefined at an index signature's key",
+        body: [
+          "const Map = pattern<{ map: Record<string, string> }, { k: number }>(",
+          "  ({ map }) => ({ k: Object.keys(map).length }),",
+          ");",
+          "export default pattern(() => ({ k: Map({ map: { a: undefined } }).k }));",
+        ].join("\n"),
+        refused: "'undefined' is not assignable",
+      },
+      {
+        name:
+          "refuses undefined at a required key of patternTool's extraParams",
+        body: "export default patternTool(Strict, { index: undefined });",
+        refused: "not assignable to parameter of type 'undefined'",
+      },
+      {
+        name: "admits `undefined` written to an optional key by `key().set()`",
+        body: [
+          "import { handler, type Writable } from 'commonfabric';",
+          "const clear = handler<unknown, { cell: Writable<{ note?: string }> }>(",
+          "  (_event, { cell }) => { cell.key('note').set(undefined); },",
+          ");",
+          "export default pattern<{ cell: Writable<{ note?: string }> }>(({ cell }) => ({",
+          "  clear: clear({ cell }),",
+          "}));",
+        ].join("\n"),
+      },
+      {
+        name: "refuses undefined written into an optional property by update()",
+        body: [
+          "import { handler, type Writable } from 'commonfabric';",
+          "const clear = handler<unknown, { cell: Writable<{ note?: string }> }>(",
+          "  (_event, { cell }) => { cell.update({ note: undefined }); },",
+          ");",
+          "export default pattern<{ cell: Writable<{ note?: string }> }>(({ cell }) => ({",
+          "  clear: clear({ cell }),",
+          "}));",
+        ].join("\n"),
+        refused: "'undefined' is not assignable",
+      },
+    ];
+
+    for (const { name, body, refused } of CASES) {
+      it(name, async () => {
+        // Through the pre-transform, as the engine compiles a pattern, so
+        // JSX finds its helpers.
+        const program = new InMemoryProgram("/main.tsx", {
+          "/main.tsx": transformCfDirective(`${SUB}\n${body}\n`, "/main.tsx"),
+          ...fabricTypeModules,
+        });
+        const compiler = new TypeScriptCompiler(types);
+        const compile = resolveAndCompileToModules(compiler, program, {
+          runtimeModules: FABRIC_RUNTIME_MODULES,
+        });
+        if (refused === undefined) {
+          expect((await compile).get("/main.tsx")).toBeDefined();
+        } else {
+          await expect(compile).rejects.toThrow(refused);
+        }
+      });
+    }
+  });
 });

@@ -68,6 +68,9 @@ describe("JSON command contracts", () => {
       .toBe(true);
     expect(reservesStdoutForCommandOutput(["cell", "set-label", "path"]))
       .toBe(true);
+    expect(
+      reservesStdoutForCommandOutput(["cell", "release-by-intent", "path"]),
+    ).toBe(true);
     // The bulk commands write their plan or their report to stdout, so they
     // reserve it whether or not --json is on the line.
     expect(reservesStdoutForCommandOutput(["piece", "survey", "--piece", "b"]))
@@ -129,26 +132,6 @@ describe("JSON command contracts", () => {
     });
   });
 
-  it("keeps the profiling marker off pattern JSON stdout", async () => {
-    const env = { CF_PROFILE_DONE_MARKER: "profile finished" };
-    const { code, stdout, stderr } = await cf(
-      argv`check fixtures/check-json-no-evaluate.ts --pattern-json`,
-      { env },
-    );
-
-    expect(code).toBe(0);
-    expect(stdout).toEqual(["1"]);
-    expect(stderr.join("\n")).toContain("profile finished");
-
-    const transformed = await cf(
-      argv`check fixtures/check-json-no-evaluate.ts --show-transformed`,
-      { env },
-    );
-    expect(transformed.code).toBe(0);
-    expect(transformed.stdout.join("\n")).not.toContain("profile finished");
-    expect(transformed.stderr.join("\n")).toContain("profile finished");
-  });
-
   it("keeps parser help off reserved stdout modes", async () => {
     for (
       const command of [
@@ -156,6 +139,7 @@ describe("JSON command contracts", () => {
         argv`cell get --bogus`,
         argv`cell get-label --bogus`,
         argv`cell set-label --bogus`,
+        argv`cell release-by-intent --bogus`,
         argv`piece --bogus survey`,
         argv`wish --bogus #profile`,
         // Bundled beside unbundled, because cliffy accepts both and only the
@@ -174,6 +158,20 @@ describe("JSON command contracts", () => {
       expect(stdout).toEqual([]);
       expect(stripAnsi(stderr.join("\n"))).toContain("Unknown option");
     }
+  });
+
+  it("keeps a release-by-intent refusal off stdout without --json", async () => {
+    // Standard input is not a terminal here, so the command refuses before it
+    // loads a key or reaches a server, and the refusal is all it writes.
+    const { code, stdout, stderr } = await cf(
+      argv`cell release-by-intent --identity /nonexistent.key --api-url http://127.0.0.1:9 --space did:key:z6MkReleaseRefusalSpace --cell piece --clause abc123`,
+    );
+
+    expect(code).not.toBe(0);
+    expect(stdout).toEqual([]);
+    expect(stripAnsi(stderr.join("\n"))).toContain(
+      "standard input or standard error is not one",
+    );
   });
 
   it("does not reserve stdout for unrelated piece argument values", async () => {

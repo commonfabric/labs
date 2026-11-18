@@ -9,11 +9,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { join } from "@std/path";
+import { writeSourcePackage } from "../lib/piece.ts";
 import {
   undeclaredDataFiles,
   undeclaredDataFileWarning,
-  writeSourcePackage,
-} from "../lib/piece.ts";
+} from "../lib/undeclared-data-files.ts";
 
 const READS_CITIES = 'import { dataFile } from "commonfabric";\n' +
   'export default () => dataFile("/data/cities.json");\n';
@@ -116,6 +116,16 @@ describe("undeclaredDataFileWarning", () => {
     expect(warning).toContain("2 data file(s)");
     expect(warning).toContain("--datafile ./a.txt");
     expect(warning).toContain("--datafile ./b.txt");
+  });
+
+  it("quotes a path that needs it, so that the pasted line stays one argument per file", () => {
+    const warning = undeclaredDataFileWarning(
+      program({
+        "/main.tsx": "export default 1;\n",
+        "/my team's notes.txt": "a",
+      }, ["/my team's notes.txt"]),
+    );
+    expect(warning).toContain(`--datafile './my team'\\''s notes.txt'`);
   });
 });
 

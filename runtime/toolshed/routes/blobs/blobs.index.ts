@@ -10,6 +10,7 @@ import {
 } from "@commonfabric/runner/blob-record";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { Context } from "@hono/hono";
+import { cors } from "@hono/hono/cors";
 
 // Blob routes are intentionally unauthenticated for the MVP. Anyone can POST a
 // blob into any space DID; content addressing prevents overwriting a different
@@ -19,6 +20,24 @@ import { createRouter } from "@/lib/create-app.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
 
 const router = createRouter();
+
+// A page on any origin may upload a blob and read the reply, and may read a
+// blob's bytes; a preflight admits `Content-Type` and no other header. Hono
+// runs middleware in the order the app mounts it, and a preflight is answered
+// by the first `cors()` it reaches. The `routes/static` and `routes/shell`
+// routers each put one on every path, listing no `POST` and admitting any
+// header asked for, so this policy is the one a preflight gets only while the
+// app mounts this router ahead of those two.
+for (const path of ["/:spaceDid/blobs", "/:spaceDid/blobs/*"]) {
+  router.use(
+    path,
+    cors({
+      origin: "*",
+      allowMethods: ["GET", "POST", "OPTIONS"],
+      allowHeaders: ["Content-Type"],
+    }),
+  );
+}
 
 const DEFAULT_SUFFIX_BY_TYPE: Record<string, string> = {
   "image/gif": "gif",

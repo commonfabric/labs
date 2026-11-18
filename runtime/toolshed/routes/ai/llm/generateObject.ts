@@ -1,7 +1,8 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { DEFAULT_GENERATE_OBJECT_MODEL } from "@commonfabric/llm";
-import {
-  type LLMGenerateObjectRequest,
-  type LLMGenerateObjectResponse,
+import type {
+  LLMGenerateObjectRequest,
+  LLMGenerateObjectResponse,
 } from "@commonfabric/llm/types";
 import { trace } from "@opentelemetry/api";
 import {
@@ -12,8 +13,9 @@ import {
 import { Ajv } from "ajv";
 
 import { LLMRequestError } from "./errors.ts";
-import { resolveModel } from "./models.ts";
+import type { ModelRegistry } from "./models.ts";
 import { normalizeSchemaForProvider } from "./schema.ts";
+import { metadataAttributeValue } from "@/lib/ai-telemetry.ts";
 import { withGatewayOperation } from "@/lib/gateway-provenance.ts";
 
 /**
@@ -23,15 +25,17 @@ import { withGatewayOperation } from "@/lib/gateway-provenance.ts";
  */
 export function generateObject(
   params: LLMGenerateObjectRequest,
+  models: Pick<ModelRegistry, "resolve">,
 ): Promise<LLMGenerateObjectResponse> {
   return withGatewayOperation(
     "generate-object",
-    () => generateObjectCall(params),
+    () => generateObjectCall(params, models),
   );
 }
 
 async function generateObjectCall(
   params: LLMGenerateObjectRequest,
+  models: Pick<ModelRegistry, "resolve">,
 ): Promise<LLMGenerateObjectResponse> {
   try {
     const providerSchema = normalizeSchemaForProvider(params.schema) as Record<
@@ -39,7 +43,7 @@ async function generateObjectCall(
       unknown
     >;
     const modelName = params.model ?? DEFAULT_GENERATE_OBJECT_MODEL;
-    const modelConfig = await resolveModel(modelName);
+    const modelConfig = await models.resolve(modelName);
     if (!modelConfig) {
       throw new LLMRequestError(`Unsupported model: ${modelName}`);
     }
@@ -51,9 +55,7 @@ async function generateObjectCall(
       validator = ajv.compile(providerSchema);
     } catch (error) {
       throw new LLMRequestError(
-        `Schema cannot be compiled: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Schema cannot be compiled: ${describeFailure(error)}`,
         { cause: error },
       );
     }
@@ -62,25 +64,12 @@ async function generateObjectCall(
     const spanId = activeSpan?.spanContext().spanId;
 
     // Attach metadata directly to the root span
-    if (activeSpan) {
-      // Add the metadata from params if available
-      if (params.metadata) {
-        Object.entries(params.metadata).forEach(([key, value]) => {
-          // Only set attributes with valid values (not undefined)
-          if (value !== undefined) {
-            // Handle different types to ensure we only use valid AttributeValue types
-            if (
-              typeof value === "string" ||
-              typeof value === "number" ||
-              typeof value === "boolean"
-            ) {
-              activeSpan.setAttribute(`metadata.${key}`, value);
-            } else if (typeof value === "object") {
-              // Convert objects to JSON strings
-              activeSpan.setAttribute(`metadata.${key}`, JSON.stringify(value));
-            }
-          }
-        });
+    if (activeSpan && params.metadata) {
+      for (const [key, value] of Object.entries(params.metadata)) {
+        const attribute = metadataAttributeValue(value);
+        if (attribute !== undefined) {
+          activeSpan.setAttribute(`metadata.${key}`, attribute);
+        }
       }
     }
 

@@ -420,10 +420,39 @@ withdrawal re-derives, over the region that can be affected and no further:
 `origin`'s transitive upstream, which is closed under the writer edge.
 Any node whose support routes through `origin` is upstream of it, so a live
 reader *outside* that region cannot owe its own liveness to anything inside, and
-its support is taken at face value. Clearing the region and re-seeding from the
-roots inside it plus the live readers outside is cycle-safe (a rootless cycle
-finds no seed and settles dormant) and diamond-accurate (each surviving arm
-re-contributes its own reference).
+its support is taken at face value. Clearing the region and re-seeding it from
+the live readers outside it is cycle-safe (a rootless cycle finds no seed and
+settles dormant) and diamond-accurate (each surviving arm re-contributes its own
+reference). The region holds no root: a root `origin` keeps its demand and ends
+the withdrawal, and a writer that is a root bounds the region as described
+next.
+
+That region is narrowed to the part of it that may actually die. A node that a
+root reaches along reader edges avoiding the region keeps its support whatever
+the region loses, so withdrawal first asks that of `origin` itself, and stops
+there if a root answers: `origin` stays live and contributes upstream exactly
+what it did. Otherwise, walking upstream, it asks the same of each writer it
+reaches, and a writer a root finds that way bounds the region rather than
+joining it: it stays live, so the walk does not continue past it. The search
+runs downstream, depth first, and skips nodes that are not live, which loses no
+path, since withdrawing only removes reachability. No node on a path it finds
+ever joins the region, because the one nearest the root would have found that
+root itself. A boundary node gives back the references the region's live nodes
+held on it before the region is re-seeded, and the re-seeding hands back those
+of the survivors. The search ends at the first root, which for a UI node is a
+few readers away, so a writer shared by many rows does not pay for its whole
+upstream, and every reader of every node in it, each time one row goes away.
+Within one withdrawal, each node is entered by at most one search: one that
+finds a root puts that root and every node on its path to it on the boundary,
+and marks everything else it entered as a dead end, as does one that finds
+nothing; later searches stop at a dead end, and a writer marked that way joins
+the region without a search of its own. A node marked after a successful search
+may in fact reach a root through the path found, so the marking is sound rather
+than exact: a later search that stops at it may fail and add nodes to the region
+that did not need to be there, and re-seeding gives them back whatever support
+they have, so the cost of such a mistake is work, never a wrong count. The
+searches of one withdrawal together cost at most the readers of the nodes they
+enter.
 
 `recomputeLiveRefs` derives the same state from the roots in one pass over the
 whole graph. Nothing on the maintenance path calls it: it is the definition the
@@ -711,6 +740,41 @@ evidence first). An opt-in server-confirmed dispatch mode would occupy only
 its own lane while others proceed. Nothing in v2 may assume "the head
 event" is globally unique — components address "the head of a lane".
 
+**Per-space lanes now (PROPOSED 2026-11-02, awaiting ruling).** The
+contention the step above waits for is here. A head that waits on I/O that
+never finishes holds every later event in the runtime, on every stream of
+every space: a presync or a closure load on a connection that never
+answers, or a cross-space lineage origin whose commit never settles. A
+send to one chat room then waits on a load in another, and the host sees
+sends that never answer. The proposal:
+
+- An event's lane is its stream's space (`eventLink.space`). Each lane is
+  FIFO, and its head is parked, held, gated and dispatched exactly as the
+  single lane's head is now.
+- A pass takes the lanes' heads in the order they were enqueued, so while
+  no head waits, events dispatch in the order the single lane gives them.
+  A waiting head holds only its own lane.
+- Same-space order is unchanged: I4 holds per space, and so does the
+  arrival order events.md §2 promises across one space's streams. The
+  single lane promised order across spaces as well; nothing that reads two
+  spaces' events may rely on that order afterwards, which events.md §2
+  already does not claim ("no global ordering claim beyond the space's
+  commit sequence").
+
+Recommended: adopt it. Alternatives:
+
+- Keep the single lane (the status quo). A head that never stops waiting
+  keeps every later event waiting, and only a drop of that head releases
+  them.
+- A host-owned cancel: `sendReviewed(…, { signal })` drops a still-queued
+  event without a deadline, so a host can release a stuck head. It
+  complements lanes rather than replacing them, since the host must know
+  which head is stuck, and a send to a healthy room still waits until it
+  acts.
+- Per-stream lanes. Finer, but a handler reads and writes across the
+  streams of its piece, and events.md §2 promises arrival order across one
+  space's streams.
+
 Every event gets a durable **event id minted at send time**, causally
 derived from the originating context: the sending transaction's id (or the
 external ingress id for events not born in a transaction), the stream link,
@@ -735,7 +799,24 @@ each ready event behind it in turn, the handlers running back to back ahead
 of the pass's one settle, so that derivations several events invalidate run
 once; an event the gate below holds ends that run, and the settle serves it):
 
-1. **Preflight.** Compute the handler's read closure in a read-only,
+0. **Earlier commits.** A transaction that writes several spaces commits them
+   one at a time, and hands a space its writes only once the server has
+   answered for the spaces before it (an `.inSpace()` create closes the new
+   space first and its own space last). While such a commit still has a space
+   to hand over, the head holds its lane slot and the pass ends there, so the
+   handler reads every write an event before it committed. A commit to one
+   space holds nothing: its writes are in the replica as it is issued.
+1. **Presync.** Bring the handler's input documents into the local replica
+   (`presyncInputs`). The head holds its lane slot while the presync's I/O
+   runs, as it does while its handler's piece loads, and the pass ends there:
+   the events behind the head wait, and the derivations the pass owes still
+   settle. The presync's settlement queues the pass that goes on to the
+   preflight. An unguarded handler presyncs ahead of its preflight, so the
+   closure is computed over what the presync loaded; a guarded stream
+   presyncs once the preflight has selected the actor's implementation, and
+   then runs its preflight again. A presync that fails counts as done, and
+   the handler's own read reports the failure.
+2. **Preflight.** Compute the handler's read closure in a read-only,
    commit-as-no-op transaction (CFC-inert, as today): declared writable-input
    links when present, else the `$event`-scoped schema closure — the one
    place a deep schema read survives in v2. **Default is
@@ -745,7 +826,7 @@ once; an event the gate below holds ends that run, and the settle serves it):
    is the one place where an under-approximated closure weakens a
    user-visible guarantee (I4), so correctness-by-default wins until the
    cache is proven.
-2. **Consistency gate.** Treat the closure as a transient demand root: any
+3. **Consistency gate.** Treat the closure as a transient demand root: any
    invalid upstream nodes of the closure join the pass's work set (they are
    demanded *by the event*, live or not). The invalid-upstream set is computed
    by **inverted reachability** from the maintained invalid-node set into the
@@ -770,13 +851,12 @@ once; an event the gate below holds ends that run, and the settle serves it):
    that was already in flight at the preflight snapshot re-parks; a generation
    first kicked by that same preflight is history-suppressed, avoiding a
    self-created park livelock.
-3. **Dispatch** once the closure is clean: presync handler inputs
-   (`presyncInputs`, unchanged), run the handler in an immediate transaction
-   stamped with the handler's id, commit optimistically (changes propagate
-   through the one channel), retry a stale-basis rejection by re-queueing at
-   the lane head (backoff-parked via `notBefore`), then run the internal
-   `onCommit` callback (success or final failure; no external side effects —
-   unchanged contract).
+4. **Dispatch** once the closure is clean: run the handler in an immediate
+   transaction stamped with the handler's id, commit optimistically (changes
+   propagate through the one channel), retry a stale-basis rejection by
+   re-queueing at the lane head (backoff-parked via `notBefore`), then run the
+   internal `onCommit` callback (success or final failure; no external side
+   effects — unchanged contract).
 
 ### 7.6 Event-initiated work and commit failure
 
@@ -891,11 +971,14 @@ correctness comes from cancellation, not staging:
      (Future server-routed/cross-runtime event delivery would reopen this
      with an origin-attestation design; deferred until such a path
      exists.)
-   If the send observes that its origin transaction is already settled, it
-   does not create pending lineage: an already-committed origin is treated as
-   confirmed immediately, and an already-failed origin is treated as failed
-   immediately so descendants cancel or drop instead of waiting for a callback
-   that will never arrive.
+   If the send, or a requeue recording a follow-up's lineage again for a re-run,
+   observes that its origin transaction is already settled, wherever its commit
+   went (a commit sealed into a serving wave or the client's speculation overlay
+   settles the transaction while the storage transaction it wraps still reads
+   `ready`), it does not create pending lineage: an already-committed origin is
+   treated as confirmed immediately, and an already-failed origin is treated as
+   failed immediately so descendants cancel or drop instead of waiting for a
+   callback that will never arrive.
 2. Client-side, the runtime keeps a lineage registry: origin tx →
    {queued events, started pieces}. When an origin's failure becomes known
    locally, undispatched descendant events (parked or queued) are cancelled
@@ -942,8 +1025,8 @@ cross-space child-phase limitation is explicit below.
 
 The receipt is not a new document kind: **the receipt is the handling's
 result cell.** Every event handling conceptually owns one result document —
-the same `{ resultFor: cause }` cell that hosts a launched pattern when the
-handler returns one; when the handler launches nothing, the cell is simply
+the same `receipt:` cell (`handlingReceiptId()`, a hash of the event id and its
+stream) that hosts a launched pattern when the handler returns one; when the handler launches nothing, the cell is simply
 the receipt. This gives handlers the same shape as computations: one
 canonical output document per unit of work, whose creation doubles as the
 exactly-once witness. A receipt-only handling carries the handler's normalized
@@ -1290,7 +1373,8 @@ semantics) or its commit was rejected. Corollary: a computation producing
 unchanged output triggers no downstream runs.
 
 **I4 — Event ordering & consistency.** Handlers dispatch in enqueue order
-within their ordering lane (today: one global lane). Before dispatch, every
+within their ordering lane (today: one global lane; per-space lanes are
+PROPOSED in §7.5). Before dispatch, every
 invalid node upstream of the handler's read closure has been run, and every
 in-flight replica load for an address the closure depends on has completed
 (or the event is parked; it is never skipped or reordered within its lane).
@@ -1493,7 +1577,7 @@ Summary table; the full per-mechanism walkthrough with file references is in
     `queueSchedulerEvent`). Multi-handler dispatch is a future opt-in
     feature; if it lands, the handler id joins the receipt derivation.
 13. **The receipt is the handler's result cell.** Every handling owns one
-    result document — the `{ resultFor: cause }` cell that hosts a
+    result document — the `receipt:` cell that hosts a
     launched pattern when there is one, and is just the receipt when there
     was nothing to launch. For inline non-navigation results, an `inSpace`
     child has its own target-space result, but the canonical handler

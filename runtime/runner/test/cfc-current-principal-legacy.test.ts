@@ -5,6 +5,7 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import { labelsReached } from "./support/reached-labels.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -72,7 +73,9 @@ const setup = async (legacy: "both" | "schema" | "label") => {
     value: ["Owner secret"],
   };
   const seed = runtime.edit() as ExtendedStorageTransaction;
-  expect(seed.tx.write(link, envelope).error).toBeUndefined();
+  // The envelope is written with the runtime's own authority, and the commit
+  // goes to the storage transaction, so nothing prepares it.
+  seedStoredEnvelope(seed, link, envelope);
   expect(
     seed.tx.write({ ...link, id: `cid:${schemaHash}` }, { value: schema })
       .error,

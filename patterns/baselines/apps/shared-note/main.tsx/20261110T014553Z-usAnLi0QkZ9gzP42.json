@@ -1,0 +1,647 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CommentRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/NoteProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the comment was written under."
+          },
+          "body": {
+            "description": "The comment; empty while it is a draft.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The comment's id, which its two anchors on the body are named for.",
+            "type": "string"
+          },
+          "postedAt": {
+            "description": "The handler clock when the comment was written, in milliseconds.",
+            "type": "number"
+          },
+          "quote": {
+            "description": "The text between the anchors when the comment was written, shown in its\nrow while the editor marks nothing for it: while it is a listed draft,\nonce it is resolved, and once an edit has deleted that text.",
+            "type": "string"
+          },
+          "replies": {
+            "$ref": "#/$defs/RepliesValue",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The comment's replies, a list of its own that anyone may add to under\ntheir own name."
+          },
+          "resolved": {
+            "asCell": [
+              "cell"
+            ],
+            "default": false,
+            "description": "Whether the comment is settled, a cell of its own that anyone may set. A\nresolved comment marks no text.",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/$defs/CommentStatus",
+            "description": "Where the comment is in its life. A draft holds its anchors from the\nmoment its author opens the composer; it is listed only to its author,\nwho can continue or discard it, and marks no text for anyone else. A\ndeleted comment is linked from no list, and has no anchors."
+          }
+        },
+        "required": [
+          "id",
+          "authorProfile",
+          "body",
+          "status",
+          "quote",
+          "postedAt",
+          "replies",
+          "resolved"
+        ],
+        "type": "object"
+      },
+      "CommentStatus": {
+        "enum": [
+          "draft",
+          "posted",
+          "deleted"
+        ]
+      },
+      "NoteProfile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "RepliesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StoredReply"
+        },
+        "type": "array"
+      },
+      "ReplyRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/NoteProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The profile the reply was written under."
+          },
+          "body": {
+            "description": "The reply.",
+            "type": "string"
+          },
+          "postedAt": {
+            "description": "The handler clock when the reply was written, in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "body",
+          "postedAt"
+        ],
+        "type": "object"
+      },
+      "StoredComment": {
+        "$ref": "#/$defs/CommentRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "openComposer"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "postComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "addComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "deleteComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "discardDraft"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredReply": {
+        "$ref": "#/$defs/ReplyRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/apps/shared-note/main.tsx",
+              "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+              "path": [
+                "commitReply"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "Initial document values, shared by every viewer of this piece.",
+    "properties": {
+      "comments": {
+        "default": [],
+        "description": "Comments on the body, one keyed record per comment. A record whose\n`status` is `\"draft\"` is a comment its author is still writing.",
+        "items": {
+          "$ref": "#/$defs/StoredComment"
+        },
+        "scope": "space",
+        "type": "array"
+      },
+      "content": {
+        "default": "",
+        "description": "LF-normalized Markdown; live editing uses CodeMirror operations.",
+        "scope": "space",
+        "type": "string"
+      },
+      "title": {
+        "default": "Untitled note",
+        "description": "Editable document title, independent of Markdown frontmatter.",
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/shared-note/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddCommentEvent": {
+        "properties": {
+          "body": {
+            "description": "The comment.",
+            "type": "string"
+          },
+          "quote": {
+            "description": "Text the body holds exactly once, compared code unit for code unit.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quote",
+          "body"
+        ],
+        "type": "object"
+      },
+      "CommentIdEvent": {
+        "properties": {
+          "id": {
+            "description": "The comment's `id`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "CommentRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/NoteProfile",
+            "description": "The profile the comment was written under."
+          },
+          "body": {
+            "description": "The comment; empty while it is a draft.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The comment's id, which its two anchors on the body are named for.",
+            "type": "string"
+          },
+          "postedAt": {
+            "description": "The handler clock when the comment was written, in milliseconds.",
+            "type": "number"
+          },
+          "quote": {
+            "description": "The text between the anchors when the comment was written, shown in its\nrow while the editor marks nothing for it: while it is a listed draft,\nonce it is resolved, and once an edit has deleted that text.",
+            "type": "string"
+          },
+          "replies": {
+            "$ref": "#/$defs/RepliesValue",
+            "description": "The comment's replies, a list of its own that anyone may add to under\ntheir own name."
+          },
+          "resolved": {
+            "default": false,
+            "description": "Whether the comment is settled, a cell of its own that anyone may set. A\nresolved comment marks no text.",
+            "type": "boolean"
+          },
+          "status": {
+            "$ref": "#/$defs/CommentStatus",
+            "description": "Where the comment is in its life. A draft holds its anchors from the\nmoment its author opens the composer; it is listed only to its author,\nwho can continue or discard it, and marks no text for anyone else. A\ndeleted comment is linked from no list, and has no anchors."
+          }
+        },
+        "required": [
+          "id",
+          "authorProfile",
+          "body",
+          "status",
+          "quote",
+          "postedAt",
+          "replies",
+          "resolved"
+        ],
+        "type": "object"
+      },
+      "CommentReplyEvent": {
+        "properties": {
+          "body": {
+            "description": "The reply.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The comment's `id`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "id"
+        ],
+        "type": "object"
+      },
+      "CommentStatus": {
+        "enum": [
+          "draft",
+          "posted",
+          "deleted"
+        ]
+      },
+      "FieldAnchors": {
+        "additionalProperties": {
+          "type": "number"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "LineEvent": {
+        "properties": {
+          "text": {
+            "description": "The line, without a trailing newline.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "NoteProfile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReplaceTextEvent": {
+        "properties": {
+          "new": {
+            "description": "Text that takes its place.",
+            "type": "string"
+          },
+          "old": {
+            "description": "Text the document holds exactly once, compared code unit for code unit.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "old",
+          "new"
+        ],
+        "type": "object"
+      },
+      "RepliesValue": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/StoredReply"
+        },
+        "type": "array"
+      },
+      "ReplyRecord": {
+        "properties": {
+          "authorProfile": {
+            "$ref": "#/$defs/NoteProfile",
+            "description": "The profile the reply was written under."
+          },
+          "body": {
+            "description": "The reply.",
+            "type": "string"
+          },
+          "postedAt": {
+            "description": "The handler clock when the reply was written, in milliseconds.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "authorProfile",
+          "body",
+          "postedAt"
+        ],
+        "type": "object"
+      },
+      "StoredComment": {
+        "$ref": "#/$defs/CommentRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writePolicyAnyOf": [
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "openComposer"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "postComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "addComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "deleteComment"
+                  ]
+                }
+              }
+            },
+            {
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/patterns/apps/shared-note/main.tsx",
+                  "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+                  "path": [
+                    "discardDraft"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      },
+      "StoredReply": {
+        "$ref": "#/$defs/ReplyRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/apps/shared-note/main.tsx",
+              "moduleIdentity": "yNrim3IvPNSWPwoCCDTkIlSq9-WFEaLNYIi311qT47k",
+              "path": [
+                "commitReply"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "Readable Markdown and the same compact view for standalone and embedded use.",
+    "properties": {
+      "$FS": {
+        "description": "The note as `index.md`: the title in the frontmatter, then the body, both\nlinked to the fields below. A filesystem save writes both back. Once an\neditor has changed the body, a save that changes it too is refused, and\nthe body is edited through the verbs below instead.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$TILE_UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addComment": {
+        "$ref": "#/$defs/AddCommentEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Comments under the caller's profile on the one occurrence of `quote` in\nthe body, and refuses when `quote` is empty, occurs nowhere, or occurs\nmore than once, when `body` has no text, or when the caller has no\nprofile."
+      },
+      "appendLine": {
+        "$ref": "#/$defs/LineEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds `text` to the end of the document, on a line of its own."
+      },
+      "commentAnchors": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/FieldAnchors"
+          }
+        ],
+        "description": "Where each comment's text is now: the body's anchors, two per comment,\ndrafts included. The text of the comment `id` runs from the anchor\n`<id>:from` to the anchor `<id>:to`. `undefined` until the body first\nholds an anchor."
+      },
+      "comments": {
+        "items": {
+          "$ref": "#/$defs/StoredComment"
+        },
+        "scope": "space",
+        "type": "array"
+      },
+      "content": {
+        "scope": "space",
+        "type": "string"
+      },
+      "deleteComment": {
+        "$ref": "#/$defs/CommentIdEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Deletes the comment `id`, which only its author can do."
+      },
+      "participantName": {
+        "scope": "user",
+        "type": "string"
+      },
+      "prependLine": {
+        "$ref": "#/$defs/LineEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Adds `text` to the start of the document, on a line of its own."
+      },
+      "reopenComment": {
+        "$ref": "#/$defs/CommentIdEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Marks the comment `id` open again."
+      },
+      "replaceText": {
+        "$ref": "#/$defs/ReplaceTextEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replaces the one occurrence of `old` in the document with `new`, and\nrefuses when `old` is empty, occurs nowhere, or occurs more than once."
+      },
+      "replyToComment": {
+        "$ref": "#/$defs/CommentReplyEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replies to the comment `id` under the caller's profile."
+      },
+      "resolveComment": {
+        "$ref": "#/$defs/CommentIdEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Marks the comment `id` resolved: it stays listed and marks no text."
+      },
+      "title": {
+        "scope": "space",
+        "type": "string"
+      }
+    },
+    "required": [
+      "title",
+      "content",
+      "comments",
+      "participantName",
+      "commentAnchors",
+      "appendLine",
+      "prependLine",
+      "replaceText",
+      "addComment",
+      "replyToComment",
+      "resolveComment",
+      "reopenComment",
+      "deleteComment",
+      "$NAME",
+      "$UI",
+      "$TILE_UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

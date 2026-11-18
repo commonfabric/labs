@@ -15,16 +15,16 @@ import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { getPatternEnvironment } from "../builder/env.ts";
 import type { CellScope, Schema } from "../builder/types.ts";
-import { type Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import { useCancelGroup } from "../cancel.ts";
 import { createFrozenRequestSnapshot } from "../cfc/request-snapshot.ts";
 import { validateAgainstSchema } from "../cfc/schema-sanitization.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import { setResultCell } from "../result-utils.ts";
-import { type RawBuiltinResult } from "../module.ts";
+import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
-import { type Action } from "../scheduler.ts";
+import type { Action } from "../scheduler.ts";
 import {
   requireWaveAcceptance,
   waveRunContextOf,
@@ -494,7 +494,7 @@ function fetchBuiltin(kind: FetchKind) {
 
       /** Keeps the instance alive through its authoritative writeback. */
       function trackWork(
-        work: Promise<void>,
+        work: Promise<unknown>,
         staging: FetchStaging,
         sharedCompletion = false,
       ): void {
@@ -811,27 +811,6 @@ function fetchBuiltin(kind: FetchKind) {
                     error.withTx(tx).set(undefined);
                   });
 
-                  // Check if URL became empty while waiting for mutex
-                  if (!inputsSnapshot.url) {
-                    // Release the lock and clear state
-                    myRequestId = undefined;
-                    runtime.editWithRetry((tx) => {
-                      if (identity !== undefined) {
-                        tx.tx.scopeKeyIdentity = identity;
-                      }
-                      markEffectCompletion(tx, effectKey);
-                      pending.withTx(tx).set(false);
-                      result.withTx(tx).set(undefined);
-                      error.withTx(tx).set(undefined);
-                      internal.withTx(tx).set({
-                        requestId: "",
-                        lastActivity: 0,
-                        inputHash: "",
-                      });
-                    });
-                    return;
-                  }
-
                   abortController = new AbortController();
 
                   // We claimed the mutex, start the fetch. `startFetch` compares
@@ -870,12 +849,14 @@ function fetchBuiltin(kind: FetchKind) {
                 trackWork(
                   settleAbandonedRequest(
                     runtime,
-                    kind.name,
-                    effectKey,
+                    {
+                      builtinId: kind.name,
+                      effectKey,
+                      identity,
+                      scope: outputScope,
+                      attributeToBuiltin: true,
+                    },
                     (settleTx) => {
-                      if (identity !== undefined) {
-                        settleTx.tx.scopeKeyIdentity = identity;
-                      }
                       const ownsBinding = identity === undefined ||
                         (instances.get(instanceKey) === instance &&
                           stagings.get(bindingKey) === staging);

@@ -130,6 +130,34 @@ most-recently-used (MRU) ordering:
   the person's profiles share. A space whose recorded profile is retired
   keeps that record, and `sharedSpaces.profiles` reads it as `retired`
   ([Social-space collection](#social-space-collection)).
+- A profile whose space is
+  [deleted](../../specs/random-space-identities.md#deleting-a-space) is
+  retired. The memory server refuses its space, with the `deleted` marker,
+  which is not the absence of a missing profile's document, and its `name`
+  cannot be followed, so it is never one of the user's own profiles. Until it
+  is retired, `#profile` cannot read it, and if it leaves no other live
+  profile, `#profile` reports an error rather than opening profile creation
+  ([`wish.md`](wish.md)). Retiring it records the deletion: a retired profile
+  is skipped before it is read, so once it is retired and no live profile is
+  left, the roster is empty and `#profile` opens profile creation. The
+  runtime that holds the person's Home sends `retireProfile` for a profile
+  `profiles` lists when it is refused that profile's space with the `deleted`
+  marker, as it sends the catalog's `markDeleted`
+  ([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)),
+  through the same `PiecesController.markDeletedSpace`
+  (`retireDeletedProfileOf()`). `setProfileRetired` admits such a
+  profile in place of the ownership test it can no longer pass: its link is in
+  `profiles` and `spaceDeleted(space)` returns `true` in the handler, asked by
+  the handler itself, so an event naming a profile that is not deleted is held
+  to the usual refusals. The refusals that keep `#profile` from moving without the
+  person choosing do not apply, since a deleted profile is none of the live
+  ones they protect. Where the memory server has not yet answered for the
+  space, the handler runs again once it has, under the conditions
+  [`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces)
+  gives for `markDeleted`. The picker lists a deleted profile apart, by its
+  space and marked deleted, with no control. It shows no name, since a
+  profile's name is kept in its own space, which is gone. `restoreProfile`
+  refuses a deleted profile.
 
 Each profile lives in its own space, created with the anonymous
 `PatternFactory.inSpace()` — one allocation per creation, each a new space with
@@ -144,10 +172,13 @@ command or policy, has a place beside it. A runtime loads every profile's
 delegations at startup
 (`Runtime.loadProfileDelegations`) so its sessions on the profile space act
 under the profile's own grant ([profile delegation](../../specs/profile-delegation.md)).
-A profile created before profiles owned themselves names its creator as owner
-and has no delegation; it keeps opening on the creator's grant. The wildcard
-WRITE is there because a runtime showing a profile writes into the profile's
-space, so a visitor needs more than READ. CFC owner-protects the
+The creating runtime holds the delegation from the moment the key signs it, so
+the commit that places the profile and the copy of its pattern into the space
+are made under the profile's grant too, and creation needs nothing from the
+wildcard. A profile created before profiles owned themselves names its creator
+as owner and has no delegation; it keeps opening on the creator's grant. The
+wildcard WRITE is there because a runtime showing a profile writes into the
+profile's space, so a visitor needs more than READ. CFC owner-protects the
 profile's data fields that store an owner policy (all but `picture`, as below),
 and its view state is per session; nothing else in the space is protected from
 a visitor (a *named* `inSpace(name)` would put every
@@ -165,14 +196,33 @@ profile created with the field, and no one on a profile that gained the field
 in a later release, since a source update is no principal's act. The value
 cell's own label is minted by the write that stored the value. Only the second
 says whose word the value is, so a reader that relies on who a field
-represents, such as a host showing a member's picture as their face, reads the
-value cell's label and takes the field as the owner's only when that label
-names the owner alone. A pattern reads it in a handler or a reactive
-computation, since the call throws in a pattern body, with
+represents reads the value cell's label and takes the field as the owner's only
+when that label names the owner alone. A pattern reads it in a handler or a
+reactive computation, since the call throws in a pattern body, with
 `principalOf(profile.key(field), "represents-principal")`; a host reads it with
 `cfcLabelViewForResolvedTarget()`. Like every claim, it binds honest runtimes
 only: the memory server does not check a claim against the session that
 committed it ([`principal-of.md`](../../features/principal-of.md)).
+
+A profile's face is its `picture`, or else its legacy `avatar` text, when that
+value's own cell represents its owner. The runtime decides whom a value's own
+cell represents by one rule (`runtime/runner/src/cfc/written-principal.ts`): the
+one principal the label of the cell a write to the field lands in names, when
+the value is the whole of that cell, that cell is in the space of the document
+holding the field, and no link stored there leads elsewhere. That label says
+nothing of who pointed the field at the cell. A cell in another space is
+refused, since its label says who wrote the value there, not that anyone put it
+at this field. Within the profile's space, a visitor can still point a face
+field at another cell the owner wrote there. A reader names the field through
+the profile, as `profile.key("picture")` does: a write redirect of its own to
+the field, stored in its own space, is refused like any other. A pattern asks
+with `writtenPrincipalOf()`, a host holding a runtime with
+`writtenPrincipalAt()`, and a host holding cell handles with
+`observeWrittenPrincipal()` from `@commonfabric/runtime-client`. Patterns read a
+face with `profileFace()` from `patterns/system/profile-face/profile-face.ts`,
+which compares that principal with `profileOwnerOf()`; `cf-profile-badge`
+compares it with the principal its seal shows. So a picture a visitor set, or
+one stored before pictures were labeled, is not shown as the owner's face.
 
 A field's writes are checked only once a write stores its policy in the value
 cell. A field with a default, such as `name` or `bio`, has its owner-protected
@@ -317,17 +367,25 @@ delivered there stays readable. The host's share intake follows the offers in
 the inbox Home holds and in each one it retains, vets each as the user, and
 registers each one that passes in Home's shared-space catalog through Home's
 `registerSharedSpace` stream; it leaves every offer in its inbox. Home creates
-an inbox from `patterns/system/private-inbox/private-inbox.tsx` only when it
-holds none and no profile points at one. An inbox that fails vetting is neither
+an inbox from `patterns/system/private-inbox/private-inbox.tsx` once, in a step
+of its own that reads nothing labeled before it, and records it in
+`defaultPattern.ownPrivateInbox`. The host has Home take that step, through
+Home's `createOwnPrivateInbox` stream, before an ensure for which Home may need
+it, and waits for it, so a creation that fails fails the ensure. Home takes that
+inbox when it holds none and
+no profile points at one, and in place of an inbox it did not make, such as a
+loom daemon's, which it then retains. An inbox that fails vetting is neither
 adopted nor replaced, and Home keeps what it holds, or holds none. While Home
-holds an inbox, it points each profile that points at no inbox at it, through
-the profile's `inbox` field, which is how a sender finds it, and leaves a
-profile pointing at another inbox as it is. While it holds none, as after a
+holds an inbox, it points each profile that points at no inbox, or at an inbox
+Home gave up or replaced, at it, through the profile's `inbox` field, which is
+how a sender finds it, and leaves a profile pointing at any other inbox as it
+is. While it holds none, as after a
 failed vetting, a profile that points at no inbox stays unpointed. A failed
 vetting is recorded in `defaultPattern.privateInboxRefusal`, under `refusal`:
 the host's reason code, a link to the refused inbox, and when Home first
 recorded it. Each ensure, which is to say the next bring-up of Home in a runtime
-worker, clears it when Home adopts or creates an inbox, when the deciding
+worker, that records no refusal itself clears it when Home adopts an inbox or
+takes its own, when the deciding
 profile points at the inbox Home holds, or when no profile points at the refused
 inbox any longer. Nothing else clears it automatically in between, though the
 owner can clear it by replacing the refused inbox, as below, and the owner's own
@@ -336,19 +394,21 @@ stream. It is read from Home's root like any other field of Home, the root being
 the link the `#default` wish answers with, as "Custom Home Pattern" below says,
 and Home shows it as a notice above its tabs, by its code and time alone. The
 notice's "Use a new inbox" button, which a click on it sends, has Home clear the
-refusal, keep its inbox or create its own, and point the profiles that point at
+refusal, keep its inbox or take its own, and point the profiles that point at
 the refused inbox at it, and records that in
-`defaultPattern.privateInboxReplacement`. A profile created once Home holds the
-inbox is pointed at it as it is created; one created earlier is pointed by the
-next ensure. Home decides only when an ensure runs, so a pointer that moves is
+`defaultPattern.privateInboxReplacement`. The notice offers no button while Home
+holds no inbox and the refused inbox is Home's own, which the click never takes.
+A profile created once Home holds the inbox is pointed at it as it is created;
+one created earlier is pointed by the next ensure. Home decides only when an
+ensure runs, so a pointer that moves is
 decided at the first bring-up of Home in the next runtime worker to start, once
 the current worker's ensure has succeeded. A loom daemon does the same in the
 other direction, adopting the inbox a profile advertises and never replacing a
 pointer to a different one. A client that would otherwise create an inbox of its
 own, as a loom daemon does, asks Home for it through
 `defaultPattern.requestPrivateInbox`, naming the profile it finds the owner by:
-Home ensures its inbox with an event naming nothing, which keeps or creates
-Home's inbox and points the profiles that point at none but adopts nothing,
+Home ensures its inbox with an event naming nothing, which keeps Home's inbox or
+takes its own and points the profiles that point at none but adopts nothing,
 and its handling's receipt links to Home's answer for that profile, which
 reads `ensured` once the profile points at Home's inbox, or a final status
 saying why it never will.
@@ -379,7 +439,9 @@ user's favorites only, and the queue is not a favorite.
 The piece holds two things:
 
 - `entries` - one `{ run, host }` entry per `AgentRun` record the user has
-  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  submitted and not removed, across spaces and toolsheds. `cf agent remove`
+  takes a finished run's entry off the queue and leaves its record where it
+  is. The `agent` builtin adds an entry
   when a request commits, as an element addressed by the record's id
   (`elementById` and `addUnique`, the way favorites are keyed), so two requests
   indexed side by side land as two elements. `run` links to the record in the requesting space;
@@ -416,8 +478,9 @@ pattern is a version without the field, `wish({ query: "#agent_queue" })`
 resolves to nothing; where there is no home pattern yet, a headless wish
 resolves to nothing too, and any other resolves through the empty slot. A write
 through that cell is refused with a `SpaceRootMissingError`. When the write is a
-handler's on a client runtime and the refusal escapes the handler, the home
-pattern is created and the handler runs again; a serving runtime creates none.
+handler's and the refusal escapes the handler, the handler runs again once the
+home pattern exists: a client runtime creates it, and a serving runtime waits
+for the home space's own server to create it and link it.
 [Built-in Targets](wish.md#built-in-targets) describes both.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the
 request side.
@@ -433,10 +496,14 @@ keeps its stable identity, and the flat catalog fields remain aliases.
 The **Social spaces** tab lists saved and archived looms, chats, and other kinds
 without fetching their roots. Search and filters belong to the current session.
 Archive puts a space away and restore saves it again; both compare the revision
-the rendered control showed and leave space access unchanged. Unfamiliar states
-remain visible in **Other states**. An unavailable collection has an explicit
-notice rather than an empty list. Ordinary space navigation opens a listed
-space using the runtime's configured routing.
+the rendered control showed and leave space access unchanged. A space recorded
+as deleted
+([`shared-space-catalog.md`](../../features/shared-space-catalog.md#deleted-spaces))
+appears under **Deleted**, with neither control. Unfamiliar states remain
+visible in **Other states**. An unavailable collection has an explicit notice
+rather than an empty list.
+Ordinary space navigation opens a listed space using the runtime's configured
+routing.
 
 Home also records which of the person's profiles acts in each space, as part of
 their membership in it: `sharedSpaceProfiles` holds one record per space, keyed

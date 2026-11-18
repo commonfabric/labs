@@ -9,6 +9,7 @@ import {
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/async/defer";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { NAME } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import { useCancelGroup } from "../../src/cancel.ts";
@@ -334,6 +335,7 @@ describe("wish-availability", () => {
           async create(space, signer, options = {}) {
             const base = loopback(server);
             const client = await connect({
+              instanceNames: namesInstancesByDefault(),
               transport: {
                 ...base,
                 async send(payload) {

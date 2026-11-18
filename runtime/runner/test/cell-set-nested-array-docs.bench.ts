@@ -19,8 +19,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
-import { type Cell, type Frame } from "../src/builder/types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { Cell, Frame } from "../src/builder/types.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("bench nested array docs");
 const space = signer.did();

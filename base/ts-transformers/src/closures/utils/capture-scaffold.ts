@@ -1,4 +1,4 @@
-import ts from "typescript";
+import type ts from "typescript";
 import type { TransformationContext } from "../../core/mod.ts";
 import { preserveSourceMapRange } from "../../ast/mod.ts";
 import {

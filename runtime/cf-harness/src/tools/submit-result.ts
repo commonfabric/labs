@@ -16,7 +16,7 @@
  * from the swap that turns tokens into addresses.
  */
 
-import { errorMessage } from "../error-message.ts";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { validateStructuredResultValue } from "../structured-result.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -81,7 +81,7 @@ export const submitResultTool: HarnessToolDefinition<
         status: "error",
         code: "invalid_result",
         message: `the result does not satisfy the schema: ${
-          errorMessage(error)
+          describeFailure(error)
         }`,
       };
     }

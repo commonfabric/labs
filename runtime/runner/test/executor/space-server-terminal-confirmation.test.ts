@@ -114,14 +114,14 @@ describe("SpaceServer", () => {
       return sync(cell, options);
     };
     const facade = new Proxy(server, {
-      get(target, key, receiver) {
+      get(target, key) {
         if (key === "demandForSpace") {
           return () =>
             sessionDemandOf(
               demanded ? [{ id: ids[0], scope, scopeKey, root: true }] : [],
             );
         }
-        const value = Reflect.get(target, key, receiver);
+        const value = Reflect.get(target, key);
         return typeof value === "function" ? value.bind(target) : value;
       },
     });

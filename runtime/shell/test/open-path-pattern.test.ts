@@ -14,6 +14,7 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
@@ -60,7 +61,10 @@ class InProcessTransport extends EventEmitter<RuntimeTransportEvents>
     if (!("msgId" in message)) return;
     const { msgId, data } = message;
     if (
-      data.type === RequestType.Initialize || data.type === RequestType.Dispose
+      data.type === RequestType.Initialize ||
+      data.type === RequestType.Attach ||
+      data.type === RequestType.SetForwardWorkerConsole ||
+      data.type === RequestType.Dispose
     ) {
       queueMicrotask(() => this.emit("message", { msgId }));
       return;
@@ -78,7 +82,7 @@ class InProcessTransport extends EventEmitter<RuntimeTransportEvents>
         (error) =>
           this.emit("message", {
             msgId,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeFailure(error),
           }),
       );
   }

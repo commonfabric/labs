@@ -1,18 +1,22 @@
 /**
- * The principals a FabriChat room's participants stand for, as a client that
- * draws natively reads them from the room's views: an entry for each
- * participant, in the order of `participants`, pairing their profile with the
- * principal its label attests, and with none for a profile that attests no
- * principal; and each principal once, in that order. Each person writes their
- * own profile here, so its label names them, as a Fabric profile's does.
- * That a reader whom a profile's space refuses reads the list without a write
- * fight is something only spaces other than the test's own show, so
- * `../../integration/fabrichat-room-principals-multi-runtime.test.ts` checks it.
+ * A FabriChat room's deprecated `participantEntries` and
+ * `participantPrincipals`, as a client that draws natively reads them from the
+ * room's views: the room's `members` in the shapes clients read before it.
+ * The principals are the members', each principal the space's access list
+ * names, in DID order, whether or not they joined, and the entries pair each
+ * member's own profile on the roster with the member's principal. A profile
+ * that is no one's, or that only sent a message, has no entry. Each person
+ * writes their own profile here, so its label names them, as a Fabric
+ * profile's does. That a reader whom a profile's space refuses reads them
+ * without a write fight is something only spaces other than the test's own
+ * show, so `../../integration/fabrichat-room-members-multi-runtime.test.ts`
+ * checks it.
  */
 import {
   action,
   type AddIntegrity,
   assert,
+  computed,
   currentPrincipal,
   equals,
   handler,
@@ -154,7 +158,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 });
 
 // Sends a message without joining, which makes him a participant only as an
-// author, and reads the principals through the room's views.
+// author, and reads the principals and entries through the room's views.
 export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profile = Writable.of<OwnProfile>();
   const writeProfile = writeOwnProfile({ profile, name: "Bob" });
@@ -168,6 +172,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     messages: setup.records.messages,
     roster: setup.records.roster,
   } as RoomArg);
+  const expectedOrder = computed(() =>
+    [setup.aliceDid.get(), bobDid.get()].sort()
+  );
 
   return {
     [TESTS]: [
@@ -180,50 +187,45 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: sendGesture,
       },
       // Four participants: Alice's profile and the unclaimed one, as joined,
-      // then the two authors, Alice's other profile and Bob's. They attest
-      // Alice, no one, Alice, and Bob.
+      // then the two authors, Alice's other profile and Bob's. The principals
+      // are the two members, in DID order, though Bob never joined.
       {
         assertion: assert(() => {
           const principals = room[VIEWS].room.participantPrincipals;
           return setup.aliceDid.get() !== "" && bobDid.get() !== "" &&
             room.participants.length === 4 &&
             principals.length === 2 &&
-            principals[0] === setup.aliceDid.get() &&
-            principals[1] === bobDid.get();
+            principals[0] === expectedOrder[0] &&
+            principals[1] === expectedOrder[1];
         }),
       },
       // The room's own output offers the same list.
       {
         assertion: assert(() =>
           room.participantPrincipals.length === 2 &&
-          room.participantPrincipals[0] === setup.aliceDid.get() &&
-          room.participantPrincipals[1] === bobDid.get()
+          room.participantPrincipals[0] === expectedOrder[0] &&
+          room.participantPrincipals[1] === expectedOrder[1]
         ),
       },
-      // One entry for each participant, in order, each with its profile, and
-      // with the principal it attests, or none for the unclaimed profile.
+      // One entry, for the one profile on the roster that is a member's own:
+      // Alice's, with her principal. The unclaimed profile is no one's, and
+      // Alice's other profile and Bob's are only authors.
       {
         assertion: assert(() => {
           const entries = room[VIEWS].room.participantEntries;
-          const aliceDid = setup.aliceDid.get();
-          const expected = [aliceDid, undefined, aliceDid, bobDid.get()];
-          return aliceDid !== "" && bobDid.get() !== "" &&
-            entries.length === room.participants.length &&
-            entries.length === expected.length &&
-            entries.every((entry, index) =>
-              equals(entry.profile, room.participants[index]) &&
-              entry.principal === expected[index]
-            );
+          return setup.aliceDid.get() !== "" && entries.length === 1 &&
+            equals(entries[0]?.profile, room.participants[0]) &&
+            entries[0]?.principal === setup.aliceDid.get();
         }),
       },
-      // The reader's own entry, the one for the profile they read the room
-      // with, carries their principal, which is how a client tells which
-      // participant is them.
+      // Bob, who never joined, has no entry for the profile he reads the room
+      // with.
       {
         assertion: assert(() =>
-          room.participantEntries.find((entry) =>
-              equals(entry.profile, profile)
-            )?.principal === bobDid.get() && bobDid.get() !== ""
+          room.participantEntries.length === 1 &&
+          room.participantEntries.every((entry) =>
+            !equals(entry.profile, profile)
+          )
         ),
       },
     ],

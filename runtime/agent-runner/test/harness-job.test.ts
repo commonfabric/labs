@@ -186,6 +186,87 @@ describe("runHarnessJob()", () => {
       return loopResult(runRoot);
     };
 
+  it("throws before preparing a workspace when the spec asks for progress with nowhere to publish it", async () => {
+    await expect(
+      runHarnessJob(plainSpec({ progress: true }), {
+        runRoot,
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("Progress requires a host publication channel");
+    await expect(Deno.stat(join(runRoot, "workspace"))).rejects.toThrow(
+      Deno.errors.NotFound,
+    );
+  });
+
+  for (const progress of [false, true]) {
+    it(`offers milestone reporting only when opted in: ${progress}`, async () => {
+      const messages: string[] = [];
+      let turns = 0;
+      const result = await runHarnessJob(
+        plainSpec({
+          progress,
+          tools: [],
+          maxModelTurns: 3,
+          taskRole: "context",
+        }),
+        {
+          runRoot,
+          signal: new AbortController().signal,
+          onProgress: (message) => {
+            messages.push(message);
+            return Promise.resolve();
+          },
+          harnessDeps: {
+            env: {
+              ...SCRIPTED_ENV,
+              CF_HARNESS_RUNSC_CFC_POLICY:
+                "/nonexistent/harness-job-test/policy.json",
+            },
+            createPromptLoop: (options) =>
+              new CfHarnessPromptLoop({
+                ...options,
+                modelClient: {
+                  providerId: "fixture",
+                  complete: (request) => {
+                    expect(
+                      request.tools?.some((tool) =>
+                        tool.toolId === "report_progress"
+                      ),
+                    ).toBe(progress);
+                    expect(messages.length).toBe(progress ? turns : 0);
+                    const reporting = progress && turns < 2;
+                    turns++;
+                    return Promise.resolve({
+                      assistant: {
+                        role: "assistant",
+                        content: "",
+                        toolCalls: [{
+                          id: `call-${turns}`,
+                          type: "function",
+                          function: {
+                            name: reporting
+                              ? "report_progress"
+                              : "submit_result",
+                            arguments: JSON.stringify(
+                              reporting
+                                ? { message: `Milestone ${turns}` }
+                                : { result: { answer: "Titan" } },
+                            ),
+                          },
+                        }],
+                      },
+                    });
+                  },
+                },
+              }),
+          },
+        },
+      );
+      expect(result.outcome).toBe("completed");
+      expect(messages).toEqual(progress ? ["Milestone 1", "Milestone 2"] : []);
+    });
+  }
+
   for (const valid of [true, false]) {
     it(`keeps the real loop's final-turn ${valid ? "submission" : "failure report"}`, async () => {
       let calls = 0;
@@ -280,6 +361,69 @@ describe("runHarnessJob()", () => {
       maxOutputTokens: 8192,
       stopOnStructuredResult: true,
     });
+  });
+
+  it("sends two runs' model calls under the spec's shared cache affinity key, and each run under its own without one", async () => {
+    /** The cache key and run id of each model request one job made. */
+    const requestsOf = async (spec: HarnessJobSpec) => {
+      const requests: { cacheAffinityKey?: string; runId: string }[] = [];
+      const jobRoot = await Deno.makeTempDir({ dir: runRoot });
+      const result = await runHarnessJob(spec, {
+        runRoot: jobRoot,
+        signal: new AbortController().signal,
+        harnessDeps: {
+          env: {
+            ...SCRIPTED_ENV,
+            CF_HARNESS_RUNSC_CFC_POLICY:
+              "/nonexistent/harness-job-test/policy.json",
+          },
+          createPromptLoop: (options) =>
+            new CfHarnessPromptLoop({
+              ...options,
+              modelClient: {
+                providerId: "fixture",
+                complete: (request) => {
+                  requests.push({
+                    ...(request.cacheAffinityKey !== undefined
+                      ? { cacheAffinityKey: request.cacheAffinityKey }
+                      : {}),
+                    runId: request.runId,
+                  });
+                  return Promise.resolve({
+                    assistant: {
+                      role: "assistant",
+                      content: "",
+                      toolCalls: [{
+                        id: "submit-one",
+                        type: "function",
+                        function: {
+                          name: "submit_result",
+                          arguments: JSON.stringify({
+                            result: { answer: "Titan" },
+                          }),
+                        },
+                      }],
+                    },
+                  });
+                },
+              },
+            }),
+        },
+      });
+      expect(result.outcome).toBe("completed");
+      expect(requests.length).toBeGreaterThan(0);
+      return requests;
+    };
+    const shared = { tools: [], cacheAffinityKey: "loom-brief" };
+    const first = await requestsOf(plainSpec(shared));
+    const second = await requestsOf(plainSpec(shared));
+    expect(first[0].runId).not.toBe(second[0].runId);
+    for (const request of [...first, ...second]) {
+      expect(request.cacheAffinityKey).toBe("loom-brief");
+    }
+    for (const request of await requestsOf(plainSpec({ tools: [] }))) {
+      expect("cacheAffinityKey" in request).toBe(false);
+    }
   });
 
   it("passes the job's command endpoint, actor, own id and relevant commands into the harness", async () => {
@@ -634,6 +778,23 @@ describe("runHarnessJob()", () => {
           "submit_result",
         ]);
       }
+    });
+
+    it("says a job's published patterns are made for a person only when the spec says so", async () => {
+      const { seen } = await runScripted(
+        plainSpec({
+          tools: ["run_pattern"],
+          fabric: localFabric(),
+          patternIndexUrl: "https://index.example",
+          patternIndexOrigin: "agent",
+        }),
+        answering("Titan"),
+      );
+      expect(seen.loopOptions?.engine?.config.patternIndex).toEqual({
+        baseUrl: "https://index.example",
+        origin: "agent",
+      });
+      expect(seen.loopOptions?.engine?.patternIndexOrigin).toBe("agent");
     });
 
     it("configures no pattern index for a spec that names none", async () => {

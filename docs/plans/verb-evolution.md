@@ -37,8 +37,13 @@ the old one. Two rules drive that comparison, in opposite directions:
 
 - What a pattern **accepts**, it may accept more of, never less. Accepting
   less breaks whoever was sending the thing you dropped.
-- What a pattern **provides**, it may provide more of, never less. Providing
-  less breaks whoever was reading the thing you dropped.
+- What a pattern **provides**, it may provide more of, never less of what it
+  guarantees. Providing less breaks whoever was reading the thing you dropped. A
+  data field it publishes as optional guarantees nothing about presence, so it
+  may stop publishing one: whoever reads it already handles its absence. An
+  optional verb a pattern's handler backs is such a field too, since a holder's
+  object read leaves it out once it is gone; a required verb, or one a builtin
+  backs or another node forwards, is not.
 
 Sound in principle. Measured against the current runtime — not inferred —
 here is what it does to a verb's author:
@@ -47,7 +52,8 @@ here is what it does to a verb's author:
 | --- | --- |
 | Add a verb | allowed |
 | Add a verb to a type another pattern stores | **refused** |
-| Remove or rename a verb | refused |
+| Remove an optional verb bound straight to its handler's stream | allowed, and a holder's object read leaves it out |
+| Rename a verb, or remove a required one, a builtin's, or one another node forwards | refused |
 | Mark a verb `@deprecated` | allowed, and it disappears from listings |
 | Turn a verb into data, or data into a verb | refused |
 | Add an optional field to a verb's input | allowed |
@@ -117,13 +123,26 @@ a demand hits `newly required argument field has no default`, and a verb is
 a stream, which cannot carry a default, so a newly required verb is the same
 refusal arriving from the other direction.
 
-Giving a demand up is narrowing, and the gate reads it as narrowing. A field
-the pattern stopped reading leaves a writer's value unread rather than
-breaking a reader, so the argument side drops named fields freely; what it
-still proves is that the candidate can hold the value the piece already
-carries, which a closed candidate object fails as `source field is rejected
-by the target object`. The result side preserves every named field it
-published.
+Giving a demand up is narrowing, and the gate reads it as narrowing. A field the
+pattern stopped reading leaves a writer's value unread rather than breaking a
+reader, so the argument side drops named fields freely; what it still proves is
+that the candidate can hold the value the piece already carries, which a closed
+candidate object fails as `source field is rejected by the target object`. The
+result side preserves every required field it published, every required verb,
+and every field that holds one. An optional data field it may stop publishing,
+since whoever reads it already reads its absence. An optional verb, and an
+optional field holding verbs, it may stop publishing too where its previous
+pattern bound each verb, through named object properties, straight to a
+handler's stream: a holder's object read leaves the verb out once it is gone
+(`runtime/runner/src/withdrawn-verb.ts`). One bound any other way is refused: a
+verb at a key of a builtin's own document, or one forwarded through a builtin, a
+computation or a sub-pattern, may stand for a document that records no owner to
+consult. So is a verb removal judged against a recorded baseline, which carries
+no binding. What the gate accepts in letting the rest go: a handle held in
+memory from before the update, or one `Cell.get()` or a read without a schema
+mints, still reads as itself, so a holder still bound through one keeps sending
+to it, and each event waits for the producer's piece to start and is then
+dropped for want of a handler.
 
 Stated plainly, because much of the design rests on it: **a deployed
 holder's demands can be given up freely, and added only where an existing
@@ -204,13 +223,14 @@ A verb is declared as something a piece definitely has, not something it may
 have. Code that holds a piece and calls a verb writes no check: the
 declaration says the verb is there, and the compiler agrees.
 
-Names are stable by default. The gate refuses a shape that removes or renames
-a verb — the one rule in today's gate genuinely protecting callers, and it
-stays — so a verb does not vanish by accident. The ordinary way to retire one
-is to add its replacement and mark the old one `@deprecated`, which hides it
-from listings while keeping it callable. A verb whose contract must change
-incompatibly gets a new name, spelled `append_v2`, introduced when the second
-generation actually appears.
+Names are stable by default. The gate refuses a shape that renames a verb or
+removes one — the one rule in today's gate genuinely protecting callers, and it
+stays — so a verb does not vanish by accident. Its one exception is an optional
+verb bound straight to its handler's stream, which a holder's object read leaves
+out once it is gone. The ordinary way to retire one is to add its replacement
+and mark the old one `@deprecated`, which hides it from listings while keeping
+it callable. A verb whose contract must change incompatibly gets a new name,
+spelled `append_v2`, introduced when the second generation actually appears.
 
 What this is not is an invariant. A pattern's owner may deliberately break
 their own pattern — retire a verb for real, change what one means — and the
@@ -405,7 +425,8 @@ Absence is evidence of retirement only on a listing that reports neither.
 | Widen a verb's input with an optional field | ok | ok | ok | ok | ok |
 | Require more of a verb's input | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** |
 | Change a verb's output | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** | **breaks at call** |
-| Rename or remove a verb | provider refused | provider refused | provider refused | provider refused | provider refused |
+| Remove an optional verb bound straight to its handler's stream | ok | ok | ok | ok | ok |
+| Rename a verb, or remove one any other way | provider refused | provider refused | provider refused | provider refused | provider refused |
 | Retire: add the replacement, deprecate the old | **holder refused** | ok | ok | ok | ok |
 
 "Holder refused" means the gate stops the *holder's* next update: nothing

@@ -119,7 +119,7 @@ describe("Engine.compileToRecordGraph()", () => {
     );
     expect(joinedBodies(graph)).toContain("__importDefault");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -351,7 +351,7 @@ describe("Engine.compileToRecordGraph()", () => {
 
     expect(joinedBodies(graph)).toContain("__cf_data");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -389,7 +389,7 @@ describe("Engine.compileToRecordGraph()", () => {
     expect(bodies).toContain("Date.now");
     expect(bodies).toContain("Math.random");
 
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,
@@ -433,7 +433,7 @@ describe("Engine.compileToRecordGraph()", () => {
     const { id, graph, mainSpecifier } = await engine.compileToRecordGraph(
       program,
     );
-    const { main } = engine.evaluateRecordGraph(
+    const { main } = await engine.evaluateRecordGraph(
       id,
       graph,
       mainSpecifier,

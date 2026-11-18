@@ -29,6 +29,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "scheduler_basis",
   "execution_lease",
   "execution_outbox",
+  "instance_name_mark",
   "_cf_commit_watermark",
 ];
 
@@ -96,18 +97,10 @@ function normalizeForGuard(sql: string): string {
       continue;
     }
     if (ch === "'") { // string literal -> blank
-      i++;
-      while (i < n) {
-        if (sql[i] === "'") {
-          if (sql[i + 1] === "'") {
-            i += 2;
-            continue;
-          } // '' escape
-          i++;
-          break;
-        }
-        i++;
-      }
+      // An `''` escape reads here as one literal closing and the next
+      // opening. Both are blanked, so the escape still leaves only spaces.
+      const close = sql.indexOf("'", i + 1);
+      i = close === -1 ? n : close + 1;
       out += " ";
       continue;
     }

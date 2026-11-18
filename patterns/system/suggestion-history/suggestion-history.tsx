@@ -24,6 +24,12 @@ export type Output = {
   [UI]: VNode;
 };
 
+function isHistoryEntry(
+  entry: Partial<SuggestionHistoryEntry> | undefined,
+): entry is SuggestionHistoryEntry {
+  return entry?.result != null && Array.isArray(entry.messages);
+}
+
 function extractText(content: any): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -58,10 +64,21 @@ export const searchPattern = pattern<
 });
 
 const SuggestionHistory = pattern<Input, Output>(() => {
-  const { result: entries } = wish<SuggestionHistoryEntry[] | Default<[]>>({
+  // `#suggestions` is an ordinary hashtag, so what the wish finds is a piece
+  // tagged with it, not a history list. Only entries shaped as history are
+  // read; anything else reads as no entries. The wish asks for entries with
+  // every field optional, since one entry missing a field would otherwise
+  // fail the whole read and leave no history at all.
+  const { result: entries } = wish<
+    Partial<SuggestionHistoryEntry>[] | Default<[]>
+  >({
     query: "#suggestions",
   });
-  const allEntries = computed(() => entries ?? []);
+  const allEntries = computed((): SuggestionHistoryEntry[] =>
+    Array.isArray(entries)
+      ? entries.flatMap((entry) => isHistoryEntry(entry) ? [entry] : [])
+      : []
+  );
 
   return {
     [NAME]: "Suggestion History",

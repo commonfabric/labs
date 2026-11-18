@@ -35,6 +35,7 @@ import type {
   IMemorySpaceAddress,
   TransactionWriteDetail,
 } from "../src/storage/interface.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Action, ReactivityLog } from "../src/scheduler/types.ts";
 import { recordCommitElisions } from "../src/storage/commit-elision.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -1246,8 +1247,10 @@ describe("scheduler-remote-echo-breaker", () => {
           const transact = server.transact.bind(server);
           let nextOutput: number[] | undefined;
           let derivedCommits = 0;
+          // The peer runs the naming mode the test's runtimes run.
           const peerClient = await MemoryV2Client.connect({
             transport: MemoryV2Client.loopback(server),
+            instanceNames: namesInstancesByDefault(),
           });
           try {
             await seed(editor, deriver.runtime, "growing-source", []);

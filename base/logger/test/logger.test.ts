@@ -7,13 +7,20 @@ import {
   getGlobalLogFloor,
   getLogger,
   getLoggerCountsBreakdown,
+  getLoggerCountsByKey,
+  getLoggerErrorMessagesBreakdown,
+  getLoggerFlagsBreakdown,
   getTimingMeasuresState,
   getTimingStatsBreakdown,
   getTotalLoggerCounts,
   log,
   LOG_COLORS,
+  Logger,
+  loggerCountsBreakdownOf,
   parseTimingMeasureCap,
+  resetAllCountBaselines,
   resetAllLoggerCounts,
+  resetAllTimingBaselines,
   resetAllTimingStats,
   resetTimingMeasureBudget,
   setGlobalLogFloor,
@@ -905,6 +912,229 @@ describe("logger", () => {
     });
   });
 
+  describe("errorMessagesByKey", () => {
+    // Each logger is disabled, which prints nothing, and which a logger's
+    // kept messages are meant to survive.
+
+    const disabledLogger = (name: string) =>
+      getLogger(name, { enabled: false });
+
+    it("returns the text of what was logged at `error`, by key", () => {
+      const logger = disabledLogger("kept-messages-text");
+
+      logger.error("first-key", "something", "broke");
+      logger.error("second-key", "something else broke");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({
+        "first-key": ["something broke"],
+        "second-key": ["something else broke"],
+      });
+    });
+
+    it("returns nothing of what was logged at any other level", () => {
+      const logger = disabledLogger("kept-messages-levels");
+
+      logger.debug("a-key", "debug");
+      logger.info("a-key", "info");
+      logger.warn("a-key", "warn");
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+      expect(logger.countsByKey["a-key"]?.total).toBe(3);
+    });
+
+    it("returns the earliest three messages of a key, which goes on counting", () => {
+      const logger = disabledLogger("kept-messages-bound");
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", `message ${i}`);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "message 0",
+        "message 1",
+        "message 2",
+      ]);
+      expect(logger.countsByKey["a-key"]?.error).toBe(5);
+    });
+
+    it("cuts a message at a thousand characters", () => {
+      const logger = disabledLogger("kept-messages-length");
+
+      logger.error("a-key", "x".repeat(1001));
+      logger.error("a-key", "y".repeat(1000));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        `${"x".repeat(1000)}…`,
+        "y".repeat(1000),
+      ]);
+    });
+
+    it("evaluates a lazy message once it has room for it, and not after", () => {
+      const logger = disabledLogger("kept-messages-lazy");
+      let evaluated = 0;
+      const lazy = () => {
+        evaluated++;
+        return ["lazily", "built"];
+      };
+
+      for (let i = 0; i < 5; i++) logger.error("a-key", lazy);
+
+      expect(logger.errorMessagesByKey["a-key"]?.[0]).toBe("lazily built");
+      expect(evaluated).toBe(3);
+    });
+
+    it("returns a sentence for a lazy message that throws, rather than throwing", () => {
+      const logger = disabledLogger("kept-messages-throwing");
+
+      logger.error("a-key", () => {
+        throw new Error("the message could not be built");
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "(this message could not be rendered)",
+      ]);
+    });
+
+    it("returns an error's name, message and cause", () => {
+      const logger = disabledLogger("kept-messages-error");
+
+      logger.error(
+        "a-key",
+        "failed:",
+        new TypeError("the outer one", { cause: new Error("the inner one") }),
+      );
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "failed: TypeError: the outer one (cause: Error: the inner one)",
+      ]);
+    });
+
+    it("returns what an object reporting like an error reports", () => {
+      const logger = disabledLogger("kept-messages-error-like");
+      class DonutFailure {
+        get name() {
+          return "DonutFailure";
+        }
+
+        get message() {
+          return "the fryer went out";
+        }
+      }
+
+      logger.error("a-key", new DonutFailure());
+      logger.error("a-key", { message: "a record with no name" });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "DonutFailure: the fryer went out",
+        "a record with no name",
+      ]);
+    });
+
+    it("returns the contents of records and arrays, to a bounded extent", () => {
+      const logger = disabledLogger("kept-messages-record");
+
+      logger.error("a-key", {
+        kind: "write",
+        count: 2,
+        error: new Error("it broke"),
+        deep: { deeper: { deepest: { value: 1 } } },
+        list: Array.from({ length: 12 }, (_, index) => index),
+      });
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{kind: write, count: 2, error: Error: it broke, " +
+        "deep: {deeper: {deepest: …}}, " +
+        "list: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, …]}",
+      ]);
+    });
+
+    it("cuts a record at ten keys, and names a function rather than calling it", () => {
+      const logger = disabledLogger("kept-messages-wide-record");
+      let called = 0;
+      const record: Record<string, unknown> = {
+        callback: () => {
+          called++;
+        },
+      };
+      for (let i = 1; i < 11; i++) record[`key${i}`] = i;
+
+      logger.error("a-key", record);
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "{callback: [function], key1: 1, key2: 2, key3: 3, key4: 4, key5: 5, " +
+        "key6: 6, key7: 7, key8: 8, key9: 9, …}",
+      ]);
+      expect(called).toBe(0);
+    });
+
+    it("names an instance of a class, calling neither `toJSON()` nor `toString()`", () => {
+      const logger = disabledLogger("kept-messages-instance");
+      let called = 0;
+      class Donut {
+        toJSON() {
+          called++;
+          return "json";
+        }
+
+        toString() {
+          called++;
+          return "string";
+        }
+      }
+
+      logger.error("a-key", new Donut());
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["[Donut]"]);
+      expect(called).toBe(0);
+    });
+
+    it("returns copies, which a caller cannot use to change what is kept", () => {
+      const logger = disabledLogger("kept-messages-copies");
+      logger.error("a-key", "kept");
+
+      logger.errorMessagesByKey["a-key"]?.push("not kept");
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual(["kept"]);
+    });
+
+    it("evaluates a lazy message twice where the logger also prints it", () => {
+      const logger = getLogger("kept-messages-printed", { level: "error" });
+      let evaluated = 0;
+
+      captureConsole("error", () =>
+        logger.error("a-key", () => {
+          evaluated++;
+          return "lazily built";
+        }));
+
+      expect(logger.errorMessagesByKey["a-key"]).toStrictEqual([
+        "lazily built",
+      ]);
+      expect(evaluated).toBe(2);
+    });
+
+    it("returns nothing once the counts are reset", () => {
+      const logger = disabledLogger("kept-messages-reset");
+      logger.error("a-key", "kept");
+
+      logger.resetCounts();
+
+      expect(logger.errorMessagesByKey).toStrictEqual({});
+    });
+  });
+
+  describe("getLoggerErrorMessagesBreakdown()", () => {
+    it("returns each logger's kept messages by name, omitting a logger with none", () => {
+      getLogger("breakdown-quiet", { enabled: false }).warn("a-key", "warned");
+      getLogger("breakdown-failing", { enabled: false }).error(
+        "a-key",
+        "it broke",
+      );
+
+      expect(getLoggerErrorMessagesBreakdown()).toStrictEqual({
+        "breakdown-failing": { "a-key": ["it broke"] },
+      });
+    });
+  });
+
   describe("setLoggerCountObserver()", () => {
     afterEach(() => setLoggerCountObserver(undefined));
 
@@ -1026,6 +1256,55 @@ describe("logger", () => {
 
       resetAllLoggerCounts();
       expect(getTotalLoggerCounts()).toBe(0);
+    });
+  });
+
+  describe("loggerCountsBreakdownOf()", () => {
+    const counts = (debug: number, info: number) => ({
+      debug,
+      info,
+      warn: 0,
+      error: 0,
+      total: debug + info,
+    });
+
+    it("returns each logger's counts with its total, and the total across them", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { one: counts(1, 2), two: counts(0, 4) },
+        b: { one: counts(5, 0) },
+      });
+
+      expect(breakdown.a!.one).toEqual(counts(1, 2));
+      expect(breakdown.a!.total).toBe(7);
+      expect(breakdown.b!.total).toBe(5);
+      expect(breakdown.total).toBe(12);
+    });
+
+    it("skips a message key named `total`, which would overwrite the logger's", () => {
+      const breakdown = loggerCountsBreakdownOf({
+        a: { total: counts(9, 9), one: counts(1, 0) },
+      });
+
+      expect(breakdown.a!.total).toBe(1);
+      expect(breakdown.total).toBe(1);
+    });
+  });
+
+  describe("getLoggerCountsByKey()", () => {
+    it("returns each registered logger's counts by message key", () => {
+      captureConsole("log", () => {
+        const logger = getLogger("counts-by-key-test");
+        logger.info("one", "test");
+        logger.info("one", "test");
+        logger.warn("two", "test");
+      });
+
+      const byKey = getLoggerCountsByKey()["counts-by-key-test"];
+      expect(byKey?.one).toMatchObject({ info: 2, warn: 0, total: 2 });
+      expect(byKey?.two).toMatchObject({ info: 0, warn: 1, total: 1 });
+      expect(Object.keys(getLoggerCountsByKey())).toContain(
+        "counts-by-key-test",
+      );
     });
   });
 
@@ -2172,6 +2451,236 @@ describe("logger", () => {
       expect(logger.counts.info).toBe(1);
       expect(logger.counts.warn).toBe(1);
       expect(logger.counts.error).toBe(1);
+    });
+  });
+
+  describe("the reserved message key `total`", () => {
+    it("is warned about and left uncounted", () => {
+      const logger = getLogger("reserved-total", { enabled: false });
+      using warn = stub(console, "warn");
+
+      logger.info("total", "x");
+      logger.info("other", "y");
+
+      expect(warn.calls).toHaveLength(1);
+      expect(String(warn.calls[0]!.args[0])).toContain("`total` is reserved");
+      expect(Object.keys(logger.countsByKey)).toEqual(["other"]);
+      expect(logger.counts.info).toBe(2);
+    });
+  });
+
+  describe("flags", () => {
+    it("holds a flag's metadata, or `null` without any, per id", () => {
+      const logger = getLogger("flags-metadata");
+
+      logger.flag("invalid input", "action:a", true, { reason: "missing" });
+      logger.flag("invalid input", "action:b", true);
+
+      expect(logger.flags).toEqual({
+        "invalid input": {
+          "action:a": { reason: "missing" },
+          "action:b": null,
+        },
+      });
+    });
+
+    it("drops an id set to `false`, and a flag name once no id is left", () => {
+      const logger = getLogger("flags-clear");
+      logger.flag("invalid input", "action:a", true);
+      logger.flag("invalid input", "action:b", true);
+      logger.flag("stale", "doc:1", true);
+
+      logger.flag("invalid input", "action:a", false);
+      expect(logger.flags).toEqual({
+        "invalid input": { "action:b": null },
+        stale: { "doc:1": null },
+      });
+
+      logger.flag("invalid input", "action:b", false);
+      logger.flag("never set", "x", false);
+      expect(logger.flags).toEqual({ stale: { "doc:1": null } });
+    });
+
+    it("holds none after `resetFlags()`", () => {
+      const logger = getLogger("flags-reset");
+      logger.flag("stale", "doc:1", true);
+
+      logger.resetFlags();
+
+      expect(logger.flags).toEqual({});
+    });
+
+    describe("getLoggerFlagsBreakdown()", () => {
+      it("returns the flags of each registered logger that holds any", () => {
+        getLogger("flags-breakdown-a").flag("stale", "doc:1", true, { n: 1 });
+        getLogger("flags-breakdown-b");
+        getLogger("flags-breakdown-c").flag("gone", "x", true);
+        getLogger("flags-breakdown-c").flag("gone", "x", false);
+
+        expect(getLoggerFlagsBreakdown()).toEqual({
+          "flags-breakdown-a": { stale: { "doc:1": { n: 1 } } },
+        });
+      });
+    });
+  });
+
+  describe("baselines across registered loggers", () => {
+    it("`resetAllCountBaselines()` measures every logger's deltas from its counts at the reset", () => {
+      const a = getLogger("all-count-baselines-a");
+      const b = getLogger("all-count-baselines-b", { enabled: false });
+      a.warn("k", "before");
+      b.error("k", "before");
+
+      resetAllCountBaselines();
+      a.warn("k", "after");
+
+      expect(a.getCountDeltas()).toEqual({
+        debug: 0,
+        info: 0,
+        warn: 1,
+        error: 0,
+        total: 1,
+      });
+      expect(b.getCountDeltas().total).toBe(0);
+    });
+
+    it("`resetAllTimingBaselines()` measures every logger's timings from the reset", () => {
+      const a = getLogger("all-timing-baselines-a");
+      const b = getLogger("all-timing-baselines-b");
+      a.time(0, 10, "op");
+      b.time(0, 10, "op");
+
+      resetAllTimingBaselines();
+      a.time(0, 30, "op");
+
+      expect(a.getTimeStats("op")?.countSinceBaseline).toBe(1);
+      expect(a.getTimeStats("op")?.totalTimeSinceBaseline).toBe(30);
+      expect(b.getTimeStats("op")?.countSinceBaseline).toBe(0);
+    });
+
+    it("keeps at most a reservoir's worth of samples since the baseline, while counting every one", () => {
+      const logger = getLogger("timing-baseline-reservoir");
+      logger.resetTimingBaseline();
+      for (let i = 1; i <= 1500; i++) logger.time(0, i, "op");
+
+      const stats = logger.getTimeStats("op")!;
+      expect(stats.countSinceBaseline).toBe(1500);
+      expect(stats.cdfSinceBaseline).toHaveLength(1000);
+      expect(stats.cdf).toHaveLength(1000);
+      for (const { x } of stats.cdfSinceBaseline!) {
+        expect(x >= 1 && x <= 1500).toBe(true);
+      }
+    });
+  });
+
+  describe("the registry on `globalThis`", () => {
+    it("is created by the first `getLogger()` when nothing has made one", () => {
+      const global = globalThis as unknown as { commonfabric?: unknown };
+      const saved = global.commonfabric;
+      try {
+        delete global.commonfabric;
+        expect(getTotalLoggerCounts()).toBe(0);
+
+        getLogger("registry-created").info("k", "hi");
+        expect(getTotalLoggerCounts()).toBe(1);
+
+        global.commonfabric = {};
+        getLogger("registry-created-again").info("k", "hi");
+        expect(getTotalLoggerCounts()).toBe(1);
+      } finally {
+        global.commonfabric = saved;
+      }
+    });
+  });
+
+  describe("environment", () => {
+    // Each case sets the variable it is about and removes it again, so the
+    // rest of the file runs without it.
+
+    /** Runs `fn` with the environment variable `name` set to `value`. */
+    function withEnv<T>(name: string, value: string, fn: () => T): T {
+      const previous = Deno.env.get(name);
+      Deno.env.set(name, value);
+      try {
+        return fn();
+      } finally {
+        if (previous === undefined) Deno.env.delete(name);
+        else Deno.env.set(name, previous);
+      }
+    }
+
+    it("gives a new logger the level `LOG_LEVEL` names, when it names one", () => {
+      expect(withEnv("LOG_LEVEL", "warn", () => new Logger().level)).toBe(
+        "warn",
+      );
+      expect(withEnv("LOG_LEVEL", "silent", () => new Logger().level)).toBe(
+        "info",
+      );
+      expect(withEnv("LOG_LEVEL", "loud", () => new Logger().level)).toBe(
+        "info",
+      );
+      expect(new Logger("named", { level: "error" }).level).toBe("error");
+    });
+
+    it("writes to stderr, and not to the console, when `LOG_TO_STDERR` is `1`", () => {
+      const written: string[] = [];
+      using _write = stub(Deno.stderr, "writeSync", (bytes: Uint8Array) => {
+        written.push(new TextDecoder().decode(bytes));
+        return bytes.length;
+      });
+      const logger = new Logger("stderr-test", { level: "debug" });
+      using debug = spy(console, "debug");
+      using log = spy(console, "log");
+      using warn = spy(console, "warn");
+      using error = spy(console, "error");
+
+      withEnv("LOG_TO_STDERR", "1", () => {
+        logger.debug("d", "one");
+        logger.info("i", { two: 2 });
+        logger.warn("w", "three");
+        logger.error("e", "four");
+      });
+
+      for (const method of [debug, log, warn, error]) {
+        expect(method.calls).toHaveLength(0);
+      }
+      expect(written).toHaveLength(4);
+      expect(written[0]).toMatch(
+        /^\[DEBUG\]\[stderr-test::\d{2}:\d{2}:\d{2}\.\d{3}\] d one\n$/,
+      );
+      expect(written[1]).toMatch(/\[INFO\].* i \{ two: 2 \}\n$/);
+      expect(written[2]).toMatch(/\[WARN\].* w three\n$/);
+      expect(written[3]).toMatch(/\[ERROR\].* e four\n$/);
+    });
+
+    it("writes to the console when stderr refuses the write", () => {
+      using _write = stub(Deno.stderr, "writeSync", () => {
+        throw new Error("closed");
+      });
+      const logger = new Logger("stderr-refused");
+
+      const { calls } = withEnv(
+        "LOG_TO_STDERR",
+        "1",
+        () => captureConsole("error", () => logger.info("i", "five")),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.slice(1)).toEqual(["i", "five"]);
+    });
+
+    it("writes to the console when `LOG_TO_STDERR` is anything but `1`", () => {
+      using write = spy(Deno.stderr, "writeSync");
+      const logger = new Logger("stderr-off");
+
+      const { calls } = withEnv(
+        "LOG_TO_STDERR",
+        "0",
+        () => captureConsole("log", () => logger.info("i", "six")),
+      );
+
+      expect(calls).toHaveLength(1);
+      expect(write.calls).toHaveLength(0);
     });
   });
 

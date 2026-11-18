@@ -40,6 +40,7 @@ import {
   keyPairFromRealmValue,
 } from "@commonfabric/identity";
 import type { DID } from "@commonfabric/identity/did";
+import { setLLMResponder } from "@commonfabric/llm";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
   ACLManager,
@@ -48,7 +49,6 @@ import {
   ConsoleMethod,
   type Engine,
   type ErrorWithContext,
-  type Pattern,
   PatternCoverageCollector,
   patternCoverageOutputPath,
   Runtime,
@@ -56,7 +56,7 @@ import {
   TESTS,
   writePatternCoverageLcov,
 } from "@commonfabric/runner";
-import { defer } from "@commonfabric/async/defer";
+import { defer, type Deferred } from "@commonfabric/async/defer";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 
 import { assertionOutcome } from "./assert-record.ts";
@@ -70,20 +70,29 @@ import {
   type LoggerErrorWarnSnapshot,
   snapshotLoggerErrorWarnCounts,
 } from "./console-capture.ts";
+import { type LLMForwardedAnswer, LLMForwardingResponder } from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import { waitForMarkerCommit } from "./multi-user-marker-commit.ts";
 import { patternTestExperimentalOptions } from "./pattern-test-experimental-options.ts";
 import {
   collectServedErrors,
   type EventError,
+  servedCfcRefusalWarnings,
   servedRuntimeErrors,
+  servedThrows,
 } from "./served-errors.ts";
 import {
   type RuntimeErrorExpectation,
   runtimeErrorExpectation,
 } from "./runtime-error-expectation.ts";
-import { servedConsequences, settleServed } from "./served-settle.ts";
-import { buildActionEvent } from "./trusted-action-event.ts";
+import {
+  servedConsequences,
+  type ServedQuiescence,
+  settleServed,
+} from "./served-settle.ts";
+import { pullActionEvent } from "./test-action-event.ts";
+import { participantPatternOf, requirePattern } from "./require-pattern.ts";
+import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 export interface WorkerRequest {
   id: number;
@@ -102,6 +111,19 @@ export type WorkerResponse =
 export interface WorkerLifetimeNotice {
   lifetimeLock: string | undefined;
 }
+
+/**
+ * The message a participant worker posts to wait for the serving loop, which
+ * runs in the orchestrator, to reach quiescence.
+ */
+export interface WorkerQuiescenceRequest {
+  quiescenceRequest: number;
+}
+
+/** The orchestrator's answer to a {@link WorkerQuiescenceRequest}. */
+export type WorkerQuiescenceAnswer =
+  & { quiescenceAnswer: number }
+  & ({ reached: number } | { error: string });
 
 export type StepKind =
   | "action"
@@ -201,6 +223,38 @@ let consoleCaptureActive = false;
 /** Channel 2: logger error/warn count snapshot taken after compile, before run. */
 let loggerCountsBeforeRun: LoggerErrorWarnSnapshot = new Map();
 
+/**
+ * On the server-execution arm, what a settle waits on for the serving loop:
+ * a request to the orchestrator, which holds it.
+ */
+let servedQuiescence: ServedQuiescence | undefined;
+
+/** The orchestrator's answers still awaited, by request id. */
+const quiescenceAnswers = new Map<number, Deferred<number>>();
+let nextQuiescenceRequest = 0;
+
+/**
+ * Sends every language-model request this worker's runtime makes to the
+ * orchestrator, which answers it from the test's `llmMocks`.
+ */
+const llmForwarding = new LLMForwardingResponder((message) =>
+  (self as unknown as Worker).postMessage(
+    message,
+  )
+);
+setLLMResponder(llmForwarding);
+
+/** Helper for {@link servedQuiescence}, which makes one request. */
+function requestServedQuiescence(): Promise<number> {
+  const quiescenceRequest = nextQuiescenceRequest++;
+  const answer = defer<number>();
+  quiescenceAnswers.set(quiescenceRequest, answer);
+  (self as unknown as Worker).postMessage(
+    { quiescenceRequest } satisfies WorkerQuiescenceRequest,
+  );
+  return answer.promise;
+}
+
 function rt(): Runtime {
   if (!runtime) throw new Error("worker not initialized");
   return runtime;
@@ -209,7 +263,8 @@ function rt(): Runtime {
 /**
  * Settles the runtime and its storage, until a round finds nothing to do,
  * and on the server-execution arm until every event this runtime fired has
- * its served consequence back here; see `served-settle.ts`.
+ * its served consequence back here and the serving loop has finished what
+ * that set off; see `served-settle.ts`.
  */
 async function settle(maxIterations = 20): Promise<void> {
   await settleServed(rt(), async () => {
@@ -222,7 +277,7 @@ async function settle(maxIterations = 20): Promise<void> {
       await rt().idle();
       if (performance.now() - start < SETTLE_FAST_MS) return;
     }
-  });
+  }, servedQuiescence);
 }
 
 function markersCellFor(participant: string): Cell<Record<string, boolean>> {
@@ -274,6 +329,10 @@ const stepPeekSchema = {
     action: { type: "unknown" },
     assertion: { type: "unknown" },
     render: { type: "unknown" },
+    press: { type: "unknown" },
+    control: { type: "string" },
+    within: { type: "string" },
+    modifiers: { type: "array", items: { type: "string" } },
     settle: { type: "boolean" },
     label: { type: "string" },
     await: { type: "string" },
@@ -315,13 +374,16 @@ function classifyStep(stepCell: Cell<unknown>, index: number): StepMeta {
   if (peek?.settle === true) return { kind: "settle", ...skip };
   // Streams/computeds peek as present-but-opaque; key presence is the signal.
   if (Object.hasOwn(peek ?? {}, "render")) return { kind: "render", ...skip };
-  if (Object.hasOwn(peek ?? {}, "action")) return { kind: "action", ...skip };
+  // A press is an action whose event a rendered control sends.
+  if (
+    Object.hasOwn(peek ?? {}, "action") || Object.hasOwn(peek ?? {}, "press")
+  ) return { kind: "action", ...skip };
   if (Object.hasOwn(peek ?? {}, "assertion")) {
     return { kind: "assertion", ...skip };
   }
   throw new Error(
     `Test step ${index} has none of ` +
-      `action/assertion/render/settle/label/await ` +
+      `action/press/assertion/render/settle/label/await ` +
       // The step's own keys, not the peek's: the peek schema has already
       // dropped every key it does not declare, which is exactly the set an
       // author needs named here.
@@ -433,6 +495,7 @@ const handlers: Record<
     }));
     if (experimental.serverExecution) {
       servedErrors = collectServedErrors(runtime);
+      servedQuiescence = requestServedQuiescence;
     }
     if (args.noIdempotencyCheck !== true) runtime.enableIdempotencyCheck();
     if (args.cfcDenials === true) {
@@ -488,14 +551,18 @@ const handlers: Record<
     loggerCountsBeforeRun = snapshotLoggerErrorWarnCounts();
     consoleCaptureActive = true;
     const descriptor = (main?.default ?? {}) as {
-      setup?: Pattern;
-      participants?: Record<string, Pattern | { pattern: Pattern }>;
+      setup?: unknown;
+      participants?: Record<string, unknown>;
     };
-    const entry = descriptor.participants?.[args.participant as string];
-    const participantFactory = typeof entry === "function"
-      ? entry
-      : (entry as { pattern?: Pattern } | undefined)?.pattern;
-    if (typeof participantFactory !== "function") {
+    const setup = descriptor.setup === undefined ? undefined : requirePattern(
+      descriptor.setup,
+      "A multi-user test's `setup` must be a pattern function",
+    );
+    const participantFactory = participantPatternOf(
+      args.participant as string,
+      descriptor.participants?.[args.participant as string],
+    );
+    if (participantFactory === undefined) {
       throw new Error(
         `No participant pattern "${args.participant}" in test descriptor`,
       );
@@ -546,7 +613,7 @@ const handlers: Record<
     // worker runs the SAME instance (the first materializes it, the rest
     // resume it from storage and compute their own per-user partitions).
     let setupCell: Cell<Record<string, unknown>> | undefined;
-    if (typeof descriptor.setup === "function") {
+    if (setup !== undefined) {
       const tx = rt().edit();
       setupCell = rt().getCell<Record<string, unknown>>(
         space,
@@ -555,7 +622,7 @@ const handlers: Record<
         tx,
       );
       await setupCell.sync();
-      rt().run(tx, descriptor.setup, {}, setupCell);
+      rt().run(tx, setup, {}, setupCell);
       rt().prepareTxForCommit?.(tx);
       await tx.commit().settled;
       await settle();
@@ -578,7 +645,7 @@ const handlers: Record<
     await tx.commit().settled;
     if (args.continuousUI === true) {
       continuousUiCancel = await mountTestVDOM(
-        resultCell.key("$UI") as Cell<unknown>,
+        resultCell.key("$UI"),
         (error) => continuousUiErrors.push(error),
       );
     }
@@ -600,45 +667,49 @@ const handlers: Record<
 
     const result: ParticipantInitResult = {
       steps: stepCells.map((cell, index) => classifyStep(cell, index)),
-      allowRuntimeErrors:
-        await (resultCell.key("allowRuntimeErrors") as Cell<unknown>)
-          .pull() === true,
+      allowRuntimeErrors: await resultCell.key("allowRuntimeErrors")
+        .pull() === true,
       expectRuntimeErrors: runtimeErrorExpectation(
-        await (resultCell.key("expectRuntimeErrors") as Cell<unknown>).pull(),
+        await resultCell.key("expectRuntimeErrors").pull(),
       ),
-      expectNonIdempotent:
-        await (resultCell.key("expectNonIdempotent") as Cell<unknown>)
-          .pull() === true,
-      allowConsoleErrors:
-        await (resultCell.key("allowConsoleErrors") as Cell<unknown>)
-          .pull() === true,
-      allowConsoleWarnings:
-        await (resultCell.key("allowConsoleWarnings") as Cell<unknown>)
-          .pull() === true,
+      expectNonIdempotent: await resultCell.key("expectNonIdempotent")
+        .pull() === true,
+      allowConsoleErrors: await resultCell.key("allowConsoleErrors")
+        .pull() === true,
+      allowConsoleWarnings: await resultCell.key("allowConsoleWarnings")
+        .pull() === true,
       cfcEnforcementMode: rt().cfcEnforcementMode,
       cfcFlowLabels: rt().cfcFlowLabels,
     };
     return result;
   },
 
-  /** Invoke an action step's stream and settle. */
+  /** Invoke an action step's stream, or press its control, and settle. */
   async action({ index }) {
     const stepCell = stepCells[index as number];
-    const stream = stepCell.key("action" as never) as unknown as {
-      send?: (value: unknown) => void;
+    const peek = stepCell.asSchema(stepPeekSchema).get() as {
+      control?: unknown;
+      within?: unknown;
+      modifiers?: unknown;
     };
-    if (typeof stream?.send !== "function") {
-      throw new Error(`Test step ${index} action is not a stream`);
+    if (Object.hasOwn(peek ?? {}, "press")) {
+      await pressRenderedControl(
+        stepCell.key("press"),
+        pressTargetOf(peek, index as number),
+        () => settle(),
+      );
+      await settle();
+      return {};
     }
+    const stream = stepCell.key("action");
     const meta = stepCell.asSchema(stepPeekSchema).get() as {
       trustedUi?: unknown;
     };
-    // Pull the payload before snapshotting links supplied by patterns or
-    // computations. The true schema also recursively reads accessible linked
-    // data, so this step can preload the handler's inputs; see the event-link
-    // guidance in docs/common/workflows/pattern-testing.md.
-    const event = await stepCell.key("event" as never).asSchema(true).pull();
-    stream.send(buildActionEvent(event, meta?.trustedUi));
+    const event = await pullActionEvent(
+      stepCell.key("event"),
+      meta?.trustedUi,
+    );
+    stream.send(event);
     await settle();
     return {};
   },
@@ -646,18 +717,26 @@ const handlers: Record<
   /** Evaluate an assertion step, reporting what a false value held. */
   async assertion({ index }) {
     const stepCell = stepCells[index as number];
-    const value = await (stepCell.key("assertion" as never) as Cell<unknown>)
-      .pull();
-    // An `assert(...)` assertion carries the operands recorded while the
-    // condition ran, so a failure names them and their values.
-    return assertionOutcome(value);
+    const assertionCell = stepCell.key("assertion");
+    // Demanding the assertion is what starts an asynchronous built-in it
+    // reads, such as a fetch or a model call. Hold that demand while waiting
+    // for the work it set going, as the single-user runner does.
+    const releaseDemand = assertionCell.sink(() => {});
+    try {
+      await rt().settled();
+      // An `assert(...)` assertion carries the operands recorded while the
+      // condition ran, so a failure names them and their values.
+      return assertionOutcome(await assertionCell.pull());
+    } finally {
+      releaseDemand();
+    }
   },
 
   /** Materialize one VDOM target, then remove its renderer demand. */
   async render({ index }) {
     const stepCell = stepCells[index as number];
     await materializeTestVDOM(
-      stepCell.key("render" as never) as Cell<unknown>,
+      stepCell.key("render"),
       () => settle(),
     );
     return {};
@@ -669,6 +748,10 @@ const handlers: Record<
    * next, so this is a demand for full settlement at a point the author names.
    */
   async settleStep() {
+    await settleServed(rt(), async () => {
+      await rt().settled();
+      await servedConsequences(rt());
+    }, servedQuiescence);
     await settle();
     return {};
   },
@@ -705,23 +788,25 @@ const handlers: Record<
     return Promise.resolve({
       runtimeErrors: [
         ...runtimeErrors.map((error) => String(error)),
-        ...servedRuntimeErrors(servedErrors, runtimeErrors),
+        ...servedRuntimeErrors(servedThrows(servedErrors), runtimeErrors),
         ...continuousUiErrors.map((error) =>
           `[continuous $UI] ${String(error)}`
         ),
       ],
       consoleErrors: [...consoleErrors],
-      consoleWarnings: [...consoleWarnings],
-      nonIdempotent: rt().getIdempotencyViolations?.()?.map((violation) => {
-        const { actionId, differingWriteKeys } = violation as {
-          actionId?: string;
-          differingWriteKeys?: string[];
-        };
-        const id = String(actionId ?? violation);
-        return differingWriteKeys?.length
-          ? `${id} (differing writes: ${differingWriteKeys.join(", ")})`
-          : id;
-      }) ?? [],
+      // A served commit CFC refused is a denial, reported among the warnings
+      // as the single-user runner reports it (`served-errors.ts`).
+      consoleWarnings: [
+        ...consoleWarnings,
+        ...servedCfcRefusalWarnings(servedErrors),
+      ],
+      nonIdempotent: rt().getIdempotencyViolations().map((
+        { actionId, differingWriteKeys },
+      ) =>
+        differingWriteKeys.length
+          ? `${actionId} (differing writes: ${differingWriteKeys.join(", ")})`
+          : actionId
+      ),
     });
   },
 
@@ -765,7 +850,23 @@ const announced = holdWorkerLifetimeLock().then((lifetimeLock) =>
   )
 );
 
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+self.onmessage = async (
+  event: MessageEvent<
+    WorkerRequest | WorkerQuiescenceAnswer | LLMForwardedAnswer
+  >,
+) => {
+  if ("llmAnswer" in event.data) {
+    llmForwarding.receive(event.data);
+    return;
+  }
+  if ("quiescenceAnswer" in event.data) {
+    const answer = event.data;
+    const waiting = quiescenceAnswers.get(answer.quiescenceAnswer);
+    quiescenceAnswers.delete(answer.quiescenceAnswer);
+    if ("error" in answer) waiting?.reject(new Error(answer.error));
+    else waiting?.resolve(answer.reached);
+    return;
+  }
   await announced;
   const { id, cmd, args } = event.data;
   const handler = handlers[cmd];

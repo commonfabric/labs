@@ -295,7 +295,16 @@ normative from C1 on:
   covering trace: `lastNode:"top"` link reads, raw link handles, unfollowed
   redirect checks) are row-3 followRef observations. A list coordinator's
   scaffolding probes carry the machinery marker (§6.2) and consume nothing,
-  so a coordinator's J does not join every slot's transport label.
+  so a coordinator's J does not join every slot's transport label. A probe
+  of a slot that holds a reference consumes no link entry beneath the slot.
+  The document has no position there: such an entry labels a position of
+  the target, as a copy of the target's labels that a stored envelope can
+  carry although no link write persists one, and a dereference consumes the
+  target's own labels where it reads them (spec §4.6.3, §8.2.5). Whether the
+  slot holds a reference is decided for the state the stored envelope
+  describes, the one before the transaction, so a transaction that takes the
+  reference and then writes the slot consumes no such entry either. The link
+  entry at the slot stays consumed (spec §18.7).
 - **An `enumerate` entry applies at its container only.** It labels a
   container's membership, order and count, so it is consumed by a read of
   the container. A read of an array's native `length`, which the journal
@@ -335,6 +344,15 @@ every other path the wiring transaction wrote.
 so such a read consumes nothing; a marked read that materializes content is
 unaffected and keeps consuming its ordinary labels.
 
+A pattern setup that stages a stored argument again is wiring of the same
+kind (`Runner.#readStoredArgument` in `runner.ts`): it reads each carried slot
+that holds a reference as a marked probe, and its only use of that reference
+is to write it again to the same slot of the argument it stages, where the
+slot's restriction stays. A carried slot the new argument schema refuses
+moves to the piece's refused-slot store by a plain write, which carries no
+link's restriction, so the setup reads that slot again as an ordinary read
+first.
+
 A wiring transaction that consumed the `origin: "link"` entry of a
 confidential reference would carry that clause into every result projection
 it rewrote. A derived stamp at a sub-piece result's root covers its `$UI`, so
@@ -349,7 +367,23 @@ outside that scope. `filter` reads every predicate result there, and `flatMap`
 reads every child result there, so membership and content in those two still
 depend on reads that taint. `map` reads no element value anywhere: it
 republishes references, so what protects an element in its output is the
-element's own label, at the element.
+element's own label, at the element. Its one read outside the marked scope
+is of the list's membership, which it declares onward (`declaredOnwardRead`,
+`reactivity-log.ts`): the join leaves what that read consumed at the list
+itself out and keeps its integrity in the meet, and the flow stage lands
+that, as the join resolved it (`deriveFlowJoin`'s `declaredOnwardAt`), in
+the container's `enumerate` stamp, replaced from the join each reconcile
+like the rest of the stamp — a measurement, never a declaration. What the
+read consumed at the slots — each item's shape, the reference scalar there,
+the pointer a probe finds — is per-item and stays in the join: a child is
+set up from exactly that, so its setup and the container's slot templates
+carry it. So the container's membership
+and length carry what the list's do, and a child the same transaction sets
+up carries its own slot's label and the selection's: a list whose membership
+carries every element's label, a query result (§8.17.6), would otherwise
+hand each child the join of all of them.
+`cfc-declared-onward-read.test.ts` holds the partition to the join, and
+`cfc-map-row-labels.test.ts` measures the children over such a result.
 
 That is what makes the exclusion sound, and it does not come from any read.
 `list.set(members)` writes a link per member, and the slot the link lands in

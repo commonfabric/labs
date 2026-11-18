@@ -23,12 +23,14 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type Cell,
   getPatternIdentityRef,
   type MemorySpace,
   type NormalizedFullLink,
   type Runtime,
+  startWithInputSources,
 } from "@commonfabric/runner";
 import {
   cfcLabelViewForCellFailClosedWithStatus,
@@ -44,7 +46,6 @@ import {
 } from "@commonfabric/runner/shared";
 import { disclosedCfcLabels } from "../cfc-label-disclosure.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
-import { errorMessage } from "../error-message.ts";
 import { scrubBareFabricIdentifiers } from "../fabric-identifier-scrub.ts";
 import {
   admitsFabricReference,
@@ -279,7 +280,13 @@ export const readValueTool: HarnessToolDefinition<
             `${entry.token} holds a value its piece derives, and the piece has not run; running it is a side effect this run is not authorized for. A run under a direct command reads it, which runs the piece`,
           );
         }
-        await runtime.startWithCommit(piece);
+        // The pieces that enclose it start first, as they do for an open,
+        // so a nested instance derives from what they derive now.
+        await startWithInputSources(
+          runtime,
+          piece,
+          () => runtime.startWithCommit(piece),
+        );
         await runtime.idle();
       }
       // A link at the position itself is followed, so a piece's field reads
@@ -344,7 +351,7 @@ export const readValueTool: HarnessToolDefinition<
         );
       }
       return fail(
-        `read_value could not read ${entry.token}: ${errorMessage(error)}`,
+        `read_value could not read ${entry.token}: ${describeFailure(error)}`,
       );
     } finally {
       releaseTx.abort("read_value release measurement");

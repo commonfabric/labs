@@ -10,11 +10,11 @@ import { getPatternIdentityRef } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createBuilder } from "../src/builder/factory.ts";
-import { type Cell } from "../src/builder/types.ts";
+import type { Cell } from "../src/builder/types.ts";
 import { recordAuthoredDebugSource } from "../src/harness/authored-debug-source.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type ErrorWithContext } from "../src/scheduler.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { ErrorWithContext } from "../src/scheduler.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("test operator");

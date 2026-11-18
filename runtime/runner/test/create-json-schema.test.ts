@@ -6,7 +6,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isInternedSchema } from "@commonfabric/data-model-schema";
 
 import { createJsonSchema } from "../src/builder/create-json-schema.ts";
-import { type JSONSchema, type JSONSchemaObj } from "../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
@@ -275,6 +275,18 @@ describe("create-json-schema", () => {
 
       const schema = createJsonSchema(cellWithSchema, false, runtime);
       expect(schema).toEqual({ type: "string", format: "email" });
+      expect(isInternedSchema(schema)).toBe(true);
+    });
+
+    it("returns an empty schema for a cell given no runtime to resolve it with", () => {
+      const cellWithSchema = runtime.getImmutableCell(
+        space,
+        "cell@value.com",
+        { type: "string", format: "email" },
+      );
+
+      const schema = createJsonSchema(cellWithSchema);
+      expect(schema).toEqual({});
       expect(isInternedSchema(schema)).toBe(true);
     });
 

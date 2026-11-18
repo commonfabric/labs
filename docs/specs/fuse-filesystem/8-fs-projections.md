@@ -66,7 +66,7 @@ Produces `index.md` at the piece root:
 ```markdown
 ---
 entityId: of:ba4jcbvpq3k5soo...
-title: My Note Title
+title: "My Note Title"
 ---
 
 The note body content goes here.
@@ -74,7 +74,11 @@ The note body content goes here.
 
 - `entityId` is always injected first and is read-only.
 - Primitive `frontmatter` fields (string, number, boolean, null) become YAML
-  key-value pairs.
+  key-value pairs. A string value is written quoted, in JSON form, which YAML
+  reads as a double-quoted scalar; a number, boolean, or null is written
+  bare. Quoting is what lets a title that looks like a number, carries quotes
+  or surrounding spaces, or spans lines come back as the same string when the
+  file is saved.
 - Complex `frontmatter` fields (arrays of entities, nested objects) cannot be
   represented in YAML — they become sibling directories alongside `index.md`,
   using the same directory-tree rules as the default result layout.
@@ -111,7 +115,7 @@ to the corresponding reactive cells.
 
 | File | Write-Back Behavior |
 |------|---------------------|
-| `index.md` | Parses YAML frontmatter → updates `$FS.frontmatter.<key>` cells; parses body → updates `$FS.content` cell |
+| `index.md` | Parses YAML frontmatter → updates `$FS.frontmatter.<key>` cells; parses body → updates `$FS.content` cell. A quoted value is the string inside the quotes; a bare number, boolean, or `null` is that value; any other bare value is text. The frontmatter is found under LF, CRLF, or CR line endings and after a leading byte-order mark; the body is written as saved |
 | `index.json` | Parses JSON → updates `$FS.content.<key>` cells |
 
 `entityId` is always skipped on write (read-only).
@@ -151,7 +155,7 @@ createNewNote.handler  void
 Each `.handler` and `.tool` file embeds the input schema as readable comments:
 
 ```sh
-#!/path/to/cf-exec exec
+#!/bin/sh
 # schema: {"type":"string"}
 # input: string
 exec '/path/to/cf-exec' exec "$0" "$@"

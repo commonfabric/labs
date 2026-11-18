@@ -39,6 +39,12 @@ import {
   hasConcreteOwner,
   isACL,
 } from "@commonfabric/memory/acl";
+import {
+  type CfcConfClause,
+  clauseAlternatives,
+  hasExactKeys,
+  isActorOwnedAlternative,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
@@ -58,11 +64,7 @@ import { normalizeCellScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { matchAtomPattern } from "./atom-pattern.ts";
-import {
-  type CfcConfClause,
-  clauseAlternatives,
-  clausesEqual,
-} from "./clause.ts";
+import { clausesEqual } from "./clause.ts";
 import {
   evaluateExchangeRules,
   modulePolicyRecordId,
@@ -71,8 +73,6 @@ import {
   canonicalJson,
   containsAtomPatternVariable,
   evidenceHolds,
-  hasExactKeys,
-  isActorOwnedAlternative,
   isTrustedGestureOn,
   type ReadEvidence,
   readEvidence,
@@ -541,7 +541,7 @@ const UNUSED_PROPERTY: unique symbol = Symbol("unused property");
  * @throws If the schema admits free text or any other open-ended leaf, or if
  *   the value does not satisfy it.
  */
-const checkInertStance = (
+export const checkInertStance = (
   schema: unknown,
   value: unknown,
   path: readonly (string | number)[] = [],
@@ -708,11 +708,11 @@ const checkInertStance = (
  * @throws If the terms name no seats or no stance schema, or if the actor
  *   holds no seat.
  */
-const checkTerms = (terms: JSONValue, actor: string): unknown => {
-  if (!isObjectNotArray(terms)) {
-    throw new Error("Custody terms must be an object");
-  }
-  const { seats, stanceSchema } = terms as Record<string, unknown>;
+const checkTerms = (
+  terms: Readonly<Record<string, JSONValue>>,
+  actor: string,
+): unknown => {
+  const { seats, stanceSchema } = terms;
   if (
     !Array.isArray(seats) || seats.length === 0 ||
     !seats.every(isWellFormedDID) ||
@@ -1377,7 +1377,7 @@ const resolveSeats = async (
   seatLinks: ReadonlyMap<number, NormalizedFullLink>,
   { room, policy }: { room: string; policy: CfcModulePolicyRefAtom },
   evidence: ReadEvidence[],
-): Promise<JSONValue> => {
+): Promise<Record<string, JSONValue>> => {
   if (seatLinks.size === 0) return terms;
   const seats = [...(terms.seats as JSONValue[])];
   for (const [index, link] of seatLinks) {
@@ -1560,7 +1560,7 @@ interface RoomInspection {
   readonly policy: CfcModulePolicyRefAtom;
   readonly room: string;
   readonly termsLink: NormalizedFullLink;
-  readonly terms: JSONValue;
+  readonly terms: Record<string, JSONValue>;
   readonly template: PolicyTemplateV1;
   readonly witnessedRelease: boolean;
 }

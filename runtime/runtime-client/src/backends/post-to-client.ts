@@ -1,12 +1,12 @@
 import { debugStr } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
   type IpcChannelSizes,
   type IPCRemotePost,
   NotificationType,
 } from "@/protocol/mod.ts";
-import { describeFailure } from "@/shared/utils.ts";
 import { IpcChannelTally } from "./ipc-channel-tally.ts";
 
 /**

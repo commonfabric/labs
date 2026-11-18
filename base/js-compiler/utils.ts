@@ -1,4 +1,4 @@
-import { type StaticCache } from "@commonfabric/static";
+import type { StaticCache } from "@commonfabric/static";
 
 // Returns an object mapping typescript lib name
 // to a string of standalone .d.ts content.

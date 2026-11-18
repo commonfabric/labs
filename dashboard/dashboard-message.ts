@@ -7,6 +7,7 @@
  * open across someone else's edit tells its own text from theirs.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { dashboardCacheFile } from "./history-files.ts";
 
 /** The period during which a saved message remains fully visible. */
@@ -140,7 +141,7 @@ export class DashboardMessageStore {
       }
       throw new Error(
         `Could not load the dashboard message: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
         { cause: error },
       );
@@ -168,7 +169,7 @@ export class DashboardMessageStore {
     } catch (error) {
       throw new Error(
         `Could not save the dashboard message: ${
-          error instanceof Error ? error.message : String(error)
+          describeFailure(error)
         }`,
         { cause: error },
       );

@@ -1,10 +1,11 @@
 # D3 iframe-first pattern guide
 
 Use this guide to build a Common Fabric pattern whose primary interface is a
-D3 visualization inside one sandboxed `cf-iframe`. The generated wrapper is
-mechanical: it exposes named Cell and SQLite resources, bundles the guest and
-D3 into one HTML string, and returns durable state and output through the
-normal pattern result.
+D3 visualization inside one sandboxed `cf-iframe`. The pattern is one
+`main.tsx` you write by hand: it declares the Cells and any SQLite databases the
+visualization uses, renders a `cf-iframe` that hands them to the guest by name,
+and returns durable state and output through the normal pattern result.
+`deno bundle` compiles the guest and D3 into one module.
 
 This guide is self-contained. Do not also load the plain-DOM or React iframe
 guide unless the request explicitly combines D3 with an existing guest in one
@@ -12,23 +13,28 @@ of those styles.
 
 ## Source layout
 
-Keep the authored contract and guest beside the generated wrapper:
+Keep these files together:
 
 ```text
-patterns/examples/d3-shared-bars/
-├── contract.ts  # input, durable state, output, scopes, optional databases
-├── guest.ts     # D3 application and Fabric bridge client
-├── guest.html   # optional document shell
-└── main.tsx     # generated wrapper; do not hand-edit
+patterns/examples/iframe-d3-shared-bars/
+├── contract.ts  # types and defaults shared by main.tsx and the guest
+├── guest.ts     # the D3 application and Fabric bridge client
+├── guest.html   # the guest's document: the chart's markup and styles
+├── guest.js     # `deno bundle` output of guest.ts; never edited by hand
+└── main.tsx     # the pattern: cells, databases, and the cf-iframe
 ```
 
-The generated `main.tsx` contains D3, the guest bridge, and the application. It
-does not fetch JavaScript at runtime. Keep `contract.ts` and `guest.ts` so an
-agent can regenerate the wrapper.
+In this repository, the directory's name starts with `iframe-`. That prefix
+keeps the guest out of the pattern type check and the bundle out of `deno fmt`,
+`deno lint` and `deno task check`.
+
+`main.tsx` reads `guest.html` and `guest.js` with `dataFile()`, so both travel
+with the pattern's code, and the guest fetches no JavaScript at runtime.
 
 ## Describe input, state, and output
 
-Create `contract.ts` as a side-effect-free declarative module. Every array
+Create `contract.ts` as a side-effect-free declarative module. It holds only
+types and defaults, which `main.tsx` and the guest both import. Every array
 member that can move carries a stable application ID:
 
 ```typescript
@@ -58,34 +64,107 @@ export const DEFAULT_STATE: IframeStateData = {
   ],
 };
 export const DEFAULT_OUTPUT: IframeOutputData = { selectedId: null };
-
-export const IFRAME_PATTERN = {
-  name: "D3SharedBars",
-  displayName: "D3 shared bars",
-  stateScope: "space",
-  outputScope: "session",
-  frameHeight: "100vh",
-  databases: {},
-} as const;
 ```
 
-The wrapper exposes three resources:
+`main.tsx` hands the guest three resources, and the guest receives each by the
+name `main.tsx` gives it:
 
 - `input` is read-only caller data.
 - `state` is durable data the visualization may change.
-- `output` is the public selection or result the wrapper returns.
+- `output` is the public selection or result the pattern returns.
 
 Choose each writable resource's scope independently:
 
-| Scope | Meaning |
-| --- | --- |
-| `space` | Shared by every user and browser session in the piece |
-| `user` | Separate for each user and shared by that user's sessions |
-| `session` | Separate for each browser session |
+| Scope | Meaning | Declared in `main.tsx` as |
+| --- | --- | --- |
+| `space` | Shared by every user and browser session in the piece | `new Writable(...)` in the pattern body |
+| `user` | Separate for each user and shared by that user's sessions | an optional `PerUser<...>` input |
+| `session` | Separate for each browser session | an optional `PerSession<...>` input |
 
 Keep hover coordinates, drag previews, zoom transforms, animation progress,
 and temporary tooltips in guest memory. Persist only state that must survive a
 reload or be observed elsewhere.
+
+## Write the pattern
+
+`main.tsx` for the shared bars, with the bars shared by everyone on the piece
+and the selection kept for each browser session:
+
+```tsx
+// Shown at module scope.
+import {
+  dataFile,
+  type Default,
+  NAME,
+  pattern,
+  type PerSession,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
+import {
+  DEFAULT_INPUT,
+  DEFAULT_OUTPUT,
+  DEFAULT_STATE,
+  type IframeInputData,
+  type IframeOutputData,
+  type IframeStateData,
+} from "./contract.ts";
+
+const GUEST_HTML = dataFile("./guest.html");
+const GUEST_SCRIPT = dataFile("./guest.js");
+
+export interface SharedBarsInput {
+  input?: Default<IframeInputData, typeof DEFAULT_INPUT>;
+  output?: PerSession<
+    Writable<Default<IframeOutputData, typeof DEFAULT_OUTPUT>>
+  >;
+}
+
+export interface SharedBarsOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  state: IframeStateData;
+  output: IframeOutputData;
+}
+
+export default pattern<SharedBarsInput, SharedBarsOutput>(
+  ({ input, output }) => {
+    const state = new Writable<IframeStateData>(DEFAULT_STATE);
+
+    return {
+      [NAME]: "D3 shared bars",
+      [UI]: (
+        <div style={{ width: "100%", height: "100vh" }}>
+          <cf-iframe
+            src={GUEST_HTML}
+            script={GUEST_SCRIPT}
+            $context={{ input, state, output }}
+            resourceKinds={{ input: "readonly" }}
+          />
+        </div>
+      ),
+      state,
+      output,
+    };
+  },
+);
+```
+
+`src` is the guest's document and `script` is its bundle. `$context` binds a
+record of cells: each field is a resource the guest asks for by name, and each
+reaches the guest live, `output` resolved to this session's cell before the
+guest loads. `resourceKinds` grants `input` reads only; a field it gives no kind
+is a cell the guest may write. Callers omit the optional inputs, and each
+`Default` supplies the readable fallback. `state` and `output` are returned, so
+the piece's result carries the guest's data to callers.
+
+[Choose a scope for state and output](./iframe-pattern-guide.md#choose-a-scope-for-state-and-output)
+in the iframe pattern guide shows the other scopes, and its
+[Optional SQLite](./iframe-pattern-guide.md#optional-sqlite),
+[Optional presence](./iframe-pattern-guide.md#optional-presence), and
+[Optional streams](./iframe-pattern-guide.md#optional-streams) carry the
+templates that add a database, a presence room, or a verb to the record.
 
 ## Connect the bridge and pass one readiness barrier
 
@@ -299,10 +378,10 @@ rejections in an element with `role="alert"`. A sequence of writes is ordered,
 not atomic; choose one Cell as the canonical source when multiple views must
 agree.
 
-## Document shell and CSP
+## The guest's document and CSP
 
-The default generated shell supplies `<div id="root"></div>`. A D3 chart
-normally benefits from explicit accessible HTML:
+`guest.html` is the guest's complete document. For a D3 chart it holds explicit
+accessible HTML around the SVG the guest draws into:
 
 ```html
 <!doctype html>
@@ -319,41 +398,50 @@ normally benefits from explicit accessible HTML:
       <p role="alert"></p>
       <svg id="chart" role="img" aria-label="Shared bar chart"></svg>
     </main>
-    <!-- PATTERN_IFRAME_SCRIPT -->
   </body>
 </html>
 ```
 
+The document holds no `<script>` for the guest. The sandbox runs `guest.js` as
+the document's last module script once the document is parsed, so `#chart`,
+`#add`, and the alert region exist when the guest selects them. A Content
+Security Policy the document declares in a `<meta>` must admit inline scripts
+(`script-src 'unsafe-inline'`), since that is how the bundle arrives; a policy
+that does not leaves the guest blank.
+
 The sandbox does not grant arbitrary network access. Bundle modules, generate
 small assets locally, or pass data through `input`; do not depend on a CDN,
-`fetch()`, or remote fonts. A custom shell must contain
-`<!-- PATTERN_IFRAME_SCRIPT -->` exactly once. Buttons must use `type="button"`
-so an accidental form ancestor cannot trigger navigation.
+`fetch()`, or remote fonts. Buttons must use `type="button"` so an accidental
+form ancestor cannot trigger navigation.
 
-Style the shell and the chart with the ambient theme the iframe receives — its
-elements, `cf-*` classes, and `--cf-theme-*` variables, which SVG `fill` and
-`stroke` accept as `var(--cf-theme-color-primary)` — and spell no color or
+Style the document and the chart with the ambient theme the iframe receives —
+its elements, `cf-*` classes, and `--cf-theme-*` variables, which SVG `fill`
+and `stroke` accept as `var(--cf-theme-color-primary)` — and spell no color or
 font; see
 [Style with the ambient theme](./iframe-pattern-guide.md#style-with-the-ambient-theme).
 
-## Generate and validate
+## Bundle the guest
 
-Generate the wrapper without the React flag:
+From the pattern's directory, write the guest's bundle:
 
 ```bash
-deno run -A scripts/write-iframe-wrapper.ts \
-  --contract patterns/examples/d3-shared-bars/contract.ts \
-  --guest patterns/examples/d3-shared-bars/guest.ts \
-  --html patterns/examples/d3-shared-bars/guest.html \
-  --out patterns/examples/d3-shared-bars/main.tsx
+deno bundle --platform browser --minify guest.ts -o guest.js
 ```
 
-Then validate the authored guest and generated pattern:
+Run it again after every change to the guest or to anything it imports, and
+keep `guest.js` with the change: `main.tsx` reads the file as it is, so a stale
+bundle runs the guest as it was. `deno bundle` inlines D3,
+`@commonfabric/iframe-sandbox/guest`, and the contract into the one module the
+sandbox runs.
+
+## Validate
+
+From the repository root, format and compile the guest and the pattern:
 
 ```bash
-deno fmt patterns/examples/d3-shared-bars
-deno check patterns/examples/d3-shared-bars/guest.ts
-deno task cf check patterns/examples/d3-shared-bars/main.tsx --no-run
+deno fmt patterns/examples/iframe-d3-shared-bars
+deno check patterns/examples/iframe-d3-shared-bars/guest.ts
+deno task cf check patterns/examples/iframe-d3-shared-bars/main.tsx --no-run
 ```
 
 Launch the pattern with the steps under

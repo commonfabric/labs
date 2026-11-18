@@ -10,6 +10,7 @@ import {
   RUN_LIST_ACCESS,
 } from "./lib.ts";
 import { RELAY_VOUCH_MS } from "./github-webhooks.ts";
+import { RunListFile } from "./run-list-file.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 
 const REPO = "example/repo";
@@ -1098,6 +1099,22 @@ describe("github-runs", () => {
           );
         });
 
+        it("returns each run with only the first line of its head commit's message", async () => {
+          const github = new FakeGitHub([
+            run(3, { head_commit: { message: "Fix it\n\nAt length." } }),
+            run(2, { head_commit: { message: "One line" } }),
+            run(1),
+          ]);
+
+          const read1 = await read(new RunLists(), github);
+
+          expect(read1.map((held) => held.head_commit)).toEqual([
+            { message: "Fix it" },
+            { message: "One line" },
+            null,
+          ]);
+        });
+
         it("passes run list access with every run list it asks for", async () => {
           const seen: GitHubRequestOptions[] = [];
           const github = new FakeGitHub(runs(30, 1));
@@ -1315,6 +1332,72 @@ describe("github-runs", () => {
             github.paths = [];
             expect(ids(await read(lists, github))).toEqual(ids(runs(32, 1)));
             expect(github.paths).toEqual([]);
+          });
+
+          it("takes in a run delivered while the top of the list is read, over the older copy the list shows, before choosing the runs to return", async () => {
+            // The reading stops at the first failed run, which only the
+            // delivered copy shows, so taking that copy in after the runs are
+            // chosen would return every run.
+
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub([
+              run(30, { status: "in_progress", conclusion: null }),
+              ...runs(29, 1),
+            ]);
+            const lists = new RunLists(undefined, relay.webhooks);
+            const finished = run(30, {
+              conclusion: "failure",
+              updated_at: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+            });
+            let delivered = false;
+
+            const read1 = await lists.runs(
+              async <T>(path: string, options: GitHubRequestOptions) => {
+                if (!delivered) {
+                  delivered = true;
+                  await deliver(relay, finished);
+                }
+                return github.request<T>(path, options);
+              },
+              REPO,
+              WORKFLOW,
+              {
+                reader: "reader",
+                recheck: [],
+                wants: () => true,
+                until: (run) => run.conclusion === "failure",
+              },
+            );
+
+            expect(delivered).toBe(true);
+            expect(ids(read1)).toEqual([30]);
+            expect(read1[0].conclusion).toBe("failure");
+          });
+
+          it("places the copy read by its id of a delivered run the list leaves out, when that copy is newer", async () => {
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub(runs(30, 1));
+            const lists = new RunLists(undefined, relay.webhooks);
+            await read(lists, github);
+            github.list = [run(32), ...runs(30, 1)];
+            github.unlisted = [
+              run(31, {
+                conclusion: "failure",
+                updated_at: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+              }),
+            ];
+            await deliver(
+              relay,
+              run(31, { status: "in_progress", conclusion: null }),
+            );
+            await deliver(relay, run(32));
+
+            const read2 = await read(lists, github);
+
+            expect(ids(read2)).toEqual(ids(runs(32, 1)));
+            expect(read2[1].conclusion).toBe("failure");
           });
 
           it("keeps a delivered copy of a run over a copy the list shows updated at the same moment", async () => {
@@ -1581,6 +1664,36 @@ describe("github-runs", () => {
 
             expect(ids(read2)).toEqual(ids(runs(305, 1)));
             expect(github.pages).toEqual(["1@20"]);
+          });
+
+          it("keeps only the first line of the head commit message of each run the file holds", async () => {
+            const described = runs(250, 1).map((held) =>
+              run(held.id, {
+                name: "CI",
+                path: `.github/workflows/${WORKFLOW}`,
+                head_commit: { message: `Change ${held.id}\n\nAt length.` },
+              })
+            );
+            await new RunListFile(file).save(() => [{
+              repo: REPO,
+              workflow: WORKFLOW,
+              runs: described,
+              complete: true,
+              drift: 0,
+              readAt: Date.now(),
+              usedAt: Date.now(),
+              readers: [{ reader: "reader", id: 1, at: Date.now() }],
+            }], 0);
+            const github = new FakeGitHub(described);
+
+            const read1 = await read(new RunLists(file), github, {
+              until: (held) => held.id === 10,
+            });
+
+            expect(github.pages).toEqual(["1@20"]);
+            expect(read1.map((held) => held.head_commit)).toEqual(
+              ids(runs(250, 10)).map((id) => ({ message: `Change ${id}` })),
+            );
           });
 
           it("logs a write of the file that fails, and writes it again after the next reading", async () => {

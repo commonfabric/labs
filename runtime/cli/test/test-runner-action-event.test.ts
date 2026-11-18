@@ -28,7 +28,7 @@ describe(
           { root: FIXTURES },
         );
         expect(failed).toBe(0);
-        expect(passed).toBe(2);
+        expect(passed).toBe(3);
       });
 
       it("reaches the handler as authored, for a primitive and an object", async () => {

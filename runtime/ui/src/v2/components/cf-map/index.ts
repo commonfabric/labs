@@ -2,21 +2,17 @@
  * CF Map Component Export and Registration
  */
 
-import { CFMap } from "./cf-map.ts";
+// @ts-types="@types/leaflet"
+import * as L from "leaflet";
 
-import type {
-  Bounds,
-  CfBoundsChangeDetail,
-  CfCircleClickDetail,
-  CfClickDetail,
-  CfMarkerClickDetail,
-  CfMarkerDragEndDetail,
-  LatLng,
-  MapCircle,
-  MapMarker,
-  MapPolyline,
-  MapValue,
-} from "./types.ts";
+import * as cfMap from "./cf-map.ts";
+
+/** cf-map drawing with Leaflet, which needs a browser. */
+class CFMap extends cfMap.CFMap {
+  constructor() {
+    super(L);
+  }
+}
 
 if (!customElements.get("cf-map")) {
   customElements.define("cf-map", CFMap);
@@ -25,16 +21,4 @@ if (!customElements.get("cf-map")) {
 export type { CFMap as CFMapElement } from "./cf-map.ts";
 
 export { CFMap };
-export type {
-  Bounds,
-  CfBoundsChangeDetail,
-  CfCircleClickDetail,
-  CfClickDetail,
-  CfMarkerClickDetail,
-  CfMarkerDragEndDetail,
-  LatLng,
-  MapCircle,
-  MapMarker,
-  MapPolyline,
-  MapValue,
-};
+export type * from "./types.ts";

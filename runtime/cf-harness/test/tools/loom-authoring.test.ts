@@ -8,10 +8,14 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  parseHandleRef,
 } from "../../src/handle-table.ts";
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
 import { directPromptSlotBindingFor } from "../support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
+import { startCommandHost } from "../support/command-host.ts";
+import { openLegacySpace } from "../support/legacy-space.ts";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
@@ -111,144 +115,283 @@ const engineFixture = (configured = true) => {
 
 describe("loom-authoring", () => {
   describe("held Pattern Instances", () => {
-    it("resolves held whole instances and rejects restricted, foreign-space, and subpath tokens", async () => {
-      const identity = await Identity.fromPassphrase(
-        "Loom tool isolated fixture",
-      );
-      const storageManager = StorageManager.emulate({ as: identity });
-      const runtime = new Runtime({
-        apiUrl: new URL("http://toolshed.test"),
-        storageManager,
-      });
-      const pieces = new PiecesController(
-        createSession({
-          identity,
-          spaceDid: (await Identity.generate()).did(),
-        }),
-        runtime,
-      );
-      try {
-        const created = await pieces.create(
-          "import { pattern } from 'commonfabric'; export default pattern(() => ({ count: 1 }));",
+    for (const named of [false, true]) {
+      it(`resolves producer refs and rejects restricted, foreign-space, and subpath tokens in a ${named ? "named" : "DID"} session`, async () => {
+        const identity = await Identity.fromPassphrase(
+          "Loom tool isolated fixture",
         );
-        await runtime.idle();
-        await pieces.synced();
-        const link = created.getCell().getAsNormalizedFullLink();
-        const foreign = createSession({
-          identity,
-          spaceDid: (await Identity.generate()).did(),
+        const storageManager = StorageManager.emulate({ as: identity });
+        const runtime = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
         });
-        const cases = [
-          {
-            ref: createLLMFriendlyLink(link, pieces.getSpace()),
-            noFabric: true,
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(link, pieces.getSpace()),
-            cancelDuringResolution: true,
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(
-              runtime.getCell(pieces.getSpace(), "held-non-pattern")
-                .getAsNormalizedFullLink(),
-              pieces.getSpace(),
-            ),
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(link, pieces.getSpace()),
-            allowed: true,
-          },
-          {
-            ref: createLLMFriendlyLink(link, pieces.getSpace()),
-            capability: "skill-context" as const,
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(
-              { ...link, path: ["count"] },
-              pieces.getSpace(),
-            ),
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(
-              { ...link, scope: "session" },
-              pieces.getSpace(),
-            ),
-            allowed: false,
-          },
-          {
-            ref: createLLMFriendlyLink(
-              { ...link, space: foreign.space },
-              pieces.getSpace(),
-            ),
-            allowed: false,
-          },
-        ];
-        for (const candidate of cases) {
-          const calls: ProcessRunRequest[] = [];
-          const controller = new AbortController();
-          const engine = new CfHarnessEngine({
-            sandboxRuntime: sandbox,
-            ...(!candidate.noFabric
-              ? {
-                fabricSessionFactory: () => {
-                  if (candidate.cancelDuringResolution) controller.abort();
-                  return Promise.resolve({ pieces });
-                },
-              }
-              : {}),
-            loomAuthoring: {
-              cliPath: "/trusted/loom",
-              transport: { kind: "broker", queuePath: "/trusted/queue" },
-            },
-            processRunner: {
-              run(request) {
-                calls.push(request);
-                return Promise.resolve({
-                  exitCode: 0,
-                  stderr: "",
-                  stdout: JSON.stringify({
-                    ok: true,
-                    result: {
-                      receipt,
-                      replayed: false,
-                      manifest: { loom_id: receipt.loom_id, version: 2 },
-                    },
-                  }),
-                });
-              },
-            },
-          });
-          const minted = await mintAddressHandle(
-            createHarnessHandleTable(engine.getRunState().runId),
-            candidate.ref,
-            candidate.capability === undefined
-              ? {}
-              : { capability: candidate.capability },
+        const pieces = named
+          ? await openLegacySpace(identity, runtime, "composition-receipt")
+          : new PiecesController(
+            createSession({
+              identity,
+              spaceDid: (await Identity.generate()).did(),
+            }),
+            runtime,
           );
-          await engine.recordHandleTable(minted.table);
-          const { output } = await engine.invokeBuiltinTool("loom_compose", {
-            request_id: "collection-one",
-            components: [{ pattern_token: minted.token }],
-          }, { signal: controller.signal });
-          expect(output.status).toBe(candidate.allowed ? "ok" : "error");
-          expect(calls).toHaveLength(candidate.allowed ? 1 : 0);
-          if (candidate.allowed) {
-            expect(JSON.parse(calls[0].stdinText!).components[0].ref).toMatch(
-              /^pattern:did:key:.+\/fid1:/,
-            );
+        const received: Record<string, unknown>[] = [];
+        await using host = startCommandHost({
+          list: () =>
+            Response.json({
+              commands: [
+                {
+                  id: "loom.compose",
+                  scope: "global",
+                  inputs: { type: "object" },
+                },
+                { id: "loom.add", scope: "loom", inputs: { type: "object" } },
+              ],
+            }),
+          run: (body) => {
+            if (!isObjectNotArray(body)) {
+              throw new Error("Expected command body");
+            }
+            received.push(body);
+            return Response.json({ ok: true });
+          },
+        });
+        try {
+          const producer = new CfHarnessEngine({
+            sandboxRuntime: sandbox,
+            fabricSessionFactory: () => Promise.resolve({ pieces }),
+          });
+          const { output: produced } = await producer.invokeBuiltinTool(
+            "run_pattern",
+            {
+              sourceText:
+                "import { pattern } from 'commonfabric'; export default pattern(() => ({ count: 1 }));",
+            },
+          );
+          if (
+            !isObjectNotArray(produced) || produced.status !== "ok" ||
+            typeof produced.ref !== "string" ||
+            typeof produced.pieceId !== "string"
+          ) {
+            throw new Error("Expected a successful piece receipt");
           }
-          expect(JSON.stringify(output)).not.toContain("did:key:");
+          await runtime.idle();
+          await pieces.synced();
+          const link = {
+            ...parseHandleRef(produced.ref),
+            space: pieces.getSpace(),
+          };
+          const createdId = produced.pieceId;
+          const foreign = createSession({
+            identity,
+            spaceDid: (await Identity.generate()).did(),
+          });
+          const cases = [
+            {
+              ref: createLLMFriendlyLink(link, pieces.getSpace()),
+              noFabric: true,
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(link, pieces.getSpace()),
+              cancelDuringResolution: true,
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(
+                runtime.getCell(pieces.getSpace(), "held-non-pattern")
+                  .getAsNormalizedFullLink(),
+                pieces.getSpace(),
+              ),
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(link, pieces.getSpace()),
+              allowed: true,
+            },
+            {
+              ref: createLLMFriendlyLink(link),
+              allowed: true,
+            },
+            {
+              ref: createLLMFriendlyLink(link, pieces.getSpace()),
+              capability: "skill-context" as const,
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(
+                { ...link, path: ["count"] },
+                pieces.getSpace(),
+              ),
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(
+                { ...link, scope: "session" },
+                pieces.getSpace(),
+              ),
+              allowed: false,
+            },
+            {
+              ref: createLLMFriendlyLink(
+                { ...link, space: foreign.space },
+                pieces.getSpace(),
+              ),
+              allowed: false,
+            },
+          ];
+          for (const candidate of cases) {
+            const calls: ProcessRunRequest[] = [];
+            const controller = new AbortController();
+            const engine = new CfHarnessEngine({
+              model: "gpt-5.4",
+              sandboxRuntime: sandbox,
+              ...(!candidate.noFabric
+                ? {
+                  fabricSessionFactory: () => {
+                    if (candidate.cancelDuringResolution) controller.abort();
+                    return Promise.resolve({ pieces });
+                  },
+                }
+                : {}),
+              loomAuthoring: {
+                cliPath: "/trusted/loom",
+                transport: { kind: "broker", queuePath: "/trusted/queue" },
+              },
+              loomCommands: {
+                url: host.url,
+                actor: "agent:test",
+                runId: "test",
+              },
+              processRunner: {
+                run(request) {
+                  calls.push(request);
+                  return Promise.resolve({
+                    exitCode: 0,
+                    stderr: "",
+                    stdout: JSON.stringify({
+                      ok: true,
+                      result: {
+                        receipt,
+                        replayed: false,
+                        manifest: { loom_id: receipt.loom_id, version: 2 },
+                      },
+                    }),
+                  });
+                },
+              },
+            });
+            const minted = await mintAddressHandle(
+              createHarnessHandleTable(engine.getRunState().runId),
+              candidate.ref,
+              candidate.capability === undefined
+                ? {}
+                : { capability: candidate.capability },
+            );
+            await engine.recordHandleTable(minted.table);
+            for (const field of ["pattern_token", "ref"]) {
+              calls.length = 0;
+              const { output } = await engine.invokeBuiltinTool(
+                "loom_compose",
+                {
+                  request_id: "collection-one",
+                  components: [{ [field]: minted.token }],
+                },
+                { signal: controller.signal },
+              );
+              expect(output.status).toBe(candidate.allowed ? "ok" : "error");
+              expect(calls).toHaveLength(candidate.allowed ? 1 : 0);
+              expect(JSON.stringify(output)).not.toContain("did:key:");
+            }
+            if (candidate.allowed) {
+              expect(JSON.parse(calls[0].stdinText!).components[0].ref).toMatch(
+                /^pattern:did:key:.+\/fid1:/,
+              );
+            }
+            for (const command of ["loom.compose", "loom.add"]) {
+              received.length = 0;
+              const { output } = await engine.invokeBuiltinTool("run_command", {
+                command,
+                args: command === "loom.compose"
+                  ? {
+                    request_id: "collection-one",
+                    components: [{ ref: minted.token }],
+                  }
+                  : { ref: minted.token },
+              }, { signal: controller.signal });
+              expect(output.status).toBe(
+                candidate.allowed ? "executed" : "failed_to_deliver",
+              );
+              expect(received).toHaveLength(candidate.allowed ? 1 : 0);
+              if (candidate.allowed) {
+                expect(JSON.stringify(received[0])).toContain(
+                  `pattern:${pieces.getSpace()}/${createdId}`,
+                );
+                expect(JSON.stringify(received[0])).not.toContain("/of:");
+              }
+            }
+            if (candidate.allowed) {
+              received.length = 0;
+              const payloads = [{
+                choices: [{
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: "",
+                    tool_calls: [{
+                      id: "compose-held",
+                      type: "function",
+                      function: {
+                        name: "run_command",
+                        arguments: JSON.stringify({
+                          calls: [{
+                            command: "loom.compose",
+                            args: {
+                              request_id: "receipt-loop",
+                              components: [{ ref: minted.token }],
+                            },
+                          }],
+                        }),
+                      },
+                    }],
+                  },
+                }],
+              }, {
+                choices: [{
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: "Done",
+                  },
+                }],
+              }];
+              let index = 0;
+              const loop = new CfHarnessPromptLoop({
+                engine,
+                apiKey: "synthetic-test-key",
+                model: "gpt-5.4",
+                allowedToolIds: ["run_command"],
+                fetchFn: () =>
+                  Promise.resolve(Response.json(
+                    responsesBodyFromChatFixture(payloads[index++]),
+                  )),
+              });
+              await loop.runPrompt({
+                prompt: "Compose the piece I hold",
+                promptSlotBinding: directPromptSlotBindingFor("held-receipt"),
+              });
+              expect(received).toHaveLength(1);
+              expect(JSON.stringify(received[0])).toContain(
+                `pattern:${pieces.getSpace()}/${createdId}`,
+              );
+              expect(JSON.stringify(received[0])).not.toContain("/of:");
+            }
+          }
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
         }
-      } finally {
-        await runtime.dispose();
-        await storageManager.close();
-      }
-    });
+      });
+    }
   });
 
   describe("prompt-loop authority", () => {
@@ -475,6 +618,8 @@ describe("loom-authoring", () => {
       for (
         const ref of [
           "wish:W-123",
+          "page-id:pg_11111111111111111111111111111111",
+          "section:pg_11111111111111111111111111111111:es-22222222222222222222222222222222",
           "intention:step-11111111111111111111111111111111",
           "chat:conv-example",
           "person:email:synthetic@example.com",

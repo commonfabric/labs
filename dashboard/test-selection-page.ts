@@ -11,6 +11,7 @@
  * names tests, never the people who wrote or touched them.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type CalibrationHealth,
   type Manifest,
@@ -315,21 +316,22 @@ function healthLead(health: CalibrationHealth): string {
 
 /** The counts the two tiles headline, spelled out. */
 function summary(manifest: Manifest): string {
-  const selected = selectedSeconds(manifest);
-  const corpus = corpusSeconds(manifest);
+  const selected = selectedCount(manifest);
+  const corpus = manifest.entries.length;
+  const seconds = selectedSeconds(manifest);
+  const corpusTime = corpusSeconds(manifest);
   const facts: Array<[string, string]> = [
-    ["selected", shareLabel(selected, corpus)],
-    [
-      "test time",
-      `${humanDuration(selected * 1_000)} of ${
-        humanDuration(corpus * 1_000)
-      }`,
-    ],
     [
       "tests",
-      `${groupDigits(selectedCount(manifest))} of ${
-        groupDigits(manifest.entries.length)
-      }`,
+      `${shareLabel(selected, corpus)} (${groupDigits(selected)} of ${
+        groupDigits(corpus)
+      })`,
+    ],
+    [
+      "test time",
+      `${shareLabel(seconds, corpusTime)} (${humanDuration(seconds * 1_000)} of ${
+        humanDuration(corpusTime * 1_000)
+      })`,
     ],
     ["lanes", String(manifest.lanes.length)],
     ["flaky", groupDigits(flakyCount(manifest))],
@@ -423,7 +425,7 @@ export async function testSelectionResponse(
   try {
     return livePageResponse(testSelectionPage(await read(), clock?.()));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeFailure(error);
     console.error("test selection page:", message);
     return livePageResponse(
       testSelectionUnavailable(collectionSub(error)),

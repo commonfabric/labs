@@ -177,6 +177,9 @@ describe("fabric import specifiers", () => {
       `cf:of:${HASH}`,
       // The scheme requires the fid1 segment, like of:.
       `cf:computed:${HASH}`,
+      // A receipt holds one handling's outcome, which is nothing to import.
+      `cf:receipt:fid1:${HASH}`,
+      `cf:/kitchen/receipt:fid1:${HASH}`,
       // The retired fid2 tag form is not readable.
       `cf:of:fid2:computed:${HASH}`,
       "cf:data:abc",
@@ -212,6 +215,20 @@ describe("fabric import specifiers", () => {
     const pinned = withPin(ref, HASH);
     expect(formatFabricRef(ref)).toBe("cf:/kitchen/todo-list");
     expect(formatFabricRef(pinned)).toBe(`cf:/kitchen/todo-list@${HASH}`);
+  });
+
+  it("throws for a pin that is not a hash", () => {
+    const ref = parseFabricRef("cf:/kitchen/todo-list")!;
+    expect(() => withPin(ref, "abc")).toThrow("malformed pin");
+  });
+
+  it("throws for a space that is neither a DID nor a slug, naming the slug rule", () => {
+    expect(() => parseFabricRef("cf:/Kitchen_Space/todo-list")).toThrow(
+      "Slug must use lowercase letters, numbers, and single hyphens between words.: cf:/Kitchen_Space/todo-list",
+    );
+    expect(parseFabricRef("cf:/kitchen-space/todo-list")?.space).toBe(
+      "kitchen-space",
+    );
   });
 
   it("withPin on a pattern: URI ref is consistent with the conflicting-pin rule", () => {

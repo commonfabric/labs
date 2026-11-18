@@ -300,6 +300,11 @@ topic, and following a crossref to a sibling. Its `topic board` group charts
 each of those as its own series plus a `journey` series for the whole sequence,
 so a regression lands on the segment that caused it.
 
+The opened card is selected by the newest seeded topic's title. The board sorts
+cards by last activity, and topics with equal timestamps can put a topic without
+citations first. Only the newest seeded topics carry the citations navigation
+follows.
+
 Two further series in that group measure the Topics derivations rather than the
 navigation over them, for the browser tier of [the Topics computation
 plan](../plans/topics-computation-cost.md). Each charts a timed interval and
@@ -310,17 +315,16 @@ measurement.
 
 - `comment` is a warm update: sending a comment on an open topic, which moves
   that topic's comment count and its last activity. It runs against a board of
-  its own, in its own space, because sending a comment is a durable write that
-  makes the commented topic the board's first card, which would leave `crossref`
-  and `journey` opening a card with no citation to follow. Each iteration
+  its own, in its own space, so its durable writes leave the navigation
+  fixture's counts, activity, and card order unchanged. Each iteration
   comments on a topic that has none, so every iteration measures the same
   thing.
 - `backlink` opens the topic the most siblings cite and waits for every row the
   topic's backlink derivation produces. `crossref` cannot measure that: it
-  follows a citation outward from the board's first card, which is the newest
-  topic, and nothing cites the newest topic. The segment reaches its topic
-  through the shell's own navigation rather than by clicking, because a topic in
-  the middle of the board is on no card or link the page is showing.
+  follows a citation outward from the newest seeded topic, which nothing cites.
+  The segment reaches its topic through the shell's own navigation rather than
+  by clicking, because a topic in the middle of the board is on no card or link
+  the page is showing.
 
 Under server execution the serving runtime computes those derivations, and with
 web view-scoped replication on the page shows what it delivers without running
@@ -594,8 +598,9 @@ shell's runtime client, runs the operation, waits until the view has settled and
 the runtime is idle, and turns both off again. From the `scheduler.run.complete`
 markers it sums runs, `durationMs`, proxy accesses, the largest single run's
 accesses, link resolutions, distinct documents, and registered dependencies, in
-one row for the board's pivot (`crossrefTable`, the producer), one for the
-per-topic consumer (`backlinksOf`), and one for every other run. It also records the scheduler
+one row each for the board's pivot (`crossrefTable`) and its index by topic
+number (`crossrefIndexOf`), the producers, one for the per-topic consumer
+(`backlinksOf`), and one for every other run. It also records the scheduler
 graph's node and edge counts before and after, the operation's elapsed time, and
 the timing statistics the main thread and the worker accumulated over it, less
 the helper's own requests. A timing row sums spans that can overlap, so its
@@ -787,10 +792,10 @@ reconciler's demand over the piece's view for the run, as a mounted tab does
 (`renderView` on the session, with the fixture showing the poll's own view under
 its `renderPoll` input), so a client that derives the tallies and cards it would
 show has derived them by the measured end. Each client is a web client
-(`clientClass: "web"` on the session), so under
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION` its view registers as a view interest
-and the server selects what it receives, as it does for a browser tab; hold that
-flag and server execution constant when comparing arms. Such a client derives
+(`clientClass: "web"` on the session), so with web view-scoped replication on,
+as it is by default under server execution, its view registers as a view
+interest and the server selects what it receives, as it does for a browser tab;
+hold that flag and server execution constant when comparing arms. Such a client derives
 none of the poll itself, and the tallies the server derives from a burst's votes
 can reach it a wave after the votes do, which the measured end below does not
 wait for, so with that flag and server execution on the end is the votes'
@@ -1344,8 +1349,10 @@ outside the timed interval.
 The reused-memo case includes its first miss. The cleared-memo control clears
 only the active snapshot memo before each request; storage read caches remain
 active. That control includes clearing the map and journaling the additional
-reads. Both cases still merge label views for every request. They measure the
-cost of repeated derivation in this fixture, not a whole-pattern speedup.
+reads. The memo holds each dereference's merged view as well as the view at
+each address, so the reused-memo case merges label views once and the
+cleared-memo control merges them for every request. They measure the cost of
+repeated derivation in this fixture, not a whole-pattern speedup.
 
 Untimed diagnostics verify one metadata read with reuse and one per request
 with clearing. These are transaction read activities, not proxy-access counts
@@ -1387,9 +1394,10 @@ repository root to measure the Topics board's mention pivot and each topic's
 backlink lookup over the headless fixture in
 `patterns/integration/topics-headless-fixture.ts`. The fixture writes synthetic
 topics straight to emulated storage and runs the unmodified Topics lifts —
-`crossrefTable` and `backlinksOf` — with no browser and no server. A topic's
-comment count and last activity are stored values its verbs keep in the write
-that changes them, so there is no derivation of theirs to measure.
+`crossrefTable`, `crossrefIndexOf` and `backlinksOf` — with no browser and no
+server. A topic's comment count and last activity are stored values its verbs
+keep in the write that changes them, so there is no derivation of theirs to
+measure.
 Each case runs in a process of its own, started with `--frozen` as well, so no
 process in a run writes `deno.lock`.
 
@@ -1460,8 +1468,15 @@ At 32 and at 128 topics a sweep varies mentions per source over 0, 1, 4, and
 16, where 0 is the `none` graph: 32 topics is the size the read budget gates,
 and 128 is the size the probe reports the effect of mention degree at. The
 small pivot cases hold 4 topics, with as many mentions per source, up to four,
-as each graph allows. The fixture's documentation of
-`MentionGraph` says how each graph spreads its mentions.
+as each graph allows. The fixture's documentation of `MentionGraph` says how
+each graph spreads its mentions.
+
+Every topic in those cases is wired as `addTopic` wires one, to the pivot and to
+the pivot's index by topic number, so each numbered topic's lookup reads its row
+by number. One more case, the 32-topic `high-degree` case at four mentions per
+source, holds unbound topics instead: each lookup is handed the pivot and no
+index, as a topic filed before its board published an index is until it is
+bound, so every lookup scans the pivot.
 
 The pivot cases are recorded under three demand workloads. The first topic is
 the focus topic: the one `topic-open` opens. The mention phases change which
@@ -1484,7 +1499,8 @@ pivot and that topic's backlinks. That is one small sample. Server execution,
 and lazy materialization off, were not measured.
 
 A case's ID names all of that, as
-`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`.
+`pivot/<graph>/mentions-<count>/topics-<count>/<workload>`, with `/unbound`
+before the workload for the case whose topics are unbound.
 
 ### The phases
 
@@ -1609,7 +1625,9 @@ The gated cases are:
 - the 4-topic `low-degree` pivot cases under `topic-open` and `all-backlinks`;
 - the 32-topic pivot cases under both workloads for the `high-degree` and
   `single-bucket` graphs at four mentions per source, and for the `low-degree`
-  graph at 16.
+  graph at 16;
+- the 32-topic `high-degree` case whose topics are unbound, under both
+  workloads, which gates the scan every unbound topic's lookup makes.
 
 No `board` case is gated, since the probe measures none. Every gated case holds
 32 topics or the small case's 4; the larger sizes run only from the probe. A
@@ -1655,11 +1673,17 @@ lifts, in the same transaction:
 Every limit is an upper bound, so the budget catches a change that reads more
 and is blind to one that reads differently. Lazy materialization turned back
 into eager traversal is the case that matters: it makes fewer proxy accesses,
-not more, while every topic's `backlinksOf` runs again on each mention edit.
-`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds that
-property directly, on the 32-topic `high-degree` `all-backlinks` case under
-lazy materialization: a mention edit re-runs the lookups of the topics whose
-pivot row changed, and no other.
+not more, while every unbound topic's `backlinksOf`, which scans the pivot, runs
+again on each mention edit. A keyed lookup reads only the positions filed under
+its number and re-runs only for its own row in either mode.
+`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the property
+directly, under lazy materialization, on the 32-topic `high-degree`
+`all-backlinks` case with its topics unbound and with them wired to the index: a
+mention edit re-runs the lookups of the topics whose pivot row changed, and no
+other. The same file holds that a numbered topic's lookup, which reads its row
+through the pivot's index, registers the same reads at 4 and at 32 topics, and
+that filing a topic re-runs only its own lookup and those of the topics it
+mentions.
 
 A case's test fails when a count exceeds its limit, when a measured count has no
 limit, or when a limit names a phase the case did not record. The failure names
@@ -1743,6 +1767,48 @@ deno bench --no-lock --json runtime/memory/test/v2-path.bench.ts
 The
 [local encoding measurement](../history/development/performance/2026-09-14-encode-pointer.md)
 records interleaved comparisons and their limits.
+
+## Watch coverage and schema churn
+
+`runtime/memory/test/v2-query-coverage.bench.ts` measures cold graph tracking,
+extending covered and overlapping roots, and refreshing dirty leaves, stable
+roots, and retargeted roots. `V2_QUERY_COVERAGE_DOCS` sets the corpus size
+(default 1,000) and `V2_QUERY_COVERAGE_DIRTY_PERCENT` sets the changed share
+(default 1%). Untimed traversal counters go to stderr; set
+`V2_QUERY_COVERAGE_STATS=false` to omit them. Counter values stay out of series
+names so changing the work an operation performs preserves its timing history.
+
+`runtime/memory/test/v2-query-churn.bench.ts` holds one base watch over 1,000
+linked documents while adding and removing a temporary watch 100 times. One
+series repeats a schema; the other uses a distinct schema each cycle. Each
+sample creates its own graph and warms it with five cycles outside the timer.
+The timed interval covers the whole add/remove sequence, including its natural
+allocation and collection costs. Fresh-evaluation equivalence, delivery of a
+subsequent write, and final-root cleanup are checked outside the timer.
+
+Separate diagnostic runs collect the surviving heap after warm-up and every
+ten cycles, recording the final cycle even when it falls between checkpoints.
+The JSON diagnostic lines go to `diagnostics.log`, alongside sampled heap and
+resident-memory maxima. Heap samples cover the benchmark isolate, and resident
+memory covers the process; sampled maxima can miss transient peaks. Explicit
+collections belong only to the diagnostics.
+The timing dashboard does not chart the heap samples or gate on them; the
+`query-retention.test.ts` unit test separately bounds retained growth.
+
+`V2_QUERY_CHURN_DOCS` and `V2_QUERY_CHURN_CYCLES` change the workload; both sizes
+are part of the series name. Both files run in the scheduled Benchmarks workflow.
+For an isolated local measurement:
+
+```sh
+deno bench --json -A --v8-flags=--expose-gc \
+  runtime/memory/test/v2-query-coverage.bench.ts \
+  runtime/memory/test/v2-query-churn.bench.ts
+```
+
+These synthetic graph workloads measure watch processing and retention. The
+[FabriChat send-burst benchmark](#concurrent-sends) measures replication to every
+participant; its end point is separate from a browser's send-confirmation
+indicator.
 
 ## Refresh schema-closure walk
 
@@ -1856,14 +1922,16 @@ connector, browser, or external store. After each render, a labeled-copy action
 reads every title and writes plain row values into an ordinary writable store,
 exercising writer-fit preparation separately from generated view outputs.
 The file stays identical between arms;
-only the runtime flags change:
+only the CFC flags change. Both arms run on the server-execution OFF arm, which
+CFC disabled requires and where the test's CFC posture governs every handler
+(served handlers run under the serving runtime's posture instead):
 
 ```sh
 # Arm A: enforcement disabled, flow labels off.
-deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
+EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-enforcement-mode disabled --cfc-flow-labels off --verbose --stats-threshold 0 --no-idempotency-check
 
 # Arm B: shell enforcement and flow-label posture.
-deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
+EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test runtime/cli/test/fixtures/cfc-flow-labels/mapped-render.test.tsx --cfc-shell-posture --verbose --stats-threshold 0 --no-idempotency-check
 ```
 
 The output names the resolved posture and each N. `render_1`, `render_2`, and

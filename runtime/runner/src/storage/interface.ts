@@ -1,28 +1,30 @@
 import type {
   CellScope,
+  FabricPlainObject,
   FabricValue,
   SchemaPathSelector,
   TextChange,
 } from "@commonfabric/api";
 import type { DIDKey } from "@commonfabric/identity/did";
-import {
-  type ACL,
-  type AuthorizationError as IAuthorizationError,
-  type ConflictError as IConflictError,
-  type ConnectionError as IConnectionError,
-  type DID,
-  type MemorySpace,
-  type QueryError as IQueryError,
-  type Result,
-  type Revision,
-  type Signer,
-  type State,
-  type The as MediaType,
-  type TransactionError,
-  type Unit,
-  type URI,
-  type Variant,
+import type {
+  ACL,
+  AuthorizationError as IAuthorizationError,
+  ConflictError as IConflictError,
+  ConnectionError as IConnectionError,
+  DID,
+  MemorySpace,
+  QueryError as IQueryError,
+  Result,
+  Revision,
+  Signer,
+  State,
+  The as MediaType,
+  TransactionError,
+  Unit,
+  URI,
+  Variant,
 } from "@commonfabric/memory/interface";
+import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
@@ -40,6 +42,7 @@ import type {
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
+  PatternLifecycleVerb,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
@@ -56,16 +59,20 @@ import type {
   ViewPlan,
 } from "@commonfabric/memory/v2";
 import type {
+  InviteAdministration,
   PresenceEvent,
   PresenceMembership,
 } from "@commonfabric/memory/v2/client";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Immutable } from "@commonfabric/js-values/types";
 
 import type { Cancel } from "../cancel.ts";
-import { Cell } from "../cell.ts";
+import type { Cell } from "../cell.ts";
 import type {
   CfcConfidentialityRelease,
+  CfcConfidentialityReleaseByIntent,
+  CfcConfidentialityReleaseByIntentInput,
   CfcConfidentialityReleaseInput,
 } from "../cfc/confidentiality-release-plan.ts";
 import type {
@@ -75,12 +82,14 @@ import type {
   CfcDeclaredWideningExemption,
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
+  CfcDocumentAddress,
   CfcEnforcementMode,
   CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcMetadata,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -97,7 +106,7 @@ import type { EntityId } from "../create-ref.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { RAW_META_WRITE } from "../meta-seam.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
-import { BaseMemoryAddress } from "../traverse.ts";
+import type { BaseMemoryAddress } from "../traverse.ts";
 import type { MergeableOpDelta } from "./mergeable-ops.ts";
 import type {
   PendingCommitContext,
@@ -165,20 +174,8 @@ export class ReplicaLoadFailureError extends Error {
     readonly failure: ReplicaLoadFailure,
     cause: unknown,
   ) {
-    super(loadFailureMessage(cause), { cause });
+    super(describeFailure(cause), { cause });
   }
-}
-
-/**
- * Returns the message a load failure's cause carries. A pull reports its
- * failure as a plain result object rather than an `Error`, so the message is
- * read off any object that has one; a cause without one is stringified.
- */
-function loadFailureMessage(cause: unknown): string {
-  return typeof cause === "object" && cause !== null && "message" in cause &&
-      typeof cause.message === "string"
-    ? cause.message
-    : String(cause);
 }
 
 export const toReplicaLoadFailureError = (
@@ -295,6 +292,19 @@ export type StoredDocumentAddress = {
   scopeKey?: ScopeKey;
 };
 
+/** How a release pass (`IStorageManager.releaseUnreadDocuments()`) runs. */
+export type ReleaseOptions = {
+  /**
+   * Whether the pass completes a release something asked for, such as a
+   * stop: each hold token live as the pass begins, once collected, then asks
+   * for a pass of its own (`IStorageManager.subscribeHoldsCollected()`), which
+   * releases what the token alone kept. Absent, a token's collection asks
+   * for nothing on this pass's account. Closing the manager forgets every
+   * follow-up.
+   */
+  followUpOnCollection?: boolean;
+};
+
 export interface IStorageManager extends IStorageSubscriptionCapability {
   id: string;
 
@@ -398,6 +408,34 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * sessions would then be split across the two.
    */
   setSharedMemoryConnection?(enabled: boolean): void;
+
+  /**
+   * Declares whether the runtime this manager serves names instances, so
+   * that every session it opens declares that mode in its signed
+   * `session.open` descriptor, and a server that does not record the
+   * instance-naming mark is refused (INV-16, 04-protocol.md §4.1.2). A
+   * `Runtime` calls this at construction. A manager no runtime has declared
+   * a mode to runs this build's default, and a manager without the method
+   * declares nothing, so its sessions are positional.
+   *
+   * @throws If another mode is already declared, or if a session is
+   * already open and the mode would change: the manager's sessions are its
+   * runtimes' alike, so they cannot serve two modes.
+   */
+  setInstanceNames?(enabled: boolean): void;
+
+  /**
+   * Chooses whether the sessions this manager opens from here on take `cid:`
+   * schema documents by reference (`ConnectOptions.syncCidReferences` of the
+   * memory client). A `Runtime` calls this at construction. A manager
+   * without the method, or one no runtime has called it on, takes every
+   * body.
+   *
+   * @throws If another choice is already declared, or if a session is
+   * already open and the choice would change: the manager's connections are
+   * its runtimes' alike, so they cannot serve both.
+   */
+  setSyncCidReferences?(enabled: boolean): void;
 
   /**
    * Keeps session-scoped documents in the local replica when enabled.
@@ -532,6 +570,23 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<MemoryProtocolFlags | null | undefined>;
 
   /**
+   * Redeems `invite` in `space` as this manager's principal, on a session of
+   * its own whose open carries the invitation, and returns the redemption's
+   * receipt: how a principal the space's access list does not name yet gains
+   * the grant the invitation confers. Optional: a manager whose sessions
+   * cannot carry an invitation omits it.
+   *
+   * @throws `SpaceInviteRefusal`, with the invitation service's code as
+   *   `.code`, when the redemption is refused, or with
+   *   `invite-service-unsupported` when the server does not redeem on
+   *   `session.open`.
+   */
+  redeemInvite?(
+    space: MemorySpace,
+    invite: { inviteId: string; code: string },
+  ): Promise<RedeemReceipt>;
+
+  /**
    * The serving manager's HOME space (a serving runtime's storage
    * manager declares it; undefined on every client manager). Consumers
    * use it to decide whether a write target is FOREIGN to the serving
@@ -572,6 +627,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * W advance — see `ISpaceReplica.unappliedForeignSeqFloor` (Phase 2
    * revisit (a)). */
   inputSynced?(): Promise<void>;
+
+  /**
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
+   */
+  framesApplied?(): Promise<void>;
 
   /**
    * Issue an ordered-after round trip on every open space connection, so that
@@ -616,11 +682,49 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     observer: (status: ClientUpdateRequired) => void,
   ): Cancel;
 
-  /** The latest authoritative access loss for a space, cleared on reopening. */
+  /**
+   * The latest authoritative access loss for a space, cleared on reopening.
+   * The memory-backed manager's answer is one `isSpaceAccessRefusal()` holds
+   * of, as is its `authorizationError()`.
+   */
   spaceAccessError?(space: MemorySpace): Error | undefined;
 
   /**
-   * Observes authoritative access loss synchronously. Transient connection
+   * Whether the memory server has answered for `space`: `true` once it has
+   * admitted this manager's session there or refused it, `false` while it has
+   * not, and `undefined` when no memory server answers for the space, as for
+   * one whose reads a store supplies. A reopen that replaces the session, such
+   * as a remount after a revocation, puts it back to `false` until the server
+   * answers the reopen, unless a refusal stays recorded for the space in the
+   * meantime. Opens nothing.
+   */
+  spaceAnswered?(space: MemorySpace): boolean | undefined;
+
+  /**
+   * Observes the memory server's answer to each open of a space's session,
+   * the first open and every reopen alike: called once the server has
+   * admitted the session or refused it for good, and the answer is what
+   * `spaceAnswered()` and `spaceAccessError()` report. A first answer that is
+   * a refusal also reaches `subscribeSpaceAccessChange()` observers. An open
+   * that ends with no answer, such as one whose connection never completes a
+   * handshake, does not emit.
+   */
+  subscribeSpaceAnswer?(observer: (space: MemorySpace) => void): Cancel;
+
+  /**
+   * Opens `space`'s session if none is open, and resolves once the memory
+   * server has answered for it, admitting it or refusing it, as
+   * `spaceAnswered()` reports. Resolves at once where that is already `true`
+   * or is `undefined`.
+   *
+   * @throws When the session's open ends with no answer, as when its
+   *   connection never completes a handshake.
+   */
+  awaitSpaceAnswer?(space: MemorySpace): Promise<void>;
+
+  /**
+   * Observes authoritative access loss synchronously, and a refusal of a space
+   * already refused that turns out to be its deletion. Transient connection
    * failures and normal closure do not emit; `spaceAccessError()` supplies
    * the current snapshot for subscriptions installed after a loss.
    */
@@ -629,9 +733,12 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Cancel;
 
   /**
-   * Observes authoritative denial and recovery after an authorized reopen.
-   * Read `spaceAccessError()` for the current verdict. Initial successful
-   * opens and transient connection failures do not emit.
+   * Observes authoritative denial and recovery after an authorized reopen,
+   * a refusal of a space already refused that turns out to be its deletion,
+   * and a space whose first connection never completed a handshake that a
+   * `retrySpaceAccess()` reached. Read `spaceAccessError()` for the current
+   * verdict. Initial successful opens and transient connection failures do
+   * not emit.
    */
   subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
@@ -650,7 +757,8 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * `spaceSessionError()` reports from then on: for example a takeover, an
    * authorization denial, or a client that gives up reconnecting. The space's
    * documents receive no further updates unless a reopen after an access
-   * change (see `subscribeSpaceAccessChange()`) replaces the session, after
+   * change (see `subscribeSpaceAccessChange()`), or a `retrySpaceAccess()` of
+   * a space that never connected, replaces the session, after
    * which `spaceSessionError()` returns undefined again. An authorization
    * denial also reaches `subscribeSpaceAccessLoss()` observers. Ordinary
    * reconnects, normal closure, and spaces whose reads an authoritative local
@@ -684,6 +792,24 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
     promise: Promise<unknown>,
     context?: () => PendingCommitContext,
   ): void;
+
+  /**
+   * Register a multi-space commit whose later spaces' writes are not yet in
+   * those spaces' replicas. The transaction layer commits such a transaction
+   * one space at a time and hands a space's writes to its replica only once
+   * the server has answered for the spaces before it, so until then a read
+   * of a later space does not see them. `applied` settles once the commit
+   * has handed its last space's writes to that space's replica, or has
+   * stopped short of it. Called synchronously as the commit is issued.
+   */
+  trackMultiSpaceCommitApplying?(applied: Promise<void>): void;
+
+  /**
+   * Settles once every multi-space commit registered with
+   * `trackMultiSpaceCommitApplying()` so far has handed its writes to its
+   * replicas, or stopped; `undefined` when none is still handing them over.
+   */
+  multiSpaceCommitsApplied?(): Promise<void> | undefined;
 
   /** Snapshot pending work without waiting for durability or starting I/O. */
   getDiagnostics?(): StorageDiagnostics;
@@ -777,6 +903,17 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): object;
 
   /**
+   * Calls `observer` when a document's hold token (`holdDocument()`) has been
+   * collected that a pass asked to follow up found live
+   * (`ReleaseOptions.followUpOnCollection`), while it was still that
+   * document's token and its space was open, so that the next
+   * `releaseUnreadDocuments()` can release a document nothing holds any
+   * more. One collection can call it once for each of many tokens. Returns a
+   * cancel that removes it.
+   */
+  subscribeHoldsCollected?(observer: () => void): Cancel;
+
+  /**
    * Adds a way for the manager to learn whether something reads a document;
    * a document any of them reads keeps its watches through
    * `releaseUnreadDocuments()` and stays loaded when its watches go. Returns
@@ -795,9 +932,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * the previous call began keeps its watch through this one. A later read
    * of a dropped document loads it again. A space whose server does not
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
-   * session has answered.
+   * session has answered, to whether some root was kept only for having been
+   * loaded or read since the previous call began, which a later call may
+   * release.
    */
-  releaseUnreadDocuments?(): Promise<void>;
+  releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -912,14 +1051,41 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<EventAttentionResolveResult>;
 
   /**
+   * Runs pattern-lifecycle verb `verb` with `body` in `space`, on this
+   * manager's memory session there and as its principal, and returns the
+   * verb's receipt. The memory server behind that session owns the space, so
+   * the verb runs where the space is served. Absent from a manager with no
+   * memory sessions; errors are the memory client's
+   * `runPatternLifecycle()`'s.
+   */
+  runPatternLifecycle?(
+    space: MemorySpace,
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /**
+   * Administers `space`'s invitations on this manager's memory session
+   * there, as its principal, and returns what the invitation service
+   * returns. Absent from a manager with no memory sessions; errors are the
+   * memory client's `administerInvites()`'s.
+   */
+  administerInvites?(
+    space: MemorySpace,
+    invite: InviteAdministration,
+  ): Promise<FabricValue>;
+
+  /**
    * One of THE SESSION REMOUNT's two triggers: an admitted commit touched
    * `space`'s ACL document. A space session this manager holds — revoked or
    * denied by an EARLIER ACL verdict — is dropped so the next load re-opens
    * it, because the ACL is the only input that decision has. Never widens
    * authority: a genuine de-authorization is refused again at `session.open`.
    * Implemented by the v2 StorageManager; the serving loop's host is its only
-   * caller. The other trigger is `retrySpaceAccess()`, for a host that sees no
-   * such commit.
+   * caller, for the commits its own memory server admits. The other trigger
+   * is `retrySpaceAccess()`, for a host that sees no such commit. A serving
+   * runtime's grant verdicts on another space's actors do not depend on it:
+   * its replica of that space watches the list over its own session.
    */
   noteSpaceAclChanged?(space: MemorySpace): void;
 
@@ -940,8 +1106,26 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * or of a repeated load, rejects, and a later call repeats the loads that
    * have not yet succeeded. Does nothing for a space this manager has not
    * opened, or one it holds no refusal for.
+   *
+   * A space whose first connection never completed a handshake, such as one
+   * on a host that was down or out of the network's reach, counts as refused
+   * here: its `spaceSessionError()` stays that failure, and its loads fail
+   * with it at once without dialing again, until this call makes one more
+   * round of connection attempts. An ACL notice does not. The loads that
+   * failed in the meantime are made again once it connects.
+   * A host calls it when it has reason to think the host is reachable now,
+   * such as a person asking to try again or a change of network. A dial that
+   * fails again rejects with the new failure and leaves the space as it was.
    */
   retrySpaceAccess?(space: MemorySpace): Promise<void>;
+
+  /**
+   * The spaces this manager has opened whose first connection never
+   * completed a handshake, which `retrySpaceAccess()` would dial again. For a
+   * host that learns the network changed and cannot know which spaces were
+   * out of its reach. Opens nothing.
+   */
+  unreachableSpaces?(): MemorySpace[];
 
   /**
    * Load cell from storage. Will also subscribe to new changes.
@@ -1131,6 +1315,17 @@ export interface IStorageProvider {
   inputSynced?(): Promise<void>;
 
   /**
+   * Resolves once every frame the connection has handed over has been dealt
+   * with: applied and its subscribers notified, so that a synchronous read of
+   * the scheduler's state afterward sees the work the frame set off, or dropped
+   * as failing to apply, which the replica logs as an error and which leaves it
+   * behind on that frame's documents. Unlike `inputSynced()`, this rests on an
+   * application that nothing parks behind: a frame's novelty can stay shadowed
+   * by a sealed commit, but its application finishes.
+   */
+  framesApplied?(): Promise<void>;
+
+  /**
    * Destroy the storage provider. Used for tests only.
    *
    * @returns Promise that resolves when the storage provider is destroyed.
@@ -1217,6 +1412,12 @@ export interface IOperationStorageCapability {
     query: Omit<OperationFieldQuery, "principal" | "sessionId">,
   ): Promise<OperationFieldSnapshot>;
 
+  /**
+   * Applies an operation and waits for its covering frame while a subscription
+   * and the server's verdict catch-up markers are available. Without that
+   * channel, or when it closes, returns the accepted result without waiting
+   * for delivery.
+   */
   applyOperation(operation: ApplyOpOperation): Promise<ApplyOpResolution>;
 
   releaseOperationField(operation: ReleaseOpFieldOperation): Promise<void>;
@@ -1644,7 +1845,9 @@ export interface IStorageTransaction {
   /**
    * Check scheduling dependencies before accepting an empty commit or seal.
    * Set by reactive computations, whose subscriptions must cover changes since
-   * their reads. Event handlers retain ordinary empty-commit behavior.
+   * their reads, and direct bookkeeping commits, whose verdict validates the
+   * guarded snapshot even when every write is elided. Event handlers retain
+   * ordinary empty-commit behavior.
    */
   validateReactiveReads?: boolean;
 
@@ -1661,10 +1864,11 @@ export interface IStorageTransaction {
   /**
    * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
    * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the
-   * document. Set by link resolution on a serving runtime only, where such an
-   * instance is one the serving loop has not produced yet, and read by the
-   * reactive action's commit, which a run that read one does not make.
+   * and another derivation registered in the same runtime writes the document
+   * and has not yet run for that instance. Set by link resolution on a serving
+   * runtime only, where such an instance is one the serving loop has not
+   * produced yet, and read by the reactive action's commit, which a run that
+   * read one does not make.
    */
   unproducedScopedInstance?: string;
 
@@ -1736,12 +1940,9 @@ export interface IStorageTransaction {
   readonly journal: ITransactionJournal;
 
   /**
-   * Optional lightweight dependency summary.
-   *
-   * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity.
+   * The transaction's dependency summary: the addresses it read and wrote.
    */
-  getReactivityLog?(): TransactionReactivityLog;
+  getReactivityLog(): TransactionReactivityLog;
 
   /**
    * Optional scheduler observation payload to persist alongside the native
@@ -2114,10 +2315,25 @@ export interface IStorageTransaction {
    * unspecified. The writes it does apply are applied consistently: the
    * transaction's reads, its write details and its commit all include them. A
    * caller that must not land part of a batch aborts the transaction.
+   *
+   * `options` carries nothing but the extended transaction's write-chokepoint
+   * mark, which covers every write of the batch.
    */
   writeBatch?(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError>;
+
+  /**
+   * Optional: report each write `write()` or `writeBatch()` takes without the
+   * extended transaction's write-chokepoint mark (`write-chokepoint.ts`) to
+   * `sink`, before applying it. Such a write came from code holding this
+   * transaction directly, so nothing judged who made it. Each extended
+   * transaction wrapping this one adds a sink as it is built, and counts each
+   * such write as made under no identity. A sink stays for the life of the
+   * transaction: nothing removes one.
+   */
+  reportUnmarkedWrites?(sink: (address: IMemorySpaceAddress) => void): void;
 
   /**
    * Transaction can be cancelled which causes storage provider to stop keeping
@@ -2298,6 +2514,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void;
 
   /**
+   * Record a folded SQLite write onto this transaction. See
+   * {@link IStorageTransaction.recordSqliteWrite}.
+   */
+  recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void;
+
+  /**
    * Stages the content-addressed document holding `value` into this
    * transaction and returns its id: `cid:` plus the general content hash
    * of the value. The document is the value and nothing else, so no
@@ -2312,12 +2534,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Mints the runtime secret called `name` in `space` when no trusted value
    * is stored: a random value, written under the secret's label and writer
-   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
-   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
-   * one writer of the reserved namespace, which refuses every unprivileged
-   * write, and callable only with the runtime's authorization, since code
-   * that minted a secret in its own transaction could read it back there
-   * before its label is stored.
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns the
+   * secret, the trusted stored value or the one minted. The one writer of the
+   * reserved namespace, which refuses every unprivileged write, and callable
+   * only with the runtime's authorization, since code that minted a secret in
+   * its own transaction could read it back there before its label is stored.
    *
    * @throws Error without the runtime's authorization, or when the stored
    * value's schema cannot be resolved.
@@ -2326,7 +2547,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void;
+  ): string;
 
   tx: IStorageTransaction;
 
@@ -2422,14 +2643,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * (see {@link MergeableOpDelta}), forwarded to the underlying transaction after
    * resolving the link to a memory address.
    */
-  recordMergeableOp?(link: NormalizedFullLink, delta: MergeableOpDelta): void;
+  recordMergeableOp(link: NormalizedFullLink, delta: MergeableOpDelta): void;
 
   /**
    * Record text changes to the string addressed by `link`, forwarded to the
    * underlying transaction after resolving the link to a memory address. See
    * {@link IStorageTransaction.recordTextChanges}.
    */
-  recordTextChanges?(
+  recordTextChanges(
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string;
@@ -2717,11 +2938,28 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * Marks the values the runtime initializes in this transaction as
    * attributed to the acting principal (`CfcTxState.attributedInitialization`):
    * the runner marks the transaction of a handler run the principal invoked,
-   * and a start deferred from one. The mark takes the runtime's authorization,
-   * and a call without it does nothing.
+   * and a start deferred from one. With `piece`, the result document of a
+   * piece the transaction brings into being on the principal's behalf, the
+   * mark covers that piece's own documents alone
+   * (`CfcTxState.attributedPieces`). The mark takes the runtime's
+   * authorization, and a call without it does nothing.
    */
   markCfcAttributedInitialization(
     authorization: RuntimeWritePolicyAuthorization,
+    piece?: CfcDocumentAddress,
+  ): void;
+
+  /**
+   * Records that the runtime names `creator` as the creator of the piece
+   * whose result document is `piece` (`CfcTxState.pieceCreators`), so that
+   * preparation admits the transaction's write of the `creator` meta field
+   * there. The mark takes the runtime's authorization, and a call without it
+   * does nothing.
+   */
+  markCfcPieceCreator(
+    authorization: RuntimeWritePolicyAuthorization,
+    piece: CfcDocumentAddress,
+    creator: string,
   ): void;
 
   /**
@@ -2841,7 +3079,10 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    *
    * This transaction alone, with no enrollment beside it: the measurement runs
    * over documents the asking transaction wrote, so a marker recorded beside
-   * the write always covers the question.
+   * the write always covers the question. A value write on the document made
+   * under any identity but a builtin's (`CfcTxState.nonBuiltinWrites`) is
+   * not the runtime's to vouch for, whatever a builtin writes there after
+   * it, so this then returns `false`.
    *
    * Takes the runtime's mark for the same reason {@link isRuntimeOwnedStore}
    * does: the gate acts on the claim rather than measuring it.
@@ -2939,6 +3180,23 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string };
 
   /**
+   * The repair of a compile-cache record a flow stamp labeled: writes
+   * `replacement`'s value and label envelope over the document a compile-cache
+   * record's key `target.key` names, or deletes the document when
+   * `replacement` is absent, inside the privileged system-write scope.
+   * Requires the transaction's current implementation identity to be the
+   * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
+   * The caller, `repairCompileCacheStamps()`, computes the replacement from
+   * the verified closure; this method trusts it.
+   *
+   * @throws When the identity is not the repair's, or the key not a record's.
+   */
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void;
+
+  /**
    * The trusted writer path for an owner's release of the confidentiality
    * stored at one path of a document (`cfc/confidentiality-release-plan.ts`).
    * Requires the transaction's current implementation identity to be the
@@ -2946,8 +3204,9 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * authenticated, and the document to sit in that principal's own space.
    * Removes every stored clause at the path that `input.keep` does not name,
    * from every component of the label there and from the stored schema, and
-   * writes the envelope inside the privileged system-write scope. Writes
-   * nothing when there is nothing to remove.
+   * writes the envelope inside the privileged system-write scope. A path
+   * holding a `*` segment reaches every position it matches at its depth.
+   * Writes nothing when there is nothing to remove.
    *
    * @throws On any of the requirements above, on an unreadable envelope, and
    *   on everything `planConfidentialityRelease()` refuses.
@@ -2955,6 +3214,29 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease;
+
+  /**
+   * The trusted writer path for an owner's release by intent of the
+   * confidentiality stored at one path of a document (§8.12.7 route 2d,
+   * `cfc/confidentiality-release-plan.ts`). Requires the transaction's
+   * current implementation identity to be the `cfc-owner-release-by-intent`
+   * builtin. Verifies the signed request first: its signature, that its
+   * signer is the space's owner by the access list it reads, which the caller
+   * loads from the store first (`releaseAccessListOf()`),
+   * that the document's stored envelope is the one it names, and that its
+   * record does not exist yet. Then removes the clauses it names from every
+   * component of the label at its path and from the stored schema, re-derives
+   * the envelope's label-metadata templates, and writes the envelope inside
+   * the privileged system-write scope. The record is the caller's to write,
+   * at the returned id, in the same transaction; the store refuses the
+   * release without it.
+   *
+   * @throws On any of the requirements above, on an unreadable envelope, and
+   *   on everything `planConfidentialityReleaseByIntent()` refuses.
+   */
+  releaseCfcConfidentialityByIntent(
+    input: CfcConfidentialityReleaseByIntentInput,
+  ): CfcConfidentialityReleaseByIntent;
 
   /**
    * Surfaces a post-commit sink-request release rejection (the effect is fail-
@@ -2999,6 +3281,20 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * is in flight.
    */
   postCommitEffectsSettled(): Promise<void>;
+
+  /**
+   * How this transaction settled: `committed`, or `failed` for a commit that
+   * was rejected and for an abort, from the moment its commit callbacks start
+   * to run, the outcome being final by then, so a callback reads it too; and
+   * `undefined` before that. It answers for this transaction wherever its
+   * commit went. {@link status} reports the storage transaction this one
+   * wraps, which a commit sealed into a destination, a serving wave or the
+   * client's speculation overlay, leaves uncommitted, so that it still reads
+   * `ready` once this transaction has settled. A callback
+   * {@link addCommitCallback} adds once they have all run never runs, so code
+   * that may register one late asks this first.
+   */
+  settledOutcome(): "committed" | "failed" | undefined;
 
   /**
    * Add a callback to be called when the transaction settles. The callback
@@ -3155,7 +3451,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * identical. These two methods let `Cell.get()` cache its result keyed by the
    * stable value of the cell view; the implementation clears the entire cache
    * on any write, so a cached entry is only ever returned when no write has
-   * intervened.
+   * intervened. A transaction that is no longer ready, whose CFC state is
+   * prepared, that is marked for a UI-input blind write, or that is reading at
+   * an earlier epoch neither returns nor stores an entry at the time it is
+   * asked, so such a read takes the full pipeline. A read made while CFC is
+   * prepared invalidates that preparation, so its result is then stored.
    *
    * Optional: transactions that must not cache (e.g. the non-reactive `sample()`
    * wrapper) leave these undefined and callers fall back to recomputing.
@@ -3684,6 +3984,28 @@ export interface ISpaceReplica extends ISpace {
   ): number | undefined;
 
   /**
+   * Whether a quarantine holds back a copy of the document the server holds, so
+   * that an earlier finding of its absence no longer stands.
+   */
+  isQuarantined?(
+    id: URI,
+    scope?: CellScope,
+    identity?: ScopeKeyIdentity,
+  ): boolean;
+
+  /**
+   * Waits for any re-delivery of the document a quarantine holds back, and
+   * returns the failure if the replica still cannot apply it and has no value
+   * to read: the refusal that ended the re-delivery, if one did. `undefined`
+   * otherwise, which says nothing of whether the document exists.
+   */
+  quarantineFailure?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): Promise<Error | PullError | undefined>;
+
+  /**
    * Whether the replica holds a known stored version of the document, with
    * no pending local write, refused local fold, or incomplete wave promotion.
    * A watched delivery establishes it, including absence; a newer own write
@@ -3808,6 +4130,15 @@ export interface ISpaceReplica extends ISpace {
     action: "retry" | "dismiss",
   ): Promise<EventAttentionResolveResult>;
 
+  /** Like `IStorageManager.runPatternLifecycle()`, for this replica's space. */
+  runPatternLifecycle?(
+    verb: PatternLifecycleVerb,
+    body: FabricPlainObject,
+  ): Promise<FabricPlainObject>;
+
+  /** Like `IStorageManager.administerInvites()`, for this replica's space. */
+  administerInvites?(invite: InviteAdministration): Promise<FabricValue>;
+
   /** Pending (undischarged) event intents — the offline event queue's
    * live content (speculation.md §5), bounded by pending-intent count. */
   pendingEventAppends?(): readonly EventAppendRequest[];
@@ -3851,6 +4182,13 @@ export interface ISpaceReplica extends ISpace {
    * entry's floor witnesses arrival only when derived-class). Undefined
    * — an OFF-arm or pre-predicate frame, or a fake in tests — reads as
    * "class unknown", which never witnesses arrival at the floor.
+   *
+   * `envelopeDocuments` is the `cid:` ids of the documents the confirmed
+   * version's CFC envelope names: its schema document and, on a version-2
+   * envelope, its label documents. An entry that wrote a `cid:` document the
+   * store has not served is held while an arrived document it wrote names
+   * that document (speculation.md §4). Undefined — a fake in tests — reads
+   * as "names unknown", which holds the entry as a name would.
    */
   speculationRetirementView?(
     id: URI,
@@ -3859,6 +4197,7 @@ export interface ISpaceReplica extends ISpace {
     confirmedSeq: number;
     coverClass?: CommitClass;
     pendingLocalSeqs: number[];
+    envelopeDocuments?: readonly URI[];
   };
 
   /**
@@ -3947,7 +4286,9 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
 /**
  * The wave commit step's per-sealed-commit disposition (serving-loop.md
  * §3d). `committed` carries the wave commit's accepted store seq — the
- * sealed commit's pending writes promote to confirmed at that seq.
+ * sealed commit's pending writes promote to confirmed at that seq — and,
+ * when the wave commit carried only part of the sealed commit, the writes
+ * it left out, which roll back while the rest promote.
  * `withdrawn` rolls the sealed commit's pending writes back: its ops were
  * dropped (superseded pure derivation), requeued (raced non-re-derivable
  * consequence), or the wave never committed (lease lost, abandon). The
@@ -3963,7 +4304,7 @@ export type WaveWithdrawalCause = "contribution-dropped" | "wave-abandoned";
  * it) and the sealed commit settles `ok`, not error.
  */
 export type SealedCommitVerdict =
-  | { committed: { seq: number } }
+  | { committed: { seq: number; dropped?: DroppedSealedWrites } }
   | {
     withdrawn: {
       message: string;
@@ -3973,6 +4314,19 @@ export type SealedCommitVerdict =
       cause?: WaveWithdrawalCause;
     };
   };
+
+/**
+ * The writes of a sealed commit that a wave commit left out
+ * (serving-loop.md §3d's superseded writes), keyed by the index of their
+ * operation in the sealed commit's operations: the whole operation, or the
+ * indexes of the patches it left out of a patch operation. The replica reads
+ * only the indexes of document operations, which come first in a commit; a
+ * collaborative-field edit is shown inside the patch layer of its document.
+ */
+export type DroppedSealedWrites = ReadonlyMap<
+  number,
+  "operation" | ReadonlySet<number>
+>;
 
 /** A replica's handle for one sealed native commit. */
 export interface SealedNativeCommit {
@@ -4023,6 +4377,13 @@ export type PullError =
  * `connection` failure. */
 export interface IForeignScopedReadRefusedError extends IStorageError {
   readonly name: "ForeignScopedReadRefusedError";
+
+  /**
+   * Whether the read named no instance at all, leaving the runtime's own
+   * identity as the only thing it could resolve against. A read naming a key,
+   * whether or not the key names an actor, is not one of these.
+   */
+  readonly unnamed: boolean;
 }
 
 /**

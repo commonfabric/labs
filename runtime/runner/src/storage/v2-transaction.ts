@@ -17,16 +17,19 @@ import {
   codeMirrorTextChangesPayload,
   type CommitPrecondition,
   getCommitPreconditionsConfig,
+  operationAnchorsDocId,
   operationBaselineHash,
   type PatchOp,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
   type SqliteOperation,
+  STREAM_ENTRIES_DOC_PREFIX,
   toDocumentPath,
   toValuePath,
 } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { getLogger } from "@commonfabric/logger";
 import { PathKeyMap } from "@commonfabric/collections/path-key-map";
 import {
@@ -117,6 +120,7 @@ import {
   isMutableTransactionReadAllowed,
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
+  isServedDerivationTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -130,8 +134,10 @@ import {
   TransactionCompleteError,
   WriteIsolationError,
 } from "./transaction-errors.ts";
+import { commutesWithTailAppends } from "./transaction/sidecar-appends.ts";
 import {
   claim,
+  claimedValue,
   load as loadInline,
   read as readAttestation,
   StateInconsistency,
@@ -145,6 +151,12 @@ import { toTransactionDocumentValue } from "./v2-document.ts";
 import { hasValueAtPath, readValueAtPath } from "./v2-path.ts";
 import { recordWriteStackTrace } from "./write-stack-trace.ts";
 import { hasInlineCellScheme } from "../immutable-cell.ts";
+import { metaFieldChanges } from "../meta-seam.ts";
+import {
+  isReservedSibling,
+  reservedSiblingChanges,
+} from "../reserved-sibling-seam.ts";
+import { passedWriteChokepoint } from "./write-chokepoint.ts";
 
 type RootAttestation = IAttestation;
 
@@ -247,12 +259,29 @@ type TextChangeIntent = {
 
   /** The id the `apply-op` is submitted under. */
   submissionId: string;
+
+  /**
+   * The transaction's activity clock when the first batch was recorded: a
+   * write stamped at or after it came after the edit.
+   */
+  recordedAt: number;
 };
 
 type SpaceBranch = {
   space: MemorySpace;
   replica: ReturnType<IStorageManager["open"]>["replica"];
   docs: Map<string, DocumentEntry>;
+};
+
+/**
+ * A document `#document()` answered recently, with the branch, id and scope
+ * that name it, the parts of an address its key holds.
+ */
+type RecentDocument = {
+  branch: SpaceBranch;
+  id: URI;
+  scope: CellScope;
+  doc: DocumentEntry;
 };
 
 type ReadyState = {
@@ -288,7 +317,7 @@ const multiSpaceCommitLogger = getLogger("storage.v2.multi-space-commit", {
 });
 
 const toStoreError = (error: unknown): StorageTransactionRejected => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   return {
     name: "StoreError" as const,
     message,
@@ -527,6 +556,9 @@ const findArrayPatchPath = (
  * When presence flags are omitted they are inferred from value
  * definedness (legacy callers in the array fast-path, where presence
  * parity was already established via `in` checks).
+ *
+ * The caller passes a change: the two states differ in presence or in value,
+ * so a slot absent from both never reaches here.
  */
 const buildValuePatchCandidate = (
   path: readonly string[],
@@ -534,16 +566,9 @@ const buildValuePatchCandidate = (
   previousValue: FabricValue | undefined,
   valuePresent: boolean = value !== undefined,
   previousPresent: boolean = previousValue !== undefined,
-): PatchDraftCandidate | null => {
-  if (valuePresent === previousPresent && valueEqual(value, previousValue)) {
-    return null;
-  }
-
+): PatchDraftCandidate => {
   const pointer = encodePointer(path);
   if (!valuePresent) {
-    if (!previousPresent) {
-      return null;
-    }
     return {
       patch: { op: "remove", path: pointer },
       path,
@@ -576,6 +601,12 @@ const arrayTailIsDense = (
   return true;
 };
 
+/**
+ * Builds the patch candidates that take the value at `path` from `before` to
+ * `after`. The caller passes a change: `path` is the array a changed write
+ * beneath it is diffed as a change to (`findArrayPatchPath()`), and a value
+ * differs wherever a value beneath it does.
+ */
 const buildArrayPatchCandidates = (
   path: readonly string[],
   before: FabricValue | undefined,
@@ -583,19 +614,16 @@ const buildArrayPatchCandidates = (
   beforePresent: boolean = before !== undefined,
   afterPresent: boolean = after !== undefined,
 ): PatchDraftCandidate[] => {
-  if (beforePresent === afterPresent && valueEqual(before, after)) {
-    return [];
-  }
-
   if (!Array.isArray(before) || !Array.isArray(after)) {
-    const candidate = buildValuePatchCandidate(
-      path,
-      after,
-      before,
-      afterPresent,
-      beforePresent,
-    );
-    return candidate ? [candidate] : [];
+    return [
+      buildValuePatchCandidate(
+        path,
+        after,
+        before,
+        afterPresent,
+        beforePresent,
+      ),
+    ];
   }
 
   // Both sides are arrays from here on, so the array slot itself is present
@@ -603,20 +631,12 @@ const buildArrayPatchCandidates = (
   const overlappingLength = Math.min(before.length, after.length);
   for (let index = 0; index < overlappingLength; index += 1) {
     if ((index in before) !== (index in after)) {
-      const fallback = buildValuePatchCandidate(
-        path,
-        after,
-        before,
-        true,
-        true,
-      );
-      return fallback ? [fallback] : [];
+      return [buildValuePatchCandidate(path, after, before, true, true)];
     }
   }
 
   if (after.length > before.length && !arrayTailIsDense(after, before.length)) {
-    const fallback = buildValuePatchCandidate(path, after, before, true, true);
-    return fallback ? [fallback] : [];
+    return [buildValuePatchCandidate(path, after, before, true, true)];
   }
 
   const candidates: PatchDraftCandidate[] = [];
@@ -668,11 +688,6 @@ const buildArrayPatchCandidates = (
       coversDescendants: false,
       tailSpliceStartIndex: after.length,
     });
-  }
-
-  if (candidates.length === 0) {
-    const fallback = buildValuePatchCandidate(path, after, before, true, true);
-    return fallback ? [fallback] : [];
   }
 
   return candidates;
@@ -765,25 +780,6 @@ const isPrefixPath = (
   path: readonly string[],
 ): boolean => prefix.length <= path.length && pathsOverlap(prefix, path);
 
-const isSubsumedByTailSplice = (
-  spliceCandidate: PatchDraftCandidate,
-  candidatePath: readonly string[],
-): boolean => {
-  if (spliceCandidate.tailSpliceStartIndex === undefined) {
-    return false;
-  }
-  if (
-    !isPrefixPath(spliceCandidate.path, candidatePath) ||
-    candidatePath.length <= spliceCandidate.path.length
-  ) {
-    return false;
-  }
-  const childSegment = candidatePath[spliceCandidate.path.length];
-  return childSegment !== undefined &&
-    isArrayIndexPropertyName(childSegment) &&
-    Number(childSegment) >= spliceCandidate.tailSpliceStartIndex;
-};
-
 /**
  * The ops a document's commit sends, chosen from its patch candidates. A
  * covering candidate is dropped when a tail splice subsumes it, or when a
@@ -805,26 +801,30 @@ export const selectPatchOps = (
   nonCoverCandidates: readonly PatchDraftCandidate[],
   suppress: readonly OpSuppression[],
 ): PatchOp[] => {
-  const tailSplicesByPointer = new Map<string, PatchDraftCandidate[]>();
-  for (const candidate of nonCoverCandidates) {
-    if (candidate.tailSpliceStartIndex === undefined) continue;
-    const pointer = encodePointer(candidate.path);
-    const splices = tailSplicesByPointer.get(pointer);
-    if (splices === undefined) {
-      tailSplicesByPointer.set(pointer, [candidate]);
+  // The first index each tail splice touches, by the pointer of its array.
+  const tailSpliceStartsByPointer = new Map<string, number[]>();
+  for (const { path, tailSpliceStartIndex } of nonCoverCandidates) {
+    if (tailSpliceStartIndex === undefined) continue;
+    const pointer = encodePointer(path);
+    const starts = tailSpliceStartsByPointer.get(pointer);
+    if (starts === undefined) {
+      tailSpliceStartsByPointer.set(pointer, [tailSpliceStartIndex]);
     } else {
-      splices.push(candidate);
+      starts.push(tailSpliceStartIndex);
     }
   }
-  // A tail splice subsumes only what sits strictly beneath it, so a
-  // candidate's own pointer, the last of its prefixes, is not looked up.
+  // A tail splice subsumes only what sits strictly beneath it, at an element
+  // index at or past its start, so a candidate's own pointer, the last of its
+  // prefixes, is not looked up.
   const isSubsumedByAnyTailSplice = (
     candidatePath: readonly string[],
   ): boolean =>
-    prefixPointers(candidatePath).slice(0, -1).some((pointer) =>
-      tailSplicesByPointer.get(pointer)?.some((spliceCandidate) =>
-        isSubsumedByTailSplice(spliceCandidate, candidatePath)
-      ) ?? false
+    prefixPointers(candidatePath).slice(0, -1).some((pointer, length) =>
+      tailSpliceStartsByPointer.get(pointer)?.some((start) => {
+        const childSegment = candidatePath[length]!;
+        return isArrayIndexPropertyName(childSegment) &&
+          Number(childSegment) >= start;
+      }) ?? false
     );
 
   const retainedCoverCandidates = fullCoverCandidates
@@ -1202,13 +1202,14 @@ export class V2StorageTransaction implements IStorageTransaction {
   #writtenSpaces: MemorySpace[] = [];
 
   #readOnlySource?: string;
-  #lastDocument?: {
-    branch: SpaceBranch;
-    id: URI;
-    type: MediaType;
-    scope: CellScope;
-    doc: DocumentEntry;
-  };
+  #lastDocument?: RecentDocument;
+  #previousDocument?: RecentDocument;
+
+  /**
+   * Where `write()` and `writeBatch()` report each write that arrives without
+   * the write chokepoint's mark: every sink `reportUnmarkedWrites()` added.
+   */
+  #unmarkedWriteSinks: ((address: IMemorySpaceAddress) => void)[] = [];
 
   /**
    * Complete the transaction, keeping its result and releasing the state that
@@ -1242,6 +1243,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     this.#writeAttemptLog.length = 0;
     this.#reactivityLogCache = undefined;
     this.#lastDocument = undefined;
+    this.#previousDocument = undefined;
   }
 
   readonly #storage: IStorageManager;
@@ -1443,6 +1445,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     delta: MergeableOpDelta,
   ): void {
     this.#assertWritable("recordMergeableOp()");
+    // An intent stands in for a diff at its path, so one at a reserved
+    // sibling would change it with no write to refuse. The extended
+    // transaction records intents only on the value surface.
+    if (isReservedSibling(address.path[0] ?? "")) {
+      throw new Error(
+        debugStr`${address.id}: refusing a mergeable op at $quote${address.path}, which is runtime state rather than user data.`,
+      );
+    }
     const ready = this.#editable();
     if (ready.error) throw ready.error;
     if (isNoopMergeableDelta(delta)) {
@@ -1637,6 +1647,7 @@ export class V2StorageTransaction implements IStorageTransaction {
       batches: [recorded],
       expected: next,
       submissionId: crypto.randomUUID(),
+      recordedAt: this.#activityClock,
     });
     return next;
   }
@@ -1835,6 +1846,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     const applyOps = this.#textChangesAsWholeDocuments
       ? []
       : this.#textChangeOperations(space);
+    if (applyOps.length > 0) {
+      this.#refuseAnchorsWrittenAfterTheirEdits(space, operations);
+    }
     return {
       operations,
       ...(nativePreconditions.length
@@ -1843,6 +1857,57 @@ export class V2StorageTransaction implements IStorageTransaction {
       ...(sqliteOps?.length ? { sqliteOps: [...sqliteOps] } : {}),
       ...(applyOps.length ? { applyOps } : {}),
     };
+  }
+
+  /**
+   * Helper for `getNativeCommit()`, which throws when `operations` write the
+   * anchors document of a field this transaction edits in `space`, and the
+   * transaction wrote the document's value after recording the edit. The
+   * runtime's own writes beside the value, such as the confidentiality
+   * `prepareCfc()` records at `["cfc"]`, state no offsets. The store maps
+   * a field's anchors through each edit that follows their write in the
+   * commit, and a commit hands it every document write ahead of every edit,
+   * so anchors written against the edited text would be moved through the
+   * same edit again. Anchors written before the edit are stated against the
+   * text it applies to, and moving them through it is right; deleting the
+   * document maps nothing.
+   */
+  #refuseAnchorsWrittenAfterTheirEdits(
+    space: MemorySpace,
+    operations: readonly NativeStorageCommitOperation[],
+  ): void {
+    // TODO(ubik2): Honor the order instead, sending such a write after the
+    // edit, once a transaction's reads of a field's anchors move them through
+    // the edits it has recorded on the field.
+    const anchorsWritten = new Set(
+      operations
+        .filter((operation) => operation.op !== "delete")
+        .map(({ id, scope }) => `${normalizeCellScope(scope)} ${id}`),
+    );
+    for (const docKey of this.#textChanges.get(space)?.keys() ?? []) {
+      const { id, scope } = this.#parseDocKey(docKey);
+      for (const intent of this.#pendingTextChanges(space, docKey) ?? []) {
+        const path = toValuePath(intent.path.slice(1));
+        const anchors = operationAnchorsDocId({ id, scope, path });
+        if (!anchorsWritten.has(`${normalizeCellScope(scope)} ${anchors}`)) {
+          continue;
+        }
+        const writtenAfter = this.#writeAttemptLog.some((write) =>
+          write.space === space && write.id === anchors &&
+          write.scope === normalizeCellScope(scope) &&
+          (write.path.length === 0 || write.path[0] === "value") &&
+          write.journalIndex >= intent.recordedAt
+        );
+        if (writtenAfter) {
+          throw new Error(
+            debugStr`the transaction wrote the anchors of the field at ` +
+              debugStr`$quote${path} of $quote${id} after editing it; write ` +
+              "them before the edit, against the text it applies to, or in " +
+              "a commit of their own",
+          );
+        }
+      }
+    }
   }
 
   /**
@@ -2019,7 +2084,8 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const branch = this.#branch(address.space);
     const { doc } = this.#document(branch, address);
-    if (readStatsActive && !hasInlineCellScheme(address.id)) {
+    const inline = hasInlineCellScheme(address.id);
+    if (readStatsActive && !inline) {
       recordDocumentRead(this, doc);
     }
     // The one place a read chooses which root it is reading. A materialized
@@ -2040,20 +2106,28 @@ export class V2StorageTransaction implements IStorageTransaction {
     // `set()` call only — CFC boundary-commit reads run after the tx is unmarked
     // and keep their preconditions.
     const skipCommitPrecondition = isUiInputBlindWriteTx(this);
-    const { space: _, ...memoryAddress } = address;
 
-    if (!hasInlineCellScheme(address.id)) {
-      const readActivity = {
-        space: address.space,
-        scope: normalizeCellScope(address.scope),
-        id: address.id,
-        path: toDocumentPath(address.path),
-        meta: skipCommitPrecondition
-          ? { ...readMeta, ...ignoreReadForCommit }
-          : readMeta,
-        ...(options?.nonRecursive === true ? { nonRecursive: true } : {}),
-        journalIndex: this.#activityClock++,
-      };
+    if (!inline) {
+      const space = address.space;
+      const scope = normalizeCellScope(address.scope);
+      const id = address.id;
+      const path = toDocumentPath(address.path);
+      const meta = skipCommitPrecondition
+        ? { ...readMeta, ...ignoreReadForCommit }
+        : readMeta;
+      // Every read builds this record, so each arm is a whole literal: a
+      // spread in an object literal copies its source member by member.
+      const readActivity: IReadActivity = options?.nonRecursive === true
+        ? {
+          space,
+          scope,
+          id,
+          path,
+          meta,
+          nonRecursive: true,
+          journalIndex: this.#activityClock++,
+        }
+        : { space, scope, id, path, meta, journalIndex: this.#activityClock++ };
       // A sealed record is frozen with metadata that has the scheduler
       // ignore the read and marks no attempted write, so the log never lists
       // it and stands across it. Any other record's metadata can be replaced
@@ -2063,13 +2137,14 @@ export class V2StorageTransaction implements IStorageTransaction {
       if (!sealed) this.#invalidateReactivityLog();
     }
     if (options?.trackReadWithoutLoad === true) {
-      if (!hasInlineCellScheme(address.id) && !skipCommitPrecondition) {
+      if (!inline && !skipCommitPrecondition) {
         doc.validated = true;
       }
       return { ok: { address, value: undefined } };
     }
 
-    if (usesLocalReads(this) && !hasInlineCellScheme(address.id)) {
+    const { space: _, ...memoryAddress } = address;
+    if (usesLocalReads(this) && !inline) {
       // `patchDetails` is keyed by each write's pointer.
       const patchDetails = doc.patchDetails;
       const written = this.#readEpoch === undefined &&
@@ -2093,7 +2168,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     if (isMutableTransactionReadAllowed(readMeta)) {
       if (
-        !hasInlineCellScheme(address.id) &&
+        !inline &&
         !doc.validated &&
         !skipCommitPrecondition
       ) {
@@ -2134,7 +2209,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (
       !skipCommitPrecondition &&
       isInternalVerifierRead(readMeta) &&
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       // Content-addressed documents are EXEMPT from durable serving:
       // their content is identical on every layer (the replica refuses
       // a cid: doc whose content does not hash to its id), so the
@@ -2205,7 +2280,7 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const result = readAttestation(current, memoryAddress);
     if (
-      !hasInlineCellScheme(address.id) &&
+      !inline &&
       !doc.validated &&
       !skipCommitPrecondition
     ) {
@@ -2368,6 +2443,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     if (ready.error) {
       return { error: ready.error };
     }
+    if (!passedWriteChokepoint(options)) {
+      this.#refuseUnmarkedMemberChange(
+        ready.ok,
+        address,
+        options?.delete === true ? undefined : value,
+      );
+      for (const sink of this.#unmarkedWriteSinks) sink(address);
+    }
     return this.#writeWithinBranch(
       ready.ok,
       address.space,
@@ -2377,9 +2460,16 @@ export class V2StorageTransaction implements IStorageTransaction {
     );
   }
 
+  /** @inheritDoc */
+  reportUnmarkedWrites(sink: (address: IMemorySpaceAddress) => void): void {
+    this.#unmarkedWriteSinks.push(sink);
+  }
+
   writeBatch(
     writes: Iterable<ITransactionWriteRequest>,
+    options?: IWriteOptions,
   ): Result<Unit, WriterError | WriteError> {
+    const marked = passedWriteChokepoint(options);
     let run: ITransactionWriteRequest[] = [];
     let runKey: string | undefined;
 
@@ -2391,6 +2481,22 @@ export class V2StorageTransaction implements IStorageTransaction {
       const ready = this.#prepareWriteSpace(address.space);
       if (ready.error) {
         return { error: ready.error };
+      }
+      // A batch request carries no options, so it carries no mark, and the
+      // whole run is checked before any of it is applied. The batch's own
+      // mark says only that the chokepoint saw each write, which is what an
+      // unmarked batch's writes are reported for lacking.
+      for (const write of run) {
+        this.#refuseUnmarkedMemberChange(
+          ready.ok,
+          write.address,
+          write.delete === true ? undefined : write.value,
+        );
+      }
+      if (!marked) {
+        for (const sink of this.#unmarkedWriteSinks) {
+          for (const write of run) sink(write.address);
+        }
       }
       const result = this.#writeBatchRun(address.space, ready.ok, run);
       run = [];
@@ -2421,6 +2527,52 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     return flushRun();
+  }
+
+  /**
+   * Throws when a write at `address` carrying `value` changes a member of the
+   * document the runtime owns: a meta field, as `metaFieldChanges()` defines a
+   * change, or a reserved sibling, as `reservedSiblingChanges()` does. A
+   * delete carries `undefined`, whatever value it names, since applying it
+   * stores nothing there: a root delete erases every stored member.
+   *
+   * The extended transaction's write chokepoint is where such a write is
+   * judged. It refuses a meta write the runtime didn't authorize, and records
+   * a reserved-sibling write from outside the runtime's privileged
+   * persistence scope for the commit boundary to refuse, and it marks every
+   * write it forwards here. A write without that mark came from whatever
+   * holds this transaction directly, skipping the chokepoint, so it is
+   * refused whatever the CFC enforcement mode. A root write is decided
+   * against the document as this transaction holds it in `branch`, read from
+   * the entry the write itself lands in, so deciding records no read.
+   */
+  #refuseUnmarkedMemberChange(
+    branch: SpaceBranch,
+    address: IMemorySpaceAddress,
+    value: FabricValue | undefined,
+  ): void {
+    const storedRoot = (): unknown => {
+      const { doc } = this.#document(branch, address);
+      return (doc.current ?? doc.initial).value;
+    };
+    const metaChanges = metaFieldChanges(address.path, value, storedRoot);
+    if (metaChanges.length > 0) {
+      throw new Error(
+        debugStr`${address.id}: refusing a write that changes meta fields of the document (${
+          metaChanges.map((field) => `\`${field}\``).join(", ")
+        }). They name the program a piece runs and the cells it is wired to, and the runtime writes them through \`setMetaRaw()\` on an extended transaction.`,
+      );
+    }
+    const changes = reservedSiblingChanges(address.path, value, (sibling) => {
+      const root = storedRoot();
+      return isObjectNotArray(root) ? root[sibling] : undefined;
+    });
+    if (changes.length === 0) return;
+    throw new Error(
+      debugStr`${address.id}: refusing a write that changes reserved members of the document (${
+        changes.map(([sibling]) => `\`${sibling}\``).join(", ")
+      }). They hold runtime state, which the runtime writes through an extended transaction's write chokepoint.`,
+    );
   }
 
   #writeWithinSpace(
@@ -2497,6 +2649,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     const isDelete = options?.delete === true;
 
     const { doc: readDoc } = this.#document(branch, address);
+    this.#dependOnUnseenWriteTarget(space, address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     const current = doc.current;
@@ -2586,6 +2739,45 @@ export class V2StorageTransaction implements IStorageTransaction {
     return { ok: collapsedNext };
   }
 
+  /**
+   * Makes a served derivation's write to a scoped instance its replica has
+   * never seen depend on that instance's arrival, as a read of it would.
+   *
+   * The replica holds an instance a served run asks for only once the run
+   * names it (`#loadRoot()` starts the load), so a run that writes such an
+   * instance without reading it writes over an absent view, and its commit
+   * is a whole-document `set`. Where the store already holds the instance,
+   * the wave drops that write (serving-loop.md §3d), and with no read of the
+   * instance nothing re-runs the derivation when the instance lands. The
+   * read here is that dependency: it is at the document root and not
+   * recursive, so the instance's arrival wakes the run and the run's own
+   * later writes to the instance, a child path, do not.
+   */
+  #dependOnUnseenWriteTarget(
+    space: MemorySpace,
+    address: IMemoryAddress,
+    doc: DocumentEntry,
+  ): void {
+    if (
+      doc.initial.value !== undefined ||
+      this.#scopeKeyIdentity === undefined ||
+      normalizeCellScope(address.scope) === "space" ||
+      usesLocalReads(this) ||
+      !isServedDerivationTx(this)
+    ) {
+      return;
+    }
+    // Every caller is a write that found the transaction editable, which is
+    // all a read that loads nothing can be refused for.
+    this.read({
+      space,
+      id: address.id,
+      ...(address.type === undefined ? {} : { type: address.type }),
+      ...(address.scope === undefined ? {} : { scope: address.scope }),
+      path: [],
+    }, { trackReadWithoutLoad: true, nonRecursive: true });
+  }
+
   /** Elision over a pending document retains its commit basis. */
   #retainPendingWriteElision(
     branch: SpaceBranch,
@@ -2644,6 +2836,7 @@ export class V2StorageTransaction implements IStorageTransaction {
     }
 
     const { doc: readDoc } = this.#document(branch, writes[0]!.address);
+    this.#dependOnUnseenWriteTarget(space, writes[0]!.address, readDoc);
     const doc = ensureWritableDocument(readDoc);
     this.#preserveForReaders(doc);
     let nextRoot = doc.current.value;
@@ -3053,7 +3246,17 @@ export class V2StorageTransaction implements IStorageTransaction {
       return { error: validation.error };
     }
 
-    const promise = this.#runSplitCommits(commits, options);
+    // A later space's writes reach its replica only once the server has
+    // answered for the spaces before it, and until then a read of that space
+    // does not see them. The storage manager tracks the commit until the
+    // last space's writes are in its replica, for a reader that must see all
+    // of them: the event that runs next (scheduler-v2 §7.5).
+    const applied = Promise.withResolvers<void>();
+    if (commits.length > 1) {
+      this.#storage.trackMultiSpaceCommitApplying?.(applied.promise);
+    }
+    const promise = this.#runSplitCommits(commits, applied.resolve, options);
+    void promise.then(() => applied.resolve(), () => applied.resolve());
     this.#state = { status: "pending", promise };
     try {
       const result = await promise;
@@ -3110,8 +3313,14 @@ export class V2StorageTransaction implements IStorageTransaction {
     return ordered;
   }
 
+  /**
+   * Commits each of `commits` to its space in turn, stopping at the first
+   * failure, and calls `handedOver` once the last one's writes are in its
+   * replica.
+   */
   async #runSplitCommits(
     commits: { space: MemorySpace; native: NativeStorageCommit }[],
+    handedOver: () => void,
     options?: NativeCommitOptions,
   ): Promise<Result<Unit, StorageTransactionRejected>> {
     for (let i = 0; i < commits.length; i++) {
@@ -3140,7 +3349,10 @@ export class V2StorageTransaction implements IStorageTransaction {
       // space and everything after it are left uncommitted.
       try {
         endLocalReadValidationStretch();
-        const result = await commitNative(native, this, options);
+        // The replica takes the writes before the call first yields.
+        const committed = commitNative(native, this, options);
+        if (i === commits.length - 1) handedOver();
+        const result = await committed;
         if (result.error) {
           multiSpaceCommitLogger.error(
             "multi-space-commit-failed",
@@ -3579,13 +3791,23 @@ export class V2StorageTransaction implements IStorageTransaction {
     address: Pick<IMemoryAddress, "id" | "type" | "scope">,
   ): { doc: DocumentEntry } {
     const scope = normalizeCellScope(address.scope);
+    const last = this.#lastDocument;
     if (
-      this.#lastDocument?.branch === branch &&
-      this.#lastDocument.id === address.id &&
-      this.#lastDocument.type === (address.type ?? DOCUMENT_MIME) &&
-      this.#lastDocument.scope === scope
+      last?.branch === branch && last.id === address.id && last.scope === scope
     ) {
-      return { doc: this.#lastDocument.doc };
+      return { doc: last.doc };
+    }
+    // A read through links alternates between the document holding a link and
+    // the one it reaches, so the document answered before the last one is
+    // kept as well.
+    const previous = this.#previousDocument;
+    if (
+      previous?.branch === branch && previous.id === address.id &&
+      previous.scope === scope
+    ) {
+      this.#previousDocument = last;
+      this.#lastDocument = previous;
+      return { doc: previous.doc };
     }
 
     const key = this.#docKey(address);
@@ -3598,13 +3820,8 @@ export class V2StorageTransaction implements IStorageTransaction {
       };
       branch.docs.set(key, doc);
     }
-    this.#lastDocument = {
-      branch,
-      id: address.id,
-      type: address.type ?? DOCUMENT_MIME,
-      scope,
-      doc,
-    };
+    this.#previousDocument = last;
+    this.#lastDocument = { branch, id: address.id, scope, doc };
     return { doc };
   }
 
@@ -3850,7 +4067,9 @@ export class V2StorageTransaction implements IStorageTransaction {
    * The commit-time claim check over every space this transaction touched:
    * each snapshotted document is re-read from its replica, and a value that
    * differs from the snapshot rejects the transaction before its read set
-   * is built (03-commit-model.md §3.3.4).
+   * is built (03-commit-model.md §3.3.4), except a stream sidecar that took
+   * only tail appends this transaction's use of it commutes with
+   * (`#survivesTailAppends()`).
    */
   #validate(): Result<Unit, IStorageTransactionInconsistent> {
     for (const [space, branch] of this.#branches) {
@@ -3886,11 +4105,52 @@ export class V2StorageTransaction implements IStorageTransaction {
         this.#scopeKeyIdentity,
         isDurableReadTx(this),
       );
-      if (result.error) {
+      if (result.error && !this.#survivesTailAppends(space, key, doc, branch)) {
         return { error: result.error };
       }
     }
     return { ok: {} };
+  }
+
+  /**
+   * Helper for `#validateBranch()`, which decides whether `doc`, a document
+   * whose claim failed, is a stream sidecar (`of:stream-events:`) that
+   * changed only by appends this transaction's use of it commutes with
+   * (`commutesWithTailAppends()`). A multi-space transaction meets this most
+   * often: its later spaces are checked again after the earlier ones close,
+   * and a served `.inSpace()` create closes the new space first and its home
+   * space, with the create stream's sidecar, after.
+   */
+  #survivesTailAppends(
+    space: MemorySpace,
+    key: string,
+    doc: ReadDocumentEntry | WritableDocumentEntry,
+    branch: SpaceBranch,
+  ): boolean {
+    const { id, scope } = this.#parseDocKey(key);
+    if (!id.startsWith(STREAM_ENTRIES_DOC_PREFIX)) return false;
+    // A whole-document write carries the log as the transaction held it, so
+    // it would drop the appended entries.
+    if (this.#emitsWholeDocuments) return false;
+    // A mergeable op resolves against whatever the store holds, so it does
+    // not stay inside the entries the transaction held.
+    if ("mergeableOps" in doc && (doc.mergeableOps?.size ?? 0) > 0) {
+      return false;
+    }
+    const { actual } = claimedValue(
+      doc.initial.address,
+      branch.replica,
+      this.#scopeKeyIdentity,
+      isDurableReadTx(this),
+    );
+    const reads = this.#readActivities.filter((read) =>
+      read.space === space && read.id === id &&
+      normalizeCellScope(read.scope) === scope
+    ).map((read) => read.path);
+    const writes = [...doc.writeDetails?.values() ?? []].map((detail) =>
+      detail.address.path
+    );
+    return commutesWithTailAppends(doc.initial.value, actual, reads, writes);
   }
 
   #docKey(
@@ -3902,10 +4162,8 @@ export class V2StorageTransaction implements IStorageTransaction {
   #parseDocKey(
     key: string,
   ): { id: URI; type: MediaType; scope: CellScope } {
+    // `#docKey()` made the key, so the separator is there.
     const separator = key.indexOf("\0");
-    if (separator === -1) {
-      return { id: key as URI, type: DOCUMENT_MIME, scope: "space" };
-    }
     return {
       scope: normalizeCellScope(key.slice(0, separator) as CellScope),
       id: key.slice(separator + 1) as URI,
@@ -4001,16 +4259,15 @@ export class V2StorageTransaction implements IStorageTransaction {
 
     const fullCoverCandidates: PatchDraftCandidate[] = [];
     for (const detail of patchDetails.values()) {
-      const candidate = buildValuePatchCandidate(
-        detail.path,
-        detail.value,
-        detail.previousValue,
-        detail.valuePresent,
-        detail.previousPresent,
+      fullCoverCandidates.push(
+        buildValuePatchCandidate(
+          detail.path,
+          detail.value,
+          detail.previousValue,
+          detail.valuePresent,
+          detail.previousPresent,
+        ),
       );
-      if (candidate) {
-        fullCoverCandidates.push(candidate);
-      }
     }
 
     const nonCoverCandidates: PatchDraftCandidate[] = [];

@@ -122,12 +122,12 @@ Useful references:
 
 ### Feedback And Overlays
 
-| Element             | Element             | Element         | Element     |
-| ------------------- | ------------------- | --------------- | ----------- |
-| `cf-alert`          | `cf-empty-state`    | `cf-fab`        | `cf-loader` |
-| `cf-modal`          | `cf-progress`       | `cf-skeleton`   | `cf-toast`  |
-| `cf-share-snapshot` | `cf-custody-seal`   | `cf-hover-card` |             |
-| `cf-toast-provider` | `cf-custody-answer` |                 |             |
+| Element             | Element             | Element         | Element          |
+| ------------------- | ------------------- | --------------- | ---------------- |
+| `cf-alert`          | `cf-empty-state`    | `cf-fab`        | `cf-loader`      |
+| `cf-modal`          | `cf-progress`       | `cf-skeleton`   | `cf-toast`       |
+| `cf-share-snapshot` | `cf-custody-seal`   | `cf-hover-card` | `cf-suggestions` |
+| `cf-toast-provider` | `cf-custody-answer` |                 |                  |
 
 ### Charts And Maps
 
@@ -162,11 +162,11 @@ Useful references:
 
 ### Runtime And Interaction
 
-| Element        | Element           | Element          | Element         |
-| -------------- | ----------------- | ---------------- | --------------- |
-| `cf-autostart` | `cf-cell-link`    | `cf-drag-source` | `cf-draggable`  |
-| `cf-drop-zone` | `cf-keybind`      | `cf-piece`       | `cf-piece-menu` |
-| `cf-render`    | `cf-space-create` | `cf-toolbar`     |                 |
+| Element        | Element           | Element          | Element              |
+| -------------- | ----------------- | ---------------- | -------------------- |
+| `cf-autostart` | `cf-cell-link`    | `cf-drag-source` | `cf-draggable`       |
+| `cf-drop-zone` | `cf-keybind`      | `cf-piece`       | `cf-piece-menu`      |
+| `cf-render`    | `cf-space-create` | `cf-toolbar`     | `cf-pattern-install` |
 
 ### Retired
 
@@ -313,8 +313,8 @@ document.querySelector("cf-button").addEventListener("cf-click", (e) => {
 });
 
 document.querySelector("cf-form").addEventListener("cf-submit", (e) => {
-  e.preventDefault();
-  console.log("Form data:", e.detail.formData);
+  e.preventDefault(); // stays on the page rather than posting to `action`
+  console.log("Form submitted; its fields' cells hold the values");
 });
 ```
 

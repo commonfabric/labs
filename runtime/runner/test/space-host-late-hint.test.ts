@@ -5,6 +5,7 @@ import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -45,6 +46,7 @@ class LoopbackSessionFactory implements SessionFactory {
     _signal?: AbortSignal,
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#serverForSpace(space)),
     });
     const session = await client.mount(

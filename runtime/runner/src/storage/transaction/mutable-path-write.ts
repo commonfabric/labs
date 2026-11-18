@@ -189,15 +189,8 @@ const isContainerValue = (
   isFabricPlainContainer(value);
 
 /** Names the kind of a root a write cannot descend into, for its error. */
-const getValueTypeName = (value: FabricValue | undefined): string => {
-  if (value === null) {
-    return "null";
-  }
-  if (Array.isArray(value)) {
-    return "array";
-  }
-  return typeof value;
-};
+const getValueTypeName = (value: FabricValue | undefined): string =>
+  value === null ? "null" : typeof value;
 
 /**
  * Indicates whether the root a write creates is an array, given `firstKey`,

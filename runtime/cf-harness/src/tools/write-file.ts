@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessToolDefinition } from "./types.ts";
@@ -7,7 +8,6 @@ import {
   classifyPathResolutionError,
   createStructuredFileToolErrorOutput,
   detailFromShellFailure,
-  detailFromUnknownError,
   type StructuredFileToolErrorOutput,
   structuredFileToolErrorOutputSchema,
 } from "./file-errors.ts";
@@ -55,7 +55,11 @@ export const writeFileToolDescriptor: HarnessToolDescriptor = {
       path: { type: "string" },
       content: { type: "string" },
       mode: { type: "string", enum: [...WRITE_FILE_MODES] },
-      createParents: { type: "boolean" },
+      createParents: {
+        type: "boolean",
+        description:
+          "Create missing parent directories before writing. Set true when saving a new file whose parent directory may not exist.",
+      },
     },
     required: ["path", "content"],
     additionalProperties: false,
@@ -88,7 +92,7 @@ export const writeFileTool: HarnessToolDefinition<
       return createStructuredFileToolErrorOutput(context, "write_file", {
         path: input.path,
         code: classifyPathResolutionError(error),
-        detail: detailFromUnknownError(error),
+        detail: describeFailure(error),
       });
     }
     if (await isResolvedPathInsideArtifactRoot(context, resolvedPath)) {

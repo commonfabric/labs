@@ -12,6 +12,7 @@ import type {
   PatternIndexSearchResponse,
 } from "@commonfabric/pattern-index/client";
 import { sha256 } from "@commonfabric/content-hash";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   computeEntryIdentity,
   ensureCompilerStack,
@@ -47,7 +48,6 @@ import {
 } from "../contracts/docs-corpus.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
-import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
 import { orientationGuidance } from "../orientation.ts";
 import { DEFAULT_HARNESS_RUN_DEPTH } from "../contracts/run-depth.ts";
@@ -58,7 +58,7 @@ import type {
   HarnessModelClient,
   HarnessModelUsage,
 } from "../model/client.ts";
-import { patternIndexDependencies } from "../pattern-index/composition.ts";
+import { patternIndexDependencies } from "@commonfabric/pattern-index/deploy";
 import type { DescribeHandleResearchResult } from "../tools/describe-handle.ts";
 import {
   patternIndexDeclaredType,
@@ -927,7 +927,7 @@ const inspectPattern = async (
         : {}),
     });
   } catch (error) {
-    const message = errorMessage(error);
+    const message = describeFailure(error);
     if (!message.includes("is not supported by the light identity path")) {
       throw error;
     }
@@ -1114,7 +1114,7 @@ const finalAnswerComplaint = (
     return {
       turnName: "JSON repair",
       problem: "Your final answer was not valid JSON.",
-      report: `The parser reported: ${errorMessage(error)}`,
+      report: `The parser reported: ${describeFailure(error)}`,
     };
   }
   if (purpose === undefined) return undefined;
@@ -1129,7 +1129,7 @@ const finalAnswerComplaint = (
       turnName: "schema repair",
       problem:
         "Your final answer was JSON but not an instance of the schema: give the values the schema describes, not the schema itself.",
-      report: `The validator reported: ${errorMessage(error)}`,
+      report: `The validator reported: ${describeFailure(error)}`,
     };
   }
 };
@@ -1568,7 +1568,7 @@ async (request) => {
             }
             throw error;
           }
-          output = { error: errorMessage(error) };
+          output = { error: describeFailure(error) };
         }
         transcript.push(toolResultMessage(call.id, call.function.name, output));
       }
@@ -1581,15 +1581,15 @@ async (request) => {
     /**
      * Spends one model turn with the private tools withheld on `instruction`,
      * and returns the reply's text, or `undefined` when the model called a
-     * tool instead of answering.
+     * tool instead of answering. It checks the signal as it returns, not on
+     * entry: the turn loop checks it just before the first call, the first
+     * call's own check comes just before the second, and the model client is
+     * handed the signal as well.
      */
     const repairTurn = async (
       turnName: string,
       instruction: readonly string[],
     ): Promise<string | undefined> => {
-      if (runWasAborted(request.signal)) {
-        throw abortError(request.signal);
-      }
       transcript.push({ role: "user", content: instruction.join("\n") });
       const repaired = await options.modelClient.complete({
         model,
@@ -1678,6 +1678,6 @@ async (request) => {
     return { kit, record: record() };
   } catch (error) {
     if (error instanceof HarnessResearchError) throw error;
-    throw new HarnessResearchError(errorMessage(error), record());
+    throw new HarnessResearchError(describeFailure(error), record());
   }
 };

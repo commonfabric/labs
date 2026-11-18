@@ -17,6 +17,7 @@ import {
   type SpaceSession,
 } from "@commonfabric/memory/v2/client";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -56,7 +57,10 @@ describe("storage-view-owner", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
     });
-    writer = await connect({ transport: loopback(server) });
+    writer = await connect({
+      instanceNames: namesInstancesByDefault(),
+      transport: loopback(server),
+    });
     writerSession = await writer.mount(
       space,
       {},

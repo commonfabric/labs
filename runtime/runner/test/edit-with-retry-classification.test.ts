@@ -26,6 +26,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -309,6 +310,7 @@ class CountingLoopbackSessionFactory implements SessionFactory {
     requested: MemoryV2Client.MountOptions = {},
   ) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -355,6 +357,7 @@ Deno.test("a server ProtocolError reaches editWithRetry by name, once", async ()
   const bob = await Identity.fromPassphrase("retry-classification bob");
 
   const server = new MemoryV2Server.Server({
+    namesInstances: namesInstancesByDefault,
     store: new URL("memory://retry-classification"),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
@@ -474,6 +477,7 @@ class WireRefusalSessionFactory implements SessionFactory {
   ) {
     this.sessions++;
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(
@@ -509,6 +513,7 @@ Deno.test("a SessionError commits once and does not remount the session", async 
   const user = await Identity.fromPassphrase("session-error user");
 
   const server = new MemoryV2Server.Server({
+    namesInstances: namesInstancesByDefault,
     store: new URL("memory://session-error-retry"),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },
@@ -566,6 +571,7 @@ Deno.test("a MessageTooLargeError reaches editWithRetry by name, once", async ()
   const user = await Identity.fromPassphrase("message-too-large user");
 
   const server = new MemoryV2Server.Server({
+    namesInstances: namesInstancesByDefault,
     store: new URL("memory://message-too-large-retry"),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
     sessionOpenAuth: { audience: TEST_AUDIENCE },

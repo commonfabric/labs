@@ -19,9 +19,9 @@ import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { txToReactivityLog } from "../src/scheduler.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
-import {
-  type IExtendedStorageTransaction,
-  type IStorageTransaction,
+import type {
+  IExtendedStorageTransaction,
+  IStorageTransaction,
 } from "../src/storage/interface.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";

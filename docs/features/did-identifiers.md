@@ -46,13 +46,15 @@ Import the DID vocabulary from the `/did` entry point.
 `example.com:8080`, because everything after the method's colon is the
 identifier. A DID with no second colon parses to an empty identifier.
 
-A pattern is the exception, and it is a hard one. A pattern compiles against
-the `commonfabric` module and nothing else, so it cannot reach this module at
-all. A pattern that has to inspect a DID states the shape it accepts in its own
-source, and says which shape that is and why, the way
+A pattern is the exception. A pattern compiles against the `commonfabric`
+module and nothing else, so it cannot import this module. The `commonfabric`
+module binds two of its functions, `isWellFormedDID` and `parseDID`, so a
+pattern checks a DID's syntax and takes a DID apart with the same functions the
+runtime uses. A pattern that needs some other shape states the shape it accepts
+in its own source, and says which shape that is and why, the way
 `patterns/system/private-inbox/private-inbox.tsx` states the DID shape an
-offer's `space` and `from` must take. The `DID` type is available to a pattern,
-since `base/api` declares a standalone copy of it.
+offer's `space` and `from` must take. The `DID` and `ParsedDID` types are
+available to a pattern, since `base/api` declares standalone copies of them.
 
 ## Asking a narrower question
 

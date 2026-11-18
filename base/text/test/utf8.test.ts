@@ -12,6 +12,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  decodeDataFile,
   utf8ByteLength,
   utf8Compare,
   utf8SortedKeysOf,
@@ -36,6 +37,14 @@ describe("utf8Compare()", () => {
 
   it("returns a positive number if `second` is a prefix of `first`", () => {
     expect(utf8Compare("abcd", "abc")).toBeGreaterThan(0);
+  });
+
+  it("orders long strings without surrogates by their first difference, in either direction", () => {
+    const base = "abcdefghijklmnopqrstuvwxyz";
+
+    expect(utf8Compare(`${base}a`, `${base}b`)).toBeLessThan(0);
+    expect(utf8Compare(`${base}b`, `${base}a`)).toBeGreaterThan(0);
+    expect(utf8Compare(base, `${base}a`)).toBeLessThan(0);
   });
 
   describe("strings with astral-plane characters", () => {
@@ -137,15 +146,21 @@ describe("utf8SortedKeysOf()", () => {
     expect(utf8SortedKeysOf(obj)).toEqual(["￿", "\u{10000}"]);
   });
 
-  it("returns a frozen value", () => {
-    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
-    const sorted = utf8SortedKeysOf(obj);
+  it("returns a frozen value when it returns that value again on later calls", () => {
+    const sorted = utf8SortedKeysOf(
+      Object.freeze({ beep: "x", bop: "y", awOOOOga: "z" }),
+    );
+    expect(sorted).toEqual(["awOOOOga", "beep", "bop"]);
     expect(Object.isFrozen(sorted)).toBe(true);
   });
 
-  it("returns a frozen value for keys that arrive already in order", () => {
-    const sorted = utf8SortedKeysOf({ awOOOOga: "z", beep: "x", bop: "y" });
-    expect(Object.isFrozen(sorted)).toBe(true);
+  it("returns a new value on each call, given an object that is not frozen", () => {
+    const obj = { beep: "x", bop: "y", awOOOOga: "z" };
+    const sorted1 = utf8SortedKeysOf(obj);
+    const sorted2 = utf8SortedKeysOf(obj);
+    expect(sorted1).toEqual(["awOOOOga", "beep", "bop"]);
+    expect(sorted2).toEqual(sorted1);
+    expect(sorted2).not.toBe(sorted1);
   });
 
   it("returns the same (`===`) value on two different calls, given the same frozen object", () => {
@@ -160,6 +175,15 @@ describe("utf8SortedKeysOf()", () => {
     const sorted1 = utf8SortedKeysOf(obj);
     const sorted2 = utf8SortedKeysOf(obj);
     expect(sorted1).toBe(sorted2);
+  });
+
+  it("returns a new value on each call, given a frozen object whose keys arrive already in order", () => {
+    const obj = Object.freeze({ alive: true, be: null, feeling: [4] });
+    const sorted1 = utf8SortedKeysOf(obj);
+    const sorted2 = utf8SortedKeysOf(obj);
+    expect(sorted1).toEqual(["alive", "be", "feeling"]);
+    expect(sorted2).toEqual(sorted1);
+    expect(sorted2).not.toBe(sorted1);
   });
 });
 
@@ -188,5 +212,21 @@ describe("utf8ByteLength()", () => {
     expect(utf8ByteLength("\ud83dx")).toBe(
       new TextEncoder().encode("\ud83dx").byteLength,
     );
+  });
+});
+
+describe("decodeDataFile()", () => {
+  it("returns the text of valid UTF-8, keeping a leading byte order mark", () => {
+    const bytes = new TextEncoder().encode("\ufeffcaf\u00e9 \u{1f369}");
+
+    expect(decodeDataFile(bytes, "menu.txt")).toBe("\ufeffcaf\u00e9 \u{1f369}");
+  });
+
+  it("throws naming the file for bytes that are not valid UTF-8", () => {
+    for (const bytes of [[0xff], [0x61, 0xc3], [0xed, 0xa0, 0x80]]) {
+      expect(() => decodeDataFile(new Uint8Array(bytes), "menu.txt")).toThrow(
+        "Data file `menu.txt` is not valid UTF-8 text.",
+      );
+    }
   });
 });

@@ -7,6 +7,7 @@ import { encodeHex } from "@std/encoding/hex";
 import { join, resolve } from "@std/path";
 
 import { sha256 } from "@commonfabric/content-hash";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const [name, directory, ...args] = Deno.args;
 if (
@@ -104,7 +105,7 @@ try {
   if (!result.success) throw new Error(`Probe exited with ${result.code}.`);
 } catch (error) {
   manifest.status = "failed";
-  manifest.error = error instanceof Error ? error.message : String(error);
+  manifest.error = describeFailure(error);
   throw error;
 } finally {
   manifest.finished = new Date().toISOString();

@@ -3,8 +3,8 @@
  * `list_commands` shows them as signatures, and `run_command` runs one or a
  * batch of them, as the actor the host configured (`loom-commands.ts`). The
  * host decides what runs. The tools read the run's catalog, held for the
- * run, and `run_command` refuses a name the catalog does not show before
- * anything is sent; the host checks the args of every call it is sent.
+ * run, for schemas and effects. The host admits each invocation and checks
+ * its arguments.
  *
  * A command's answer is Loom data, so it is measured the way the retrieval
  * tools measure a row: one row, labeled by its own `ifc` or else by the query
@@ -15,13 +15,12 @@
  */
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
-import type { JSONObject } from "@commonfabric/api";
+import type { JSONObject, JSONValue } from "@commonfabric/api";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
 } from "@commonfabric/js-values/types";
 
-import { boundCatalogForModel } from "../client-actions/command-result.ts";
 import {
   HARNESS_COMMAND_ARGS_MAX_BYTES,
   HARNESS_COMMAND_CATALOG_DETAIL_LIMIT,
@@ -45,7 +44,6 @@ import {
   type LoomCommandCatalogSource,
   type LoomCommandEntry,
   type LoomCommandInvocation,
-  nearestCommandNames,
   runLoomCommand,
 } from "../loom-commands.ts";
 import {
@@ -54,6 +52,198 @@ import {
   measureLoomRows,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
+import {
+  heldPatternInstance,
+  InvalidPatternReference,
+  patternReference,
+  type UnheldPatternInstance,
+} from "./loom-authoring.ts";
+import {
+  parseStoredPieceAddress,
+  type StoredPieceAddress,
+} from "../input-cells.ts";
+import { defineOwnEntry, swapTokensForRefs } from "../handle-table.ts";
+
+/** Commands whose reference fields name durable Loom components. */
+const COMPONENT_COMMANDS = new Set([
+  "loom.compose",
+  "loom.create-child",
+  "loom.add",
+  "loom.replace",
+  "loom.revise",
+]);
+
+/** Resolves held component identities before generic Fabric-link substitution. */
+const componentReferences = async (
+  context: HarnessToolContext,
+  value: JSONValue,
+): Promise<JSONValue> => {
+  if (Array.isArray(value)) {
+    return await Promise.all(
+      value.map((item) => componentReferences(context, item)),
+    );
+  }
+  if (!isObjectNotArray(value)) return value;
+  const result: { [key: string]: JSONValue } = {};
+  for (const [key, item] of Object.entries(value)) {
+    const resolved = (key === "ref" || key === "if_ref") &&
+        typeof item === "string" && item.startsWith("cfh:")
+      ? await patternReference(context, item)
+      : await componentReferences(context, item);
+    defineOwnEntry(result, key, resolved);
+  }
+  return result;
+};
+
+/**
+ * Most distinct pieces one answer verifies and holds; the rest are
+ * `limit`. SHORTCUT (2026-11-13): a fixed bound keeps one answer's Fabric
+ * reads bounded, as the deployed_patterns handoff does. Limit: a host answer
+ * naming more pieces holds only the first ones. The way back: hold each
+ * address lazily, verifying it when the model first describes or calls it.
+ */
+export const HELD_COMPONENT_LIMIT = 32;
+
+/** Most of one answer's piece checks in flight at once. */
+const HELD_COMPONENT_FAN_IN = 8;
+
+/** What one stored address became: the run's reference, or why not. */
+type HeldAddress =
+  | { ref: string }
+  | { unheld: UnheldPatternInstance | "limit" };
+
+/** Helper for {@link heldComponentReferences}: each stored address in `value`. */
+const storedAddressesIn = (
+  value: JSONValue,
+  found: Map<string, StoredPieceAddress>,
+): void => {
+  if (typeof value === "string") {
+    const address = parseStoredPieceAddress(value);
+    if (address !== undefined) found.set(value, address);
+  } else if (Array.isArray(value)) {
+    for (const item of value) storedAddressesIn(item, found);
+  } else if (isObjectNotArray(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      storedAddressesIn(key, found);
+      storedAddressesIn(item, found);
+    }
+  }
+};
+
+/** Helper for {@link heldComponentReferences}: `value` with each address replaced. */
+const withHeldAddresses = (
+  value: JSONValue,
+  held: ReadonlyMap<string, HeldAddress>,
+): JSONValue => {
+  if (Array.isArray(value)) {
+    return value.map((item) => {
+      const replaced = typeof item === "string" ? held.get(item) : undefined;
+      if (replaced === undefined) return withHeldAddresses(item, held);
+      return "ref" in replaced ? replaced.ref : { unheld: replaced.unheld };
+    });
+  }
+  return isObjectNotArray(value) ? withHeldMembers(value, held) : value;
+};
+
+/** Helper for {@link withHeldAddresses}: one object's members. */
+const withHeldMembers = (
+  value: JSONObject,
+  held: ReadonlyMap<string, HeldAddress>,
+): JSONObject => {
+  const result: { [key: string]: JSONValue } = {};
+  /**
+   * A renamed member's key: `key`, or `key#n` for the first `n` that neither
+   * an original key of `value` nor one already written uses, so a rename
+   * never displaces another member. An unrenamed key is an original, unique
+   * among the originals and avoided by every rename.
+   */
+  const freeKey = (key: string): string => {
+    let candidate = key;
+    for (
+      let n = 1;
+      Object.hasOwn(value, candidate) || Object.hasOwn(result, candidate);
+      n++
+    ) {
+      candidate = `${key}#${n}`;
+    }
+    return candidate;
+  };
+  for (const [stored, item] of Object.entries(value)) {
+    // A key that spells an address is renamed like a value: to the run's
+    // reference, which the outbound swap mints in keys too, or to a reason.
+    const heldKey = held.get(stored);
+    const key = heldKey === undefined
+      ? stored
+      : freeKey("ref" in heldKey ? heldKey.ref : `unheld:${heldKey.unheld}`);
+    const replaced = typeof item === "string" ? held.get(item) : undefined;
+    if (replaced === undefined) {
+      defineOwnEntry(result, key, withHeldAddresses(item, held));
+    } else if ("ref" in replaced) {
+      defineOwnEntry(result, key, replaced.ref);
+    } else {
+      defineOwnEntry(result, freeKey(`${key}_unheld`), replaced.unheld);
+    }
+  }
+  return result;
+};
+
+/**
+ * The outbound inverse of {@link componentReferences}: every string in a
+ * command's answer that spells a piece's stored address
+ * ({@link parseStoredPieceAddress}) becomes the reference the run holds for
+ * that piece, so a model that inspects a Loom can describe and call the
+ * pieces in it without ever holding an address. One the run cannot hold
+ * (another space, no whole Pattern Instance, a failed read, past the limit)
+ * is dropped: an object member gives way to `<key>_unheld` naming why, an
+ * array item to `{unheld}`, and a key that spells one is renamed to
+ * `unheld:<reason>` (a held one to the run's reference). Matched by shape in
+ * every value and every key, so a Loom's `inbox` or any other field is
+ * covered, and a renamed key takes a `#n` suffix rather than displace another
+ * member; a host spelling an address
+ * some other way (a pane url) is the host's to keep from a model. Admission
+ * is {@link heldPatternInstance}'s check alone: whatever text named the id,
+ * the run gets only an own-space whole Pattern Instance, which the generic
+ * outbound swap would mint from a bare `/of:` link without any check.
+ * Distinct pieces are verified concurrently, each once.
+ */
+const heldComponentReferences = async (
+  context: HarnessToolContext,
+  body: JSONObject,
+): Promise<JSONObject> => {
+  const found = new Map<string, StoredPieceAddress>();
+  storedAddressesIn(body, found);
+  if (found.size === 0) return body;
+  const pieces = new Map<string, StoredPieceAddress>();
+  for (const address of found.values()) {
+    pieces.set(`${address.space}/${address.id}`, address);
+  }
+  const distinct = [...pieces].map(([key, address], index) => ({
+    key,
+    address,
+    index,
+  }));
+  const verdicts = new Map<string, HeldAddress>(
+    await mapWithFanIn(
+      distinct,
+      HELD_COMPONENT_FAN_IN,
+      async ({ key, address, index }): Promise<[string, HeldAddress]> => [
+        key,
+        index >= HELD_COMPONENT_LIMIT
+          ? { unheld: "limit" }
+          // Checked as each read starts, so a cancelled turn starts no more.
+          : context.signal?.aborted
+          ? { unheld: "unavailable" }
+          : await heldPatternInstance(context, address.space, address.id),
+      ],
+    ),
+  );
+  const held = new Map<string, HeldAddress>();
+  for (const [text, address] of found) {
+    const verdict = verdicts.get(`${address.space}/${address.id}`);
+    if (verdict !== undefined) held.set(text, verdict);
+  }
+  return withHeldMembers(body, held);
+};
 
 /** The notice every listing carries beside its entries. */
 export const LOOM_COMMANDS_EFFECT_NOTICE =
@@ -92,11 +282,7 @@ const BAD_ARGS_HOST_CODE = "bad-args";
 const notGrantedHint = (command: string): string =>
   `This run may not run \`${command}\`. Do not retry it; if the person should run it, name it in your result as an offer for them.`;
 
-/** What the model is told when a name is not in the run's listing. */
-const unknownCommandHint = (command: string): string =>
-  `No command named \`${command}\` is listed for this run. Use a name list_commands showed; a command it does not list is not this run's to run.`;
-
-/** What `list_commands` takes: command names to keep whole when bounded. */
+/** What `list_commands` takes: commands whose description and schema to show. */
 export interface ListCommandsInput {
   detail?: string[];
 }
@@ -112,7 +298,7 @@ export type ListCommandsErrorCode =
  * One command as `list_commands` shows it: its signature line, which carries
  * its parameters, output names, effect, and target, its title, and whether
  * the host names it as relevant to this run. A command named in `detail`
- * also carries its full argument schema.
+ * also carries its description and full argument schema.
  */
 export interface LoomCommandListing {
   name: string;
@@ -135,13 +321,7 @@ export type ListCommandsOutput =
     outputId: ToolOutputId;
     status: "ok";
     notice: typeof LOOM_COMMANDS_EFFECT_NOTICE;
-    entries: (
-      | LoomCommandListing
-      | Omit<LoomCommandListing, "inputSchema" | "description">
-    )[];
-
-    /** Entries shown without their schema and description, past the bound. */
-    compacted?: number;
+    entries: LoomCommandListing[];
 
     /** Rows left out because they could not be read. */
     omitted?: number;
@@ -214,13 +394,13 @@ export type RunCommandCallOutput =
     notice: typeof LOOM_COMMAND_UNTRUSTED_NOTICE;
     outcome: LoomCommandOutcome;
 
-    /** The answer, measured; absent when even alone it passed the bound. */
+    /** The answer, measured; absent when the remaining output space is too small. */
     entry?: LoomRetrievalEntry;
 
     /** Whether the answer was cut to a bound or left out. */
     truncated: boolean;
 
-    /** What to do instead, when the run may not run the command. */
+    /** Guidance for a refused command or a body omitted by the output bound. */
     hint?: string;
 
     /** The command's signature, when the host refused its args. */
@@ -244,16 +424,6 @@ export type RunCommandCallOutput =
     /** `no` when nothing was sent; `unknown` when the answer was lost. */
     landed: "no" | "unknown";
     hint?: string;
-  }
-  | {
-    /** The listing names no such command; nothing was sent. */
-    outputId: ToolOutputId;
-    status: "unknown_command";
-    command: string;
-
-    /** The listed names nearest the one called, nearest first. */
-    suggestions: string[];
-    hint: string;
   };
 
 /** What became of a batch: one result per call, in the calls' order. */
@@ -295,7 +465,7 @@ const catalogSourceOf = (
 /**
  * Helper for `list_commands`, which shows one entry as a listing: its
  * signature and title always, its `relevant` mark when the host names it,
- * its description unless compacted, and its schema only when `whole`.
+ * its description and schema only when `whole`.
  */
 const listingOf = (
   entry: LoomCommandEntry,
@@ -305,7 +475,7 @@ const listingOf = (
   name: entry.name,
   signature: renderCommandSignature(entry),
   ...(entry.title !== undefined ? { title: entry.title } : {}),
-  ...(entry.description !== undefined
+  ...(whole && entry.description !== undefined
     ? { description: entry.description }
     : {}),
   ...(relevant ? { relevant: true } : {}),
@@ -319,31 +489,24 @@ const COMMAND_NAME_SCHEMA = {
 } as const;
 
 /**
- * Helper for the command tools, which waits for the run's catalog read
- * unless the turn is cancelled first. The read is shared with every other
- * caller in the run, so a cancelled turn stops waiting for it without
- * ending it.
+ * Helper for the command tools, which starts the run's catalog read unless
+ * the turn is already cancelled, and waits for it unless the turn is
+ * cancelled first. The read is shared with every other caller in the run, so
+ * a cancelled turn stops waiting for it without ending it.
  */
 const unlessCancelled = <T>(
-  reading: Promise<T>,
+  read: () => Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T | "cancelled"> => {
-  if (signal === undefined) return reading;
+  if (signal === undefined) return read();
   if (signal.aborted) return Promise.resolve("cancelled");
-  return new Promise((resolve, reject) => {
-    const cancel = () => resolve("cancelled");
-    signal.addEventListener("abort", cancel, { once: true });
-    reading.then(
-      (value) => {
-        signal.removeEventListener("abort", cancel);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", cancel);
-        reject(error);
-      },
-    );
-  });
+  const reading = read();
+  const cancelled = Promise.withResolvers<"cancelled">();
+  const cancel = () => cancelled.resolve("cancelled");
+  signal.addEventListener("abort", cancel, { once: true });
+  return Promise.race([reading, cancelled.promise]).finally(() =>
+    signal.removeEventListener("abort", cancel)
+  );
 };
 
 /** Lists the commands this run's host lets it run. */
@@ -388,7 +551,10 @@ export const listCommandsTool: HarnessToolDefinition<
     }
     // An explicit listing asks the host afresh, and what it reads is the
     // catalog `run_command` checks calls against from then on.
-    const listed = await unlessCancelled(source.refresh(), context.signal);
+    const listed = await unlessCancelled(
+      () => source.refresh(),
+      context.signal,
+    );
     if (listed === "cancelled") {
       return fail("cancelled", "The turn was cancelled during the host call.");
     }
@@ -401,29 +567,20 @@ export const listCommandsTool: HarnessToolDefinition<
         ? input.detail.filter((name) => typeof name === "string")
         : [],
     );
-    // The commands the host names as relevant lead, so a listing past the
-    // model bound keeps them whole.
+    // The commands the host names as relevant lead the listing.
     const relevant = new Set(context.loomCommands?.relevant ?? []);
     const ordered = [
       ...catalog.entries.filter((entry) => relevant.has(entry.name)),
       ...catalog.entries.filter((entry) => !relevant.has(entry.name)),
     ];
-    const bounded = boundCatalogForModel(
-      ordered.map((entry) =>
-        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
-      ),
-      (entry) => entry.name,
-      [...detail],
-    );
     const omitted = catalog.malformed;
     return {
       outputId,
       status: "ok",
       notice: LOOM_COMMANDS_EFFECT_NOTICE,
-      entries: bounded.entries,
-      ...(bounded.compacted !== undefined
-        ? { compacted: bounded.compacted }
-        : {}),
+      entries: ordered.map((entry) =>
+        listingOf(entry, detail.has(entry.name), relevant.has(entry.name))
+      ),
       ...(omitted > 0 ? { omitted } : {}),
     };
   },
@@ -477,7 +634,7 @@ const notSent = (
 
 /** What a malformed call is told. */
 const INVALID_CALL_REASON =
-  `run_command requires a command name list_commands showed, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`;
+  `run_command requires a command name, an args object, an optional loomId like loom-0123456789abcdef, and an optional nonnegative integer expectedVersion.`;
 
 /**
  * Helper for command tools, which reads one call's shape: the invocation it
@@ -523,37 +680,24 @@ const readCall = (
 interface SendableCall {
   outputId: ToolOutputId;
   invocation: LoomCommandInvocation;
-  entry: LoomCommandEntry;
+  entry?: LoomCommandEntry;
 }
 
 /**
- * Helper for command tools, which checks one call against the run's catalog:
- * a call to send, or the result that says why nothing was sent.
+ * Helper for command tools, which pairs a well-formed call with the entry the
+ * run's catalog shows for its command, if any.
  */
-const checkCall = (
+const sendableCall = (
   outputId: ToolOutputId,
-  call: RunCommandCall,
+  invocation: LoomCommandInvocation,
   catalog: LoomCommandCatalog,
-): SendableCall | RunCommandCallOutput => {
-  const read = readCall(call);
-  if ("reason" in read) return notSent(outputId, "invalid_input", read.reason);
-  const { invocation } = read;
-  const { command } = invocation;
-  const entry = catalog.entries.find((candidate) => candidate.name === command);
-  if (entry === undefined) {
-    return {
-      outputId,
-      status: "unknown_command",
-      command,
-      suggestions: nearestCommandNames(
-        command,
-        catalog.entries.map((candidate) => candidate.name),
-      ),
-      hint: unknownCommandHint(command),
-    };
-  }
-  return { outputId, invocation, entry };
-};
+): SendableCall => ({
+  outputId,
+  invocation,
+  entry: catalog.entries.find((candidate) =>
+    candidate.name === invocation.command
+  ),
+});
 
 /** A call the command layer answered, its answer not yet measured. */
 interface AnsweredCall {
@@ -583,7 +727,50 @@ const sendCall = async (
   // `runLoomCommand` reads every failure of the request itself as an answer
   // that may have been lost; what it throws is an invalid configuration,
   // found before anything is sent, which is not this call's to absorb.
-  const answered = await runLoomCommand(config, invocation, context.signal);
+  let args: JSONValue = invocation.args;
+  if (
+    COMPONENT_COMMANDS.has(invocation.command) &&
+    JSON.stringify(args).includes("cfh:")
+  ) {
+    try {
+      args = await componentReferences(context, args);
+    } catch (error) {
+      if (!(error instanceof InvalidPatternReference)) {
+        return notSent(
+          outputId,
+          "command_failed",
+          "The held reference could not be read. Keep the same ref and try again when the Fabric session is available.",
+        );
+      }
+      return notSent(
+        outputId,
+        "invalid_input",
+        "Use the ref returned by run_pattern or assign_slug for a held, unrestricted whole Pattern Instance in this run's own space. Read source material with source.read, then retain it with page.write and use that receipt's ref.",
+      );
+    }
+  }
+  const resolved = context.handleTable === undefined
+    ? args
+    : swapTokensForRefs(context.handleTable, args);
+  if (
+    !isObjectNotArray(resolved) || !isHarnessCommandJsonValue(resolved) ||
+    harnessCommandJsonBytes(resolved) > HARNESS_COMMAND_ARGS_MAX_BYTES
+  ) {
+    return notSent(outputId, "invalid_input", INVALID_CALL_REASON);
+  }
+  // Checked last, after every read the call needed, so a turn cancelled
+  // while they ran sends nothing.
+  if (context.signal?.aborted) {
+    return notSent(
+      outputId,
+      "cancelled",
+      "The turn was cancelled before the command.",
+    );
+  }
+  const answered = await runLoomCommand(config, {
+    ...invocation,
+    args: resolved,
+  }, context.signal);
   if (answered.status === "error") {
     return {
       outputId,
@@ -593,7 +780,8 @@ const sendCall = async (
       landed: answered.landed,
     };
   }
-  const { body, bodyBytes } = answered;
+  const { bodyBytes } = answered;
+  const body = await heldComponentReferences(context, answered.body);
   const { command, loomId } = invocation;
   const outcome = outcomeOf(body, bodyBytes);
   const version = isRecord(body.outputs) ? body.outputs.version : undefined;
@@ -607,7 +795,7 @@ const sendCall = async (
       ...(outcome.code === "not_granted"
         ? { hint: notGrantedHint(command) }
         : {}),
-      ...(outcome.code === BAD_ARGS_HOST_CODE
+      ...(outcome.code === BAD_ARGS_HOST_CODE && entry !== undefined
         ? { signature: renderCommandSignature(entry) }
         : {}),
     },
@@ -623,6 +811,14 @@ const sendCall = async (
     },
   };
 };
+
+/** Guidance when the output bound leaves a command's body out. */
+const OMITTED_BODY_HINT =
+  "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.";
+
+/** Space reserved for an omitted body's guidance, including JSON wrapping. */
+const OMITTED_BODY_HINT_SIZE =
+  JSON.stringify({ hint: OMITTED_BODY_HINT }).length;
 
 /**
  * Helper for command tools, which measures an answer against the run's
@@ -653,7 +849,9 @@ const measureAnswer = async (
   const [entry] = measured.entries;
   return {
     ...answered.skeleton,
-    ...(entry !== undefined ? { entry } : {}),
+    ...(entry !== undefined
+      ? { entry }
+      : { hint: answered.skeleton.hint ?? OMITTED_BODY_HINT }),
     truncated: measured.truncated,
     cfc: {
       version: 1,
@@ -707,12 +905,9 @@ export const runCommandTool: HarnessToolDefinition<
   descriptor: {
     toolId: "run_command",
     title: "Run Command",
-    // A command's effect is unknown until the host declares it, so every
-    // call — a batch as a whole included — is authorized as one that may
-    // change something.
     effectClass: "write",
     description:
-      `Run commands list_commands showed, as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; an unlisted name returns unknown_command and sends nothing.`,
+      `Run host commands as the agent: one call as {command, args, loomId?, expectedVersion?}, or up to ${RUN_COMMAND_BATCH_LIMIT} independent calls as {calls: [...]}. Each executed call returns its outcome (ok, code, mayHaveLanded, completed) and its answer, admitted with a handle or withheld under this run's confidentiality ceiling; CFS decides whether the caller may attempt each command.`,
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -732,6 +927,27 @@ export const runCommandTool: HarnessToolDefinition<
       },
     },
     tags: ["loom", "command"],
+  },
+  async effectClassOf(input, context) {
+    const source = catalogSourceOf(context);
+    if (source === undefined) return "write";
+    const listed = await unlessCancelled(
+      () => source.current(),
+      context.signal,
+    );
+    if (listed === "cancelled" || listed.status !== "ok") return "write";
+    const calls = Array.isArray(input.calls) ? input.calls : [input];
+    if (calls.length === 0) return "write";
+    let effect: "read" | "write" | "side-effect" = "read";
+    for (const call of calls) {
+      if (!isObjectNotArray(call)) return "write";
+      const entry = listed.catalog.entries.find((row) =>
+        row.name === call.command
+      );
+      if (entry?.effect === "external") return "side-effect";
+      if (entry?.effect !== "read") effect = "write";
+    }
+    return effect;
   },
   async invoke(context, input) {
     const outputId = context.nextOutputId("run_command");
@@ -774,10 +990,14 @@ export const runCommandTool: HarnessToolDefinition<
       const sent = await mapWithFanIn(numbered, RUN_COMMAND_FAN_IN, (
         { call, outputId: callOutputId },
       ) => {
-        const checked = checkCall(callOutputId, call, listed.catalog);
-        return "invocation" in checked
-          ? sendCall(context, config, checked)
-          : Promise.resolve(checked);
+        const read = readCall(call);
+        return "reason" in read
+          ? Promise.resolve(notSent(callOutputId, "invalid_input", read.reason))
+          : sendCall(
+            context,
+            config,
+            sendableCall(callOutputId, read.invocation, listed.catalog),
+          );
       });
       return await measureBatch(context, outputId, sent);
     }
@@ -788,38 +1008,32 @@ export const runCommandTool: HarnessToolDefinition<
     }
     const listed = await readCatalog(context, source, outputId);
     if (!("catalog" in listed)) return listed;
-    const checked = checkCall(outputId, input, listed.catalog);
-    if (!("invocation" in checked)) return checked;
-    const sent = await sendCall(context, config, checked);
+    const sent = await sendCall(
+      context,
+      config,
+      sendableCall(outputId, read.invocation, listed.catalog),
+    );
     if (!isAnswered(sent)) return sent;
     return await measureAnswer(
       context,
       sent,
-      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE,
+      JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE +
+        OMITTED_BODY_HINT_SIZE,
     );
   },
 };
 
 /**
  * Helper for `run_command`, which reads the run's catalog, or says why no
- * call was sent. What the run can call is what it can see: a call naming a
- * command the catalog leaves out is refused before it reaches the host. The
- * catalog is held for the run, and the host refuses a command it has
- * withdrawn since it was read.
+ * call was sent. The catalog supplies schemas and effects; the host decides
+ * whether each invocation is admitted.
  */
 const readCatalog = async (
   context: HarnessToolContext,
   source: LoomCommandCatalogSource,
   outputId: ToolOutputId,
 ): Promise<{ catalog: LoomCommandCatalog } | RunCommandCallOutput> => {
-  if (context.signal?.aborted) {
-    return notSent(
-      outputId,
-      "cancelled",
-      "The turn was cancelled before the command.",
-    );
-  }
-  const listed = await unlessCancelled(source.current(), context.signal);
+  const listed = await unlessCancelled(() => source.current(), context.signal);
   if (listed === "cancelled") {
     return notSent(
       outputId,
@@ -835,8 +1049,8 @@ const readCatalog = async (
 /**
  * Helper for batches, which returns the forms an executed call's summary may
  * take: the `larger` ones, largest first, and the `smallest`. The compact
- * form replaces `completed` with the count of its ids and leaves out the
- * hint, keeping the signature a `bad-args` refusal carries; the next leaves
+ * form replaces `completed` with the count of its ids, keeping the refusal
+ * hint and the signature a `bad-args` refusal carries; the next leaves
  * out the signature too; the smallest keeps only the outcome's `ok`, `code`,
  * and size, marked `summaryOmitted`.
  */
@@ -846,7 +1060,7 @@ const skeletonForms = (
   larger: AnsweredCall["skeleton"][];
   smallest: AnsweredCall["skeleton"];
 } => {
-  const { hint: _hint, signature, outcome, ...rest } = skeleton;
+  const { signature, outcome, ...rest } = skeleton;
   const { completed, ...kept } = outcome;
   const compact = {
     ...rest,
@@ -872,8 +1086,8 @@ const skeletonForms = (
 };
 
 /**
- * Helper for command tools, which measures a batch's answers in the calls'
- * order against one output bound for the whole batch, so a batch shows the
+ * Helper for command tools, which measures a batch's answers smallest-first
+ * against one output bound for the whole batch, so a batch shows the
  * model no more than one call may. Each executed call's summary takes, in
  * the calls' order, the largest of its forms whose serialized size fits
  * beside the smallest forms of the calls after it, so a later call's
@@ -888,8 +1102,10 @@ const measureBatch = async (
 ): Promise<RunCommandBatchOutput> => {
   // Each result costs its serialized size, escapes included, the comma
   // that separates it from the next, and an answered one its `truncated`
-  // turning from `true` to `false`.
-  const charge = (result: object) => JSON.stringify(result).length + 2;
+  // turning from `true` to `false`. Only answered calls can need an omission hint.
+  const charge = (result: RunCommandCallOutput | AnsweredCall["skeleton"]) =>
+    JSON.stringify(result).length + 2 +
+    (result.status === "executed" ? OMITTED_BODY_HINT_SIZE : 0);
   const smallest = (call: AnsweredCall | RunCommandCallOutput) =>
     isAnswered(call) ? skeletonForms(call.skeleton).smallest : call;
   let later = sent.reduce((sum, call) => sum + charge(smallest(call)), 0);
@@ -913,14 +1129,19 @@ const measureBatch = async (
     return { ...call, skeleton };
   });
   const results: RunCommandCallOutput[] = [];
-  for (const call of compacted) {
+  const allocationOrder = compacted.map((call, index) => ({ call, index }))
+    .sort((a, b) =>
+      (isAnswered(a.call) ? a.call.skeleton.outcome.bodyBytes : 0) -
+      (isAnswered(b.call) ? b.call.skeleton.outcome.bodyBytes : 0)
+    );
+  for (const { call, index } of allocationOrder) {
     if (!isAnswered(call)) {
-      results.push(call);
+      results[index] = call;
       continue;
     }
     const measured = await measureAnswer(context, call, reserved);
     reserved += JSON.stringify({ entry: measured.entry }).length;
-    results.push(measured);
+    results[index] = measured;
   }
   const executed = results.filter((result) => result.status === "executed");
   const observedLabel = mergeConfidentialityOnlyLabels(
@@ -937,9 +1158,6 @@ const measureBatch = async (
     },
   };
 };
-
-/** The command tools, in registration order. */
-export const LOOM_COMMAND_TOOLS = [listCommandsTool, runCommandTool] as const;
 
 /**
  * The model-context observation a command's answer contributes: its label

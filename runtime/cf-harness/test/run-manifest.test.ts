@@ -1,4 +1,6 @@
 import { assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
 import { CFC_PROMPT_SLOT_BOUND_ATOM_TYPE } from "../src/contracts/prompt-slot.ts";
 import {
@@ -381,4 +383,53 @@ Deno.test("parseLoomRunManifestJson refuses a malformed read ceiling rather than
       testCase.message,
     );
   }
+});
+
+describe("run-manifest", () => {
+  describe("parseLoomRunManifestJson()", () => {
+    const parse = (manifest: Record<string, unknown>) =>
+      parseLoomRunManifestJson(JSON.stringify(manifest));
+
+    it("throws naming the parse failure for text that is not JSON", () => {
+      expect(() => parseLoomRunManifestJson("{not json")).toThrow(
+        "failed to parse run manifest JSON:",
+      );
+    });
+
+    it("throws naming a manifest type other than the Loom one", () => {
+      expect(parse({ type: "cf-harness.loom-run-manifest" }).type).toBe(
+        "cf-harness.loom-run-manifest",
+      );
+      expect(() => parse({ type: "cf-harness.other-manifest" })).toThrow(
+        "unsupported run manifest type: cf-harness.other-manifest",
+      );
+    });
+
+    it("throws naming a manifest version other than 1", () => {
+      expect(parse({ version: 1 }).version).toBe(1);
+      expect(() => parse({ version: 2 })).toThrow(
+        "unsupported run manifest version: 2",
+      );
+    });
+
+    it("returns the CFC label source when it is the Loom manifest's own", () => {
+      expect(parse({ cfc: { labelSource: "loom-run-manifest" } }).cfc).toEqual(
+        { labelSource: "loom-run-manifest" },
+      );
+    });
+
+    it("throws naming a CFC label source other than the Loom manifest", () => {
+      expect(() => parse({ cfc: { labelSource: "model" } })).toThrow(
+        "unsupported run manifest cfc.labelSource: model",
+      );
+    });
+
+    it("throws for a credential owner that is not a JSON object", () => {
+      for (const credentialOwner of ["loom:user", ["loom:user"], null]) {
+        expect(() => parse({ credentialOwner })).toThrow(
+          "run manifest credentialOwner must be a JSON object",
+        );
+      }
+    });
+  });
 });

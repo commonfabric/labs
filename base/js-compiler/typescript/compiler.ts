@@ -6,19 +6,20 @@ import { yieldToEventLoop } from "@commonfabric/async/sleep";
 import type {
   CompilerHost,
   CompilerOptions,
-  FileReference,
   ModuleResolutionHost,
   ResolvedModuleWithFailedLookupLocations,
-  ResolvedProjectReference,
-  ResolvedTypeReferenceDirectiveWithFailedLookupLocations,
   ScriptTarget,
   SourceFile,
   StringLiteralLike,
 } from "typescript";
 import ts from "typescript";
 
-import { Program, ProgramResolver, Source } from "../interface.ts";
-import type { SourceMap } from "../interface.ts";
+import type {
+  Program,
+  ProgramResolver,
+  Source,
+  SourceMap,
+} from "../interface.ts";
 import { parseSourceMap } from "../source-map.ts";
 import {
   authoredLocation,
@@ -98,13 +99,7 @@ class VirtualFs implements ModuleResolutionHost {
     this.#debug = !!debug;
   }
 
-  writeFile(fileName: unknown, content: unknown) {
-    if (typeof fileName !== "string") {
-      throw new Error("file name not string:" + typeof fileName);
-    }
-    if (typeof content !== "string") {
-      throw new Error("content not string:" + typeof content);
-    }
+  writeFile(fileName: string, content: string) {
     vfsLogger.debug(
       "vfs",
       () => `writeFile - ${fileName} (${content.length} chars)`,
@@ -115,10 +110,6 @@ class VirtualFs implements ModuleResolutionHost {
   getCurrentDirectory(): string {
     vfsLogger.debug("vfs", () => "getCurrentDirectory - returning /");
     return "/";
-  }
-
-  getDirectories(_path: string): string[] {
-    throw new Error("getDirectories() not implemented.");
   }
 
   fileExists(fileName: string): boolean {
@@ -183,21 +174,6 @@ class TypeScriptHost extends VirtualFs implements CompilerHost {
 
   getDefaultLibLocation(): string {
     return VFS_TYPES_DIR;
-  }
-
-  getEnvironmentVariable(_name: string): string | undefined {
-    return undefined;
-  }
-
-  resolveTypeReferenceDirectiveReferences?<T extends FileReference | string>(
-    _typeDirectiveReferences: readonly T[],
-    _containingFile: string,
-    _redirectedReference: ResolvedProjectReference | undefined,
-    _options: CompilerOptions,
-    _containingSourceFile: SourceFile | undefined,
-    _reusedNames: readonly T[] | undefined,
-  ): readonly ResolvedTypeReferenceDirectiveWithFailedLookupLocations[] {
-    throw new Error("ResolveTypeReferenceDirectiveReferences");
   }
 
   getCanonicalFileName(fileName: string): string {
@@ -452,11 +428,13 @@ export class TypeScriptCompiler {
     compileTimingLogger.time(createStart, "phase", "createProgram");
     yield;
 
-    const checker = new Checker(tsProgram, {
-      messageTransformer: inputOptions.diagnosticMessageTransformer,
-      storedSource,
-      authoredSource: inputOptions.authoredSource,
-    });
+    const checkerFor = (target: ts.Program) =>
+      new Checker(target, {
+        messageTransformer: inputOptions.diagnosticMessageTransformer,
+        storedSource,
+        authoredSource: inputOptions.authoredSource,
+      });
+    const checker = checkerFor(tsProgram);
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
     // only semantic hygiene codes. On stored-source compiles this gate
@@ -473,14 +451,50 @@ export class TypeScriptCompiler {
       yield;
     }
     if (!noCheck) {
-      const errors = [];
-      for (const sourceFile of checker.checkableSources()) {
-        const typeCheckStart = performance.now();
-        for (const error of checker.collectSemanticErrors(sourceFile)) {
-          errors.push(error);
+      const semanticErrors = function* (
+        of: Checker,
+        phase: string,
+      ): Generator<void, ReturnType<Checker["collectSemanticErrors"]>, void> {
+        const errors: ReturnType<Checker["collectSemanticErrors"]> = [];
+        for (const sourceFile of of.checkableSources()) {
+          const typeCheckStart = performance.now();
+          for (const error of of.collectSemanticErrors(sourceFile)) {
+            errors.push(error);
+          }
+          compileTimingLogger.time(typeCheckStart, "phase", phase);
+          yield;
         }
-        compileTimingLogger.time(typeCheckStart, "phase", "typeCheckFile");
-        yield;
+        return errors;
+      };
+      const errors = yield* semanticErrors(checker, "typeCheckFile");
+      // Stored source admitted before `exactOptionalPropertyTypes` was the
+      // rule may hold an `undefined` written into an optional property, which
+      // the flag refuses, and those bytes cannot be re-authored. Such a
+      // program is admitted if it checks clean without the flag. Neither
+      // rule's language contains the other (an index signature beside an
+      // optional property type-checks only under the flag), so neither check
+      // alone admits every stored program.
+      //
+      // The check without the flag only admits. The program is still emitted
+      // under the flag, so a module compiles to the same output whichever
+      // program includes it, as its identity, a hash of its own source and
+      // what it imports, assumes.
+      if (
+        errors.length > 0 && storedSource &&
+        tsOptions.exactOptionalPropertyTypes === true
+      ) {
+        const inexactChecker = checkerFor(
+          ts.createProgram(
+            sourceNames,
+            { ...tsOptions, exactOptionalPropertyTypes: false },
+            host,
+          ),
+        );
+        const admitted = yield* semanticErrors(
+          inexactChecker,
+          "typeCheckFileInexact",
+        );
+        if (admitted.length === 0) errors.length = 0;
       }
       checker.throwIfErrors(errors);
     }
@@ -774,19 +788,7 @@ export class TypeScriptCompiler {
 }
 
 function validateSource(artifact: Program) {
-  let entryFound = false;
-  for (const { name } of artifact.files) {
-    if (name === artifact.main) {
-      entryFound = true;
-    }
-    // Sources must be root paths, unless they are type files,
-    // which could be included for runtime dependencies,
-    // e.g. `@commonfabric/builder.d.ts`
-    if (name[0] !== "/" && !name.endsWith(".d.ts")) {
-      //throw new Error(`File "${name}" must have a "/" root.`);
-    }
-  }
-  if (!entryFound) {
+  if (!artifact.files.some(({ name }) => name === artifact.main)) {
     throw new Error(`No main module "${artifact.main}" in source.`);
   }
 }

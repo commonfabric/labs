@@ -39,12 +39,6 @@ import * as Address from "./transaction/address.ts";
 // instances resolve server-side per session).
 const fromKey = (key: string): BaseMemoryAddress => {
   const separator = key.indexOf("\0");
-  if (separator === -1) {
-    return {
-      id: key as BaseMemoryAddress["id"],
-      type: "application/json",
-    };
-  }
   const scopeKey = key.slice(0, separator);
   const scope = scopeOfScopeKey(scopeKey);
   return {
@@ -92,11 +86,14 @@ const selectorRefFor = (selector: SchemaPathSelector): string =>
       : hashSchema(SelectorTracker.getStandardSchema(selector.schema)),
   ]);
 
+/** A selector whose schema has been put in standard form. */
+type StandardizedSelector = { path: readonly string[]; schema: JSONSchema };
+
 // This class helps us maintain a client model of our server side subscriptions.
 export class SelectorTracker<T = Result<Unit, Error>> {
   #refTracker = new MapSetStringToStrings();
   #selectors = new Map<string, SchemaPathSelector>();
-  #standardizedSelector = new Map<string, SchemaPathSelector>();
+  #standardizedSelector = new Map<string, StandardizedSelector>();
   #selectorPromises = new Map<string, Promise<T>>();
 
   /** How many addresses track each selector. */
@@ -144,18 +141,6 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     return this.#refTracker.has(this.#toKey(address));
   }
 
-  hasSelector(
-    address: BaseMemoryAddress,
-    selector: SchemaPathSelector,
-  ): boolean {
-    const selectorRefs = this.#refTracker.get(this.#toKey(address));
-    if (selectorRefs !== undefined) {
-      const selectorRef = selectorRefFor(selector);
-      return selectorRefs.has(selectorRef);
-    }
-    return false;
-  }
-
   getSupersetSelector(
     address: BaseMemoryAddress,
     selector: SchemaPathSelector,
@@ -187,9 +172,6 @@ export class SelectorTracker<T = Result<Unit, Error>> {
       const existingAddress = { ...address, path: existingSelector.path };
       if (Address.includes(existingAddress, newAddress)) {
         const existingSchema = existingSelector.schema;
-        if (existingSchema === undefined) {
-          continue;
-        }
         const subPath = newAddress.path.slice(existingAddress.path.length);
         // Tracked schemas are interned (deep-frozen), so this derivation hits
         // cfc.schemaAtPath's identity-keyed memo.
@@ -247,15 +229,6 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     );
   }
 
-  getPromise(
-    address: BaseMemoryAddress,
-    selector: SchemaPathSelector,
-  ): Promise<T> | undefined {
-    const selectorRef = selectorRefFor(selector);
-    const promiseKey = `${this.#toKey(address)}?${selectorRef}`;
-    return this.#selectorPromises.get(promiseKey);
-  }
-
   delete(address: BaseMemoryAddress, selector: SchemaPathSelector): void {
     const selectorRef = selectorRefFor(selector);
     const key = this.#toKey(address);
@@ -269,10 +242,6 @@ export class SelectorTracker<T = Result<Unit, Error>> {
     this.#selectorUses.delete(selectorRef);
     this.#selectors.delete(selectorRef);
     this.#standardizedSelector.delete(selectorRef);
-  }
-
-  getAllPromises(): Iterable<Promise<T>> {
-    return this.#selectorPromises.values();
   }
 
   getAllSubscriptions(): {

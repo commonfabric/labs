@@ -13,10 +13,12 @@
 
 import { exists } from "@std/fs";
 import * as posix from "@std/path/posix";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   acceptedDropKey,
   type AcceptedStateDrop,
 } from "./pattern-vintage-accepted-drops.ts";
+import type { CommandOutput } from "./command-output.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 
 import {
@@ -457,11 +459,6 @@ export interface ReplayFailure {
   detail: string;
 }
 
-/** A readable message for anything thrown across the task's I/O boundary. */
-export function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** An absolute path back to a repo-relative one, for readable output. */
 export function relativeToRepo(path: string, repoRoot: string): string {
   const prefix = `${repoRoot}/`;
@@ -592,22 +589,6 @@ async function gitMove(from: string, to: string): Promise<void> {
       }`,
     );
   }
-}
-
-/**
- * Everything a command wants to say, and the code it wants to exit with.
- *
- * Returned rather than printed so the OUTPUT is testable, not just the
- * decision behind it. That is where this file's defects have actually lived:
- * across five review rounds the recurring fault was never a wrong decision, it
- * was the wrong text printed for a correct one — a remedy that did not fit the
- * situation, or a promise about output the function did not control. Text
- * assembled inside the task shell is text no test can read.
- */
-export interface CommandOutput {
-  out?: string;
-  err?: string;
-  code: number;
 }
 
 /** What `--pin` says, given what it decided. */
@@ -1203,7 +1184,7 @@ export function reportNoVerdict(reason?: unknown): string {
     "",
     reason === undefined
       ? "  (no rejection was observed; look for an unresolved await)"
-      : `  last unhandled rejection: ${describeError(reason)}`,
+      : `  last unhandled rejection: ${describeFailure(reason)}`,
   ].join("\n");
 }
 

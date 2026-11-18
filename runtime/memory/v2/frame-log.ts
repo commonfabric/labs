@@ -1,4 +1,5 @@
 import { isDeno } from "@commonfabric/platform/env";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 /**
@@ -281,7 +282,7 @@ export function createFrameLog(write: (line: string) => void): FrameLog {
     } catch (error) {
       summary = {
         dir: "error",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       };
     }
     append(summary);

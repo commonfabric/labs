@@ -1,6 +1,8 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  type ServerMessage,
 } from "@commonfabric/memory/v2";
 import {
   type EncodedMemoryMessage,
@@ -12,6 +14,7 @@ import {
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
 import * as MemoryServer from "@commonfabric/memory/v2/server";
+import { upgradeMemoryWebSocket } from "@commonfabric/memory/v2/websocket-upgrade";
 import { getLogger } from "@commonfabric/logger";
 
 import type * as Routes from "./memory.routes.ts";
@@ -223,10 +226,20 @@ export const warnOnOversizedOutboundFrame = (
   ]);
 };
 
+/** The part of a memory server that a socket's pipeline talks to. */
+export interface MemorySocketServer {
+  connect(send: (message: ServerMessage) => void): {
+    readonly id: string;
+    receive(payload: string): Promise<void>;
+    close(): void;
+  };
+}
+
 export const attachMemorySocketPipeline = (
   socket: WebSocket,
   negotiation: ReturnType<typeof bufferTextMessagesUntilNegotiated>,
   firstMessage: string,
+  server: MemorySocketServer = memoryServer,
 ): boolean => {
   const parsedFirstMessage = MemoryServer.parseClientMessage(firstMessage);
   if (parsedFirstMessage === null) {
@@ -268,7 +281,7 @@ export const attachMemorySocketPipeline = (
       closeConnection();
     },
   );
-  const connection = memoryServer.connect((message) => {
+  const connection = server.connect((message) => {
     const encoded = encodeMemoryBoundary(message);
     channel.send(
       encoded,
@@ -319,7 +332,6 @@ export const attachMemorySocketPipeline = (
       logMemWrites(firstMessage);
       negotiation.handoff({
         onMessage(message) {
-          if (closed) return;
           if (!compressionNegotiated && typeof message !== "string") {
             safeSocketClose(
               1003,
@@ -390,9 +402,12 @@ export const attachMemorySocketPipeline = (
  * first frame among them, is logged with its cause and closes the socket with
  * 1011 if it is still open. A socket closed without an error before its first
  * frame is not a failure, and is not logged. The returned promise never
- * rejects.
+ * rejects. `server` is the memory server the pipeline connects to.
  */
-export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
+export const setUpMemorySocket = (
+  socket: WebSocket,
+  server: MemorySocketServer = memoryServer,
+): Promise<void> =>
   createSpan("memory.socket.setup", async (setupSpan) => {
     const negotiation = bufferTextMessagesUntilNegotiated(socket);
     const firstMessage = await negotiation.firstMessage;
@@ -402,7 +417,7 @@ export const setUpMemorySocket = (socket: WebSocket): Promise<void> =>
       return;
     }
 
-    if (attachMemorySocketPipeline(socket, negotiation, firstMessage)) {
+    if (attachMemorySocketPipeline(socket, negotiation, firstMessage, server)) {
       setupSpan.setAttribute("socket.setup", "memory");
       return;
     }
@@ -428,13 +443,7 @@ export const subscribe: AppRouteHandler<typeof Routes.subscribe> = (c) => {
     try {
       span.setAttribute("memory.operation", "subscribe");
 
-      // Deno's default idle timeout can mistake a legitimate synchronous
-      // memory-server stretch for a dead peer, then close every connection
-      // together when the event loop yields. Disable that transport-level
-      // pong deadline rather than turning server load into a reconnect storm.
-      const { socket, response } = Deno.upgradeWebSocket(c.req.raw, {
-        idleTimeout: 0,
-      });
+      const { socket, response } = upgradeMemoryWebSocket(c.req.raw);
       span.setAttribute("websocket.upgrade", "success");
 
       void setUpMemorySocket(socket);
@@ -444,7 +453,7 @@ export const subscribe: AppRouteHandler<typeof Routes.subscribe> = (c) => {
       span.setAttribute("memory.status", "exception");
       span.setAttribute(
         "error.message",
-        error instanceof Error ? error.message : String(error),
+        describeFailure(error),
       );
       span.setAttribute(
         "error.type",

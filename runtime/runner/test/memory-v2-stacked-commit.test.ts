@@ -47,6 +47,7 @@ import {
   parsePointer,
   pathsOverlap,
 } from "../../memory/v2/path.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type {
   IStorageProvider,
   IStorageTransaction,
@@ -1991,7 +1992,10 @@ describe("memory-v2-stacked-commit", () => {
     it("returns the same result for a duplicate `localSeq`, sending it once", async () => {
       const model = new ScriptedServerModel();
       const transport = new ScriptedModelTransport(model);
-      const client = await MemoryV2Client.connect({ transport });
+      const client = await MemoryV2Client.connect({
+        instanceNames: namesInstancesByDefault(),
+        transport,
+      });
       try {
         const session = await client.mount(
           space,
@@ -5654,6 +5658,142 @@ describe("memory-v2-stacked-commit", () => {
           .filter((change) => change.address.id === DOCS.A);
         expect(promoted.map((change) => change.after)).toContainEqual({
           value: { items: ["a", "b", "c", "x"] },
+        });
+      } finally {
+        responseGate.resolve();
+        await harness.close();
+      }
+    });
+
+    it("shows a layer stacked on the splice over what the store applied when the verdict accepts over the moved list", async () => {
+      // The layer above the splice was shown over the list the writer
+      // computed. Once the verdict promotes the list the store applied, the
+      // layer is shown over that list instead.
+      const harness = await createHarness();
+      const responseGate = Promise.withResolvers<void>();
+      const flagGate = Promise.withResolvers<void>();
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a", "b"] });
+        await watch(harness);
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          skipReadValidation: true,
+          responseGate: responseGate.promise,
+          remoteInterleave: {
+            label: "foreign",
+            operations: [{
+              op: "set",
+              id: DOCS.A,
+              value: { items: ["a", "b", "x"] },
+            }],
+          },
+        });
+        harness.model.setOutcome(3, {
+          kind: "accept",
+          responseGate: flagGate.promise,
+        });
+        const splice = growTo(harness, { items: ["a", "b", "c"] }, ["c"]);
+        const flag = harness.replica.commitNative(
+          {
+            operations: [{
+              op: "patch",
+              id: DOCS.A,
+              type: DOCUMENT_MIME,
+              patches: [{ op: "add", path: "/value/flag", value: true }],
+              value: { value: { items: ["a", "b", "c"], flag: true } },
+            }],
+          },
+          undefined,
+          { resolveAt: "verdict" },
+        );
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: currentSeq(harness, DOCS.A) + 1,
+            value: { items: ["a", "b", "x"] },
+          }],
+        });
+        await clock.settle();
+        expectVisible(harness, { A: { items: ["a", "b", "c"], flag: true } });
+
+        responseGate.resolve();
+        await expectResultOk(splice);
+        expectVisible(harness, {
+          A: { items: ["a", "b", "c", "x"], flag: true },
+        });
+        flagGate.resolve();
+        await expectResultOk(flag);
+        expectVisible(harness, {
+          A: { items: ["a", "b", "c", "x"], flag: true },
+        });
+      } finally {
+        responseGate.resolve();
+        flagGate.resolve();
+        await harness.close();
+      }
+    });
+
+    it("promotes what the store applied when a commit's later operation on the document is the splice the moved list changes", async () => {
+      // The commit writes the document twice. Its first operation replays as
+      // it was shown; its second, the splice, does not, so the promotion has
+      // to take the store's list rather than the one the view showed.
+      const harness = await createHarness();
+      const responseGate = Promise.withResolvers<void>();
+      try {
+        await seedAccepted(harness, DOCS.A, { items: ["a", "b"] });
+        await watch(harness);
+        harness.model.setOutcome(2, {
+          kind: "accept",
+          skipReadValidation: true,
+          responseGate: responseGate.promise,
+          remoteInterleave: {
+            label: "foreign",
+            operations: [{
+              op: "set",
+              id: DOCS.A,
+              value: { items: ["a", "b", "x"] },
+            }],
+          },
+        });
+        const commit = harness.replica.commitNative(
+          {
+            operations: [{
+              op: "patch",
+              id: DOCS.A,
+              type: DOCUMENT_MIME,
+              patches: [{ op: "add", path: "/value/flag", value: true }],
+              value: { value: { items: ["a", "b"], flag: true } },
+            }, {
+              op: "patch",
+              id: DOCS.A,
+              type: DOCUMENT_MIME,
+              patches: [{
+                op: "splice",
+                path: "/value/items",
+                index: 2,
+                remove: 0,
+                add: ["c"],
+              }],
+              value: { value: { items: ["a", "b", "c"], flag: true } },
+            }],
+          },
+          sourceFromReads([{ id: DOCS.A }]),
+          { resolveAt: "verdict" },
+        );
+        harness.pushSync({
+          upserts: [{
+            id: DOCS.A,
+            seq: currentSeq(harness, DOCS.A) + 1,
+            value: { items: ["a", "b", "x"] },
+          }],
+        });
+        await clock.settle();
+        expectVisible(harness, { A: { items: ["a", "b", "c"], flag: true } });
+
+        responseGate.resolve();
+        await expectResultOk(commit);
+        expectVisible(harness, {
+          A: { items: ["a", "b", "c", "x"], flag: true },
         });
       } finally {
         responseGate.resolve();

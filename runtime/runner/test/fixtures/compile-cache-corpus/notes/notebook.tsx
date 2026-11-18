@@ -1166,7 +1166,7 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
                   }}
                 >
                   {/* Notes List - using cf-table like default-app for consistent spacing */}
-                  <cf-table full-width hover>
+                  <cf-table fullWidth hover>
                     <tbody>
                       {notes.map((note, index) => (
                         <tr

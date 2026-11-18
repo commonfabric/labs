@@ -17,6 +17,13 @@ space, and they are partitioned by a **scope** — `space`, `user`, or `session`
 so that per-user and per-session cells are isolated physically rather than by
 convention.
 
+A document's payload is a `FabricValue`, which crosses this package's boundary
+as `fvj1:` text
+([`3-json-encoding.md`](../../docs/specs/space-model-formal-spec/3-json-encoding.md)):
+`encodeMemoryBoundary()` in `v2.ts` writes one through `jsonFromFabricValue()`,
+and `decodeMemoryBoundary()` reads one back with a `NullLiveEnvironment`, so no
+cell is decoded at this boundary.
+
 A write is expressed as an **operation**: `set` replaces a document, `patch`
 applies a list of edits to one, `delete` writes a tombstone, and `sqlite` folds
 a SQLite statement into the same transaction as the cell writes. The patch
@@ -24,6 +31,19 @@ vocabulary is JSON Patch plus edits that merge rather than clobber — appending
 to an array, adding to it by identity, removing from it by value, and
 incrementing a number — each resolved against durable state so that concurrent
 writers combine instead of overwriting each other.
+
+## Watch memory
+
+A tracked graph retains the documents and reachability records needed by its
+active watches. Schema traversal results are shared within one evaluation and
+released when it finishes, including an incremental watch addition or removal.
+[Schema graph queries](../../docs/features/schema-graph-queries.md) describes
+that lifetime and the tracker that preserves delivery between evaluations.
+
+The server's query evaluation cache admits only graphs that fit individually
+within its retained-entity budget, before cloning them. Its cross-space eviction
+then bounds the combined weight of admitted entries. Entity count is a proxy for
+retained memory, not a byte limit or a bound on an active session's graph.
 
 ## Commit model
 

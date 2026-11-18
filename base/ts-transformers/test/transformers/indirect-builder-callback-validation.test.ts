@@ -208,4 +208,35 @@ describe("indirect-builder-callback-validation", () => {
       await errorsIn(`const inc = lift({ type: "object" } as never);`),
     ).toHaveLength(0);
   });
+
+  describe("calls this stage does not judge", () => {
+    it("reports nothing for an indirect callback passed to a builder the verifier does not trust", async () => {
+      // `render()` is not a trusted builder, so its argument is not a callback
+      // the verifier checks; `lift()` beside it is.
+
+      const { diagnostics } = await validateSource(
+        `import { lift, pattern, render } from "commonfabric";
+const views = { main: () => null, bump: (n: number) => n + 1 };
+export const view = render(views.main);
+export const inc = lift(views.bump);
+export default pattern(() => ({}));
+`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      expect(
+        indirectCallbackErrors(diagnostics).map((error) =>
+          error.message.includes("lift(")
+        ),
+      ).toEqual([true]);
+    });
+  });
+
+  it("reports a callback whose names resolve to each other in a cycle", async () => {
+    const errors = await errorsIn(`
+      const first: (n: number) => number = second;
+      const second: (n: number) => number = first;
+      const inc = lift(first);
+    `);
+    expect(errors).toHaveLength(1);
+  });
 });

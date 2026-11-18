@@ -1,92 +1,47 @@
-import {
-  type DebugValueOptions,
-  toCompactDebugString,
-  toIndentedDebugString,
-} from "@commonfabric/data-model";
+import { toIndentedDebugString } from "@commonfabric/data-model";
 import type {
   LoggerMetadata,
   RuntimeTelemetryMarkerResult,
   TimingStats,
 } from "@commonfabric/runtime-client";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { css, html, LitElement, TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import type { DebuggerController } from "../lib/debugger-controller.ts";
+import {
+  activeSubtopicCount,
+  allSubtopics,
+  CDF_CHART_FRAME,
+  type CdfChart,
+  cdfChart,
+  cdfChartTooltip,
+  chartedOperations,
+  countsTotal,
+  DEBUGGER_VALUE_OPTIONS,
+  eventColor,
+  eventDetails,
+  eventIcon,
+  filterEvents,
+  formatDuration,
+  formatTimestamp,
+  type LoggerCounts,
+  type LoggerTiming,
+  mergeLoggerCounts,
+  mergeLoggerTiming,
+  messageCountsByTotal,
+  RUN_DETAIL_OPTIONS,
+  toggleAllTopics,
+  toggleMember,
+  toggleTopic,
+  TOPIC_HIERARCHY,
+  type TopicKey,
+  topicState,
+} from "../lib/debugger-view-model.ts";
 import { ResizableDrawerController } from "../lib/resizable-drawer-controller.ts";
 
 import "./SchedulerGraphView.ts";
 
 import type { Logger, LoggerBreakdown } from "@commonfabric/logger";
-
-/**
- * Rendering options for a value shown in the debugger: a bounded glimpse on
- * every axis, since a marker can hold anything a cell can and the search
- * renders every marker on each keystroke. The replacer keeps an action's
- * metadata, which it carries as enumerable properties on the function.
- */
-const DEBUGGER_VALUE_OPTIONS: DebugValueOptions = {
-  maxDepth: 3,
-  maxArrayLength: 5,
-  maxProperties: 20,
-  maxStringLength: 200,
-  replacer: (value) => {
-    if (typeof value === "function") {
-      return { name: value.name || "[anonymous]", ...value };
-    }
-    return value;
-  },
-};
-
-/**
- * Rendering options for the runs of a non-idempotent report. The panel is an
- * inspector, so every run and every cell a run read or wrote is shown, deep
- * enough to reach the values; a long string, or a value nested past the
- * depth, is still cut.
- */
-const RUN_DETAIL_OPTIONS: DebugValueOptions = {
-  ...DEBUGGER_VALUE_OPTIONS,
-  maxDepth: 6,
-  maxArrayLength: Infinity,
-  maxProperties: Infinity,
-};
-
-/**
- * Hierarchical topic definitions for filtering telemetry events.
- * Topics can have subtopics for more granular filtering.
- */
-export const TOPIC_HIERARCHY = {
-  scheduler: {
-    label: "Scheduler",
-    icon: "⚙️",
-    color: "#3b82f6", // blue
-    subtopics: {
-      run: { label: "Run", pattern: "scheduler.run" },
-      invocation: { label: "Invocation", pattern: "scheduler.invocation" },
-    },
-  },
-  storage: {
-    label: "Storage",
-    icon: "💾",
-    color: "#10b981", // green
-    subtopics: {
-      push: { label: "Push", pattern: "storage.push" },
-      pull: { label: "Pull", pattern: "storage.pull" },
-    },
-  },
-  cells: {
-    label: "Cells",
-    icon: "📝",
-    color: "#8b5cf6", // violet
-    subtopics: {
-      update: { label: "Update", pattern: "cell.update" },
-    },
-  },
-} as const;
-
-export type TopicKey = keyof typeof TOPIC_HIERARCHY;
-export type SubtopicKey<T extends TopicKey> =
-  keyof typeof TOPIC_HIERARCHY[T]["subtopics"];
 
 /**
  * Shell Debugger view for monitoring RuntimeTelemetry events in real-time.
@@ -734,19 +689,6 @@ export class XDebuggerView extends LitElement {
       font-weight: 500;
     }
 
-    .delta {
-      font-size: 0.625rem;
-      margin-left: 0.25rem;
-    }
-
-    .delta.positive {
-      color: #10b981;
-    }
-
-    .delta.negative {
-      color: #3b82f6;
-    }
-
     /* Timing histogram styles - Tufte-inspired minimal design */
     .timing-histogram {
       margin-top: 0.5rem;
@@ -814,27 +756,13 @@ export class XDebuggerView extends LitElement {
   private accessor activeSubtopics = new Set<string>();
 
   @state()
-  private accessor loggerBaseline:
-    | Record<string, LoggerBreakdown | number>
-    | null = null;
-
-  @state()
-  private accessor loggerSample:
-    | Record<string, LoggerBreakdown | number>
-    | null = null;
+  private accessor loggerSample: LoggerCounts | null = null;
 
   @state()
   private accessor workerLoggerMetadata: LoggerMetadata | null = null;
 
   @state()
-  private accessor loggerTimingSample:
-    | Record<string, Record<string, TimingStats>>
-    | null = null;
-
-  @state()
-  private accessor workerLoggerTiming:
-    | Record<string, Record<string, TimingStats>>
-    | null = null;
+  private accessor loggerTimingSample: LoggerTiming | null = null;
 
   @state()
   private accessor expandedLoggers = new Set<string>();
@@ -877,12 +805,17 @@ export class XDebuggerView extends LitElement {
   });
 
   /**
-   * The worker-logger metadata, the diagnosis panel's render step, and the
-   * three worker-logger handlers, which a test drives directly.
+   * The worker-logger metadata, the diagnosis panel's render step, the three
+   * worker-logger handlers, and the two document listeners, which a test
+   * drives directly.
    */
   get accessForTestingOnly(): {
     workerLoggerMetadata: LoggerMetadata | null;
     renderDiagnosis(): TemplateResult;
+    handleKeyDown(
+      e: Pick<KeyboardEvent, "key" | "target" | "preventDefault">,
+    ): void;
+    handleDocumentClick(e: Pick<Event, "target">): void;
     resetBaseline(): Promise<void>;
     toggleLogger(name: string): Promise<void>;
     setLoggerLevel(
@@ -900,6 +833,8 @@ export class XDebuggerView extends LitElement {
         outerThis.workerLoggerMetadata = value;
       },
       renderDiagnosis: () => this.#renderDiagnosis(),
+      handleKeyDown: this.#handleKeyDown,
+      handleDocumentClick: this.#handleDocumentClick,
       resetBaseline: () => this.#resetBaseline(),
       toggleLogger: (name) => this.#toggleLogger(name),
       setLoggerLevel: (name, level) => this.#setLoggerLevel(name, level),
@@ -911,7 +846,7 @@ export class XDebuggerView extends LitElement {
     document.addEventListener("keydown", this.#handleKeyDown);
     document.addEventListener("click", this.#handleDocumentClick);
     // Initialize with all subtopics active
-    this.#initializeAllSubtopics();
+    this.activeSubtopics = allSubtopics();
   }
 
   override disconnectedCallback() {
@@ -929,7 +864,9 @@ export class XDebuggerView extends LitElement {
     }
   }
 
-  #handleKeyDown = (e: KeyboardEvent) => {
+  #handleKeyDown = (
+    e: Pick<KeyboardEvent, "key" | "target" | "preventDefault">,
+  ) => {
     // Clear search on Escape
     if (e.key === "Escape" && this.searchText) {
       e.preventDefault();
@@ -942,17 +879,7 @@ export class XDebuggerView extends LitElement {
     }
   };
 
-  #initializeAllSubtopics() {
-    const allSubtopics = new Set<string>();
-    for (const [topicKey, topic] of Object.entries(TOPIC_HIERARCHY)) {
-      for (const subtopicKey of Object.keys(topic.subtopics)) {
-        allSubtopics.add(`${topicKey}.${subtopicKey}`);
-      }
-    }
-    this.activeSubtopics = allSubtopics;
-  }
-
-  #handleDocumentClick = (e: Event) => {
+  #handleDocumentClick = (e: Pick<Event, "target">) => {
     // Close dropdowns when clicking outside
     const target = e.target as HTMLElement;
     if (!target.closest(".topic-button-group")) {
@@ -960,73 +887,15 @@ export class XDebuggerView extends LitElement {
     }
   };
 
+  /**
+   * Opens a topic's subtopic menu, closing any other, or closes it when it is
+   * the one open.
+   */
   #toggleDropdown(topicKey: TopicKey, e: Event) {
     e.stopPropagation();
-    const newDropdowns = new Set(this.openDropdowns);
-    if (newDropdowns.has(topicKey)) {
-      newDropdowns.delete(topicKey);
-    } else {
-      // Close other dropdowns
-      newDropdowns.clear();
-      newDropdowns.add(topicKey);
-    }
-    this.openDropdowns = newDropdowns;
-  }
-
-  #toggleTopic(topicKey: TopicKey) {
-    const topic = TOPIC_HIERARCHY[topicKey];
-    const subtopicKeys = Object.keys(topic.subtopics);
-    const fullKeys = subtopicKeys.map((sk) => `${topicKey}.${sk}`);
-
-    // Check current state
-    const activeCount =
-      fullKeys.filter((k) => this.activeSubtopics.has(k)).length;
-    const newSubtopics = new Set(this.activeSubtopics);
-
-    if (activeCount === 0) {
-      // None active -> activate all
-      fullKeys.forEach((k) => newSubtopics.add(k));
-    } else {
-      // Some or all active -> deactivate all
-      fullKeys.forEach((k) => newSubtopics.delete(k));
-    }
-
-    this.activeSubtopics = newSubtopics;
-  }
-
-  #toggleSubtopic(topicKey: TopicKey, subtopicKey: string) {
-    const fullKey = `${topicKey}.${subtopicKey}`;
-    const newSubtopics = new Set(this.activeSubtopics);
-
-    if (newSubtopics.has(fullKey)) {
-      newSubtopics.delete(fullKey);
-    } else {
-      newSubtopics.add(fullKey);
-    }
-
-    this.activeSubtopics = newSubtopics;
-  }
-
-  #getTopicState(topicKey: TopicKey): "active" | "partial" | "inactive" {
-    const topic = TOPIC_HIERARCHY[topicKey];
-    const subtopicKeys = Object.keys(topic.subtopics);
-    const fullKeys = subtopicKeys.map((sk) => `${topicKey}.${sk}`);
-    const activeCount =
-      fullKeys.filter((k) => this.activeSubtopics.has(k)).length;
-
-    if (activeCount === 0) return "inactive";
-    if (activeCount === subtopicKeys.length) return "active";
-    return "partial";
-  }
-
-  #toggleAllTopics() {
-    if (this.activeSubtopics.size > 0) {
-      // Some selected, deselect all
-      this.activeSubtopics = new Set();
-    } else {
-      // None selected, select all
-      this.#initializeAllSubtopics();
-    }
+    this.openDropdowns = this.openDropdowns.has(topicKey)
+      ? new Set()
+      : new Set([topicKey]);
   }
 
   #clearEvents() {
@@ -1051,28 +920,14 @@ export class XDebuggerView extends LitElement {
     }
   }
 
+  /** Expands or collapses an event; collapsing also drops its full height. */
   #toggleEventExpand(index: number) {
-    const newSet = new Set(this.expandedEvents);
-    if (newSet.has(index)) {
-      newSet.delete(index);
-      // Also remove from full height when collapsing
-      const fullHeightSet = new Set(this.fullHeightEvents);
-      fullHeightSet.delete(index);
-      this.fullHeightEvents = fullHeightSet;
-    } else {
-      newSet.add(index);
+    if (this.expandedEvents.has(index)) {
+      const fullHeight = new Set(this.fullHeightEvents);
+      fullHeight.delete(index);
+      this.fullHeightEvents = fullHeight;
     }
-    this.expandedEvents = newSet;
-  }
-
-  #toggleJsonFullHeight(index: number) {
-    const newSet = new Set(this.fullHeightEvents);
-    if (newSet.has(index)) {
-      newSet.delete(index);
-    } else {
-      newSet.add(index);
-    }
-    this.fullHeightEvents = newSet;
+    this.expandedEvents = toggleMember(this.expandedEvents, index);
   }
 
   async #copyJson(data: RuntimeTelemetryMarkerResult) {
@@ -1084,241 +939,13 @@ export class XDebuggerView extends LitElement {
     }
   }
 
-  #formatTime(timestamp: number): string {
-    const date = new Date(timestamp);
-    return `${date.toLocaleTimeString()}.${
-      date.getMilliseconds().toString().padStart(3, "0")
-    }`;
-  }
-
-  #getEventIcon(marker: RuntimeTelemetryMarkerResult): string {
-    const type = marker.type;
-
-    // Try to find a matching topic
-    for (const [_topicKey, topic] of Object.entries(TOPIC_HIERARCHY)) {
-      for (const [_subtopicKey, subtopic] of Object.entries(topic.subtopics)) {
-        if (type.startsWith(subtopic.pattern)) {
-          return topic.icon;
-        }
-      }
-    }
-
-    // Default icon
-    return "📊";
-  }
-
-  #getEventColor(marker: RuntimeTelemetryMarkerResult): string {
-    const type = marker.type;
-
-    // Try to find a matching topic
-    for (const [_topicKey, topic] of Object.entries(TOPIC_HIERARCHY)) {
-      for (const [_subtopicKey, subtopic] of Object.entries(topic.subtopics)) {
-        if (type.startsWith(subtopic.pattern)) {
-          return topic.color;
-        }
-      }
-    }
-
-    // Default color
-    return "#64748b";
-  }
-
-  #matchesActiveTopics(marker: RuntimeTelemetryMarkerResult): boolean {
-    if (this.activeSubtopics.size === 0) return false;
-
-    const type = marker.type;
-
-    // Check if the event matches any active subtopic
-    for (const [topicKey, topic] of Object.entries(TOPIC_HIERARCHY)) {
-      for (const [subtopicKey, subtopic] of Object.entries(topic.subtopics)) {
-        const fullKey = `${topicKey}.${subtopicKey}`;
-        if (
-          this.activeSubtopics.has(fullKey) && type.startsWith(subtopic.pattern)
-        ) {
-          return true;
-        }
-      }
-    }
-
-    return false;
-  }
-
-  #matchesSearch(marker: RuntimeTelemetryMarkerResult): boolean {
-    if (!this.searchText) return true;
-
-    const searchLower = this.searchText.toLowerCase();
-    // A bounded rendering, so that a search does not render a huge marker
-    // whole each keystroke.
-    const markerStr = toCompactDebugString(marker, {
-      ...DEBUGGER_VALUE_OPTIONS,
-      maxLength: 5000,
-    }).toLowerCase();
-    return markerStr.includes(searchLower);
-  }
-
-  #getFilteredEvents(): RuntimeTelemetryMarkerResult[] {
-    const markers = this.isPaused ? this.pausedMarkers : this.telemetryMarkers;
-
-    return markers.filter((marker) =>
-      this.#matchesActiveTopics(marker) && this.#matchesSearch(marker)
+  /** The events the filters keep, from the frozen list while paused. */
+  #filteredEvents(): RuntimeTelemetryMarkerResult[] {
+    return filterEvents(
+      this.isPaused ? this.pausedMarkers : this.telemetryMarkers,
+      this.activeSubtopics,
+      this.searchText,
     );
-  }
-
-  #renderEventDetails(
-    marker: RuntimeTelemetryMarkerResult,
-  ): TemplateResult[] {
-    const details = [];
-
-    // Extract key-value pairs from the marker (excluding type and timeStamp)
-    const { type, timeStamp: _, ...rest } = marker;
-
-    // Special handling for different event types
-    if (type === "scheduler.run" || type === "scheduler.invocation") {
-      const eventData = rest as Record<string, unknown>;
-      const actionId = typeof eventData.actionId === "string"
-        ? eventData.actionId
-        : undefined;
-      const handlerId = typeof eventData.handlerId === "string"
-        ? eventData.handlerId
-        : undefined;
-      const info = isObjectOrArray(eventData.actionInfo)
-        ? eventData.actionInfo
-        : isObjectOrArray(eventData.handlerInfo)
-        ? eventData.handlerInfo
-        : undefined;
-
-      const idLabel = actionId ? "action" : "handler";
-      const idValue = actionId ?? handlerId;
-
-      if (idValue) {
-        details.push(html`
-          <div class="event-detail">
-            <span class="event-detail-label">${idLabel}:</span>
-            <span class="event-detail-value">${idValue}</span>
-          </div>
-        `);
-      }
-
-      if (info) {
-        if (typeof info.patternName === "string") {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">pattern:</span>
-              <span class="event-detail-value">${info.patternName}</span>
-            </div>
-          `);
-        }
-        if (typeof info.moduleName === "string") {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">module:</span>
-              <span class="event-detail-value">${info.moduleName}</span>
-            </div>
-          `);
-        }
-        if (Array.isArray(info.reads) && info.reads.length > 0) {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">reads:</span>
-              <span class="event-detail-value">${info.reads
-                .length} dependencies</span>
-            </div>
-          `);
-        }
-        if (Array.isArray(info.writes) && info.writes.length > 0) {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">writes:</span>
-              <span class="event-detail-value">${info.writes
-                .length} outputs</span>
-            </div>
-          `);
-        }
-      }
-
-      if (eventData.error) {
-        details.push(html`
-          <div class="event-detail">
-            <span class="event-detail-label">error:</span>
-            <span class="event-detail-value" style="color: #ef4444;">${eventData
-              .error}</span>
-          </div>
-        `);
-      }
-    } else if (type === "cell.update") {
-      const change = (rest as Record<string, unknown>).change;
-      if (isObjectOrArray(change)) {
-        if (isObjectOrArray(change.address)) {
-          if (change.address?.id) {
-            details.push(html`
-              <div class="event-detail">
-                <span class="event-detail-label">cell:</span>
-                <span class="event-detail-value">${change.address.id}</span>
-              </div>
-            `);
-          }
-          if (change.address?.path) {
-            details.push(html`
-              <div class="event-detail">
-                <span class="event-detail-label">path:</span>
-                <span class="event-detail-value">${(change.address
-                  .path as string[]).join(
-                    "/",
-                  )}</span>
-              </div>
-            `);
-          }
-          if (change.address?.type) {
-            details.push(html`
-              <div class="event-detail">
-                <span class="event-detail-label">type:</span>
-                <span class="event-detail-value">${change.address.type}</span>
-              </div>
-            `);
-          }
-        }
-        // Show a summary of the change
-        const hasBeforeAfter = change.before !== undefined ||
-          change.after !== undefined;
-        if (hasBeforeAfter) {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">change:</span>
-              <span class="event-detail-value">
-                ${change.before === undefined
-                  ? "created"
-                  : change.after === undefined
-                  ? "deleted"
-                  : "updated"}
-              </span>
-            </div>
-          `);
-        }
-      }
-    } else {
-      // Default rendering for other event types
-      for (const [key, value] of Object.entries(rest)) {
-        if (value !== undefined && value !== null) {
-          details.push(html`
-            <div class="event-detail">
-              <span class="event-detail-label">${key}:</span>
-              <span class="event-detail-value">${typeof value === "string"
-                ? value
-                : typeof value === "boolean"
-                ? value.toString()
-                : typeof value === "number"
-                ? value.toString()
-                : toCompactDebugString(value, {
-                  ...DEBUGGER_VALUE_OPTIONS,
-                  maxLength: 100,
-                })}</span>
-            </div>
-          `);
-        }
-      }
-    }
-
-    return details;
   }
 
   #getLoggerRegistry(): Record<string, Logger> {
@@ -1328,29 +955,16 @@ export class XDebuggerView extends LitElement {
     return global.commonfabric?.logger ?? {};
   }
 
-  #getLoggerBreakdown(): Record<string, LoggerBreakdown | number> {
+  #getLoggerBreakdown(): LoggerCounts {
     const global = globalThis as unknown as {
-      commonfabric?: {
-        getLoggerCountsBreakdown?: () => Record<
-          string,
-          LoggerBreakdown | number
-        >;
-      };
+      commonfabric?: { getLoggerCountsBreakdown?: () => LoggerCounts };
     };
     return global.commonfabric?.getLoggerCountsBreakdown?.() ?? { total: 0 };
   }
 
-  #getBreakdownTotal(
-    breakdown: Record<string, LoggerBreakdown | number> | null,
-  ): number {
-    if (!breakdown) return 0;
-    const total = breakdown.total;
-    return typeof total === "number" ? total : 0;
-  }
-
   async #getWorkerLoggerBreakdown(): Promise<{
-    counts: Record<string, LoggerBreakdown | number> | null;
-    timing: Record<string, Record<string, TimingStats>> | null;
+    counts: LoggerCounts | null;
+    timing: LoggerTiming | null;
   }> {
     const runtime = this.debuggerController?.getRuntime();
     if (!runtime) return { counts: null, timing: null };
@@ -1369,125 +983,24 @@ export class XDebuggerView extends LitElement {
     }
   }
 
-  #mergeLoggerBreakdowns(
-    main: Record<string, LoggerBreakdown | number>,
-    worker: Record<string, LoggerBreakdown | number> | null,
-  ): Record<string, LoggerBreakdown | number> {
-    if (!worker) return main;
-
-    const merged: Record<string, LoggerBreakdown | number> = {};
-    const allKeys = new Set([
-      ...Object.keys(main).filter((k) => k !== "total"),
-      ...Object.keys(worker).filter((k) => k !== "total"),
-    ]);
-
-    for (const key of allKeys) {
-      const mainVal = main[key];
-      const workerVal = worker[key];
-
-      if (typeof mainVal === "number" || typeof workerVal === "number") {
-        // Handle simple number values
-        merged[key] = (typeof mainVal === "number" ? mainVal : 0) +
-          (typeof workerVal === "number" ? workerVal : 0);
-      } else if (mainVal && workerVal) {
-        // Both have LoggerBreakdown - merge them
-        merged[key] = this.#mergeBreakdown(mainVal, workerVal);
-      } else {
-        // Only one has data
-        merged[key] = mainVal ?? workerVal;
-      }
-    }
-
-    // Merge totals
-    const mainTotal = typeof main.total === "number" ? main.total : 0;
-    const workerTotal = typeof worker.total === "number" ? worker.total : 0;
-    merged.total = mainTotal + workerTotal;
-
-    return merged;
-  }
-
-  #mergeBreakdown(
-    a: LoggerBreakdown,
-    b: LoggerBreakdown,
-  ): LoggerBreakdown {
-    const merged = { total: a.total + b.total } as LoggerBreakdown;
-    const allKeys = new Set([
-      ...Object.keys(a).filter((k) => k !== "total"),
-      ...Object.keys(b).filter((k) => k !== "total"),
-    ]);
-
-    for (const key of allKeys) {
-      const aVal = a[key];
-      const bVal = b[key];
-      if (aVal && bVal) {
-        merged[key] = {
-          debug: aVal.debug + bVal.debug,
-          info: aVal.info + bVal.info,
-          warn: aVal.warn + bVal.warn,
-          error: aVal.error + bVal.error,
-          total: aVal.total + bVal.total,
-        };
-      } else {
-        merged[key] = aVal ?? bVal;
-      }
-    }
-
-    return merged;
-  }
-
-  #getLoggerTiming(): Record<string, Record<string, TimingStats>> {
+  #getLoggerTiming(): LoggerTiming {
     const global = globalThis as unknown as {
-      commonfabric?: {
-        getTimingStatsBreakdown?: () => Record<
-          string,
-          Record<string, TimingStats>
-        >;
-      };
+      commonfabric?: { getTimingStatsBreakdown?: () => LoggerTiming };
     };
     return global.commonfabric?.getTimingStatsBreakdown?.() ?? {};
-  }
-
-  #mergeLoggerTiming(
-    main: Record<string, Record<string, TimingStats>>,
-    worker: Record<string, Record<string, TimingStats>> | null,
-  ): Record<string, Record<string, TimingStats>> {
-    if (!worker) return main;
-
-    const merged: Record<string, Record<string, TimingStats>> = { ...main };
-
-    for (const [loggerName, workerKeys] of Object.entries(worker)) {
-      if (!merged[loggerName]) {
-        merged[loggerName] = workerKeys;
-      } else {
-        // Merge keys within the same logger
-        merged[loggerName] = { ...merged[loggerName], ...workerKeys };
-      }
-    }
-
-    return merged;
   }
 
   async #sampleLoggerCounts(): Promise<void> {
     const mainCounts = this.#getLoggerBreakdown();
     const workerResult = await this.#getWorkerLoggerBreakdown();
-    this.loggerSample = this.#mergeLoggerBreakdowns(
-      mainCounts,
-      workerResult.counts,
-    );
+    this.loggerSample = mergeLoggerCounts(mainCounts, workerResult.counts);
 
     // Merge timing data
     const mainTiming = this.#getLoggerTiming();
-    this.loggerTimingSample = this.#mergeLoggerTiming(
+    this.loggerTimingSample = mergeLoggerTiming(
       mainTiming,
       workerResult.timing,
     );
-
-    // Debug logging
-    console.log("[sampleLoggerCounts] Timing data:", {
-      mainTiming,
-      workerTiming: workerResult.timing,
-      merged: this.loggerTimingSample,
-    });
   }
 
   async #resetBaseline(): Promise<void> {
@@ -1508,8 +1021,6 @@ export class XDebuggerView extends LitElement {
       if (rt) {
         await rt.resetLoggerBaselines();
       }
-      // Clear local baseline tracking
-      this.loggerBaseline = null;
       // Sample to get fresh data
       await this.#sampleLoggerCounts();
     } catch (error) {
@@ -1584,325 +1095,59 @@ export class XDebuggerView extends LitElement {
   }
 
   #toggleExpandLogger(name: string): void {
-    if (this.expandedLoggers.has(name)) {
-      this.expandedLoggers.delete(name);
-    } else {
-      this.expandedLoggers.add(name);
-    }
-    this.requestUpdate();
-  }
-
-  #getDelta(current: number, baseline: number | undefined): number {
-    return current - (baseline ?? 0);
-  }
-
-  #formatDelta(delta: number): string {
-    if (delta === 0) return "0";
-    return delta > 0 ? `+${delta}` : `${delta}`;
+    this.expandedLoggers = toggleMember(this.expandedLoggers, name);
   }
 
   #renderTimingHistogram(
-    _loggerName: string,
     timingData: Record<string, TimingStats>,
   ): TemplateResult {
-    const keys = Object.keys(timingData).sort((a, b) =>
-      timingData[b].count - timingData[a].count
-    );
-
-    if (keys.length === 0) {
+    if (Object.keys(timingData).length === 0) {
       return html`
       `;
     }
 
     return html`
       <div class="timing-histogram">
-        ${keys.map((key) => {
-          const stats = timingData[key];
-          if (!stats.cdf || stats.cdf.length === 0) {
-            return html`
-            `;
-          }
-
-          return this.#renderCDFForKey(key, stats);
-        })}
+        ${chartedOperations(timingData).map(([key, stats]) =>
+          this.#renderCDFForKey(key, stats)
+        )}
       </div>
     `;
   }
 
-  #handleChartMouseMove(
-    e: MouseEvent,
-    cumulativePointsBlue: Array<{
-      latency: number;
-      cumulativeTime: number;
-      eventIndex: number;
-      normalizedPosition: number;
-    }>,
-    cumulativePointsGreen:
-      | Array<{
-        latency: number;
-        cumulativeTime: number;
-        eventIndex: number;
-        normalizedPosition: number;
-      }>
-      | null,
-    xScale: (normalizedPosition: number) => number,
-    yScaleBlue: (cumulativeTime: number) => number,
-    yScaleGreen: (cumulativeTime: number) => number,
-    formatTime: (ms: number) => string,
-    margin: { top: number; right: number; bottom: number; left: number },
-    _plotWidth: number,
-    _plotHeight: number,
-  ): void {
+  /** Shows the tooltip for the chart point under the pointer, if any. */
+  #handleChartMouseMove(e: MouseEvent, chart: CdfChart): void {
     const svg = e.currentTarget as SVGElement;
     const rect = svg.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    // Check if mouse is inside plot area
-    if (
-      mouseX < margin.left ||
-      mouseX > rect.width - margin.right ||
-      mouseY < margin.top ||
-      mouseY > rect.height - margin.bottom
-    ) {
-      this.tooltipData = null;
-      return;
-    }
-
-    // Find closest point on blue curve
-    let closestPointBlue = cumulativePointsBlue[0];
-    let minDistanceBlue = Infinity;
-
-    for (const point of cumulativePointsBlue) {
-      const px = xScale(point.normalizedPosition);
-      const py = yScaleBlue(point.cumulativeTime);
-      const distance = Math.sqrt((mouseX - px) ** 2 + (mouseY - py) ** 2);
-      if (distance < minDistanceBlue) {
-        minDistanceBlue = distance;
-        closestPointBlue = point;
-      }
-    }
-
-    // Find closest point on green curve if it exists
-    let closestPointGreen: typeof closestPointBlue | null = null;
-    let minDistanceGreen = Infinity;
-
-    if (cumulativePointsGreen) {
-      for (const point of cumulativePointsGreen) {
-        const px = xScale(point.normalizedPosition);
-        const py = yScaleGreen(point.cumulativeTime);
-        const distance = Math.sqrt((mouseX - px) ** 2 + (mouseY - py) ** 2);
-        if (distance < minDistanceGreen) {
-          minDistanceGreen = distance;
-          closestPointGreen = point;
-        }
-      }
-    }
-
-    // Show tooltip if close enough to either curve (within 30px)
-    const isCloseToBlue = minDistanceBlue < 30;
-    const isCloseToGreen = minDistanceGreen < 30;
-
-    if (isCloseToBlue || isCloseToGreen) {
-      const lines: string[] = [];
-
-      if (isCloseToBlue) {
-        lines.push(
-          `All time: ${formatTime(closestPointBlue.latency)}`,
-          `  Cumulative: ${formatTime(closestPointBlue.cumulativeTime)}`,
-          `  Event #${closestPointBlue.eventIndex}`,
-        );
-      }
-
-      if (isCloseToGreen && closestPointGreen) {
-        if (lines.length > 0) lines.push(""); // Add blank line between sections
-        lines.push(
-          `Since baseline: ${formatTime(closestPointGreen.latency)}`,
-          `  Cumulative: ${formatTime(closestPointGreen.cumulativeTime)}`,
-          `  Event #${closestPointGreen.eventIndex}`,
-        );
-      }
-
-      this.tooltipData = {
-        x: e.clientX + 10,
-        y: e.clientY - 10,
-        content: lines.join("\n"),
-        visible: true,
-      };
-    } else {
-      this.tooltipData = null;
-    }
-  }
-
-  #handleChartMouseLeave(): void {
-    this.tooltipData = null;
+    const content = cdfChartTooltip(
+      chart,
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      rect.width,
+      rect.height,
+    );
+    this.tooltipData = content === null ? null : {
+      x: e.clientX + 10,
+      y: e.clientY - 10,
+      content,
+      visible: true,
+    };
   }
 
   #renderCDFForKey(
     key: string,
     stats: TimingStats,
   ): TemplateResult {
-    const cdf = stats.cdf;
-    const cdfDelta = stats.cdfSinceBaseline;
-
-    if (cdf.length === 0) {
-      return html`
-      `;
-    }
-
-    // Format time for display
-    const formatTime = (ms: number) => {
-      if (ms < 1) return `${(ms * 1000).toFixed(0)}μs`;
-      if (ms < 1000) return `${ms.toFixed(1)}ms`;
-      return `${(ms / 1000).toFixed(2)}s`;
-    };
-
-    // Create unique ID for this chart
-    const chartId = `cdf-${key.replace(/\//g, "-")}`;
-
-    // SVG dimensions
-    const width = 600;
-    const height = 200;
-    const margin = { top: 25, right: 50, bottom: 40, left: 60 };
+    const chart = cdfChart(stats);
+    const { width, height, margin } = CDF_CHART_FRAME;
     const plotWidth = width - margin.left - margin.right;
     const plotHeight = height - margin.top - margin.bottom;
-
-    // Sort samples and compute cumulative time
-    const sortedSamples = [...cdf].sort((a, b) => a.x - b.x);
-    const cumulativePoints: Array<
-      {
-        latency: number;
-        cumulativeTime: number;
-        eventIndex: number;
-        normalizedPosition: number;
-      }
-    > = [];
-    let cumTime = 0;
-    const totalCount = sortedSamples.length;
-    sortedSamples.forEach((sample, i) => {
-      cumTime += sample.x;
-      cumulativePoints.push({
-        latency: sample.x,
-        cumulativeTime: cumTime,
-        eventIndex: i + 1,
-        normalizedPosition: totalCount > 0 ? (i + 1) / totalCount : 0,
-      });
-    });
-
-    // Do the same for delta if it exists
-    let cumulativePointsDelta:
-      | Array<
-        {
-          latency: number;
-          cumulativeTime: number;
-          eventIndex: number;
-          normalizedPosition: number;
-        }
-      >
-      | null = null;
-    if (cdfDelta) {
-      const sortedDelta = [...cdfDelta].sort((a, b) => a.x - b.x);
-      cumulativePointsDelta = [];
-      let cumTimeDelta = 0;
-      const deltaCount = sortedDelta.length;
-      sortedDelta.forEach((sample, i) => {
-        cumTimeDelta += sample.x;
-        cumulativePointsDelta!.push({
-          latency: sample.x,
-          cumulativeTime: cumTimeDelta,
-          eventIndex: i + 1,
-          normalizedPosition: deltaCount > 0 ? (i + 1) / deltaCount : 0,
-        });
-      });
-    }
-
-    // X-axis: normalized position (0 to 1)
-    // This allows both curves to use the full chart width
-    const xScale = (normalizedPosition: number) => {
-      return margin.left + normalizedPosition * plotWidth;
-    };
-
-    // Y-axis: cumulative time (0 to max cumulative from reservoir samples)
-    // Use separate scales for each curve so both fill the vertical space
-    const maxCumulativeTimeBlue =
-      cumulativePoints[cumulativePoints.length - 1]?.cumulativeTime ?? 0.001;
-    const maxCumulativeTimeGreen = cumulativePointsDelta?.[
-      cumulativePointsDelta.length - 1
-    ]?.cumulativeTime ?? maxCumulativeTimeBlue;
-
-    const yScaleBlue = (cumulativeTime: number) => {
-      return margin.top + plotHeight -
-        (cumulativeTime / maxCumulativeTimeBlue) * plotHeight;
-    };
-
-    const yScaleGreen = (cumulativeTime: number) => {
-      return margin.top + plotHeight -
-        (cumulativeTime / maxCumulativeTimeGreen) * plotHeight;
-    };
-
-    // For y-axis labels, use the maximum of both
-    const maxCumulativeTime = Math.max(
-      maxCumulativeTimeBlue,
-      maxCumulativeTimeGreen,
-    );
-    const yScale = yScaleBlue; // For grid lines/labels
-
-    // Generate SVG path from cumulative points
-    const pathFromCumulative = (
-      points: Array<{
-        latency: number;
-        cumulativeTime: number;
-        eventIndex: number;
-        normalizedPosition: number;
-      }>,
-      yScaleFn: (cumulativeTime: number) => number,
-    ) => {
-      if (points.length === 0) return "";
-      const pathParts = points.map((p, i) =>
-        `${i === 0 ? "M" : "L"} ${xScale(p.normalizedPosition)} ${
-          yScaleFn(p.cumulativeTime)
-        }`
-      );
-      const path = pathParts.join(" ");
-      return path;
-    };
-
-    // Generate x-axis tick marks (percentages: 0%, 20%, 40%, 60%, 80%, 100%)
-    const xTicks: number[] = [];
-    const xTickCount = 5;
-    for (let i = 0; i <= xTickCount; i++) {
-      xTicks.push(i / xTickCount); // 0, 0.2, 0.4, 0.6, 0.8, 1.0
-    }
-
-    // Generate y-axis tick marks (cumulative time)
-    const yTicks: number[] = [];
-    const yTickCount = 5;
-    for (let i = 0; i <= yTickCount; i++) {
-      yTicks.push((i / yTickCount) * maxCumulativeTime);
-    }
+    const chartId = `cdf-${key.replace(/\//g, "-")}`;
+    const showBaselineLegend = (chart.baselinePoints?.length ?? 0) > 0;
 
     // Percentile positions (normalized 0-1)
     const p50Position = 0.5; // Always at 50% by definition
     const p95Position = 0.95; // Always at 95% by definition
-
-    // Find position closest to average latency in the blue curve
-    let avgPosition = 0.5; // default to middle
-    let minDiff = Infinity;
-    for (let i = 0; i < cumulativePoints.length; i++) {
-      const diff = Math.abs(cumulativePoints[i].latency - stats.average);
-      if (diff < minDiff) {
-        minDiff = diff;
-        avgPosition = cumulativePoints[i].normalizedPosition;
-      }
-    }
-
-    // Pre-render SVG path data
-    const greenPathData = cumulativePointsDelta
-      ? pathFromCumulative(cumulativePointsDelta, yScaleGreen)
-      : null;
-
-    const showGreenLegend = cdfDelta && cumulativePointsDelta &&
-      cumulativePointsDelta.length > 0;
 
     return html`
       <div style="margin-bottom: 1rem;">
@@ -1910,9 +1155,9 @@ export class XDebuggerView extends LitElement {
           <span class="timing-key-name">${key}</span>
           <div class="timing-stats-summary">
             <span>n=${stats.count}</span>
-            <span>p50=${formatTime(stats.p50)}</span>
-            <span>p95=${formatTime(stats.p95)}</span>
-            <span>avg=${formatTime(stats.average)}</span>
+            <span>p50=${formatDuration(stats.p50)}</span>
+            <span>p95=${formatDuration(stats.p95)}</span>
+            <span>avg=${formatDuration(stats.average)}</span>
           </div>
         </div>
 
@@ -1922,23 +1167,12 @@ export class XDebuggerView extends LitElement {
           height="${height}"
           style="background-color: #0f172a; border-radius: 0.25rem; cursor: crosshair;"
           @mousemove="${(e: MouseEvent) =>
-            this.#handleChartMouseMove(
-              e,
-              cumulativePoints,
-              cumulativePointsDelta,
-              xScale,
-              yScaleBlue,
-              yScaleGreen,
-              formatTime,
-              margin,
-              plotWidth,
-              plotHeight,
-            )}"
-          @mouseleave="${() => this.#handleChartMouseLeave()}"
+            this.#handleChartMouseMove(e, chart)}"
+          @mouseleave="${() => this.tooltipData = null}"
         >
           <!-- Y-axis grid lines and labels -->
-          ${yTicks.map((y) => {
-            const yPos = yScale(y);
+          ${chart.yTicks.map((y) => {
+            const yPos = chart.y(y);
             return html`
               <line
                 x1="${margin.left}"
@@ -1958,14 +1192,14 @@ export class XDebuggerView extends LitElement {
                 font-size="10"
                 font-family="monospace"
               >
-                ${formatTime(y)}
+                ${formatDuration(y)}
               </text>
             `;
           })}
 
           <!-- X-axis grid lines and labels -->
-          ${xTicks.map((x) => {
-            const xPos = xScale(x);
+          ${chart.xTicks.map((x) => {
+            const xPos = chart.x(x);
             return html`
               <line
                 x1="${xPos}"
@@ -2008,8 +1242,8 @@ export class XDebuggerView extends LitElement {
           />
 
           <!-- X-axis ticks -->
-          ${xTicks.map((x) => {
-            const xPos = xScale(x);
+          ${chart.xTicks.map((x) => {
+            const xPos = chart.x(x);
             return html`
               <line
                 x1="${xPos}"
@@ -2023,8 +1257,8 @@ export class XDebuggerView extends LitElement {
           })}
 
           <!-- Y-axis ticks -->
-          ${yTicks.map((y) => {
-            const yPos = yScale(y);
+          ${chart.yTicks.map((y) => {
+            const yPos = chart.y(y);
             return html`
               <line
                 x1="${margin.left - 6}"
@@ -2039,26 +1273,26 @@ export class XDebuggerView extends LitElement {
 
           <!-- Cumulative time curve (all samples since start) - blue -->
           <path
-            d="${pathFromCumulative(cumulativePoints, yScaleBlue)}"
+            d="${chart.path}"
             fill="none"
             stroke="#3b82f6"
             stroke-width="2"
             opacity="0.8"
             style="pointer-events: stroke;"
           >
-            <title>Total: ${stats.count} samples, ${formatTime(
+            <title>Total: ${stats.count} samples, ${formatDuration(
               stats.totalTime,
             )} cumulative</title>
           </path>
 
           <!-- Cumulative time delta curve (since baseline) - green -->
           <path
-            d="${greenPathData || ""}"
+            d="${chart.baselinePath || ""}"
             fill="none"
             stroke="#10b981"
             stroke-width="2"
             opacity="0.8"
-            style="pointer-events: stroke; ${greenPathData
+            style="pointer-events: stroke; ${chart.baselinePath
               ? ""
               : "display: none;"}"
           >
@@ -2068,19 +1302,19 @@ export class XDebuggerView extends LitElement {
           <!-- Percentile reference lines (p50, p95) - render AFTER curves -->
           <g style="pointer-events: stroke;">
             <line
-              x1="${xScale(p50Position)}"
+              x1="${chart.x(p50Position)}"
               y1="${margin.top}"
-              x2="${xScale(p50Position)}"
+              x2="${chart.x(p50Position)}"
               y2="${height - margin.bottom}"
               stroke="#f59e0b"
               stroke-width="1.5"
               stroke-dasharray="4,2"
               opacity="0.7"
             >
-              <title>p50 (median): ${formatTime(stats.p50)}</title>
+              <title>p50 (median): ${formatDuration(stats.p50)}</title>
             </line>
             <text
-              x="${xScale(p50Position)}"
+              x="${chart.x(p50Position)}"
               y="${margin.top - 4}"
               text-anchor="middle"
               fill="#f59e0b"
@@ -2088,8 +1322,8 @@ export class XDebuggerView extends LitElement {
               font-weight="600"
               style="pointer-events: none;"
             >
-              <tspan x="${xScale(p50Position)}" dy="0">p50</tspan>
-              <tspan x="${xScale(p50Position)}" dy="10">${formatTime(
+              <tspan x="${chart.x(p50Position)}" dy="0">p50</tspan>
+              <tspan x="${chart.x(p50Position)}" dy="10">${formatDuration(
                 stats.p50,
               )}</tspan>
             </text>
@@ -2097,19 +1331,19 @@ export class XDebuggerView extends LitElement {
 
           <g style="pointer-events: stroke;">
             <line
-              x1="${xScale(p95Position)}"
+              x1="${chart.x(p95Position)}"
               y1="${margin.top}"
-              x2="${xScale(p95Position)}"
+              x2="${chart.x(p95Position)}"
               y2="${height - margin.bottom}"
               stroke="#ef4444"
               stroke-width="1.5"
               stroke-dasharray="4,2"
               opacity="0.7"
             >
-              <title>p95: ${formatTime(stats.p95)}</title>
+              <title>p95: ${formatDuration(stats.p95)}</title>
             </line>
             <text
-              x="${xScale(p95Position)}"
+              x="${chart.x(p95Position)}"
               y="${margin.top - 4}"
               text-anchor="middle"
               fill="#ef4444"
@@ -2117,8 +1351,8 @@ export class XDebuggerView extends LitElement {
               font-weight="600"
               style="pointer-events: none;"
             >
-              <tspan x="${xScale(p95Position)}" dy="0">p95</tspan>
-              <tspan x="${xScale(p95Position)}" dy="10">${formatTime(
+              <tspan x="${chart.x(p95Position)}" dy="0">p95</tspan>
+              <tspan x="${chart.x(p95Position)}" dy="10">${formatDuration(
                 stats.p95,
               )}</tspan>
             </text>
@@ -2127,19 +1361,19 @@ export class XDebuggerView extends LitElement {
           <!-- Average reference line -->
           <g style="pointer-events: stroke;">
             <line
-              x1="${xScale(avgPosition)}"
+              x1="${chart.x(chart.averagePosition)}"
               y1="${margin.top}"
-              x2="${xScale(avgPosition)}"
+              x2="${chart.x(chart.averagePosition)}"
               y2="${height - margin.bottom}"
               stroke="#8b5cf6"
               stroke-width="1.5"
               stroke-dasharray="4,2"
               opacity="0.5"
             >
-              <title>avg (mean): ${formatTime(stats.average)}</title>
+              <title>avg (mean): ${formatDuration(stats.average)}</title>
             </line>
             <text
-              x="${xScale(avgPosition)}"
+              x="${chart.x(chart.averagePosition)}"
               y="${margin.top - 4}"
               text-anchor="middle"
               fill="#8b5cf6"
@@ -2147,8 +1381,10 @@ export class XDebuggerView extends LitElement {
               font-weight="600"
               style="pointer-events: none;"
             >
-              <tspan x="${xScale(avgPosition)}" dy="0">avg</tspan>
-              <tspan x="${xScale(avgPosition)}" dy="10">${formatTime(
+              <tspan x="${chart.x(chart.averagePosition)}" dy="0">avg</tspan>
+              <tspan x="${chart.x(
+                chart.averagePosition,
+              )}" dy="10">${formatDuration(
                 stats.average,
               )}</tspan>
             </text>
@@ -2188,9 +1424,9 @@ export class XDebuggerView extends LitElement {
               fill="#cbd5e1"
               font-size="10"
             >
-              All time (${(maxCumulativeTimeBlue / 1000).toFixed(
+              All time (${(chart.maxTime / 1000).toFixed(
                 2,
-              )}s in ${cumulativePoints.length} samples)
+              )}s in ${chart.points.length} samples)
             </text>
             <line
               x1="0"
@@ -2199,7 +1435,7 @@ export class XDebuggerView extends LitElement {
               y2="15"
               stroke="#10b981"
               stroke-width="2"
-              style="${showGreenLegend ? "" : "display: none;"}"
+              style="${showBaselineLegend ? "" : "display: none;"}"
             />
             <text
               x="25"
@@ -2207,14 +1443,12 @@ export class XDebuggerView extends LitElement {
               dominant-baseline="middle"
               fill="#cbd5e1"
               font-size="10"
-              style="${showGreenLegend ? "" : "display: none;"}"
+              style="${showBaselineLegend ? "" : "display: none;"}"
             >
-              Since baseline (${showGreenLegend
+              Since baseline (${showBaselineLegend
                 ? `${
-                  (maxCumulativeTimeGreen / 1000).toFixed(
-                    2,
-                  )
-                }s in ${cumulativePointsDelta!.length} samples`
+                  (chart.maxBaselineTime / 1000).toFixed(2)
+                }s in ${chart.baselinePoints?.length} samples`
                 : ""})
             </text>
           </g>
@@ -2225,7 +1459,6 @@ export class XDebuggerView extends LitElement {
 
   #renderLoggers(): TemplateResult {
     const sample = this.loggerSample ?? this.#getLoggerBreakdown();
-    const baseline = this.loggerBaseline;
     const registry = this.#getLoggerRegistry();
     const loggerNames = Object.keys(sample).filter((k) => k !== "total");
 
@@ -2236,10 +1469,6 @@ export class XDebuggerView extends LitElement {
         </div>
       `;
     }
-
-    const sampleTotal = this.#getBreakdownTotal(sample);
-    const baselineTotal = this.#getBreakdownTotal(baseline);
-    const totalDelta = this.#getDelta(sampleTotal, baselineTotal);
 
     return html`
       <div class="loggers-toolbar">
@@ -2260,21 +1489,12 @@ export class XDebuggerView extends LitElement {
           Sample
         </button>
         <span class="loggers-total">
-          Total: ${sampleTotal} ${baseline
-            ? html`
-              <span class="delta ${totalDelta > 0
-                ? "positive"
-                : totalDelta < 0
-                ? "negative"
-                : ""}">(${this.#formatDelta(totalDelta)})</span>
-            `
-            : ""}
+          Total: ${countsTotal(sample)}
         </span>
       </div>
       <div class="loggers-list">
         ${loggerNames.map((name) => {
           const loggerData = sample[name] as LoggerBreakdown;
-          const baselineData = baseline?.[name] as LoggerBreakdown | undefined;
           const logger = registry[name];
           const workerMeta = this.workerLoggerMetadata?.[name];
           const isExpanded = this.expandedLoggers.has(name);
@@ -2285,7 +1505,7 @@ export class XDebuggerView extends LitElement {
             ? !workerMeta.enabled
             : false;
           const currentLevel = logger?.level ?? workerMeta?.level ?? "info";
-          const delta = this.#getDelta(loggerData.total, baselineData?.total);
+          const timing = this.loggerTimingSample?.[name];
 
           return html`
             <div class="logger-item ${isDisabled ? "disabled" : ""}">
@@ -2294,15 +1514,7 @@ export class XDebuggerView extends LitElement {
                 <span class="logger-expand">${isExpanded ? "▼" : "▶"}</span>
                 <span class="logger-name">${name}</span>
                 <span class="logger-count">
-                  ${loggerData.total} ${baseline
-                    ? html`
-                      <span class="delta ${delta > 0
-                        ? "positive"
-                        : delta < 0
-                        ? "negative"
-                        : ""}">(${this.#formatDelta(delta)})</span>
-                    `
-                    : ""}
+                  ${loggerData.total}
                 </span>
                 <span class="logger-controls" @click="${(e: Event) =>
                   e.stopPropagation()}">
@@ -2342,65 +1554,29 @@ export class XDebuggerView extends LitElement {
               ${isExpanded
                 ? html`
                   <div class="logger-keys">
-                    ${Object.entries(loggerData)
-                      .filter(([k]) => k !== "total")
-                      .sort((a, b) =>
-                        (b[1] as { total: number }).total -
-                        (a[1] as { total: number }).total
-                      )
-                      .map(([key, counts]) => {
-                        const c = counts as {
-                          debug: number;
-                          info: number;
-                          warn: number;
-                          error: number;
-                          total: number;
-                        };
-                        const baselineCounts = baselineData?.[key] as
-                          | typeof c
-                          | undefined;
-                        const keyDelta = this.#getDelta(
-                          c.total,
-                          baselineCounts?.total,
-                        );
-                        return html`
-                          <div class="logger-key">
-                            <span class="key-name">${key}</span>
-                            <span class="key-counts">
-                              <span class="count-debug" title="debug">${c
-                                .debug}</span>
-                              <span class="count-info" title="info">${c
-                                .info}</span>
-                              <span class="count-warn" title="warn">${c
-                                .warn}</span>
-                              <span class="count-error" title="error">${c
-                                .error}</span>
-                              <span class="count-total">
-                                = ${c.total} ${baseline
-                                  ? html`
-                                    <span class="delta ${keyDelta > 0
-                                      ? "positive"
-                                      : keyDelta < 0
-                                      ? "negative"
-                                      : ""}">(${this.#formatDelta(
-                                        keyDelta,
-                                      )})</span>
-                                  `
-                                  : ""}
-                              </span>
+                    ${messageCountsByTotal(loggerData).map(([key, c]) =>
+                      html`
+                        <div class="logger-key">
+                          <span class="key-name">${key}</span>
+                          <span class="key-counts">
+                            <span class="count-debug" title="debug">${c
+                              .debug}</span>
+                            <span class="count-info" title="info">${c
+                              .info}</span>
+                            <span class="count-warn" title="warn">${c
+                              .warn}</span>
+                            <span class="count-error" title="error">${c
+                              .error}</span>
+                            <span class="count-total">
+                              = ${c.total}
                             </span>
-                          </div>
-                        `;
-                      })}
+                          </span>
+                        </div>
+                      `
+                    )}
                   </div>
 
-                  ${/* Show timing histogram if available */
-                  this.loggerTimingSample?.[name]
-                    ? this.#renderTimingHistogram(
-                      name,
-                      this.loggerTimingSample[name],
-                    )
-                    : ""}
+                  ${timing ? this.#renderTimingHistogram(timing) : ""}
                 `
                 : ""}
             </div>
@@ -2436,8 +1612,10 @@ export class XDebuggerView extends LitElement {
           class="tab-button ${this.activeTab === "loggers" ? "active" : ""}"
           @click="${() => {
             this.activeTab = "loggers";
-            // Sample current counts when tab is opened
-            this.#sampleLoggerCounts();
+            // Sample current counts when tab is opened. The sample is
+            // returned, as the toolbar's buttons return theirs, so that a
+            // caller can wait for the counts to arrive.
+            return this.#sampleLoggerCounts();
           }}"
         >
           Loggers
@@ -2623,7 +1801,7 @@ export class XDebuggerView extends LitElement {
   }
 
   #renderEvents() {
-    const events = this.#getFilteredEvents();
+    const events = this.#filteredEvents();
 
     if (events.length === 0) {
       return html`
@@ -2643,7 +1821,7 @@ export class XDebuggerView extends LitElement {
         ${reversedEvents.map((marker, index) => {
           const actualIndex = events.length - 1 - index;
           const isExpanded = this.expandedEvents.has(actualIndex);
-          const color = this.#getEventColor(marker);
+          const color = eventColor(marker.type);
 
           return html`
             <div
@@ -2653,17 +1831,26 @@ export class XDebuggerView extends LitElement {
               <div class="event-header">
                 <div class="event-main">
                   <span class="event-icon" style="color: ${color}">
-                    ${this.#getEventIcon(marker)}
+                    ${eventIcon(marker.type)}
                   </span>
                   <div class="event-content">
                     <div class="event-type">${marker.type}</div>
                     <div class="event-details">
-                      ${this.#renderEventDetails(marker)}
+                      ${eventDetails(marker).map(({ label, value, isError }) =>
+                        html`
+                          <div class="event-detail">
+                            <span class="event-detail-label">${label}:</span>
+                            <span class="event-detail-value" style="${isError
+                              ? "color: #ef4444;"
+                              : ""}">${value}</span>
+                          </div>
+                        `
+                      )}
                     </div>
                   </div>
                 </div>
                 <div class="event-time">
-                  ${this.#formatTime(marker.timeStamp)}
+                  ${formatTimestamp(marker.timeStamp)}
                 </div>
               </div>
 
@@ -2680,7 +1867,10 @@ export class XDebuggerView extends LitElement {
                         class="json-control-btn"
                         @click="${(e: Event) => {
                           e.stopPropagation();
-                          this.#toggleJsonFullHeight(actualIndex);
+                          this.fullHeightEvents = toggleMember(
+                            this.fullHeightEvents,
+                            actualIndex,
+                          );
                         }}"
                       >
                         ${this.fullHeightEvents.has(actualIndex)
@@ -2718,7 +1908,7 @@ export class XDebuggerView extends LitElement {
     const allEvents = this.isPaused
       ? this.pausedMarkers
       : this.telemetryMarkers;
-    const filteredCount = this.visible ? this.#getFilteredEvents().length : 0;
+    const filteredCount = this.visible ? this.#filteredEvents().length : 0;
 
     return html`
       ${this.visible
@@ -2784,9 +1974,7 @@ export class XDebuggerView extends LitElement {
                   <div class="topics-filter">
                     ${Object.entries(TOPIC_HIERARCHY).map(([key, topic]) => {
                       const topicKey = key as TopicKey;
-                      const state = this.#getTopicState(topicKey);
-                      const subtopicKeys = Object.keys(topic.subtopics);
-                      const hasDropdown = subtopicKeys.length > 0; // Show dropdown even for single subtopic
+                      const state = topicState(this.activeSubtopics, topicKey);
                       const isDropdownOpen = this.openDropdowns.has(topicKey);
 
                       return html`
@@ -2795,69 +1983,68 @@ export class XDebuggerView extends LitElement {
                             type="button"
                             class="topic-toggle ${state}"
                             style="--topic-color: ${topic.color}"
-                            @click="${() => this.#toggleTopic(topicKey)}"
+                            @click="${() =>
+                              this.activeSubtopics = toggleTopic(
+                                this.activeSubtopics,
+                                topicKey,
+                              )}"
                             title="${topic.label}"
                           >
                             <span class="topic-icon">${topic.icon}</span>
                             ${topic.label} ${state === "partial"
                               ? html`
                                 <span style="font-size: 0.5rem; opacity: 0.7; margin-left: 0.25rem;">
-                                  ${Object.keys(topic.subtopics).filter((sk) =>
-                                    this.activeSubtopics.has(
-                                      `${topicKey}.${sk}`,
-                                    )
-                                  ).length}/${subtopicKeys.length}
+                                  ${activeSubtopicCount(
+                                    this.activeSubtopics,
+                                    topicKey,
+                                  )}/${Object.keys(topic.subtopics).length}
                                 </span>
                               `
                               : ""}
                           </button>
-                          ${hasDropdown
+                          <button
+                            type="button"
+                            class="dropdown-trigger"
+                            style="--topic-color: ${topic.color}"
+                            @click="${(e: Event) =>
+                              this.#toggleDropdown(topicKey, e)}"
+                            title="Filter subtopics"
+                          >
+                            ${isDropdownOpen ? "▲" : "▼"}
+                          </button>
+                          ${isDropdownOpen
                             ? html`
-                              <button
-                                type="button"
-                                class="dropdown-trigger"
-                                style="--topic-color: ${topic.color}"
-                                @click="${(e: Event) =>
-                                  this.#toggleDropdown(topicKey, e)}"
-                                title="Filter subtopics"
-                              >
-                                ${isDropdownOpen ? "▲" : "▼"}
-                              </button>
-                              ${isDropdownOpen
-                                ? html`
-                                  <div class="subtopic-dropdown" style="--topic-color: ${topic
-                                    .color}">
-                                    ${Object.entries(topic.subtopics).map(
-                                      ([subKey, subtopic]) => {
-                                        const fullKey = `${topicKey}.${subKey}`;
-                                        const isChecked = this.activeSubtopics
-                                          .has(
-                                            fullKey,
-                                          );
-                                        return html`
-                                          <label class="subtopic-item">
-                                            <input
-                                              type="checkbox"
-                                              class="subtopic-checkbox"
-                                              .checked="${isChecked}"
-                                              @change="${(e: Event) => {
-                                                e.stopPropagation();
-                                                this.#toggleSubtopic(
-                                                  topicKey,
-                                                  subKey,
-                                                );
-                                              }}"
-                                              @click="${(e: Event) =>
-                                                e.stopPropagation()}"
-                                            />
-                                            ${subtopic.label}
-                                          </label>
-                                        `;
-                                      },
-                                    )}
-                                  </div>
-                                `
-                                : ""}
+                              <div class="subtopic-dropdown" style="--topic-color: ${topic
+                                .color}">
+                                ${Object.entries(topic.subtopics).map(
+                                  ([subKey, subtopic]) => {
+                                    const fullKey = `${topicKey}.${subKey}`;
+                                    const isChecked = this.activeSubtopics
+                                      .has(
+                                        fullKey,
+                                      );
+                                    return html`
+                                      <label class="subtopic-item">
+                                        <input
+                                          type="checkbox"
+                                          class="subtopic-checkbox"
+                                          .checked="${isChecked}"
+                                          @change="${(e: Event) => {
+                                            e.stopPropagation();
+                                            this.activeSubtopics = toggleMember(
+                                              this.activeSubtopics,
+                                              fullKey,
+                                            );
+                                          }}"
+                                          @click="${(e: Event) =>
+                                            e.stopPropagation()}"
+                                        />
+                                        ${subtopic.label}
+                                      </label>
+                                    `;
+                                  },
+                                )}
+                              </div>
                             `
                             : ""}
                         </div>
@@ -2911,7 +2098,9 @@ export class XDebuggerView extends LitElement {
                     <button
                       type="button"
                       class="action-button"
-                      @click="${this.#toggleAllTopics}"
+                      @click="${() => this.activeSubtopics = toggleAllTopics(
+                        this.activeSubtopics,
+                      )}"
                       title="Toggle all topics"
                     >
                       ${this.activeSubtopics.size > 0 ? "☐" : "☑"}
@@ -2920,7 +2109,7 @@ export class XDebuggerView extends LitElement {
                     <button
                       type="button"
                       class="action-button"
-                      @click="${this.#togglePause}"
+                      @click="${() => this.#togglePause()}"
                       title="${this.isPaused ? "Resume" : "Pause"} (Space)"
                     >
                       ${this.isPaused ? "▶" : "⏸"}
@@ -2929,7 +2118,7 @@ export class XDebuggerView extends LitElement {
                     <button
                       type="button"
                       class="action-button"
-                      @click="${this.#clearEvents}"
+                      @click="${() => this.#clearEvents()}"
                       title="Clear events"
                     >
                       Clear

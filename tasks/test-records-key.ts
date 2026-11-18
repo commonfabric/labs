@@ -30,6 +30,7 @@
 
 import { exists } from "@std/fs";
 import { dirname, join } from "@std/path";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   defaultSpoolRoot,
   type Environment,
@@ -110,24 +111,15 @@ export interface KeyToolDeps {
   pause: () => Promise<void>;
 }
 
-function reason(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 /** Runs a command for its output; injectable so tests run no commands. */
 export type CommandRunner = (
   command: string,
   args: string[],
 ) => Promise<{ code: number; stdout: Uint8Array }>;
 
-const runCommand: CommandRunner = async (command, args) => {
-  const { code, stdout } = await new Deno.Command(command, {
-    args,
-    stdout: "piped",
-    stderr: "null",
-  }).output();
-  return { code, stdout };
-};
+const runCommand: CommandRunner = (command, args) =>
+  new Deno.Command(command, { args, stdout: "piped", stderr: "null" })
+    .output();
 
 /**
  * The GitHub token to work with: the environment's, and otherwise
@@ -202,7 +194,7 @@ async function github(
     });
   } catch (error) {
     throw new KeyToolError(
-      `Cannot reach ${API}: ${reason(error)}`,
+      `Cannot reach ${API}: ${describeFailure(error)}`,
     );
   }
 }
@@ -577,7 +569,7 @@ async function installDelivery(
   } catch (error) {
     throw new KeyToolError(
       `The delivery does not open with the identity at ` +
-        `${identityPath(deps.env)}: ${reason(error)}`,
+        `${identityPath(deps.env)}: ${describeFailure(error)}`,
     );
   }
   const keyText = new TextDecoder().decode(keyFile);
@@ -1114,7 +1106,7 @@ async function removeFile(path: string): Promise<boolean> {
     return true;
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return false;
-    throw new KeyToolError(`Cannot remove ${path}: ${reason(error)}`);
+    throw new KeyToolError(`Cannot remove ${path}: ${describeFailure(error)}`);
   }
 }
 
@@ -1161,7 +1153,7 @@ async function moveFile(from: string, to: string): Promise<void> {
     await Deno.remove(from);
   } catch (error) {
     throw new KeyToolError(
-      `Cannot move ${from} to ${to}: ${reason(error)}\n` +
+      `Cannot move ${from} to ${to}: ${describeFailure(error)}\n` +
         "Move it there yourself and run the command again.",
     );
   }
@@ -1323,24 +1315,33 @@ Stopped watching. The minting run carries on; pick the key up with
     deno task test-records-key setup
 `;
 
+/** Where a watch registers for the signal a person stops it with. */
+export interface InterruptSignals {
+  addSignalListener(signal: "SIGINT", handler: () => void): void;
+  removeSignalListener(signal: "SIGINT", handler: () => void): void;
+}
+
 /**
- * Reports a stop as a stop rather than as a stack, and returns the call
- * that takes the listener back off: a live signal listener holds the
- * event loop open, so the command would not end on its own with one
- * still registered.
+ * Reports a stop as a stop rather than as a stack, exiting with `exit`,
+ * and returns the call that takes the listener back off: a live signal
+ * listener holds the event loop open, so the command would not end on its
+ * own with one still registered.
  */
-function watchForInterrupt(): () => void {
+export function watchForInterrupt(
+  signals: InterruptSignals = Deno,
+  exit: (code: number) => never = Deno.exit,
+): () => void {
   const stop = () => {
     console.log(INTERRUPT_NOTICE);
-    Deno.exit(130);
+    exit(130);
   };
   try {
-    Deno.addSignalListener("SIGINT", stop);
+    signals.addSignalListener("SIGINT", stop);
   } catch {
     // A platform without SIGINT delivery stops the way it always did.
     return () => {};
   }
-  return () => Deno.removeSignalListener("SIGINT", stop);
+  return () => signals.removeSignalListener("SIGINT", stop);
 }
 
 /**

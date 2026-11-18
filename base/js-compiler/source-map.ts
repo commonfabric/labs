@@ -2,7 +2,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { LRUCache } from "@commonfabric/collections/cache";
 import { MappedPosition, SourceMapConsumer } from "source-map-js";
 
-import { SourceMap } from "./interface.ts";
+import type { SourceMap } from "./interface.ts";
 
 export type { MappedPosition };
 
@@ -320,11 +320,11 @@ export function composeBundleSourceMap(
  * Build an IDENTITY source map for a compiled body whose authored source map
  * was not retained — every generated line maps to the same line/column of
  * `source`. Used by the warm/cached module-record load path so error stacks
- * name the module source rather than a raw bundle coordinate.
+ * name the module source rather than a raw compiled coordinate.
  *
  * Line/column coordinates are preserved verbatim (the compiled body IS the
  * eval'd text under this load), so no positional information is invented — the
- * map only re-labels the bundle coordinate with the per-module source name.
+ * map only re-labels the compiled coordinate with the per-module source name.
  */
 export function identitySourceMap(
   // The compiled body, or its precomputed line count — the map is a fixed
@@ -385,13 +385,12 @@ const MAX_SOURCE_MAP_CACHE_SIZE = 1024;
 // - [as identifier]: \[as \w+\] matches any identifier, not just "factory"
 const stackTracePattern =
   /at (?:async )?(.+?) (?:\[as [^\]]+\] )?\((.+?)(?:, <anonymous>)?(?:\):|\:)(\d+):(\d+)\)/;
-// V8 eval frames without a function name show the filename directly after "at".
-// When there is a nested position in parens, it is the more precise location:
-//   at recipe-abc.js, <anonymous>:14:15 (recipe-abc.js, <anonymous>:20:10)
+// V8 eval frames without a function name show the filename directly after "at":
 //   at recipe-abc.js, <anonymous>:14:15
-// The nested pattern matches the inner (more precise) position first.
-const evalFrameNestedPattern =
-  /at .+?, <anonymous>:\d+:\d+ \((.+?), <anonymous>:(\d+):(\d+)\)/;
+// One that carries a nested position in parens is matched by
+// `stackTracePattern`, which maps the inner position and keeps the outer one
+// as the function name:
+//   at recipe-abc.js, <anonymous>:14:15 (recipe-abc.js, <anonymous>:20:10)
 const evalFramePattern = /at (.+?), <anonymous>:(\d+):(\d+)/;
 const CF_INTERNAL = `    at <CF_INTERNAL>`;
 const UNMAPPED = `    at <UNMAPPED>`;
@@ -471,18 +470,6 @@ export class SourceMapParser {
       }
 
       // V8 eval frames without a function name.
-      // Try the nested pattern first (inner position is more precise).
-      const nestedMatch = line.match(evalFrameNestedPattern);
-      if (nestedMatch) {
-        return this.#mapFrame(
-          "",
-          nestedMatch[1],
-          nestedMatch[2],
-          nestedMatch[3],
-          line,
-        );
-      }
-
       const evalMatch = line.match(evalFramePattern);
       if (evalMatch) {
         return this.#mapFrame(

@@ -22,10 +22,6 @@ import {
 } from "../v2.ts";
 import { createBranch } from "../v2/engine.ts";
 import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
-import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
 } from "../v2/operation-codec.ts";
@@ -80,7 +76,9 @@ describe("view interests", () => {
     return response<WatchSetResult>(messages, requestId).sync;
   }
 
-  async function resume() {
+  /** Reopens the session over a fresh connection; `descriptor` adds to the
+   * resume's session descriptor, such as the serving binding. */
+  async function resume(descriptor: { actingAs?: "space-owner" } = {}) {
     const initial = response<SessionOpenResult>(messages, "open");
     connection.close();
     connection = server.connect((message) => messages.push(message));
@@ -98,6 +96,7 @@ describe("view interests", () => {
       session: {
         sessionId: initial.sessionId,
         sessionToken: initial.sessionToken,
+        ...descriptor,
       },
       invocation: {
         iss: principal,
@@ -164,8 +163,12 @@ describe("view interests", () => {
     resetServerExecutionConfig();
   });
 
-  it("excludes the serving principal from visible client demand", async () => {
+  it("excludes the serving principal's serving session from visible client demand, and keeps its client session", async () => {
     await set([], [view()]);
+    expect(server.viewInterestsForSpace(space, { excludePrincipal: principal }))
+      .toHaveLength(1);
+
+    await resume({ actingAs: "space-owner" });
     expect(server.viewInterestsForSpace(space, { excludePrincipal: principal }))
       .toEqual([]);
     expect(server.viewInterestsForSpace(space, { excludePrincipal: "another" }))
@@ -283,12 +286,9 @@ describe("view interests", () => {
   });
 
   it("preserves delivery when a serving session selects an unnamed foreign scoped root", async () => {
-    const homeSpace = "did:key:z6Mk-view-home";
-    const homeEngine = await server.engineForSpace(homeSpace);
-    expect(acquireExecutionLease(homeEngine, {
-      space: homeSpace,
-      holder: executionLeaseHolder(principal),
-    })).toBe(true);
+    // A session under the serving binding that does not serve the space on
+    // this server (protocol.md §2's grant-scoped read).
+    await resume({ actingAs: "space-owner" });
     await set([], [view()]);
     const [{ handle }] = server.viewInterestsForSpace(space);
     expect(
@@ -577,7 +577,7 @@ describe("view interests", () => {
       expect(demanded()).not.toContain("of:unborn");
       expect(demanded()).toContain("of:arriving");
       expect(changed.calls.slice(notifications).map((call) => call.args))
-        .toEqual([[space, "push-growth", principal, sessionId]]);
+        .toEqual([[space, "push-growth", principal, sessionId, undefined]]);
       messages.length = 0;
       await server.writeDocument(space, "of:unborn", { label: "orphan" });
       await server.flushSessions();
@@ -1207,7 +1207,7 @@ describe("view interests", () => {
       server.demandedInstancesForSpace(space).map((row) => row.id),
     ).toContain("of:arriving");
     expect(changed.calls.slice(notifications).map((call) => call.args))
-      .toEqual([[space, "push-growth", principal, sessionId]]);
+      .toEqual([[space, "push-growth", principal, sessionId, undefined]]);
   });
 
   it("rebuilds only the support graphs for a plan that keeps a root under another selector", async () => {

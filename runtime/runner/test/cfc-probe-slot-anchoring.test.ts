@@ -22,19 +22,24 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 
 import { recordRuntimeOwnedStore } from "../src/builtins/runtime-owned-store.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import type { CfcRefusalDetail } from "../src/cfc/refusal-detail.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-probe-slot");
 const space = signer.did();
@@ -387,6 +392,282 @@ describe("link-resolution probes and `*` templates", () => {
           cell.getAsNormalizedFullLink().id
         );
       }))).toBe(true);
+    });
+  });
+
+  describe("a reference whose envelope holds a link entry beneath it", () => {
+    // A link entry beneath a slot that holds a reference labels a position
+    // of the reference's target: the document holding the reference has no
+    // position there. A link write persists none, but a stored envelope can
+    // hold them, as copies of the target's labels (CFC §18.7 legacy data).
+
+    beforeEach(() => makeRuntime(true));
+
+    const BENEATH_CLAUSE = cfcAtom.personalSpace(space);
+    const SLOT_CLAUSE = cfcAtom.user(space);
+
+    /** The schema of a holder whose `piece` is read as a handle. */
+    const HOLDER_SCHEMA = {
+      type: "object",
+      properties: {
+        piece: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          asCell: ["cell"],
+        },
+      },
+    } as const;
+
+    /**
+     * Stores, without preparing a commit, a document labeling its `offers`
+     * with the beneath clause, and a holder whose `piece` is a link to it,
+     * labeled by `entries`.
+     */
+    const seededHolder = async (
+      cause: string,
+      entries: readonly Record<string, FabricValue>[],
+    ) => {
+      const schema = { type: "object" } as const;
+      const schemaHash = internSchemaAsTaggedHashString(schema);
+      const at = (id: `of:${string}`) =>
+        ({ space, id, path: [], scope: "space" }) as const;
+      const target = at(`of:${cause}-target`);
+      const holder = at(`of:${cause}-holder`);
+      const envelope = <Value, Entries>(value: Value, entries: Entries) => ({
+        value,
+        cfc: { version: 1, schemaHash, labelMap: { version: 1, entries } },
+      });
+      const seed = runtime.edit() as ExtendedStorageTransaction;
+      // The envelopes are written with the runtime's own authority, and the
+      // commit goes to the storage transaction, so nothing prepares it.
+      seedStoredEnvelope(
+        seed,
+        target,
+        envelope({ offers: [{ kind: "loom" }] }, [{
+          path: ["offers"],
+          origin: "declared",
+          label: { confidentiality: [BENEATH_CLAUSE] },
+        }]),
+      );
+      seedStoredEnvelope(
+        seed,
+        holder,
+        envelope(
+          {
+            piece: { "/": { "link@1": { id: target.id, space, path: [] } } },
+          },
+          entries,
+        ),
+      );
+      expect(
+        seed.tx.write({ ...target, id: `cid:${schemaHash}` }, {
+          value: schema,
+        }).error,
+      ).toBeUndefined();
+      expect((await seed.tx.commit().settled).error).toBeUndefined();
+      const cell = runtime.getCellFromLink<{ piece: Cell<unknown> }>(
+        holder,
+        HOLDER_SCHEMA,
+      );
+      await cell.sync();
+      return cell;
+    };
+
+    /**
+     * A holder as `seededHolder` stores it, with a link entry at the slot
+     * holding `slotLabel` and one beneath it holding the beneath clause.
+     */
+    const storedHolder = async (cause: string, slotLabel: FabricValue) => {
+      const cell = await seededHolder(cause, [
+        { path: ["piece"], origin: "link", label: slotLabel },
+        {
+          path: ["piece", "offers"],
+          origin: "link",
+          label: { confidentiality: [BENEATH_CLAUSE] },
+        },
+      ]);
+      expect(entriesOf(cell).map((entry) => entry.path)).toEqual([
+        ["piece"],
+        ["piece", "offers"],
+      ]);
+      return cell;
+    };
+
+    /** The pointer label a link write gives a slot: integrity alone. */
+    const linkReferenceLabel = (cause: string) => ({
+      integrity: [{
+        type: CFC_ATOM_TYPE.LinkReference,
+        source: { space, id: `of:${cause}-target`, path: [] },
+        target: { space, id: `of:${cause}-holder`, path: ["piece"] },
+      }],
+    });
+
+    it("carries the slot's own label, and not the entry beneath it, into taking the reference", async () => {
+      const holder = await storedHolder("own", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+
+      const join = joinOf((tx) => {
+        holder.withTx(tx).get().piece.getAsNormalizedFullLink();
+      });
+      expect(join).toEqual([SLOT_CLAUSE]);
+    });
+
+    it("commits a write into another space after taking the reference", async () => {
+      const holder = await storedHolder(
+        "elsewhere",
+        linkReferenceLabel("elsewhere"),
+      );
+      const other = (await Identity.fromPassphrase("runner-cfc-probe-other"))
+        .did();
+
+      const tx = runtime.edit();
+      holder.withTx(tx).get();
+      runtime.getCell(other, "elsewhere-record", undefined, tx).set({
+        added: true,
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    });
+
+    it("names only a stamped slot, and not the entry beneath a reference, as the input of a refused write elsewhere", async () => {
+      // Both holders carry the same clause, the pointer beneath its slot
+      // and the stamped holder at its slot. Taking the pointer's reference
+      // consumes nothing, so the refusal is the stamp's alone, and naming
+      // the pointer would send whoever reads it after the wrong document.
+
+      const pointer = await storedHolder(
+        "named-pointer",
+        linkReferenceLabel("named-pointer"),
+      );
+      const stamped = await seededHolder("named-stamped", [{
+        path: ["piece"],
+        origin: "structure",
+        observes: "followRef",
+        label: { confidentiality: [BENEATH_CLAUSE] },
+      }]);
+      const other = (await Identity.fromPassphrase("runner-cfc-probe-other"))
+        .did();
+
+      const tx = runtime.edit();
+      pointer.withTx(tx).get().piece.getAsNormalizedFullLink();
+      stamped.withTx(tx).get().piece.getAsNormalizedFullLink();
+      runtime.getCell(other, "named-record", undefined, tx).set({
+        added: true,
+      });
+      runtime.prepareTxForCommit(tx);
+      const { error } = await tx.commit().settled;
+
+      const refusals =
+        (error as { refusals?: readonly CfcRefusalDetail[] } | undefined)
+          ?.refusals ?? [];
+      expect(refusals.map((detail) => detail.gate)).toEqual(["writer-fit"]);
+      expect(
+        refusals[0].offendingAtoms.map((atom) => JSON.parse(atom)),
+      ).toEqual([BENEATH_CLAUSE]);
+      expect(
+        refusals[0].inputs.map((input) => [input.read.id, input.labelPath]),
+      ).toEqual([[stamped.getAsNormalizedFullLink().id, ["piece"]]]);
+      expect(refusals[0].attribution).toBe("complete");
+    });
+
+    it("carries a child's link entry into a probe of the container holding it", async () => {
+      // The container holds no reference, so what sits beneath it is its
+      // own: the link entry at its `piece` slot labels the reference there.
+
+      const holder = await storedHolder("container", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+      const link = holder.getAsNormalizedFullLink();
+
+      const join = joinOf((tx) => {
+        tx.read({
+          space,
+          scope: link.scope,
+          id: link.id,
+          type: "application/json",
+          path: ["value"],
+        }, { meta: linkResolutionProbe });
+      });
+      expect(join).toEqual(expect.arrayContaining([SLOT_CLAUSE]));
+    });
+
+    it("carries the target's own label into reading through the reference", async () => {
+      const holder = await storedHolder("through", {
+        confidentiality: [SLOT_CLAUSE],
+      });
+
+      const join = joinOf((tx) => {
+        holder.withTx(tx).get().piece.key("offers").get();
+      });
+      expect(join).toEqual(
+        expect.arrayContaining([SLOT_CLAUSE, BENEATH_CLAUSE]),
+      );
+    });
+
+    describe("re-pointed by the transaction that took the reference", () => {
+      // A conditional pointer write reads the slot, then sets it, in one
+      // transaction. The entries beneath the slot describe the reference it
+      // held before that transaction, which the write does not change.
+
+      it("carries the slot's own label, and not the entry beneath it, into the re-pointing", async () => {
+        const holder = await storedHolder("repoint", {
+          confidentiality: [SLOT_CLAUSE],
+        });
+
+        const join = joinOf((tx) => {
+          holder.withTx(tx).get().piece.getAsNormalizedFullLink();
+          const replacement = runtime.getCell(
+            space,
+            "repoint-replacement",
+            undefined,
+            tx,
+          );
+          holder.withTx(tx).set({ piece: replacement });
+        });
+        expect(join).toEqual([SLOT_CLAUSE]);
+      });
+
+      it("stores no label of the entry beneath, so a later write into another space commits", async () => {
+        const holder = await storedHolder("repoint-elsewhere", {
+          integrity: [{
+            type: CFC_ATOM_TYPE.LinkReference,
+            source: { space, id: "of:repoint-elsewhere-target", path: [] },
+            target: {
+              space,
+              id: "of:repoint-elsewhere-holder",
+              path: ["piece"],
+            },
+          }],
+        });
+        const other = (await Identity.fromPassphrase("runner-cfc-probe-other"))
+          .did();
+
+        const repoint = runtime.edit();
+        holder.withTx(repoint).get().piece.getAsNormalizedFullLink();
+        const replacement = runtime.getCell(
+          space,
+          "repoint-elsewhere-replacement",
+          undefined,
+          repoint,
+        );
+        holder.withTx(repoint).set({ piece: replacement });
+        runtime.prepareTxForCommit(repoint);
+        expect((await repoint.commit().settled).error).toBeUndefined();
+        expect(
+          entriesOf(holder).flatMap((entry) =>
+            entry.label.confidentiality ?? []
+          ),
+        ).toEqual([]);
+
+        const tx = runtime.edit();
+        holder.withTx(tx).get().piece.getAsNormalizedFullLink();
+        runtime.getCell(other, "repoint-elsewhere-record", undefined, tx).set(
+          { added: true },
+        );
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      });
     });
   });
 });

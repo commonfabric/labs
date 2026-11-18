@@ -31,6 +31,7 @@
  * separate invocation by design; this module only applies and reports.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   acceptUnretained,
   normalizePlan,
@@ -355,7 +356,7 @@ async function closeSession(
     await sessions.close(pieces);
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return describeFailure(error);
   }
 }
 
@@ -512,8 +513,7 @@ export async function applyPlan<Op extends ReferenceOp>(
               piece: row.piece,
               ...carried,
               verdict: "failed",
-              problem:
-                (error instanceof Error ? error.message : String(error)) +
+              problem: describeFailure(error) +
                 "; the run did not start, so nothing was written.",
             },
           });
@@ -584,8 +584,7 @@ export async function applyPlan<Op extends ReferenceOp>(
       // are unattempted rather than failed — their state is known, not
       // unknown — and no row is at fault, so the reason is the run's. The
       // stop names the remainder the way every other stop does.
-      sessionProblem =
-        (error instanceof Error ? error.message : String(error)) +
+      sessionProblem = describeFailure(error) +
         "; this group's session could not be opened, so its pieces were " +
         "not attempted.";
       for (const row of group) {
@@ -701,9 +700,7 @@ export async function applyPlan<Op extends ReferenceOp>(
           if (reporterThrew) throw error;
           // Every other failure is classified by a state check made after
           // it, the way the design requires — never a probe before.
-          const problem = error instanceof Error
-            ? error.message
-            : String(error);
+          const problem = describeFailure(error);
           let state =
             "; the piece could not be re-read, so its state is unknown";
           try {

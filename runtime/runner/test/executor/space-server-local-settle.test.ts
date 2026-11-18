@@ -40,14 +40,14 @@ async function serveOneWave(
   });
   let idleCalls = 0;
   const facade = new Proxy(server, {
-    get(target, property, receiver) {
+    get(target, property) {
       if (property === "idle") {
         return () => {
           idleCalls++;
           return target.idle();
         };
       }
-      const value = Reflect.get(target, property, receiver);
+      const value = Reflect.get(target, property);
       return typeof value === "function" ? value.bind(target) : value;
     },
   });

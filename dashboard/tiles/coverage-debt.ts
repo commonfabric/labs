@@ -21,6 +21,7 @@
  * and nothing here is aggregated per person.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Status, Tile, TileView } from "../types.ts";
 import {
   type CoverageDebtSample,
@@ -202,9 +203,7 @@ export function makeCoverageDebt(
         store,
       });
       if (history.samples.length === 0 && history.error !== undefined) {
-        const message = history.error instanceof Error
-          ? history.error.message
-          : String(history.error);
+        const message = describeFailure(history.error);
         console.error("coverage debt: could not read the store:", message);
         return {
           status: "unknown",

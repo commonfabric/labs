@@ -904,15 +904,13 @@ run_callable_json_surface() {
 }
 
 run_callable_shebangs() {
-  phase "Callable files are executable and expose cf exec shebangs"
-  HANDLER_FIRST_LINE=$(head -n 1 "$HANDLER_FILE")
-  TOOL_FIRST_LINE=$(head -n 1 "$TOOL_FILE")
+  phase "Callable files are executable scripts that run cf exec on themselves"
   test -x "$HANDLER_FILE" || error "Handler file should be executable."
   test -x "$TOOL_FILE" || error "Tool file should be executable."
-  assert_contains "$HANDLER_FIRST_LINE" "#!" "Handler file should start with a shebang."
-  assert_contains "$HANDLER_FIRST_LINE" " exec" "Handler shebang should invoke cf exec."
-  assert_contains "$TOOL_FIRST_LINE" "#!" "Tool file should start with a shebang."
-  assert_contains "$TOOL_FIRST_LINE" " exec" "Tool shebang should invoke cf exec."
+  assert_contains "$(head -n 1 "$HANDLER_FILE")" "#!/bin/sh" "Handler file should start with a shell shebang."
+  assert_contains "$(cat "$HANDLER_FILE")" ' exec "$0" "$@"' "Handler file should run cf exec on itself."
+  assert_contains "$(head -n 1 "$TOOL_FILE")" "#!/bin/sh" "Tool file should start with a shell shebang."
+  assert_contains "$(cat "$TOOL_FILE")" ' exec "$0" "$@"' "Tool file should run cf exec on itself."
 }
 
 run_callable_help() {

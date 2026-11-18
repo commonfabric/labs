@@ -1,6 +1,7 @@
 import type {
   FabricPlainObject,
   FabricValue,
+  FieldAnchors,
   JSONSchema,
   SchemaPathSelector,
 } from "@commonfabric/api";
@@ -20,7 +21,9 @@ import {
   isPlainObject,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import type { RedeemReceipt } from "./space-invites.ts";
 import type { ClientInfo } from "./v2/client-info.ts";
+import type { InviteOperation } from "./v2/invites.ts";
 import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
@@ -425,6 +428,43 @@ export const streamEntriesDocId = (stream: StreamLinkRef): EntityId =>
   }`;
 
 /**
+ * Prefix of the anchors document of a collaborative field: the entity holding
+ * the field's anchors (`07-op-views-and-annotations.md` §7.15), whose value is
+ * a {@link FieldAnchors}. A client changes the anchors by writing it as it
+ * writes any entity, and the engine rewrites it in the transaction that
+ * integrates an edit moving one. The id is content-derived from the field's
+ * address ({@link operationAnchorsDocId}), so every party addresses it with
+ * no coordination, and the document lives in the field's own scope: a
+ * per-user field's anchors are per-user.
+ */
+export const OP_ANCHORS_DOC_PREFIX = "of:op-anchors:";
+
+/**
+ * The field an anchors document belongs to, as its id is derived: entity id,
+ * scope name and value-relative path. The resolved scope key is not part of
+ * it, since the document lives in the field's scope and resolves the same way.
+ */
+export type OperationAnchorsFieldRef = {
+  id: EntityId;
+  scope?: CellScope;
+  path: readonly string[];
+};
+
+export const operationAnchorsDocId = (
+  field: OperationAnchorsFieldRef,
+): EntityId =>
+  `${OP_ANCHORS_DOC_PREFIX}${
+    hashStringOf({
+      id: field.id,
+      path: [...field.path],
+      scope: field.scope ?? "space",
+    })
+  }`;
+
+export const isOperationAnchorsDocId = (id: string): boolean =>
+  id.startsWith(OP_ANCHORS_DOC_PREFIX);
+
+/**
  * `firedAt` — SERVER-STAMPED at admission (events.md §1, protocol.md §2):
  * `user` and `session` come from the authenticated commit envelope (or,
  * for delegated appends, the validated carried actor; for wave-carried
@@ -451,6 +491,9 @@ export type DeliveryFailureClass =
   | "authorization"
   | "protocol"
   | "timeout"
+  /** The space lacks the program closure of the pattern the event's piece
+   * runs, past the serving loop's grace for its arrival (events.md §5). */
+  | "program-unavailable"
   | "unknown";
 
 /** Durable processing state for an event whose runnable handler has not yet
@@ -540,6 +583,12 @@ export type StreamEventEntry = {
   /** Processing-side: the handler threw — the error IS the consequence
    * (events.md §5). */
   error?: string;
+
+  /** Processing-side: the handling read data this space doesn't admit, so
+   * the entry records the outcome withheld, the same whether it committed,
+   * errored or was refused, and records none of `error`, `status` or `reason`
+   * (events.md §5). */
+  withheld?: true;
 
   /** Processing-side: how the entry ended, where it did not simply run.
    * `"dropped"` is the dropped-event notice (events.md §5 T7);
@@ -883,9 +932,71 @@ export type DeleteOperation = {
   scope?: CellScope;
 };
 
+/**
+ * A version of a collaborative field: the field epoch, which a release of the
+ * field ends, and the count of operations integrated within it.
+ */
 export type OpCursor = {
+  /** The field epoch. */
   epoch: number;
+
+  /** Operations integrated in the epoch. */
   version: number;
+};
+
+/**
+ * The value of a field's anchors document ({@link operationAnchorsDocId}),
+ * which `@commonfabric/api` declares because a pattern reads and writes it.
+ */
+export type { FieldAnchors };
+
+/** The most anchors a field's anchors document may hold. */
+const MAX_FIELD_ANCHORS = 1024;
+
+/** The most characters an anchor's id may run to. */
+const MAX_ANCHOR_ID_LENGTH = 256;
+
+/**
+ * Reads `value` as a field's anchors
+ * (`07-op-views-and-annotations.md` §7.8): a plain map from anchor id to
+ * offset, of at most {@link MAX_FIELD_ANCHORS} anchors, each under a
+ * non-empty id of at most {@link MAX_ANCHOR_ID_LENGTH} characters, at a
+ * non-negative integer. Returns the anchors, or what is wrong with `value`
+ * as `fault`, worded to follow the name of whatever holds it. The engine's
+ * check of a written document and the state inspector's report of a stored
+ * one both rest on this, so the two cannot disagree about a document.
+ */
+export const parseFieldAnchors = (
+  value: unknown,
+): { anchors: FieldAnchors } | { fault: string } => {
+  if (!isPlainObject(value)) {
+    return { fault: "is not a map from anchor id to offset" };
+  }
+  const entries = Object.entries(value);
+  if (entries.length > MAX_FIELD_ANCHORS) {
+    return { fault: `holds more than ${MAX_FIELD_ANCHORS} anchors` };
+  }
+  const anchors: [string, number][] = [];
+  for (const [id, offset] of entries) {
+    if (id.length === 0 || id.length > MAX_ANCHOR_ID_LENGTH) {
+      return {
+        fault:
+          `holds an anchor id that is empty or longer than ${MAX_ANCHOR_ID_LENGTH} characters`,
+      };
+    }
+    if (
+      typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0
+    ) {
+      return {
+        fault:
+          `holds anchor ${id} at something other than a non-negative integer offset`,
+      };
+    }
+    anchors.push([id, offset]);
+  }
+  // `Object.fromEntries()` defines each id as an own property, whatever the
+  // id is; an assignment would lose an anchor whose id is `__proto__`.
+  return { anchors: Object.fromEntries(anchors) };
 };
 
 export const CODEMIRROR_CHANGESET_CODEC = "codemirror-changeset@1";
@@ -963,6 +1074,14 @@ export type OperationFieldSnapshot = OperationFieldAddress & {
   baselineHash: string;
   materialized: FabricValue;
   operations: IntegratedOperation[];
+
+  /**
+   * The field's anchors as its anchors document holds them, which are stated
+   * against `materialized`. A write to the document changes them without
+   * advancing the cursor, so a snapshot can carry different anchors at a
+   * cursor the client has already applied.
+   */
+  anchors: FieldAnchors;
 
   /** Lowest cursor from which the retained integrated suffix is contiguous. */
   retainedFrom?: OpCursor;
@@ -1145,6 +1264,8 @@ export type ClientCommit = {
 };
 
 export type SessionOpenResult = {
+  /** Serving Toolshed process commit, not the router or a compatibility gate. */
+  serverBuild?: string;
   sessionId: SessionId;
   sessionToken: SessionToken;
   serverSeq: number;
@@ -1157,6 +1278,9 @@ export type SessionOpenResult = {
 
   /** A challenge the connection's next signed request may carry. */
   sessionOpen: SessionOpenAuthMetadata;
+
+  /** The redemption of the invitation the open carried, when it carried one. */
+  invite?: RedeemReceipt;
 };
 
 export type MemoryProtocolFlags = {
@@ -1236,6 +1360,17 @@ export type MemoryProtocolFlags = {
    * connection whose transport bounds its messages. Inherent to the build.
    */
   syncPartsV1: boolean;
+
+  /**
+   * A session sync may name a `cid:` schema document by id, without its
+   * body (04-protocol.md section 4.2.3), enabled only when both peers
+   * advertise it: the server references a schema its realm registry holds,
+   * and the client takes the body from its own registry or fetches it.
+   * Experimental: a server advertises it unless its `syncCidReferences`
+   * option turns it off, and a client only when its
+   * `ConnectOptions.syncCidReferences` turns it on.
+   */
+  syncCidReferencesV1: boolean;
 
   /**
    * Server capability: a `session.watch.set` may come as staged parts that
@@ -1403,6 +1538,67 @@ export type MemoryProtocolFlags = {
    */
   sessionReportV1?: boolean;
 
+  /**
+   * Server capability: the server runs `pattern.lifecycle` requests
+   * (04-protocol.md §4.3.10). Advertised exactly while the deployment has a
+   * lifecycle handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and a
+   * client then sends the verbs some other way or not at all.
+   */
+  patternLifecycle?: boolean;
+
+  /**
+   * Server capability: the `pattern.lifecycle` verbs this server runs, while
+   * it advertises `patternLifecycle`, take an origin — the `follow` verb, and
+   * `origin` on `setsrc` (04-protocol.md §4.3.10). Build-inherent, so a
+   * server of this version always advertises it. Absent (an older server)
+   * parses to false: such a server refuses `follow` unread and drops a
+   * `setsrc` origin, detaching the piece, so a client sends neither.
+   */
+  patternLifecycleOrigins?: boolean;
+
+  /**
+   * Server capability: the `setsrc` and `follow` verbs this server runs take
+   * `scope`, the scope a piece is addressed at, and change the requester's
+   * instance of a piece held at a user or session scope (04-protocol.md
+   * §4.3.10). Build-inherent. Absent (an older server) parses to false: such
+   * a server ignores `scope` and changes the piece's space instance, so a
+   * client sends no scoped request.
+   */
+  patternLifecycleScopes?: boolean;
+
+  /**
+   * Server capability: the server runs `served` requests (04-protocol.md
+   * §4.3.12), the crossings one serving process sends the process that owns
+   * the target space. Advertised exactly while the deployment has a served
+   * request handler installed, which is while it runs the serving loop.
+   * Absent (an older server, or one without the loop) parses to false, and
+   * a sender then treats the owner as unavailable.
+   */
+  servedRequests?: boolean;
+
+  /**
+   * Server capability: the server administers invitations through
+   * `space.invite` requests (04-protocol.md §4.3.11). Advertised exactly
+   * while the server knows the public host its invitation links name, since
+   * an invitation's code verifier is bound to that host. Absent (an older
+   * server, or one without the host) parses to false, and a client then
+   * administers invitations some other way or not at all.
+   */
+  spaceInvites?: boolean;
+
+  /**
+   * Server capability: the server records a space's instance-naming mark and
+   * enforces INV-16 (04-protocol.md §4.1.1): a marked space admits only
+   * sessions, and commits, that declare `instanceNames: true`; the first
+   * commit from such a session marks the space; and a declaring session is
+   * admitted to an unmarked space only while the server's posture names
+   * instances. Build-inherent, so a server of this version always advertises
+   * it. Absent (an older server) parses to false; such a server admits a
+   * declaring session's commits and marks nothing.
+   */
+  instanceNameMark?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1439,6 +1635,7 @@ export type WireMemoryProtocolFlags = {
   syncCrossingsV1?: boolean;
   watchRemoveV1?: boolean;
   syncPartsV1?: boolean;
+  syncCidReferencesV1?: boolean;
   watchSetPartsV1?: boolean;
   messageCompressionV1?: boolean;
   sqliteCommitRowLabelEval?: boolean;
@@ -1458,6 +1655,12 @@ export type WireMemoryProtocolFlags = {
   admissionNotice?: boolean;
   elidedVerdicts?: boolean;
   sessionReportV1?: boolean;
+  patternLifecycle?: boolean;
+  patternLifecycleOrigins?: boolean;
+  patternLifecycleScopes?: boolean;
+  servedRequests?: boolean;
+  spaceInvites?: boolean;
+  instanceNameMark?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1496,6 +1699,30 @@ export type SessionDescriptor = {
 
   /** Assert the immutable declared kind when mounting or resuming. */
   spaceKind?: string;
+
+  /**
+   * Present when the session's runtime names instances, and absent when it
+   * binds a parent's children by position (INV-16, 04-protocol.md §4.1.2).
+   * Declared afresh on every open, and signed into the session.open
+   * invocation with the rest of this descriptor. A server advertising
+   * `instanceNameMark` admits only declaring sessions, and their commits, to a
+   * space it has marked, and marks a space at the first commit it admits from
+   * one.
+   */
+  instanceNames?: true;
+
+  /**
+   * Declares that no one waits on this session's results: a server-side
+   * component that reads and writes a space as an ordinary client and keeps
+   * its sessions open for as long as it runs, such as a toolshed's webhook
+   * runtime, or a client that only copies documents, such as a command-line
+   * tool's mirror. The server leaves the session out of client demand,
+   * whichever identity signed it, so the session neither activates its space
+   * for serving, nor keeps it from parking, nor adds to its demand. Only the
+   * literal `false`; absent, the session is demand. Declared afresh on every open, and signed into the
+   * session.open invocation with the rest of this descriptor.
+   */
+  demand?: false;
 
   sessionId?: SessionId;
   seenSeq?: number;
@@ -1558,6 +1785,17 @@ export type SessionDescriptor = {
    * this descriptor.
    */
   actingAs?: "space-owner";
+
+  /**
+   * An invitation to redeem, as the open's principal, before the open's grant
+   * is checked (04-protocol.md §4.1.2): how someone the space's access list
+   * does not name yet opens a session on it. Bound to the open's principal as
+   * the rest of this descriptor is: signed into the invocation of a signed
+   * open, and covered by the connection's authentication of an open that
+   * names its principal. A client sends it on the open that redeems and not
+   * on the resumes after it.
+   */
+  invite?: { inviteId: string; code: string };
 };
 
 /**
@@ -1746,6 +1984,15 @@ export type SessionSyncUpsert = {
   deleted?: true;
 
   /**
+   * Marks a `cid:` schema document named without its `doc`, on a
+   * connection that negotiated `syncCidReferencesV1`: the space's store
+   * holds it at `seq`, and the client takes its content from its own
+   * registry, fetching any it lacks. The client resolves every reference
+   * before the sync reaches a session, so nothing past it sees one.
+   */
+  byReference?: true;
+
+  /**
    * The commit CLASS of the covering commit — the commit whose write
    * produced this snapshot's `seq` (`commit.seq` is unique, and every
    * revision's seq IS its commit's seq, so the seq names exactly one
@@ -1819,6 +2066,14 @@ export type ViewPlan = {
   id: string;
   revision: number;
   generation: number;
+
+  /**
+   * On a `read` view's plan: the serving loop settled with this view's demand
+   * included, so the documents delivered ahead of this plan hold what it
+   * derived for them.
+   */
+  settled?: true;
+
   eligibleActions: string[];
   pieces: { id: string; scope: CellScope; patternIdentity?: string }[];
   /** Settled execution failures upstream of this rendered view. */
@@ -2094,8 +2349,14 @@ export type ViewInterest = {
   revision: number;
   /** Visible roots, which also hold execution demand. */
   query: ViewQuery;
-  /** Whether the server should select data for local interaction previews. */
-  mode: "render" | "speculate";
+  /**
+   * What the view is for. `render` and `speculate` keep a renderer's roots
+   * delivered, and `speculate` also selects data for local interaction
+   * previews. `read` holds demand for a one-shot read: the server selects
+   * nothing for it and sends one plan, marked `settled`, once its roots are
+   * current.
+   */
+  mode: "render" | "speculate" | "read";
   /** Shared component read contract version supplied by this client build. */
   componentContractVersion: string;
 };
@@ -2113,6 +2374,12 @@ export type SessionViewHandle = {
 export type SessionViewInterest = {
   handle: SessionViewHandle;
   principal?: string;
+  /** Whether the session is a serving loop's own, not a client's (the
+   * server's `SessionState.servingOwn`). */
+  servingOwn?: true;
+  /** Whether the session declared that it is not demand (the server's
+   * `SessionState.notDemand`). */
+  notDemand?: true;
   /** Whether a connection currently owns the retained session. */
   attached: boolean;
   view: ViewInterest;
@@ -2268,6 +2535,91 @@ export type EventAttentionResolveRequest = {
 export type EventAttentionResolveResult = {
   serverSeq: number;
   resolution: EventAttentionResolution;
+};
+
+/**
+ * Most UTF-8 bytes a `pattern.lifecycle` message may take. A routed
+ * connection bounds every request more tightly (`ROUTED_QUEUE_LIMIT`), and a
+ * client holds a request to the smaller bound before sending it.
+ */
+export const PATTERN_LIFECYCLE_MAX_BYTES = 8 * 1024 * 1024;
+
+/** A pattern-lifecycle verb that a serving deployment runs on request. */
+export type PatternLifecycleVerb =
+  | "upload"
+  | "instantiate"
+  | "setsrc"
+  | "follow";
+
+/**
+ * A request to run a pattern-lifecycle verb in the session's space, as the
+ * session's principal (04-protocol.md §4.3.10).
+ */
+export type PatternLifecycleRequest = {
+  type: "pattern.lifecycle";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  verb: PatternLifecycleVerb;
+
+  /**
+   * The verb's arguments, which the memory server hands to the deployment's
+   * lifecycle handler without reading them; the handler validates them, as
+   * `docs/features/server-pattern-lifecycle.md` defines.
+   */
+  body: FabricPlainObject;
+};
+
+/**
+ * Most UTF-8 bytes a `served` message may take on a direct connection, the
+ * bound `pattern.lifecycle` has. A routed connection bounds every request
+ * more tightly (`ROUTED_QUEUE_LIMIT`), and a client holds a request to the
+ * smaller bound before sending it.
+ */
+export const SERVED_REQUEST_MAX_BYTES = PATTERN_LIFECYCLE_MAX_BYTES;
+
+/**
+ * What a `served` request carries (04-protocol.md §4.3.12): one delegated
+ * event append, one foreign wave batch, or one served access-list change.
+ */
+export type ServedRequestKind = "append" | "commit" | "acl";
+
+/**
+ * A request from a serving process to the process that owns the session's
+ * space, to admit one crossing into that space on the sender's behalf
+ * (04-protocol.md §4.3.12). Admitted only on a session whose principal is in
+ * the server's delegating class.
+ */
+export type ServedRequest = {
+  type: "served";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  kind: ServedRequestKind;
+
+  /**
+   * The crossing, in the kind's shape, which the memory server hands to the
+   * deployment's served request handler without reading it.
+   */
+  body: FabricPlainObject;
+};
+
+/**
+ * A request to administer the session space's invitations, as the session's
+ * principal (04-protocol.md §4.3.11). Redemption is not among them: the one
+ * redeeming holds no grant on the space yet, so it has no session to send on.
+ * Nor is preview: whoever sends it, including a principal that has a session
+ * or has already redeemed, a preview always goes as the signed HTTP request,
+ * so a client that is deciding whether to redeem needs no session to ask.
+ */
+export type SpaceInviteRequest = {
+  type: "space.invite";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+
+  /** The operation and its arguments. */
+  invite: Exclude<InviteOperation, { operation: "redeem" | "preview" }>;
 };
 
 /**
@@ -2443,7 +2795,14 @@ export type SessionRevokedMessage = {
   type: "session/revoked";
   space: string;
   sessionId: SessionId;
-  reason: "taken-over" | "unauthorized";
+  /**
+   * `taken-over`: a newer connection resumed the session. `unauthorized`: an
+   * access-list change left its principal without access. `deleted`: its space
+   * was deleted, so no principal will be admitted to it again (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`). `instance-names`: a naming
+   * commit marked the space and the session declares no naming (INV-16).
+   */
+  reason: "taken-over" | "unauthorized" | "deleted" | "instance-names";
 };
 
 /**
@@ -2460,6 +2819,14 @@ export type SessionAdmissibleMessage = {
 export type V2Error = {
   name: string;
   message: string;
+
+  /**
+   * Stable name of the reason for a refusal, on an error whose kind
+   * classifies its refusals: a `PatternLifecycleRefusal` or a
+   * `SpaceInviteRefusal`. A client branches on this, never on `message`.
+   */
+  code?: string;
+
   /** Runtime incompatibility that requires replacing the client before mounting. */
   clientUpdateRequired?: true;
 
@@ -2490,8 +2857,19 @@ export type V2Error = {
   /** Positive evidence that the server made a durable, no-commit verdict. */
   permanentEvidence?: true;
 
-  /** Engine revision whose ACL state produced an authorization denial. */
+  /**
+   * On a refusal the space's ACL state decided, the `seq` at which the ACL
+   * document is stored, or 0 when the space has none: the document's revision,
+   * not the server's current sequence (`04-protocol.md` §4.5.1).
+   */
   aclRevision?: number;
+
+  /**
+   * Present on an `AuthorizationError` for a deleted space, which every
+   * principal is refused for good (INV-15 in
+   * `docs/specs/memory-v2/09-invariants.md`).
+   */
+  deleted?: true;
 };
 
 export type V2Result<Value> = { ok: Value } | { error: V2Error };
@@ -2515,6 +2893,9 @@ export type ClientMessage =
   | SessionAckRequest
   | SessionCloseRequest
   | EventAttentionResolveRequest
+  | PatternLifecycleRequest
+  | ServedRequest
+  | SpaceInviteRequest
   | PresenceJoinRequest
   | PresencePublishRequest
   | PresenceLeaveRequest
@@ -2766,6 +3147,18 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records the diagnostics a client
   // reports about its session.
   sessionReportV1: true,
+  // Build-inherent: this build's server records a space's instance-naming
+  // mark and admits sessions and commits by it (INV-16).
+  instanceNameMark: true,
+  // Build-inherent: this build's lifecycle verbs take an origin.
+  patternLifecycleOrigins: true,
+  // Build-inherent: this build's `setsrc` and `follow` take a scope.
+  patternLifecycleScopes: true,
+  // Configuration rather than build-inherent: a `Server` advertises each
+  // from what it was given (`Server.memoryProtocolFlags()`).
+  patternLifecycle: false,
+  servedRequests: false,
+  spaceInvites: false,
   routedAuthV1: false,
   routedCompressionV1: false,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
@@ -2779,6 +3172,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's client handles a sync split across
   // messages, and its routed host splits one for a client that does.
   syncPartsV1: true,
+  // Experimental, and each peer advertises its own choice: a `Server` by its
+  // `syncCidReferences` option, a client by `ConnectOptions.syncCidReferences`.
+  syncCidReferencesV1: false,
   // Build-inherent: this build's server applies a watch set staged in parts.
   watchSetPartsV1: true,
 });
@@ -2792,6 +3188,62 @@ export const compatibleMemoryProtocolFlags = (
   right: MemoryProtocolFlags,
 ): boolean => left.modernCellRep === right.modernCellRep;
 
+/** The members of `MemoryProtocolFlags` that hold a boolean. */
+type BooleanMemoryProtocolFlag = {
+  [K in keyof MemoryProtocolFlags]-?: NonNullable<
+    MemoryProtocolFlags[K]
+  > extends boolean ? K : never;
+}[keyof MemoryProtocolFlags];
+
+/**
+ * Every boolean flag, for `parseMemoryProtocolFlags()` to refuse a peer that
+ * advertises one as anything but a boolean. The type requires every boolean
+ * member of `MemoryProtocolFlags` here, and nothing else.
+ */
+const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
+  routedAuthV1: true,
+  routedCompressionV1: true,
+  genesisRoot: true,
+  spaceKind: true,
+  serverExecution: true,
+  stableExpressionResultIds: true,
+  commitPreconditions: true,
+  applyOp: true,
+  sqliteQueryReader: true,
+  modernCellRep: true,
+  syncSchemaTableV2: true,
+  syncLabelTableV1: true,
+  commitLabelTableV1: true,
+  messageCompressionV1: true,
+  sqliteCommitRowLabelEval: true,
+  pendingReadStacks: true,
+  verdictCatchUpMarkers: true,
+  entityIdListing: true,
+  entityIdPagination: true,
+  entityIdLookup: true,
+  viewScopedReplicationV1: true,
+  sessionReadCeiling: true,
+  sessionHoldings: true,
+  presenceV1: true,
+  sessionClose: true,
+  connectionAuth: true,
+  sessionOpenProofs: true,
+  admissionNotice: true,
+  elidedVerdicts: true,
+  sessionReportV1: true,
+  patternLifecycle: true,
+  patternLifecycleOrigins: true,
+  patternLifecycleScopes: true,
+  servedRequests: true,
+  spaceInvites: true,
+  instanceNameMark: true,
+  syncCrossingsV1: true,
+  watchRemoveV1: true,
+  syncPartsV1: true,
+  syncCidReferencesV1: true,
+  watchSetPartsV1: true,
+};
+
 /**
  * Parses and normalizes incoming wire-protocol flags. Returns `null` if the
  * input is not a recognizable flags object.
@@ -2802,51 +3254,11 @@ export const parseMemoryProtocolFlags = (
   if (!isPlainObject(value)) {
     return null;
   }
-  if (
-    value.routedAuthV1 !== undefined && typeof value.routedAuthV1 !== "boolean"
-  ) {
-    return null;
+  for (const name of Object.keys(BOOLEAN_MEMORY_PROTOCOL_FLAGS)) {
+    if (value[name] !== undefined && typeof value[name] !== "boolean") {
+      return null;
+    }
   }
-  if (
-    value.routedCompressionV1 !== undefined &&
-    typeof value.routedCompressionV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const genesisRoot = value.genesisRoot;
-  if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
-    return null;
-  }
-  const spaceKind = value.spaceKind;
-  if (spaceKind !== undefined && typeof spaceKind !== "boolean") {
-    return null;
-  }
-  const serverExecution = value.serverExecution;
-  if (serverExecution !== undefined && typeof serverExecution !== "boolean") {
-    return null;
-  }
-  const stableExpressionResultIds = value.stableExpressionResultIds;
-  if (
-    stableExpressionResultIds !== undefined &&
-    typeof stableExpressionResultIds !== "boolean"
-  ) {
-    return null;
-  }
-
-  const commitPreconditions = value.commitPreconditions;
-  if (
-    commitPreconditions !== undefined &&
-    typeof commitPreconditions !== "boolean"
-  ) {
-    return null;
-  }
-
-  const applyOp = value.applyOp;
-  if (applyOp !== undefined && typeof applyOp !== "boolean") {
-    return null;
-  }
-
   const operationCodecs = value.operationCodecs;
   if (
     operationCodecs !== undefined &&
@@ -2858,248 +3270,96 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
-  const sqliteQueryReader = value.sqliteQueryReader;
-  if (
-    sqliteQueryReader !== undefined && typeof sqliteQueryReader !== "boolean"
-  ) {
-    return null;
-  }
-
-  const modernCellRep = value.modernCellRep;
-  if (
-    modernCellRep !== undefined &&
-    typeof modernCellRep !== "boolean"
-  ) {
-    return null;
-  }
-
-  const syncSchemaTableV2 = value.syncSchemaTableV2;
-  if (
-    syncSchemaTableV2 !== undefined &&
-    typeof syncSchemaTableV2 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const syncLabelTableV1 = value.syncLabelTableV1;
-  if (
-    syncLabelTableV1 !== undefined && typeof syncLabelTableV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const commitLabelTableV1 = value.commitLabelTableV1;
-  if (
-    commitLabelTableV1 !== undefined && typeof commitLabelTableV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const messageCompressionV1 = value.messageCompressionV1;
-  if (
-    messageCompressionV1 !== undefined &&
-    typeof messageCompressionV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sqliteCommitRowLabelEval = value.sqliteCommitRowLabelEval;
-  if (
-    sqliteCommitRowLabelEval !== undefined &&
-    typeof sqliteCommitRowLabelEval !== "boolean"
-  ) {
-    return null;
-  }
-
-  const pendingReadStacks = value.pendingReadStacks;
-  if (
-    pendingReadStacks !== undefined &&
-    typeof pendingReadStacks !== "boolean"
-  ) {
-    return null;
-  }
-
-  const verdictCatchUpMarkers = value.verdictCatchUpMarkers;
-  if (
-    verdictCatchUpMarkers !== undefined &&
-    typeof verdictCatchUpMarkers !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdListing = value.entityIdListing;
-  if (
-    entityIdListing !== undefined &&
-    typeof entityIdListing !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdPagination = value.entityIdPagination;
-  if (
-    entityIdPagination !== undefined &&
-    typeof entityIdPagination !== "boolean"
-  ) {
-    return null;
-  }
-
-  const entityIdLookup = value.entityIdLookup;
-  if (
-    entityIdLookup !== undefined &&
-    typeof entityIdLookup !== "boolean"
-  ) {
-    return null;
-  }
-
-  const viewScopedReplicationV1 = value.viewScopedReplicationV1;
-  if (
-    viewScopedReplicationV1 !== undefined &&
-    typeof viewScopedReplicationV1 !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sessionReadCeiling = value.sessionReadCeiling;
-  if (
-    sessionReadCeiling !== undefined &&
-    typeof sessionReadCeiling !== "boolean"
-  ) {
-    return null;
-  }
-
-  const sessionHoldings = value.sessionHoldings;
-  if (
-    sessionHoldings !== undefined &&
-    typeof sessionHoldings !== "boolean"
-  ) {
-    return null;
-  }
-
-  const presenceV1 = value.presenceV1;
-  if (presenceV1 !== undefined && typeof presenceV1 !== "boolean") {
-    return null;
-  }
-
-  const sessionClose = value.sessionClose;
-  if (sessionClose !== undefined && typeof sessionClose !== "boolean") {
-    return null;
-  }
-
-  const connectionAuth = value.connectionAuth;
-  if (connectionAuth !== undefined && typeof connectionAuth !== "boolean") {
-    return null;
-  }
-
-  const sessionOpenProofs = value.sessionOpenProofs;
-  if (
-    sessionOpenProofs !== undefined && typeof sessionOpenProofs !== "boolean"
-  ) {
-    return null;
-  }
-
-  const admissionNotice = value.admissionNotice;
-  if (admissionNotice !== undefined && typeof admissionNotice !== "boolean") {
-    return null;
-  }
-  const elidedVerdicts = value.elidedVerdicts;
-  if (elidedVerdicts !== undefined && typeof elidedVerdicts !== "boolean") {
-    return null;
-  }
-
-  const sessionReportV1 = value.sessionReportV1;
-  if (sessionReportV1 !== undefined && typeof sessionReportV1 !== "boolean") {
-    return null;
-  }
-
-  const syncCrossingsV1 = value.syncCrossingsV1;
-  if (syncCrossingsV1 !== undefined && typeof syncCrossingsV1 !== "boolean") {
-    return null;
-  }
-
-  const watchRemoveV1 = value.watchRemoveV1;
-  if (watchRemoveV1 !== undefined && typeof watchRemoveV1 !== "boolean") {
-    return null;
-  }
-
-  const syncPartsV1 = value.syncPartsV1;
-  if (syncPartsV1 !== undefined && typeof syncPartsV1 !== "boolean") {
-    return null;
-  }
-
-  const watchSetPartsV1 = value.watchSetPartsV1;
-  if (watchSetPartsV1 !== undefined && typeof watchSetPartsV1 !== "boolean") {
-    return null;
-  }
-
   return {
-    modernCellRep: modernCellRep === true,
+    modernCellRep: value.modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
-    spaceKind: spaceKind === true,
-    ...(serverExecution === undefined ? {} : { serverExecution }),
-    stableExpressionResultIds: stableExpressionResultIds === true,
-    commitPreconditions: commitPreconditions === true,
-    applyOp: applyOp === true,
+    spaceKind: value.spaceKind === true,
+    ...(typeof value.serverExecution === "boolean"
+      ? { serverExecution: value.serverExecution }
+      : {}),
+    stableExpressionResultIds: value.stableExpressionResultIds === true,
+    commitPreconditions: value.commitPreconditions === true,
+    applyOp: value.applyOp === true,
     ...(operationCodecs === undefined
       ? {}
       : { operationCodecs: [...operationCodecs].sort() as string[] }),
-    syncSchemaTableV2: syncSchemaTableV2 === true,
-    syncLabelTableV1: syncLabelTableV1 === true,
-    commitLabelTableV1: commitLabelTableV1 === true,
-    messageCompressionV1: messageCompressionV1 === true,
+    syncSchemaTableV2: value.syncSchemaTableV2 === true,
+    syncLabelTableV1: value.syncLabelTableV1 === true,
+    commitLabelTableV1: value.commitLabelTableV1 === true,
+    messageCompressionV1: value.messageCompressionV1 === true,
     // Absent (an older peer) parses to false: the capability must be
     // POSITIVELY advertised for the runner to relax its write gate.
-    sqliteCommitRowLabelEval: sqliteCommitRowLabelEval === true,
-    sqliteQueryReader: sqliteQueryReader === true,
+    sqliteCommitRowLabelEval: value.sqliteCommitRowLabelEval === true,
+    sqliteQueryReader: value.sqliteQueryReader === true,
     // Absent (an older server) parses to false: clients scalarize pending
     // reads to top-of-stack unless the array capability is advertised.
-    pendingReadStacks: pendingReadStacks === true,
+    pendingReadStacks: value.pendingReadStacks === true,
     // Absent (an older server that stamps markers only for conflicts)
     // parses to false: clients apply verdicts immediately instead of
     // parking them on marker coverage.
-    verdictCatchUpMarkers: verdictCatchUpMarkers === true,
-    entityIdListing: entityIdListing === true,
-    entityIdPagination: entityIdPagination === true,
-    entityIdLookup: entityIdLookup === true,
+    verdictCatchUpMarkers: value.verdictCatchUpMarkers === true,
+    entityIdListing: value.entityIdListing === true,
+    entityIdPagination: value.entityIdPagination === true,
+    entityIdLookup: value.entityIdLookup === true,
     // Absent (an older server) parses to false: a provider-less session
     // declares nothing and reconnects on the declaration-less paths; a
     // provider-bearing one terminates at restore (see the flag's doc).
-    sessionHoldings: sessionHoldings === true,
-    viewScopedReplicationV1: viewScopedReplicationV1 === true,
+    sessionHoldings: value.sessionHoldings === true,
+    viewScopedReplicationV1: value.viewScopedReplicationV1 === true,
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
-    sessionReadCeiling: sessionReadCeiling === true,
+    sessionReadCeiling: value.sessionReadCeiling === true,
     // Absent (an older server) parses to false: a client then refuses to
     // join a presence room rather than send a message the server would
     // refuse.
-    presenceV1: presenceV1 === true,
+    presenceV1: value.presenceV1 === true,
     // Absent (an older server) parses to false: a client then leaves a
     // session it closes attached until the connection closes.
-    sessionClose: sessionClose === true,
+    sessionClose: value.sessionClose === true,
     // Absent parses to false: a client then signs each `session.open`.
-    connectionAuth: connectionAuth === true,
+    connectionAuth: value.connectionAuth === true,
     // Absent parses to false: a client then presents no proof chain.
-    sessionOpenProofs: sessionOpenProofs === true,
+    sessionOpenProofs: value.sessionOpenProofs === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client no `session/admissible`.
-    admissionNotice: admissionNotice === true,
+    admissionNotice: value.admissionNotice === true,
     // Absent (an older client) parses to false: the server then holds that
     // session's commits to both conditions of the identity proof.
-    elidedVerdicts: elidedVerdicts === true,
+    elidedVerdicts: value.elidedVerdicts === true,
     // Absent (an older server) parses to false: a client then sends no
     // `session.report`.
-    sessionReportV1: sessionReportV1 === true,
+    sessionReportV1: value.sessionReportV1 === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // `pattern.lifecycle` or `space.invite`.
+    patternLifecycle: value.patternLifecycle === true,
+    // Absent (an older server) parses to false: a serving process then
+    // treats the owner as unavailable.
+    servedRequests: value.servedRequests === true,
+    spaceInvites: value.spaceInvites === true,
+    // Absent (an older server) parses to false: the server records no mark
+    // and admits a declaring session's commits without one.
+    instanceNameMark: value.instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then sends neither
+    // `follow` nor a `setsrc` origin.
+    patternLifecycleOrigins: value.patternLifecycleOrigins === true,
+    // Absent (an older server) parses to false: a client then sends no
+    // scoped `setsrc` or `follow`.
+    patternLifecycleScopes: value.patternLifecycleScopes === true,
     // Absent (an older server) parses to false: a client then finds the
     // links out of a space by reading what it synced.
-    syncCrossingsV1: syncCrossingsV1 === true,
+    syncCrossingsV1: value.syncCrossingsV1 === true,
     // Absent (an older server) parses to false: a client then replaces the
     // whole watch set to remove a watch.
-    watchRemoveV1: watchRemoveV1 === true,
+    watchRemoveV1: value.watchRemoveV1 === true,
     // Absent (an older peer) parses to false: a server then sends that
     // client every sync whole.
-    syncPartsV1: syncPartsV1 === true,
+    syncPartsV1: value.syncPartsV1 === true,
+    // Absent (an older peer) parses to false: a server then sends that
+    // client every schema document with its body.
+    syncCidReferencesV1: value.syncCidReferencesV1 === true,
     // Absent (an older server) parses to false: a client then sends every
     // watch set whole.
-    watchSetPartsV1: watchSetPartsV1 === true,
+    watchSetPartsV1: value.watchSetPartsV1 === true,
     routedAuthV1: value.routedAuthV1 === true,
     routedCompressionV1: value.routedCompressionV1 === true,
   };
@@ -3144,11 +3404,18 @@ export const wireMemoryProtocolFlags = (
   admissionNotice: flags.admissionNotice,
   elidedVerdicts: flags.elidedVerdicts,
   sessionReportV1: flags.sessionReportV1,
+  patternLifecycle: flags.patternLifecycle,
+  patternLifecycleOrigins: flags.patternLifecycleOrigins,
+  patternLifecycleScopes: flags.patternLifecycleScopes,
+  servedRequests: flags.servedRequests,
+  spaceInvites: flags.spaceInvites,
+  instanceNameMark: flags.instanceNameMark,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,
   watchRemoveV1: flags.watchRemoveV1,
   syncPartsV1: flags.syncPartsV1,
+  syncCidReferencesV1: flags.syncCidReferencesV1,
   watchSetPartsV1: flags.watchSetPartsV1,
 });
 

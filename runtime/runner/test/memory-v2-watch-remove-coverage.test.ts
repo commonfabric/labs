@@ -11,10 +11,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
-import {
-  type EntityDocument,
-  type SessionSync,
-  type SessionSyncUpsert,
+import type {
+  EntityDocument,
+  SessionSync,
+  SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { IStorageProvider } from "../src/storage/interface.ts";

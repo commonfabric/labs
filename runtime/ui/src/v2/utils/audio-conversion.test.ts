@@ -3,19 +3,24 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
+  applyMovingAverageFilter,
+  convertToWav,
   createWavFile,
   floatTo16BitPCM,
+  mixStereoToMono,
   resample,
+  resampleWithAntiAliasing,
 } from "./audio-conversion.ts";
+import { StandInAudioContext } from "../test-utils/audio-context.ts";
+
+/** The PCM samples of a WAV file `createWavFile()` wrote. */
+function samplesOf(wav: ArrayBuffer): number[] {
+  return Array.from(new Int16Array(wav.slice(44)));
+}
 
 describe("audio-conversion", () => {
-  // These cover the exported helper functions directly, plus two format
-  // details asserted in place. `convertToWav` itself
-  // requires a browser AudioContext, which Deno's test runner does not
-  // provide.
-
   describe("WAV file format", () => {
     it("should create valid WAV header structure", () => {
       // Create a simple PCM data array
@@ -182,10 +187,7 @@ describe("audio-conversion", () => {
       const left = new Float32Array([0.8, -0.6, 0.4]);
       const right = new Float32Array([0.2, -0.4, 0.6]);
 
-      const mono = new Float32Array(left.length);
-      for (let i = 0; i < left.length; i++) {
-        mono[i] = (left[i] + right[i]) / 2;
-      }
+      const mono = mixStereoToMono(left, right);
 
       expect(mono[0]).toBeCloseTo(0.5, 2); // (0.8 + 0.2) / 2
       expect(mono[1]).toBeCloseTo(-0.5, 2); // (-0.6 + -0.4) / 2
@@ -193,27 +195,137 @@ describe("audio-conversion", () => {
     });
   });
 
-  describe("DataView string writing", () => {
-    it("should write ASCII strings correctly", () => {
-      const buffer = new ArrayBuffer(10);
-      const view = new DataView(buffer);
+  describe("convertToWav()", () => {
+    beforeEach(() => {
+      StandInAudioContext.reset();
+      Object.defineProperty(globalThis, "AudioContext", {
+        configurable: true,
+        value: StandInAudioContext,
+      });
+    });
 
-      const testStrings = ["RIFF", "WAVE", "fmt ", "data"];
+    afterEach(() => {
+      Reflect.deleteProperty(globalThis, "AudioContext");
+    });
 
-      for (const str of testStrings) {
-        const offset = 0;
-        for (let i = 0; i < str.length; i++) {
-          view.setUint8(offset + i, str.charCodeAt(i));
-        }
+    it("returns a mono 16-bit WAV of the decoded audio at 16 kHz by default", async () => {
+      StandInAudioContext.decode = () => ({
+        channels: [new Float32Array([0, 0.5, -0.5, 1])],
+        sampleRate: 16000,
+      });
+      const wav = await convertToWav(new Blob([new Uint8Array([1, 2, 3])]));
 
-        // Read back
-        let result = "";
-        for (let i = 0; i < str.length; i++) {
-          result += String.fromCharCode(view.getUint8(i));
-        }
+      expect(wav.type).toBe("audio/wav");
+      const bytes = await wav.arrayBuffer();
+      const view = new DataView(bytes);
+      expect(view.getUint16(22, true)).toBe(1);
+      expect(view.getUint32(24, true)).toBe(16000);
+      expect(samplesOf(bytes)).toEqual([0, 16383, -16384, 32767]);
+      const { made } = StandInAudioContext;
+      expect(made.map((c) => c.sampleRate)).toEqual([16000]);
+      expect(made[0].decodedBytes).toEqual(new Uint8Array([1, 2, 3]));
+      expect(made[0].state).toBe("closed");
+    });
 
-        expect(result).toBe(str);
+    it("returns stereo audio mixed down to mono", async () => {
+      StandInAudioContext.decode = () => ({
+        channels: [
+          new Float32Array([0.5, -0.25]),
+          new Float32Array([0.5, 0.25]),
+        ],
+        sampleRate: 8000,
+      });
+      const wav = await convertToWav(new Blob([new Uint8Array([1])]), 8000);
+
+      const bytes = await wav.arrayBuffer();
+      expect(new DataView(bytes).getUint16(22, true)).toBe(1);
+      expect(new DataView(bytes).getUint32(24, true)).toBe(8000);
+      expect(samplesOf(bytes)).toEqual([16383, 0]);
+    });
+
+    it("returns audio decoded at another rate resampled to the rate asked for", async () => {
+      StandInAudioContext.decode = () => ({
+        channels: [new Float32Array(48).fill(0.5)],
+        sampleRate: 48000,
+      });
+      const wav = await convertToWav(new Blob([new Uint8Array([1])]), 16000);
+
+      const bytes = await wav.arrayBuffer();
+      expect(new DataView(bytes).getUint32(24, true)).toBe(16000);
+      expect(samplesOf(bytes)).toEqual(new Array(16).fill(16383));
+    });
+
+    it("rejects with the decoding error, and closes the context, when the audio does not decode", async () => {
+      const failure = new Error("Unable to decode audio data");
+      StandInAudioContext.decode = () => {
+        throw failure;
+      };
+      const reason = await convertToWav(new Blob([])).catch((e: unknown) => e);
+      expect(reason).toBe(failure);
+      expect(StandInAudioContext.made.map((c) => c.state)).toEqual(["closed"]);
+    });
+  });
+
+  describe("mixStereoToMono()", () => {
+    it("returns the average of the two channels where it stays within 0.95", () => {
+      const mono = mixStereoToMono(
+        new Float32Array([0.9, -0.9, 0.2]),
+        new Float32Array([1, -1, 0]),
+      );
+      expect(Array.from(mono)).toEqual(
+        Array.from(new Float32Array([0.95, -0.95, 0.1])),
+      );
+    });
+
+    it("returns the average scaled so that its peak is 0.95 where it would exceed that", () => {
+      const mono = mixStereoToMono(
+        new Float32Array([1, 0.5]),
+        new Float32Array([1, 0.5]),
+      );
+      expect(mono[0]).toBeCloseTo(0.95, 6);
+      expect(mono[1]).toBeCloseTo(0.475, 6);
+    });
+  });
+
+  describe("applyMovingAverageFilter()", () => {
+    it("returns the samples themselves for a window of one", () => {
+      const samples = new Float32Array([1, 2, 3]);
+      expect(applyMovingAverageFilter(samples, 1)).toBe(samples);
+    });
+
+    it("returns each sample averaged with its neighbors in the window, fewer at the edges", () => {
+      const filtered = applyMovingAverageFilter(
+        new Float32Array([3, 6, 9, 0]),
+        3,
+      );
+      expect(Array.from(filtered)).toEqual([4.5, 6, 5, 4.5]);
+    });
+  });
+
+  describe("resampleWithAntiAliasing()", () => {
+    it("returns the samples themselves at the same rate", () => {
+      const samples = new Float32Array([1, -1]);
+      expect(resampleWithAntiAliasing(samples, 16000, 16000)).toBe(samples);
+    });
+
+    it("returns downsampled audio with content above the new rate's band smoothed away", () => {
+      // A tone at the source's Nyquist frequency alternates sign every sample.
+      // Taken one sample in two it would come through as a constant 1.
+      const samples = new Float32Array(16).map((_, i) => (i % 2 ? -1 : 1));
+      const result = resampleWithAntiAliasing(samples, 32000, 16000);
+      expect(result.length).toBe(8);
+      expect(Array.from(resample(samples, 32000, 16000))).toEqual(
+        new Array(8).fill(1),
+      );
+      for (const sample of result) {
+        expect(Math.abs(sample)).toBeLessThan(0.5);
       }
+    });
+
+    it("returns upsampled audio interpolated without smoothing", () => {
+      const samples = new Float32Array([0, 1]);
+      expect(Array.from(resampleWithAntiAliasing(samples, 8000, 16000)))
+        .toEqual([0, 0.5, 1, 1]);
     });
   });
 });

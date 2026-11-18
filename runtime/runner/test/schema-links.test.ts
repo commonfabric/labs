@@ -14,7 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import { toCell } from "../src/back-to-cell.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";

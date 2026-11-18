@@ -22,9 +22,15 @@ export const sharedSpaceEntrySchema = {
 } as const satisfies JSONSchema;
 
 const entries = { type: "array", items: sharedSpaceEntrySchema } as const;
+// `deleted` is absent from a view a Home older than the list produced.
 const kindView = {
   type: "object",
-  properties: { saved: entries, archived: entries, other: entries },
+  properties: {
+    saved: entries,
+    archived: entries,
+    deleted: entries,
+    other: entries,
+  },
   required: ["saved", "archived", "other"],
 } as const;
 const unavailable = {
@@ -50,6 +56,7 @@ export const sharedSpaceCollectionViewSchema = {
         },
         saved: entries,
         archived: entries,
+        deleted: entries,
         other: entries,
         byKind: { type: "object", additionalProperties: kindView },
       },
@@ -148,7 +155,9 @@ export type HomeSharedSpaceProfileView = Schema<
 /**
  * Reads only command bindings at `Home.sharedSpaces.commands`. Event schemas
  * retain every field so Home's authored validator sees malformed optional data.
- * Host callers observe completion through ordinary handling receipts.
+ * Host callers observe completion through ordinary handling receipts. A Home
+ * without `retitle` or `markDeleted` still answers for the commands it has, so
+ * a caller that needs one can tell that Home needs an update.
  */
 export const sharedSpaceCommandsSchema = {
   type: "object",
@@ -159,6 +168,16 @@ export const sharedSpaceCommandsSchema = {
       asCell: ["stream"],
     },
     changeMembership: {
+      type: "object",
+      additionalProperties: true,
+      asCell: ["stream"],
+    },
+    retitle: {
+      type: "object",
+      additionalProperties: true,
+      asCell: ["stream"],
+    },
+    markDeleted: {
       type: "object",
       additionalProperties: true,
       asCell: ["stream"],

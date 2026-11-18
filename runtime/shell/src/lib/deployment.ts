@@ -105,8 +105,8 @@ function ignoring(
  * page's where it states one ({@link deploymentFromPage}), which is not
  * transient, and otherwise what the API URL's meta document publishes, read
  * once for both the memory URL and the flags. That read retries a document
- * it could not read for a transient reason, and then warns and leaves Memory
- * on `apiUrl`, with no flag adopted (`deploymentForShell`).
+ * it could not read for a transient reason, and then logs an error, warns and
+ * leaves Memory on `apiUrl`, with no flag adopted (`deploymentForShell`).
  */
 export function resolveDeployment(
   page: Pick<ParentNode, "querySelector"> | undefined,

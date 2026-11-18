@@ -64,6 +64,18 @@ export interface PatternAssignmentError {
   error: string;
 }
 
+/**
+ * A pattern file one compiler built to no cause assignment, as it does a
+ * helper module that exports no pattern.
+ */
+export interface UnassignedPattern {
+  /** The pattern's key, as `pattern-files.ts` names it. */
+  pattern: string;
+
+  /** A digest of the source files the pattern was compiled from. */
+  source: string;
+}
+
 /** A cell whose number differs between two builds of one source. */
 export interface MovedCell extends RenumberedCell {
   pattern: string;

@@ -13,6 +13,8 @@ import { propertiesDocument, propertiesLines } from "./properties.ts";
 export const propertiesLanguage: Language = {
   id: "properties",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

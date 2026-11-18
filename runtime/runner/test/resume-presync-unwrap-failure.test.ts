@@ -44,7 +44,8 @@ describe("resume pre-sync unwrap failure", () => {
       const rc1 = rt1.getCell(space, "presync-unwrap-failure");
       await rt1.runSynced(rc1, trustExecutable(rt1, seedPattern), {});
       await rc1.pull();
-      await rt1.dispose();
+      // `rt2` resumes from what this run stored, over the same storage manager.
+      await rt1.dispose({ closeStorage: false });
 
       const badPattern = {
         argumentSchema: {},

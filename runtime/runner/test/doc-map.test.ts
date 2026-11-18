@@ -14,7 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { createRef, entityIdFrom, getEntityId } from "../src/create-ref.ts";
 import { Runtime } from "../src/runtime.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();

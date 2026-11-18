@@ -1,7 +1,7 @@
-import {
+import type {
   AnyCellWrapping,
-  type JSONSchemaObj,
-  type JSONValue,
+  JSONSchemaObj,
+  JSONValue,
 } from "@commonfabric/api";
 import {
   cloneIfNecessary,
@@ -31,8 +31,9 @@ import {
 import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { literalMemberMatches } from "./schema-literal-match.ts";
-import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
-import { createCell, isCell } from "./cell.ts";
+import type { JSONSchema, SchemaScope } from "./builder/types.ts";
+import { createCell, isCell, isStream } from "./cell.ts";
+import { isWithdrawnVerb } from "./withdrawn-verb.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -85,7 +86,10 @@ import {
   UnresolvedInputError,
 } from "./schema-view.ts";
 import { canFollowScopedLink, isCellScope } from "./scope.ts";
-import { getTransactionForChildCells } from "./storage/extended-storage-transaction.ts";
+import {
+  getTransactionForChildCells,
+  markSingleReadTx,
+} from "./storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
 import { usesLocalReads } from "./storage/local-read-policy.ts";
 import {
@@ -294,13 +298,7 @@ const matchesConcreteValue = (
   schema: JSONSchema,
   value: unknown,
 ): boolean => {
-  if (schema === false) {
-    return false;
-  }
-  const resolved = resolveSchema(schema);
-  if (resolved === undefined) {
-    return true;
-  }
+  const resolved = resolveSchema(schema) ?? true;
   if (typeof resolved === "boolean") {
     return resolved;
   }
@@ -486,14 +484,10 @@ export function resolveSchema(
 
 const selectMatchingCompoundBranch = (
   schema: JSONSchemaObj,
-  value: unknown,
   kind: "anyOf" | "oneOf",
+  branches: readonly JSONSchema[],
+  value: unknown,
 ): JSONSchema | undefined => {
-  const branches = schema[kind];
-  if (!Array.isArray(branches) || branches.length === 0) {
-    return undefined;
-  }
-
   const { [kind]: _compound, ...rest } = schema;
   const baseSchema = rest as JSONSchemaObj;
   const matches = branches.flatMap((branch) => {
@@ -561,11 +555,19 @@ export function resolveSchemaForValue(
 
   let narrowed: JSONSchema = resolved;
   if (Array.isArray(resolved.anyOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "anyOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "anyOf",
+      resolved.anyOf,
+      value,
+    ) ?? resolved;
   } else if (Array.isArray(resolved.oneOf)) {
-    narrowed = selectMatchingCompoundBranch(resolved, value, "oneOf") ??
-      resolved;
+    narrowed = selectMatchingCompoundBranch(
+      resolved,
+      "oneOf",
+      resolved.oneOf,
+      value,
+    ) ?? resolved;
   }
 
   if (!isObjectOrArray(narrowed)) {
@@ -607,33 +609,27 @@ const _filterAsCellCache = new WeakMap<
   JSONSchema | "<undefined>"
 >();
 
+/**
+ * `schema` without its `asCell`, or `undefined` where nothing else is left.
+ * `schema` is interned, as every schema `validateAndTransform()` resolves or
+ * combines is, so the answer is cached by its identity.
+ */
 function filterAsCell(schema: JSONSchema | undefined): JSONSchema | undefined {
   if (!isNontrivialSchema(schema)) {
     return schema;
   }
-
-  const makeRawResult = () => {
-    const { asCell: _asCell, ...restSchema } = schema;
-    return isNontrivialSchema(restSchema) ? restSchema : undefined;
-  };
-
-  if (isDeepFrozen(schema)) {
-    // Note: We cache literal `<undefined>` when we are to return `undefined`,
-    // to disambiguate with no-entry.
-    const cached = _filterAsCellCache.get(schema);
-    if (cached) return (cached === "<undefined>") ? undefined : cached;
-    const rawResult = makeRawResult();
-    if (rawResult) {
-      const result = internSchema(rawResult);
-      _filterAsCellCache.set(schema, result);
-      return result;
-    } else {
-      _filterAsCellCache.set(schema, "<undefined>");
-      return undefined;
-    }
-  } else {
-    return makeRawResult();
+  // Note: We cache literal `<undefined>` when we are to return `undefined`,
+  // to disambiguate with no-entry.
+  const cached = _filterAsCellCache.get(schema);
+  if (cached) return (cached === "<undefined>") ? undefined : cached;
+  const { asCell: _asCell, ...restSchema } = schema;
+  if (isNontrivialSchema(restSchema)) {
+    const result = internSchema(restSchema);
+    _filterAsCellCache.set(schema, result);
+    return result;
   }
+  _filterAsCellCache.set(schema, "<undefined>");
+  return undefined;
 }
 
 /**
@@ -681,7 +677,7 @@ export function processDefaultValue(
       return createCell(
         runtime,
         { ...link, schema: resolvedSchema },
-        tx,
+        getTransactionForChildCells(tx),
         synced,
         "stream",
         cfcLabelView,
@@ -702,7 +698,7 @@ export function processDefaultValue(
           link.space,
           resolvedSchema.default,
           resolvedSchema,
-          tx,
+          getTransactionForChildCells(tx),
           cfcLabelView,
         );
       } else {
@@ -1163,6 +1159,20 @@ export interface ValidateAndTransformOptions {
   truthinessOnly?: boolean;
 }
 
+/**
+ * Returns the transaction a read through `tx` uses: `tx` while it is open, and
+ * otherwise a read transaction for this one read, which the cells the read hands
+ * out do not bind to (see `markSingleReadTx()`).
+ */
+export function singleReadTx(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction | undefined,
+): IExtendedStorageTransaction {
+  const read = runtime.readTx(tx);
+  if (read !== tx) markSingleReadTx(read);
+  return read;
+}
+
 export function validateAndTransform(
   runtime: Runtime,
   tx: IExtendedStorageTransaction | undefined,
@@ -1178,7 +1188,7 @@ export function validateAndTransform(
   // a view reads the state ITS transaction saw, and swapping a finished one for
   // a fresh read would read newer state where the view's contract is to
   // refuse. The refusal comes from the marked transaction's own guard below.
-  if (tx?.isLazyMaterialize() !== true) tx = runtime.readTx(tx);
+  if (tx?.isLazyMaterialize() !== true) tx = singleReadTx(runtime, tx);
 
   // Reconstruct doc, path, schema from link and runtime
   let link = isCellViewRef(sourceRef) ? sourceRef.link : sourceRef;
@@ -1818,6 +1828,16 @@ type RouteCrossing = {
   memoKey?: string;
 };
 
+/**
+ * The metadata of the read `TransformObjectCreator.cross()` journals at the
+ * slot a followed link leaves: a link-resolution probe, which CFC takes as the
+ * observation of which reference sits there, and which scheduling ignores.
+ */
+const followedSlotProbe = {
+  ...ignoreReadForScheduling,
+  ...linkResolutionProbe,
+};
+
 class TransformObjectCreator
   implements IObjectCreator<AnyCellWrapping<FabricValue>>, LinkCrossingRoute {
   #runtime: Runtime;
@@ -1873,12 +1893,13 @@ class TransformObjectCreator
     // Following a reference consumes its own restrictions as well as the
     // target observations (§8.2.4). Keep the pointer read and its trace in
     // the transaction even when the returned value cannot carry a label view.
-    // The traversal already records the slot's scheduling dependencies,
-    // including batched array reads; this observation is for CFC alone.
-    this.#tx.runWithAmbientReadMeta(
-      ignoreReadForScheduling,
-      () => readMaybeLink(this.#tx, source),
-    );
+    // The traversal already records the slot's scheduling dependencies and
+    // has the reference in hand; this observation is for CFC alone, so it
+    // loads nothing.
+    this.#tx.readOrThrow(toMemorySpaceAddress(source), {
+      meta: followedSlotProbe,
+      trackReadWithoutLoad: true,
+    });
     this.#tx.recordCfcDereferenceTrace({
       source: cfcAddressFromLink(source),
       target: cfcAddressFromLink(target),
@@ -2040,6 +2061,13 @@ class TransformObjectCreator
       this.#synced,
       this.#labelViewFor(link),
     ) as AnyCellWrapping<FabricValue>;
+  }
+
+  isWithdrawnVerb(
+    slot: NormalizedFullLink,
+    value: AnyCellWrapping<FabricValue>,
+  ): boolean {
+    return isStream(value) && isWithdrawnVerb(this.#runtime, this.#tx, slot);
   }
 
   /**

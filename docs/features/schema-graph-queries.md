@@ -89,18 +89,22 @@ watch bookkeeping, the branch and sequence handling — stays in `memory`.
 ## Sharing a tracker and a memo across walks
 
 A walk owns its pointer-cycle tracker, which is what makes a cycle of documents
-that link to each other terminate. It does not own the schema tracker or the
-schema memo: those are handed in, so they can outlive any one walk and
-accumulate across a whole query. A tracked graph keeps both — the tracker is
-the query's accumulated reach, and the memo holds traversal results a later
-walk can skip recomputing.
+that link to each other terminate. Walks within one evaluation share a schema
+memo, so repeated visits can reuse their traversal results. The memo is released
+when that evaluation finishes. Establishment, extension, root removal, and dirty
+refresh each take a fresh memo.
 
-`trackGraph` gives every root of a query one shared walk. Re-evaluating a
-document after a write gives that document a walk of its own, over the query's
-existing tracker. A write-triggered refresh takes a fresh memo, so a retarget is
-not answered from a memoized result computed before it; the memo keys on a
-document address and a schema rather than on a value, so a memo carried across a
-write can still answer with what that document used to reach.
+A tracked graph keeps its tracker and the attributions that say which roots and
+links keep each record alive. That is the state later operations need to
+preserve delivery and retire unreachable documents. Coverage in this tracker
+lets an extension skip already-covered links without retaining the narrowed
+values computed by past evaluations.
+
+Memo keys contain a document address and schema, not a document revision or the
+current set of watch roots. Keeping those results across evaluations would
+retain obsolete schemas and could reuse results whose traversal effects have
+retired. A cache shared across evaluations must instead validate revisions and
+replay effects; a bare schema memo has neither contract.
 
 ## What this coupling costs
 

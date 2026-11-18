@@ -235,7 +235,7 @@ export const recordNeurotype = handler<
   const entry: Neurotype = {
     system,
     result,
-    detail,
+    ...(detail !== undefined && { detail }),
     source,
     recordedAt: Date.now(),
   };
@@ -247,7 +247,12 @@ export const addValueCard = handler<
   AddValueCardEvent,
   { selfModel: Writable<SelfModel> }
 >(({ title, description, weight, sourcePromptId }, { selfModel }) => {
-  const card: ValueCard = { title, description, weight, sourcePromptId };
+  const card: ValueCard = {
+    title,
+    ...(description !== undefined && { description }),
+    ...(weight !== undefined && { weight }),
+    ...(sourcePromptId !== undefined && { sourcePromptId }),
+  };
   selfModel.set(appendValue(selfModel.get(), card));
 });
 
@@ -410,9 +415,9 @@ export const addValueCardFromForm = handler<
     .filter((t) => t.length > 0);
   const card: ValueCard = {
     title,
-    attendingTo,
+    ...(attendingTo !== undefined && { attendingTo }),
     stance,
-    contextTags: contextTags.length > 0 ? contextTags : undefined,
+    ...(contextTags.length > 0 && { contextTags }),
   };
   selfModel.set(appendValue(selfModel.get(), card));
   titleField.set("");

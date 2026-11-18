@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { LLMNativeModelToolId } from "@commonfabric/llm/types";
 import {
   defaultHarnessFetch,
@@ -274,9 +275,6 @@ const throwIfChatCompletionAborted = (signal?: AbortSignal): void => {
   }
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 const textByteLength = (input: string): number =>
   new TextEncoder().encode(input).byteLength;
 
@@ -368,7 +366,7 @@ const transportErrorAfterRetries = (
   new Error(
     `${operation} transport request failed after ${attempts} ${
       attempts === 1 ? "attempt" : "attempts"
-    } for ${endpoint.toString()}: ${errorMessage(error)}`,
+    } for ${endpoint.toString()}: ${describeFailure(error)}`,
   );
 
 interface ChatCompletionFetchResult {
@@ -556,7 +554,7 @@ export class OpenAICompatibleGatewayClient {
           durationMs,
           responseCompleteDurationMs: durationMs,
           outcome: "transport_error",
-          errorDetail: errorMessage(error),
+          errorDetail: describeFailure(error),
           ...(retry !== undefined ? { retry } : {}),
         });
         if (options.signal?.aborted) {

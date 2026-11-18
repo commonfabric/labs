@@ -20,6 +20,7 @@ export {
   type AgentQueueIndex,
   agentQueueIndexCell,
   type AgentRunRecord,
+  removeRecordFromQueue,
 } from "./builtins/agent.ts";
 export {
   AGENT_INPUT_ACCESS_TOOLS,

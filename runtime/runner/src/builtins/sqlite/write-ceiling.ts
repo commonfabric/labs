@@ -13,8 +13,8 @@ import {
   parseWriteParamColumns,
   parseWriteTable,
 } from "@commonfabric/memory/sqlite/write-targets";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "../../cfc/clause.ts";
 import { cfcObservationFitsCeiling } from "../../cfc/observation.ts";
 
 interface ColumnIfc {

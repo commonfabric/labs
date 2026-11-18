@@ -18,7 +18,6 @@ import {
   areLinksSame,
   type Cancel,
   type Cell,
-  CFC_ATOM_TYPE,
   ContextualFlowControl,
   type JSONSchema,
   type SinkConsumedLabel,
@@ -35,19 +34,28 @@ import {
   type ExchangeRuleKind,
   membershipSpacesInConfidentiality,
   modulePolicyRefsInConfidentiality,
-  readConsumesEntry,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { getLogger } from "@commonfabric/logger";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
-  normalizeRenderConfidentialityCeiling,
-  type RenderPolicy,
-  type WorkerReconcilerOptions,
-} from "./types.ts";
+  atomRenderableUnderPolicy,
+  canRenderConfidentialityAtom,
+  integrityLabels,
+} from "./display-fit-atoms.ts";
+import type { RenderPolicy, WorkerReconcilerOptions } from "./types.ts";
+
+export {
+  atomRenderableUnderPolicy,
+  canRenderConfidentialityAtom,
+  defaultDisplayFit,
+  integrityLabels,
+  type LabelDisplayFit,
+  normalizeAtomBound,
+  rootRenderPolicyFor,
+} from "./display-fit-atoms.ts";
 
 const logger = getLogger("display-fit", { enabled: false, level: "debug" });
 
@@ -62,20 +70,34 @@ const logger = getLogger("display-fit", { enabled: false, level: "debug" });
  */
 export type DisplayFitSources = {
   readonly resolveConfidentiality?: RenderConfidentialityResolver;
-  readonly membership?: SpaceMembershipProvider;
+  readonly membership?: Pick<
+    SpaceMembershipProvider,
+    "readerRole" | "subscribe"
+  >;
   readonly modulePolicies?: WorkerReconcilerOptions["modulePolicySource"];
 };
 
 /**
  * The label a display decision was made on, as a denial reports it: a cell's
- * stored label, its schema's, a read's consumed labels, or none it could
- * read.
+ * stored label (`stored`), the one its schema declares (`schema`), a read's
+ * consumed labels (`consumed`), or none it could read (`unreadable`). Labels
+ * could not be read where a read reports no consumed labels, as one reaching
+ * a document whose stored envelope this build cannot interpret does, where a
+ * cell's own labels cannot be resolved, and where its schema cannot be walked
+ * for the labels it declares.
  */
 export type RenderLabelSummary = {
   labelSource: "stored" | "schema" | "consumed" | "unreadable";
   confidentiality: readonly CfcConfClause[];
   integrity: readonly CfcAtom[];
 };
+
+/** The decision on a read whose labels could not be read at all. */
+export const UNREADABLE_LABELS: RenderLabelSummary = Object.freeze({
+  labelSource: "unreadable",
+  confidentiality: Object.freeze([]),
+  integrity: Object.freeze([]),
+});
 
 /**
  * How a decision that is made again watches what it consulted: each label it
@@ -92,24 +114,6 @@ export type FitWatch = {
   reeval: () => void;
 };
 
-/**
- * The policy a display decision starts from at the root, before any authored
- * boundary narrows it: the host's default ceiling when one is configured
- * (spec §8.10.6), or `undefined` for none, when nothing is gated. A malformed
- * ceiling reads as the empty one, which admits public content only, rather
- * than as none.
- */
-export function rootRenderPolicyFor(
-  configured: unknown,
-): RenderPolicy | undefined {
-  const ceiling = normalizeRenderConfidentialityCeiling(configured);
-  return ceiling === undefined ? undefined : {
-    declassifyConfidentiality: [],
-    maxConfidentiality: [...(ceiling.atoms ?? [])],
-    caveatKindAllow: [...(ceiling.caveatKinds ?? [])],
-  };
-}
-
 /** Whether `policy` admits every cell, having no ceiling to fit. */
 export function admitsEverything(policy: RenderPolicy): boolean {
   return policy.maxConfidentiality === undefined &&
@@ -119,11 +123,19 @@ export function admitsEverything(policy: RenderPolicy): boolean {
 /**
  * The label that keeps `policy` from admitting what `reads` of `cell` show,
  * or undefined when the policy admits it. The policy has to admit both the
- * cell's labels, as {@link cellLabelRefusal} fits them, and the labels the
- * reads consumed, which reach every document a read passed through,
- * including one behind a link crossed part way along the path. A read that
- * reports no consumed labels counts as consuming the marker no policy admits,
- * and reads that consumed none are fitted by the cell's schema.
+ * labels the reads consumed, which reach every document a read passed
+ * through, including one behind a link crossed part way along the path, and
+ * the labels at `cell`'s own node, as {@link cellLabelRefusal} fits them,
+ * which include those its ancestors' labels cover (see
+ * {@link nodeLabelSources}). What lies below `cell` is fitted as the reads
+ * consumed it, so a read that stops short of a labeled field is not refused
+ * for that field, and one that reaches it is (spec §8.10.6: a display
+ * boundary evaluates the consumed labels). A read that reports no consumed
+ * labels counts as consuming the marker no policy admits, and reads that
+ * consumed none are fitted by the cell's schema. A refusal names the schema
+ * as its source when what the schema declares refused, and names the labels
+ * as unreadable when a read reported none or the schema could not be walked
+ * for its labels.
  */
 export function readRefusal(
   cell: Cell<unknown>,
@@ -141,11 +153,10 @@ export function readRefusal(
     [...(read?.modulePolicySpaces.values() ?? [])].flatMap((set) => [...set])
   );
   if (confidentiality.length === 0) {
-    return confidentialityLabelsFromCellSchema(cell).every((atom) =>
-        atomRenderableUnderPolicy(atom, policy)
-      )
-      ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
-      : { labelSource: "consumed", confidentiality, integrity };
+    const declared = schemaLabelsOf(cell);
+    return schemaAdmits(declared, policy)
+      ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
+      : schemaRefusal(declared, integrity);
   }
   // The reads behind one rendered value are one access. Its clauses are
   // watched as read, since the exchange at each location may consult a
@@ -170,8 +181,70 @@ export function readRefusal(
       watch,
       "not-value-intrinsic",
     )
-    ? cellLabelRefusal(cell, cellLabelSources(cell), policy, sources, watch)
-    : { labelSource: "consumed", confidentiality, integrity: access.integrity };
+    ? cellLabelRefusal(cell, nodeLabelSources(cell), policy, sources, watch)
+    : {
+      labelSource: reads.some((read) => read === undefined)
+        ? "unreadable"
+        : "consumed",
+      confidentiality,
+      integrity: access.integrity,
+    };
+}
+
+/** The information-flow atoms a cell's schema declares, as read from it. */
+type SchemaLabels = {
+  readonly atoms: readonly unknown[];
+
+  /** Whether the schema could not be walked for its labels at all. */
+  readonly readFailed: boolean;
+};
+
+/** Whether `policy` admits what `declared` says the cell's schema declares. */
+function schemaAdmits(declared: SchemaLabels, policy: RenderPolicy): boolean {
+  return !declared.readFailed &&
+    declared.atoms.every((atom) => atomRenderableUnderPolicy(atom, policy));
+}
+
+/**
+ * The refusal of a read by its cell's schema, `declared`, which names the
+ * labels unreadable where the schema could not be walked for them, and the
+ * schema otherwise, even where what it declares is the read-failure marker,
+ * as a runtime secret's schema does.
+ */
+function schemaRefusal(
+  declared: SchemaLabels,
+  integrity: readonly CfcAtom[],
+): RenderLabelSummary {
+  return declared.readFailed ? { ...UNREADABLE_LABELS, integrity } : {
+    labelSource: "schema",
+    confidentiality: declared.atoms as readonly CfcConfClause[],
+    integrity,
+  };
+}
+
+/**
+ * `cell`'s labels as {@link cellLabelSources} reads them, each view narrowed
+ * to the entries at the node it was read at. A cell's label view holds an
+ * entry for each labeled path at or below the cell, and folds what its
+ * ancestors' labels cover into the entries at the node itself, so these are
+ * the labels of the node and of every ancestor, and none of what lies below
+ * it. A view whose entries all lie below the node narrows to an empty one,
+ * not to none: the cell is labeled, at its fields, and what a read takes in
+ * of those is fitted as the read consumed it, not by the schema a cell with
+ * no label falls back to.
+ */
+function nodeLabelSources(
+  cell: Cell<unknown>,
+): CfcLabelViewSource[] | undefined {
+  return cellLabelSources(cell)?.map((source) =>
+    source.view === undefined ? source : {
+      ...source,
+      view: {
+        ...source.view,
+        entries: source.view.entries.filter((entry) => entry.path.length === 0),
+      },
+    }
+  );
 }
 
 /**
@@ -247,19 +320,13 @@ export function cellLabelRefusal(
     labelSources === undefined ||
     labelSources.some((source) => source.readFailed)
   ) {
-    return { labelSource: "unreadable", confidentiality: [], integrity: [] };
+    return UNREADABLE_LABELS;
   }
   if (labelSources.every((source) => source.view === undefined)) {
-    const confidentiality = confidentialityLabelsFromCellSchema(cell);
-    return confidentiality.every((atom) =>
-        atomRenderableUnderPolicy(atom, policy)
-      )
+    const declared = schemaLabelsOf(cell);
+    return schemaAdmits(declared, policy)
       ? undefined
-      : {
-        labelSource: "schema",
-        confidentiality: confidentiality as readonly CfcConfClause[],
-        integrity: [],
-      };
+      : schemaRefusal(declared, []);
   }
   // A stored label is fitted on the integrity at its root. A label view
   // carries no origin, folds an ancestor's entry in beside a narrower cell's
@@ -353,62 +420,6 @@ export function canRenderLabelUnderPolicy(
   );
 }
 
-/**
- * Per-atom admission under a render policy. The read-failure marker is
- * ungrantable: it means "the label could not be read", so neither author
- * declassification nor a ceiling entry, even one naming the exported marker
- * string, may admit it. Every other atom checks declassification first, then
- * the ceiling.
- */
-export function atomRenderableUnderPolicy(
-  atom: unknown,
-  policy: RenderPolicy,
-): boolean {
-  if (deepEqual(atom, CFC_LABEL_READ_FAILED_ATOM)) {
-    return false;
-  }
-  if (
-    policy.declassifyConfidentiality.some((declassified) =>
-      deepEqual(declassified, atom)
-    )
-  ) {
-    return true;
-  }
-  return canRenderConfidentialityAtom(atom, policy);
-}
-
-/**
- * Whether `atom` sits under `policy`'s ceiling: listed in it, or a caveat of a
- * kind the policy's caveat-kind allowance admits (spec §8.10.6). Admission is
- * not discharge: the caveat stays on the value.
- */
-export function canRenderConfidentialityAtom(
-  atom: unknown,
-  policy: RenderPolicy,
-): boolean {
-  const max = normalizeAtomBound(policy.maxConfidentiality);
-  if (max === undefined) {
-    return true;
-  }
-  if (max.some((allowed) => deepEqual(allowed, atom))) {
-    return true;
-  }
-  const kinds = policy.caveatKindAllow;
-  return kinds !== undefined && kinds.length > 0 &&
-    isObjectOrArray(atom) && atom.type === CFC_ATOM_TYPE.Caveat &&
-    typeof atom.kind === "string" && kinds.includes(atom.kind);
-}
-
-/** A ceiling's atoms, deduplicated, or undefined for no ceiling. */
-export function normalizeAtomBound(
-  labels: readonly unknown[] | undefined,
-): readonly CfcConfClause[] | undefined {
-  if (labels === undefined) {
-    return undefined;
-  }
-  return ContextualFlowControl.uniqueAtoms(labels);
-}
-
 /** The confidentiality clauses `labelView` holds, at any path. */
 export function confidentialityLabels(
   labelView: CfcLabelView,
@@ -421,21 +432,6 @@ export function confidentialityLabels(
 }
 
 /**
- * The integrity a read of the value at the root of `labelView` consumes. An
- * entry describing a link the value was once reached through, rather than
- * the value, contributes none.
- */
-export function integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
-  return ContextualFlowControl.uniqueAtoms(
-    labelView.entries.flatMap((entry) =>
-      entry.path.length === 0 && readConsumesEntry("value", entry)
-        ? [...(entry.label.integrity ?? [])]
-        : []
-    ),
-  );
-}
-
-/**
  * The information-flow atoms `cell`'s schema declares, or, when the schema
  * cannot be read for them, the read-failure marker, which no policy admits,
  * not even one with no ceiling that only declassifies.
@@ -443,17 +439,41 @@ export function integrityLabels(labelView: CfcLabelView): readonly CfcAtom[] {
 export function confidentialityLabelsFromCellSchema(
   cell: Cell<unknown>,
 ): readonly unknown[] {
+  const declared = schemaLabelsOf(cell);
+  return declared.readFailed ? [CFC_LABEL_READ_FAILED_ATOM] : declared.atoms;
+}
+
+/**
+ * The label a decision made on `cell`'s schema alone reports, as a denial
+ * reports it: what the schema declares, or none it could read where the
+ * schema could not be walked for its labels.
+ */
+export function schemaLabelSummary(cell: Cell<unknown>): RenderLabelSummary {
+  return schemaRefusal(schemaLabelsOf(cell), []);
+}
+
+/**
+ * The information-flow atoms `cell`'s schema declares, and whether the schema
+ * could not be walked for them.
+ */
+function schemaLabelsOf(cell: Cell<unknown>): SchemaLabels {
   const schema = (cell as { schema?: JSONSchema }).schema;
   if (schema === undefined) {
-    return [];
+    return { atoms: [], readFailed: false };
   }
   const joined = new Set<unknown>();
   try {
     ContextualFlowControl.joinSchema(joined, schema);
   } catch {
-    return [CFC_LABEL_READ_FAILED_ATOM];
+    // TODO(danfuzz): A subschema carrying its own `$id` and `$defs`, nested in
+    // another, lands here, since `joinSchema` resolves its `$ref` against the
+    // outer root; its labels should be read against its own root instead.
+    return { atoms: [], readFailed: true };
   }
-  return ContextualFlowControl.uniqueAtoms(joined);
+  return {
+    atoms: ContextualFlowControl.uniqueAtoms(joined),
+    readFailed: false,
+  };
 }
 
 /**

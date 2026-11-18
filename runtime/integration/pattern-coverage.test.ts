@@ -3,8 +3,10 @@ import { resolve } from "@std/path";
 import type { PatternCoverageSpan } from "@commonfabric/runner";
 import {
   collectPatternCoverage,
+  patternCoverageCollector,
   PATTERNS_ROOT,
   withRepositoryFileNames,
+  writeProcessPatternCoverage,
 } from "./pattern-coverage.ts";
 import type { Page } from "./page.ts";
 
@@ -268,4 +270,41 @@ Deno.test("a later dump leaves an earlier dump's record standing", async () => {
     );
   });
   assertEquals(warnings, []);
+});
+
+//
+// Writing what this process's own runtimes ran
+//
+// A test whose pattern code runs only in runtimes it constructs, with no page
+// to collect from, has its hits written when it asks.
+//
+
+Deno.test("the process's own runtimes' hits are written when asked", async () => {
+  const fileName = "/system/favorites-manager/favorites-manager.tsx";
+  const warnings = await collectingWarnings(async (dir) => {
+    const collector = patternCoverageCollector();
+    assert(collector !== undefined, "a run that collects has a collector");
+    collector.registerSpan({ ...span(fileName), id: 5 });
+    collector.hit(fileName, 5);
+    await writeProcessPatternCoverage();
+    assertEquals(
+      (await lcovCounts(dir, "system/favorites-manager/favorites-manager.tsx"))
+        .get(1),
+      1,
+    );
+  });
+  assertEquals(warnings, []);
+});
+
+Deno.test("a run that collects no coverage writes nothing when asked", async () => {
+  const previousDir = Deno.env.get("CF_PATTERN_COVERAGE_DIR");
+  Deno.env.delete("CF_PATTERN_COVERAGE_DIR");
+  try {
+    assertEquals(patternCoverageCollector(), undefined);
+    await writeProcessPatternCoverage();
+  } finally {
+    if (previousDir !== undefined) {
+      Deno.env.set("CF_PATTERN_COVERAGE_DIR", previousDir);
+    }
+  }
 });

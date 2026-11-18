@@ -42,6 +42,14 @@ const runtime = {
 } as unknown as RuntimeClient;
 
 describe("CellEventTarget", () => {
+  it("returns the handle it wraps from `cell()`", () => {
+    const cell = new CellHandle<string>(runtime, ref);
+    const other = new CellHandle<string>(runtime, ref);
+
+    expect(new CellEventTarget(cell).cell()).toBe(cell);
+    expect(new CellEventTarget(other).cell()).not.toBe(cell);
+  });
+
   it("fires each value, and each refusal, as the read it is", () => {
     const cell = new CellHandle<string>(runtime, ref);
     const target = new CellEventTarget(cell);

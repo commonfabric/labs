@@ -28,6 +28,7 @@ import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import type { Action } from "../src/scheduler.ts";
 import type {
@@ -67,6 +68,7 @@ class LoopbackSessionFactory implements SessionFactory {
   }
   async create(id: string, signer?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(this.#server),
     });
     const session = await client.mount(

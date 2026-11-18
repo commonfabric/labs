@@ -175,14 +175,10 @@ async function waitForSchedulerCondition(
   }
 }
 
-// NOTE on receipt addressing: the receipt cause is `{ ...inputs, $event }`
-// (`instantiateJavaScriptHandlerNode`, `src/runner.ts`), so a handler with
-// bound context — every compiled CTS verb, whose closed-over cells lower to
-// `$ctx` bindings — does NOT live at the `{ resultFor: { $ctx: {}, $event } }`
-// address the trusted-builder tests use. The route a real caller takes, and
-// the one these tests take, is `cell.send` with a caller event id, then
-// reading `tx.handlingReceiptLink` from the commit callback (production
-// consumer: `runtime/cli/lib/callable.ts`).
+// NOTE on receipt addressing: the route a real caller takes to a receipt, and
+// the one these tests take, is `cell.send` with a caller event id, then reading
+// `tx.handlingReceiptLink` from the commit callback (production consumer:
+// `runtime/cli/lib/callable.ts`).
 type ReceiptLink = NonNullable<
   IExtendedStorageTransaction["handlingReceiptLink"]
 >;

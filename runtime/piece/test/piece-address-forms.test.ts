@@ -70,6 +70,25 @@ describe("piece address forms", () => {
     );
   });
 
+  it("reads a `receipt:` address as the document it names, and not the `of:` one over the same hash", async () => {
+    const piece = await createPiece("address-forms-receipt");
+    const id = pieceId(piece)!;
+    const receipt = runtime.getCellFromLink({
+      id: `receipt:${id}`,
+      path: [],
+      space: pieces.getSpace(),
+      scope: "space",
+    });
+    await runtime.editWithRetry((tx) => {
+      receipt.withTx(tx).set({ outcome: "landed" });
+    });
+
+    const viaAddress = await pieces.getPieceCell(`receipt:${id}`);
+
+    expect(viaAddress.equals(receipt)).toBe(true);
+    expect(viaAddress.get()).toEqual({ outcome: "landed" });
+  });
+
   it("enables view replication in the space addressed by a Cell", async () => {
     const viewer = new Runtime({
       apiUrl: new URL(import.meta.url),

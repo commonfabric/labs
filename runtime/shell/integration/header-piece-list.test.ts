@@ -79,7 +79,7 @@ async function mountHeader(page: Page) {
     Object.assign(fixture.header, {
       rt: runtime,
       space: "did:key:first",
-      spaceName: "Menu test",
+      view: { spaceName: "Menu test" },
       pieceTitle: "Current piece",
       pieceId: "named",
     });

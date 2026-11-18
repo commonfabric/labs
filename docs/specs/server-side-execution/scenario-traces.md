@@ -812,7 +812,7 @@ these.
   runtime-mapping N40/N41]
 - Q6: park requires ALL of: no live client sessions, no feed input,
   no open wave contributions, idle past IDLE_PARK_MS, and no armed
-  gate wake. Parking releases the lease row, cancels the demand
+  gate wake. Parking releases the lease, cancels the demand
   sinks, disposes the runtime. A racing commit self-heals: the
   admission hook re-fires on the next admission and the host
   re-activates. [serving-loop §1, §2]

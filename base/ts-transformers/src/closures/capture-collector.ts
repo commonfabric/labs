@@ -341,20 +341,11 @@ export class CaptureCollector {
       !ts.isShorthandPropertyAssignment(decl)
     );
 
-    // If all we have are shorthand property assignments, check if this identifier
-    // is actually a parameter of the callback itself
+    // All declarations are shorthand property assignments only when `node` is
+    // a shorthand name whose value names no binding in scope; a callback
+    // parameter of that name would have resolved it. It is read as an outer
+    // reference.
     if (realDeclarations.length === 0) {
-      // Check if there's a parameter with this name in the callback
-      // Use extractBindingNames to handle nested destructuring patterns
-      const isCallbackParam = func.parameters.some((
-        param: ts.ParameterDeclaration,
-      ) => extractBindingNames(param.name).includes(node.text));
-
-      if (isCallbackParam) {
-        return undefined; // Don't capture - it's just referencing a callback parameter
-      }
-
-      // Not a callback parameter, must be from outer scope
       return node;
     }
 
@@ -364,14 +355,6 @@ export class CaptureCollector {
     );
 
     if (allDeclaredInside) {
-      return undefined;
-    }
-
-    // Check if it's a JSX attribute (should not be captured)
-    const isJsxAttr = declarations.some((decl: ts.Declaration) =>
-      ts.isJsxAttribute(decl)
-    );
-    if (isJsxAttr) {
       return undefined;
     }
 
@@ -403,16 +386,6 @@ export class CaptureCollector {
       isFunctionDeclaration(decl, this.#checker)
     );
     if (isFunction) {
-      return false;
-    }
-
-    // Skip type parameters (generic type parameters like T, U, etc.)
-    // Type parameters are compile-time only and don't exist at runtime.
-    // Trying to capture them causes "ReferenceError: T is not defined"
-    const isTypeParameter = declarations.some((decl: ts.Declaration) =>
-      ts.isTypeParameterDeclaration(decl)
-    );
-    if (isTypeParameter) {
       return false;
     }
 
@@ -477,33 +450,13 @@ export class CaptureCollector {
     outerFunc: ts.FunctionLikeDeclaration,
     funcParams: Set<string>,
   ): boolean {
-    if (ts.isIdentifier(capture)) {
-      return !this.#isParameterOrLocalVariable(
-        capture,
-        outerFunc,
-        funcParams,
-      );
+    // A capture is an identifier or a property-access chain rooted at one, so
+    // walk the chain down to that identifier: a.b.c -> a
+    let root = capture;
+    while (ts.isPropertyAccessExpression(root)) {
+      root = root.expression;
     }
-
-    if (ts.isPropertyAccessExpression(capture)) {
-      // Property access: check if root identifier is a parameter or local variable
-      // Walk down the chain to find the root: a.b.c -> a
-      let rootExpr: ts.Expression = capture;
-      while (ts.isPropertyAccessExpression(rootExpr)) {
-        rootExpr = rootExpr.expression;
-      }
-      if (ts.isIdentifier(rootExpr)) {
-        return !this.#isParameterOrLocalVariable(
-          rootExpr,
-          outerFunc,
-          funcParams,
-        );
-      }
-      // Root is not an identifier (e.g., computed property access) - include it
-      return true;
-    }
-
-    // Other types of captures (e.g., element access, call expressions) - include them
-    return true;
+    return !ts.isIdentifier(root) ||
+      !this.#isParameterOrLocalVariable(root, outerFunc, funcParams);
   }
 }

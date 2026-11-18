@@ -15,6 +15,7 @@ import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { LoopbackStorageManager } from "../src/executor/loopback-storage.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -91,6 +92,7 @@ describe("executor-acl-document-write", () => {
       beforeEach(async () => {
         storeSeq += 1;
         server = new MemoryV2Server.Server({
+          namesInstances: namesInstancesByDefault,
           store: new URL(`memory://acl-document-write-${mode}-${storeSeq}`),
           subscriptionRefreshDelayMs: 0,
           authorizeSessionOpen: authorizeLoopbackSessionOpen,

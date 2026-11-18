@@ -172,7 +172,7 @@ describe("Engine fabric imports", () => {
       targetIdentity: dependency.entryIdentity,
     });
 
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -229,7 +229,7 @@ describe("Engine fabric imports", () => {
       | { policyDigest: string }
       | undefined;
 
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -282,7 +282,7 @@ describe("Engine fabric imports", () => {
     const compiled = await engine.compileToRecordGraph(program, {
       fabricImports: { space },
     });
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -380,7 +380,7 @@ describe("Engine fabric imports", () => {
         ],
       },
     ]);
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -401,7 +401,7 @@ describe("Engine fabric imports", () => {
     );
 
     expect(compiled.resolvedPins).toEqual([]);
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -440,7 +440,7 @@ describe("Engine fabric imports", () => {
     expect(compiled.graph.records.has(`cf:module/${dependency.entryIdentity}`))
       .toBe(true);
 
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -495,7 +495,7 @@ describe("Engine fabric imports", () => {
       fabricImports: { space },
       patternCoverage: coverage,
     });
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -625,7 +625,7 @@ describe("Engine fabric imports", () => {
       targetIdentity: base.entryIdentity,
     });
 
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       compiled.id,
       compiled.graph,
       compiled.mainSpecifier,
@@ -673,7 +673,7 @@ describe("Engine fabric imports", () => {
     expect(secondTransformed).toBe(0);
     expect(second.entryIdentity).toBe(first.entryIdentity);
 
-    const evaluated = engine.evaluateRecordGraph(
+    const evaluated = await engine.evaluateRecordGraph(
       second.id,
       second.graph,
       second.mainSpecifier,

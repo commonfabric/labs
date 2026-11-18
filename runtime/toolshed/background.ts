@@ -147,10 +147,12 @@ function defaultSpawn(
   };
 }
 
-// Read the child's stdout until the readiness marker arrives or the stream ends.
-// Returns true when the marker was seen, false when the child's stdout closed
-// first -- which means the child exited before it bound its port.
-async function awaitReadyMarker(
+/**
+ * Reads the stdout of the server copy until the readiness marker arrives or the
+ * stream ends. Returns `true` when the marker was seen, and `false` when the
+ * stdout closed first, which means the server exited before it bound its port.
+ */
+export async function awaitReadyMarker(
   stdout: ReadableStream<Uint8Array>,
 ): Promise<boolean> {
   const reader = stdout.getReader();
@@ -169,9 +171,7 @@ async function awaitReadyMarker(
     }
   } finally {
     reader.releaseLock();
-    // Not awaited: cancelling a live child's stdout waits for the child to close
-    // it, which a listening server never does. The parent detaches and exits
-    // right after this returns, which closes the read end anyway.
+    // Not awaited, because nothing after this depends on the cancel finishing.
     void stdout.cancel().catch(() => {});
   }
 }
@@ -191,8 +191,8 @@ export async function runBackgroundParent(
 ): Promise<void> {
   const spawn = deps.spawn ?? defaultSpawn;
   const exit = deps.exit ?? Deno.exit;
-  const writeOut = deps.writeOut ?? ((line: string) => console.log(line));
-  const writeErr = deps.writeErr ?? ((line: string) => console.error(line));
+  const writeOut = deps.writeOut ?? console.log;
+  const writeErr = deps.writeErr ?? console.error;
   const readLog = deps.readLog ?? ((path: string) => Deno.readTextFile(path));
   const makeTempLog = deps.makeTempLog ??
     (() => Deno.makeTempFileSync({ prefix: "toolshed-", suffix: ".log" }));
@@ -236,8 +236,12 @@ export async function runBackgroundParent(
  * method both the console redirect and the request logger send lines to. */
 export function backgroundLogStream(
   path: string,
+  open: (
+    path: string,
+    options: Deno.OpenOptions,
+  ) => Pick<Deno.FsFile, "writeSync"> = Deno.openSync,
 ): { write(chunk: string): void } {
-  const file = Deno.openSync(path, { write: true, create: true, append: true });
+  const file = open(path, { write: true, create: true, append: true });
   const encoder = new TextEncoder();
   return {
     write(chunk: string): void {
@@ -271,11 +275,13 @@ export function redirectConsoleToFile(path: string): void {
 
 /** Route uncaught errors through console.error so the background log records a
  * failure the runtime would otherwise print to a discarded stderr. */
-export function logUncaughtErrors(): void {
-  globalThis.addEventListener("error", (event) => {
+export function logUncaughtErrors(
+  target: Pick<typeof globalThis, "addEventListener"> = globalThis,
+): void {
+  target.addEventListener("error", (event) => {
     console.error("Uncaught error:", event.error ?? event.message);
   });
-  globalThis.addEventListener("unhandledrejection", (event) => {
+  target.addEventListener("unhandledrejection", (event) => {
     console.error("Unhandled promise rejection:", event.reason);
   });
 }

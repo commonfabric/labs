@@ -18,7 +18,16 @@ a room to anyone its space doesn't admit.
 
 ## Finding conversations
 
-- **All of the person's rooms** are the manager's `rooms`.
+- **All of the person's rooms** are the manager's `rooms`, which the manager
+  draws from its own records and which reads no room. A client that lists them
+  MUST declare each entry's `room` as `{ type: "unknown", asCell: ["cell"] }`,
+  so that reading the list loads nothing in any room's space; any declaration
+  with a shape of its own makes every read of the list load every room's root
+  (see [reading the list](ChatManagerOutput.md#reading-the-list)). A row's
+  `title` is a hint, as of the person's last visit to the room; the room's own
+  `about.title` is current. A client MUST NOT read every listed room to fill in
+  a row: what a row lacks, such as where its conversation stands, it reads for
+  the rows it shows.
 - **The conversation with one person** is `openDirect` with that person's
   principal. A client MUST use it, and MUST NOT create a direct room any other
   way. It is what keeps one person's conversation from splitting. A client
@@ -56,6 +65,25 @@ a room to anyone its space doesn't admit.
   Either way their later `openDirect` with the creator finds the room `direct`
   holds (see [`ChatManagerOutput`](ChatManagerOutput.md#offers)).
 
+## Opening a room
+
+A room is checked when it is opened, not when it is listed: the list holds what
+the manager recorded, and a room whose space has since been deleted, or no
+longer admits the person, stays listed until a runtime of theirs hears of it.
+Opening it is how one does. The runtime refuses each read of the room's space,
+and reports it once for the space, as the runtime client's `spaceaccesslost`
+notification, which carries the space and, for a deleted space, `deleted:
+true`. A read the runtime fails for the refusal carries a code as well,
+`space-deleted` for a deleted space and `space-access-refused` otherwise, so a
+client that missed the notice learns the same from the read. A client MUST show the room as gone, or
+as no longer open to the person, when it receives either for a room it is
+opening, and MUST NOT wait on the room's contents instead. The runtime that hears of a deletion records it in
+Home's catalog, and the room then moves to `deletedRooms`.
+
+A client that opens a room sends `joinRoom` for it (see [`ChatManagerOutput`](ChatManagerOutput.md#joinroomrequestid-string-room-cellchatroomoutput)),
+as a host does for a visit, which brings the row's `title` hint up to the
+room's, and lists a room the catalog holds with no membership.
+
 ## Showing a room
 
 A client that draws natively reads a placement's `chat` group, which the adapter
@@ -91,12 +119,17 @@ A client that draws natively MUST:
   against the record's `authored-by` attestation.
 - **Show members from the room's space.** A room's `participants` are its
   space's participants, as claims, plus its authors. None of them is proof that
-  someone can read the room. To name each of them, and to tell which one is the
-  reader, as when titling a direct room with the other person's name, a client
-  reads the room's `participantEntries`, which pairs each participant's profile
-  with the principal it attests. It is best effort and derived for each reader:
-  an entry whose profile the reader can't read holds no principal, and it is
-  not an access list.
+  someone can read the room. A room's membership is its space's, so a client
+  asks the space: it shows the member set the space's root offers, which for a
+  room in a space of its own is the room's `members`: each principal the
+  space's access list names, with the participants' profiles that are that
+  principal's own. To name each member, it shows their first profile, and to
+  tell which one is the reader, as when titling a direct room with the other
+  person's name, it compares each member's `principal` with the reader's. It
+  is derived for each reader: a profile the reader can't read counts toward no
+  member. The room's `participantEntries` and `participantPrincipals` hold the
+  same members in older shapes, and are deprecated: a client that reads them
+  moves to `members`, and they will be retired once clients have.
 - **Offer any single emoji as a reaction** (see
   [`ChatReaction`](ChatReaction.md)), and show any that others have used, even
   ones the client wouldn't offer itself.
@@ -137,6 +170,16 @@ A client that draws natively MUST:
   [`ChatReply`](ChatReply.md#a-reply-naming-neither)).
 - **Show a room it can't read as unreadable**, and nothing more (see
   [`FabriChatPlacement.md`](FabriChatPlacement.md#viewers-who-arent-members)).
+- **Show a deleted room as deleted, with no controls**: an entry of the
+  manager's `deletedRooms`, or a placement whose `state` is `"deleted"` (see
+  [`ChatManagerOutput`](ChatManagerOutput.md#facts)). Deleting a room is
+  deleting its space, which FabriChat itself offers no way to do. A room
+  declared inside a container's space, as a loom's `chatRoom` is, lives in
+  that space, so it is deleted only together with the container, and
+  everything else the container holds goes with it. Deleting such a room apart
+  from its container is not offered. Once the container's space is deleted,
+  the room is one of the manager's `deletedRooms`, as any room whose space is
+  deleted is.
 
 A client MUST NOT copy a room's contents into any other space, including as a
 cache inside a piece. A copy loses the room's label and is readable by everyone
@@ -178,10 +221,8 @@ client asks the adder to send them the room's link. A client offers people to ad
 user's manager's `people`, and names a person picked there by their profile as
 well as their address, so the manager offers the room through that profile.
 To leave the people already in the room out of its add control, it reads the
-room's `participantPrincipals`, the principals the room's `participantEntries`
-hold. It is a best-effort set to leave out, not an access list: someone who
-has been added but has never joined isn't among them, and neither is a
-participant whose profile the reader can't read.
+room's `members`, whose principals are exactly those the space's access list
+names, whether or not they have joined.
 
 A client that draws natively retitles a room the same way: it sends `setTitle`
 through the sanctioned issuing path on `ChatRetitleSurface`, finds it in
@@ -269,7 +310,10 @@ control. The function that returns sends the control's payload with `native`
 provenance for that surface and action, carrying the renderer-trust mark. A
 host whose runtime runs in a worker sends the same act with
 `CellHandle.sendReviewed(event, { surface, action })`, which waits for the
-handler's run, and rejects with the reason when its write is refused. Either
+handler's run, and rejects with the reason when its write is refused, except
+that a served run whose outcome is withheld resolves it with
+`{ handling: "withheld" }`, for the client to show as sent with a private
+outcome. Either
 way, the runtime checks the surface and action against the write's policy as
 it checks a rendered gesture's provenance, and the mark reaches a served
 handler the way a rendered gesture's does. The generic `cell:send` marks

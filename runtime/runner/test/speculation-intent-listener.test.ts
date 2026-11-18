@@ -283,21 +283,24 @@ describe("intent listener — scripted notification seam (design (e) pins 1–5,
     });
     scripted.seed(SPACE, SIDECAR, {
       entries: [
+        { eventId: "mine", stream: { id: "s", path: [] }, seq: 1 },
         null,
         "not-an-entry",
         7,
-        { eventId: "mine", stream: { id: "s", path: [] }, seq: 4 },
       ] as unknown as StreamEventsDocValue["entries"],
     });
+    // The check at the fire scans back from the tail, past the malformed
+    // entries, to the well-formed one.
     destination.trackIntent(SPACE, SIDECAR, "mine");
+    expect(destination.intentCheckMaxVisits).toBe(4);
     expect(destination.pendingIntentCount).toBe(1);
 
     scripted.deliver(SPACE, SIDECAR, (value) => {
-      value.entries![3].status = "dropped";
-      value.entries![3].reason = "gone";
+      value.entries![0].status = "dropped";
+      value.entries![0].reason = "gone";
     }, [
-      ["value", "entries", "3", "status"],
-      ["value", "entries", "3", "reason"],
+      ["value", "entries", "0", "status"],
+      ["value", "entries", "0", "reason"],
     ]);
     await flushMicrotasks();
     expect(outcomes).toEqual(["dropped:mine"]);
@@ -1772,6 +1775,60 @@ describe("intent listener — end to end (design (e) pins 6, 10, 11)", () => {
         node.id.includes(`/${SERVER_EXECUTION_EFFECTS_DOC_ID}/`)
       );
     expect(effectsSinkNodes.length).toBe(0);
+    cancelDemand();
+  });
+
+  it("keeps the sidecar of an outstanding intent watched through a release of unread documents, so the served mark still resolves it, and releases the sidecar once nothing is outstanding on it", async () => {
+    const { manager, runtime } = openClient({ serverExecution: true });
+    const engine = await server.engineForSpace(space);
+    const { result } = await standUp(runtime, "release");
+    const cancelDemand = result.sink(() => {});
+    await runtime.idle();
+    await manager.synced();
+
+    const acks = new ArrivalLog<string>();
+    sendEvent(result.key("bump"), {}, (ackTx) => {
+      acks.record(ackTx.status().status);
+    });
+    const overlay = runtime.speculationOverlay!;
+    await awaitAdmitted(server, () => sidecarIdsIn(engine).length === 1);
+    const sidecarId = sidecarIdsIn(engine)[0] as never;
+    const replica = manager.open(space).replica;
+    await awaitReplica(
+      manager,
+      () =>
+        ((replica.getDocument(sidecarId, "space")?.value as
+          | StreamEventsDocValue
+          | undefined)?.entries?.length ?? 0) === 1,
+    );
+    // Whether the replica holds the sidecar, asked without reading it, since
+    // a read keeps a document through the pass that follows.
+    const loaded = () => replica.hasLocalDocumentCoverage?.(sidecarId) === true;
+    const releaseTwice = async () => {
+      await runtime.idle();
+      await manager.releaseUnreadDocuments();
+      await manager.releaseUnreadDocuments();
+    };
+
+    await releaseTwice();
+    expect(overlay.pendingIntentCount).toBe(1);
+    expect(loaded()).toBe(true);
+
+    // The host starts serving the space at the next commit admitted to it,
+    // and then takes up the event appended before it existed.
+    host = newServingHost();
+    {
+      const wake = runtime.edit();
+      runtime.getCell<number>(space, "release-wake", undefined, wake).set(1);
+      expect((await wake.commit().settled).error).toBeUndefined();
+    }
+    await acks.reached(1);
+    expect(acks.entries).toHaveLength(1);
+    expect(acks.entries[0]).not.toBe("error");
+    expect(overlay.pendingIntentCount).toBe(0);
+
+    await releaseTwice();
+    expect(loaded()).toBe(false);
     cancelDemand();
   });
 

@@ -72,3 +72,20 @@ header, debugger, outer content padding, sidebar, and fab surfaces.
 Shell navigation preserves embed mode. For example, a pattern calling
 `navigateTo(...)` from a `/.embed/...` URL navigates to another `/.embed/...`
 URL rather than leaving the embedded surface.
+
+## Embedding the deployed runtime
+
+The shell build also emits `scripts/shell-library.js` (the browser-facing
+identity, runtime-client and lib-shell API) and `scripts/shell-components.js`
+(the embedded component palette). Importing the library does not start the shell
+application. Both entries and `worker-runtime.js` are built in the same split
+pass, so shared classes have one module identity. The iframe sandbox's
+`outer-frame-script.js` is emitted alongside them.
+
+Toolshed advertises the asset namespace as `browserAssetBase` in `/api/meta`.
+Compiled deployments use their baked `/builds/<commit>/` namespace; source runs
+use `/`, regardless of a health-report Git SHA override. `build-manifest.json`
+contains SHA-256 digests of entries and shared JavaScript chunks. An embedding
+host can retain the complete graph, verify it, and serve it from its own origin.
+Keep the graph fixed while its worker lives, including when attaching new panes.
+Loom uses this contract to track its home/default Toolshed deployment.

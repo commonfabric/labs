@@ -377,12 +377,19 @@ What this leaves open:
   numbering it was deployed with.
 - A runtime with naming off, or one that predates instance names, binds a
   parent's children positionally, even where a naming runtime carried them
-  over to their names: reopening the parent, it runs whatever instance now
-  takes a carried child's positional number on that child's document, and
-  updating the parent, it shows the carried child's state under that instance,
-  with no refusal in either case (`runtime/runner/test/instance-naming-modes.test.ts`).
-  The `instanceNames` flag stays off until such a runtime is kept away from a
-  space whose data a naming runtime wrote.
+  over to their names: reopening the parent, it would run whatever instance
+  now takes a carried child's positional number on that child's document. The
+  memory server keeps such a runtime away: a space is marked at the first
+  commit from a naming runtime, which declares its mode in every open, and the
+  server admits no runtime with naming off to a marked space (INV-16 in
+  [`memory-v2/09-invariants.md`](memory-v2/09-invariants.md#inv-16--instance-naming-admission)),
+  so its reopen or update of such a parent is refused
+  (`runtime/runner/test/instance-naming-modes.test.ts`). A naming runtime of a
+  build older than the declaration declares nothing, and is admitted as
+  positional. The `instanceNames` flag stays off until deployments' posture
+  names instances;
+  [`../plans/instance-names-on.md`](../plans/instance-names-on.md) sequences
+  that and the flip.
 
 ### Transaction provenance
 
@@ -860,13 +867,13 @@ changes here:
   analysis (`capability-analysis.ts`) is the natural place to detect the
   calls, including through module-scope helpers via its interprocedural
   summaries.
-- Deferred tooling gap: `XSchedulerGraph.#extractEntityId` (shell) groups
-  graph nodes by scheme-stripped entity id, so an `of:` doc and a
-  `computed:` doc minted from the same cause would be conflated into one
-  group in the debug graph. This is more than cosmetic debt: the scheduler
-  treats computed cells differently (ack-and-drop instead of conflict
-  retry, recompute-on-sync convergence), so the kind is a scheduling-
-  relevant property the graph view should surface as a first-class visual
-  dimension — distinct grouping keys at minimum, and eventually a distinct
-  color/badge for computed nodes so drop-and-recompute behavior is legible
-  when debugging settle waves.
+- Deferred tooling gap: `extractEntityId()` in the shell's
+  `src/lib/scheduler-graph-layout.ts` groups debug graph nodes by their full
+  schemed entity URI, so an `of:` doc and a `computed:` doc minted from the
+  same cause fall into separate groups, but nothing in the graph view marks a
+  group or a node as computed. The scheduler treats computed cells
+  differently (ack-and-drop instead of conflict retry, recompute-on-sync
+  convergence), so the kind is a scheduling-relevant property the graph view
+  should surface as a first-class visual dimension, such as a distinct
+  color or badge for computed nodes, so that drop-and-recompute behavior is
+  legible when debugging settle waves.

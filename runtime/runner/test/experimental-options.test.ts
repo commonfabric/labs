@@ -60,6 +60,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: false,
         agentBuiltin: false,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: false,
@@ -69,6 +70,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: false,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -87,6 +89,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: true,
         agentBuiltin: true,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -96,6 +99,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: true,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -112,6 +116,7 @@ describe("ExperimentalOptions", () => {
         modernCellRep: false,
         agentBuiltin: true,
         localFold: false,
+        pieceCreatorRecord: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -121,6 +126,7 @@ describe("ExperimentalOptions", () => {
         readerSchemaPrecedence: true,
         serverExecution: false,
         localSessionDocuments: false,
+        syncCidReferences: false,
       });
       await runtime.dispose();
       await sm.close();
@@ -244,6 +250,90 @@ describe("ExperimentalOptions", () => {
         });
         expect(declared).toEqual([enabled]);
         await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("constructing Runtime declares its naming mode to the storage manager", async () => {
+      // Each open declares the mode, so a manager hears it before any session
+      // opens: at construction, on and off alike.
+      for (const enabled of [true, false]) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setInstanceNames: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { instanceNames: enabled },
+        });
+        expect(declared).toEqual([enabled]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("constructing Runtime declares whether it takes schema documents by reference", async () => {
+      // Each connection's hello advertises it, so a manager hears it before
+      // any session opens: off unless the runtime, or the host embedding it,
+      // opts in.
+      for (
+        const [experimental, expected] of [
+          [{ syncCidReferences: true }, true],
+          [{ syncCidReferences: false }, false],
+          [{}, false],
+        ] as const
+      ) {
+        const sm = StorageManager.emulate({ as: signer });
+        const declared: boolean[] = [];
+        const manager = Object.assign(sm, {
+          setSyncCidReferences: (value: boolean) => {
+            declared.push(value);
+          },
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental,
+        });
+        expect(declared).toEqual([expected]);
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("refuses a second runtime on one storage manager that declares the other schema-reference choice", async () => {
+      const sm = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: sm,
+        experimental: { syncCidReferences: true },
+      });
+      try {
+        expect(() =>
+          new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: sm,
+            experimental: { syncCidReferences: false },
+          })
+        ).toThrow("already declared the other choice");
+      } finally {
+        await runtime.dispose();
+        await sm.close();
+      }
+    });
+
+    it("refuses to change the schema-reference choice of a storage manager with a session open", async () => {
+      const sm = StorageManager.emulate({ as: signer });
+      try {
+        await sm.open(signer.did()).sync(`of:${signer.did()}`);
+        expect(() => sm.setSyncCidReferences(true)).toThrow(
+          "a session is already open",
+        );
+      } finally {
         await sm.close();
       }
     });

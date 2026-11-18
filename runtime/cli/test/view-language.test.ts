@@ -27,7 +27,7 @@ import {
   metadataMatchesSharedExtension,
   renderedLinesFor,
 } from "../lib/view/languages/language.ts";
-import { type LanguageDecoder } from "../lib/view/languages/decoder.ts";
+import type { LanguageDecoder } from "../lib/view/languages/decoder.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import {

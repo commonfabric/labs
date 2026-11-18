@@ -69,16 +69,17 @@ import {
   type PresenceRecord,
   type PresenceRoomHandle,
   type RuntimeClient,
+  sameAnchors,
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { html, PropertyValues } from "lit";
+import { type CSSResult, html, PropertyValues, unsafeCSS } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
 import { createStringCellController } from "../../core/cell-controller.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
-import { type InputTimingOptions } from "../../core/input-timing-controller.ts";
+import type { InputTimingOptions } from "../../core/input-timing-controller.ts";
 import {
   dedupeByDestination,
   labelForToken,
@@ -113,6 +114,19 @@ import {
   createBacklinkDecorationPlugin,
 } from "./features/backlinks.ts";
 import {
+  type EditorHighlight,
+  highlightAnchors,
+  highlightFaults,
+  highlights as highlightsExtension,
+  localAnchors,
+  sameSelection,
+  type SelectionReport,
+  selectionReport,
+  setHighlightAnchorsEffect,
+  setHighlightsEffect,
+} from "./features/highlights.ts";
+import { margin as marginExtension } from "./features/margin.ts";
+import {
   atomicMentionRefRanges,
   createMentionRefDecorationPlugin,
   findRefToken,
@@ -127,6 +141,8 @@ import {
   setRefShortNames,
   shortNameQueryAt,
 } from "./features/mention-refs.ts";
+import { mathMarkdown } from "./features/math-syntax.ts";
+import { proseMath } from "./features/prose-math.ts";
 import { createProseMarkdownPlugin } from "./features/prose-markdown.ts";
 import { styles } from "./styles.ts";
 import {
@@ -134,6 +150,7 @@ import {
   CodeMirrorReconciliationError,
   codeMirrorRewriteDedupeEffect,
   type CodeMirrorSynchronizationSnapshot,
+  hasConfirmedCursor,
 } from "./codemirror-collaboration.ts";
 import {
   codeMirrorPresence,
@@ -219,11 +236,18 @@ export type MimeType = (typeof MimeType)[keyof typeof MimeType];
 
 // Language registry
 const langRegistry = new Map<MimeType, LanguageSupport>();
+const markdownCodeLang = createJavaScript({ jsx: true });
 const markdownLang = createMarkdown({
-  defaultCodeLanguage: createJavaScript({ jsx: true }),
+  defaultCodeLanguage: markdownCodeLang,
   extensions: GFM,
 });
 const defaultLang = markdownLang;
+
+/** Markdown with `$…$` and `$$…$$` formulas, for prose mode's math. */
+const markdownMathLang = createMarkdown({
+  defaultCodeLanguage: markdownCodeLang,
+  extensions: [GFM, mathMarkdown],
+});
 
 langRegistry.set(MimeType.javascript, createJavaScript());
 langRegistry.set(MimeType.jsx, createJavaScript({ jsx: true }));
@@ -236,9 +260,23 @@ langRegistry.set(MimeType.html, createHtml());
 langRegistry.set(MimeType.markdown, markdownLang);
 langRegistry.set(MimeType.json, createJson());
 
-const getLangExtFromMimeType = (mime: MimeType) => {
+/**
+ * The language for `mime`. Markdown parses formulas as well when `math`, for
+ * an editor that draws them.
+ */
+const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
+  if (math && mime === MimeType.markdown) return markdownMathLang;
   return langRegistry.get(mime) ?? defaultLang;
 };
+
+// KaTeX and its layout rules, from `features/katex-render.ts`. They would be a
+// large share of the shell's bundle, and only an editor with `math` set uses
+// them, so the shell builds them as a script of their own, maps
+// `cf-katex-render` to it in its page's import map, and leaves the specifier
+// for the browser to resolve. Everywhere else, `runtime/ui`'s import map
+// resolves it to the module.
+// deno-lint-ignore cf-imports/no-inline-module-import
+const loadKatex = () => import("cf-katex-render");
 
 /** What the editor needs of a handle it computes writes from. */
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
@@ -290,6 +328,9 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   follows the nearest `<cf-theme>`'s color scheme, light or dark; wrap the
  *   editor in its own `<cf-theme>` to give it a different scheme from the page.
  * @attr {"code"|"prose"} mode - Editor mode; "prose" enables markdown prose editing.
+ * @attr {boolean} math - In prose mode with Markdown, draw `$…$` and `$$…$$`
+ *   TeX formulas with KaTeX, showing a formula's TeX where the selection
+ *   touches it (default: false). See `docs/prose-markdown.md`.
  * @attr {CellHandle<string>} pattern - Optional pattern piece used for backlink context.
  * @attr {boolean} collaborative - Use Memory's operation protocol for concurrent editing.
  * @attr {string} presenceRoom - Optional opaque room override for ephemeral
@@ -301,6 +342,18 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   publishes its caret there with `focused` reporting whether it owns focus.
  *   Presence travels over the runtime's memory connection; no endpoint is
  *   configured.
+ * @attr {EditorHighlight[]} highlights - Ranges of the collaborative field's
+ *   text to mark, each `{ id, fromAnchor, toAnchor, kind? }`: the text from
+ *   one of the field's anchors to another, named by anchor id. Memory moves
+ *   each anchor through every edit and the editor draws the mark between
+ *   where Memory says the two are; `id` names the mark and `kind` adds the
+ *   class `cm-highlight-<kind>`. See `docs/highlights.md`.
+ *
+ * @slot - Element children are shown in a margin beside the text, which wraps
+ *   below it where the two do not fit side by side. A child whose
+ *   `data-anchor` names an anchor of the collaborative field sits beside the
+ *   text at that anchor, and a child naming none sits under the child before
+ *   it. See `docs/margin.md`.
  *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
  * @fires cf-focus - Fired on focus
@@ -311,12 +364,33 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   of document collaboration. Detail contains a safe failure category.
  * @fires cf-presence-join - Fired each time the editor joins its presence room,
  *   including a rejoin after `cf-presence-error`. It carries no detail.
- * @fires backlink-click - Fired when a backlink is clicked with Cmd/Ctrl+Enter with detail: { text, piece }
- * @fires backlink-create - Fired when a novel backlink is activated (Cmd/Ctrl+Click)
- *   or confirmed with Enter during autocomplete with no matches. Detail:
- *   { text: string, pieceId: any, piece: Cell<MentionablePiece>, navigate: boolean }
+ * @fires cf-selection-change - Fired when the main selection changes, with
+ *   detail `{ from, to, text, value }`: the range in the editor's document,
+ *   the text that range holds, and the whole document. An empty selection
+ *   reports `from === to` and an empty `value`. A selection held while any
+ *   edit changes the document is reported again, against the new document. A
+ *   new editor's first report is always fired, and says that nothing is
+ *   selected.
+ * @fires cf-highlight-click - Fired when a highlight is clicked, with detail
+ *   `{ id }` naming the highlight: on the release of a primary-button press
+ *   that leaves nothing selected, so a press that drags out a selection fires
+ *   nothing. The caret still lands where the click was.
+ * @fires backlink-click - Fired when a mention's pill is clicked, with detail:
+ *   { id, text, piece: SigilLink }
+ * @fires backlink-create - Fired when a mention typed after `[[` is confirmed
+ *   with Enter and matches nothing, so a piece is created for it. Detail:
+ *   { text: string, pieceId: any, piece: SigilLink, navigate: false }
  * @fires mention-ref-label-changed - Fired when a mention's label is edited in
- *   reference mode, with detail: { key, label, modifiedTitle, destination }
+ *   reference mode, with detail: { key, label, modifiedTitle, destination:
+ *   SigilLink | null }
+ * @fires backlink-name-changed - Fired when a backlink's text renames its
+ *   piece, with detail: { pieceId, oldName, newName, piece: SigilLink }
+ *
+ * Every piece in a detail is a link to its cell, not the cell's handle. A
+ * detail crosses to the worker as a `FabricValue`, and `toSerializableValue()`
+ * in `runtime/html/src/main/events.ts` converts a handle only when it is the
+ * whole detail. A handler that declares the member as `Writable<T>` receives
+ * the cell.
  *
  * @example
  * <cf-code-editor language="text/javascript" placeholder="Enter code..."></cf-code-editor>
@@ -347,20 +421,19 @@ export class CFCodeEditor extends BaseElement {
           const num = Number(value);
           return Number.isNaN(num) ? value : num;
         },
-        toAttribute(value: number | string | undefined) {
-          return value?.toString() ?? null;
-        },
       },
     },
     tabSize: { type: Number },
     tabIndent: { type: Boolean },
     theme: { type: String, reflect: true },
     mode: { type: String, reflect: true },
+    math: { type: Boolean },
     autofocus: { type: Boolean },
     cursorPosition: { type: String },
     collaborative: { type: Boolean },
     presenceRoom: { type: String },
     participantName: { type: String },
+    highlights: { type: Array },
   };
 
   declare value: CellHandle<string> | string;
@@ -399,11 +472,26 @@ export class CFCodeEditor extends BaseElement {
   declare tabIndent: boolean;
   declare theme: "light" | "dark";
   declare mode: "code" | "prose";
+
+  /**
+   * Whether prose mode draws `$…$` and `$$…$$` TeX formulas in Markdown with
+   * KaTeX. Ignored in code mode and for other languages.
+   */
+  declare math: boolean;
+
   declare autofocus: boolean;
   declare cursorPosition: "start" | "end";
   declare collaborative: boolean;
   declare presenceRoom: string;
   declare participantName: string;
+
+  /**
+   * The ranges of the collaborative field's text to draw, each from one of
+   * the field's anchors to another. Memory says where each anchor is; a
+   * highlight naming an anchor the field does not hold, or whose text an edit
+   * deleted, draws nothing.
+   */
+  declare highlights: EditorHighlight[];
 
   @consume({ context: runtimeContext, subscribe: true })
   @property({ attribute: false })
@@ -439,6 +527,17 @@ export class CFCodeEditor extends BaseElement {
   private _setupComp = new Compartment();
   private _modeComp = new Compartment();
   private _proseMarkdownComp = new Compartment();
+
+  /** KaTeX's layout rules, made into a sheet once and shared by every editor. */
+  static #katexStyles: CSSResult | undefined;
+
+  /**
+   * KaTeX, once loaded. It loads the first time this editor draws math.
+   */
+  #katex: Awaited<ReturnType<typeof loadKatex>> | undefined;
+
+  /** The load of `#katex`, from when it starts; it never rejects. */
+  #katexLoad: Promise<void> | undefined;
   private _collaborationComp = new Compartment();
   private _presenceComp = new Compartment();
   /**
@@ -450,6 +549,29 @@ export class CFCodeEditor extends BaseElement {
   private _refusedShown = false;
   private _collaboration: CodeMirrorCollaborationController | undefined;
   private _collaborationSyncUnsub: (() => void) | undefined;
+  /**
+   * The last `cf-selection-change` detail emitted, or `undefined` when the
+   * editor view has emitted none, so that the view's first report is emitted
+   * whatever it is.
+   */
+  private _lastSelectionReport: SelectionReport | undefined;
+  /**
+   * The anchors last handed to the highlight field and the version they were
+   * stated at, which is `null` for a field with no collaborative edit, or
+   * `undefined` when the highlight field holds none of a collaboration's.
+   */
+  private _shownAnchors:
+    | Pick<CodeMirrorSynchronizationSnapshot, "anchors"> & {
+      cursor: CodeMirrorSynchronizationSnapshot["confirmedCursor"];
+    }
+    | undefined;
+
+  /**
+   * The highlight faults last reported through `cf-error`, so that a fault is
+   * reported once while it lasts rather than on every change to the editor.
+   */
+  #reportedHighlightFaults: ReadonlySet<string> = new Set();
+
   private _presence: PresenceRoomHandle | undefined;
   private _presenceUnsubscribe: (() => void) | undefined;
   private _presenceJoining = false;
@@ -547,11 +669,11 @@ export class CFCodeEditor extends BaseElement {
   /**
    * Keys the document held when it loaded, plus those this editor minted.
    * Collection only removes entries from this set, so a key another client
-   * added while this one was open is never swept away. `null` until the
+   * added while this one was open is never swept away. Empty until the
    * document has loaded, which is what keeps an empty editor from collecting
    * the whole map.
    */
-  private _refKeysAtLoad: Set<string> | null = null;
+  private _refKeysAtLoad = new Set<string>();
 
   /**
    * Signature of the last `$mentioned` write in reference mode; `null` forces
@@ -608,11 +730,13 @@ export class CFCodeEditor extends BaseElement {
     this.tabIndent = true;
     this.theme = "light";
     this.mode = "code";
+    this.math = false;
     this.autofocus = false;
     this.cursorPosition = "start";
     this.collaborative = false;
     this.presenceRoom = "";
     this.participantName = "";
+    this.highlights = [];
     this.mentionable = null;
     this.references = null;
     this.fabricHosts = [];
@@ -640,12 +764,12 @@ export class CFCodeEditor extends BaseElement {
    * So while any is withheld the editor computes no write at all. One gate
    * stands at each kind of write: the document takes no change but the one
    * that mirrors the content cell (`changeFilter`, and the read-only
-   * {@link _refusedComp} for the person at the keyboard); every cell write
-   * goes through {@link _write}, every content write through
-   * {@link setValue}, and every piece is created through
-   * {@link _createPiece}. Each also returns before it records anything that
-   * would make a later write wrong, and runs again once the read is
-   * admitted.
+   * {@link _refusedComp} for the person at the keyboard), so a content
+   * write ({@link setValue}) follows only a change that filter let through;
+   * every other cell write goes through {@link _write}, and every piece is
+   * created through {@link _createPiece}. Each also returns before it
+   * records anything that would make a later write wrong, and runs again
+   * once the read is admitted.
    */
   private get _readsWithheld(): boolean {
     return this._cellController.refusal !== undefined ||
@@ -869,7 +993,7 @@ export class CFCodeEditor extends BaseElement {
             // it silently.
             const opensQuery = view.state.doc.sliceString(from - 2, from) ===
               "[[";
-            if (this._refMode && opensQuery && destination) {
+            if (opensQuery && destination) {
               const key = this._writeRefEntry(
                 destination as CellHandle<unknown>,
               );
@@ -1035,7 +1159,7 @@ export class CFCodeEditor extends BaseElement {
     destination: CellHandle<Mentionable> | undefined,
     pieceId: string,
   ): void {
-    if (this._refMode && destination) {
+    if (destination) {
       const key = this._writeRefEntry(destination as CellHandle<unknown>);
       if (key) {
         this._insertRefToken(view, from, to, label, key);
@@ -1197,10 +1321,7 @@ export class CFCodeEditor extends BaseElement {
     if (exactMatch) {
       const [matchCell, matchIndex] = exactMatch;
       const pieceName = matchCell.key(NAME).get() || text;
-      if (
-        !this._refMode ||
-        !this._completeMentionRef(view, pieceName, matchIndex)
-      ) {
+      if (!this._completeMentionRef(view, pieceName, matchIndex)) {
         const pieceId = this._getPieceId(matchIndex);
         this._completeBacklinkWithId(view, text, pieceName, pieceId);
       }
@@ -1221,7 +1342,7 @@ export class CFCodeEditor extends BaseElement {
       this._createMentionRefFromPattern(view, text);
     } else {
       this._completeBacklinkText(view);
-      this.createBacklinkFromPattern(text, false);
+      this.createBacklinkFromPattern(text);
     }
   }
 
@@ -1239,8 +1360,6 @@ export class CFCodeEditor extends BaseElement {
     const doc = view.state.doc.toString();
     const beforeCursor = doc.slice(0, pos);
     const bracketPos = beforeCursor.lastIndexOf("[[");
-
-    if (bracketPos === -1) return;
 
     // Check if there are auto-closed brackets after cursor
     const afterCursor = doc.slice(pos, pos + 2);
@@ -1319,7 +1438,7 @@ export class CFCodeEditor extends BaseElement {
     ) return null;
     // Ours to collect: a key this editor minted can be swept when its token
     // goes, without waiting for a reload to observe it.
-    this._refKeysAtLoad?.add(key);
+    this._refKeysAtLoad.add(key);
     return key;
   }
 
@@ -1370,7 +1489,6 @@ export class CFCodeEditor extends BaseElement {
     const pos = view.state.selection.main.head;
     const doc = view.state.doc.toString();
     const bracketPos = doc.slice(0, pos).lastIndexOf("[[");
-    if (bracketPos === -1) return false;
 
     const key = this._createRefEntry(index);
     if (!key) return false;
@@ -1403,7 +1521,6 @@ export class CFCodeEditor extends BaseElement {
     const pos = view.state.selection.main.head;
     const doc = view.state.doc.toString();
     const bracketPos = doc.slice(0, pos).lastIndexOf("[[");
-    if (bracketPos === -1) return;
 
     const key = mintRefKey(this._takenRefKeys());
     const hasAutoClose = doc.slice(pos, pos + 2) === "]]";
@@ -1432,7 +1549,7 @@ export class CFCodeEditor extends BaseElement {
       this.emit("backlink-create", {
         text: label,
         pieceId: piece.id(),
-        piece: piece.cell(),
+        piece: piece.cell().toSigilLink(),
         navigate: false,
       });
 
@@ -1450,7 +1567,7 @@ export class CFCodeEditor extends BaseElement {
           { destination, modifiedTitle: false } as unknown as MentionRef,
         )
       ) {
-        this._refKeysAtLoad?.add(key);
+        this._refKeysAtLoad.add(key);
       }
     } catch (error) {
       // A disposal race (logout, runtime swap) cancels the create; that is
@@ -1558,7 +1675,7 @@ export class CFCodeEditor extends BaseElement {
         this.emit("backlink-click", {
           id,
           text: innerText,
-          piece: cell,
+          piece: cell.toSigilLink(),
         });
         return;
       }
@@ -1604,71 +1721,16 @@ export class CFCodeEditor extends BaseElement {
       this.emit("backlink-click", {
         id: ref.key,
         text: ref.label,
-        piece: destination,
+        piece: destination.toSigilLink(),
       });
       return;
     }
   }
 
   /**
-   * Handle backlink activation (Cmd/Ctrl+Click on a backlink)
-   */
-  private handleBacklinkActivation(
-    view: EditorView,
-    _event?: MouseEvent,
-  ): boolean {
-    const state = view.state;
-    const pos = state.selection.main.head;
-    const doc = state.doc;
-
-    // Find backlinks around cursor position
-    const lineStart = doc.lineAt(pos).from;
-    const lineEnd = doc.lineAt(pos).to;
-    const lineText = doc.sliceString(lineStart, lineEnd);
-
-    // Find all [[...]] patterns in the line
-    const backlinkRegex = /\[\[([^\]]+)\]\]/g;
-    let match;
-
-    while ((match = backlinkRegex.exec(lineText)) !== null) {
-      const matchStart = lineStart + match.index;
-      const matchEnd = matchStart + match[0].length;
-
-      // Check if cursor is within this backlink
-      if (pos >= matchStart && pos <= matchEnd) {
-        const backlinkText = match[1];
-        // Extract ID from "Name (id)" format
-        const idMatch = backlinkText.match(/\(([^)]+)\)$/);
-        const backlinkId = idMatch ? idMatch[1] : undefined;
-        const piece = backlinkId ? this.findPieceById(backlinkId) : null;
-        if (piece) {
-          this.emit("backlink-click", {
-            id: backlinkId,
-            text: backlinkText,
-            piece,
-          });
-          return true;
-        }
-
-        // Only create new backlink if there's NO ID (text-only like [[Name]])
-        if (!backlinkId && this.pattern) {
-          this.createBacklinkFromPattern(backlinkText, true);
-        }
-
-        return true;
-      }
-    }
-
-    return false;
-  }
-
-  /**
    * Create a backlink from pattern
    */
-  private async createBacklinkFromPattern(
-    backlinkText: string,
-    navigate: boolean,
-  ): Promise<void> {
+  private async createBacklinkFromPattern(backlinkText: string): Promise<void> {
     // The op runs against the pattern's own runtime, not the ambient
     // `this.runtime` (which RootView clears to undefined on logout).
     const rt = this.pattern.runtime();
@@ -1684,15 +1746,16 @@ export class CFCodeEditor extends BaseElement {
       const pieceId = piece.id();
 
       // Insert the ID into the text if we have an editor
-      if (this._editorView && pieceId) {
-        this._insertBacklinkId(backlinkText, pieceId, navigate);
-      }
+      const view = this._editorView;
+      if (view) this._insertBacklinkId(view, backlinkText, pieceId);
 
+      // The editor stays where the person is typing, so the host is never
+      // asked to navigate to the piece.
       this.emit("backlink-create", {
         text: backlinkText,
         pieceId,
-        piece: piece.cell(),
-        navigate,
+        piece: piece.cell().toSigilLink(),
+        navigate: false,
       });
     } catch (error) {
       // A disposal race (logout, runtime swap) cancels the create; that is
@@ -1707,13 +1770,10 @@ export class CFCodeEditor extends BaseElement {
    * Replaces [[text]] with [[text (id)]] and positions cursor after ]].
    */
   private _insertBacklinkId(
+    view: EditorView,
     backlinkText: string,
     id: string,
-    navigate: boolean,
   ): void {
-    if (!this._editorView) return;
-
-    const view = this._editorView;
     const state = view.state;
     const doc = state.doc;
     const content = doc.toString();
@@ -1731,9 +1791,7 @@ export class CFCodeEditor extends BaseElement {
 
     view.dispatch({
       changes: { from, to, insert: replacement },
-      selection: navigate
-        ? undefined // Keep current selection if navigating away
-        : { anchor: from + replacement.length }, // Position after ]] if staying
+      selection: { anchor: from + replacement.length },
     });
   }
 
@@ -1916,19 +1974,12 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
-   * Writes the content, as every content write the editor makes does, unless
-   * a read it computes its writes from is refused ({@link _readsWithheld}).
+   * Writes the content, as every content write the editor makes does. Each
+   * follows a change the refusal gate let through, so none is made while a
+   * read it computes its writes from is refused ({@link _readsWithheld}).
    */
   private setValue(newValue: string): void {
-    if (this._readsWithheld) return;
     this._cellController.setValue(newValue);
-  }
-
-  override connectedCallback() {
-    super.connectedCallback();
-    if (this.autofocus && this._editorView) {
-      this._queueAutofocus();
-    }
   }
 
   override disconnectedCallback() {
@@ -2000,6 +2051,10 @@ export class CFCodeEditor extends BaseElement {
     if (update.selectionSet && !isCellSync && !isRemote) {
       this._publishPresence();
     }
+    // A report carries the document, so a change to it restates a held
+    // selection, which the change may also have moved without setting one,
+    // as a rename of a reference ahead of it does.
+    if (update.selectionSet || update.docChanged) this._reportSelection();
     if (!update.docChanged || isCellSync) return;
 
     const value = update.state.doc.toString();
@@ -2019,8 +2074,8 @@ export class CFCodeEditor extends BaseElement {
     this._updateMentionedFromContent(value);
     this._setupPieceNameSubscriptions();
     if (!this.readonly && !isRemote) {
-      this._detectAndSyncNameChanges();
-      this._syncMentionRefs();
+      this._detectAndSyncNameChanges(update.state);
+      this._syncMentionRefs(update.state);
     }
   }
 
@@ -2092,6 +2147,7 @@ export class CFCodeEditor extends BaseElement {
     const generation = ++this._collaborationGeneration;
     this._collaborationSyncUnsub?.();
     this._collaborationSyncUnsub = undefined;
+    this._clearAnchors(view);
     this._cleanupPresence();
     const previous = this._collaboration;
     this._collaborationFailed = false;
@@ -2232,7 +2288,19 @@ export class CFCodeEditor extends BaseElement {
   private _handleCollaborationSynchronization(
     snapshot: CodeMirrorSynchronizationSnapshot | null,
   ): void {
+    // A collaboration is observed only once it has a view to draw in.
+    const view = this._editorView;
+    if (!view) return;
     if (snapshot === null) {
+      this._cleanupPresence();
+      this._clearAnchors(view);
+      return;
+    }
+    // Anchors are stated against the confirmed text, which a field with no
+    // collaborative edit has as much as one with a version.
+    this._showAnchors(view, snapshot);
+    // Presence is stated against a version, so a field without one has none.
+    if (!hasConfirmedCursor(snapshot)) {
       this._cleanupPresence();
       return;
     }
@@ -2246,10 +2314,8 @@ export class CFCodeEditor extends BaseElement {
     // The extension is installed as soon as a join starts, so its cursor
     // follows every advance from then on; a record that lands after the
     // join is mapped against the document the extension already knows.
-    if ((!this._presence && !this._presenceJoining) || !this._editorView) {
-      return;
-    }
-    this._editorView.dispatch({
+    if (!this._presence && !this._presenceJoining) return;
+    view.dispatch({
       effects: codeMirrorPresenceCursorEffect.of({
         cursor: snapshot.confirmedCursor,
         pendingChanges: snapshot.pendingChanges,
@@ -2259,11 +2325,85 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /**
+   * Forgets the anchors of a collaboration that has ended or is being
+   * replaced, so no mark is drawn until the next one states its own. A fault
+   * the anchors made goes with them, and is reported again if they return.
+   */
+  private _clearAnchors(view: EditorView): void {
+    this._shownAnchors = undefined;
+    view.dispatch({ effects: setHighlightAnchorsEffect.of({}) });
+    this._reportHighlightFaults(view);
+  }
+
+  /**
+   * Emits `cf-error` for each highlight the host asked for that the editor
+   * cannot draw as asked ({@link highlightFaults}), once while it lasts.
+   */
+  private _reportHighlightFaults(view: EditorView): void {
+    const faults = highlightFaults(view.state);
+    const reported = this.#reportedHighlightFaults;
+    this.#reportedHighlightFaults = new Set(faults);
+    for (const message of faults) {
+      if (reported.has(message)) continue;
+      this.emit("cf-error", { error: new Error(message), message });
+    }
+  }
+
+  /**
+   * Restates the highlight field's anchors from Memory's when the anchors or
+   * the version they are stated at have changed. Between restatements the
+   * highlight field moves each anchor through each edit by the same rule, so
+   * a restatement usually finds the field holding what it would state, and
+   * then dispatches nothing.
+   */
+  private _showAnchors(
+    view: EditorView,
+    snapshot: CodeMirrorSynchronizationSnapshot,
+  ): void {
+    const shown = this._shownAnchors;
+    if (
+      shown !== undefined && shown.anchors === snapshot.anchors &&
+      shown.cursor?.epoch === snapshot.confirmedCursor?.epoch &&
+      shown.cursor?.version === snapshot.confirmedCursor?.version
+    ) {
+      return;
+    }
+    const anchors = localAnchors(view.state, snapshot);
+    if (anchors === undefined) return;
+    this._shownAnchors = {
+      anchors: snapshot.anchors,
+      cursor: snapshot.confirmedCursor,
+    };
+    if (sameAnchors(anchors, highlightAnchors(view.state))) return;
+    view.dispatch({ effects: setHighlightAnchorsEffect.of(anchors) });
+    this._reportHighlightFaults(view);
+  }
+
+  /** Reports the main selection, against the editor's document. */
+  private _reportSelection(): void {
+    const view = this._editorView;
+    if (!view) return;
+    this._emitSelection(selectionReport(view.state));
+  }
+
+  /**
+   * Emits `cf-selection-change` with `report` when it differs from the last
+   * one emitted, or when the editor view has emitted none. Every empty
+   * selection reports the same way, so moving the caret reports nothing.
+   */
+  private _emitSelection(report: SelectionReport): void {
+    const last = this._lastSelectionReport;
+    if (last !== undefined && sameSelection(report, last)) return;
+    this._lastSelectionReport = report;
+    this.emit("cf-selection-change", report);
+  }
+
+  /**
    * Joins the presence room of the collaborative field through the cell's
-   * runtime once collaboration is ready and a participant name is set. A
-   * join already made for the same epoch and room is kept and republished
-   * to; a failure is reported once per configuration, and a `configuration`
-   * failure is not retried until the room or name changes.
+   * runtime once the field has a confirmed version and a participant name is
+   * set. A join already made for the same epoch and room is kept and
+   * republished to; a failure is reported once per configuration, and a
+   * `configuration` failure is not retried until the room or name changes.
    */
   private _setupPresence(
     synchronization = this._collaboration?.synchronizationSnapshot,
@@ -2281,8 +2421,7 @@ export class CFCodeEditor extends BaseElement {
     }
     if (
       !view || !this.collaborative || !controller?.active ||
-      synchronization === null || synchronization === undefined ||
-      !this.participantName
+      !hasConfirmedCursor(synchronization) || !this.participantName
     ) {
       this._cleanupPresence();
       return;
@@ -2368,17 +2507,16 @@ export class CFCodeEditor extends BaseElement {
     });
   }
 
+  /**
+   * Records and reports a failure of the room joined or being joined. Each is
+   * reported: a failure ends the room, and a join after one is made only
+   * where {@link _setupPresence} decides to retry it.
+   */
   private _failPresence(category: PresenceFailureCategory): void {
     const configurationKey = JSON.stringify([
       this.presenceRoom,
       this.participantName,
     ]);
-    if (
-      this._presenceFailure?.category === category &&
-      this._presenceFailure.configurationKey === configurationKey
-    ) {
-      return;
-    }
     this._presenceFailure = { category, configurationKey };
     this._cleanupPresence();
     this.emit("cf-presence-error", { category });
@@ -2391,7 +2529,9 @@ export class CFCodeEditor extends BaseElement {
       this._failPresence(presenceFailureCategory(event.error));
       return;
     }
-    if (!view || !this._presence || !synchronization) return;
+    if (!view || !this._presence || !hasConfirmedCursor(synchronization)) {
+      return;
+    }
     if (event.kind === "snapshot") {
       this._presenceParticipantId = event.participantId;
       this._applyPresenceSnapshot(event.participants);
@@ -2412,7 +2552,7 @@ export class CFCodeEditor extends BaseElement {
       });
       return;
     }
-    if (event.participantId === this._presenceParticipantId) return;
+    // Its own record is never drawn, so its own removal removes nothing.
     view.dispatch({
       effects: codeMirrorPresenceRemoveEffect.of(event.participantId),
     });
@@ -2422,7 +2562,7 @@ export class CFCodeEditor extends BaseElement {
   private _applyPresenceSnapshot(records: readonly PresenceRecord[]): void {
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
-    if (!view || !synchronization) return;
+    if (!view || !hasConfirmedCursor(synchronization)) return;
     view.dispatch({
       effects: [
         codeMirrorPresenceClearEffect.of(null),
@@ -2446,9 +2586,7 @@ export class CFCodeEditor extends BaseElement {
     const presence = this._presence;
     const view = this._editorView;
     const synchronization = this._collaboration?.synchronizationSnapshot;
-    if (!presence || !view || synchronization === null || !synchronization) {
-      return;
-    }
+    if (!presence || !view || !hasConfirmedCursor(synchronization)) return;
     const focused = view.hasFocus;
     if (focused) this._presenceHasSelection = true;
     const provisional = synchronization.pendingChanges.length !== 0;
@@ -2657,7 +2795,7 @@ export class CFCodeEditor extends BaseElement {
       }
       this._cleanupRefDestinationSubscriptions();
       this._previousRefLabels.clear();
-      this._refKeysAtLoad = null;
+      this._refKeysAtLoad = new Set();
       this._lastMentionedSignature = null;
       this._setupReferencesSyncHandler();
       this._publishKnownRefKeys();
@@ -2697,11 +2835,27 @@ export class CFCodeEditor extends BaseElement {
       this._setupPresence();
     }
 
-    // Update language
-    if (changedProperties.has("language") && this._editorView) {
-      const lang = getLangExtFromMimeType(this.language);
+    if (changedProperties.has("highlights") && this._editorView) {
       this._editorView.dispatch({
-        effects: this._lang.reconfigure(lang),
+        effects: setHighlightsEffect.of(this.highlights ?? []),
+      });
+      this._reportHighlightFaults(this._editorView);
+    }
+
+    if (
+      (changedProperties.has("math") || changedProperties.has("mode") ||
+        changedProperties.has("language")) && this.#drawsMath
+    ) {
+      this.#loadKatex();
+    }
+
+    // Update language, which parses formulas only for an editor drawing them
+    if (
+      (changedProperties.has("language") || changedProperties.has("math") ||
+        changedProperties.has("mode")) && this._editorView
+    ) {
+      this._editorView.dispatch({
+        effects: this._lang.reconfigure(this.#languageExtension()),
       });
     }
 
@@ -2803,10 +2957,15 @@ export class CFCodeEditor extends BaseElement {
         effects: [
           this._setupComp.reconfigure(this._getSetupExtensions()),
           this._modeComp.reconfigure(this._getModeExtension()),
-          this._proseMarkdownComp.reconfigure(
-            this.mode === "prose" ? createProseMarkdownPlugin() : [],
-          ),
+          this._proseMarkdownComp.reconfigure(this.#proseExtension()),
         ],
+      });
+    } else if (
+      (changedProperties.has("math") || changedProperties.has("language")) &&
+      this._editorView
+    ) {
+      this._editorView.dispatch({
+        effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
       });
     }
 
@@ -2825,7 +2984,7 @@ export class CFCodeEditor extends BaseElement {
 
   protected override firstUpdated(_changedProperties: PropertyValues): void {
     super.firstUpdated(_changedProperties);
-    this._initializeEditor();
+    const view = this._initializeEditor();
 
     // Bind the initial value to the cell controller
     this._cellController.bind(this.value, stringSchema);
@@ -2849,7 +3008,7 @@ export class CFCodeEditor extends BaseElement {
     this._updateMentionedFromContent();
 
     // Initialize backlink name tracking for sync detection
-    this._initializeBacklinkNameTracking();
+    this._initializeBacklinkNameTracking(view);
     this._initializeRefTracking();
 
     // Set up subscriptions for bidirectional NAME sync
@@ -2879,12 +3038,10 @@ export class CFCodeEditor extends BaseElement {
   }
 
   private _attemptAutofocus(): void {
-    if (!this._autofocusPending || !this.autofocus) {
-      this._cancelAutofocus();
-      return;
-    }
+    // Clearing `autofocus` and disconnecting both cancel the attempt, and an
+    // editor has a view from its first render until it is removed, so only
+    // an editor removed before `autofocus` was set reaches here without one.
     if (!this._editorView) return;
-    if (typeof document !== "undefined" && !this.isConnected) return;
 
     if (!this._isVisibleForAutofocus()) {
       this._observeAutofocusVisibility();
@@ -2954,9 +3111,8 @@ export class CFCodeEditor extends BaseElement {
    * Initialize the backlink name tracking map with current document state.
    * This establishes a baseline so we can detect subsequent name changes.
    */
-  private _initializeBacklinkNameTracking(): void {
-    if (!this._editorView) return;
-    const backlinks = this._editorView.state.field(backlinkField);
+  private _initializeBacklinkNameTracking(view: EditorView): void {
+    const backlinks = view.state.field(backlinkField);
     this._previousBacklinkNames.clear();
     for (const bl of backlinks) {
       if (bl.id) {
@@ -3021,6 +3177,86 @@ export class CFCodeEditor extends BaseElement {
     );
   }
 
+  /** Whether the editor draws formulas: `math` set, in prose mode. */
+  get #drawsMath(): boolean {
+    return this.math && this.mode === "prose" &&
+      this.language === MimeType.markdown;
+  }
+
+  /** The language extension for `language`, with formulas when drawn. */
+  #languageExtension(): Extension {
+    return getLangExtFromMimeType(this.language, this.#drawsMath);
+  }
+
+  /**
+   * Prose mode's Markdown rendering, with formulas once KaTeX has loaded.
+   * Until then, formulas show as their TeX. The formulas come first, so
+   * their decorations take precedence: CodeMirror wraps a widget only in
+   * marks of equal or lower precedence, and a formula belongs inside the
+   * Markdown around it, such as a table cell.
+   */
+  #proseExtension(): Extension {
+    if (this.mode !== "prose") return [];
+    const katex = this.#drawsMath ? this.#katex : undefined;
+    return [
+      katex === undefined
+        ? []
+        : proseMath(this._editorView?.hasFocus ?? false, katex.renderFormula),
+      createProseMarkdownPlugin(),
+    ];
+  }
+
+  /**
+   * Starts loading KaTeX, unless a load has started, and draws formulas once
+   * it arrives. A load that fails is reported as `cf-error`, and the formulas
+   * stay as their TeX: a page that maps no script to `cf-katex-render` is
+   * one where that happens.
+   */
+  #loadKatex(): void {
+    if (this.#katexLoad !== undefined) return;
+    this.#katexLoad = loadKatex().then((katex) => {
+      this.#katex = katex;
+      CFCodeEditor.#katexStyles ??= unsafeCSS(katex.KATEX_STYLES);
+      this.#adoptMathStyles(CFCodeEditor.#katexStyles);
+      if (this._editorView !== undefined && this.#drawsMath) {
+        this._editorView.dispatch({
+          effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
+        });
+      }
+    }, (cause: unknown) => {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.emit("cf-error", { error, message: error.message });
+    });
+  }
+
+  /**
+   * Adds KaTeX's layout rules to this editor's shadow root, after the sheets
+   * already there. Lit's `adoptStyles()` would replace those, CodeMirror's
+   * own among them.
+   */
+  #adoptMathStyles(mathStyles: CSSResult): void {
+    const root = this.shadowRoot;
+    if (root === null) return;
+    const sheet = mathStyles.styleSheet;
+    if (sheet === undefined) {
+      const style = document.createElement("style");
+      style.textContent = mathStyles.cssText;
+      root.append(style);
+    } else if (!root.adoptedStyleSheets.includes(sheet)) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
+    }
+  }
+
+  /**
+   * Like Lit's, except that once this editor has started loading KaTeX, it
+   * also waits for that load and the drawing it brings.
+   */
+  protected override async getUpdateComplete(): Promise<boolean> {
+    const complete = await super.getUpdateComplete();
+    await this.#katexLoad;
+    return complete;
+  }
+
   private _getModeExtension(): Extension {
     if (this.mode !== "prose") return [];
 
@@ -3045,11 +3281,13 @@ export class CFCodeEditor extends BaseElement {
     ];
   }
 
-  private _initializeEditor(): void {
+  /** Builds the editor's view inside the element `render()` drew for it. */
+  private _initializeEditor(): EditorView {
     const editorElement = this.shadowRoot?.querySelector(
       ".code-editor",
     ) as HTMLElement;
-    if (!editorElement) return;
+    const layout = this.shadowRoot?.querySelector(".layout") as HTMLElement;
+    const margin = this.shadowRoot?.querySelector(".margin") as HTMLElement;
 
     // Create editor extensions
     const extensions: Extension[] = [
@@ -3070,7 +3308,7 @@ export class CFCodeEditor extends BaseElement {
       refShortNameField,
       // Tab indentation keymap (toggleable)
       this._tabIndentComp.of(this.tabIndent ? keymap.of([indentWithTab]) : []),
-      this._lang.of(getLangExtFromMimeType(this.language)),
+      this._lang.of(this.#languageExtension()),
       this._readonly.of(EditorState.readOnly.of(this.readonly)),
       // Word wrapping
       this._wrap.of(this.wordWrap ? EditorView.lineWrapping : []),
@@ -3104,11 +3342,11 @@ export class CFCodeEditor extends BaseElement {
       this._themeComp.of(this._themeExtension()),
       // Prose/code mode extensions
       this._modeComp.of(this._getModeExtension()),
-      this._proseMarkdownComp.of(
-        this.mode === "prose" ? createProseMarkdownPlugin() : [],
-      ),
+      this._proseMarkdownComp.of(this.#proseExtension()),
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
+      highlightsExtension((id) => this.emit("cf-highlight-click", { id })),
+      marginExtension({ host: this, layout, margin }),
       this._refusalGate(),
       EditorView.updateListener.of((update) =>
         this._handleEditorUpdate(update)
@@ -3116,7 +3354,6 @@ export class CFCodeEditor extends BaseElement {
       // Handle focus/blur events
       EditorView.domEventHandlers({
         focus: () => {
-          this._cellController.onFocus();
           this.emit("cf-focus");
           this._handlePresenceFocus();
           return false;
@@ -3129,7 +3366,7 @@ export class CFCodeEditor extends BaseElement {
         },
         paste: (event, view) => this._handlePaste(event, view),
       }),
-      // Add backlink click handler for Cmd/Ctrl+Click
+      // Navigates from a clicked mention pill
       this.createBacklinkClickHandler(),
       // Add backlink decoration plugin to visually style [[backlinks]]
       createBacklinkDecorationPlugin(),
@@ -3233,16 +3470,21 @@ export class CFCodeEditor extends BaseElement {
     });
 
     // Create editor view
-    this._editorView = new EditorView({
-      state,
-      parent: editorElement,
-    });
+    // The highlights reach the view from `updated()`, which runs after
+    // `firstUpdated()` with `highlights` among the changed properties.
+    const view = new EditorView({ state, parent: editorElement });
+    this._editorView = view;
     this._refusedShown = this._readsWithheld;
+    this._reportSelection();
+    return view;
   }
 
   override render() {
     return html`
-      <div class="code-editor"></div>
+      <div class="layout">
+        <div class="code-editor"></div>
+        <div class="margin"><slot></slot></div>
+      </div>
     `;
   }
 
@@ -3251,6 +3493,29 @@ export class CFCodeEditor extends BaseElement {
    */
   override focus(): void {
     this._editorView?.focus();
+  }
+
+  /**
+   * The pass resolving each mentionable entry to its piece, which a test runs
+   * to completion rather than waiting on the one a binding starts; and the
+   * collaboration controller, which a test sets to a stand-in for one that
+   * has started without Memory.
+   */
+  get accessForTestingOnly(): {
+    resolvePieceIds(): Promise<void>;
+    collaboration: CodeMirrorCollaborationController | undefined;
+  } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      resolvePieceIds: () => this._resolvePieceIds(),
+      get collaboration() {
+        return outerThis._collaboration;
+      },
+      set collaboration(value) {
+        outerThis._collaboration = value;
+      },
+    };
   }
 
   /**
@@ -3364,7 +3629,7 @@ export class CFCodeEditor extends BaseElement {
           } as unknown as MentionRef,
         )
       ) {
-        this._refKeysAtLoad?.add(key);
+        this._refKeysAtLoad.add(key);
       } else if (this._readsWithheld) {
         // Its entry was not written; the token goes once the read is
         // admitted.
@@ -3502,7 +3767,7 @@ export class CFCodeEditor extends BaseElement {
     const newIds = this._extractMentionedIds(content);
 
     // Get current mentioned IDs by looking them up in mentionable
-    const curIds = this._getCurrentMentionedIds();
+    const curIds = this._getCurrentMentionedIds(this.mentioned);
 
     // Compare ID sets to avoid unnecessary writes
     if (newIds.size === curIds.size) {
@@ -3587,11 +3852,10 @@ export class CFCodeEditor extends BaseElement {
   /**
    * Get IDs of currently mentioned pieces by looking them up in mentionable.
    */
-  private _getCurrentMentionedIds(): Set<string> {
+  private _getCurrentMentionedIds(
+    mentionedHandle: CellHandle<MentionableArray>,
+  ): Set<string> {
     const curIds = new Set<string>();
-    const mentionedHandle = this.mentioned;
-    if (!mentionedHandle) return curIds;
-
     const currentSource =
       (valueForDisplay(mentionedHandle) ?? []) as MentionableArray;
 
@@ -3685,7 +3949,7 @@ export class CFCodeEditor extends BaseElement {
     }
     const collaboration = this._collaboration;
     if (collaboration !== undefined) {
-      if (!collaboration.active) return;
+      // A collaboration that has ended confirms nothing, which stops this.
       // A semantic rewrite has to be the first unconfirmed local update for
       // CodeMirror to acknowledge another client's copy. Confirm ordinary
       // local edits first, then recompute the rewrite against the latest doc.
@@ -3784,11 +4048,14 @@ export class CFCodeEditor extends BaseElement {
   }
 
   /** Reconcile the reference map with the document after an edit. */
-  private _syncMentionRefs(): void {
-    if (!this.references || !this._editorView) return;
+  private _syncMentionRefs(state: EditorState): void {
+    const map = this.references;
+    if (!map) return;
 
-    this._detectRefLabelChanges();
-    this._collectUnreferencedRefEntries();
+    // Both follow the person's own edit, which the refusal gate let through,
+    // so no read they write from is refused.
+    this._detectRefLabelChanges(map, state);
+    this._collectUnreferencedRefEntries(map, state);
     this._setupRefDestinationSubscriptions();
   }
 
@@ -3801,17 +4068,14 @@ export class CFCodeEditor extends BaseElement {
    * into agreement clears it again, so the flag tracks divergence rather than
    * accumulating a history of edits.
    */
-  private _detectRefLabelChanges(): void {
-    const map = this.references;
-    // A refused map says nothing of which labels the user has claimed. No
-    // label is edited while a read is refused, which holds the editor
-    // read-only.
-    if (!map || this._readsWithheld) return;
-
+  private _detectRefLabelChanges(
+    map: CellHandle<MentionRefMap>,
+    state: EditorState,
+  ): void {
     const entries = this._refMap();
     const current = new Map<string, string>();
 
-    for (const ref of this._documentRefs()) {
+    for (const ref of mentionRefs(state)) {
       current.set(ref.key, ref.label);
 
       const previous = this._previousRefLabels.get(ref.key);
@@ -3841,7 +4105,7 @@ export class CFCodeEditor extends BaseElement {
         key: ref.key,
         label: ref.label,
         modifiedTitle,
-        destination: this._refDestination(ref.key),
+        destination: this._refDestination(ref.key)?.toSigilLink() ?? null,
       });
     }
 
@@ -3856,14 +4120,11 @@ export class CFCodeEditor extends BaseElement {
    * reason to believe was ever in its document, and the conservative reading
    * keeps it.
    */
-  private _collectUnreferencedRefEntries(): void {
-    const map = this.references;
-    if (
-      !map || this._readsWithheld || this._refKeysAtLoad === null ||
-      !this._editorView
-    ) return;
-
-    const doc = this._editorView.state.doc.toString();
+  private _collectUnreferencedRefEntries(
+    map: CellHandle<MentionRefMap>,
+    state: EditorState,
+  ): void {
+    const doc = state.doc.toString();
     // A document that has not loaded names nothing, which is not the same as
     // a document that names nothing.
     if (doc.length === 0) return;
@@ -3888,9 +4149,8 @@ export class CFCodeEditor extends BaseElement {
       // Per key, rather than writing the whole map back. A blind write of a
       // snapshot would take an entry another client added between the read
       // and the write down with it.
-      if (this._write(map.key(key), undefined as unknown as MentionRef)) {
-        this._refKeysAtLoad.delete(key);
-      }
+      this._write(map.key(key), undefined as unknown as MentionRef);
+      this._refKeysAtLoad.delete(key);
     }
   }
 
@@ -4070,7 +4330,7 @@ export class CFCodeEditor extends BaseElement {
     }
     const collaboration = this._collaboration;
     if (collaboration !== undefined) {
-      if (!collaboration.active) return;
+      // A collaboration that has ended confirms nothing, which stops this.
       if (!await collaboration.prepareExternalChange()) return;
       if (
         this._collaboration !== collaboration || !collaboration.active ||
@@ -4170,10 +4430,8 @@ export class CFCodeEditor extends BaseElement {
    * Detect name changes in backlinks and sync them to linked piece's NAME property.
    * Called when document changes.
    */
-  private _detectAndSyncNameChanges(): void {
-    if (!this._editorView) return;
-
-    const backlinks = this._editorView.state.field(backlinkField);
+  private _detectAndSyncNameChanges(state: EditorState): void {
+    const backlinks = state.field(backlinkField);
     const currentNames = new Map<string, string>();
 
     for (const bl of backlinks) {
@@ -4214,13 +4472,15 @@ export class CFCodeEditor extends BaseElement {
 
     // Update 'title' field - for note patterns, NAME is computed from title
     // (NAME = `📝 ${title}`) so setting title will update NAME automatically
-    if (!this._write(pieceCell.key("title"), titleValue)) return;
+    // This follows the person's own edit, which the refusal gate let through,
+    // so the write is made.
+    this._write(pieceCell.key("title"), titleValue);
 
     this.emit("backlink-name-changed", {
       pieceId,
       oldName,
       newName,
-      piece: pieceCell,
+      piece: pieceCell.toSigilLink(),
     });
   }
 }

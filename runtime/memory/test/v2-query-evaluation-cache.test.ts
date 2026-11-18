@@ -1,9 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { spy } from "@std/testing/mock";
 import { applyCommit, open as openEngine } from "../v2/engine.ts";
 import {
   classifyStateScope,
   createQueryEvaluationCache,
+  EngineObjectManager,
   queryEvaluationCacheDiagnostics,
   type TrackedGraphState,
   trackGraph,
@@ -686,7 +688,6 @@ describe("v2 query evaluation cache", () => {
       crossedBy: new Map(),
       crossingsOf: new Map(),
       entities: new Map(),
-      memo: new Map(),
       manager: {
         loadedAddresses: () => [{
           id: "of:doc:meta",
@@ -928,44 +929,86 @@ describe("v2 query evaluation cache", () => {
   });
 
   it("does not retain an evaluation heavier than the whole budget", async () => {
-    const space = "did:key:z6Mk-eval-budget-oversize";
     const server = createServer("memory://eval-cache-oversize", 1);
+    const held = "did:key:z6Mk-eval-budget-oversize-held";
+    const space = "did:key:z6Mk-eval-budget-oversize";
+    const heldMessages: ServerMessage[] = [];
+    const heldConnection = server.connect((message) =>
+      heldMessages.push(message)
+    );
     const messages: ServerMessage[] = [];
     const connection = server.connect((message) => messages.push(message));
     try {
+      // Another space's entry fills the budget first. Refusing the
+      // oversized graph before insertion leaves it alone: an inserted
+      // one would have evicted it (least recently evaluated) before
+      // evicting itself.
+      const heldSession = await openSession(
+        heldConnection,
+        heldMessages,
+        held,
+        "h",
+      );
+      await seedDocs(server, heldMessages, held, heldSession, ["of:doc:1"]);
+      await watchAdd(heldConnection, heldMessages, held, heldSession, "h", [
+        { id: "of:doc:1" },
+      ]);
+      expect(server.evaluationCacheDiagnostics(held).weight).toBe(1);
+
       const sessionId = await openSession(connection, messages, space, "o");
       await seedDocs(server, messages, space, sessionId, [
         "of:doc:1",
         "of:doc:2",
       ]);
-      await watchAdd(connection, messages, space, sessionId, "o", [
+      using copies = spy(EngineObjectManager.prototype, "mergeFrom");
+      const sync = await watchAdd(connection, messages, space, sessionId, "o", [
         { id: "of:doc:1" },
         { id: "of:doc:2" },
       ]);
+      expect(sync.upserts).toHaveLength(2);
+      expect(copies.calls).toHaveLength(0);
       const diagnostics = server.evaluationCacheDiagnostics(space);
       expect(diagnostics.misses).toBe(1);
       expect(diagnostics.entries).toBe(0);
       expect(diagnostics.weight).toBe(0);
+      expect(server.evaluationCacheDiagnostics(held).weight).toBe(1);
     } finally {
       connection.close();
+      heldConnection.close();
     }
   });
 
   it("holds the budget even when a later watch group fails", async () => {
-    const space = "did:key:z6Mk-eval-budget-failure";
     const server = createServer("memory://eval-cache-budget-failure", 1);
+    const held = "did:key:z6Mk-eval-budget-failure-held";
+    const space = "did:key:z6Mk-eval-budget-failure";
+    const heldMessages: ServerMessage[] = [];
+    const heldConnection = server.connect((message) =>
+      heldMessages.push(message)
+    );
     const messages: ServerMessage[] = [];
     const connection = server.connect((message) => messages.push(message));
     try {
-      const sessionId = await openSession(connection, messages, space, "f");
-      await seedDocs(server, messages, space, sessionId, [
-        "of:doc:1",
-        "of:doc:2",
+      // Another space's entry fills the budget first. It lives in its own
+      // space so the seed commit below rotates only this space's cache.
+      const heldSession = await openSession(
+        heldConnection,
+        heldMessages,
+        held,
+        "h",
+      );
+      await seedDocs(server, heldMessages, held, heldSession, ["of:doc:1"]);
+      await watchAdd(heldConnection, heldMessages, held, heldSession, "h", [
+        { id: "of:doc:1" },
       ]);
-      // One request, two groups: the first evaluates a valid two-document
-      // graph (inserting weight 2 against a budget of 1), the second
-      // fails evaluation. The failure must not skip the enforcement the
-      // first group's insert already owed.
+      expect(server.evaluationCacheDiagnostics(held).weight).toBe(1);
+
+      const sessionId = await openSession(connection, messages, space, "f");
+      await seedDocs(server, messages, space, sessionId, ["of:doc:1"]);
+      // One request, two groups: the first evaluates a valid one-document
+      // graph (admissible on its own, but a second weight of 1 against a
+      // budget of 1), the second fails evaluation. The failure must not
+      // skip the enforcement the first group's insert already owed.
       await connection.receive(encodeMemoryBoundary({
         type: "session.watch.add",
         requestId: "f-watch",
@@ -978,7 +1021,6 @@ describe("v2 query evaluation cache", () => {
             query: {
               roots: [
                 { id: "of:doc:1", selector: { path: [], schema: true } },
-                { id: "of:doc:2", selector: { path: [], schema: true } },
               ],
             },
           },
@@ -1000,10 +1042,13 @@ describe("v2 query evaluation cache", () => {
       }));
       const response = messages.shift() as ResponseMessage<WatchAddResult>;
       expect(response.error).toBeDefined();
-      const diagnostics = server.evaluationCacheDiagnostics(space);
-      expect(diagnostics.weight).toBeLessThanOrEqual(1);
+      // The insert evicted the least-recently-evaluated space's entry
+      // rather than leaving both within a budget of one.
+      expect(server.evaluationCacheDiagnostics(space).weight).toBe(1);
+      expect(server.evaluationCacheDiagnostics(held).weight).toBe(0);
     } finally {
       connection.close();
+      heldConnection.close();
     }
   });
 

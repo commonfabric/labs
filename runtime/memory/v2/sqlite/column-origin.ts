@@ -24,6 +24,7 @@
 // `columnOrigins()` then reads the memoized handle synchronously.
 
 import { download } from "@denosaurs/plug";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 type OriginLib = {
   origin: Deno.DynamicLibrary<{
@@ -87,7 +88,7 @@ export type LibrarySource =
  *  denied read is swallowed — `NotCapable` on current Deno, `PermissionDenied` on
  *  older ones — and reported as the var being unset; any other failure is
  *  unexpected and propagates. */
-function readEnv(key: string): string | undefined {
+export function readEnv(key: string): string | undefined {
   try {
     return Deno.env.get(key);
   } catch (e) {
@@ -116,9 +117,6 @@ export function librarySource(
 
 type Resolution = { lib: OriginLib } | { problem: string };
 
-const describe = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
-
 /**
  * Open one source, or report why it could not be opened. Only the source
  * `@db/sqlite` itself uses is ever opened: any other file would give the process
@@ -142,7 +140,9 @@ export async function openSource(source: LibrarySource): Promise<Resolution> {
     try {
       path = await download(SQLITE3_RELEASE);
     } catch (e) {
-      return { problem: `${label} could not be resolved (${describe(e)})` };
+      return {
+        problem: `${label} could not be resolved (${describeFailure(e)})`,
+      };
     }
   }
   try {
@@ -151,7 +151,7 @@ export async function openSource(source: LibrarySource): Promise<Resolution> {
     return {
       problem:
         `${label} names ${path}, whose column-origin symbols could not ` +
-        `be bound (${describe(e)}). A libsqlite3 built without ` +
+        `be bound (${describeFailure(e)}). A libsqlite3 built without ` +
         `SQLITE_ENABLE_COLUMN_METADATA does not export them.`,
     };
   }

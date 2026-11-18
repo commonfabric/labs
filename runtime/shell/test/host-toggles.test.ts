@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isPatternCoverageEnabled,
+  runtimeExperimentalHostFlags,
   runtimeHostFlags,
   setupHostToggles,
 } from "../src/lib/host-toggles.ts";
@@ -72,6 +73,7 @@ describe("setupHostToggles", () => {
       expect(typeof cf?.forwardWorkerConsole).toBe("function");
       expect(typeof cf?.cfcRenderCeiling).toBe("function");
       expect(typeof cf?.concurrentWatchRefresh).toBe("function");
+      expect(typeof cf?.syncCidReferences).toBe("function");
     } finally {
       h.restore();
     }
@@ -156,6 +158,55 @@ describe("runtimeHostFlags", () => {
       });
     } finally {
       h.restore();
+    }
+  });
+});
+
+describe("runtimeExperimentalHostFlags", () => {
+  it("returns nothing when no toggle is persisted", () => {
+    const h = setup();
+    try {
+      expect(runtimeExperimentalHostFlags()).toStrictEqual({});
+    } finally {
+      h.restore();
+    }
+  });
+
+  it("returns syncCidReferences on when a host has opted the profile in", () => {
+    // A host embedding the shell opts in by setting the key before the shell
+    // loads; the runtime created next takes the option.
+    const h = setup();
+    try {
+      h.storage.map.set("syncCidReferences", "true");
+      expect(runtimeExperimentalHostFlags()).toStrictEqual({
+        syncCidReferences: true,
+      });
+      h.storage.map.set("syncCidReferences", "yes");
+      expect(runtimeExperimentalHostFlags()).toStrictEqual({});
+    } finally {
+      h.restore();
+    }
+  });
+
+  it("returns nothing when reading localStorage throws", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "localStorage",
+    );
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      get() {
+        throw new Error("localStorage is blocked");
+      },
+    });
+    try {
+      expect(runtimeExperimentalHostFlags()).toStrictEqual({});
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(globalThis, "localStorage", descriptor);
+      } else {
+        delete (globalThis as { localStorage?: unknown }).localStorage;
+      }
     }
   });
 });

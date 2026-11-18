@@ -36,6 +36,7 @@ import {
   delegationCovers,
   verifyDelegation,
 } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
 import { type ClientInfo, parseClientInfo } from "./client-info.ts";
@@ -71,6 +72,9 @@ const sameSessionDescriptor = (
     actingAs?: string;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    instanceNames?: true;
+    demand?: false;
+    invite?: { inviteId: string; code: string };
   },
 ): boolean =>
   valueEqual(
@@ -97,7 +101,17 @@ const sameSessionDescriptor = (
   valueEqual(left.genesisRoot, right.genesisRoot) &&
   // Compared as signed, so a signed kind the message does not carry, of any
   // form, is a mismatch rather than read as no kind.
-  left.spaceKind === right.spaceKind;
+  left.spaceKind === right.spaceKind &&
+  // The session's naming mode decides which spaces admit it (INV-16), so a
+  // declaration cannot be attached or stripped in transit either. Compared
+  // as signed, like the kind.
+  left.instanceNames === right.instanceNames &&
+  // Whether the session is demand decides whether its space is served, so
+  // the declaration cannot be attached or stripped in transit either.
+  left.demand === right.demand &&
+  // An invitation redeems as the signer, so one cannot be attached to or
+  // taken off a signed open in transit.
+  valueEqual(left.invite, right.invite);
 
 export type SessionOpenMessage = {
   space: string;
@@ -110,6 +124,9 @@ export type SessionOpenMessage = {
     resumeAttempt?: number;
     genesisRoot?: FabricValue;
     spaceKind?: string;
+    instanceNames?: true;
+    demand?: false;
+    invite?: { inviteId: string; code: string };
   };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
@@ -317,6 +334,9 @@ export type VerifiedProofChain = {
    */
   rootIssuer: string;
 
+  /** The chain's issuers, root first. */
+  issuers: string[];
+
   /**
    * The unix second the chain stops holding, the earliest `exp` among its
    * proofs; absent when none expires. The session is held to it after
@@ -377,8 +397,6 @@ export const verifySessionOpenProofs = async (
       throw proofError("`prf` does not name one CID per proof");
     }
     cids = prf as string[];
-  } else if (prf !== undefined) {
-    throw proofError("`prf` without a signed invocation");
   }
   const now = options.nowSeconds ?? Math.floor(Date.now() / 1000);
   const chain: Delegation[] = [];
@@ -392,7 +410,7 @@ export const verifySessionOpenProofs = async (
       delegation = await decodeDelegation(proof.slice());
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
     if (cids !== undefined && cids[i] !== delegation.cid) {
@@ -435,12 +453,13 @@ export const verifySessionOpenProofs = async (
       await verifyDelegation(delegation);
     } catch (error) {
       throw proofError(
-        `proof ${i} ${error instanceof Error ? error.message : error}`,
+        `proof ${i} ${describeFailure(error)}`,
       );
     }
   }
   return {
     rootIssuer: chain[0].payload.iss,
+    issuers: chain.map(({ payload }) => payload.iss),
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 };

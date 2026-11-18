@@ -70,10 +70,10 @@ export default pattern(() => {
     identityProvider("email") === "Email" &&
     identityProvider("whatever.new") === "whatever.new"
   );
-  const assert_undated_identity_is_hidden = assert(() =>
-    isShownIdentity({ ...freshLogin, verifiedAt: undefined }, nowMs) ===
-      false
-  );
+  const assert_undated_identity_is_hidden = assert(() => {
+    const { verifiedAt: _verifiedAt, ...undated } = freshLogin;
+    return isShownIdentity(undated, nowMs) === false;
+  });
   const assert_unreadable_date_or_clock_hides_identity = assert(() =>
     isFreshIdentity(freshLogin.verifiedAt, undefined) === false &&
     isFreshIdentity("not a timestamp", nowMs) === false
@@ -255,11 +255,8 @@ export default pattern(() => {
     profile.setAvatar.send({ avatar: "" });
   });
 
-  // CT-1748 note: the presentation-vs-edit *content* lives behind `ifElse`, and
-  // [UI] vnode traversal doesn't resolve through this test harness's `.get()`,
-  // so the toggle is asserted via the exported `isEditing` and the bound data
-  // below. The rendered presentation itself (real cf-profile-badge + card tiles,
-  // distinct from the edit form) is verified in the browser.
+  // The toggle is asserted via the exported `isEditing` and the bound data
+  // below. `profile-home.elements.test.tsx` walks the rendered presentation.
 
   // Visiting a profile starts in the read-only presentation, not the edit form.
   const assert_not_editing = assert(() => profile.isEditing === false);

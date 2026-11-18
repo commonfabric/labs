@@ -20,7 +20,7 @@ For a link column:
   direct bind to a `_cf_link` column receives the link-column string encoding.
 - **On read** the behavior depends on whether the query is **typed**:
   - A **typed `db.query<{ col_cf_link: Cell<T> }>`** surfaces the column as a
-    live `Cell`. (Mechanically: the runtime decodes the stored sigil **string**
+    live `Cell`, and so does one typed `Cell<T> | null`. (Mechanically: the runtime decodes the stored sigil **string**
     into a sigil **object**, and the consumer's `<Row>` `asCell` schema
     rehydrates that object into a `Cell<T>` on read.)
   - An **untyped `db.query`** returns the raw stored **sigil-link string** — the
@@ -117,8 +117,11 @@ query built-in after rows return
 and is **driven by the typed `db.query<Row>` schema**:
 
 1. From the transformer-injected `rowSchema`, identify which result columns are
-   marked `asCell` (a `Cell<T>` field in `Row`). An **untyped** query injects no
-   `rowSchema` → no columns are decoded.
+   marked `asCell` (a `Cell<T>` field in `Row`), either directly or in a branch
+   of an `anyOf`, `oneOf`, or `allOf`, following a `$ref` into the row schema's
+   `$defs`: a nullable `Cell<T> | null` field lowers to
+   `anyOf: [{ type: "null" }, { …, asCell }]`, and is a link column too. An
+   **untyped** query injects no `rowSchema` → no columns are decoded.
 2. For each `asCell` column, replace the stored sigil-link **string** with the
    parsed sigil-link **object** (`parseCfLinkToSigil`). `null`/`undefined` →
    `null`. A value that is not a decodable link is left as-is (the `asCell` read

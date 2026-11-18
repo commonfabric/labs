@@ -17,17 +17,17 @@
 
 import { join } from "@std/path";
 
-import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
-import { canContinueHarnessRun } from "@commonfabric/cf-harness/run-continuation";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
 import { debugStr } from "@commonfabric/data-model";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import type { ACL } from "@commonfabric/memory/acl";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { agentRunObservationCeiling } from "../agent-run-harness.ts";
 import {
+  canContinueRecordedRun,
   type HarnessJobOptions,
   type HarnessJobResult,
   type HarnessJobSpec,
@@ -213,6 +213,9 @@ export const localJobSpecOf = async (
     ...(profile.reasoningEffort !== undefined
       ? { reasoningEffort: profile.reasoningEffort }
       : {}),
+    ...(profile.cacheAffinityKey !== undefined
+      ? { cacheAffinityKey: profile.cacheAffinityKey }
+      : {}),
     instructions: framing.length > 0 ? framing.join("\n\n") : undefined,
     model: profile.model ?? options.model,
     loomRetrievalConfigPath: profile.loomRetrievalConfig ??
@@ -243,6 +246,9 @@ export const localJobSpecOf = async (
     },
     patternIndexUrl: profile.patternIndexUrl,
     patternIndexPublish: profile.patternIndexPublish,
+    ...(profile.patternIndexOrigin !== undefined
+      ? { patternIndexOrigin: profile.patternIndexOrigin }
+      : {}),
   };
 };
 
@@ -402,13 +408,8 @@ export class LocalJobLane {
   async start(): Promise<void> {
     const continuable = new Set<string>();
     for (const { id, runRoot } of this.#options.store.runningRuns()) {
-      if (runRoot === undefined) continue;
-      try {
-        if (canContinueHarnessRun(await readHarnessRunArtifacts(runRoot))) {
-          continuable.add(id);
-        }
-      } catch (error) {
-        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      if (runRoot !== undefined && await canContinueRecordedRun(runRoot)) {
+        continuable.add(id);
       }
     }
     const recovered = this.#options.store.recover(continuable);
@@ -631,9 +632,7 @@ export class LocalJobLane {
       );
     } catch (error) {
       this.#report(() =>
-        `agent runner: local job ${job.id} failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+        `agent runner: local job ${job.id} failed: ${describeFailure(error)}`
       );
       result = {
         outcome: "failed",

@@ -6,7 +6,7 @@ import type { CfcRefusalDetail } from "./cfc/refusal-detail.ts";
 import type { ReadAttemptCounts } from "./read-stats.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 
-import { IMemoryChange } from "./storage/interface.ts";
+import type { IMemoryChange } from "./storage/interface.ts";
 
 /** Read work performed by one action run, or summed across runs. */
 export type ActionReadStats = {

@@ -2,6 +2,7 @@
 import { bodyLimit } from "@hono/hono/body-limit";
 import { cors } from "@hono/hono/cors";
 import { z } from "@hono/zod-openapi";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   INVITE_ACCESS,
   normalizeInviteHost,
@@ -27,12 +28,27 @@ const schemas = {
     ),
     maxUses: z.number().int().min(1).max(SPACE_INVITE_CAPABILITY.maxUses)
       .optional(),
+    // The service judges the suggestion's values; the schema admits its shape.
+    suggestedProfile: z.object({
+      name: z.string(),
+      picture: z.string().optional(),
+    }).strict().optional(),
+    // The service judges the names' values too.
+    spaceName: z.string().optional(),
+    issuerName: z.string().optional(),
   }).strict(),
   redeem: z.object({ inviteId, code: secret }).strict(),
+  preview: z.object({ inviteId, code: secret }).strict(),
   revoke: z.object({ inviteId }).strict(),
   list: z.object({}).strict(),
   receipts: z.object({ inviteId: inviteId.optional() }).strict(),
 };
+
+// Every body fits in 4 KiB but a `create` carrying a suggested picture, which
+// may add that picture's base64url text.
+const BODY_LIMIT = 4096;
+const CREATE_BODY_LIMIT = BODY_LIMIT +
+  4 * Math.ceil(SPACE_INVITE_CAPABILITY.suggestedProfile.maxPictureBytes / 3);
 
 /** Builds routes around the serving memory instance; tests supply a controlled clock. */
 export function createSpaceInviteRouter(
@@ -74,13 +90,6 @@ export function createSpaceInviteRouter(
       ],
     }),
   );
-  router.use(
-    `${BASE}/*`,
-    bodyLimit({
-      maxSize: 4096,
-      onError: (c) => c.json({ code: "invalid-request" }, 413),
-    }),
-  );
   const mutationLimiter = createRateLimiter({
     capacity: 60,
     refillPerSecond: 1,
@@ -93,11 +102,19 @@ export function createSpaceInviteRouter(
     const operation of [
       "create",
       "redeem",
+      "preview",
       "revoke",
       "list",
       "receipts",
     ] as const
   ) {
+    router.use(
+      `${BASE}/${operation}`,
+      bodyLimit({
+        maxSize: operation === "create" ? CREATE_BODY_LIMIT : BODY_LIMIT,
+        onError: (c) => c.json({ code: "invalid-request" }, 413),
+      }),
+    );
     router.use(
       `${BASE}/${operation}`,
       rateLimit(operation === "revoke" ? revocationLimiter : mutationLimiter, {
@@ -132,7 +149,7 @@ export function createSpaceInviteRouter(
             // Production always passes the configured `API_URL` as the host; the
             // dialed origin is only for fixtures that build the router without one.
             authority: configuredHost ?? new URL(c.req.url).origin,
-            error: error instanceof Error ? error.message : String(error),
+            error: describeFailure(error),
           },
           "Rejected unauthenticated first-party HTTP request",
         );
@@ -171,6 +188,14 @@ export function createSpaceInviteRouter(
                 body: schemas.redeem.parse(body),
               }),
             );
+          case "preview":
+            return c.json(
+              await options.server.invite({
+                ...envelope,
+                operation,
+                body: schemas.preview.parse(body),
+              }),
+            );
           case "revoke":
             return c.json(
               await options.server.invite({
@@ -205,6 +230,8 @@ export function createSpaceInviteRouter(
             { code: error.code },
             error.code === "not-owner"
               ? 403
+              : error.code === "space-deleted"
+              ? 410
               : error.code === "invalid-request" ||
                   error.code === "invalid-host"
               ? 400

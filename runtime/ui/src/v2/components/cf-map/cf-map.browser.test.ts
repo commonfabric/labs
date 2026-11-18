@@ -212,6 +212,20 @@ Deno.test("cf-map with no bounds opens on its default view", async () => {
   expect(await showsMarkerAt(page.map, PARIS_CENTER)).toBe(false);
 });
 
+Deno.test("cf-map moved elsewhere in the page draws its map again", async () => {
+  using page = await mounted((map) => {
+    map.bounds = createMockCellHandle(PARIS);
+  });
+  const moved = document.createElement("div");
+  document.body.append(moved);
+  try {
+    moved.append(page.map);
+    expect(await showsMarkerAt(page.map, PARIS_CENTER)).toBe(true);
+  } finally {
+    moved.remove();
+  }
+});
+
 Deno.test("bound bounds win over a bound center and zoom at mount", async () => {
   using page = await mounted((map) => {
     map.bounds = createMockCellHandle(PARIS);

@@ -66,7 +66,6 @@ export async function runAgentBookPatternTest(
   const fixture = join(directory, "main.test.tsx");
   let recommendationLink: NormalizedFullLink | undefined;
   const previousAgentFlag = Deno.env.get("EXPERIMENTAL_AGENT_BUILTIN");
-  const previousServerFlag = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
   try {
     await Deno.writeTextFile(
       fixture,
@@ -104,7 +103,6 @@ export default pattern(() => {
 `,
     );
     Deno.env.set("EXPERIMENTAL_AGENT_BUILTIN", "true");
-    Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", "false");
     return await runTestPattern(fixture, {
       root: fromFileUrl(new URL("../", import.meta.url)),
       cfcEnforcementMode: "enforce-strict",
@@ -115,6 +113,9 @@ export default pattern(() => {
       storageHost: {
         identity,
         storageManager,
+        // The observer and the hook below come with a caller-supplied store,
+        // which a run that resolves ON refuses, so this runs on the OFF arm.
+        serverExecution: false,
         apiUrl: options.apiUrl,
         preserveDefaultPattern: true,
         onPatternInstantiated: (instance) => {
@@ -148,9 +149,6 @@ export default pattern(() => {
     if (previousAgentFlag === undefined) {
       Deno.env.delete("EXPERIMENTAL_AGENT_BUILTIN");
     } else Deno.env.set("EXPERIMENTAL_AGENT_BUILTIN", previousAgentFlag);
-    if (previousServerFlag === undefined) {
-      Deno.env.delete("EXPERIMENTAL_SERVER_EXECUTION");
-    } else Deno.env.set("EXPERIMENTAL_SERVER_EXECUTION", previousServerFlag);
     await storageManager.close();
     await Deno.remove(directory, { recursive: true });
   }

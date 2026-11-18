@@ -18,6 +18,7 @@ import {
   type CfcPrefixProvenanceSummary,
   prepareBoundaryCommit,
 } from "../src/cfc/mod.ts";
+import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
@@ -281,17 +282,25 @@ describe("CFC prefix-provenance precision counters (Stage 0, doc §6)", () => {
                 ).get();
                 // Model a metadata write between target checks. The native
                 // write keeps this fixture separate from application-write
-                // authorization; the gate must read the current envelope.
+                // authorization, and carries the mark the chokepoint puts on
+                // what it forwards; the gate must read the current envelope.
                 expect(
-                  target.tx.write({
-                    space: signer.did(),
-                    id: source.getAsNormalizedFullLink().id as URI,
-                    type: "application/json",
-                    path: ["cfc", "labelMap"],
-                  }, {
-                    version: 1,
-                    entries: [{ path: [], label: { integrity: [OTHER_ATOM] } }],
-                  }).ok,
+                  target.tx.write(
+                    {
+                      space: signer.did(),
+                      id: source.getAsNormalizedFullLink().id as URI,
+                      type: "application/json",
+                      path: ["cfc", "labelMap"],
+                    },
+                    {
+                      version: 1,
+                      entries: [{
+                        path: [],
+                        label: { integrity: [OTHER_ATOM] },
+                      }],
+                    },
+                    writeChokepointMark(),
+                  ).ok,
                 ).toBeDefined();
               }
               const reads = [

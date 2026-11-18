@@ -19,6 +19,7 @@ import {
   isPendingPullActionRunnable,
   isRunnableSchedulingSeed,
   type PullSchedulingState,
+  seedScanNodes,
 } from "./work-oracle.ts";
 
 const logger = getLogger("scheduler", {
@@ -44,12 +45,14 @@ function collectPrimaryPullIterationSeeds(
   state: PullSchedulingState,
   workSet: Set<Action>,
 ): void {
+  // One clock read for the scan, not one per node.
+  const now = performance.now();
   for (const action of state.pending) {
     if (state.materializerIndex.isMaterializer(action)) continue;
     const record = state.nodes.get(action);
     if (
       record &&
-      isRunnableSchedulingSeed(state, record) &&
+      isRunnableSchedulingSeed(state, record, now) &&
       isPendingPullActionRunnable(state.pendingPullRunnableState, action)
     ) {
       workSet.add(action);
@@ -57,12 +60,13 @@ function collectPrimaryPullIterationSeeds(
   }
 
   // Every runnable seed is invalid/never-ran (isRunnableSchedulingSeed gates
-  // on isInvalidOrNeverRan), so the invalid-node index is exactly the
-  // candidate set — iterate it instead of every registered node.
-  for (const action of state.nodes.getInvalidNodes()) {
+  // on isInvalidOrNeverRan) and live or pending, so the invalid nodes that
+  // are not dormant are exactly the candidate set (`seedScanNodes`): iterate
+  // them instead of every registered node.
+  for (const record of seedScanNodes(state)) {
+    const action = record.action;
     if (state.materializerIndex.isMaterializer(action)) continue;
-    const record = state.nodes.get(action);
-    if (record && isRunnableSchedulingSeed(state, record)) {
+    if (isRunnableSchedulingSeed(state, record, now)) {
       workSet.add(action);
     }
   }
@@ -72,17 +76,16 @@ function collectIdleMaterializerSeeds(
   state: PullSchedulingState,
   workSet: Set<Action>,
 ): void {
+  const now = performance.now();
   for (const action of state.pending) {
     const record = state.nodes.get(action);
-    if (record && isIdleMaterializerRunnable(state, record)) {
+    if (record && isIdleMaterializerRunnable(state, record, now)) {
       workSet.add(action);
     }
   }
 
-  for (const action of state.nodes.getInvalidNodes()) {
-    const record = state.nodes.get(action);
-    if (!record) continue;
-    if (isIdleMaterializerRunnable(state, record)) {
+  for (const record of seedScanNodes(state)) {
+    if (isIdleMaterializerRunnable(state, record, now)) {
       workSet.add(record.action);
     }
   }
@@ -521,10 +524,10 @@ async function runPullSettleOrder(
   for (const fn of order) {
     // The serving posture's cooperative macrotask yield (server-execution
     // v2 stage C tuning T3, cooperative-yield.ts): between runs, once the
-    // slice is spent, let the wave's flush-deadline timer, the lease
-    // renew, and the push flush fire. `yieldBetweenRuns` is installed
-    // only on a serving runtime; everywhere else this is one undefined
-    // check and the loop keeps its exact microtask shape (no `await`).
+    // slice is spent, let the wave's flush-deadline timer and the push
+    // flush fire. `yieldBetweenRuns` is installed only on a serving
+    // runtime; everywhere else this is one undefined check and the loop
+    // keeps its exact microtask shape (no `await`).
     if (state.yieldBetweenRuns !== undefined) {
       const turn = state.yieldBetweenRuns();
       if (turn !== undefined) await turn;
@@ -597,28 +600,22 @@ function maybeApplyBudgetBackoff(
     reason,
     passScopedDemand,
   });
-  if (plan.actions.length === 0) {
+  // The plan names a wake time exactly when it defers an action.
+  const { backoffUntil } = plan;
+  if (backoffUntil === undefined) {
     return { applied: false, actionCount: 0, actions: [] };
   }
 
   logger.debug("schedule-backoff", () => [
     `[BACKOFF] ${reason}: deferred ${plan.actions.length} action(s)`,
-    ...(plan.backoffUntil !== undefined
-      ? [
-        `wake in ${
-          Math.max(0, Math.round(plan.backoffUntil - performance.now()))
-        }ms`,
-      ]
-      : []),
+    `wake in ${Math.max(0, Math.round(backoffUntil - performance.now()))}ms`,
   ]);
 
   return {
     applied: true,
     actionCount: plan.actions.length,
     actions: plan.actions,
-    ...(plan.backoffUntil !== undefined
-      ? { backoffUntil: plan.backoffUntil }
-      : {}),
+    backoffUntil,
   };
 }
 

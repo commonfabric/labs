@@ -12,7 +12,6 @@ import {
   SERVER_EXECUTION_WATERMARK_DOC_ID,
   type WatermarkDocValue,
 } from "@commonfabric/memory/v2";
-import * as Engine from "@commonfabric/memory/v2/engine";
 import type { Runtime } from "../runtime.ts";
 import type { Cell } from "../cell.ts";
 import type { MemorySpace } from "../storage/interface.ts";
@@ -37,22 +36,6 @@ export const watermarkCell = (
   runtime.getCellFromLink<WatermarkDocValue>(watermarkDocLink(space));
 
 /**
- * Read W directly from the engine (the serving loop's activation read —
- * serving-loop.md §3: "W = read watermark doc (0 if absent)"). Direct
- * engine read on the co-hosted plane; clients read the same doc through
- * their ordinary subscription instead.
- */
-export const readWatermarkSeq = (engine: Engine.Engine): number => {
-  const state = Engine.readState(engine, {
-    id: SERVER_EXECUTION_WATERMARK_DOC_ID as Parameters<
-      typeof Engine.readState
-    >[1]["id"],
-  });
-  const value = state?.document?.value as WatermarkDocValue | undefined;
-  return typeof value?.seq === "number" ? value.seq : 0;
-};
-
-/**
  * Resolve when the space's watermark reaches `seq` (testing.md §3's
  * `waitForSettled(space, seq)`): the poll-loop replacement — integration
  * tests MUST use this instead of text-polling for "server done". Rides
@@ -63,57 +46,25 @@ export const waitForSettled = (
   runtime: Runtime,
   space: MemorySpace,
   seq: number,
-  options: { timeoutMs?: number } = {},
 ): Promise<number> => {
   const cell = watermarkCell(runtime, space);
-  return new Promise<number>((resolve, reject) => {
-    // The timer callback closes over the sink's cancel before the sink
-    // exists, so all three live on one holder object. `done` also covers
-    // the SYNCHRONOUS-fire case: cell.sink invokes the callback with the
-    // current value before returning, so a W that already satisfies
-    // `seq` settles before `state.cancel` is assigned — the cancellation
-    // is then replayed right after the assignment, or the subscription
-    // leaks (and keeps triggering scheduler work) on every already-
-    // settled wait.
-    const state: {
-      cancel?: () => void;
-      timer?: ReturnType<typeof setTimeout>;
-      done?: boolean;
-    } = {};
-    const settle = (value: number) => {
-      if (state.done === true) return;
-      state.done = true;
-      if (state.timer !== undefined) clearTimeout(state.timer);
-      state.cancel?.();
-      resolve(value);
-    };
-    if (options.timeoutMs !== undefined) {
-      state.timer = setTimeout(() => {
-        if (state.done === true) return;
-        state.done = true;
-        reject(
-          new Error(
-            `waitForSettled(${space}, ${seq}) timed out after ` +
-              `${options.timeoutMs}ms (watermark W < ${seq})`,
-          ),
-        );
-        try {
-          state.cancel?.();
-        } catch {
-          // cancellation is best-effort; the rejection above already
-          // carried the outcome
-        }
-      }, options.timeoutMs);
-    }
-    state.cancel = cell.sink((value) => {
+  return new Promise<number>((resolve) => {
+    // `cell.sink` invokes the callback with the current value before
+    // returning, so a W that already satisfies `seq` settles before the
+    // sink's cancel exists. The callback reads the cancel through this
+    // holder, and the cancellation is made right after it is assigned, or
+    // the subscription would stay live (and keep triggering scheduler work)
+    // after every already-settled wait.
+    const subscription: { cancel?: () => void; settled?: true } = {};
+    const cancel = cell.sink((value) => {
       const current = typeof value?.seq === "number" ? value.seq : 0;
-      if (current >= seq) settle(current);
+      if (current < seq) return;
+      subscription.settled = true;
+      subscription.cancel?.();
+      resolve(current);
     });
-    if (state.done === true) {
-      // The sink fired synchronously before `cancel` existed: replay the
-      // cancellation now that it does.
-      state.cancel();
-    }
+    subscription.cancel = cancel;
+    if (subscription.settled) cancel();
   });
 };
 

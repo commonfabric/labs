@@ -20,7 +20,7 @@ import {
   fabricPrimitiveClassesByName,
   isFabricPrimitiveSchemaType,
 } from "@commonfabric/data-model/fabric-primitives";
-import { isWellFormedDID } from "@commonfabric/identity/did";
+import { isWellFormedDID, parseDID } from "@commonfabric/identity/did";
 import {
   all as rowLabelAll,
   any as rowLabelAny,
@@ -47,6 +47,7 @@ import {
 import { nameBlob } from "./blob-name.ts";
 import {
   agent,
+  anchorsOf,
   cellFromUrl,
   compileAndRun,
   fetchBinary,
@@ -74,6 +75,7 @@ import {
 import { tagCollectionKey } from "./collection-key.ts";
 import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
+import { equalsKey } from "./equals-key.ts";
 import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import { nameInstance } from "./instance-name.ts";
@@ -89,15 +91,21 @@ import {
 } from "./module.ts";
 import { isTrustedPattern, setPatternProgram } from "./pattern-metadata.ts";
 import { pattern } from "./pattern.ts";
-import { principalOf, principalsOf } from "./principal-of.ts";
+import {
+  principalOf,
+  principalsOf,
+  writtenPrincipalOf,
+} from "./principal-of.ts";
 import { profileOwnerOf } from "./profile-owner-of.ts";
 import { linksOf } from "./links-of.ts";
 import { resultOwnerOf } from "./result-owner-of.ts";
 import {
   spaceAccess,
   spaceAccessOf,
+  spaceDeleted,
   spaceMembers,
   spaceOf,
+  spaceOfLink,
 } from "./space-access.ts";
 import { grantSpaceAccess, revokeSpaceAccess } from "./space-access-change.ts";
 import type {
@@ -288,17 +296,21 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
       constant: rowLabelConstant,
     },
     navigateTo,
+    anchorsOf,
     // inv-12 Stage 2: bounded first-layer label introspection (§4.6.4.1).
     inspectConfLabel,
     currentPrincipal,
     principalOf,
     principalsOf,
+    writtenPrincipalOf,
     profileOwnerOf,
     resultOwnerOf,
     linksOf,
     eventKey,
-    // The DID Core syntax guard the runtime itself decides by.
+    // The DID Core syntax guard the runtime itself decides by, and the one
+    // way the runtime takes a DID apart.
     isWellFormedDID,
+    parseDID,
     wish,
 
     // Multi-user test descriptor tag (see api MultiUserTestDescriptor):
@@ -309,6 +321,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Cell creation
     cell: cellConstructorFactory<AsCell>("cell").of,
     equals: cellConstructorFactory<AsCell>("cell").equals,
+    equalsKey,
 
     // Cell constructors with static methods
     Cell: cellConstructorFactory<AsCell>("cell"),
@@ -330,6 +343,8 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccessOf,
     spaceMembers,
     spaceOf,
+    spaceOfLink,
+    spaceDeleted,
     grantSpaceAccess,
     revokeSpaceAccess,
 

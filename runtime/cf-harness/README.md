@@ -38,6 +38,29 @@ boolean, an enum or const string) as themselves, and everything else as a
 reference token addressing that position. So a total comes back as `42` and a
 free-text description comes back as something to point at.
 
+`run_pattern` and `assign_slug` also return `ref`, a whole-piece handle that can
+be passed directly as a component's `ref` to `loom_compose` or through
+`run_command` to `loom.compose`, `loom.add`, `loom.replace`, `loom.revise`, and
+`loom.create-child`. The trusted bridge resolves it to the session's space and
+piece identity after checking that the run holds an unrestricted whole piece.
+Source-reader references need a retained Page first: read the source, write the
+relevant material with `page.write`, then compose the Page receipt's `ref`.
+
+The same bridge runs the other way. Any string in a command's answer that spells
+a piece's stored address (`pattern:<space>/<piece-id>`, or the
+`pattern:<space>/of:<piece-id>` form Loom records components in) reaches the
+model as the handle the run holds for that piece, once the bridge has checked it
+is a whole Pattern Instance in the session's own space. So an agent that
+inspects a Loom can describe and call the pieces in it. An address it cannot
+hold is dropped, and a `<key>_unheld` member, or `{unheld}` in a list, says why:
+`foreign-space`, `limit` (past 32 distinct pieces in one answer), or
+`unavailable` for everything else. An absent piece, a cell that is no Pattern
+Instance and a failed read all answer `unavailable`, so a raw address cannot
+probe what a space holds. This is half of the rule that an address never reaches
+a model; the other half is the host's: it must not spell a piece's address to an
+agent run any other way, such as a pane url, which the bridge cannot recognize.
+Loom keeps its render blocks out of what an agent run reads for that reason.
+
 That is the useful shape of it: the declaration is the boundary, and it is a
 narrow one by construction. A field typed as one of three enum values can carry
 no more than those three values, whatever the data behind it turned out to be.
@@ -126,12 +149,16 @@ What works today:
   see [Sandbox runtimes](#sandbox-runtimes)
 - named `bash` sessions: a long-lived container that later calls execute in,
   offered to the model only where the run's CFC enforcement mode allows them,
-  and not under the Linux default's `pasta` network
+  and not under `pasta`'s network: the Linux default's, that of any Linux run
+  that forwards host ports, and that of a named Linux `runsc` under `bridge`
 - a sandbox network that defaults to `sandbox`, the driver's own: on Linux
-  `pasta` gives it egress and the host at `host.docker.internal`.
-  `CF_HARNESS_DOCKER_NETWORK_MODE` names one: `bridge` is that default, and
-  `none` and `host` are the others; the name is kept from the Docker driver, as
-  is its vocabulary
+  `pasta` gives it egress and the host at `host.docker.internal`, every port of
+  the host's loopback, or only the ports `CFC_VM_FORWARD_PORTS` lists, which for
+  a named `runsc` under `bridge` may be none. `CF_HARNESS_DOCKER_NETWORK_MODE`
+  names one: `bridge` is that default, and `none` and `host` are the others; the
+  name is kept from the Docker driver, as is its vocabulary. A named Linux
+  `runsc` whose network is unnamed and that lists no port has runsc's own,
+  loopback alone, and needs no `pasta`
 - a kitchen-sink rootfs from the native store, as the sibling `gvisor` repo's
   installers write it; name another with `--sandbox-rootfs` or
   `CF_HARNESS_SANDBOX_ROOTFS`
@@ -249,8 +276,9 @@ What works today:
     `commands` entry with the job's own id as the run id; the commands the host
     offers, run as the actor the host names; the listing shows each command as a
     one-line signature and is the host's command metadata, unmeasured;
-    `run_command` refuses a name the listing does not show, takes one call or a
-    batch of up to sixteen, and measures each answer like a retrieval row)
+    `run_command` sends names to CFS for admission, takes one call or a batch of
+    up to sixteen, derives its effect from host metadata (missing effects are
+    writes), and measures each answer like a retrieval row)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -314,8 +342,10 @@ What works today:
 - GPT-6.1 Sol, GPT-6 Luna, and GPT-5.6 gateway cost estimates with complete
   cache usage detail; estimates use the public OpenAI token schedule and are
   kept distinct from provider-reported cost
-- stable prompt-cache affinity across an interactive session, plus opt-in
-  reasoning effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
+- stable prompt-cache affinity across an interactive session, and across the
+  jobs of an agent-runner profile that names a `cacheAffinityKey` (sent as the
+  provider prompt-cache key in place of each run's id), plus opt-in reasoning
+  effort and GPT-5.6/GPT-6.1 Sol gateway cache-mode controls
 - transcript-based resumability
 - package-local operator CLI
 - an Agent Skills registry over `--skills-root`, defaulting to the checkout's
@@ -334,10 +364,14 @@ networking is enabled: explicit `curl` invocations may target loopback HTTP(S)
 hosts such as `localhost`, `127.0.0.1`, `[::1]`, and the `host.docker.internal`
 host alias, but obvious external `curl` targets are denied before sandbox
 execution. The refusal states that rule and names no host to try instead, since
-what answers on those names is the platform's: on Linux `host.docker.internal`
-reaches any port of the host, through `pasta`, and on macOS only the ports the
-launch forwards into the VM. This is an integration unblock, not a complete
-network confinement model.
+what answers on those names is the platform's. On Linux, under `pasta`'s
+network, `host.docker.internal` reaches any port of the host's loopback for the
+default, or only the ports a run lists in `CFC_VM_FORWARD_PORTS`; a named
+`runsc` under `bridge` that lists none reaches no port of the host's loopback,
+and one whose network is unnamed and that lists none has no `pasta`, and its
+loopback is its own. On macOS it reaches only the ports the launch forwards into
+the VM. This is an integration unblock, not a complete network confinement
+model.
 
 - CFC mode plumbing with:
   - `disabled`
@@ -602,13 +636,17 @@ is no estimate of tokens still being generated within a provider call.
 
 For an ordinary task with a configured Fabric session, the parent completes
 either after `assign_slug` successfully names a UI piece in that run or through
-`finish_task` with outcome `completed`. A task that builds or shows something
-leaves a piece, created through the ordinary authoring and tool policy path.
-Data-only probes stay unnamed. An existing piece can keep its address: after a
-revision, `assign_slug` confirms the same piece under its existing slug. Its
-pending-read and UI checks apply in either case. A task whose answer is words
-ends with `finish_task` completed and the answer as its message, without a
-pattern built to hold it.
+`finish_task` with outcome `completed`. A task that builds or revises a reactive
+pattern leaves a piece, created through the ordinary authoring and tool policy
+path. Requested durable material can instead be saved through the host's Page
+and Loom commands; verified receipts satisfy that request, following the host's
+placement instructions. Data-only probes stay unnamed. An existing piece can
+keep its address: after a revision, `assign_slug` confirms the same piece under
+its existing slug. Its pending-read and UI checks apply in either case. A task
+whose answer is words ends with `finish_task` completed and the answer as its
+message, without a pattern built to hold it. Saved durable material also ends
+with `finish_task` completed once the host's placement requirements are
+satisfied.
 
 Outside a budget-finalizing turn, a plain-text final answer without that receipt
 gets a host correction within the existing model-turn bound. Exhausting a strict
@@ -652,30 +690,12 @@ transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
-For a request about an existing piece, the parent first uses an explicit
-attachment, a user-supplied reference, or an unambiguous target established in
-the conversation. With none of those and no piece name from the user, it asks
-which piece to use with zero registry reads. A user-supplied slug is resolved
-with the parent tool `resolve_piece` before author delegation or any registry
-read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
-and uses the same exact-address resolver as input-cell attachments. It returns
-only a handle, so a display name differing from the slug does not affect
-resolution and source remains on the child-only read/revise path. Foreign spaces
-are refused. An unheld slug or a readable target that is not a usable piece
-returns recoverable `not-found` without failing the run. A failed read returns
-`unavailable` and does not establish absence. The same path serves a fresh
-request and a follow-up answering which piece the user meant.
-
-A display name without a slug permits at most one registry read across the
-parent and its children, proceeding only on exactly one released match. An
-ambiguous, missing, or unreadable match leads to a question, without candidate
-inspection, retrying discovery through another delegation, or replacement
-authoring. The one lookup must return the match count and usable reference or
-requested data together; a lost reference or missing requested value is a reason
-to ask for an attachment, not to reread the registry or infer a value from the
-piece name. This is shared model guidance, not a runtime quota, and does not
-limit an explicit request to list or analyze the space. A failed exact-slug
-lookup does not fall back to authoring a name matcher or crawling the registry.
+The parent can use `resolve_piece` to resolve a bare slug in the session's space
+or `pattern:<space>/<slug>`. It uses the same exact-address resolver as
+input-cell attachments and returns only a handle; source remains on the
+child-only read/revise path. Foreign spaces are refused. An unheld slug or a
+readable target that is not a usable piece returns recoverable `not-found`. A
+failed read returns `unavailable` and does not establish absence.
 
 Private research receives the same explicit input-cell names and tokens as the
 parent, separately from the general handle inventory. Registry and connector
@@ -829,10 +849,13 @@ A follow-up accepts `--image` and `--input-cell` with the same formats and
 limits as a first run. Images are snapshotted under the new run's artifact
 directory and attached to its new prompt. New input cells mint handles into the
 carried table, so earlier tokens still resolve. Attachment names are retained
-across continuations; a new input cell whose name is already held is refused
-before any model request. `assignedPieces` also carries forward. When no new
-input cells are supplied, their confirmed slugs are announced as attachments, as
-in later chat turns.
+across continuations. An input cell that gives a held name to the cell the name
+already stands for adds nothing, so a host may attach on a follow-up what it
+attached before. One that gives a held name to any other cell is refused before
+any model request, and so is a piece address spelled by slug under a held name,
+since the check compares the references as written. `assignedPieces` also
+carries forward. When no new input cells are supplied, their confirmed slugs are
+announced as attachments, as in later chat turns.
 
 The gateway and subscription routes have different billing, workspace policy,
 retention, and model availability. The model catalog is read live from the
@@ -1195,14 +1218,34 @@ Pasta also clears the parent-death signal of what it runs, so the driver runs it
 through `setpriv --pdeathsig KILL` (util-linux): a call that times out, or is in
 flight when the runtime closes, stops its pasta, and its container dies with
 pasta's namespace. No port is forwarded into the container, or from the
-container's loopback to the host's. A user id, or a kernel parameter, that
-cannot be read refuses the default rather than being guessed at. Where no
-`pasta` is on `PATH`, no `setpriv`, or for root no `unshare`, the default is
-refused, saying to install passt (`sudo apt install passt`) or util-linux, or to
-name a network: `CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container
-loopback alone, and `host` the host's own network, interfaces and all. Those two
-need none of `pasta`, `setpriv` or `unshare`; a process that is not root still
-needs user namespaces for the store's rootless `runsc`, as above.
+container's loopback to the host's, unless the run lists host ports in
+`CFC_VM_FORWARD_PORTS`: then the container reaches those ports of the host's
+loopback and no other port of it. Pasta runs with `--no-map-gw`, so the gateway
+does not lead to the host, and listens on each listed port at the container's
+loopback, which the hosts file then names `host.docker.internal`, forwarding it
+to the host's. A named `runsc` gets pasta's network for such a run too, and the
+run is refused under the `none` or `host` network, which forward nothing. A
+named `runsc` under `bridge` gets the same network where the run lists no port,
+with none forwarded: egress, and no port of the host's loopback, since runsc's
+own `sandbox` network is loopback alone, and a rootless `runsc` refuses it.
+Egress is kept, so a service the host binds to an address of another interface
+is reached at that address, as from any other machine. Under pasta's network the
+driver also binds a resolver configuration over `/etc/resolv.conf` that names
+the gateway, where pasta answers DNS with the host's resolver, so names resolve
+whatever the rootfs holds; a mount at or over it is refused, as one at or over
+`/etc/hosts` is. Pasta shares its stderr with the call, and writes to it before
+the call's command starts (root's two warnings about user mappings, and, under
+`--no-map-gw` on a host whose nameservers are all on its loopback, one saying it
+finds no nameserver to hand the container). The driver's shell writes a line
+naming the call before it starts runsc, and the call's stderr is what follows
+that line. A user id, or a kernel parameter, that cannot be read refuses the
+default rather than being guessed at. Where no `pasta` is on `PATH`, no
+`setpriv`, or for root no `unshare`, the default is refused, saying to install
+passt (`sudo apt install passt`) or util-linux, or to name a network:
+`CF_HARNESS_DOCKER_NETWORK_MODE=none` gives the container loopback alone, and
+`host` the host's own network, interfaces and all. Those two need none of
+`pasta`, `setpriv` or `unshare`; a process that is not root still needs user
+namespaces for the store's rootless `runsc`, as above.
 
 A defaulted macOS run takes its CFC policy from
 `$HOME/.local/share/runsc-cfc/cfc-policy.json` where that file exists, and
@@ -1294,7 +1337,9 @@ rest of this section says of that driver, and these differences of platform:
   `host.docker.internal` reaches only the host ports the launch forwards into
   the VM.
 - **On Linux** there is no VM; the default network is pasta's, above, and the
-  host is reached at `host.docker.internal` on every port its loopback serves.
+  host is reached at `host.docker.internal` on every port its loopback serves,
+  or on the ports of it `CFC_VM_FORWARD_PORTS` lists alone, which for a named
+  `runsc` under `bridge` may be none.
 
 The driver keeps its `runsc` state under the run's own scratch directory and
 registers nothing anywhere. The `runsc` it invokes is gVisor's own on Linux, and
@@ -1347,17 +1392,37 @@ otherwise, with the status and selected headers.
 
 A final assistant reply must contain non-whitespace text. A reply with no text
 and no function tool calls fails the run with `provider-unavailable`, including
-when the provider returned HTTP 200. The one exception is a run that has
-`submit_result`: when a turn that still offers tools follows, its first such
-reply is answered with a host notice asking it to submit the answer, or why it
-cannot be given, and only a second fails it. Tool-only replies continue through
-normal tool dispatch. The normalized assistant message stays in the transcript,
-and the run report retains the model attempts and token usage. This failure does
-not trigger a retry. A Codex attempt that reached its terminal response records
-that response's `status` as `terminalStatus` and the type of each of its output
-items as `outputItemTypes`, which together say whether a blank reply was a
-`completed` response with an empty message, a reasoning item alone, or no item
-at all.
+when the provider returned HTTP 200. A run that has `submit_result` or
+`finish_task` gets one completion notice per prompt-loop invocation when a turn
+that still offers tools follows. The notice asks it to call `submit_result` if
+available, otherwise `finish_task`, with the answer or why it cannot be given. A
+second blank reply fails the run. Tool-only replies continue through normal tool
+dispatch. The normalized assistant message stays in the transcript, and the run
+report retains the model attempts and token usage. This failure does not trigger
+a retry. A Codex attempt that reached its terminal response records that
+response's `status` as `terminalStatus` and the type of each of its output items
+as `outputItemTypes`, which together say whether a blank reply was a `completed`
+response with an empty message, a reasoning item alone, or no item at all.
+
+A blank reply also writes `model-turn-<n>-<uuid>-empty-reply.json` beside the
+run report. The UUID preserves each reply when a resumed invocation repeats a
+turn number. Its `modelAttemptSequence` links to the invocation's report attempt
+record; turn numbers and attempt sequences restart in each invocation. The
+diagnostic names the decoder and records its decoded text length, trimmed text
+length, and function-call count, with the reason it judged the reply empty.
+`responseBodyExcerpt` retains response evidence as JSON, bounded to 64 KiB of
+UTF-8 without splitting a code point; `responseBodyBytes` records the full
+serialized size of that evidence and `responseBodyTruncated` marks a cut
+excerpt. Before applying that bound, Responses evidence selects `status`,
+`incomplete_details`, `error`, every `output` item with all its fields, `usage`,
+and `model`. Chat Completions evidence selects the complete `choices`, `usage`,
+and `model`. Echoed request fields such as `instructions` and `tools` are
+excluded. Codex evidence selects the terminal fields and the complete collected
+streamed output items, which supply decoder input when the terminal output is
+empty. All selected fields and streamed items share the 64 KiB bound and may be
+truncated, as indicated by `responseBodyTruncated`. These payloads stay in the
+sidecar artifact, outside transcripts, reports, and standard output. Normal text
+replies and tool-only replies write no such artifact.
 
 A failed attempt carries the provider's own reason wherever the provider stated
 one. `providerError` holds the provider's `type`, `code`, and `message` as the
@@ -1369,13 +1434,15 @@ provider said. A provider that returns a bare `503` states no reason, and the
 record carries none rather than a guess.
 
 A transient failure is issued again before anything reaches the harness. Three
-kinds qualify, and only these: a transport error, where no response arrived; a
-`429` or `5xx` status; and a provider-stated error whose type or code names
-capacity, rate limiting, or a server-side fault — `server_is_overloaded` and
-`service_unavailable_error` among them. Anything else ends the exchange on its
-first attempt: a `4xx` refuses the request itself, a provider error naming the
-request cannot be cleared by waiting, and a body that is not SSE-framed JSON is
-a protocol failure, not a transient one.
+kinds qualify, and only these: a transport error, where no response arrived or
+its stream was cut off before the terminal event (a read that failed, a body
+that ended early, or a machine sleep); a `429` or `5xx` status; and a
+provider-stated error whose type or code names capacity, rate limiting, or a
+server-side fault — `server_is_overloaded` and `service_unavailable_error` among
+them. Anything else ends the exchange on its first attempt: a `4xx` refuses the
+request itself, a provider error naming the request cannot be cleared by
+waiting, and a body that is not SSE-framed JSON is a protocol failure, not a
+transient one.
 
 Reissuing is safe because the harness dispatches nothing from an attempt that
 did not complete: a model exchange has no side effect until a tool call from its
@@ -1385,15 +1452,29 @@ included, is discarded with it. A `429` from the Codex provider is its usage
 limit, which the backoff does not clear; the retry there is bounded by the same
 schedule and costs seconds, not a turn.
 
+A Codex attempt that the machine sleeps through is cut off as a transport error.
+The provider can drop the connection while the machine is asleep without either
+end being told, and a read of it would then wait forever. Deno's `fetch` has no
+keepalive that would notice, and a Deno process gets no notice of a wake, so
+each open attempt is watched by `watchMachineSleep`
+(`src/model/machine-sleep.ts`): it reads the wall and monotonic clocks every
+`SLEEP_CHECK_EVERY_MS`, and a wall clock that ran `SLEEP_GAP_MS` or more ahead
+of the monotonic one, which does not advance while the machine sleeps, is a
+sleep. The attempt's record then says so in its `errorDetail`, and the schedule
+issues it again like any other transport error; the watch stops when the attempt
+ends. The gateway provider does not watch yet.
+
 The bound is `transportRetries` attempts beyond the first — three unless a
 client is configured otherwise — with a backoff of `transportRetryDelayMs`
 before the second attempt, doubling before each attempt after it. An attempt
 that is followed by another says so: its record carries `retry`, naming the
 `kind` of transient failure (`transport_error`, `http_status`, or
-`provider_error`) and the `delayMs` waited before the next attempt. The last
-attempt of an exchange never carries one, however it ended. The backoff is
-waited out through an injected `transportRetryDelay`, which is how a test drives
-a retry sequence without a timer.
+`provider_error`) and the `delayMs` waited before the next attempt. That kind is
+why the attempt was issued again, not how far it got: a stream cut off after its
+headers arrived is recorded with `outcome` `http_response` and retried as a
+`transport_error`. The last attempt of an exchange never carries one, however it
+ended. The backoff is waited out through an injected `transportRetryDelay`,
+which is how a test drives a retry sequence without a timer.
 
 ### Session-local address handles
 
@@ -1427,8 +1508,8 @@ another.
 The table supports swapping in both directions:
 
 - Outbound, positively-marked address forms become tokens: LLM-friendly link
-  strings, standalone `of:`/`computed:`-schemed entity URIs (any tagged hash
-  after the scheme, `fid1:` among them), and whole single-key
+  strings, standalone `of:`/`computed:`/`receipt:`-schemed entity URIs (any
+  tagged hash after the scheme, `fid1:` among them), and whole single-key
   `{"@link": "<address>"}` objects. A bare tagged hash without a scheme is never
   treated as an address — schema hashes, blob ids, and slugs share that
   encoding, so only the schemed forms are positively an address. Occurrences the
@@ -1466,14 +1547,19 @@ in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 #### Well-known grants
 
-A run configured with a Fabric session starts with a seeded handle: before the
-first model turn, the CLI establishes the session, mints a token for the space's
-piece registry — the same discovery root behind `cf piece ls` — and announces it
-in a context message pairing the token with a fixed, harness-authored
-description. The address stays trusted-side in the handle table like any other
-entry. This is what lets an agent find pieces to compute over without an
-operator handing it references one by one: discovery is `run_pattern` over the
-granted token, not a tool of its own, and `describe_handle` answers the
+A run configured with a Fabric session seeds a handle when any of
+`describe_handle`, `run_pattern`, `read_value` or `call_verb` is allowed,
+including when no tool allow-list is configured: before the first model turn,
+the CLI establishes the session, mints a token for the space's piece registry —
+the same discovery root behind `cf piece ls` — and one for each configured
+connector grant (a read-only connector database, described with its label, CFC
+classes, account identity, row count and newest observation), and announces them
+in a context message pairing each token with a harness-authored description. The
+`describe_handle` instructions in that message appear only when
+`describe_handle` is allowed. The address stays trusted-side in the handle table
+like any other entry. This is what lets an agent find pieces to compute over
+without an operator handing it references one by one: discovery is `run_pattern`
+over the granted token, not a tool of its own, and `describe_handle` answers the
 registry's shape like any other reference.
 
 What the model receives is a token and fixed prose, never data. Reading anything
@@ -1481,12 +1567,9 @@ behind the token means running a pattern over it, or `read_value` once
 `describe_handle` has answered for it, where the CFC boundary rules as it does
 for every other flow — in particular, a piece's `$NAME` is a value, and a name
 computed from labeled data taints a name-listing pattern's result, which strict
-enforcement refuses whole. A refused name read leaves the name unknown. For an
-explicit reference-listing task, a pattern can return entry references without
-reading values, with addresses returned as tokens through the ordinary outbound
-swap. This does not authorize crawling references to identify an unspecified
-edit target; the shared target-selection guidance applies to the registry
-announcement too.
+enforcement refuses whole. A refused name read leaves the name unknown. A
+pattern can return entry references without reading values, with addresses
+returned as tokens through the ordinary outbound swap.
 
 The grants are recorded in run state (`wellKnownGrants`), replayed rather than
 re-minted on resume, and reported in the operator summary as `fabricGrants:`. A
@@ -1538,8 +1621,9 @@ parse, targets an unadmitted space, names a piece the space does not hold, or
 arrives on a run without a fabric session fails the run before the model is
 involved. The cells are recorded in run state (`inputCells`), replayed rather
 than re-minted on resume, and reported in the operator summary as `inputCells:`.
-A continuation retains those names and tokens and appends its new attachments;
-reusing a held attachment name is refused.
+A continuation retains those names and tokens and appends its new attachments. A
+held attachment name stays available to the cell it names and is refused for any
+other.
 
 #### Inspecting a handle's shape
 
@@ -1946,9 +2030,8 @@ unify them.
 
 ### Pattern-index client
 
-The shared signed client, successor resolution, search-body composition, and
-feedback vocabulary live in
-[`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
+The shared signed client, search-body composition, and feedback vocabulary live
+in [`@commonfabric/pattern-index`](../pattern-index/README.md). Harness
 configuration and identity loading live in `src/pattern-index/factory.ts`;
 composition, publication gates, the session ledger, probes, retrieval scoring,
 and tools remain in this package.
@@ -1991,27 +2074,26 @@ establish either an entry's intended audience or who evaluated it.
 
 ### Pattern generations in search
 
-The shared index client resolves discovery for `search_patterns`, private
-research, and the console's Index search. It reads the discoverable catalog and
-follows each entry's `priorPatternId` to find replacements, including a
-successor outside the original query's result limit. Only same-owner links
-participate. An unambiguous chain contributes its final generation once, at the
-earliest matching position. A penalized final generation removes that chain from
-the answer; a branch or cycle fails the affected search instead of choosing a
-generation arbitrarily.
+The pattern index resolves discovery itself, for `search_patterns`, private
+research, and the console's Index search alike: the shared client returns its
+`searchPatterns` answer as given. Each matched generation whose same-owner
+successor chain is unambiguous is replaced by the chain's final discoverable
+generation, once, at the earliest position any generation of the chain matched,
+and the replacement names the matched generation in `supersedes`. A chain that
+branches or cycles is withheld from the answer rather than failing the search,
+and a replacement below the search's quality floor is withheld without bringing
+back the generation it replaced. Resolution runs over the whole ranked list
+before the result limit, so a successor outside the limit still takes its
+predecessor's place. The service's `docs/api.md` states the rule.
 
-Replacement metadata, schemas, quality, and signals describe the successor.
-Where the index supports generation evidence, its combined signal summary
-includes an attributed `inherited` portion: predecessor ID, publication cutoff,
-event counts, and score. The harness preserves that attribution; a proven tier
-can come entirely from predecessor evidence before the successor has run. Older
-deployments supply only that generation's own event counts and score. Query-term
-counts are omitted on a replacement because the index measured them against the
-predecessor. The catalog is refreshed for every nonempty search; create-only
-metadata is cached by identity within the client, and failed reads are not
-cached. This requires one metadata read per catalog entry on the first search
-and for each newly discovered identity thereafter. No source is requested. An
-unavailable catalog or metadata read fails discovery explicitly.
+Replacement metadata, quality, and signals describe the successor, and a row
+carries a display `name` when the index holds or can derive one. Where the index
+supports generation evidence, its combined signal summary includes an attributed
+`inherited` portion: predecessor ID, publication cutoff, event counts, and
+score. The harness preserves that attribution; a proven tier can come entirely
+from predecessor evidence before the successor has run. Query-term counts on a
+replacement are those of the generation that matched. A search is one signed
+request; no catalog or metadata read accompanies it.
 
 `getPattern`, attached pattern references, and `cf:pattern:` imports continue to
 resolve the exact requested identity. Search resolution changes recommendations,
@@ -2065,20 +2147,18 @@ they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
-They inspect relevant grants or reuse established descriptions before asking the
-user to connect a source; a grant's name alone does not establish its contents.
-For findable inputs, private research can identify an applicable space-search
-pattern from the index and tell the parent how to run it. The parent executes
-discovery under the existing tool, piece-targeting, and release rules. An
-indexed pattern does not grant access to another store.
+A grant's name alone does not establish its contents. Private research can
+identify an applicable space-search pattern from the index and tell the parent
+how to run it. Tool and release rules govern execution; an indexed pattern does
+not grant access to another store.
 
 The action path is checked before collecting execution details: a read-only
 mailbox does not establish the ability to send, and an unavailable send path
-calls for an upfront limitation and an offered draft. The guidance favors the
-closest achievable outcome without silently substituting data or claiming the
-original task is complete. Unavailable or withheld evidence remains unknown; the
-agent follows the not-checked verification rule and never asks for a nonexistent
-permission to release it.
+calls for an upfront limitation and an offered draft. The guidance states
+capability limits and offers useful achievable work without silently
+substituting a source or claiming the original goal is complete. Unavailable or
+withheld evidence remains unknown; the agent follows the not-checked
+verification rule and never asks for a nonexistent permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
 for a specific remaining uncertainty, with `followUpTo` naming the research
@@ -2123,15 +2203,15 @@ framing (reading docs and skills, repairing code, acquiring a skill by its id),
 `pieces` a short held-pieces block (the input cells are the pieces of the loom
 the person is in; `describe_handle`, `read_value`, and `call_verb` read and act
 on them) where any other task gets one sentence saying handles may be held,
-`author` alone the piece-targeting guidance, the instruction to verify an
-effect, and the revision-verification guidance, `pieces` and `find` the
-held-handle and grant guidance, `find` and `author` the findable and
-pattern-index guidance, `author` what research is (a private pass that reports
-what to run and cannot execute) and the opening-research rule, `act`, `pieces`
-and `author` delegation, `find` and `act` the Weaver command guidance, and `act`
-the browser guidance. The tool allow-list does not narrow, so a task given too
-few tags can still reach what it needs; a run with no classification carries all
-of the orientation.
+`author` alone the piece-targeting guidance when input pieces are attached, the
+instruction to verify an effect, and the revision-verification guidance,
+`pieces` and `find` the held-handle and grant guidance, `find` and `author` the
+findable and pattern-index guidance, `author` what research is (a private pass
+that reports what to run and cannot execute) and the opening-research rule,
+`act`, `pieces` and `author` delegation, `find` and `act` the Weaver command
+guidance, and `act` the browser guidance. The tool allow-list does not narrow,
+so a task given too few tags can still reach what it needs; a run with no
+classification carries all of the orientation.
 
 The caller chooses the run's depth before it starts, with `--depth quick`,
 `standard` (the default) or `deep`; the tags say what kind of work a task is,
@@ -2142,15 +2222,18 @@ classifier's, which decides any part the caller leaves out; the record says
 `caller` for a part it stated. None of these grants authority. An agent-runner
 local job takes `depth`, `tags` and `domains` from its request, and
 `reasoningEffort` from its profile, which a request may lower but not raise. A
-`standard` run's prompt has no strategy section. A `quick` run is told to answer
-directly when it can, and otherwise to take the shortest path that does what was
-asked, adding nothing beyond it. A `deep` run is told to search every source of
-the person's data (`personal` domain) or to read several web sources (`web`), to
-leave only material worth opening, and to read its result back before it
-finishes (`src/strategy.ts`). A `deep` run also adds the opening research pass
-for a classified task in the `fabric` domain; an `author` task gets that pass at
-any depth. The effort applies to the job's own model calls and children on its
-model; research keeps its own effort setting.
+`standard` run's prompt has no strategy section. A `quick` run is told to do the
+requested work, including its destination, and stop when evidence answers the
+task and requested changes are verified, or a refusal leaves no authorized
+route. Permission refusals are final; bad arguments can be repaired and an
+unsupported reader can be replaced by an authorized source. Remaining unknowns
+are reported without claiming completion. A `deep` run is told to search every
+source of the person's data (`personal` domain) or to read several web sources
+(`web`), to leave only material worth opening, and to read its result back
+before it finishes (`src/strategy.ts`). A `deep` run also adds the opening
+research pass for a classified task in the `fabric` domain; an `author` task
+gets that pass at any depth. The effort applies to the job's own model calls and
+children on its model; research keeps its own effort setting.
 
 A tool descriptor is a contract: its name, its parameters with one-line
 descriptions, and a sentence or two on what the tool does and returns. Task tags
@@ -2165,10 +2248,13 @@ branch, pending results, `resultSchema`) and `pattern-author` delegation;
 handle); `pieces` gets reading and acting on pieces (verbs, `fill`,
 `rowLabelReads`, research handles); `find` and `act` get the host's commands
 (`loomId`, `expectedVersion`, batching, `not_granted`) and how loom retrieval
-withholds a row; `find`, `act` and `pieces` get when to resolve a named piece,
-which `author` has inside piece targeting. A rule needed only once it fires is
-left to the tool's refusal or result, which explains itself. A subagent whose
-profile holds `run_pattern` carries its rules in its own system prompt.
+withholds a row, when their respective command and retrieval tools are allowed.
+Command-enforcement guidance is included only under `enforce-explicit` or
+`enforce-strict`. `pieces` gets when to resolve a named piece, which `author`
+has inside piece targeting when input pieces are attached. No targeting context
+is emitted for empty inputs. A rule needed only once it fires is left to the
+tool's refusal or result, which explains itself. A subagent whose profile holds
+`run_pattern` carries its rules in its own system prompt.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
@@ -2953,8 +3039,14 @@ service starts. Without that binding the service has no Fabric session.
 The interactive service owns the Fabric runtimes created for its chat sessions.
 Completed turns keep their runtimes until the session closes. Closing an active
 session aborts its turn and releases its runtimes after the turn unwinds;
-`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
-session. Library callers supplying an existing engine retain ownership of it.
+`waitForIdle()` includes that cleanup. `releaseFabricRuntimes()` waits for idle
+and then releases every session's runtimes while leaving the sessions open, so a
+host shutting down frees them without recording the sessions as closed: the
+console does, on SIGINT or SIGTERM, and the stdio host does at the end of its
+input, for a service it created. A runtime that fails to release does not stop
+the others, and the failures are thrown once every release has settled.
+Persisted pieces can reopen in a later session. Library callers supplying an
+existing engine retain ownership of it.
 
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
@@ -3637,7 +3729,7 @@ declared it was doing), one per clause family:
 | AUD-9   | the artifacts that would explain why a result was exposed or denied are present; what each holds is not read here. An invocation context is required of a side effect that reached the substrate minting one, read as AUD-2 reads it; a run that recorded no context at all warns, its artifacts being unable to tell a host-side effect from lost evidence                                                                                                                                                        | AH-CFC-16                                  |
 | AUD-13  | the run's recorded fabric-session dial tuple is a point the enforcement matrix admits: `enforce-strict` without persisted flow labels fails, and a dial that is sound anywhere but credits nothing at this flow setting warns                                                                                                                                                                                                                                                                                      | matrix §2, §3                              |
 | AUD-14  | under a claimed enforcement posture, every sink releasing with no confidentiality ceiling is named with its recorded reason; a record publishing no deviation while a sink is ungated fails                                                                                                                                                                                                                                                                                                                        | AH-CFC-14, AH-CFC-15                       |
-| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode                                                                                                                                                                                                                                                                                                                                                                 | AH-CFC-15                                  |
+| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode. A snapshot that does not record the mode's source passes only a mode no weaker than the claim, and is `inconclusive` otherwise                                                                                                                                                                                                                                 | AH-CFC-15                                  |
 | AUD-15a | a run whose **flow-label dial** came from a default and landed weaker than the named posture bundle it claims asserts. Ours: no clause names the dial                                                                                                                                                                                                                                                                                                                                                              |                                            |
 | AUD-20  | counts each model-boundary omission by its recorded rule and rejects duplicated or transcript-mismatched results, duplicated rules, and rules with no artifact location. Ours: AH-CFC-16 motivates retained evidence but does not require this accounting artifact                                                                                                                                                                                                                                                 |                                            |
 | AUD-21  | **known defect (CT-2175).** a side effect that produced a result and was admitted by a decision that could not have consulted a label. The predicate is the `release` record, which only a boundary that measured a flow against a sink writes; every `cfc_*` reason code comes from the authority switch instead. A call that produced no result reached no boundary and is not counted, and a run where none did is `not-applicable` rather than `pass`. Ours: no clause states it                               |                                            |

@@ -6,7 +6,7 @@
  * enters the sandbox.
  */
 
-import { Identity } from "@commonfabric/identity";
+import type { Identity } from "@commonfabric/identity";
 import { isDIDKey } from "@commonfabric/identity/did";
 import { loadHarnessIdentity } from "./identity-key.ts";
 import { PiecesController } from "@commonfabric/piece/ops";

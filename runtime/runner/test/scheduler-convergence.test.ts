@@ -474,18 +474,18 @@ describe("bounded convergence", () => {
       { isEffect: true },
     );
 
-    if (schedulerInternal.pendingQueueTaskTimer !== null) {
-      clearTimeout(schedulerInternal.pendingQueueTaskTimer);
-      schedulerInternal.pendingQueueTaskTimer = null;
-    }
+    const cancelQueuedPass = (): boolean => {
+      const turn = schedulerInternal.queuedPass;
+      if (turn === null) return false;
+      turn.cancel();
+      schedulerInternal.queuedPass = null;
+      return true;
+    };
+    cancelQueuedPass();
 
     await schedulerInternal.execute();
 
-    if (schedulerInternal.pendingQueueTaskTimer !== null) {
-      clearTimeout(schedulerInternal.pendingQueueTaskTimer);
-      schedulerInternal.pendingQueueTaskTimer = null;
-      schedulerInternal.scheduled = false;
-    }
+    if (cancelQueuedPass()) schedulerInternal.scheduled = false;
 
     expect(effectRuns).toBe(PASS_RUN_BUDGET);
     expect(runtime.scheduler.isDirty(selfDirtyingEffect)).toBe(true);

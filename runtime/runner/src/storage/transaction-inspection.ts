@@ -8,7 +8,6 @@ import type {
   IWriteAttempt,
   MemorySpace,
   NativeStorageCommit,
-  TransactionReactivityLog,
   TransactionReadDetail,
   TransactionWriteDetail,
 } from "./interface.ts";
@@ -38,12 +37,6 @@ export function getDirectTransactionNativeCommit(
   space: MemorySpace,
 ): NativeStorageCommit | undefined {
   return tx.getNativeCommit?.(space) ?? unwrap(tx).getNativeCommit?.(space);
-}
-
-export function getDirectTransactionReactivityLog(
-  tx: TxLike,
-): TransactionReactivityLog | undefined {
-  return tx.getReactivityLog?.() ?? unwrap(tx).getReactivityLog?.();
 }
 
 export function getDirectTransactionReadActivities(
@@ -184,7 +177,6 @@ export function getTransactionWriteDetails(
  * precondition or SQLite operation and one whose every document write returned
  * to where it started. With an exact target surface, an otherwise elided write
  * can name a space too; older fallbacks can report only recorded attempts.
- * Throws when `tx` offers no record of its commit targets or writes at all.
  */
 export function getTransactionWrittenSpaces(
   tx: TxLike,
@@ -202,13 +194,7 @@ export function getTransactionWrittenSpaces(
   // The reactivity log is the remaining record. Its `writes` list only
   // changed paths, so a space whose every write returned to where it started
   // is missed unless one of them also recorded an attempted write.
-  const log = getDirectTransactionReactivityLog(tx);
-  if (log === undefined) {
-    throw new Error(
-      "The transaction keeps no write-attempt log, replayable journal or " +
-        "reactivity log, so the spaces it wrote cannot be known",
-    );
-  }
+  const log = tx.getReactivityLog();
   return [
     ...new Set(
       [...log.writes, ...(log.attemptedWrites ?? [])].map((write) =>

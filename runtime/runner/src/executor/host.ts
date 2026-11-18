@@ -1,6 +1,7 @@
 // The ExecutorHost (server-execution v2 stage F, serving-loop.md §1):
-// one per process, owning the activation policy and one SpaceServer per
-// ACTIVE space. Wiring, by plane:
+// one per process, or one per serving worker where the loop runs in
+// workers, owning the activation policy and one SpaceServer per ACTIVE
+// space it is given to serve. Wiring, by plane:
 //
 // - plane (b): the memory server's admission observer notifies the host
 //   on any AUTHORED admission (an admission-side hook, never a poll) and
@@ -12,8 +13,8 @@
 //   provisioning path when its wave staged setup into the space, which
 //   activates a sessionless target where an ordinary authored write
 //   deliberately does not (T11.Q7's write-alone parking);
-// - plane (c): lease acquire/renew by direct table write (the
-//   SpaceServer's cycle);
+// - plane (c): lease acquire and release on the memory server's lease map
+//   (the SpaceServer's cycle);
 // - plane (d): admitted-commit records route to the space's SpaceServer
 //   feed (self-echo skipped there by class + holder).
 //
@@ -23,10 +24,14 @@
 // spaces activate on their first session, event, warm request, or
 // session-implying authored admission.
 
-import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
+import {
+  type AdmittedCommitNotice,
+  isServingSessionOf,
+} from "@commonfabric/memory/v2/server";
 import { acquireServerExecutionEnabler } from "@commonfabric/memory/v2";
 import {
   type Engine,
+  findSpaceDeletion,
   selectPendingStreamEventDocs,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
@@ -38,12 +43,14 @@ import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
+import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
+  SPACE_DELETED_PARK,
   SpaceServer,
   type SpaceServerOptions,
   type SpaceServerPolicy,
@@ -52,6 +59,7 @@ import {
   emptyServingLoopStats,
   refreshDeliveryCheckpointStats,
   registerServingLoopStatsProvider,
+  type ServingLoopCounters,
   type ServingLoopStats,
 } from "./stats.ts";
 
@@ -63,14 +71,14 @@ export type {
 
 /**
  * Thrown by {@link ExecutorHost.runLifecycleVerb} when this process cannot
- * serve the space the verb names: the host is closed, or another process
- * holds the space's execution lease.
+ * serve the space the verb names: the host is closed, or another holder on
+ * this memory server has the space's execution lease.
  */
 export class SpaceNotServedError extends Error {
   constructor(space: MemorySpace) {
     super(
       `space ${space} is not served by this process (host closed, or ` +
-        "its execution lease is held elsewhere)",
+        "another holder has its execution lease)",
     );
     this.name = "SpaceNotServedError";
   }
@@ -93,7 +101,13 @@ const DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS = 30_000;
 // tenures. The spec's paragraph states the memory each costs and why these
 // defaults.
 const DEFAULT_PARKED_RUNTIME_RETENTION_MS = 10 * 60_000;
-const DEFAULT_MAX_PARKED_RUNTIMES = 8;
+
+/**
+ * How many idle-parked runtimes a host keeps unless its policy says
+ * otherwise, and how many workers a pool keeps for their parked runtimes
+ * alone.
+ */
+export const DEFAULT_MAX_PARKED_RUNTIMES = 8;
 
 /**
  * How long the host waits before rebuilding a space after its `streak`th
@@ -111,6 +125,39 @@ export const failureParkBackoffDelayMs = (
     DEFAULT_FAILURE_PARK_BACKOFF_MAX_MS;
   return Math.min(max, base * 2 ** Math.min(streak - 1, 30));
 };
+
+/**
+ * Whether an admitted commit into a space nothing serves starts a tenure
+ * there (serving-loop.md §1's ACTIVE criteria): an authored commit that
+ * carries events, or the warm mark of a provisioning wave, or lands while a
+ * client session is live on the space, which `hasLiveSessions` reports.
+ * Every other commit leaves the space parked.
+ */
+export const admissionActivates = (
+  notice: AdmittedCommitNotice,
+  hasLiveSessions: () => boolean,
+): boolean => {
+  if (notice.class !== "authored") return false;
+  if ((notice.eventAppends?.length ?? 0) > 0 || notice.warm === true) {
+    return true;
+  }
+  return hasLiveSessions();
+};
+
+/**
+ * Whether an admitted commit wrote its space's access-list document, the
+ * one input to the verdict that revokes a session.
+ */
+export const writesSpaceAcl = (notice: AdmittedCommitNotice): boolean =>
+  notice.writes.some((write) => write.id === `of:${notice.space}`);
+
+/**
+ * What a host holds: `busy` while it serves, starts, ends or re-evaluates a
+ * tenure, or holds a notice for a tenure to come; `parked` while it holds
+ * nothing but runtimes kept from idle parks; `vacant` while it holds nothing
+ * at all.
+ */
+export type HostOccupancy = "busy" | "parked" | "vacant";
 
 export type ExecutorHostOptions = {
   server: HostMemoryServer;
@@ -151,6 +198,15 @@ export type ExecutorHostOptions = {
    * `SpaceServerOptions.createWaveCommitSink`. */
   createWaveCommitSink?: SpaceServerOptions["createWaveCommitSink"];
 
+  /**
+   * The deployment's route to each space's owner
+   * (`serving-loop.md` §2). Present, the host sends every
+   * crossing into a space other than the one a tenure serves through that
+   * space's owner, over a routed plane it keeps for its life; absent, every
+   * crossing goes through this process's server.
+   */
+  route?: RouteOptions;
+
   /** DIAGNOSTIC (tests): forwarded to every SpaceServer this host
    * builds, with the space it serves — see `SpaceServerOptions`. */
   onWaveCycle?: (space: MemorySpace) => void;
@@ -187,6 +243,14 @@ export type ExecutorHostOptions = {
     space: MemorySpace,
     outcome: "active" | "refused" | "failed",
   ) => void;
+
+  /**
+   * Called with the host's {@link HostOccupancy} each time it has changed,
+   * once the work that changed it has run to its next suspension, so that
+   * what starts and ends within one stretch of work reports its outcome
+   * alone. Whoever started the host decides by it whether to keep the host.
+   */
+  onOccupancyChanged?: (occupancy: HostOccupancy) => void;
 };
 
 export class ExecutorHost {
@@ -221,11 +285,13 @@ export class ExecutorHost {
    * contiguity). */
   readonly #sinkLocalSeq = { value: 0 };
 
-  /** Consecutive failure parks per space: every park except an idle one
-   * and one on a rival's lease, and every activation that fails without
-   * parking. This backoff streak is cleared by an idle park or a
-   * successfully committed wave — real served progress, not merely a
-   * runtime that got built (every crash-loop tenure builds one). */
+  /** Consecutive failure parks per space: every park except an idle one,
+   * one on a rival's lease, and one for the space's deletion, and every
+   * activation that fails without parking. This backoff streak is cleared
+   * by an idle park or a successfully committed wave — real served
+   * progress, not merely a runtime that got built (every crash-loop tenure
+   * builds one) — and by the space's deletion, which leaves nothing to
+   * back off from (serving-loop.md, "A deleted space"). */
   readonly #failureParkStreaks = new Map<string, number>();
 
   /** Wakers for in-flight backoff sleeps — close() flushes them so a
@@ -246,11 +312,37 @@ export class ExecutorHost {
   readonly #parkedDisposals = new Set<Promise<void>>();
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
+
+  /** The routed plane, while the host has a route. */
+  readonly #route: RoutedPlane | undefined;
+
+  /** Re-evaluations of a space chained behind a park and not yet decided. */
+  readonly #reactivations = new Set<Promise<void>>();
+
+  /**
+   * Moves each time a loop suspends on its input wait, and each time a tenure
+   * starts or ends, so that an unmoved count says no loop did anything between
+   * two readings of it.
+   */
+  #quiescenceEpoch = 0;
+
+  /** The occupancy last reported to `onOccupancyChanged`. */
+  #reportedOccupancy: HostOccupancy = "vacant";
+
+  /** Whether a report of the occupancy is queued. */
+  #occupancyReportQueued = false;
+
+  /** Whether the queued report is made even of an unchanged idle host. */
+  #idleOccupancyReportOwed = false;
+
   #releaseServerExecution: () => void = () => {};
   #closed = false;
 
   constructor(options: ExecutorHostOptions) {
     this.#options = options;
+    this.#route = options.route === undefined
+      ? undefined
+      : new RoutedPlane(options.route);
     // The host is a PROCESS-level flag ENABLER: while it lives, the
     // ambient flag stays on (the memory server's per-class admission
     // reads it), whatever individual runtimes construct or dispose. The
@@ -261,24 +353,47 @@ export class ExecutorHost {
     // The memory server calls these from whichever session's request it is
     // handling, so the two that start work enter the serving context: what
     // the host starts from here is the serving loop's work. A demand change
-    // only wakes a loop already running in it.
+    // only wakes a loop already running in it. `close()` detaches the
+    // observer in the same step that closes the host, so none of these runs
+    // on a closed host.
     options.server.setServerExecutionObserver({
+      // Each is a trigger the host may decline, which changes nothing it
+      // holds, so each reports a host left idle whether or not that is news.
       commitAdmitted: (notice) =>
-        runInServingContext(true, () => this.#onCommitAdmitted(notice)),
+        runInServingContext(true, () => {
+          this.#onCommitAdmitted(notice);
+          this.#noteOccupancy({ evenIfUnchanged: true });
+        }),
       sessionOpened: (space) =>
-        runInServingContext(true, () => this.#onSessionOpened(space)),
+        runInServingContext(true, () => {
+          this.#onSessionOpened(space);
+          this.#noteOccupancy({ evenIfUnchanged: true });
+        }),
       // Fan-out stage B: a watch-set change on an ACTIVE space wakes its
       // demand pass (the arrival re-arm's trigger); an inactive space
       // waits for the session-open / admission activation triggers.
       // The serving runtime's OWN loopback session (the service
-      // principal) is dropped: its tracked-set growth is the serving
-      // graph's own reads (a wave's derivations re-traversed on push),
-      // not client demand — counting it in `pushGrowthWakes` and waking
-      // the loop spins an extra cycle and demand pass that finds no
-      // client delta (W1 review MINOR-4).
-      demandChanged: (space, reason, principal) => {
-        if (this.#closed) return;
-        if (principal === this.#options.serviceIdentity) return;
+      // principal's serving session) is dropped: its tracked-set growth
+      // is the serving graph's own reads (a wave's derivations
+      // re-traversed on push), not client demand — counting it in
+      // `pushGrowthWakes` and waking the loop spins an extra cycle and
+      // demand pass that finds no client delta (W1 review MINOR-4).
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        _sessionId,
+        servingOwn,
+        notDemand,
+      ) => {
+        if (
+          isServingSessionOf(
+            { principal, servingOwn, notDemand },
+            this.#options.serviceIdentity,
+          )
+        ) {
+          return;
+        }
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
       },
@@ -293,9 +408,23 @@ export class ExecutorHost {
     return { failureParkStreaks: this.#failureParkStreaks };
   }
 
-  /** The §7 counters, live: static counts merged with per-space state
-   * (activeSpaces and watermarkLag read the current SpaceServers). */
-  stats(): ServingLoopStats {
+  /** What this host holds now. A closed host is vacant. */
+  get occupancy(): HostOccupancy {
+    if (this.#closed) return "vacant";
+    if (
+      this.#spaces.size > 0 || this.#activating.size > 0 ||
+      this.#reactivations.size > 0 || this.#pendingNotices.size > 0 ||
+      this.#parkedDisposals.size > 0
+    ) {
+      return "busy";
+    }
+    return this.#parkedRuntimes.size > 0 ? "parked" : "vacant";
+  }
+
+  /** {@link stats} without the settle blocks, in its own deep copy: static
+   * counts merged with per-space state (activeSpaces and watermarkLag read
+   * the current SpaceServers). */
+  counters(): ServingLoopCounters {
     refreshDeliveryCheckpointStats(this.#stats);
     let watermarkLag = 0;
     let activeSpaces = 0;
@@ -304,49 +433,70 @@ export class ExecutorHost {
       activeSpaces += 1;
       watermarkLag = Math.max(watermarkLag, server.watermarkLag);
     }
+    const { settle: _settle, settleAdvances: _settleAdvances, ...live } =
+      this.#stats;
+    const counters = structuredClone(live);
+    counters.parkedRuntimes.held = this.#parkedRuntimes.size;
+    return { ...counters, activeSpaces, watermarkLag };
+  }
+
+  /** The §7 counters, live, in their own deep copy. A settle-series row
+   * stays live after it is pushed (`#recordGrowthLanding` promotes a
+   * value-only row to structural-growth in place), so a shallow copy would
+   * let a snapshot's rows change after it was taken. */
+  stats(): ServingLoopStats {
     return {
-      ...this.#stats,
-      // Own copy: the live Record mutates under bumpDerivedCommits and
-      // the top-level spread shares its reference (the same reason as
-      // NIT-1's settle-series copy below).
-      derivedCommitsBySpace: { ...this.#stats.derivedCommitsBySpace },
-      events: {
-        ...this.#stats.events,
-        needsAttention: {
-          ...this.#stats.events.needsAttention,
-          byPhase: { ...this.#stats.events.needsAttention.byPhase },
-        },
-      },
-      demand: { ...this.#stats.demand },
-      settle: {
-        // NIT-1: deep-copy the entries — a series row stays live after it
-        // is pushed (`#recordGrowthLanding` promotes a value-only row to
-        // structural-growth in place), so a shallow array copy would let a
-        // snapshot's entries mutate after the snapshot was taken.
-        series: this.#stats.settle.series.map((entry) => ({ ...entry })),
-        dropped: this.#stats.settle.dropped,
-      },
-      settleAdvances: {
-        ...this.#stats.settleAdvances,
-        series: this.#stats.settleAdvances.series.map((entry) => ({
-          ...entry,
-        })),
-      },
-      memo: { ...this.#stats.memo },
-      outbox: { ...this.#stats.outbox },
-      lease: { ...this.#stats.lease },
-      lifecycleVerbs: { ...this.#stats.lifecycleVerbs },
-      parkedRuntimes: {
-        ...this.#stats.parkedRuntimes,
-        held: this.#parkedRuntimes.size,
-      },
-      activeSpaces,
-      watermarkLag,
+      ...this.counters(),
+      settle: structuredClone(this.#stats.settle),
+      settleAdvances: structuredClone(this.#stats.settleAdvances),
     };
   }
 
   spaceServer(space: MemorySpace): SpaceServer | undefined {
     return this.#spaces.get(space);
+  }
+
+  /**
+   * Resolves once nothing this host has been told of has anything left to do:
+   * every activation and re-activation has been decided, every tenure is
+   * {@link SpaceServer.quiescent} at one instant, and no loop did anything
+   * since this call's last pass began. A cascade stays open across its links
+   * this way, whichever spaces they cross: a follow-up event in the same space
+   * keeps its loop from suspending, and a delivery into another space reaches
+   * that space's feed, or starts its activation, before the delivering cycle
+   * ends.
+   *
+   * Reactions to what the wait delivers belong to whoever reads them. The value
+   * is the epoch the wait ended at, so a caller that has since let its own
+   * runtime react waits again and compares: an equal value says the reactions
+   * gave the loops nothing to do. Never resolves while a loop keeps working.
+   *
+   * Comes from the host, so only a caller on the loop's own thread has it.
+   */
+  async whenQuiescent(): Promise<number> {
+    while (!this.#closed) {
+      const epoch = this.#quiescenceEpoch;
+      // A frame still on a connection can be the commit that wakes a loop.
+      await this.#options.server.idle();
+      await Promise.allSettled([
+        ...this.#activating.values(),
+        ...this.#reactivations,
+      ]);
+      await Promise.all(
+        [...this.#spaces.values()].map(async (server) => {
+          if (server.active) await server.whenQuiescent();
+          else await server.whenParked;
+        }),
+      );
+      if (
+        epoch === this.#quiescenceEpoch && this.#activating.size === 0 &&
+        this.#reactivations.size === 0 &&
+        [...this.#spaces.values()].every((server) => server.quiescent)
+      ) {
+        return epoch;
+      }
+    }
+    return this.#quiescenceEpoch;
   }
 
   /**
@@ -359,7 +509,7 @@ export class ExecutorHost {
    * is queued once more on the successor tenure.
    *
    * Throws {@link SpaceNotServedError} when this process cannot serve the
-   * space — the host is closed, or another process holds the space's lease.
+   * space — the host is closed, or another holder has the space's lease.
    */
   runLifecycleVerb<T>(
     space: MemorySpace,
@@ -405,8 +555,20 @@ export class ExecutorHost {
     }
   }
 
-  #onCommitAdmitted(notice: AdmittedCommitNotice): void {
+  /**
+   * Tells every tenure this host runs that an admitted commit wrote
+   * `space`'s access-list document. `#onCommitAdmitted()` calls it for the
+   * commits this host hears of; whoever routes a space's commits to another
+   * host calls it here for those.
+   */
+  noteSpaceAclChanged(space: MemorySpace): void {
     if (this.#closed) return;
+    for (const server of this.#spaces.values()) {
+      server.noteSpaceAclChanged(space);
+    }
+  }
+
+  #onCommitAdmitted(notice: AdmittedCommitNotice): void {
     // THE SESSION REMOUNT's trigger (storage/v2.ts
     // `consumeOwedSessionRemount`): this commit touched the ACL document
     // (`of:<space>` — the memory server's aclDocId), which is the ONLY
@@ -416,14 +578,12 @@ export class ExecutorHost {
     // argument link into the viewer's home space, whose pre-genesis
     // session that space's genesis ACL de-authorized. Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
-    // space, so the fan-out costs one map walk per ACL-doc admission.
-    if (
-      this.#spaces.size > 0 &&
-      notice.writes.some((write) => write.id === `of:${notice.space}`)
-    ) {
-      for (const server of this.#spaces.values()) {
-        server.noteSpaceAclChanged(notice.space as MemorySpace);
-      }
+    // space, so the fan-out costs one map walk per ACL-doc admission. Only
+    // this server's admissions reach here; a list that changes on another
+    // process's owner reaches a serving runtime's replica of that space
+    // over its routed session, which watches the list itself.
+    if (writesSpaceAcl(notice)) {
+      this.noteSpaceAclChanged(notice.space as MemorySpace);
     }
     // Phase 5's server-internal foreign wake needs NO host machinery
     // (survival-tested: a fan-out built here was mutation-probed
@@ -478,14 +638,14 @@ export class ExecutorHost {
     // admission ALONE still activates nothing; the warm mark is the
     // provisioning run's own deliberate signal, never a property of
     // ordinary writes.
-    if (notice.class !== "authored") return;
-    const carriesEvents = notice.eventAppends !== undefined &&
-      notice.eventAppends.length > 0;
     if (
-      !carriesEvents && notice.warm !== true &&
-      !this.#options.server.hasLiveSessionsForSpace(notice.space, {
-        excludePrincipal: this.#options.serviceIdentity,
-      })
+      !admissionActivates(
+        notice,
+        () =>
+          this.#options.server.hasLiveSessionsForSpace(notice.space, {
+            excludePrincipal: this.#options.serviceIdentity,
+          }),
+      )
     ) {
       return;
     }
@@ -501,10 +661,50 @@ export class ExecutorHost {
     } else {
       buffered.push(notice);
     }
+    this.#noteOccupancy();
+  }
+
+  /**
+   * Queues a report of the occupancy to `onOccupancyChanged`, made once the
+   * work under way reaches its next suspension: when the occupancy differs
+   * from the one last reported, and, with `evenIfUnchanged`, whenever the
+   * host is left with no tenure work at all.
+   */
+  #noteOccupancy(
+    { evenIfUnchanged }: { evenIfUnchanged: boolean } = {
+      evenIfUnchanged: false,
+    },
+  ): void {
+    const report = this.#options.onOccupancyChanged;
+    if (report === undefined) return;
+    if (evenIfUnchanged) this.#idleOccupancyReportOwed = true;
+    if (this.#occupancyReportQueued) return;
+    this.#occupancyReportQueued = true;
+    queueMicrotask(() => {
+      this.#occupancyReportQueued = false;
+      const owed = this.#idleOccupancyReportOwed;
+      this.#idleOccupancyReportOwed = false;
+      const occupancy = this.occupancy;
+      if (this.#closed) return;
+      if (
+        occupancy === this.#reportedOccupancy &&
+        !(owed && occupancy !== "busy")
+      ) {
+        return;
+      }
+      this.#reportedOccupancy = occupancy;
+      try {
+        report(occupancy);
+      } catch (error) {
+        logger.warn("occupancy-observer-failed", () => [
+          "occupancy observer threw",
+          error,
+        ]);
+      }
+    });
   }
 
   #onSessionOpened(space: string): void {
-    if (this.#closed) return;
     const existing = this.#spaces.get(space);
     if (existing?.active) {
       existing.noteDemandChanged();
@@ -521,7 +721,10 @@ export class ExecutorHost {
     // ACTIVE criteria like the admission and reactivation paths: the
     // service's OWN sessions (loopback planes) are not client demand,
     // and activating on one would hold a runtime and the lease with no
-    // client demanding anything.
+    // client demanding anything. The exclusion goes by the session's
+    // connection, not its principal alone: a local toolshed signs with
+    // the key its operator's client also uses, and that client's session
+    // is demand.
     if (
       !this.#options.server.hasLiveSessionsForSpace(space, {
         excludePrincipal: this.#options.serviceIdentity,
@@ -553,7 +756,10 @@ export class ExecutorHost {
    * before its activation unwinds, so the gate waits for any activation
    * in flight rather than joining it. */
   #reactivateAfterPark(space: MemorySpace, parking?: SpaceServer): void {
-    void (async () => {
+    // A tenure that ended for its space's deletion leaves nothing to
+    // re-evaluate (serving-loop.md, "A deleted space").
+    if (parking?.endedForDeletion === true) return;
+    const reactivation = (async () => {
       await parking?.whenParked;
       await this.#activating.get(space);
       if (this.#closed || this.#spaces.get(space)?.active) return;
@@ -576,11 +782,14 @@ export class ExecutorHost {
             error,
           ]);
         }
-        // The engine read awaited: re-check the activation preconditions.
-        if (this.#closed || this.#spaces.get(space)?.active) return;
       }
       void this.#activate(space);
-    })();
+    })().finally(() => {
+      this.#reactivations.delete(reactivation);
+      this.#noteOccupancy();
+    });
+    this.#reactivations.add(reactivation);
+    this.#noteOccupancy();
   }
 
   #activate(space: MemorySpace): Promise<void> {
@@ -593,8 +802,11 @@ export class ExecutorHost {
       if (this.#activating.get(space) === activation) {
         this.#activating.delete(space);
       }
+      this.#noteOccupancy();
     });
     this.#activating.set(space, activation);
+    this.#quiescenceEpoch += 1;
+    this.#noteOccupancy();
     return activation;
   }
 
@@ -618,6 +830,13 @@ export class ExecutorHost {
     let parked = false;
     try {
       const engine = await this.#options.server.engineForSpace(space);
+      // The access list is read before the lease is acquired, on every
+      // activation, so a deleted space gets no tenure whatever demand set
+      // this one off (serving-loop.md, "A deleted space").
+      if (findSpaceDeletion(engine, space) !== undefined) {
+        this.#refuseDeletedSpace(space);
+        return;
+      }
       // The sink's session key IS the DR1 holder, whose process-instance
       // component makes a new process a NEW engine session — so the
       // process-global counter starting at 0 never collides with a prior
@@ -638,7 +857,12 @@ export class ExecutorHost {
           const parked = this.#takeParkedRuntime(space, engine);
           return parked !== undefined
             ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, context);
+            : this.#options.createRuntime(space, {
+              ...context,
+              ...(this.#options.route === undefined
+                ? {}
+                : { route: this.#options.route }),
+            });
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
@@ -655,6 +879,7 @@ export class ExecutorHost {
         ...(this.#options.createWaveCommitSink !== undefined
           ? { createWaveCommitSink: this.#options.createWaveCommitSink }
           : {}),
+        ...(this.#route === undefined ? {} : { route: this.#route }),
         onParked: (reason) => {
           parked = true;
           try {
@@ -667,6 +892,11 @@ export class ExecutorHost {
               error,
             ]);
           }
+          // A park for the space's deletion ends its tenures for good: the
+          // space is not served again, so nothing is re-evaluated, and the
+          // park clears the backoff streak, as there is nothing left to
+          // back off from (serving-loop.md, "A deleted space").
+          //
           // A park on a rival's lease leaves the space to the rival.
           // Any other park may leave a space that still meets the ACTIVE
           // criteria unserved, so the host re-evaluates them once the
@@ -674,8 +904,13 @@ export class ExecutorHost {
           // backoff streak and every other park extends it, so a space
           // that keeps failing re-activates at a widening interval; a
           // committed wave (below) clears it on the serving path.
-          const rivalHoldsLease = reason === "lease-unavailable" ||
-            reason === "lease-lost";
+          if (reason === SPACE_DELETED_PARK) {
+            this.#failureParkStreaks.delete(space);
+            this.#pendingNotices.delete(space);
+            this.#endTenure(space, server, true);
+            return;
+          }
+          const rivalHoldsLease = reason === "lease-unavailable";
           if (reason === "idle") {
             this.#failureParkStreaks.delete(space);
           } else if (!rivalHoldsLease) {
@@ -714,6 +949,9 @@ export class ExecutorHost {
         ...(this.#options.onEffectRetired !== undefined
           ? { onEffectRetired: this.#options.onEffectRetired }
           : {}),
+        onLoopRest: () => {
+          this.#quiescenceEpoch += 1;
+        },
         onWaveCommitted: () => {
           // Real served progress clears the failure streak — the
           // signal a crash-looping tenure never produces (its first
@@ -740,7 +978,7 @@ export class ExecutorHost {
         // close() ran while this activation was in flight (it awaits us,
         // but park() on a not-yet-active server is a no-op — so the
         // just-activated server must park itself, or it serves and
-        // renews a lease after the host closed).
+        // holds a lease after the host closed).
         await server.park("host-closed");
       }
     } catch (error) {
@@ -760,6 +998,19 @@ export class ExecutorHost {
       logger.error("activate-failed", `activation of ${space} failed`, error);
       this.#reportActivationSettled(space, "failed");
     }
+  }
+
+  /**
+   * Helper for `#activateInner()`, which declines to activate `space`,
+   * found deleted: whatever was buffered for its next tenure is dropped,
+   * since none comes, as are its failure streak and the runtime kept from
+   * its last idle park, and the attempt is reported refused.
+   */
+  #refuseDeletedSpace(space: MemorySpace): void {
+    this.#pendingNotices.delete(space);
+    this.#failureParkStreaks.delete(space);
+    this.#discardParkedRuntime(space);
+    this.#reportActivationSettled(space, "refused");
   }
 
   /**
@@ -797,6 +1048,8 @@ export class ExecutorHost {
     servedWarm: boolean,
   ): void {
     if (this.#spaces.get(space) === server) this.#spaces.delete(space);
+    this.#quiescenceEpoch += 1;
+    this.#noteOccupancy();
     if (servedWarm || server.warmNotices.length === 0) return;
     this.#pendingNotices.set(space, [
       ...server.warmNotices,
@@ -873,6 +1126,7 @@ export class ExecutorHost {
     if (entry === undefined) return undefined;
     this.#parkedRuntimes.delete(space);
     clearTimeout(entry.expiry);
+    this.#noteOccupancy();
     const taken = entry.parked.take(serverSeq(engine));
     if (taken === undefined) {
       this.#disposeParkedRuntime(entry.parked);
@@ -918,7 +1172,10 @@ export class ExecutorHost {
         `space ${space}: disposing a parked runtime failed`,
         error,
       ]);
-    }).finally(() => this.#parkedDisposals.delete(disposal));
+    }).finally(() => {
+      this.#parkedDisposals.delete(disposal);
+      this.#noteOccupancy();
+    });
     this.#parkedDisposals.add(disposal);
   }
 
@@ -942,7 +1199,7 @@ export class ExecutorHost {
     for (const wake of [...this.#backoffWakers]) wake();
     // Await in-flight activations FIRST: an activation past its #closed
     // check would otherwise register and start serving after close
-    // returned (a leaked runtime renewing a lease nobody can take), and
+    // returned (a leaked runtime holding a lease nobody can take), and
     // park() on a not-yet-active server is a no-op — so the park sweep
     // below cannot stop it. #activateInner's own post-activate check
     // parks the freshly-activated server once #closed is set; awaiting
@@ -953,7 +1210,7 @@ export class ExecutorHost {
         this.#activating.values(),
       );
     }
-    // A server already parking on its own — a lost lease, a failed loop
+    // A server already parking on its own — an idle park, a failed loop
     // — has park() return at once, so its completion is awaited through
     // whenParked: close() must not return while a tenure's runtime is
     // still being disposed against a memory server the caller closes
@@ -975,6 +1232,9 @@ export class ExecutorHost {
       this.#discardParkedRuntime(space);
     }
     await Promise.allSettled([...this.#parkedDisposals]);
+    // Every tenure has released its scope by now; what closes here is a
+    // session a park left behind.
+    await this.#route?.close();
     // The host's enabler releases; the ambient flag resets only when no
     // other enabler (an explicitly-enabled Runtime) is still live.
     this.#releaseServerExecution();

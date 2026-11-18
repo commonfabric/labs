@@ -15,6 +15,7 @@ import {
   streamSource,
 } from "@commonfabric/agents-connector";
 import type { CommandLedger } from "@commonfabric/agents-connector/command-ledger";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { abortable } from "./abort.ts";
 import { discoverGitCheckoutDirectories } from "./checkout-discovery.ts";
 import type { BoundCommandProducer } from "./command-producers.ts";
@@ -145,10 +146,6 @@ export interface AgentsHostStopOptions {
   flushPendingReceipts?: boolean;
   interruptInFlight?: boolean;
   publishHealth?: boolean;
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 export class AgentsHost {
@@ -346,7 +343,7 @@ export class AgentsHost {
             const worker = this.#commandWorker;
             void worker?.handle(commands, producer).catch((error) => {
               this.#logger.error(
-                `command admission failed: ${errorMessage(error)}`,
+                `command admission failed: ${describeFailure(error)}`,
               );
             });
           },
@@ -410,7 +407,6 @@ export class AgentsHost {
     reason: string,
     options: AgentsHostStopOptions,
   ): Promise<void> {
-    if (this.#stopped) return;
     this.#stopping = true;
     this.#setStatus("stopping");
     this.#recordActivity("host-stopping", "Host shutdown began", { reason });
@@ -427,7 +423,7 @@ export class AgentsHost {
       this.#recordActivity(
         "command-subscription-stop-failed",
         "Fabric command subscription failed while stopping",
-        { error: errorMessage(error) },
+        { error: describeFailure(error) },
       );
     }
 
@@ -442,12 +438,7 @@ export class AgentsHost {
     }
 
     if (publishHealth) {
-      await this.#publishHealth().catch((error) => {
-        shutdownErrors.push(error);
-        this.#logger.error(
-          `stopping health publication failed: ${errorMessage(error)}`,
-        );
-      });
+      await this.#publishHealthOrLog("stopping", shutdownErrors);
     }
 
     await this.#syncTail;
@@ -464,7 +455,7 @@ export class AgentsHost {
         this.#recordActivity(
           "command-drain-failed",
           "An admitted command failed before shutdown",
-          { error: errorMessage(error) },
+          { error: describeFailure(error) },
         );
       });
       if (options.flushPendingReceipts ?? true) {
@@ -480,7 +471,7 @@ export class AgentsHost {
             this.#recordActivity(
               "receipt-flush-failed",
               "Pending command receipt publication failed",
-              { error: errorMessage(error) },
+              { error: describeFailure(error) },
             );
           },
         );
@@ -504,7 +495,7 @@ export class AgentsHost {
         failedStops.add(sourceId);
         shutdownErrors.push(result.reason);
         state.status = "failed";
-        state.lastError = errorMessage(result.reason);
+        state.lastError = describeFailure(result.reason);
         this.#recordActivity(
           "source-stop-failed",
           "Source failed while stopping",
@@ -543,19 +534,14 @@ export class AgentsHost {
     this.#recordActivity("host-stopped", "Host shutdown completed", { reason });
     this.#stopped = true;
     if (publishHealth) {
-      await this.#publishHealth().catch((error) => {
-        shutdownErrors.push(error);
-        this.#logger.error(
-          `stopped health publication failed: ${errorMessage(error)}`,
-        );
-      });
+      await this.#publishHealthOrLog("stopped", shutdownErrors);
     }
     await this.#healthTail;
     if (shutdownErrors.length > 0) {
       throw new AggregateError(
         shutdownErrors,
         `agent host stopped with failures: ${
-          shutdownErrors.map(errorMessage).join("; ")
+          shutdownErrors.map(describeFailure).join("; ")
         }`,
       );
     }
@@ -613,9 +599,9 @@ export class AgentsHost {
         } catch (stopError) {
           this.#cleanupDrivers.set(config.id, driver);
           cleanupError = stopError;
-          const cleanupMessage = errorMessage(stopError);
+          const cleanupMessage = describeFailure(stopError);
           state.lastError = `${
-            errorMessage(error)
+            describeFailure(error)
           }; cleanup failed: ${cleanupMessage}`;
           this.#recordActivity(
             "source-start-cleanup-failed",
@@ -626,7 +612,7 @@ export class AgentsHost {
         }
       }
       state.status = "failed";
-      state.lastError ??= errorMessage(error);
+      state.lastError ??= describeFailure(error);
       this.#recordActivity(
         "source-start-failed",
         "Source startup failed",
@@ -747,7 +733,7 @@ export class AgentsHost {
           status: "failed",
           startedAt,
           completedAt: this.#now(),
-          error: errorMessage(signal.reason),
+          error: describeFailure(signal.reason),
         };
         this.#recordActivity(
           "sync-cancelled",
@@ -755,16 +741,10 @@ export class AgentsHost {
           { reason },
         );
         if (!this.#stopping) this.#setStatus(this.#operationalStatus());
-        await this.#publishHealth().catch((healthError) => {
-          this.#logger.error(
-            `cancellation health publication failed: ${
-              errorMessage(healthError)
-            }`,
-          );
-        });
+        await this.#publishHealthOrLog("cancellation");
         throw signal.reason;
       }
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       this.#lastSync = {
         reason,
         status: "failed",
@@ -778,11 +758,7 @@ export class AgentsHost {
         "Full collection failed",
         { reason, error: message },
       );
-      await this.#publishHealth().catch((healthError) => {
-        this.#logger.error(
-          `health publication failed: ${errorMessage(healthError)}`,
-        );
-      });
+      await this.#publishHealthOrLog("sync failure");
       throw error;
     }
   }
@@ -803,7 +779,7 @@ export class AgentsHost {
       this.#recordActivity(
         "published-sessions-unavailable",
         "Published session lookup failed; every listed session will be read",
-        { error: errorMessage(error) },
+        { error: describeFailure(error) },
       );
       return new Map();
     }
@@ -912,7 +888,7 @@ export class AgentsHost {
     try {
       await this.#target.refreshSession(driver, nativeSessionId);
     } catch (error) {
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       const state = this.#sources.get(driver.source.id);
       if (state) {
         state.status = "degraded";
@@ -925,11 +901,7 @@ export class AgentsHost {
         { nativeSessionId, error: message },
         driver.source.id,
       );
-      await this.#publishHealth().catch((healthError) => {
-        this.#logger.error(
-          `refresh health publication failed: ${errorMessage(healthError)}`,
-        );
-      });
+      await this.#publishHealthOrLog("refresh");
       throw error;
     }
     this.#readSinceStart.get(driver.source.id)?.add(
@@ -941,11 +913,7 @@ export class AgentsHost {
       { nativeSessionId },
       driver.source.id,
     );
-    await this.#publishHealth().catch((error) => {
-      this.#logger.error(
-        `refresh health publication failed: ${errorMessage(error)}`,
-      );
-    });
+    await this.#publishHealthOrLog("refresh");
   }
 
   async #publishReceipt(
@@ -954,7 +922,7 @@ export class AgentsHost {
     try {
       await this.#target.publishReceipt(receipt);
     } catch (error) {
-      const message = errorMessage(error);
+      const message = describeFailure(error);
       const state = this.#sources.get(receipt.sourceId);
       if (state) {
         state.status = "degraded";
@@ -975,13 +943,7 @@ export class AgentsHost {
         },
         receipt.sourceId,
       );
-      await this.#publishHealth().catch((healthError) => {
-        this.#logger.error(
-          `receipt failure health publication failed: ${
-            errorMessage(healthError)
-          }`,
-        );
-      });
+      await this.#publishHealthOrLog("receipt failure");
       throw error;
     }
   }
@@ -1004,15 +966,11 @@ export class AgentsHost {
       },
       receipt.sourceId,
     );
-    void this.#publishHealth().catch((error) => {
-      this.#logger.error(
-        `receipt health publication failed: ${errorMessage(error)}`,
-      );
-    });
+    void this.#publishHealthOrLog("receipt");
   }
 
   #recordCommandFailure(failure: CommandTaskFailure): void {
-    const message = errorMessage(failure.error);
+    const message = describeFailure(failure.error);
     this.#commandFailures.set(
       commandIdentity(failure.commandId, failure.producer),
       message,
@@ -1036,11 +994,7 @@ export class AgentsHost {
       },
       failure.sourceId,
     );
-    void this.#publishHealth().catch((error) => {
-      this.#logger.error(
-        `command failure health publication failed: ${errorMessage(error)}`,
-      );
-    });
+    void this.#publishHealthOrLog("command failure");
   }
 
   #recordActivity(
@@ -1072,6 +1026,19 @@ export class AgentsHost {
 
   #now(): string {
     return this.#clock().toISOString();
+  }
+
+  /**
+   * Publishes health without rejecting. A failure is logged with `occasion`
+   * naming what the publication followed, and added to `failures` when given.
+   */
+  #publishHealthOrLog(occasion: string, failures?: unknown[]): Promise<void> {
+    return this.#publishHealth().catch((error) => {
+      failures?.push(error);
+      this.#logger.error(
+        `${occasion} health publication failed: ${describeFailure(error)}`,
+      );
+    });
   }
 
   #publishHealth(signal?: AbortSignal): Promise<void> {

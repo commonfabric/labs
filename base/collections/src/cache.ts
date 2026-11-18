@@ -18,6 +18,15 @@ export interface WeightedCacheOptions<K, V> extends CacheOptions {
 
   /** Maximum total weight to hold, in the unit `weigh` reports. */
   maxWeight?: number;
+
+  /**
+   * Called once per entry the cache drops to stay within its capacity or
+   * weight bound, once the `put` that dropped it has finished, so the cache
+   * is within its bounds whatever the callback does to it. Never called for
+   * the caller's own removals (`delete`, `clear`) or for a `put` that
+   * replaces a key's value.
+   */
+  onEvict?: (key: K, value: V) => void;
 }
 
 /** Options for a {@link BoundedKeyMap}. */
@@ -178,6 +187,7 @@ export class LRUCache<K, V> {
   // assigning the caller's optional `weigh` stays legal for the packages that
   // compile with exactOptionalPropertyTypes.
   #weigh: ((key: K, value: V) => number) | undefined;
+  #onEvict: ((key: K, value: V) => void) | undefined;
   #maxWeight: number;
   #weight = 0;
 
@@ -189,6 +199,7 @@ export class LRUCache<K, V> {
   constructor(options: WeightedCacheOptions<K, V> = {}) {
     this.#capacity = Math.max(options.capacity ?? 1000, 1);
     this.#weigh = options.weigh;
+    this.#onEvict = options.onEvict;
     this.#maxWeight = options.maxWeight ?? Infinity;
   }
 
@@ -235,19 +246,25 @@ export class LRUCache<K, V> {
       existingNode.value = value;
       existingNode.weight = weight;
       this.#moveToTail(existingNode);
-      this.#evictToFit();
-      return;
+    } else {
+      const node: LRUNode<K, V> = {
+        key,
+        value,
+        weight,
+        prev: null,
+        next: null,
+      };
+      this.#map.set(key, node);
+      this.#addToTail(node);
+      this.#weight += weight;
     }
-
-    if (this.#map.size >= this.#capacity) {
-      this.#evictHead();
+    const evicted = this.#evictToFit();
+    const onEvict = this.#onEvict;
+    if (onEvict !== undefined) {
+      for (let node = evicted; node !== null; node = node.next) {
+        onEvict(node.key, node.value);
+      }
     }
-
-    const node: LRUNode<K, V> = { key, value, weight, prev: null, next: null };
-    this.#map.set(key, node);
-    this.#addToTail(node);
-    this.#weight += weight;
-    this.#evictToFit();
   }
 
   /** Removes the entry for `key`, returning whether there was one. */
@@ -272,14 +289,40 @@ export class LRUCache<K, V> {
 
   /**
    * Helper for `put()`, which drops entries from the oldest end until the
-   * weight budget is met. The newest entry stays even when it alone exceeds
-   * the budget, so a single oversized value cannot leave the cache empty on
-   * every `put()`.
+   * capacity and the weight budget are both met, and returns the first entry
+   * it dropped, oldest first and linked through `next`, or `null` if it
+   * dropped none. The newest entry stays even when it alone exceeds the
+   * budget, so a single oversized value cannot leave the cache empty on every
+   * `put()`.
    */
-  #evictToFit(): void {
-    while (this.#weight > this.#maxWeight && this.#map.size > 1) {
-      this.#evictHead();
+  #evictToFit(): LRUNode<K, V> | null {
+    if (this.#map.size <= this.#capacity && this.#weight <= this.#maxWeight) {
+      return null;
     }
+    const first = this.#head;
+    let last: LRUNode<K, V> | null = null;
+    let kept = first;
+    while (
+      kept !== null &&
+      (this.#map.size > this.#capacity ||
+        (this.#weight > this.#maxWeight && this.#map.size > 1))
+    ) {
+      this.#map.delete(kept.key);
+      this.#weight -= kept.weight;
+      last = kept;
+      kept = kept.next;
+    }
+    if (last === null) {
+      return null;
+    }
+    last.next = null;
+    this.#head = kept;
+    // At least one entry survives, since the capacity is at least one and the
+    // weight budget never drops the last entry, so the tail stays where it is.
+    if (kept !== null) {
+      kept.prev = null;
+    }
+    return first;
   }
 
   /** Unlinks `node` from the recency list. */
@@ -317,16 +360,5 @@ export class LRUCache<K, V> {
     }
     this.#removeNode(node);
     this.#addToTail(node);
-  }
-
-  /** Drops the entry at the oldest end, if there is one. */
-  #evictHead(): void {
-    if (this.#head === null) {
-      return;
-    }
-    const node = this.#head;
-    this.#map.delete(node.key);
-    this.#removeNode(node);
-    this.#weight -= node.weight;
   }
 }

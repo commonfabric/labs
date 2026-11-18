@@ -38,6 +38,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import { flowLabelWorkExists } from "../src/cfc/prepare.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { prepareStatusAtSettlement } from "./prepare-status-at-settlement.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-flow-probe-memo");
 
@@ -312,9 +313,10 @@ describe("CFC flow-label probe memo (stage C tuning T1)", () => {
       // relevant, and the same step prepares it.
       const before = probeCounts(runtime);
       expect(tx.getCfcState().relevant).toBe(false);
+      const statusAtSettlement = prepareStatusAtSettlement(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
       expect(tx.getCfcState().relevant).toBe(true);
-      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      expect(statusAtSettlement()).toBe("prepared");
       const after = probeCounts(runtime);
       expect(after.computed - before.computed).toBe(1);
     } finally {

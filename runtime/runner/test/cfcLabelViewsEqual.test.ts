@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "../src/cfc/clause.ts";
 import {
   type CfcLabelView,
   cfcLabelViewsEqual,

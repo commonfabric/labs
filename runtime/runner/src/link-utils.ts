@@ -21,6 +21,7 @@ import {
   decomposeSchema,
   recomposeSchema,
   SchemaNotDecomposableError,
+  SchemaNotRecomposableError,
 } from "./schema-decompose.ts";
 import { mapLinkSchemas } from "@commonfabric/memory/v2/schema-table-links";
 import {
@@ -31,7 +32,11 @@ import {
   registerSchemaDocument,
 } from "./schema-registry.ts";
 import type { MetaLinkField } from "./meta-seam.ts";
-import type { IReadOptions } from "./storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  IReadOptions,
+} from "./storage/interface.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
 import {
   isObjectNotArray,
@@ -39,11 +44,11 @@ import {
 } from "@commonfabric/js-values/types";
 import { getLogger } from "@commonfabric/logger";
 
-import {
-  type AnyCell,
-  type DerivedInternalCellDescriptor,
-  type JSONSchema,
-  type JSONValue,
+import type {
+  AnyCell,
+  DerivedInternalCellDescriptor,
+  JSONSchema,
+  JSONValue,
 } from "./builder/types.ts";
 import {
   type Cell,
@@ -77,11 +82,7 @@ import {
   isCellResultForDereferencing,
 } from "./query-result-proxy.ts";
 import { ignoreReadForScheduling } from "./scheduler.ts";
-import { type CellLinkRefPayload, type SigilLink } from "./sigil-types.ts";
-import {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "./storage/interface.ts";
+import type { CellLinkRefPayload, SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 
 export * from "./link-types.ts";
@@ -181,16 +182,6 @@ export function parseLinkOrThrow(
   return result;
 }
 
-export function areMaybeLinkAndNormalizedLinkSame(
-  link: any,
-  normalizedLink: NormalizedLink,
-  base?: Cell | NormalizedLink,
-): boolean {
-  const normalizedLink2 = parseLink(link, base);
-  if (!normalizedLink2) return false;
-  return areNormalizedLinksSame(normalizedLink, normalizedLink2);
-}
-
 // Link identity (`areNormalizedLinksSame` and neighbors) lives in
 // ./link-types.ts — one canonical implementation — and reaches importers of
 // this module through the `export *` above.
@@ -244,8 +235,9 @@ export function externalizeSchema(schema: JSONSchemaObj): JSONSchema {
  * document, which no space stores, is held by the space in the address
  * naming that document, or by the registry alone for a document minted
  * from a value no space has stored. An incomplete declaration selects
- * nothing until its missing documents arrive. A declaration rejected by the
- * decomposer logs a warning and selects nothing.
+ * nothing until its missing documents arrive. A declaration the decomposer
+ * rejects, or one whose documents do not fit the references to them, logs a
+ * warning and selects nothing; any other error propagates.
  */
 export function schemaForSpaceCrossing(
   tx: IExtendedStorageTransaction,
@@ -265,7 +257,12 @@ export function schemaForSpaceCrossing(
     recomposedLinkSchemaCache.set(interned, result);
     return result;
   } catch (error) {
-    if (!(error instanceof SchemaNotDecomposableError)) throw error;
+    if (
+      !(error instanceof SchemaNotDecomposableError ||
+        error instanceof SchemaNotRecomposableError)
+    ) {
+      throw error;
+    }
     schemaClosureLogger.warn("schema-closure", () => [
       "Link schema cannot be recomposed; it selects nothing:",
       sourceSpace,
@@ -789,14 +786,6 @@ function recursiveStripAsCellFromSchema(
   context: SanitizeContext,
   depth: number,
 ): any {
-  // Handle null/undefined/boolean schemas
-  if (
-    !isObjectOrArray(schema) ||
-    typeof schema === "boolean"
-  ) {
-    return schema;
-  }
-
   // Prevent infinite recursion from proxy objects or very deep schemas
   // JSON Schema shouldn't need more than ~50 levels of nesting in practice
   if (depth > 100) {
@@ -1001,11 +990,10 @@ function schemaLosesStreamCellMarker(
 }
 
 function removeStrippedStreamPropertiesFromRequired(
-  originalSchema: unknown,
-  result: unknown,
+  originalSchema: JSONSchemaObj,
+  result: Record<string, unknown>,
   context: SanitizeContext,
 ): void {
-  if (!isObjectOrArray(originalSchema) || !isObjectOrArray(result)) return;
   const properties = originalSchema.properties;
   if (!isObjectOrArray(properties)) return;
   if (!Array.isArray(result.required)) return;

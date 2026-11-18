@@ -74,6 +74,7 @@ export const StatsResponseSchema = z.object({
         bytes: z.number().int().nonnegative(),
         budgetBytes: z.number().int().positive(),
         maxEntries: z.number().int().positive(),
+        held: z.number().int().nonnegative(),
       }),
     ),
   }).optional(),
@@ -134,9 +135,11 @@ export const StatsResponseSchema = z.object({
   }).optional(),
   // The serving loop's counters (server-execution v2,
   // serving-loop.md §7) — present only in a process that runs the
-  // loop (the ON arm), on this thread or in its worker. Between a
-  // worker that failed and its replacement they are the failed
-  // worker's last counters, and no worker is serving.
+  // loop (the ON arm), on this thread or in its workers. In workers
+  // they are the counters each worker last posted, taken together
+  // with the last of each worker that has closed or failed. A worker
+  // that fails leaves the others serving; its own spaces are served
+  // again once they are placed on another.
   servingLoop: z.any().optional(),
 });
 
@@ -153,10 +156,13 @@ export const stats = createRoute({
 });
 
 /**
- * The serving loop's realm's own logger counts and timing statistics. With
- * the loop in a worker, `/api/health/stats` reads this thread's loggers,
- * which hold none of the loop's; this route asks the worker, so an answer
- * waits for the worker's turn, which is why it is not part of `stats`.
+ * The serving loop's realm's own logger counts and timing statistics, with
+ * those of the compile worker its serving runtimes compile in under
+ * `compile-worker:` logger names. With the loop in workers,
+ * `/api/health/stats` reads this thread's loggers, which hold none of the
+ * loop's; this route asks each worker and adds up what they logged, each
+ * with its own compile worker's, so an answer waits for each worker's turn,
+ * which is why it is not part of `stats`.
  */
 export const servingLoopRealm = createRoute({
   path: "/api/health/serving-loop-realm",
@@ -177,7 +183,7 @@ export const servingLoopRealm = createRoute({
     ),
     [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
       z.object({ error: z.string() }),
-      "The serving loop's worker is not serving",
+      "The serving loop's workers are not serving",
     ),
   },
 });
@@ -195,6 +201,49 @@ export const dash = createRoute({
       },
       description: "Health dashboard",
     },
+  },
+});
+
+/** The memory one isolate holds after a full collection, in bytes. */
+const collectedMemorySchema = z.object({
+  heapUsed: z.number().int().nonnegative(),
+  external: z.number().int().nonnegative(),
+});
+
+/**
+ * The memory this process's threads hold after a full garbage collection of
+ * each: the thread that answers, and the serving loop's workers where the
+ * loop runs in them, one by one under `servingLoopWorkers` with the spaces
+ * placed on each, and added up under `servingLoopWorker`. Unlike `processMemory` on `/api/health/stats`, a reading does
+ * not depend on when the collector last ran, so two readings differ by what
+ * the server retained between them. Collecting pauses each thread it
+ * measures, so the route answers only on a server started with
+ * `EXPOSE_GC=true`.
+ */
+export const collectedMemory = createRoute({
+  path: "/api/health/collected-memory",
+  method: "get",
+  tags,
+  responses: {
+    [HttpStatusCodes.OK]: jsonContent(
+      z.object({
+        timestamp: z.number(),
+        mainThread: collectedMemorySchema,
+        servingLoopWorker: collectedMemorySchema.optional(),
+        servingLoopWorkers: z.array(
+          collectedMemorySchema.extend({ spaces: z.array(z.string()) }),
+        ).optional(),
+      }),
+      "The memory each thread holds after a full collection",
+    ),
+    [HttpStatusCodes.NOT_FOUND]: jsonContent(
+      z.object({ error: z.string() }),
+      "This server was started without EXPOSE_GC=true",
+    ),
+    [HttpStatusCodes.SERVICE_UNAVAILABLE]: jsonContent(
+      z.object({ error: z.string() }),
+      "The serving loop's workers are not serving",
+    ),
   },
 });
 
@@ -262,6 +311,7 @@ export const documentInterests = createRoute({
 export type IndexRoute = typeof index;
 export type StatsRoute = typeof stats;
 export type ServingLoopRealmRoute = typeof servingLoopRealm;
+export type CollectedMemoryRoute = typeof collectedMemory;
 export type DashRoute = typeof dash;
 
 /** Handler contract for the document-interest diagnostic. */

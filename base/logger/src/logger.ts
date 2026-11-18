@@ -9,6 +9,7 @@
  * - Per-logger configuration
  * - Console styling support
  * - Call counting and metrics tracking
+ * - The text of the first few messages logged per key at `error`
  * - Automatic periodic count summaries
  *
  * @example Typical usage - disabled by default with debug level
@@ -175,10 +176,14 @@
  */
 
 import { isDeno } from "@commonfabric/platform/env";
+import { logSinks } from "./log-sinks.ts";
 
 /**
- * A message argument: either the value to log, or a function returning it,
- * which is called only when the message is actually going to be emitted.
+ * A message argument: either the value to log, or a function returning it. The
+ * function is called only when the message is actually going to be emitted,
+ * with one exception: at `error`, it is also called while a logger still has
+ * room to keep that key's text, emitted or not, so a call that does both
+ * evaluates it twice.
  */
 export type LogMessage = unknown | (() => unknown);
 
@@ -352,28 +357,11 @@ class TimingDataStore {
     this.#deltaCount = 0;
   }
 
-  /** Returns computed statistics over the recorded data. */
+  /**
+   * Returns computed statistics over the recorded data. A store is made to
+   * record its first measurement, so there is always at least one.
+   */
   getStats(): TimingStats {
-    if (this.#count === 0) {
-      return {
-        count: 0,
-        min: 0,
-        max: 0,
-        totalTime: 0,
-        average: 0,
-        countSinceBaseline: 0,
-        totalTimeSinceBaseline: 0,
-        averageSinceBaseline: 0,
-        p50: 0,
-        p95: 0,
-        lastTime: 0,
-        lastTimestamp: 0,
-        slowest: [],
-        cdf: [],
-        cdfSinceBaseline: null,
-      };
-    }
-
     // Sort samples for percentile calculation
     const sorted = [...this.#samples].sort((a, b) => a - b);
     const p50Index = Math.floor(sorted.length * 0.5);
@@ -385,7 +373,7 @@ class TimingDataStore {
 
     // Calculate CDF of samples since baseline (if baseline exists and has data)
     let cdfSinceBaseline: CDFPoint[] | null = null;
-    if (this.#deltaCount > 0 && this.#deltaSamples.length > 0) {
+    if (this.#deltaSamples.length > 0) {
       const deltaSorted = [...this.#deltaSamples].sort((a, b) => a - b);
       cdfSinceBaseline = this.#calculateCDF(deltaSorted);
     }
@@ -453,8 +441,6 @@ class TimingDataStore {
    * most `x` milliseconds.
    */
   #calculateCDF(sorted: number[]): CDFPoint[] {
-    if (sorted.length === 0) return [];
-
     return sorted.map((x, i) => ({
       x,
       y: (i + 1) / sorted.length,
@@ -483,6 +469,14 @@ export const LOG_COLORS = {
   taggedWarn: "color: #eab308; font-weight: 500",
   taggedError: "color: #ef4444; font-weight: 500",
 } as const;
+
+/** The `console` method each level prints through. */
+const CONSOLE_METHODS = {
+  debug: "debug",
+  info: "log",
+  warn: "warn",
+  error: "error",
+} as const satisfies Record<ActiveLogLevel, keyof Console>;
 
 /**
  * Global log level floor. When set, `shouldLog()` uses the more restrictive
@@ -537,13 +531,26 @@ export function setLoggerCountObserver(
  * Always `undefined` outside Deno.
  */
 function getEnvFloor(): LogLevel | undefined {
-  if (isDeno()) {
-    try {
-      const envLevel = Deno.env.get("CF_LOG_LEVEL");
-      if (envLevel && envLevel in LOG_LEVELS) return envLevel as LogLevel;
-    } catch { /* ignore permission errors */ }
+  const envLevel = readEnv("CF_LOG_LEVEL");
+  return envLevel !== undefined && isLogLevel(envLevel) ? envLevel : undefined;
+}
+
+/**
+ * Returns the environment variable `name`, or `undefined` when it is unset,
+ * when this is not Deno, or when the permission to read it is missing.
+ */
+function readEnv(name: string): string | undefined {
+  try {
+    return isDeno() ? Deno.env.get(name) : undefined;
+  } catch {
+    // A missing permission reads as unset.
+    return undefined;
   }
-  return undefined;
+}
+
+/** Indicates whether `value` names a log level. */
+function isLogLevel(value: string): value is LogLevel {
+  return Object.hasOwn(LOG_LEVELS, value);
 }
 
 // Auto-initialize floor from CF_LOG_LEVEL so workers inherit it.
@@ -657,13 +664,8 @@ export function detailOfMeasure(name: string): string | undefined {
 }
 
 function getEnvMeasuresEnabled(): boolean {
-  if (isDeno()) {
-    try {
-      const raw = Deno.env.get("CF_TIMING_MEASURES");
-      return raw !== undefined && raw !== "" && raw !== "0";
-    } catch { /* ignore permission errors */ }
-  }
-  return false;
+  const raw = readEnv("CF_TIMING_MEASURES");
+  return raw !== undefined && raw !== "" && raw !== "0";
 }
 
 /**
@@ -692,12 +694,7 @@ export function parseTimingMeasureCap(
  * its setup. Raising it has to be reachable from wherever emission is.
  */
 function getEnvMeasureCap(): number | undefined {
-  if (isDeno()) {
-    try {
-      return parseTimingMeasureCap(Deno.env.get("CF_TIMING_MEASURES_CAP"));
-    } catch { /* ignore permission errors */ }
-  }
-  return undefined;
+  return parseTimingMeasureCap(readEnv("CF_TIMING_MEASURES_CAP"));
 }
 
 _emitTimingMeasures = getEnvMeasuresEnabled();
@@ -860,6 +857,84 @@ function resolveMessages(messages: LogMessage[]): unknown[] {
   });
 }
 
+/**
+ * How many messages a logger keeps for each key it logs at `error`. It keeps
+ * the earliest, since a failure's first report is the one the later ones
+ * usually follow from.
+ */
+const KEPT_ERROR_MESSAGES_PER_KEY = 3;
+
+/** How many characters of one error message a logger keeps. */
+const KEPT_ERROR_MESSAGE_LENGTH = 1000;
+
+/** How far into a logged value the text of a kept error message reaches. */
+const KEPT_ERROR_MESSAGE_DEPTH = 3;
+
+/** How many items of one logged array or record a kept error message names. */
+const KEPT_ERROR_MESSAGE_ITEMS = 10;
+
+/**
+ * Helper for {@link renderErrorMessage}, which renders one part of a message.
+ *
+ * It calls neither `toJSON()` nor `toString()` on what it reads, because a
+ * logger runs inside whatever failed. So anything carrying a string `message`
+ * is rendered by that, which reaches an `Error` of any realm and the classes
+ * that report like one, and an instance of any other class is named rather than
+ * rendered.
+ */
+function renderMessagePart(part: unknown, depth: number): string {
+  if (typeof part === "string") return part;
+  if (typeof part === "function") return "[function]";
+  if (typeof part !== "object" || part === null) return String(part);
+  if (depth >= KEPT_ERROR_MESSAGE_DEPTH) return "…";
+
+  const { name, message, cause } = part as Partial<Error>;
+  if (typeof message === "string") {
+    const text = typeof name === "string" ? `${name}: ${message}` : message;
+    return cause === undefined
+      ? text
+      : `${text} (cause: ${renderMessagePart(cause, depth + 1)})`;
+  }
+  if (Array.isArray(part)) {
+    const shown = part.slice(0, KEPT_ERROR_MESSAGE_ITEMS)
+      .map((item) => renderMessagePart(item, depth + 1));
+    if (part.length > shown.length) shown.push("…");
+    return `[${shown.join(", ")}]`;
+  }
+  const prototype = Object.getPrototypeOf(part);
+  if (prototype !== Object.prototype && prototype !== null) {
+    return `[${prototype.constructor?.name ?? "object"}]`;
+  }
+  const keys = Object.keys(part);
+  const shown = keys.slice(0, KEPT_ERROR_MESSAGE_ITEMS).map((key) =>
+    `${key}: ${
+      renderMessagePart((part as Record<string, unknown>)[key], depth + 1)
+    }`
+  );
+  if (keys.length > shown.length) shown.push("…");
+  return `{${shown.join(", ")}}`;
+}
+
+/**
+ * Returns the text a logger keeps of an error message, cut to
+ * {@link KEPT_ERROR_MESSAGE_LENGTH}. It never throws, since it runs on the way
+ * to reporting a failure: a lazy message or a value that throws is kept as a
+ * sentence saying so.
+ */
+function renderErrorMessage(messages: LogMessage[]): string {
+  let text: string;
+  try {
+    text = resolveMessages(messages)
+      .map((part) => renderMessagePart(part, 0))
+      .join(" ");
+  } catch {
+    text = "(this message could not be rendered)";
+  }
+  return text.length > KEPT_ERROR_MESSAGE_LENGTH
+    ? `${text.slice(0, KEPT_ERROR_MESSAGE_LENGTH)}…`
+    : text;
+}
+
 /** Options for creating a logger. */
 export interface GetLoggerOptions {
   /** Whether this logger should be enabled. Defaults to `true`. */
@@ -938,6 +1013,7 @@ export class Logger {
     string,
     { debug: number; info: number; warn: number; error: number }
   >;
+  #errorMessagesByKey: Map<string, string[]> = new Map();
   #logCountEvery: number;
   #lastLoggedAt: number;
   #timingsByKey: Map<string, TimingDataStore> = new Map();
@@ -1033,6 +1109,19 @@ export class Logger {
   }
 
   /**
+   * The earliest messages logged at `error`, by message key, as text. A key
+   * keeps a few, each cut to a bounded length, so this stays small however
+   * often a key is logged. As with the counts, a message is kept even when the
+   * logger is disabled or the level filters it out, which is when nothing else
+   * records what it said. It can quote whatever the code logging it held.
+   */
+  get errorMessagesByKey(): Record<string, string[]> {
+    return Object.fromEntries(
+      [...this.#errorMessagesByKey].map(([key, kept]) => [key, [...kept]]),
+    );
+  }
+
+  /**
    * Returns all timing statistics for this logger.
    * Returns a flat map with "/" joined keys.
    */
@@ -1066,34 +1155,23 @@ export class Logger {
     return result;
   }
 
-  /** Resets all call counts to zero, both the overall and the by-key ones. */
+  /**
+   * Resets all call counts to zero, both the overall and the by-key ones, and
+   * drops the kept error messages.
+   */
   resetCounts(): void {
     this.#counts.debug = 0;
     this.#counts.info = 0;
     this.#counts.warn = 0;
     this.#counts.error = 0;
     this.#countsByKey = {};
+    this.#errorMessagesByKey.clear();
     this.#lastLoggedAt = 0;
   }
 
   /** Logs a debug message. */
   debug(key: string, ...messages: LogMessage[]): void {
-    this.#counts.debug++;
-    this.#incrementKeyCount(key, "debug");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("debug", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("debug");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.debug(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#record("debug", key, messages);
   }
 
   /** Logs a message at info level, this being the default method. */
@@ -1103,62 +1181,17 @@ export class Logger {
 
   /** Logs an info message. */
   info(key: string, ...messages: LogMessage[]): void {
-    this.#counts.info++;
-    this.#incrementKeyCount(key, "info");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("info", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("info");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.log(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#record("info", key, messages);
   }
 
   /** Logs a warning message. */
   warn(key: string, ...messages: LogMessage[]): void {
-    this.#counts.warn++;
-    this.#incrementKeyCount(key, "warn");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("warn", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("warn");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.warn(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#record("warn", key, messages);
   }
 
   /** Logs an error message. */
   error(key: string, ...messages: LogMessage[]): void {
-    this.#counts.error++;
-    this.#incrementKeyCount(key, "error");
-    if (this.#disabled) return;
-    this.#maybeLogCountSummary();
-    if (shouldLog("error", this.#level)) {
-      const { prefix, color } = this.#getLogFormat("error");
-      if (shouldLogToStderr()) {
-        logToStderr(
-          prefix.replace("%c", ""),
-          key,
-          ...resolveMessages(messages),
-        );
-      } else {
-        console.error(prefix, color, key, ...resolveMessages(messages));
-      }
-    }
+    this.#record("error", key, messages);
   }
 
   //
@@ -1368,6 +1401,20 @@ export class Logger {
   // Private helpers
   //
 
+  /**
+   * Counts a call at `level` under `key`, keeps the message when `level` is
+   * `error`, and prints `messages` when this logger is enabled and `level`
+   * passes its filter.
+   */
+  #record(level: ActiveLogLevel, key: string, messages: LogMessage[]): void {
+    this.#counts[level]++;
+    this.#incrementKeyCount(key, level);
+    if (level === "error") this.#keepErrorMessage(key, messages);
+    if (this.#disabled) return;
+    this.#maybeLogCountSummary();
+    if (shouldLog(level, this.#level)) this.#emit(level, key, messages);
+  }
+
   /** Increments the count for a specific message key and log level. */
   #incrementKeyCount(key: string, level: ActiveLogLevel): void {
     // Skip reserved key name "total" to prevent corruption of breakdown totals
@@ -1386,6 +1433,40 @@ export class Logger {
   }
 
   /**
+   * Keeps the text of an error message, while `key` has room for another. A
+   * lazy message is evaluated to do that, whether or not it then prints.
+   */
+  #keepErrorMessage(key: string, messages: LogMessage[]): void {
+    let kept = this.#errorMessagesByKey.get(key);
+    if (kept === undefined) {
+      kept = [];
+      this.#errorMessagesByKey.set(key, kept);
+    }
+    if (kept.length < KEPT_ERROR_MESSAGES_PER_KEY) {
+      kept.push(renderErrorMessage(messages));
+    }
+  }
+
+  /**
+   * Prints one line at `level`: to the logger's capture while a test holds
+   * one, and otherwise to stderr or `console`.
+   */
+  #emit(level: ActiveLogLevel, key: string, messages: LogMessage[]): void {
+    const resolved = resolveMessages(messages);
+    const sink = logSinks.get(this);
+    if (sink !== undefined) {
+      sink(level, key, resolved);
+      return;
+    }
+    const { prefix, color } = this.#getLogFormat(level);
+    if (shouldLogToStderr()) {
+      logToStderr(prefix.replace("%c", ""), key, ...resolved);
+    } else {
+      console[CONSOLE_METHODS[level]](prefix, color, key, ...resolved);
+    }
+  }
+
+  /**
    * Logs the count summary, if incrementing the counter has just carried the
    * total past another multiple of the configured threshold.
    */
@@ -1400,8 +1481,9 @@ export class Logger {
     if (threshold > this.#lastLoggedAt) {
       this.#lastLoggedAt = threshold;
 
-      // Only log if debug level is enabled
-      if (shouldLog("debug", this.#level)) {
+      // Only log if debug level is enabled, and leave a capture's record to
+      // the lines logged.
+      if (shouldLog("debug", this.#level) && !logSinks.has(this)) {
         const { prefix, color } = this.#getLogFormat("debug");
         const moduleName = this.#moduleName || "logger";
         const message =
@@ -1558,18 +1640,12 @@ export const log = new Logger();
  * `undefined` when it is unset, is `silent`, is not a valid level, or cannot
  * be read. Always `undefined` outside Deno.
  */
-function getEnvLevel() {
-  if (isDeno()) {
-    try {
-      const envLevel = Deno.env.get("LOG_LEVEL");
-      if (envLevel && envLevel !== "silent" && envLevel in LOG_LEVELS) {
-        return envLevel as LogLevel;
-      }
-    } catch {
-      // Ignore permission errors - use default log level
-    }
-  }
-  return undefined;
+function getEnvLevel(): LogLevel | undefined {
+  const envLevel = readEnv("LOG_LEVEL");
+  return envLevel !== undefined && envLevel !== "silent" &&
+      isLogLevel(envLevel)
+    ? envLevel
+    : undefined;
 }
 
 /**
@@ -1578,14 +1654,7 @@ function getEnvLevel() {
  * tool whose real output a caller is parsing.
  */
 function shouldLogToStderr(): boolean {
-  if (isDeno()) {
-    try {
-      return Deno.env.get("LOG_TO_STDERR") === "1";
-    } catch {
-      return false;
-    }
-  }
-  return false;
+  return readEnv("LOG_TO_STDERR") === "1";
 }
 
 /**
@@ -1641,15 +1710,21 @@ export function getLogger(
   return logger;
 }
 
-/** Resets call counts for every registered logger. */
-export function resetAllLoggerCounts(): void {
+/**
+ * Returns the registered loggers by name. The registry lives on `globalThis`
+ * so that every copy of this module loaded into a realm shares it.
+ */
+function registeredLoggers(): Record<string, Logger> {
   const global = globalThis as unknown as {
     commonfabric?: { logger?: Record<string, Logger> };
   };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetCounts()
-    );
+  return global.commonfabric?.logger ?? {};
+}
+
+/** Resets call counts for every registered logger. */
+export function resetAllLoggerCounts(): void {
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetCounts();
   }
 }
 
@@ -1658,13 +1733,7 @@ export function resetAllLoggerCounts(): void {
  * registered logger.
  */
 export function getTotalLoggerCounts(): number {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (!global.commonfabric?.logger) {
-    return 0;
-  }
-  return Object.values(global.commonfabric.logger)
+  return Object.values(registeredLoggers())
     .reduce((sum, logger) => sum + logger.counts.total, 0);
 }
 
@@ -1675,35 +1744,64 @@ export function getTotalLoggerCounts(): number {
 export function getLoggerCountsBreakdown(): Record<string, LoggerBreakdown> & {
   total: number;
 } {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
+  return loggerCountsBreakdownOf(getLoggerCountsByKey());
+}
 
+/**
+ * Returns each logger's counts by message key, by logger name: the counts
+ * {@link getLoggerCountsBreakdown} totals, in a shape that holds nothing but
+ * counts, so it can cross a realm boundary and be totalled on the far side.
+ */
+export function getLoggerCountsByKey(): Record<
+  string,
+  Record<string, LogCounts>
+> {
+  const byLogger: Record<string, Record<string, LogCounts>> = {};
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    byLogger[name] = logger.countsByKey;
+  }
+  return byLogger;
+}
+
+/**
+ * Returns `byLogger` totalled as {@link getLoggerCountsBreakdown} reports it:
+ * a `total` for each logger and one across them all. A message key named
+ * `total` is skipped, so that the reserved property is not overwritten.
+ */
+export function loggerCountsBreakdownOf(
+  byLogger: Record<string, Record<string, LogCounts>>,
+): Record<string, LoggerBreakdown> & { total: number } {
   const breakdown: Record<string, LoggerBreakdown> = {};
   let total = 0;
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const loggerBreakdown = { total: 0 } as LoggerBreakdown;
-
-      // Add counts by key, skipping `total` so that the reserved property is
-      // not overwritten.
-      for (const [key, counts] of Object.entries(logger.countsByKey)) {
-        if (key === "total") {
-          continue; // Skip reserved property name
-        }
-        loggerBreakdown[key] = counts;
-        loggerBreakdown.total += counts.total;
-      }
-
-      breakdown[name] = loggerBreakdown;
-      total += loggerBreakdown.total;
+  for (const [name, byKey] of Object.entries(byLogger)) {
+    const loggerBreakdown = { total: 0 } as LoggerBreakdown;
+    for (const [key, counts] of Object.entries(byKey)) {
+      if (key === "total") continue;
+      loggerBreakdown[key] = counts;
+      loggerBreakdown.total += counts.total;
     }
+    breakdown[name] = loggerBreakdown;
+    total += loggerBreakdown.total;
   }
-
   return { ...breakdown, total } as Record<string, LoggerBreakdown> & {
     total: number;
   };
+}
+
+/**
+ * Returns the messages each logger has kept of what it logged at `error`, by
+ * logger name and message key. A logger that has kept none is omitted.
+ */
+export function getLoggerErrorMessagesBreakdown(): Record<
+  string,
+  Record<string, string[]>
+> {
+  const breakdown: Record<string, Record<string, string[]>> = {};
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    const messages = logger.errorMessagesByKey;
+    if (Object.keys(messages).length > 0) breakdown[name] = messages;
+  }
+  return breakdown;
 }
 
 /** Breakdown of timing stats by logger name. */
@@ -1732,21 +1830,13 @@ export type TimingStatsBreakdown = {
  * // }
  */
 export function getTimingStatsBreakdown(): TimingStatsBreakdown {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-
   const breakdown: TimingStatsBreakdown = {};
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const stats = logger.timeStats;
-      if (Object.keys(stats).length > 0) {
-        breakdown[name] = stats;
-      }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    const stats = logger.timeStats;
+    if (Object.keys(stats).length > 0) {
+      breakdown[name] = stats;
     }
   }
-
   return breakdown;
 }
 
@@ -1764,33 +1854,20 @@ export type LoggerFlagsBreakdown = Record<
  * `{ runner: { "action invalid input": { "action:myModule": {...} } } }`.
  */
 export function getLoggerFlagsBreakdown(): LoggerFlagsBreakdown {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-
   const breakdown: LoggerFlagsBreakdown = {};
-
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      const flags = logger.flags;
-      if (Object.keys(flags).length > 0) {
-        breakdown[name] = flags;
-      }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    const flags = logger.flags;
+    if (Object.keys(flags).length > 0) {
+      breakdown[name] = flags;
     }
   }
-
   return breakdown;
 }
 
 /** Resets timing statistics for every registered logger. */
 export function resetAllTimingStats(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetTimeStats()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetTimeStats();
   }
 }
 
@@ -1799,13 +1876,8 @@ export function resetAllTimingStats(): void {
  * logger's `getCountDeltas()` reports relative to its current counts.
  */
 export function resetAllCountBaselines(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetCountBaseline()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetCountBaseline();
   }
 }
 
@@ -1815,13 +1887,8 @@ export function resetAllCountBaselines(): void {
  * its current timings.
  */
 export function resetAllTimingBaselines(): void {
-  const global = globalThis as unknown as {
-    commonfabric?: { logger?: Record<string, Logger> };
-  };
-  if (global.commonfabric?.logger) {
-    Object.values(global.commonfabric.logger).forEach((logger) =>
-      logger.resetTimingBaseline()
-    );
+  for (const logger of Object.values(registeredLoggers())) {
+    logger.resetTimingBaseline();
   }
 }
 

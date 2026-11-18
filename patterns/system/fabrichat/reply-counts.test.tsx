@@ -109,7 +109,7 @@ export default pattern(() => {
     // Stand-ins for what the room derives; a row's streams read none of it.
     places: {},
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     ...records,
   };
   // Rows on the messages, at their places in the order the steps below send

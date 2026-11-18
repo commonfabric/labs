@@ -31,15 +31,15 @@ covers trees no package's own check reaches.
 
 ### What a run ends with
 
-The root `deno task test`, `deno task integration`, and every
-continuous-integration lane end with a block headed `test summary`, built by
-`tasks/test-summary.ts`. A passing run's block is one line of counts. A failing
-run's block gives, for each of its first twenty failing tests, its name, its
-file, a command that runs it again where its kind of test has one, and the first
-lines of its error, and counts the rest. For a command that failed
-without a failing test to explain it, the block quotes the end of that
-command's output. The block ends with where the full logs are, so reading the
-end of the output is enough to know what failed and what to run next.
+The root `deno task test`, `deno task integration`, a `deno task test-gap` that
+runs tests, and every continuous-integration lane end with a block headed `test summary`, built
+by `tasks/test-summary.ts`. A passing run's block is one line of counts. A
+failing run's block gives, for each of its first twenty failing tests, its name,
+its file, a command that runs it again where its kind of test has one, and the
+first lines of its error, and counts the rest. For a command that failed without
+a failing test to explain it, the block quotes the end of that command's output.
+The block ends with where the full logs are, so reading the end of the output is
+enough to know what failed and what to run next.
 
 The root `deno task test` writes each package's output to a log file rather
 than to the console. A failing run keeps the directory of logs and names it in
@@ -50,7 +50,8 @@ failing tests, which the pull request's checks and `gh run view` show.
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
-runs `tasks/test.ts`, which takes no arguments and refuses a run given any.
+runs `tasks/workspace-tests.ts`, which takes no arguments and refuses a run
+given any.
 
 ```bash
 cd runtime/runner
@@ -86,13 +87,40 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A package can run a test runner of its own, as `base/identity` does, and
-appended arguments reach whatever that runner does with them, which its own
-source says.
+A package can run a test runner of its own, as `dashboard` does through
+`tasks/run-test-batches.ts`, and appended arguments reach whatever that runner
+does with them, which its own source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
+
+### Running what a pull request leaves out
+
+A pull request's continuous-integration run does not run every test. It runs
+the test files the change edits and a fixed budget of others chosen by their
+history (`DISCRETIONARY_SECONDS`), as [test selection](test-selection.md)
+describes. A test that imports a changed module can therefore go unrun until
+the default branch runs everything. Before opening a pull request, run those
+tests rather than tests the pull request will run anyway:
+
+```bash
+deno task test-gap --dry-run   # what would run, and what it is projected to cost
+deno task test-gap             # run it
+```
+
+It finds the test files the change reaches through their imports, takes away
+every test the pull request's default selection runs, and runs the rest,
+choosing them nearest the change first and passing over any that would take
+the run past ten minutes of work as the selection's cost model prices it. `--seconds` sets
+another budget, and `--base` the ref the change is measured against. A run that
+runs tests ends with the block described in
+[What a run ends with](#what-a-run-ends-with).
+After it come anything the run could not clean up, the failing tests that
+pull requests hold back as too flaky, which do not fail the run, and the test
+units left out, among them any this machine lacks something for.
+[Running locally what a pull request leaves out](test-selection.md#running-locally-what-a-pull-request-leaves-out)
+has the detail.
 
 ### Every test has to pass on its own
 
@@ -243,15 +271,33 @@ changed. The Tomorrow's Test Order workflow,
 ahead, so that such a test can be found and fixed before the day it would
 break.
 
-The workflow runs at 11:00 UTC every day. That is 04:00 in the Pacific zone in
-summer and 03:00 in winter, early on a Pacific day either way. It asks
-`deno task -q test-seed --tomorrow` for the seed of the next Pacific day, and
-calls the CI workflow at the head of `main` with that seed, which runs every CI
-test suite under it. When a test fails, the run fails. The run's checks on the
-commit are listed under "Tomorrow's order", apart from the checks of the
-commit's own run. When another workflow calls the CI workflow, it skips
-`Status`, which holds the coverage and topology checks. It also skips the build,
-attestation and deploy jobs. The records relay follows the workflow, and its
+The workflow runs the suites once for each seed, the first time it finds that
+the CI workflow passed on the head of `main`. A head that CI has not passed on
+would fail the run for reasons unrelated to the order. The workflow starts each
+time the CI workflow finishes on `main`, and a run goes on to decide only when
+that CI passed on a push. It also starts at 11:17 UTC every day, for a day when
+nothing lands. That is 04:17 in the Pacific zone in summer and 03:17 in winter,
+early on a Pacific day either way, so a scheduled run that GitHub starts hours
+late still asks for the same seed.
+
+Each run asks `deno task -q test-seed --tomorrow` for the seed of the next
+Pacific day. `tasks/test-order-tomorrow.ts` then decides whether to run the
+suites. It says yes when CI passed on the head of `main` and no other run has
+run that seed, whatever came of that run. A run checks out the head of `main`
+as it stood when the event that started the run fired, which is not always the
+commit whose CI run just finished. The runs that decide wait for one another,
+so that each sees what the run before it did. A run dispatched by hand runs the
+suites without asking, which is how to run a seed again, and it counts as
+having run the seed.
+
+A run that goes ahead calls the CI workflow at the head of `main` with the
+seed, which runs every CI test suite under it. When a test fails, the run
+fails. The run's checks on the commit are listed under "Tomorrow's order"
+followed by the seed, apart from the checks of the commit's own run. That
+name is how `tasks/test-order-tomorrow.ts` finds the runs of a seed. When
+another workflow calls the CI workflow, it skips `Status`, which holds the
+coverage and topology checks. It also skips the build, attestation and deploy
+jobs. The records relay follows the workflow, and its
 records carry the seed they ran under, so [test selection](test-selection.md)
 keeps them apart from the commit's own runs. Test selection reads them as runs
 on the default branch, since they ran its own head.
@@ -302,16 +348,12 @@ choose:
 - The CLI's shell harnesses under `runtime/cli/integration/` run in a fixed
   order for that same reason: each is one scenario driven end to end.
 - `deno task integration pattern-tests` runs each `.test.tsx` file in a
-  `cf test` process of its own, five at a time. Each process has its own
-  store, so the order the files start in decides how long the run takes and
-  nothing else. The files a continuous-integration lane expects to take
-  longest start first, so the lane finishes close to the time it was charged
-  for. Files of equal expected time, and every file of a local run, which has
-  no such figures, start in the order the seed puts them in. A local run can
-  therefore start the files in a different order from a lane at the same
-  commit. That changes nothing a test sees, because each file runs alone in
-  its process and its steps run in the order they are written, so every step
-  runs locally in the order it ran in the lane.
+  `cf test` process of its own, one at a time, in the order the seed puts
+  them in. Each process has its own store, so the order changes nothing a
+  test sees, and a file's steps run in the order they are written. The files
+  run one at a time so that the time each records is what that file takes:
+  ["Covering a new test surface"](test-records.md#covering-a-new-test-surface)
+  says why.
 
 #### Writing a task that runs tests
 
@@ -392,6 +434,8 @@ The following repository commands and test paths launch a browser:
   package name associated with browser tests does not by itself establish that
   a filtered test launches one.
 - The `deno task demo` command.
+- The `deno task test-gap` command, whenever what it chose to run includes
+  browser tests; its dry run lists the units it would run, with their suites.
 - Tests that run `deno-web-test`, call `Browser.launch()`, or bind a
   `ShellIntegration` lifecycle.
 
@@ -449,6 +493,23 @@ EOF wait. When investigating a teardown stall, capture every holder of the
 pipe, including renderers and detached updater processes, and record assertion
 completion separately from suite and process completion.
 
+A browser also ends with the process that launched it, whether or not anything
+closed it. An `afterAll` does not run after an uncaught error ends a test file,
+and nothing runs after `SIGKILL`, so this cannot be left to the test process.
+`spawnBrowserProcess()` in `runtime/integration/browser-process.ts` starts
+Chrome through a short shell program, which leaves one background job in the
+browser's process group. The job blocks reading a pipe that only the launching
+process holds open. The kernel closes that pipe however the process ends, and
+the job then sends `SIGKILL` to the group. The profile directory stays behind in
+that case, because removing it is `Browser.close()`'s work.
+
+On macOS, a running test's browser and a leftover one differ in their parent and
+their output pipes. A running test's browser has the test process as its parent,
+and `lsof` shows a peer on its standard output and standard error. A leftover
+browser has PID 1 as its parent and no peer on either pipe, and nothing can give
+it back a reader. Stop a leftover browser by its PID, since other test runs on
+the machine may be using browsers that look the same by name.
+
 Browser tests require macOS or Linux. The launcher rejects other platforms
 before it starts a browser.
 
@@ -475,8 +536,11 @@ file share a browser with the tests in the others, so a file that only passes
 after some particular sibling has run is relying on something no longer written
 down anywhere. Each file has to stand on its own.
 
-A package whose tests all need a browser, `base/identity` among them, hands
-its whole test directory to `deno-web-test` and has no such split to get wrong.
+A package that runs the files of its `test/` directory in a browser as well as
+in Deno, as `base/identity` and `base/static` do, hands that directory to
+`deno-web-test`. Test files elsewhere in the package, such as `base/static`'s
+`scripts/*.test.ts`, run in Deno only. The name still decides which files the
+plain `deno test` pass leaves out.
 
 Name a test that way whenever it needs a browser, including when its subject is
 not a component.
@@ -557,11 +621,10 @@ current value. CI keeps stable `default` and
 `opposite` roles; `tasks/server-execution-ci.ts` derives their actual ON/OFF
 posture from the first-party default constant. The opposite toolshed binary is
 built with an explicit inverse so its browser shell, server, and test processes
-stay aligned. Whichever role resolves ON also runs with
-`EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true` on its Toolshed servers, its
-baked shell, and the test processes of its package-integration and
-pattern-integration suites, so the ON arm's browsers receive only what their
-views need, and its posture probe checks that the toolshed publishes it.
+stay aligned. Web view-scoped replication is on by default under server
+execution, so the ON arm's browsers receive only what their views need without
+a variable of their own, and the ON arm's posture probe checks that the
+toolshed does not publish it off.
 [EXPERIMENTAL_OPTIONS.md](EXPERIMENTAL_OPTIONS.md#serverexecution) covers the
 flag itself.
 
@@ -570,15 +633,12 @@ test spans, not only the one `deno test` starts. A pattern integration test
 drives a runtime in the test process and commits through a toolshed, and the
 per-class commit admission rows are enforced by the memory server under the
 flag, so a test process on the ON arm talking to a toolshed on the OFF arm is
-on neither arm. Start the servers with it too. CI's ON arm also runs with web
-view-scoped replication, so reproducing one of its failures takes that flag on
-the same processes:
+on neither arm. Start the servers with it too:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
-  ./scripts/start-local-dev.sh
+EXPERIMENTAL_SERVER_EXECUTION=true ./scripts/start-local-dev.sh
 cd patterns
-EXPERIMENTAL_SERVER_EXECUTION=true EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION=true \
+EXPERIMENTAL_SERVER_EXECUTION=true \
   API_URL=http://localhost:8000/ \
   deno test --shuffle=$(deno task -q test-seed) --no-check -A \
   ./integration/<name>.test.ts
@@ -595,9 +655,7 @@ curl -fsS http://localhost:8000/api/health/stats | jq -e '.servingLoop != null'
 this check against every Toolshed server its capabilities start, through
 `verifyServerExecutionPosture()` in `tasks/server-execution-ci.ts`. That
 function also checks the shell half of server execution, the define baked into
-the shell, which `/api/meta` reports as `shellServerExecutionDefine`. The web
-view-scoped define the ON arm's shell bakes is not reported; the bake table in
-`cachedBinaries()` sets it, and the binary cache key covers that table.
+the shell, which `/api/meta` reports as `shellServerExecutionDefine`.
 
 The toolshed log records the same thing, but it accumulates NUL bytes, so
 `grep` can decide it is binary and print nothing rather than the line that is
@@ -628,11 +686,11 @@ these two harnesses while preserving the other inherited flags, so both run
 the OFF arm in every lane. Server-backed targets receive the supplied
 server-execution setting.
 
-For view-scoped replication, run the complete default integration suite with:
+View-scoped replication is on by default under server execution, so the
+complete default integration suite exercises it with:
 
 ```bash
-EXPERIMENTAL_SERVER_EXECUTION=true \
-EXPERIMENTAL_VIEW_SCOPED_REPLICATION=true deno task integration
+EXPERIMENTAL_SERVER_EXECUTION=true deno task integration
 ```
 
 The browser regression `shell/integration/view-scoped-replication.test.ts`
@@ -656,16 +714,40 @@ failing.
 `EXPERIMENTAL_SERVER_EXECUTION` and else `SERVER_EXECUTION_DEFAULT_ENABLED`,
 and on the ON arm hosts the loop with the pair below: a single-user test
 connects to `startServingMemoryServer()`, whose serving runtimes fetch through
-the test's `fetchMocks`, and a multi-user test's participants to
+the test's `fetchMocks` and have their model requests answered from its
+`llmMocks`, and a multi-user test's participants to
 `listenServingMemoryServer()`, with no access list, as on the OFF arm. Each
 settle also waits until every event the runtime fired has its consequence
 back at the runtime, which `runtime.idle()` and `storageManager.synced()` do
-not cover, so an assertion after an action reads what the served handler
-wrote, and a multi-user marker is announced after it. An event a served
-handler fires on its own account is no client's, and nothing waits for it.
-A run against a caller-supplied `storageHost` is refused on the ON arm,
+not cover, and then until the serving loop has finished what that set off, so
+an assertion after an action reads what the served handler wrote, and a
+multi-user marker is announced after it. An event a served handler fires on
+its own account is no client's, and its consequence can land a wave or more
+after the event that fired it, or in another space.
+`ExecutorHost.whenQuiescent()` reports the end of all of that. A settle asks for
+it once its own runtime is done, makes a round trip on each connection to
+receive what the loop wrote, settles again, and asks again, and returns once two
+of its results are equal, which says the reactions gave the loop nothing further
+to do.
+A multi-user participant asks the orchestrator, which holds the loop, over its
+worker's message channel.
+
+Quiescence is a statement about what the loop can do on its own. An event stays
+pending through it when what it waits for lies outside the loop, such as a
+program closure another runtime has yet to write, or recovery evidence for a
+delivery in its failed state, and a time gate's trailing wake is not waited
+for. A cascade that never ends leaves the settle waiting, as a client's own
+non-converging graph leaves `runtime.idle()` waiting on the OFF arm. A run
+against a caller-supplied `storageHost` is refused on the ON arm,
 since the store is the caller's and there is no memory server to host a loop
-beside.
+beside. A caller whose check does not depend on the posture, or holds only on
+the OFF arm, sets `storageHost.serverExecution: false`, which runs that
+single-user file on the OFF arm without changing the process's environment. A
+multi-user file refuses every `storageHost`, this one included, since its
+participants write against a storage server of the runner's own. A run with
+`--cfc-enforcement-mode disabled` is refused on the ON arm too: a runtime with
+CFC disabled writes no program closure for the serving loop to load, and
+served handlers run under the serving runtime's CFC posture, not the test's.
 
 On the ON arm, most of the checks `cf test` makes of a run observe the test's
 own runtime and not the serving one: the idempotency check, read budgets,
@@ -675,7 +757,10 @@ reaches it as an `errored` outcome of the event, which the runner records as
 a runtime error marked `[served]`, under the same policy as any other —
 `allowRuntimeErrors` tolerates it, and `expectRuntimeErrors` counts it. It is
 left out when the same event's speculative run recorded an error with the
-same text, so a throw both runs hit is counted once. Logger warnings and
+same text, so a throw both runs hit is counted once. A served commit that
+CFC enforcement refuses is a denial, not a throw: it is reported as a console
+warning marked `[served]`, under `allowConsoleWarnings`, as the test's own
+refused commits are, in single-user and multi-user runs alike. Logger warnings and
 errors are counted per process, and a single-user run's serving loop shares
 the test's process, so the runner tells the loop's apart by the serving
 context described below. A logger error the loop logs fails the file as a
@@ -707,7 +792,9 @@ It comes in two shapes, by how the test's clients reach it:
   which also lists the service identity as the server's delegating
   principal, as a toolshed running server execution lists its own.
 
-Both return a handle that `await using` closes, serving loop first. The host
+Both return a handle that `await using` closes, serving loop first. With the
+loop on the test's thread, `host.host.whenQuiescent()` is the wait described
+above; a loop in a worker has no such wait. The host
 keeps the process's ambient server-execution flag on while it lives, so a
 runtime in the same realm that asks for the OFF arm runs ON beside it. The
 serving loop's own options pass through: `policy`, the `on*` diagnostic hooks,
@@ -716,12 +803,15 @@ loop keeps for tests. `prepareStorageManager` hands the test each serving
 runtime's storage manager before the runtime is built, which is where a stub on
 one of its providers goes.
 
-Either shape runs its loop in a Worker of the test's process when
-`SERVER_EXECUTION_WORKER` is `true` in the environment, as a toolshed does under
-that variable
+Either shape runs its loop in Workers of the test's process, one per served
+space, when
+`SERVER_EXECUTION_WORKER` is `true` in the environment, where a toolshed over a
+file store runs it in workers unless that variable is `false`
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md#server_execution_worker)),
 unless its `worker` option says otherwise, over a store in a temporary
-directory, since a worker cannot open a non-persistent one. `serving.host` is
+directory, since a worker cannot open a non-persistent one. Its `maxWorkers`
+option, or `SERVER_EXECUTION_MAX_WORKERS` in the environment, caps the workers
+spaces are placed on, and `1` serves every space from one. `serving.host` is
 then the loop's handle, with `stats()` and `close()`, and its `host` is
 `undefined`; on this thread `serving.host.host` is the `ExecutorHost`. Either
 way `serving.host.diagnostics()` returns the logger counts and timing statistics

@@ -20,7 +20,7 @@ import {
   type SpaceServerPolicy,
 } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
-import { readWatermarkSeq } from "../../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import type { SealedCommitVerdict } from "../../src/storage/interface.ts";

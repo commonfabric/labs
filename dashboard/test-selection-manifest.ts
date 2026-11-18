@@ -31,6 +31,7 @@
  * the system. It names tests, never people.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   declaredSchema,
   type LanePlan,
@@ -131,14 +132,14 @@ export async function readManifest(name: string, options: {
   }
   const manifest = parseManifest(body);
   if (manifest !== undefined) {
-    // A lane naming a test the corpus lacks leaves the share of the
-    // corpus's test time undefined, so that body is not a manifest the
-    // dashboard can report on.
+    // A lane naming a test the corpus lacks leaves the share of the corpus
+    // it selects undefined, so that body is not a manifest the dashboard
+    // can report on.
     try {
       selectedSeconds(manifest);
     } catch (error) {
       throw new Error(
-        `manifest ${name}: ${error instanceof Error ? error.message : error}`,
+        `manifest ${name}: ${describeFailure(error)}`,
       );
     }
     return manifest;
@@ -240,18 +241,17 @@ export function selectedSeconds(manifest: Manifest): number {
 }
 
 /**
- * The percentage of the corpus's test time, `corpus` seconds, that `selected`
- * seconds of it are. Dividing tests more finely into identities leaves it
- * where it was.
+ * The percentage of the corpus, `corpus` identities or seconds, that
+ * `selected` of the same unit are.
  */
 export function selectedShare(selected: number, corpus: number): number {
   return (selected / corpus) * 100;
 }
 
 /**
- * A share of the corpus's test time as the tiles and the page print it, to a
- * tenth of a percent below ten percent, or a dash for a corpus with no test
- * time to take a share of.
+ * A share of the corpus as the tiles and the page print it, to a tenth of a
+ * percent below ten percent, or a dash for a corpus of zero to take a share
+ * of.
  */
 export function shareLabel(selected: number, corpus: number): string {
   if (corpus === 0) return "—";

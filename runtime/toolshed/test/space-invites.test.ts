@@ -7,6 +7,7 @@ import { dirname, fromFileUrl, toFileUrl } from "@std/path";
 import { SqliteError } from "@db/sqlite";
 import { pino } from "pino";
 
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { Identity } from "@commonfabric/identity";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -20,6 +21,7 @@ import { resolveSpaceStoreUrl } from "@commonfabric/memory/v2/storage-path";
 import {
   createInviteCredentials,
   inviteCodeVerifier,
+  SPACE_INVITE_CAPABILITY,
   SpaceInviteClient,
 } from "@commonfabric/runner/space-invites";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
@@ -203,6 +205,73 @@ async function fixture(publicHost?: string, captureErrors = true) {
 }
 
 describe("space-invites", () => {
+  it("answers each operation on a deleted space with `space-deleted` and 410, after the proof verifies", async () => {
+    const f = await fixture();
+    try {
+      // Nothing the server admits writes a deletion tombstone yet, so the
+      // case writes one through a second connection to the space's store.
+      const engine = await Engine.open({
+        url: resolveSpaceStoreUrl(f.store, f.space),
+      });
+      try {
+        Engine.applyCommit(engine, {
+          space: f.space,
+          sessionId: "deletion-stand-in",
+          commitClass: "system",
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: aclDocId(f.space),
+              value: { value: { deleted: { by: f.owner.did() } } },
+            }],
+          },
+        });
+      } finally {
+        Engine.close(engine);
+      }
+      const credentials = createInviteCredentials();
+      for (
+        const [operation, body] of [
+          ["list", {}],
+          ["receipts", {}],
+          ["revoke", { inviteId: credentials.inviteId }],
+          ["redeem", {
+            inviteId: credentials.inviteId,
+            code: credentials.code,
+          }],
+          ["preview", {
+            inviteId: credentials.inviteId,
+            code: credentials.code,
+          }],
+          ["create", {
+            inviteId: credentials.inviteId,
+            codeVerifier: inviteCodeVerifier({
+              host: f.host,
+              space: f.space,
+              ...credentials,
+            }),
+            access: "READ",
+            ttlSeconds: 60,
+          }],
+        ] as const
+      ) {
+        const refused = await f.raw(operation, body);
+        expect({ operation, status: refused.status }).toEqual({
+          operation,
+          status: 410,
+        });
+        expect(await refused.json()).toEqual({ code: "space-deleted" });
+      }
+      const forged = await f.raw("list", {}, f.owner, { forged: true });
+      expect(forged.status).toBe(401);
+      await forged.body?.cancel();
+    } finally {
+      await f.close();
+    }
+  });
+
   it("removes fixture storage when setup fails before listening", async () => {
     const directory = await Deno.makeTempDir();
     using _tempDirectory = stub(
@@ -614,13 +683,17 @@ describe("space-invites", () => {
         headers: { Origin: "https://shell.example" },
       });
       expect(capability.headers.get("access-control-allow-origin")).toBe("*");
-      // `access` names what this service can issue. A service without the
-      // field predates OWNER invitations and refuses them.
+      // `access` names what this service can issue, `suggestedProfile`
+      // bounds the profile an invitation may suggest, and `preview` the names
+      // a holder reads before redeeming. A service without one of these
+      // fields predates it and refuses a create that uses it.
       expect(await capability.json()).toEqual({
         version: 1,
         maxUses: 1000,
         maxTtlSeconds: 2592000,
         access: ["READ", "WRITE", "OWNER"],
+        suggestedProfile: { maxNameLength: 128, maxPictureBytes: 65536 },
+        preview: { maxNameLength: 128 },
       });
       const preflight = await fetch(
         `${f.host}/api/spaces/${f.space}/invites/redeem`,
@@ -646,6 +719,93 @@ describe("space-invites", () => {
         false,
       );
       await preflight.body?.cancel();
+    } finally {
+      await f.close();
+    }
+  });
+  it("carries a suggested profile with the largest picture from create to the redeemer, and refuses a larger create body", async () => {
+    const f = await fixture();
+    try {
+      const { maxPictureBytes } = SPACE_INVITE_CAPABILITY.suggestedProfile;
+      const suggestedProfile = {
+        name: "Sam Lee",
+        picture: toUnpaddedBase64url(
+          new Uint8Array(maxPictureBytes).fill(7),
+        ),
+      };
+      const invite = await f.client(f.owner).create({
+        access: "WRITE",
+        ttlSeconds: 60,
+        suggestedProfile,
+      });
+      expect(invite).toMatchObject({ maxUses: 1, remainingUses: 1 });
+      expect(
+        await f.client(f.guest).redeem({
+          inviteId: invite.inviteId,
+          code: invite.code,
+        }),
+      ).toEqual({
+        outcome: "redeemed",
+        redemption: { inviteId: invite.inviteId, did: f.guest.did() },
+        currentAccess: "WRITE",
+        suggestedProfile,
+      });
+      const credentials = createInviteCredentials();
+      const oversized = await f.raw("create", {
+        inviteId: credentials.inviteId,
+        codeVerifier: inviteCodeVerifier({
+          host: f.host,
+          space: f.space,
+          ...credentials,
+        }),
+        access: "READ",
+        ttlSeconds: 60,
+        suggestedProfile: {
+          name: "Sam",
+          picture: "A".repeat(4 * Math.ceil(maxPictureBytes / 3) + 4096),
+        },
+      });
+      expect(oversized.status).toBe(413);
+      expect(await oversized.json()).toEqual({ code: "invalid-request" });
+      expect(await f.client(f.owner).list()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("previews an invitation's names and suggestion over HTTP without consuming it, and refuses a wrong code as unavailable", async () => {
+    const f = await fixture();
+    try {
+      const suggestedProfile = { name: "Sam Lee" };
+      const invite = await f.client(f.owner).create({
+        access: "WRITE",
+        ttlSeconds: 60,
+        suggestedProfile,
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+      });
+      const request = { inviteId: invite.inviteId, code: invite.code };
+      expect(await f.client(f.guest).preview(request)).toEqual({
+        access: "WRITE",
+        spaceName: "Garden plans",
+        issuerName: "Pat Example",
+        suggestedProfile,
+      });
+      expect(await f.client(f.owner).list()).toEqual([
+        expect.objectContaining({ usedCount: 0, remainingUses: 1 }),
+      ]);
+      const wrong = await f.raw("preview", {
+        inviteId: invite.inviteId,
+        code: createInviteCredentials().code,
+      });
+      expect(wrong.status).toBe(409);
+      expect(await wrong.json()).toEqual({ code: "invite-unavailable" });
+      const unknown = await f.raw("preview", createInviteCredentials());
+      expect(unknown.status).toBe(409);
+      expect(await unknown.json()).toEqual({ code: "invite-unavailable" });
+      expect(await f.client(f.guest).redeem(request)).toMatchObject({
+        outcome: "redeemed",
+        suggestedProfile,
+      });
     } finally {
       await f.close();
     }

@@ -18,7 +18,7 @@ Deno.test(
   "findMatches: case-sensitive columns map non-BMP characters to one column (line 88)",
   () => {
     // An upper-case letter in the query forces the case-sensitive path, which
-    // builds the verbatim haystack and maps offsets to columns with cpLen.
+    // builds the verbatim haystack and maps offsets to code-point columns.
     // `𝑻` (U+1D47B) is one code point but two UTF-16 units, so the match after
     // it must still report column 3, not column 4.
     assertEquals(
@@ -37,7 +37,7 @@ Deno.test(
       [{ line: 0, start: 0, end: 3 }],
     );
     // A bare ASCII case-sensitive match also routes through the verbatim
-    // haystack and the cpLen column map.
+    // haystack and the code-point column map.
     assertEquals(
       findMatches(linesDoc("foo Bar"), "Bar"),
       [{ line: 0, start: 4, end: 7 }],

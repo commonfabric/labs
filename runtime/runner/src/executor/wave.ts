@@ -31,6 +31,7 @@ import type { CellScope } from "@commonfabric/api";
 import { type DID, isDID } from "@commonfabric/identity/did";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
+  type ClientCommit,
   type CommitPrecondition,
   type ConfirmedRead,
   type DerivedWriteAnnotation,
@@ -50,6 +51,7 @@ import type {
 } from "@commonfabric/memory/v2/server";
 import type {
   CommitError,
+  DroppedSealedWrites,
   IExtendedStorageTransaction,
   ISpaceReplica,
   IStorageTransaction,
@@ -83,6 +85,8 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
+import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
   enabled: true,
@@ -94,9 +98,10 @@ const logger = getLogger("wave-accumulator", {
  * class at the wave commit's per-doc CAS (serving-loop.md §3d):
  *
  * - `derivation` writes are PURE — re-derivable, so a write whose doc head
- *   advanced past the wave's basis is DROPPED; the drop re-arms nothing —
- *   recomputation arrives only through the ordinary dependency path
- *   (serving-loop.md §3d, RULED 2026-08-05);
+ *   advanced past the wave's basis is DROPPED; recomputation arrives through
+ *   the ordinary dependency path (serving-loop.md §3d, RULED 2026-08-05),
+ *   unless the commits that superseded the run's writes left its documents
+ *   with no value, which re-arms the run ({@link SupersededOutput});
  * - `event-handler` writes are NON-RE-DERIVABLE consequences — rebased and
  *   retried on conflict, and REQUEUED (rolled back to unconsequenced,
  *   never lost) when the rebase conflicts semantically;
@@ -118,9 +123,14 @@ const logger = getLogger("wave-accumulator", {
  *   is re-landed only by the next input batch's advance — on a quiet
  *   space the doc simply lags (while the wave's commit metadata and
  *   the loop's in-memory W, decided before the drop, already carry the
- *   advance — see space-server.ts's bookkeeping-write comment).
- *   Watermark forgery is an accepted authored intrusion — protocol.md
- *   §1's threat model.
+ *   advance — see space-server.ts's bookkeeping-write comment). A
+ *   builtin's ending for a request that never went out
+ *   (builtins.md §2) is not input-driven, and the loop does not land a
+ *   dropped one again: it is written again only when its node runs
+ *   again, which the requeue closure's re-arm of a derivation that read
+ *   it causes, and so does a commit to the node's own cells that it
+ *   reads. Watermark forgery is an accepted authored intrusion —
+ *   protocol.md §1's threat model.
  *
  * The remaining §3d non-re-derivable members — `eventWatermark` advances
  * and effect intents — are produced by Phase 3 events and the stage-G
@@ -326,6 +336,7 @@ export function stampWaveRunContext(
   context: WaveRunContext,
 ): void {
   waveRunContexts.set(tx, context);
+  if (context.kind === "derivation") markServedDerivationTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
@@ -405,15 +416,43 @@ export function delegatedCarriageOf(
 // teardown + reinstantiation, §3e) awaits this instead. Attached by the
 // accumulator at seal, same side-table mechanism as the run context.
 type WaveSettlement = Result<
-  Unit,
+  Unit & {
+    /** The documents this derivation's writes were dropped from as
+     * superseded, while the rest of its writes committed. */
+    supersededOutputs?: readonly SupersededOutput[];
+  },
   StorageTransactionRejected & {
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
+
+    /** The documents this derivation's writes were dropped from as
+     * superseded. */
+    supersededOutputs?: readonly SupersededOutput[];
 
     /** Why the wave withdrew this transaction's contribution. */
     waveWithdrawalCause?: WaveWithdrawalCause;
   }
 >;
+
+/**
+ * A document instance a derivation's write to it was dropped from as
+ * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
+ * superseding commit unless it read the document, and a computed never reads
+ * its own output. That commit can leave the document with no value, as a
+ * client's piece start does, and then the run can be owed again:
+ * `scheduler/superseded-output.ts`.
+ */
+export interface SupersededOutput {
+  space: MemorySpace;
+  id: string;
+  scope?: CellScope;
+
+  /** The identity the instance's scope resolves against. */
+  scopeKeyIdentity?: ScopeKeyIdentity;
+
+  /** The store's head for the instance when the wave dropped the write. */
+  seq: number;
+}
 
 const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
@@ -537,6 +576,11 @@ export interface WaveSpaceCommit {
    * carries its transaction's own reads. */
   confirmedReads?: ConfirmedRead[];
 
+  /** The direct transaction's fixed instance-addressing identity, used only
+   * for its confirmed reads and entity preconditions. It supplies no acting
+   * principal and remains the same on a retry of the commit. */
+  dependencyScopeIdentity?: ScopeKeyIdentity;
+
   /** Owning contribution index per precondition — home batch only; lets a
    * reported precondition failure resolve per write class. */
   preconditionOwners?: number[];
@@ -630,10 +674,12 @@ export function isAclDocumentWriteRefusal(
  * terminal for the wave.
  */
 export interface WaveCommitRejection {
+  /** `SpaceDeleted`: the commit's space is deleted (INV-15). */
   name:
     | "WaveCommitRejected"
     | "RowLabelCommitError"
-    | "AclDocumentWriteRefused";
+    | "AclDocumentWriteRefused"
+    | "SpaceDeleted";
   message: string;
   conflictedDocs?: readonly string[];
   failedPreconditions?: readonly number[];
@@ -813,6 +859,15 @@ export interface WaveLease {
   isCurrentTenure(sealedTenure: number): boolean;
 }
 
+/** What `WaveAccumulator.commitWave()` takes besides the sink. */
+export interface WaveCommitOptions {
+  /** The watermark the home commit carries (protocol.md §4's
+   * `derivedThrough`). The serving loop passes the post-wave W —
+   * unchanged from the current W on a budget-exhausted flush
+   * (serving-loop.md §3). Absent for waves driven outside a loop. */
+  derivedThrough?: number;
+}
+
 /** One sealed action run held by the accumulator. */
 interface WaveContribution {
   /** Set only by the closure that invalidates reads of withdrawn state. */
@@ -822,8 +877,17 @@ interface WaveContribution {
    * closure, the first one found. Set only by that closure, and read only
    * to name the cause when the run's withdrawal is reported. */
   withdrawnRead?: WithdrawnRead;
+
+  /** Per doc-instance key, what this derivation's dropped writes lost to.
+   * Set only where the commit step drops such a write. */
+  supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
+
+  /** Whether the processed claim this wave writes for the run, a same-wave
+   * copy of an event, records the outcome withheld
+   * (`waveClaimIsWithheld()`). */
+  claimWithheld?: true;
 
   /** Per-space sealed commits, in the tx's commit order (children first,
    * home last — protocol.md §2b). */
@@ -854,14 +918,11 @@ interface WaveContribution {
 
   /**
    * The access-list changes this run staged (`stageSpaceAccessChanges()`),
-   * by space, which the seal admitted. They commit ahead of every batch
-   * carrying the run's writes or appends, iff the contribution survives the
-   * wave's conflict resolution.
+   * one per space, in the memory server's form, which the seal admitted.
+   * They commit ahead of every batch carrying the run's writes or appends,
+   * iff the contribution survives the wave's conflict resolution.
    */
-  spaceAccessChanges: ReadonlyArray<{
-    space: MemorySpace;
-    changes: readonly SpaceAccessChange[];
-  }>;
+  spaceAccessChanges: readonly ListedServedAclChange[];
 
   /** The run's DISCOVERED scope at seal (scopes.md §2 S1 — the
    * transaction's read-scope ratchet, learned by running): the narrowest
@@ -892,8 +953,8 @@ export type ContributionDisposition =
    * consequence's that the firing session overwrote; survivors rode the
    * wave commit. `droppedOps` counts each dropped op, and each dropped
    * patch of an op whose other patches committed. The sealed commit's
-   * local overlay rolls back whole and reconverges from the wave commit
-   * arriving as confirmed state. */
+   * local overlay rolls back the dropped writes and promotes the rest at
+   * the wave commit's seq. */
   | { kind: "partially-dropped"; droppedOps: number }
   /** All ops withdrawn: a fully superseded derivation or event
    * consequence, or a derivation that read a withdrawn contribution's
@@ -909,7 +970,14 @@ export interface WaveCommitOutcome {
    * commit or aborted. */
   seq?: number;
 
-  aborted?: "lease-lost" | "abandoned" | "foreign-commit-failed" | "rejected";
+  /** `space-deleted`: the home commit was refused because the space is
+   * deleted (INV-15), which no successor tenure could have admitted. */
+  aborted?:
+    | "lease-lost"
+    | "abandoned"
+    | "foreign-commit-failed"
+    | "rejected"
+    | "space-deleted";
 
   /** Superseded pure-derivation writes dropped at the per-doc CAS —
    * §7's `supersededWrites` counter feeds from this. */
@@ -943,9 +1011,10 @@ export interface WaveCommitOutcome {
   /** Event-handler contributions REFUSED as orphans (server-execution v2
    * stage C build W3, (α3); events.md §4's third clause): runs of an
    * LT1 same-wave cascade whose durable entry rode an emitter write
-   * this wave withdrew — a derivation's superseded per-doc drop (re-arms
-   * nothing), a dropped-whole or requeued emitter — so the entry never
-   * lands and nothing re-emits it. Withdrawn, disposition `dropped`,
+   * this wave withdrew — a derivation's superseded per-doc drop, a
+   * dropped-whole or requeued emitter — so the entry never lands and nothing
+   * re-emits it (a re-armed emitter appends an entry of its own). Withdrawn,
+   * disposition `dropped`,
    * NOT reported as requeued (there is no entry to retry); the serving
    * loop's `events.orphanDeliveriesRefused` feeds from this. */
   orphanDeliveriesRefused: number;
@@ -984,6 +1053,12 @@ export interface WaveCommitOutcome {
     docs: Array<{ id: string; scope?: CellScope; seq: number }>;
   }>;
 }
+
+/** The home commit of a contribution that sealed nothing in the home space. */
+const NOTHING_SEALED: Pick<ClientCommit, "operations" | "reads"> = {
+  operations: [],
+  reads: { confirmed: [], pending: [] },
+};
 
 const docInstanceKey = (id: string, scopeKey: string): string =>
   `${id} ${scopeKey}`;
@@ -1072,10 +1147,9 @@ function seqLessStreamEntryEventIds(operation: Operation): string[] {
         lists.push(patch.values as unknown[]);
       } else if (
         (patch.op === "add" || patch.op === "replace") &&
-        patch.path === "/value/entries" &&
-        Array.isArray((patch as unknown as { value?: unknown }).value)
+        patch.path === "/value/entries" && Array.isArray(patch.value)
       ) {
-        lists.push((patch as unknown as { value: unknown[] }).value);
+        lists.push(patch.value);
       }
     }
   }
@@ -1169,6 +1243,22 @@ export class WaveAccumulator
     | ((change: ServedAclChange) => Promise<ServedAclChangeVerdict>)
     | undefined;
   #contributions: WaveContribution[] = [];
+
+  /**
+   * What the serving loop still asks a wave once it is over, kept by
+   * {@link #releaseSealedState} in place of the contributions. A node started
+   * in a wave holds the transaction that sealed into it, which names the
+   * wave, so what a wave keeps after its outcome stays on the heap with it.
+   */
+  #released:
+    | {
+      contributionCount: number;
+      contentContributionCount: number;
+      hasOutboundAppends: boolean;
+      foreignSpaces: MemorySpace[];
+      settlements: Promise<void>[];
+    }
+    | undefined;
   #assembly: PendingAssembly | undefined;
   #closed = false;
   #derivedThrough: number | undefined;
@@ -1352,7 +1442,7 @@ export class WaveAccumulator
   }
 
   get contributionCount(): number {
-    return this.#contributions.length;
+    return this.#released?.contributionCount ?? this.#contributions.length;
   }
 
   /**
@@ -1404,6 +1494,9 @@ export class WaveAccumulator
    * would mint a successor covering its own commit — the
    * #coverageHead commit-storm class. */
   get contentContributionCount(): number {
+    if (this.#released !== undefined) {
+      return this.#released.contentContributionCount;
+    }
     let count = 0;
     for (const contribution of this.#contributions) {
       if (contribution.context.kind !== "bookkeeping") count += 1;
@@ -1418,12 +1511,23 @@ export class WaveAccumulator
     return this.#closed;
   }
 
+  /** How many sealed commits the accumulator still holds, across its contributions. */
+  get accessForTestingOnly(): { readonly heldSealedCommits: number } {
+    return {
+      heldSealedCommits: this.#contributions.reduce(
+        (count, contribution) => count + contribution.spaces.length,
+        0,
+      ),
+    };
+  }
+
   /** Whether any contribution staged outbound appends — the serving
    * loop's cheap gate on draining the durable outbox after this wave's
    * commit (a pre-disposition upper bound: withdrawn contributions'
    * appends never actually ride). */
   get hasOutboundAppends(): boolean {
-    return this.#contributions.some((c) => c.outboundAppends.length > 0);
+    return this.#released?.hasOutboundAppends ??
+      this.#contributions.some((c) => c.outboundAppends.length > 0);
   }
 
   /** Whether an append is staged by a transaction that can still seal.
@@ -1445,6 +1549,7 @@ export class WaveAccumulator
    * co-hosted engines BEFORE driving the commit step, so the sink's
    * synchronous engineFor lookup never misses (Phase 5). */
   get foreignSpaces(): MemorySpace[] {
+    if (this.#released !== undefined) return [...this.#released.foreignSpaces];
     const spaces = new Set<MemorySpace>();
     for (const contribution of this.#contributions) {
       for (const sealed of contribution.spaces) {
@@ -1569,24 +1674,26 @@ export class WaveAccumulator
       // the overlay. A refusal is deterministic, as the refusal of a write to
       // the list is, so it fails this run alone, and the entry the run
       // delivers carries the error (`noteSealFailure()`).
+      let servedAclChanges: readonly ListedServedAclChange[] = [];
       if (spaceAccessChanges.length > 0) {
-        const refusal = await this.#refuseSpaceAccessChanges(
+        const decided = await this.#admitSpaceAccessChanges(
           context,
           spaceAccessChanges,
         );
-        if (refusal !== undefined) {
+        if ("refused" in decided) {
           logger.warn("access-list-change-refused", () => [
             `access-list change refused at wave accumulation: action ` +
-            `${context?.actionId ?? "<unstamped>"}: ${refusal}`,
+            `${context?.actionId ?? "<unstamped>"}: ${decided.refused}`,
           ]);
           return {
             error: {
               name: "StorageTransactionAborted",
-              message: refusal,
+              message: decided.refused,
               reason: new Error(ACL_DOCUMENT_WRITE_REFUSED),
             },
           };
         }
+        servedAclChanges = decided.served;
       }
       // Closing releases the transaction's activity; write-free publication
       // obligations need its read identities after the storage no-op has closed.
@@ -1682,9 +1789,10 @@ export class WaveAccumulator
         // Copied: a (refused) post-seal enqueue must not be able to
         // mutate the sealed contribution through the shared array.
         outboundAppends: [...pendingAppends],
-        spaceAccessChanges,
+        spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
         viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
       waveSettlements.set(
@@ -1693,11 +1801,24 @@ export class WaveAccumulator
           assembly.spaces.map((space) => space.sealed.settled),
         ).then((settled): Result<Unit, StorageTransactionRejected> =>
           settled.find((outcome) => outcome.error !== undefined) ?? { ok: {} }
-        )).then((outcome): WaveSettlement =>
-          outcome.error !== undefined && contribution.readDependencyWithdrawn
-            ? { error: { ...outcome.error, readDependencyWithdrawn: true } }
-            : outcome
-        ),
+        )).then((outcome): WaveSettlement => {
+          const superseded = contribution.supersededOutputs === undefined
+            ? {}
+            : {
+              supersededOutputs: [...contribution.supersededOutputs.values()],
+            };
+          return outcome.error === undefined
+            ? { ok: { ...outcome.ok, ...superseded } }
+            : {
+              error: {
+                ...outcome.error,
+                ...(contribution.readDependencyWithdrawn
+                  ? { readDependencyWithdrawn: true }
+                  : {}),
+                ...superseded,
+              },
+            };
+        }),
       );
       return result;
     } finally {
@@ -1857,16 +1978,44 @@ export class WaveAccumulator
    * state.
    */
   async settled(): Promise<void> {
-    await Promise.all(
-      this.#contributions.flatMap((contribution) =>
-        [
-          ...contribution.spaces.map((space) => space.sealed.settled),
-          ...(contribution.emptySettlement === undefined
-            ? []
-            : [contribution.emptySettlement.promise]),
-        ].map((settlement) => settlement.then(() => undefined, () => undefined))
-      ),
+    await Promise.all(this.#released?.settlements ?? this.#settlements());
+  }
+
+  /** Every sealed commit's local settlement, each resolving however it ends. */
+  #settlements(): Promise<void>[] {
+    return this.#contributions.flatMap((contribution) =>
+      [
+        ...contribution.spaces.map((space) => space.sealed.settled),
+        ...(contribution.emptySettlement === undefined
+          ? []
+          : [contribution.emptySettlement.promise]),
+      ].map((settlement) => settlement.then(() => undefined, () => undefined))
     );
+  }
+
+  /**
+   * Lets go of the sealed commits once the wave's outcome is decided, keeping
+   * what is still asked of the wave afterwards: its counts, the spaces it
+   * sealed into, and its settlement. Each sealed commit holds the documents
+   * its run wrote and read, and a wave stays reachable for as long as a node
+   * started in it runs.
+   */
+  #releaseSealedState(): void {
+    this.#released = {
+      contributionCount: this.#contributions.length,
+      contentContributionCount: this.contentContributionCount,
+      hasOutboundAppends: this.hasOutboundAppends,
+      foreignSpaces: this.foreignSpaces,
+      settlements: this.#settlements(),
+    };
+    this.#contributions = [];
+    this.#assembly = undefined;
+    this.#ownCommits.length = 0;
+    this.#ownWaveCommits.length = 0;
+    this.#foreignGrantVerdicts.clear();
+    this.#txsWithStagedAppends.clear();
+    this.#sealFailedEventIds.clear();
+    this.#failedForeignSpaces.clear();
   }
 
   /**
@@ -2053,6 +2202,7 @@ export class WaveAccumulator
         "wave-abandoned",
       );
     }
+    this.#releaseSealedState();
   }
 
   /** Whether the lease tenure this wave sealed under has ended. */
@@ -2162,17 +2312,24 @@ export class WaveAccumulator
    */
   async commitWave(
     sink: WaveCommitSink,
-    options: {
-      /** The watermark the home commit carries (protocol.md §4's
-       * `derivedThrough`). The serving loop passes the post-wave W —
-       * unchanged from the current W on a budget-exhausted flush
-       * (serving-loop.md §3). Absent for waves driven outside a loop. */
-      derivedThrough?: number;
-    } = {},
+    options: WaveCommitOptions = {},
   ): Promise<WaveCommitOutcome> {
     if (this.#closed) {
       throw new Error("wave already committed or abandoned");
     }
+    const outcome = await this.#commitHeld(sink, options);
+    // A commit step that throws leaves the wave as it stood, with its
+    // contributions undecided, as the serving loop expects of a cycle that
+    // failed; only an outcome releases them.
+    this.#releaseSealedState();
+    return outcome;
+  }
+
+  /** The commit step over the sealed commits, which `commitWave()` then releases. */
+  async #commitHeld(
+    sink: WaveCommitSink,
+    options: WaveCommitOptions,
+  ): Promise<WaveCommitOutcome> {
     this.#closed = true;
     this.#derivedThrough = options.derivedThrough;
     const outcome: WaveCommitOutcome = {
@@ -2208,22 +2365,20 @@ export class WaveAccumulator
       this.#homeDocInstances(contribution)
     );
 
-    /** Per SPACE: sealed localSeq → contribution index. LocalSeqs are
-     * per-space replica counters, so the mapping must be per-space too —
+    /** `${space}\0${localSeq}` of each sealed commit → contribution index.
+     * LocalSeqs are per-space replica counters, so the key names the space —
      * a pending read in a FOREIGN sealed commit resolves its layers
      * against that space's seals, which is what folds a reader of a
      * withdrawn foreign write into the withdrawal (the cross-space half
      * of the closure below). */
-    const byLocalSeq = new Map<MemorySpace, Map<number, number>>();
+    const byLocalSeq = new Map<string, number>();
 
     for (const contribution of this.#contributions) {
       for (const sealed of contribution.spaces) {
-        let perSpace = byLocalSeq.get(sealed.space);
-        if (perSpace === undefined) {
-          perSpace = new Map();
-          byLocalSeq.set(sealed.space, perSpace);
-        }
-        perSpace.set(sealed.sealed.localSeq, contribution.index);
+        byLocalSeq.set(
+          `${sealed.space}\0${sealed.sealed.localSeq}`,
+          contribution.index,
+        );
       }
     }
     const allDocs = new Map<
@@ -2334,7 +2489,10 @@ export class WaveAccumulator
      * Dropping costs nothing: the value is re-derivable, and a derivation
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
-     * path. A non-re-derivable consequence takes no view check here: its
+     * path. One that did not read the doc runs again only if the commits
+     * it lost to left every doc with no value (SupersededOutput). A
+     * non-re-derivable
+     * consequence takes no view check here: its
      * reads are held to the store ahead of this loop, and one with a stale
      * read is requeued whole before any doc of its reaches this, so what
      * arrives here rests on current reads and conflicts on its written
@@ -2371,9 +2529,7 @@ export class WaveAccumulator
         contribution.index >= candidate.sealedBefore
       );
       if (own === undefined) return undefined;
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) return undefined;
-      const { confirmed, pending } = home.sealed.commit.reads;
+      const { confirmed, pending } = this.#homeCommit(contribution).reads;
       let observed = false;
       for (
         const { read, seq } of [
@@ -2427,8 +2583,6 @@ export class WaveAccumulator
       ) {
         return undefined;
       }
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) return undefined;
       const overwritten = await sink.sessionOverwritePathsSince(
         this.#space,
         doc,
@@ -2442,10 +2596,9 @@ export class WaveAccumulator
       };
       const patches = new Set<PatchOp>();
       let whole = true;
-      for (const operation of home.sealed.commit.operations) {
-        if (operation.op === "sqlite") continue;
+      for (const operation of this.#homeCommit(contribution).operations) {
         if (
-          operation.id !== doc.id ||
+          operation.op === "sqlite" || operation.id !== doc.id ||
           this.#scopeKeyFor(operation.scope, context) !== doc.scopeKey
         ) {
           continue;
@@ -2515,22 +2668,33 @@ export class WaveAccumulator
           }
           if (contribution.context.kind === "derivation") {
             // Pure derivation write superseded: DROP, sound because
-            // re-derivable. The drop re-arms nothing — recomputation
-            // arrives only through the ordinary dependency path
-            // (§3d, RULED 2026-08-05).
+            // re-derivable. Recomputation arrives through the ordinary
+            // dependency path (§3d, RULED 2026-08-05), or, where the
+            // superseding commits leave the run's docs with no value, through
+            // the settlement this records for the scheduler.
             droppedDocs[contribution.index].add(key);
             outcome.supersededWrites += this.#homeOpCountFor(
               contribution,
               doc,
             );
+            const identity = contribution.context.scopeKeyIdentity ??
+              this.#scopeKeyIdentity;
+            (contribution.supersededOutputs ??= new Map()).set(key, {
+              space: this.#space,
+              id: doc.id,
+              ...(doc.scope === undefined ? {} : { scope: doc.scope }),
+              ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+              seq: heads.get(key) ?? 0,
+            });
           } else {
             // Non-re-derivable consequence (event-handler and the loop's
             // bookkeeping alike): rebase against the new head —
             // field-level merge for writes that commute with the
             // concurrent commit. A semantic conflict requeues an EVENT
             // contribution whole; a bookkeeping contribution has no
-            // event to requeue and DROPS whole instead — the loop
-            // re-derives its bookkeeping next wave (WaveRunKind doc).
+            // event to requeue and DROPS whole instead — what lands it
+            // again depends on which bookkeeping write it was (WaveRunKind
+            // doc).
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,
@@ -2667,8 +2831,9 @@ export class WaveAccumulator
           // clause, RULED 2026-08-18): an event-handler run of an LT1
           // same-wave cascade whose durable entry rode an emitter write
           // this wave WITHDRAWS — a DERIVATION emitter's superseded
-          // per-doc drop (§3d: the drop re-arms nothing, so nothing ever
-          // re-emits the entry), a dropped-whole emitter, or a requeued
+          // per-doc drop (§3d: nothing re-emits the entry, and an emitter the
+          // drop re-arms appends one of its own), a dropped-whole emitter, or
+          // a requeued
           // emitter the parentEventId thread did not reach — has NO
           // durable entry behind it. Delivering it would commit one
           // consequence for zero entries: the invariant broken from the
@@ -2803,12 +2968,6 @@ export class WaveAccumulator
     // reaches the sink's engine lookup.
     if (this.#failedForeignSpaces.size > 0) {
       for (const contribution of this.#contributions) {
-        if (
-          requeued.has(contribution.index) ||
-          droppedWhole.has(contribution.index)
-        ) {
-          continue;
-        }
         const failed = contribution.spaces.some((sealed) =>
           sealed.space !== this.#space &&
           this.#failedForeignSpaces.has(sealed.space)
@@ -2873,15 +3032,18 @@ export class WaveAccumulator
       ) {
         continue;
       }
-      for (const { space, changes } of contribution.spaceAccessChanges) {
+      for (const served of contribution.spaceAccessChanges) {
+        const { space } = served;
         if (this.#tenureEnded) return this.#abortForLostLease(outcome);
-        const result = await this.#commitSpaceAccessChange(
-          sink,
-          contribution,
-          space,
-          changes,
-        );
+        const result = await this.#commitSpaceAccessChange(sink, served);
         if (result.error === undefined) continue;
+        // A change to this tenure's own list refused for its deletion ends
+        // the tenure, as the home commit's refusal would; one to another
+        // space's list requeues like any other refusal, and the replay's
+        // seal refuses it.
+        if (result.error.name === "SpaceDeleted" && space === this.#space) {
+          return this.#abortForDeletedSpace(outcome);
+        }
         logger.warn("access-list-change-commit-refused", () => [
           `access-list change to ${space} by event ` +
           `${contribution.context.eventId} refused at the wave commit; ` +
@@ -2914,7 +3076,7 @@ export class WaveAccumulator
       const { key, batch } of this.#buildForeignBatches(requeued, droppedWhole)
     ) {
       // Tenure re-check per sink call (defense-in-depth over the entry
-      // check): the entry check plus the engine's live-lease row cover
+      // check): the entry check plus the memory server's lease map cover
       // today's synchronous sink, but an ASYNC sink would re-open the
       // same-process C7b window between entry and this call.
       if (this.#tenureEnded) {
@@ -3019,10 +3181,15 @@ export class WaveAccumulator
         return outcome;
       }
       // The memory server refuses a derived commit whose holder no longer
-      // holds the live lease, and the sink's owner ends the tenure when it
-      // sees such a refusal (serving-loop.md §2). A refusal under an ended
-      // tenure is a lease loss, with no conflict to resolve.
+      // holds the lease (serving-loop.md §2), so a refusal under a tenure a
+      // park ended meanwhile is a lease loss, with no conflict to resolve.
       if (this.#tenureEnded) return this.#abortForLostLease(outcome);
+      // The space is deleted, which ends the tenure for good
+      // (serving-loop.md, "A deleted space"): nothing to resolve, and no
+      // successor could commit the wave.
+      if (result.error.name === "SpaceDeleted") {
+        return this.#abortForDeletedSpace(outcome);
+      }
 
       // The sink re-verified inside its transaction and something moved
       // after our head query (or a precondition failed). Fold the news
@@ -3177,34 +3344,43 @@ export class WaveAccumulator
   //
 
   /**
-   * Helper for `seal()`, which returns why the wave refuses `changes`, the
-   * access-list changes a transaction staged under the run context `context`,
-   * or `undefined` when the memory server would admit each space's changes
-   * against the store as it stands.
+   * Helper for `seal()`, which decides `changes`, the access-list changes a
+   * transaction staged under the run context `context`. Returns their memory
+   * server form when it would admit each space's changes against the store
+   * as it stands, and otherwise why the wave refuses them.
    */
-  async #refuseSpaceAccessChanges(
+  async #admitSpaceAccessChanges(
     context: WaveRunContext | undefined,
-    changes: WaveContribution["spaceAccessChanges"],
-  ): Promise<string | undefined> {
+    changes: ReadonlyArray<{
+      space: MemorySpace;
+      changes: readonly SpaceAccessChange[];
+    }>,
+  ): Promise<{ refused: string } | { served: ListedServedAclChange[] }> {
     const authority = this.#spaceAccessAuthority;
     if (authority === undefined) {
-      return "This wave admits no change to an access list.";
+      return { refused: "This wave admits no change to an access list." };
     }
+    const admitted: ListedServedAclChange[] = [];
     for (const { space, changes: list } of changes) {
       const served = context === undefined
         ? undefined
         : this.#servedAclChangeFor(context, space, list);
       if (served === undefined) {
-        return "Only a handler run delivering a durable stream entry may " +
-          "change an access list, and only as the actor it acts for.";
+        return {
+          refused: "Only a handler run delivering a durable stream entry " +
+            "may change an access list, and only as the actor it acts for.",
+        };
       }
       const verdict = await authority(served);
       if ("refused" in verdict) {
-        return `The change to the access list of ${space} was refused: ` +
-          verdict.refused;
+        return {
+          refused: `The change to the access list of ${space} was refused: ` +
+            verdict.refused,
+        };
       }
+      admitted.push(served);
     }
-    return undefined;
+    return { served: admitted };
   }
 
   /**
@@ -3247,37 +3423,21 @@ export class WaveAccumulator
   }
 
   /**
-   * Helper for `commitWave()`, which commits `contribution`'s `changes` to the
-   * access list of `space` through `sink`.
+   * Helper for `commitWave()`, which commits `served`, an access-list change
+   * the seal admitted, through `sink`.
    *
    * @throws Error when `sink` cannot commit an access-list change, which
    *   only a wave host that wired the seal's check and not the commit makes.
    */
   #commitSpaceAccessChange(
     sink: WaveCommitSink,
-    contribution: WaveContribution,
-    space: MemorySpace,
-    changes: readonly SpaceAccessChange[],
+    served: ListedServedAclChange,
   ): Promise<Result<{ seq?: number }, WaveCommitRejection>> {
     if (sink.commitSpaceAccessChange === undefined) {
       throw new Error(
         "a contribution carries an access-list change, and the wave's " +
           "commit sink has no `commitSpaceAccessChange()` to commit it with",
       );
-    }
-    const served = this.#servedAclChangeFor(
-      contribution.context,
-      space,
-      changes,
-    );
-    if (served === undefined) {
-      return Promise.resolve({
-        error: {
-          name: "AclDocumentWriteRefused",
-          message: `the run that changed the access list of ${space} may ` +
-            "not change one",
-        },
-      });
     }
     return sink.commitSpaceAccessChange(served);
   }
@@ -3288,6 +3448,14 @@ export class WaveAccumulator
     return contribution.spaces.find((s) => s.space === this.#space);
   }
 
+  /** The operations and reads of a contribution's home seal; none for a
+   * contribution that sealed nothing in the home space. */
+  #homeCommit(
+    contribution: WaveContribution,
+  ): Pick<ClientCommit, "operations" | "reads"> {
+    return this.#homeSealed(contribution)?.sealed.commit ?? NOTHING_SEALED;
+  }
+
   /**
    * The confirmed reads of a contribution's home transaction, as the wave
    * hands them to the sink's stale-read check and carries them in the home
@@ -3295,9 +3463,9 @@ export class WaveAccumulator
    * that sealed nothing in the home space.
    */
   #handlerReadsOf(contribution: WaveContribution): WaveReadQuery[] {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return [];
-    return home.sealed.commit.reads.confirmed.map((read): WaveReadQuery => ({
+    return this.#homeCommit(contribution).reads.confirmed.map((
+      read,
+    ): WaveReadQuery => ({
       id: read.id,
       ...(read.scope === undefined ? {} : { scope: read.scope }),
       scopeKey: this.#scopeKeyFor(read.scope, contribution.context),
@@ -3356,9 +3524,7 @@ export class WaveAccumulator
       string,
       { id: string; scope?: CellScope; scopeKey: string }
     >();
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return docs;
-    for (const operation of home.sealed.commit.operations) {
+    for (const operation of this.#homeCommit(contribution).operations) {
       if (operation.op === "sqlite") continue;
       const scopeKey = this.#scopeKeyFor(operation.scope, contribution.context);
       docs.set(docInstanceKey(operation.id, scopeKey), {
@@ -3426,19 +3592,16 @@ export class WaveAccumulator
   }
 
   #homeOpCount(contribution: WaveContribution): number {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return 0;
-    return home.sealed.commit.operations.filter((op) => op.op !== "sqlite")
-      .length;
+    return this.#homeCommit(contribution).operations.filter((op) =>
+      op.op !== "sqlite"
+    ).length;
   }
 
   #homeOpCountFor(
     contribution: WaveContribution,
     doc: { id: string; scope?: CellScope; scopeKey: string },
   ): number {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return 0;
-    return home.sealed.commit.operations.filter((op) =>
+    return this.#homeCommit(contribution).operations.filter((op) =>
       op.op !== "sqlite" && op.id === doc.id &&
       this.#scopeKeyFor(op.scope, contribution.context) === doc.scopeKey
     ).length;
@@ -3455,12 +3618,9 @@ export class WaveAccumulator
     concurrentPaths: ReadonlyArray<readonly string[]>,
     dropped?: ReadonlySet<PatchOp>,
   ): boolean {
-    const home = this.#homeSealed(contribution);
-    if (home === undefined) return true;
-    for (const operation of home.sealed.commit.operations) {
-      if (operation.op === "sqlite") continue;
+    for (const operation of this.#homeCommit(contribution).operations) {
       if (
-        operation.id !== doc.id ||
+        operation.op === "sqlite" || operation.id !== doc.id ||
         this.#scopeKeyFor(operation.scope, contribution.context) !==
           doc.scopeKey
       ) {
@@ -3511,9 +3671,7 @@ export class WaveAccumulator
   #lt1EmittersByEventId(): Map<string, { index: number; docKey: string }> {
     const emitters = new Map<string, { index: number; docKey: string }>();
     for (const contribution of this.#contributions) {
-      const home = this.#homeSealed(contribution);
-      if (home === undefined) continue;
-      for (const operation of home.sealed.commit.operations) {
+      for (const operation of this.#homeCommit(contribution).operations) {
         if (operation.op === "sqlite" || operation.op === "delete") continue;
         if (!operation.id.startsWith(STREAM_ENTRIES_DOC_PREFIX)) continue;
         const docKey = docInstanceKey(
@@ -3542,7 +3700,7 @@ export class WaveAccumulator
    * (engine-wave-sink.ts). */
   #readsWithdrawnContribution(
     contribution: WaveContribution,
-    byLocalSeq: ReadonlyMap<MemorySpace, ReadonlyMap<number, number>>,
+    byLocalSeq: ReadonlyMap<string, number>,
     sawWithdrawnWrite: (
       ownerIndex: number,
       readDocKey: string,
@@ -3550,8 +3708,6 @@ export class WaveAccumulator
     ) => boolean,
   ): WithdrawnRead | undefined {
     for (const spaceContribution of contribution.spaces) {
-      const perSpace = byLocalSeq.get(spaceContribution.space);
-      if (perSpace === undefined) continue;
       for (const read of spaceContribution.sealed.commit.reads.pending) {
         const layers = Array.isArray(read.localSeq)
           ? read.localSeq
@@ -3561,7 +3717,7 @@ export class WaveAccumulator
           this.#scopeKeyFor(read.scope, contribution.context),
         );
         for (const layer of layers) {
-          const owner = perSpace.get(layer);
+          const owner = byLocalSeq.get(`${spaceContribution.space}\0${layer}`);
           if (
             owner !== undefined &&
             sawWithdrawnWrite(owner, readDocKey, spaceContribution.space)
@@ -3586,6 +3742,42 @@ export class WaveAccumulator
     return this.#contributions.filter((c) =>
       !requeued.has(c.index) && !droppedWhole.has(c.index)
     );
+  }
+
+  /**
+   * The writes of `contribution`'s home sealed commit that the wave commit
+   * leaves out, keyed by the index of their operation in the commit's
+   * operations: every operation on a document in `droppedDocs`, and the
+   * indexes of the patches `droppedPatches` names in a patch operation on
+   * any other document.
+   */
+  #droppedWritesOf(
+    contribution: WaveContribution,
+    droppedDocs: ReadonlySet<string>,
+    droppedPatches: ReadonlyMap<string, ReadonlySet<PatchOp>>,
+  ): DroppedSealedWrites {
+    const dropped = new Map<number, "operation" | ReadonlySet<number>>();
+    const { operations } = this.#homeCommit(contribution);
+    for (const [index, operation] of operations.entries()) {
+      if (operation.op === "sqlite") continue;
+      const key = docInstanceKey(
+        operation.id,
+        this.#scopeKeyFor(operation.scope, contribution.context),
+      );
+      if (droppedDocs.has(key)) {
+        dropped.set(index, "operation");
+        continue;
+      }
+      const superseded = droppedPatches.get(key);
+      if (superseded === undefined || operation.op !== "patch") continue;
+      const patches = new Set(
+        operation.patches.flatMap((patch, patchIndex) =>
+          superseded.has(patch) ? [patchIndex] : []
+        ),
+      );
+      if (patches.size > 0) dropped.set(index, patches);
+    }
+    return dropped;
   }
 
   #buildHomeBatch(
@@ -3648,22 +3840,24 @@ export class WaveAccumulator
       }
       const home = this.#homeSealed(contribution);
       if (home === undefined) continue;
-      for (const sealedOperation of home.sealed.commit.operations) {
+      const dropped = this.#droppedWritesOf(
+        contribution,
+        droppedDocs[contribution.index],
+        droppedPatches[contribution.index],
+      );
+      for (
+        const [index, sealedOperation] of home.sealed.commit.operations
+          .entries()
+      ) {
         let operation = sealedOperation;
-        if (operation.op !== "sqlite") {
-          const key = docInstanceKey(
-            operation.id,
-            this.#scopeKeyFor(operation.scope, context),
+        const drop = dropped.get(index);
+        if (drop === "operation") continue;
+        if (drop !== undefined && operation.op === "patch") {
+          const patches = operation.patches.filter((_, patch) =>
+            !drop.has(patch)
           );
-          if (droppedDocs[contribution.index].has(key)) continue;
-          const dropped = droppedPatches[contribution.index].get(key);
-          if (dropped !== undefined && operation.op === "patch") {
-            const patches = operation.patches.filter((patch) =>
-              !dropped.has(patch)
-            );
-            if (patches.length === 0) continue;
-            operation = { ...operation, patches };
-          }
+          if (patches.length === 0) continue;
+          operation = { ...operation, patches };
         }
         const opIndex = operations.length;
         operations.push(operation);
@@ -3779,6 +3973,9 @@ export class WaveAccumulator
     // streamEntry (its re-issued intent dedupes on navigateTo's
     // deterministic nonce at apply), and the effect lands exactly once.
     const survivedEventIds = new Set<string>();
+    // Of those, the runs whose join was foreign to this space, whose entry
+    // records the outcome withheld beside the mark (`processed-claim.ts`).
+    const withheldEventIds = new Set<string>();
     for (const contribution of this.#survivors(requeued, droppedWhole)) {
       if (
         contribution.context.kind === "event-handler" &&
@@ -3786,6 +3983,9 @@ export class WaveAccumulator
         contribution.context.lt1 === true
       ) {
         survivedEventIds.add(contribution.context.eventId);
+        if (contribution.claimWithheld === true) {
+          withheldEventIds.add(contribution.context.eventId);
+        }
       }
     }
     const eventAppends: Array<{ id: string; eventId: string }> = [];
@@ -3836,12 +4036,9 @@ export class WaveAccumulator
           }
           if (
             (patch.op === "add" || patch.op === "replace") &&
-            patch.path === "/value/entries" &&
-            Array.isArray((patch as unknown as { value?: unknown }).value)
+            patch.path === "/value/entries" && Array.isArray(patch.value)
           ) {
-            const values = spineCloneEntryList(
-              (patch as unknown as { value: unknown[] }).value,
-            );
+            const values = spineCloneEntryList(patch.value);
             entryLists.push(values);
             return { ...patch, value: values as never };
           }
@@ -3882,6 +4079,9 @@ export class WaveAccumulator
             // so the sealed originals stay pristine.
             (list[entryIndex] as { consequenced?: boolean })
               .consequenced = true;
+            if (withheldEventIds.has(entry.eventId)) {
+              (list[entryIndex] as { withheld?: boolean }).withheld = true;
+            }
           }
         }
       }
@@ -4146,7 +4346,11 @@ export class WaveAccumulator
     );
     const acceptedBySpace = new Map<
       MemorySpace,
-      Array<{ contribution: SealedSpaceContribution; seq: number }>
+      Array<{
+        contribution: SealedSpaceContribution;
+        seq: number;
+        dropped?: DroppedSealedWrites;
+      }>
     >();
     for (const contribution of this.#contributions) {
       const idx = contribution.index;
@@ -4186,6 +4390,7 @@ export class WaveAccumulator
         this.#withdraw(contribution, message, "contribution-dropped");
         continue;
       }
+      let dropped: DroppedSealedWrites | undefined;
       if (droppedDocs[idx].size > 0 || droppedPatches[idx].size > 0) {
         let droppedOps = 0;
         for (const key of droppedDocs[idx]) {
@@ -4197,39 +4402,48 @@ export class WaveAccumulator
         for (const [key, patches] of droppedPatches[idx]) {
           if (!droppedDocs[idx].has(key)) droppedOps += patches.size;
         }
-        const allDropped = droppedDocs[idx].size === homeWrites[idx].size &&
-          contribution.spaces.length === 1;
-        outcome.dispositions[idx] = allDropped
-          ? { kind: "dropped" }
-          : { kind: "partially-dropped", droppedOps };
         // No #warnDropped here: a superseded write is the EXPECTED path —
         // the superseding authored commit is the fresh state its readers
         // reconverge from — not the one-shot loss class the warn exists for.
-        // Any surviving ops rode the wave commit; the sealed commit's own
-        // overlay rolls back whole and reconverges from the wave commit
-        // (or, all-dropped, from the superseding authored commit) arriving
-        // as confirmed state.
-        const handler = context.kind === "event-handler";
-        this.#withdraw(
-          contribution,
-          (handler
-            ? "event consequence writes the firing session overwrote"
-            : "superseded pure derivation writes") +
-            " dropped from the wave commit (serving-loop.md §3d)",
-          allDropped ? "contribution-dropped" : undefined,
-        );
-        // A handler's superseded writes still consequence its event: the
-        // wave commit carries the event in `consequenceOf`, as it does for
-        // every surviving contribution.
         if (
-          handler && context.eventId !== undefined &&
-          !outcome.committedEventIds.includes(context.eventId)
+          droppedDocs[idx].size === homeWrites[idx].size &&
+          contribution.spaces.length === 1
         ) {
-          outcome.committedEventIds.push(context.eventId);
+          outcome.dispositions[idx] = { kind: "dropped" };
+          // The sealed commit's overlay rolls back whole and reconverges
+          // from the superseding authored commit arriving as confirmed
+          // state.
+          this.#withdraw(
+            contribution,
+            (context.kind === "event-handler"
+              ? "event consequence writes the firing session overwrote"
+              : "superseded pure derivation writes") +
+              " dropped from the wave commit (serving-loop.md §3d)",
+            "contribution-dropped",
+          );
+          // A handler's superseded writes still consequence its event: the
+          // wave commit carries the event in `consequenceOf`, as it does for
+          // every surviving contribution.
+          if (
+            context.kind === "event-handler" &&
+            context.eventId !== undefined &&
+            !outcome.committedEventIds.includes(context.eventId)
+          ) {
+            outcome.committedEventIds.push(context.eventId);
+          }
+          continue;
         }
-        continue;
+        outcome.dispositions[idx] = { kind: "partially-dropped", droppedOps };
+        // The writes that rode the wave commit promote at its seq, and only
+        // the dropped ones roll back.
+        dropped = this.#droppedWritesOf(
+          contribution,
+          droppedDocs[idx],
+          droppedPatches[idx],
+        );
+      } else {
+        outcome.dispositions[idx] = { kind: "committed" };
       }
-      outcome.dispositions[idx] = { kind: "committed" };
       contribution.emptySettlement?.resolve({ ok: {} });
       if (
         context.kind === "event-handler" && context.eventId !== undefined &&
@@ -4242,11 +4456,16 @@ export class WaveAccumulator
         outcome.committedEventIds.push(context.eventId);
       }
       for (const space of contribution.spaces) {
-        const seq = space.space === this.#space ? homeSeq : foreignSeqs.get(
+        const home = space.space === this.#space;
+        const seq = home ? homeSeq : foreignSeqs.get(
           this.#foreignBatchKeyFor(space.space, context),
         ) ?? homeSeq;
         const accepted = acceptedBySpace.get(space.space) ?? [];
-        accepted.push({ contribution: space, seq });
+        accepted.push({
+          contribution: space,
+          seq,
+          ...(home && dropped !== undefined ? { dropped } : {}),
+        });
         acceptedBySpace.set(space.space, accepted);
       }
     }
@@ -4255,8 +4474,10 @@ export class WaveAccumulator
     // batches in server order, preserving seal order within one batch.
     for (const accepted of acceptedBySpace.values()) {
       accepted.sort((a, b) => a.seq - b.seq);
-      for (const { contribution, seq } of accepted) {
-        contribution.resolveVerdict({ committed: { seq } });
+      for (const { contribution, seq, dropped } of accepted) {
+        contribution.resolveVerdict({
+          committed: { seq, ...(dropped === undefined ? {} : { dropped }) },
+        });
       }
     }
   }
@@ -4266,19 +4487,46 @@ export class WaveAccumulator
    * home commit landed (serving-loop.md §2's stop-committing MUST).
    */
   #abortForLostLease(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "lease-lost",
+      "lease lost mid-wave; the in-flight wave aborts (serving-loop.md §2)",
+    );
+  }
+
+  /**
+   * Withdraws every contribution because the home commit was refused for
+   * the space's deletion (serving-loop.md, "A deleted space"). The events
+   * stay unconsequenced, in a store no tenure serves again.
+   */
+  #abortForDeletedSpace(outcome: WaveCommitOutcome): WaveCommitOutcome {
+    return this.#abortWithdrawingAll(
+      outcome,
+      "space-deleted",
+      "the space is deleted; the wave aborts and the tenure ends " +
+        '(serving-loop.md, "A deleted space")',
+    );
+  }
+
+  /**
+   * Helper for {@link #abortForLostLease} and {@link #abortForDeletedSpace},
+   * which withdraws every contribution for `reason`, requeueing each event
+   * handler's and dropping every other, and marks `outcome` `aborted`.
+   */
+  #abortWithdrawingAll(
+    outcome: WaveCommitOutcome,
+    aborted: "lease-lost" | "space-deleted",
+    reason: string,
+  ): WaveCommitOutcome {
     for (const contribution of this.#contributions) {
-      this.#withdraw(
-        contribution,
-        "lease lost mid-wave; the in-flight wave aborts " +
-          "(serving-loop.md §2)",
-      );
+      this.#withdraw(contribution, reason);
       outcome.dispositions[contribution.index] =
         contribution.context.kind === "event-handler"
           ? { kind: "requeued" }
           : { kind: "dropped" };
     }
     this.#reportRequeuedEvents(outcome, () => true);
-    outcome.aborted = "lease-lost";
+    outcome.aborted = aborted;
     return outcome;
   }
 

@@ -32,6 +32,12 @@
  * its clause holds, so an empty one counts toward the module's `import type`
  * total like any other rather than standing apart as a bare statement does.
  *
+ * The second rule, `types-are-import-type`, reports that same statement
+ * wherever it stands. Deno reads the module a value statement names before it
+ * starts a program, whether or not TypeScript goes on to erase the statement,
+ * so one written inline pulls in everything that module imports. A pattern is
+ * exempt, since its source is part of its identity, and so is a fixture.
+ *
  * Whichever statement survives a merge goes where the earliest of the
  * statements it replaces sat. That is what keeps the module's evaluation at
  * the point in the list it was already reached from, which matters when the
@@ -117,6 +123,15 @@ function repeatedBareMessage(specifier: string): string {
     `so this statement does nothing: drop it. ${REFERENCE}`;
 }
 
+/** Reports a value statement that names nothing but types. */
+function allTypesMessage(specifier: string): string {
+  return `This statement names nothing but types, so write it \`import type ` +
+    `{ ... } from "${specifier}"\`. TypeScript erases either spelling, but ` +
+    "Deno reads what a value statement names, and everything that imports, " +
+    "before it starts a program, however little of it the program runs. " +
+    `${REFERENCE}`;
+}
+
 /** The statements of one kind naming one module, in the order written. */
 interface Run {
   readonly kind: Kind;
@@ -149,6 +164,27 @@ function takesNamespace(node: Deno.lint.ImportDeclaration): boolean {
 export default {
   name: "cf-import-list",
   rules: {
+    "types-are-import-type": {
+      create(context) {
+        // A pattern's source is part of its identity, so its import list is
+        // not rewritten for what a program start costs. A fixture is often a
+        // frozen copy of one.
+        if (/\/(patterns|fixtures)\//.test(context.filename)) return {};
+        return {
+          ImportDeclaration(node) {
+            if (
+              node.importKind === "value" && node.specifiers.length > 0 &&
+              !bindsValue(node)
+            ) {
+              context.report({
+                node,
+                message: allTypesMessage(node.source.value),
+              });
+            }
+          },
+        };
+      },
+    },
     "one-statement-per-kind": {
       create(context) {
         const runs = new Map<string, Run>();

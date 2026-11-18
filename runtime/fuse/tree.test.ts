@@ -49,6 +49,20 @@ describe("FsTree", () => {
         const node = tree.getNode(ino);
         expect(node?.kind).toBe("dir");
       });
+
+      it("throws, adding nothing, when the parent is a file or is missing", () => {
+        const tree = new FsTree();
+        const file = tree.addFile(tree.rootIno, "f", "x", "string");
+        const size = tree.inodes.size;
+
+        expect(() => tree.addDir(file, "d")).toThrow(
+          `Parent inode ${file} is not a directory`,
+        );
+        expect(() => tree.addDir(9_999n, "d")).toThrow(
+          "Parent inode 9999 is not a directory",
+        );
+        expect(tree.inodes.size).toBe(size);
+      });
     });
 
     describe("addFile()", () => {
@@ -86,6 +100,102 @@ describe("FsTree", () => {
         clock = 2_000;
         const ino = tree.addFile(tree.rootIno, "f", "hi", "string");
         expect(tree.getNode(ino)?.mtime).toBe(2_000);
+      });
+
+      it("throws, adding nothing, when the parent is a file", () => {
+        const tree = new FsTree();
+        const file = tree.addFile(tree.rootIno, "f", "x", "string");
+        const size = tree.inodes.size;
+
+        expect(() => tree.addFile(file, "g", "y", "string")).toThrow(
+          `Parent inode ${file} is not a directory`,
+        );
+        expect(tree.inodes.size).toBe(size);
+      });
+    });
+
+    describe("addCallable()", () => {
+      it("returns an inode that `lookup()` resolves, holding a `callable` node", () => {
+        const tree = new FsTree();
+        const script = new TextEncoder().encode("#!/bin/sh\n");
+        const ino = tree.addCallable(
+          tree.rootIno,
+          "search.tool",
+          "tool",
+          "search",
+          "result",
+          script,
+        );
+
+        expect(tree.lookup(tree.rootIno, "search.tool")).toBe(ino);
+        expect(tree.getNode(ino)).toMatchObject({
+          kind: "callable",
+          callableKind: "tool",
+          cellKey: "search",
+          cellProp: "result",
+          script,
+        });
+      });
+
+      it("throws, adding nothing, when the parent is a file", () => {
+        const tree = new FsTree();
+        const file = tree.addFile(tree.rootIno, "f", "x", "string");
+        const size = tree.inodes.size;
+
+        expect(() =>
+          tree.addCallable(
+            file,
+            "search.tool",
+            "tool",
+            "search",
+            "result",
+            new Uint8Array(0),
+          )
+        ).toThrow(`Parent inode ${file} is not a directory`);
+        expect(tree.inodes.size).toBe(size);
+      });
+    });
+
+    describe("addSymlink()", () => {
+      it("throws, adding nothing, when the parent is a file", () => {
+        const tree = new FsTree();
+        const file = tree.addFile(tree.rootIno, "f", "x", "string");
+        const size = tree.inodes.size;
+
+        expect(() => tree.addSymlink(file, "link", "../target")).toThrow(
+          `Parent inode ${file} is not a directory`,
+        );
+        expect(tree.inodes.size).toBe(size);
+      });
+    });
+
+    describe("lookup()", () => {
+      it("returns `undefined` under a parent that is a file, and the child under a directory", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        const file = tree.addFile(dir, "f", "x", "string");
+
+        expect(tree.lookup(file, "f")).toBeUndefined();
+        expect(tree.lookup(dir, "f")).toBe(file);
+      });
+    });
+
+    describe("setCfcAnnotation()", () => {
+      it("throws for an inode that does not exist", () => {
+        const tree = new FsTree();
+        const annotator = new CfcProjectionAnnotator(tree, {
+          space: "did:key:zSpace",
+          generation: "generation-1",
+          labelView: { version: 1, entries: [] },
+        });
+        const ino = tree.addFile(tree.rootIno, "f", "x", "string");
+        annotator.annotateJsonScalar(ino, ["f"], "x");
+        const annotation = tree.getCfcAnnotation(ino)!;
+
+        expect(() => tree.setCfcAnnotation(9_999n, annotation)).toThrow(
+          "Inode 9999 does not exist",
+        );
+        expect(tree.getCfcAnnotation(9_999n)).toBeUndefined();
       });
     });
 
@@ -176,6 +286,62 @@ describe("FsTree", () => {
         // inodes map decreased by 1 (the cleared "b" node)
         expect(tree.inodes.size).toBe(sizeBeforeRename - 1);
       });
+
+      it("throws, moving nothing, when the old parent is a file, the old name is missing, or the new parent is a file", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        const file = tree.addFile(dir, "f", "x", "string");
+
+        expect(() => tree.rename(file, "f", dir, "g")).toThrow(
+          `Old parent ${file} is not a directory`,
+        );
+        expect(() => tree.rename(dir, "missing", dir, "g")).toThrow(
+          `Child "missing" not found in parent ${dir}`,
+        );
+        expect(() => tree.rename(dir, "f", file, "g")).toThrow(
+          `New parent ${file} is not a directory`,
+        );
+        expect(tree.lookup(dir, "f")).toBe(file);
+        expect(tree.lookup(dir, "g")).toBeUndefined();
+      });
+
+      it("carries the entry annotation's own ref and metadata labels for a child with no annotation of its own", () => {
+        const tree = new FsTree();
+        const annotator = new CfcProjectionAnnotator(tree, {
+          space: "did:key:zSpace",
+          generation: "generation-1",
+          labelView: { version: 1, entries: [] },
+        });
+        const parentIno = tree.addDir(tree.rootIno, "values", "object");
+        annotator.annotateJsonDirectory(parentIno, [], {});
+        const annotatedIno = tree.addFile(
+          parentIno,
+          "annotated",
+          "x",
+          "string",
+        );
+        annotator.annotateJsonScalar(annotatedIno, ["annotated"], "x");
+        annotator.annotateEntry(parentIno, "annotated", annotatedIno);
+        const borrowed = tree.getCfcAnnotation(parentIno)!.entries!.entries[0];
+        tree.addFile(parentIno, "plain", "y", "string");
+        tree.setCfcEntryAnnotation(parentIno, "plain", {
+          ...borrowed,
+          name: "plain",
+        });
+
+        tree.rename(parentIno, "plain", parentIno, "moved");
+
+        const moved = tree.getCfcAnnotation(parentIno)?.entries?.entries.find(
+          (entry) => entry.name === "moved",
+        );
+        expect(moved?.childRef).toEqual(borrowed.childRef);
+        expect(moved?.metadataLabels).toEqual(borrowed.metadataLabels);
+        expect(
+          tree.getCfcAnnotation(parentIno)?.entries?.entries.some((entry) =>
+            entry.name === "plain"
+          ),
+        ).toBe(false);
+      });
     });
 
     describe("getCfcAnnotation()", () => {
@@ -236,6 +402,30 @@ describe("FsTree", () => {
     });
 
     describe("removeChild()", () => {
+      it("returns `undefined`, removing nothing, for a parent that is a file or a name it lacks", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        const file = tree.addFile(dir, "f", "x", "string");
+
+        expect(tree.removeChild(file, "f")).toBeUndefined();
+        expect(tree.removeChild(dir, "missing")).toBeUndefined();
+        expect(tree.lookup(dir, "f")).toBe(file);
+        expect(tree.inodes.has(file)).toBe(true);
+      });
+
+      it("removes an entry whose node is already gone", () => {
+        // Drops the child's node through the exposed inode map while leaving
+        // its entry listed.
+
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        const file = tree.addFile(dir, "f", "x", "string");
+        tree.inodes.delete(file);
+
+        expect(tree.removeChild(dir, "f")).toBe(file);
+        expect(tree.lookup(dir, "f")).toBeUndefined();
+      });
+
       it("leaves CFC entries unchanged when the removed child is unannotated", () => {
         const tree = new FsTree();
         const annotator = new CfcProjectionAnnotator(tree, {
@@ -328,6 +518,31 @@ describe("FsTree", () => {
         // sibling "b" is unaffected
         expect(tree.lookup(tree.rootIno, "b")).toBe(b);
         expect(tree.inodes.has(b)).toBe(true);
+      });
+
+      it("removes every node, the root's included, given the root", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        tree.addFile(dir, "f", "x", "string");
+
+        tree.clear(tree.rootIno);
+
+        expect(tree.inodes.size).toBe(0);
+        expect(tree.getNode(tree.rootIno)).toBeUndefined();
+      });
+
+      it("removes a detached inode whose former parent has since been removed", () => {
+        const tree = new FsTree();
+        const parent = tree.addDir(tree.rootIno, "parent");
+        const sibling = tree.addDir(tree.rootIno, "sibling");
+        const detached = tree.addFile(parent, "f", "x", "string");
+        tree.detachChild(parent, "f");
+        tree.removeChild(tree.rootIno, "parent");
+
+        tree.clear(detached);
+
+        expect(tree.inodes.has(detached)).toBe(false);
+        expect(tree.lookup(tree.rootIno, "sibling")).toBe(sibling);
       });
 
       it("leaves the inode map unchanged for a missing inode", () => {
@@ -792,6 +1007,16 @@ describe("FsTree", () => {
 
         tree.updateFile(ino, "c", "string");
         expect(tree.getNode(ino)?.mtime).toBe(1_002);
+      });
+
+      it("throws, changing nothing, for a directory", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+
+        expect(() => tree.updateFile(dir, "x")).toThrow(
+          `Inode ${dir} is not a file`,
+        );
+        expect(tree.getNode(dir)?.kind).toBe("dir");
       });
 
       it("throws for a generated file", () => {

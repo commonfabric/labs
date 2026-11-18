@@ -50,9 +50,10 @@ Deno.test("builtin tool registry includes the agreed first-pass tool floor", () 
     "loom_profile",
     "list_commands",
     "run_command",
+    "report_progress",
     "submit_result",
   ]);
-  assertEquals(BUILTIN_TOOL_REGISTRY.size, 39);
+  assertEquals(BUILTIN_TOOL_REGISTRY.size, 40);
   assertEquals(
     [...DEFAULT_PARENT_TOOL_IDS],
     [
@@ -118,4 +119,12 @@ Deno.test("write_file descriptor includes append support", () => {
     }).properties.mode.enum,
     ["replace", "append"],
   );
+});
+
+Deno.test("builtin tool registry registers each tool under its own descriptor's id", () => {
+  for (const [toolId, tool] of BUILTIN_TOOL_REGISTRY) {
+    assertEquals(tool.descriptor.toolId, toolId);
+  }
+  assertEquals(getBuiltinTool("bash")?.descriptor.toolId, "bash");
+  assertEquals(getBuiltinTool("not_a_tool"), undefined);
 });

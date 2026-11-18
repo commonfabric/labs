@@ -26,17 +26,17 @@ import {
 } from "@/types";
 import { debugStr } from "@/value-debug";
 
-import {
-  type MainResultForm,
-  type MapToEntryForm,
-  type MapToForm,
-  type OmitForm,
-  type RecurseForm,
-  type ReplaceForm,
-  type ValueVisitor,
-  type VisitingEntryResult,
-  type VisitingResult,
-  type VisitResult,
+import type {
+  MainResultForm,
+  MapToEntryForm,
+  MapToForm,
+  OmitForm,
+  RecurseForm,
+  ReplaceForm,
+  ValueVisitor,
+  VisitingEntryResult,
+  VisitingResult,
+  VisitResult,
 } from "./interface.ts";
 
 /**

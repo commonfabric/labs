@@ -49,6 +49,7 @@ on the Common Fabric runtime.
 - [concepts/self-reference.md](concepts/self-reference.md) — self-referential types with `SELF`
 - [concepts/types-and-schemas/writable.md](concepts/types-and-schemas/writable.md) — `Writable<>` and write access in type signatures
 - [concepts/types-and-schemas/default.md](concepts/types-and-schemas/default.md) — `Default<>` for input defaults
+- [concepts/types-and-schemas/optional.md](concepts/types-and-schemas/optional.md) — `?:` means "may be absent", and how to leave a property out
 - [concepts/types-and-schemas/unknown.md](concepts/types-and-schemas/unknown.md) — `unknown` for a reference you compare but never read through
 - [concepts/glossary.md](concepts/glossary.md) — definitions of pattern, piece, cell, space, etc.
 

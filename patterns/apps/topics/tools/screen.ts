@@ -8,31 +8,27 @@
  * the top of the list with a highlight that fades.
  */
 
-import { unicodeWidth } from "@std/cli/unicode-width";
-import {
-  RESET,
-  type Rgb,
-  sgr,
-  type Style,
-  term,
-} from "@commonfabric/cli/view/ansi";
-import { glyphFor } from "@commonfabric/cli/view/display";
+import type { Rgb, Style } from "@commonfabric/cli/view/ansi";
 import { palette as C } from "@commonfabric/cli/view/theme";
 
 import type { Topic } from "./mirror.ts";
 import type { TopicEvent } from "./events.ts";
-
-/** A run of text drawn in one style. */
-interface Span {
-  text: string;
-  style: Style;
-
-  /** Where the text links to, as a terminal hyperlink. */
-  href?: string;
-}
-
-/** One row of a region, as runs of text. */
-type Row = Span[];
+import { prose } from "./prose.ts";
+import {
+  center,
+  clip,
+  columns,
+  darken,
+  fade,
+  fit,
+  graphemes,
+  mix,
+  paintRows,
+  type Row,
+  type Span,
+  span,
+  spread,
+} from "./text.ts";
 
 /** How each kind of event is labeled, and the color it is drawn in. */
 const KINDS: Record<TopicEvent["kind"], { label: string; color: Rgb }> = {
@@ -102,6 +98,9 @@ export interface ScreenState {
 export function kindColor(kind: TopicEvent["kind"]): Rgb {
   return KINDS[kind].color;
 }
+
+/** The gap between frames while something on screen is still moving. */
+export const FRAME_MS = 33;
 
 /**
  * Whether a frame drawn at `now` differs from one drawn later, because a card
@@ -257,9 +256,10 @@ function listRows(
       span(" ", { bg }),
       ...fit(
         [
-          span(clip(topic.title, titleWidth), {
+          span(clip(topic.withheld ? "withheld" : topic.title, titleWidth), {
             fg: glow > 0 ? C.fgBright : C.fg,
             bold: glow > 0,
+            italic: topic.withheld,
             bg,
           }),
         ],
@@ -370,7 +370,7 @@ function card(
       links + event.topic.number,
     ),
     span("  ", { bg }),
-    span(event.topic.title, { fg: C.fgBright, bold: true, bg }),
+    shownTitle(event.topic, { fg: C.fgBright, bold: true, bg }),
   ];
   const shadow = span(" ", { bg: C.shadow });
   const rows: Row[] = [
@@ -466,14 +466,18 @@ function layOut(
   lines: number,
   links: string,
 ): Row[] {
+  const linkTo = (number: string) => links + number;
   switch (event.kind) {
     case "comment":
     case "edited":
-      return clipRows(markdown(event.comment.body, width), lines);
+      return clipRows(prose(event.comment.body, width, linkTo), lines);
     case "retracted":
-      return clipRows(markdown(event.comment.body, width).map(struck), lines);
+      return clipRows(
+        prose(event.comment.body, width, linkTo).map(struck),
+        lines,
+      );
     case "filed":
-      return clipRows(markdown(event.topic.body, width), lines);
+      return clipRows(prose(event.topic.body, width, linkTo), lines);
     case "link":
     case "unlinked": {
       const row = [
@@ -496,15 +500,25 @@ function layOut(
           links + event.other.number,
         ),
         span("  "),
-        span(event.other.title, { fg: C.fgBright }),
+        shownTitle(event.other, { fg: C.fgBright }),
       ];
       return [event.kind === "mention" ? row : struck(row)];
     }
     case "retitled":
-      return [[span(event.topic.title, { fg: C.green, bold: true })]];
+      return [[shownTitle(event.topic, { fg: C.green, bold: true })]];
     case "body":
       return clipRows(bodyChange(event.before, event.topic.body, width), lines);
   }
+}
+
+/**
+ * `topic`'s title in `style`, or, for a Topic withheld from this display,
+ * that it is withheld.
+ */
+function shownTitle(topic: Topic, style: Style): Span {
+  return topic.withheld
+    ? span("withheld", { ...style, fg: C.fgDim, bold: false, italic: true })
+    : span(topic.title, style);
 }
 
 /** `row` dimmed and struck through, as what was taken back is. */
@@ -574,290 +588,6 @@ function typeIn(rows: readonly Row[], count: number, color: Rgb): Row[] {
   return typed;
 }
 
-//
-// Markdown, lightly
-//
-
-/**
- * `text` as rows `width` wide, with headings, emphasis, code, links, quotes,
- * and lists drawn rather than marked up.
- */
-export function markdown(text: string, width: number): Row[] {
-  const rows: Row[] = [];
-  let fenced = false;
-  // The lines of the paragraph being read, which wrap as one.
-  let paragraph: string[] = [];
-  const flush = () => {
-    if (paragraph.length === 0) return;
-    for (const row of wrap(inline(paragraph.join(" "), { fg: C.fg }), width)) {
-      rows.push(row);
-    }
-    paragraph = [];
-  };
-  for (const raw of text.replace(/\r/g, "").split("\n")) {
-    const plain = !/^\s*(```|#{1,6}\s|[-*+]\s|\d+[.)]\s|>)/.test(raw) &&
-      raw.trim() !== "";
-    if (plain && !fenced) {
-      paragraph.push(raw.trim());
-      continue;
-    }
-    flush();
-    if (/^\s*```/.test(raw)) {
-      fenced = !fenced;
-      continue;
-    }
-    if (fenced) {
-      rows.push([
-        span(take(printable(raw.replaceAll("\t", "  ")), width), {
-          fg: C.cyan,
-        }),
-      ]);
-      continue;
-    }
-    const heading = /^\s*#{1,6}\s+(.*)$/.exec(raw);
-    if (heading) {
-      for (
-        const row of wrap(
-          inline(heading[1], { fg: C.fgBright, bold: true }),
-          width,
-        )
-      ) {
-        rows.push(row);
-      }
-      continue;
-    }
-    const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(raw);
-    if (item) {
-      const indent = Math.min(item[1].length, 6);
-      const marker = /\d/.test(item[2]) ? clip(item[2], 6) : "•";
-      const bullet = `${" ".repeat(indent)}${marker} `;
-      wrap(inline(item[3], { fg: C.fg }), width - bullet.length).forEach(
-        (row, index) =>
-          rows.push([
-            span(index === 0 ? bullet : " ".repeat(bullet.length), {
-              fg: C.cyan,
-            }),
-            ...row,
-          ]),
-      );
-      continue;
-    }
-    const quote = /^\s*>\s?(.*)$/.exec(raw);
-    if (quote) {
-      for (const row of wrap(inline(quote[1], { fg: C.fgDim }), width - 2)) {
-        rows.push([span("▎ ", { fg: C.panelHi }), ...row]);
-      }
-      continue;
-    }
-    if ((rows.at(-1)?.length ?? 0) > 0) rows.push([]);
-  }
-  flush();
-  while (rows.at(-1)?.length === 0) rows.pop();
-  return rows;
-}
-
-/** `text`'s inline markup drawn: `code`, **strong**, *emphasis*, links. */
-function inline(text: string, base: Style): Row {
-  const spans: Row = [];
-  const pattern =
-    /`([^`]+)`|\*\*([^*]+)\*\*|\*([^*\s][^*]*)\*|\[([^\]]+)\]\(([^)]+)\)/g;
-  let at = 0;
-  for (const match of text.matchAll(pattern)) {
-    if (match.index > at) spans.push(span(text.slice(at, match.index), base));
-    const [, code, strong, emphasis, label] = match;
-    if (code !== undefined) spans.push(span(code, { ...base, fg: C.cyan }));
-    else if (strong !== undefined) {
-      spans.push(span(strong, { ...base, fg: C.fgBright, bold: true }));
-    } else if (emphasis !== undefined) {
-      spans.push(span(emphasis, { ...base, italic: true }));
-    } else {
-      spans.push(span(label, { ...base, fg: C.blue, underline: true }));
-    }
-    at = match.index + match[0].length;
-  }
-  if (at < text.length) spans.push(span(text.slice(at), base));
-  return spans;
-}
-
-/** `spans` wrapped at word boundaries into rows `width` wide. */
-function wrap(spans: Row, width: number): Row[] {
-  const rows: Row[] = [];
-  let row: Row = [];
-  let used = 0;
-  const end = () => {
-    rows.push(trimEnd(row));
-    row = [];
-    used = 0;
-  };
-  for (const s of spans) {
-    for (const word of s.text.split(/(\s+)/)) {
-      if (word === "") continue;
-      if (/^\s/.test(word)) {
-        if (used > 0) {
-          row.push(span(" ", s.style));
-          used += 1;
-        }
-        continue;
-      }
-      if (used > 0 && used + columns(word) > width) end();
-      // A word wider than a row is cut where each row ends, every row taking
-      // at least one character, however wide.
-      let piece = "";
-      for (const char of graphemes(word)) {
-        const wide = columns(char);
-        if (used > 0 && used + wide > width) {
-          if (piece !== "") row.push(span(piece, s.style));
-          piece = "";
-          end();
-        }
-        piece += char;
-        used += wide;
-      }
-      row.push(span(piece, s.style));
-    }
-  }
-  if (row.length > 0) rows.push(trimEnd(row));
-  return rows;
-}
-
-function trimEnd(row: Row): Row {
-  const last = row.at(-1);
-  return last !== undefined && last.text === " " ? row.slice(0, -1) : row;
-}
-
-//
-// Text and color
-//
-
-/** The characters that set the direction text runs in, or break a line. */
-const DIRECTING =
-  /[\p{Zl}\p{Zp}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
-
-/**
- * A run of `text` in `style`, as {@link printable} draws it, linking to
- * `href` when there is one.
- */
-function span(text: string, style: Style = {}, href?: string): Span {
-  return {
-    text: printable(text),
-    style,
-    ...(href === undefined ? {} : { href }),
-  };
-}
-
-/**
- * `text` with a tab drawn as a space, and every other character a terminal
- * would act on rather than print, or that would turn the text around, drawn
- * as a glyph standing for it, so that what the board holds cannot drive the
- * terminal, and is measured as it is drawn.
- */
-function printable(text: string): string {
-  let shown = "";
-  for (const char of text.replaceAll("\t", " ").replace(DIRECTING, "␦")) {
-    shown += glyphFor(char);
-  }
-  return shown;
-}
-
-const segmenter = new Intl.Segmenter();
-
-/** The characters of `text` as a reader sees them. */
-function graphemes(text: string): string[] {
-  return Array.from(segmenter.segment(text), ({ segment }) => segment);
-}
-
-/**
- * How many columns `text` takes. An emoji made of several code points, such
- * as one asking for emoji presentation, one with a skin tone, a flag, or
- * emoji joined into one, takes two, as terminals draw them.
- */
-function columns(text: string): number {
-  let total = 0;
-  for (const char of graphemes(text)) {
-    total += [...char].length > 1 && EMOJI.test(char) ? 2 : unicodeWidth(char);
-  }
-  return total;
-}
-
-/** A code point that makes a character of several an emoji. */
-const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}|\uFE0F/u;
-
-/** The longest start of `text` that fits in `width` columns. */
-function take(text: string, width: number): string {
-  let used = 0;
-  let out = "";
-  for (const char of graphemes(text)) {
-    used += columns(char);
-    if (used > width) break;
-    out += char;
-  }
-  return out;
-}
-
-/** `text` cut to `width` columns, ending in an ellipsis when it was cut. */
-function clip(text: string, width: number): string {
-  const flat = printable(text).replace(/\s+/g, " ");
-  if (columns(flat) <= width) return flat;
-  return `${take(flat, Math.max(0, width - 1))}…`;
-}
-
-function center(text: string, width: number): string {
-  const cut = clip(text, width);
-  return " ".repeat(Math.max(0, Math.floor((width - columns(cut)) / 2))) +
-    cut;
-}
-
-/** `row` cut or padded to exactly `width` columns, padding in `bg`. */
-function fit(row: Row, width: number, bg: Rgb): Row {
-  const out: Row = [];
-  let used = 0;
-  for (const s of row) {
-    if (used + columns(s.text) <= width) {
-      out.push(s);
-      used += columns(s.text);
-      continue;
-    }
-    const head = take(s.text, width - used);
-    out.push({ ...s, text: head });
-    used += columns(head);
-    break;
-  }
-  if (used < width) {
-    const last = out.at(-1)?.style.bg ?? bg;
-    out.push(span(" ".repeat(width - used), { bg: last }));
-  }
-  return out;
-}
-
-/**
- * `left` and `right` at either end of a row `width` wide, on `bg`, `left`
- * cut short where both do not fit.
- */
-function spread(left: Row, right: Row, width: number, bg: Rgb): Row {
-  const room = width - right.reduce((n, s) => n + columns(s.text), 0);
-  return fit([...fit(left, room, bg), ...right], width, bg);
-}
-
-/** How bright a glow `elapsed` into `duration` still is, from 1 down to 0. */
-function fade(elapsed: number, duration: number): number {
-  if (elapsed >= duration) return 0;
-  const t = Math.max(elapsed, 0) / duration;
-  return 1 - t * t;
-}
-
-/** The color `amount` of the way from `from` to `to`. */
-function mix(from: Rgb, to: Rgb, amount: number): Rgb {
-  return [
-    Math.round(from[0] + (to[0] - from[0]) * amount),
-    Math.round(from[1] + (to[1] - from[1]) * amount),
-    Math.round(from[2] + (to[2] - from[2]) * amount),
-  ];
-}
-
-function darken(color: Rgb, amount: number): Rgb {
-  return mix(color, C.editorBg, 1 - amount);
-}
-
 /** `14:02:31`, in local time. */
 function clock(at: number): string {
   return new Date(at).toLocaleTimeString("en-GB", { hour12: false });
@@ -871,19 +601,4 @@ function day(at: number, now: number): string {
     ? date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })
     : date.toLocaleDateString("en-US", { month: "short", day: "2-digit" }))
     .padStart(6);
-}
-
-/**
- * `rows` painted from the top left, each padded to `width`, on `bg` wherever
- * a run names no background of its own.
- */
-function paintRows(rows: readonly Row[], width: number, bg: Rgb): string[] {
-  return rows.map((row, index) =>
-    term.moveTo(index + 1, 1) + term.clearLine +
-    fit(row, width, bg).map((s) =>
-      RESET + sgr({ bg, ...s.style }) +
-      (s.href === undefined ? s.text : term.hyperlink(s.href, s.text))
-    ).join("") +
-    RESET
-  );
 }

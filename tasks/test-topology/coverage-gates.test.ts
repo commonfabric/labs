@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { fromFileUrl } from "@std/path";
 import {
   COVERAGE_GATE_SUITE,
   coverageGateIdentity,
@@ -10,7 +11,7 @@ import {
 import { claimsFor, loadTopology } from "../test-topology.ts";
 import type { MeasuredSet, Suite } from "./suite.ts";
 
-const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
+const root = fromFileUrl(new URL("../..", import.meta.url)).replace(/\/$/, "");
 
 /** A suite carrying only what the coverage gates are built from. */
 function suite(

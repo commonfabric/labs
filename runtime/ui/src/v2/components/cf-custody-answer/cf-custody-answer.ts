@@ -1,9 +1,10 @@
 /** Host publication and display of a custody room's answer, once per instance. */
 
-import {
-  type CellHandle,
-  type JSONValue,
-  type RuntimeClient,
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import type {
+  CellHandle,
+  JSONValue,
+  RuntimeClient,
 } from "@commonfabric/runtime-client";
 import { consume } from "@lit/context";
 import { html, nothing, type PropertyValues } from "lit";
@@ -37,9 +38,6 @@ type CustodyAnswer = string | number | boolean;
 const isCustodyAnswer = (value: JSONValue): value is CustodyAnswer =>
   typeof value === "string" || typeof value === "number" ||
   typeof value === "boolean";
-
-const messageOf = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
 
 /**
  * Publishes a custody room's answer once and shows it. A room binds it as
@@ -255,7 +253,7 @@ export class CFCustodyAnswer extends BaseElement {
     } catch (refused) {
       // Not yet released, not every seat has sealed, or already published:
       // the slot says which. Anything else is said.
-      if (!isExpectedRefusal(refused)) error = messageOf(refused);
+      if (!isExpectedRefusal(refused)) error = describeFailure(refused);
     }
     // Rebound or detached meanwhile: this request's instance is not the one
     // shown any more.
@@ -277,7 +275,7 @@ export class CFCustodyAnswer extends BaseElement {
       // request met on the way no longer matters.
       if (answer !== undefined) error = "";
     } catch (failed) {
-      error = messageOf(failed);
+      error = describeFailure(failed);
     }
     if (generation !== this.#generation) return;
     if (error !== this.#error) {

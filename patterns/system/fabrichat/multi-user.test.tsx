@@ -114,7 +114,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     // Stand-ins for what the room derives; a row's streams read none of it.
     places: {},
     cannotWrite: false,
-    isOwner: false,
+    rowFacts: {},
     messages: setup.records.messages,
   } as RowArg);
 

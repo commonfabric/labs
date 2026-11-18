@@ -1,9 +1,10 @@
 /**
  * Browser-level coverage for a verb an iframe guest sends to. The verb list's
  * guest adds an item only by sending the pattern's `addItem` stream an event,
- * which reaches it as a `stream` resource of the frame; the item reaches the
- * guest again as the frame's input. The test acts on the guest's own controls
- * through a second CDP client, and reads the list from the piece.
+ * which reaches it as a `stream` resource; the item reaches the guest again
+ * through the read-only `items` resource, a path of the pattern's state. The
+ * test acts on the guest's own controls through a second CDP client, and reads
+ * the list from the piece.
  */
 
 import { createTestSpace, env } from "@commonfabric/integration";
@@ -111,12 +112,12 @@ describe("iframe verb list", () => {
         }`),
       ).toBe("");
       await cc.synced();
-      expect(await piece.result.get(["items"])).toEqual([
+      expect(await piece.result.get(["state", "items"])).toEqual([
         { id: sent.id, text: "Milk" },
       ]);
 
       // An item another caller adds through the same verb reaches the guest
-      // as the frame's input.
+      // through the items it is granted to read.
       cc.getResult(piece.getCell()).key("addItem").send({
         id: "from-another-caller",
         text: "Eggs",

@@ -1,5 +1,10 @@
 import { css, html } from "lit";
 import { BaseElement } from "../../core/base-element.ts";
+import {
+  groupOf,
+  joinGroup,
+  leaveGroup,
+} from "../cf-resizable-panel-group/membership.ts";
 
 /**
  * @component cf-resizable-panel
@@ -11,6 +16,9 @@ import { BaseElement } from "../../core/base-element.ts";
  * @attribute {number} min-size - Minimum size of the panel as a percentage (0-100). Defaults to 0.
  * @attribute {number} max-size - Maximum size of the panel as a percentage (0-100). Defaults to 100.
  * @attribute {boolean} collapsible - Whether the panel can be collapsed to zero size
+ * @attribute {boolean} hide-when-stacked - Sets `hideWhenStacked`: while its
+ *   group is stacked (narrower than the group's `stackBelow`), the panel and
+ *   the handles beside it are not drawn, and the other panels share its room
  *
  * @slot default - Content of the resizable panel
  *
@@ -51,7 +59,9 @@ import { BaseElement } from "../../core/base-element.ts";
  * ```
  *
  * @note
- * - Must be used within a cf-resizable-panel-group
+ * - Belongs to the nearest cf-resizable-panel-group above it, whatever
+ *   elements stand between them, so groups nest: a group inside a panel
+ *   sizes its own panels, and the outer group never touches them
  * - Panels are separated by cf-resizable-handle components
  * - Size values are percentages of the total available space
  * - The component automatically validates that min <= default <= max
@@ -62,17 +72,28 @@ export class CFResizablePanel extends BaseElement {
     defaultSize: { type: Number, attribute: "default-size" },
     maxSize: { type: Number, attribute: "max-size" },
     collapsible: { type: Boolean },
+    hideWhenStacked: { type: Boolean, attribute: "hide-when-stacked" },
   };
   declare minSize: number;
   declare defaultSize: number;
   declare maxSize: number;
   declare collapsible: boolean;
+  declare hideWhenStacked: boolean;
 
   static override styles = css`
     :host {
       display: block;
-      overflow: auto;
+      overflow: hidden;
       position: relative;
+    }
+
+    /* Set by the group: a panel fills the group across the axis it lies on. */
+    :host([data-orientation="horizontal"]) {
+      height: 100%;
+    }
+
+    :host([data-orientation="vertical"]) {
+      width: 100%;
     }
 
     .panel {
@@ -94,22 +115,32 @@ export class CFResizablePanel extends BaseElement {
     this.defaultSize = 50;
     this.maxSize = 100;
     this.collapsible = false;
+    this.hideWhenStacked = false;
   }
 
   override connectedCallback() {
     super.connectedCallback();
     this.validateSizes();
+    joinGroup(this);
+  }
+
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    leaveGroup(this);
   }
 
   override updated(changedProperties: Map<string | number | symbol, unknown>) {
     super.updated(changedProperties);
 
-    if (
-      changedProperties.has("minSize") ||
+    const sized = changedProperties.has("minSize") ||
       changedProperties.has("defaultSize") ||
-      changedProperties.has("maxSize")
-    ) {
-      this.validateSizes();
+      changedProperties.has("maxSize");
+    if (sized) this.validateSizes();
+    // A renderer assigns these as properties, possibly after the group
+    // read its panels, so the group reads them again.
+    if (sized) groupOf(this)?.panelSizesChanged(this);
+    else if (changedProperties.has("hideWhenStacked")) {
+      groupOf(this)?.panelShownChanged(this);
     }
   }
 

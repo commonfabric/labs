@@ -17,6 +17,7 @@ import { diffSource } from "../lib/view/diffedit.ts";
 import { renderFrame, type ViewState } from "../lib/view/render.ts";
 import { stripAnsi } from "../lib/view/ansi.ts";
 import { frameTop } from "../lib/view/actions.ts";
+import { gitBlobName } from "./view-helpers.ts";
 import { languageForFile } from "../lib/view/languages/language.ts";
 
 const TWO_FILES = [
@@ -241,6 +242,16 @@ Deno.test("isTestPath: directories and basenames", () => {
       "pkg/test_parse.py",
       "goldens/OUTPUT.GOLDEN",
       "packages\\x\\integration\\helper.ts",
+      "app/src/androidTest/java/com/example/Rules.kt",
+      "apple/AppTests/Support.swift",
+      "apple/AppUITests/Launch.swift",
+      "src/main/kotlin/ParserTest.kt",
+      "Sources/ParserTests.swift",
+      "Probe/RouteFixtures.swift",
+      "Probe/RouteFixture.swift",
+      "Sources/JSONTests.swift",
+      "Sources/HTTPTests/Client.swift",
+      "types/ParserTests.d.ts",
     ]
   ) {
     assert(isTestPath(p), `expected ${p} to be a test file`);
@@ -264,6 +275,14 @@ Deno.test("isTestPath: directories and basenames", () => {
       "pkg/test_parse.ts",
       "tasks/aliases/x-test.ts.jsonl",
       "bin/test",
+      "Sources/Contest/Latest.swift", // "test" inside a word, not a camel-case word
+      "Sources/TestRunner.swift",
+      "Sources/Attest/Tests.swift",
+      "Sources/RouteTests.swift.json",
+      "cmake/CTest.cmake",
+      "src/experiments/ABTest.kt",
+      "scripts/runTests.ts",
+      "lib/isTest.ts",
     ]
   ) {
     assert(!isTestPath(p), `expected ${p} not to be a test file`);
@@ -284,8 +303,17 @@ function press(s: Session, ...names: string[]): void {
 
 /** A diff session over `diffText` whose files do not resolve on disk (read-only,
  * but still a diff, so folding is offered). */
-function foldSession(diffText: string, height = 30, width = 80): Session {
-  const ws: DiffWorkspace = { resolve: () => null, read: () => null };
+function foldSession(
+  diffText: string,
+  height = 30,
+  width = 80,
+  blobs: ReadonlyMap<string, string> = new Map(),
+): Session {
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    readBlob: (object) => blobs.get(object) ?? null,
+  };
   const model = parseDiff(diffText)!;
   const { doc, edit } = buildDiffDocument(diffText, model, ws);
   return new Session(
@@ -453,6 +481,47 @@ Deno.test("fold: T hides shown test files and shows them when all are hidden", (
   assertEquals(s.view().message, "Showing 1 test file.");
 });
 
+Deno.test("fold: T follows the tests the repository declares over file names", () => {
+  // The workspace declares src/app.ts a test and src/app.test.ts not one.
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    declaredTests: (paths) =>
+      new Map(paths.map((path) => [path, path === "src/app.ts"])),
+  };
+  const model = parseDiff(TWO_FILES)!;
+  const { doc, edit } = buildDiffDocument(TWO_FILES, model, ws);
+  const s = new Session(
+    doc,
+    { color: false, showLineNumbers: false },
+    { width: 80, height: 30 },
+    undefined,
+    diffSource(ws, edit),
+  );
+  press(s, "T");
+  const lines = s.displayDoc().lines.map((l) => l.text);
+  assert(lines.includes("▸ src/app.ts  +1 −1"), lines.join("|"));
+  assert(!lines.includes("▸ src/app.test.ts  +1 −0"), lines.join("|"));
+  assertEquals(s.view().message, "Hid 1 test file.");
+});
+
+Deno.test("diffFiles: a declared test status overrides the path's own", () => {
+  const declared: string[][] = [];
+  const files = diffFiles(TWO_FILES, (paths) => {
+    declared.push([...paths]);
+    return new Map([["src/app.test.ts", false]]);
+  });
+  assertEquals(declared, [["src/app.ts", "src/app.test.ts"]]);
+  assertEquals(files.map((f) => f.isTest), [false, false]);
+  const undeclared = diffFiles(TWO_FILES, () => new Map());
+  assertEquals(undeclared.map((f) => f.isTest), [false, true]);
+  const declaredTest = diffFiles(
+    TWO_FILES,
+    () => new Map([["src/app.ts", true]]),
+  );
+  assertEquals(declaredTest.map((f) => f.isTest), [true, true]);
+});
+
 const CATEGORY_FILES = [
   "diff --git a/src/app.ts b/src/app.ts",
   "--- a/src/app.ts",
@@ -497,6 +566,78 @@ Deno.test("fold: M toggles every Markdown file", () => {
   assertEquals(s.view().message, "Showing 2 Markdown files.");
 });
 
+const OLD_NOTES = "// old explanation\nkeep(); // unchanged\n";
+const OLD_TAIL = "check(); // before\n";
+
+const COMMENT_ONLY_FILES = [
+  "diff --git a/src/app.ts b/src/app.ts",
+  "--- a/src/app.ts",
+  "+++ b/src/app.ts",
+  "@@ -1 +1 @@",
+  "-run(1);",
+  "+run(2);",
+  "diff --git a/src/notes.ts b/src/notes.ts",
+  `index ${gitBlobName(OLD_NOTES)}..${
+    gitBlobName("// new explanation\n// and more\nkeep(); // unchanged\n")
+  } 100644`,
+  "--- a/src/notes.ts",
+  "+++ b/src/notes.ts",
+  "@@ -1,2 +1,3 @@",
+  "-// old explanation",
+  "+// new explanation",
+  "+// and more",
+  " keep(); // unchanged",
+  "diff --git a/src/tail.ts b/src/tail.ts",
+  `index ${gitBlobName(OLD_TAIL)}..${
+    gitBlobName("check(); // after\n")
+  } 100644`,
+  "--- a/src/tail.ts",
+  "+++ b/src/tail.ts",
+  "@@ -1 +1 @@",
+  "-check(); // before",
+  "+check(); // after",
+  "",
+].join("\n");
+
+/** The old Git objects that {@link COMMENT_ONLY_FILES} names. */
+const COMMENT_ONLY_OBJECTS = new Map([
+  [gitBlobName(OLD_NOTES), OLD_NOTES],
+  [gitBlobName(OLD_TAIL), OLD_TAIL],
+]);
+
+Deno.test("fold: C toggles files that change only comments", () => {
+  const s = foldSession(COMMENT_ONLY_FILES, 30, 80, COMMENT_ONLY_OBJECTS);
+  const full = s.displayDoc().lines.length;
+  press(s, "C");
+  const hidden = s.displayDoc().lines.map((line) => line.text);
+  assert(hidden.includes("▸ src/notes.ts  +2 −1"), hidden.join("|"));
+  assert(hidden.includes("▸ src/tail.ts  +1 −1"), hidden.join("|"));
+  assert(!hidden.includes("▸ src/app.ts  +1 −1"), hidden.join("|"));
+  assert(hidden.includes("+run(2);"), "the code change is still shown");
+  assertEquals(
+    s.view().message,
+    "Hid 2 comment-only files.",
+  );
+
+  press(s, "C");
+  assertEquals(s.displayDoc().lines.length, full, "C shows the hidden files");
+  assertEquals(
+    s.view().message,
+    "Showing 2 comment-only files.",
+  );
+
+  press(s, "c");
+  assertEquals(s.displayDoc().lines.length, full, "c hides no files");
+});
+
+Deno.test("fold: C selects no file whose old Git object is unknown", () => {
+  const s = foldSession(COMMENT_ONLY_FILES);
+  const full = s.displayDoc().lines.length;
+  press(s, "C");
+  assertEquals(s.displayDoc().lines.length, full);
+  assertEquals(s.view().message, "No comment-only files.");
+});
+
 Deno.test("fold: a category key reports when the diff has no matching files", () => {
   const s = foldSession(TWO_FILES);
   const full = s.displayDoc().lines.length;
@@ -535,7 +676,7 @@ Deno.test("fold: bulk commands preserve a wrapped viewport column", () => {
   const anchor = s.view().top;
   assert(anchor > firstRow, "the viewport starts on a continuation row");
 
-  for (const key of ["T", "T", "M", "M", "F", "F", "E", "E"]) {
+  for (const key of ["T", "T", "M", "M", "C", "C", "F", "F", "E", "E"]) {
     press(s, key);
     assertEquals(s.view().top, anchor, `${key} preserves the continuation`);
   }

@@ -288,6 +288,7 @@ describe("assign-slug", () => {
         expect(accepted.output).toMatchObject({
           status: "ok",
           slug: "mailbox-size",
+          ref: createLLMFriendlyLink(resultCell.getAsNormalizedFullLink()),
         });
         expect(await resolvePieceAddress(pieces, "mailbox-size")).toBe(
           output.pieceId,
@@ -328,6 +329,7 @@ describe("assign-slug", () => {
     });
     const output = result.output as RunPatternToolSuccessOutput;
     expect(output.status).toBe("ok");
+    expect(output.ref).toBe(output.resultRef);
     return output;
   }
 

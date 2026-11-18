@@ -1,5 +1,5 @@
 import { booleanSchema } from "@commonfabric/runner/schemas";
-import { type CellHandle } from "@commonfabric/runtime-client";
+import type { CellHandle } from "@commonfabric/runtime-client";
 import { css, html } from "lit";
 import { ifDefined } from "lit/directives/if-defined.js";
 
@@ -250,7 +250,7 @@ export class CFCheckbox extends BaseElement {
 
     override firstUpdated() {
       // Register with form after first render when context is available
-      this._formField.register(this.name);
+      this._formField.register();
     }
 
     override disconnectedCallback() {
@@ -363,19 +363,5 @@ export class CFCheckbox extends BaseElement {
         event.preventDefault();
         this._handleClick(event);
       }
-    }
-
-    /**
-     * Focus the checkbox programmatically
-     */
-    override focus(): void {
-      super.focus();
-    }
-
-    /**
-     * Blur the checkbox programmatically
-     */
-    override blur(): void {
-      super.blur();
     }
   }

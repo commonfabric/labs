@@ -41,6 +41,10 @@ source content is not used to guess a language. Piping 'git diff' in gives added
 and removed lines their tints, full syntax color, a structure tree of the code
 each hunk touches, and the semantic features (inferred types, go-to-definition)
 answered against the CURRENT state of the workspace files the diff names.
+In a diff, T hides and shows test files: those whose names follow common test
+conventions, and those the repository marks with the 'test' Git attribute. A
+'.gitattributes' line such as 'scripts/test-* test' marks paths as tests, and
+'-test' marks paths as not tests whatever their names.
 
 COMMON USAGE:
   cf check ./pattern.tsx --show-transformed --no-run | cf view
@@ -56,7 +60,8 @@ KEYS (press ? in the viewer for the full list):
   Enter info card · in it: ↑/↓ pick a reference · Enter opens it · z reveals it
   v source/rendered · t look up a definition · # line numbers · \\ wrap mode
   b blame: when each line last changed, and who changed it · q quit
-  P push the checked-out branch to origin and open the pull request page
+  P push the checked-out branch to origin, then handle its pull request
+  L land the branch's pull request · O settings, such as how P and L work
 
 When stdout is not a terminal (piped/redirected) it prints the colorized text
 and exits, like less.`,

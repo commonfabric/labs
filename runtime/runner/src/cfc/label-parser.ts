@@ -6,8 +6,8 @@
 
 import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
 import { encodePointer } from "@commonfabric/memory/v2/path";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
-import type { CfcConfClause } from "./clause.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 
 const LABEL_KEYS = new Set(["confidentiality", "integrity"]);

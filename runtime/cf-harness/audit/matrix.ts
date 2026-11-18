@@ -23,7 +23,7 @@ import type {
   CfcWriteFloorMode,
 } from "@commonfabric/runner/cfc";
 
-import { type SpecCitationKey } from "./citations.ts";
+import type { SpecCitationKey } from "./citations.ts";
 
 /** A point of the dial cube, as a deployment sits at it. */
 export interface MatrixDialTuple {

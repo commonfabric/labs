@@ -1,0 +1,178 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/summary-index/summary-index.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CellScope": {
+        "enum": [
+          "space",
+          "user",
+          "session"
+        ]
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/MentionablePiece"
+                },
+                "type": "array"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "Pattern": {
+        "properties": {
+          "argumentSchema": true,
+          "defaultScope": {
+            "$ref": "#/$defs/CellScope"
+          },
+          "resultSchema": true
+        },
+        "required": [
+          "argumentSchema",
+          "resultSchema"
+        ],
+        "type": "object"
+      },
+      "SummarizablePiece": {
+        "description": "Type for pieces used in the mentionable/backlinks system.\n\nNote: While `mentioned` and `backlinks` are typed as required for structural\ncompatibility, at runtime most pieces don't actually have these fields.\nOnly patterns like notes and calendar events define them. The computeIndex\nfunction safely handles pieces that lack these fields.",
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/MentionablePiece"
+                },
+                "type": "array"
+              },
+              {
+                "properties": {},
+                "type": "object"
+              }
+            ]
+          },
+          "mentioned": {
+            "items": {
+              "$ref": "#/$defs/MentionablePiece"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SummaryIndexEntry": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "piece": {
+            "$ref": "#/$defs/SummarizablePiece"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "piece",
+          "summary",
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/SummaryIndexEntry"
+        },
+        "type": "array"
+      },
+      "search": {
+        "properties": {
+          "extraParams": {
+            "properties": {
+              "entries": {
+                "items": {
+                  "$ref": "#/$defs/SummaryIndexEntry"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "entries"
+            ],
+            "type": "object"
+          },
+          "pattern": {
+            "$ref": "#/$defs/Pattern"
+          },
+          "useResultSchemaForObservation": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "pattern",
+          "extraParams"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "entries",
+      "search"
+    ],
+    "type": "object"
+  }
+}

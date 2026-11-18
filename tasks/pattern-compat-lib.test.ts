@@ -1,6 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { type JSONSchema } from "@commonfabric/runner";
+import type { JSONSchema } from "@commonfabric/runner";
 import {
   acceptedBreakKey,
   type Baseline,
@@ -75,6 +75,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { title: { type: "string" }, body: { type: "string" } },
+        required: ["title", "body"],
       }),
     ]);
 
@@ -105,6 +106,7 @@ describe("checkPattern", () => {
       baseline("v1", EMPTY_ARGUMENT, {
         type: "object",
         properties: { "foo: bar": { type: "string" } },
+        required: ["foo: bar"],
       }),
     ]);
 
@@ -315,6 +317,18 @@ describe("baseline store", () => {
       await Deno.remove(root, { recursive: true });
     }
   };
+
+  it("throws when a pattern's baseline directory cannot be read", async () => {
+    await withTree(async ({ baselines }) => {
+      // A file where the pattern's directory belongs is not an absent one.
+      await Deno.mkdir(`${baselines}/system`, { recursive: true });
+      await Deno.writeTextFile(`${baselines}/system/home.tsx`, "");
+
+      await expect(readBaselines(baselines, "system/home.tsx")).rejects
+        .toThrow(Deno.errors.NotADirectory);
+      expect(await readBaselines(baselines, "system/other.tsx")).toEqual([]);
+    });
+  });
 
   it("reads back what it writes, round-tripping through the codec", async () => {
     await withTree(async ({ baselines }) => {
@@ -623,6 +637,24 @@ describe("unusedAcceptances", () => {
       forgivenAt("v1", "result.x"),
       forgivenAt("v2", "result.y"),
     ])).toEqual({ pairs: [], paths: [] });
+  });
+
+  it("credits nothing to an issue that blames no path", () => {
+    const entries = [entry(["v1"], ["result.x"])];
+    const atNoPath: Finding = {
+      kind: "incompatible",
+      pattern: "a.tsx",
+      baseline: "v1",
+      path: undefined,
+      detail: "the baseline schema is invalid on its own terms",
+    };
+
+    expect(unusedAcceptances(entries, examined, [atNoPath])).toEqual(
+      unusedAcceptances(entries, examined, []),
+    );
+    expect(unusedAcceptances(entries, examined, [atNoPath]).pairs).toHaveLength(
+      1,
+    );
   });
 
   it("returns a pair no issue was forgiven against", () => {

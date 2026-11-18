@@ -1,3 +1,4 @@
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { loadAgentsHostConfig } from "./config.ts";
 import { AGENTS_HOST_USAGE, parseAgentsHostCliOptions } from "./cli-options.ts";
 import { CollectionRequestQueue } from "./collection-request-queue.ts";
@@ -16,7 +17,8 @@ export interface AgentsHostCliDependencies {
   error: typeof console.error;
 }
 
-const defaultDependencies: AgentsHostCliDependencies = {
+/** The dependencies `runAgentsHostCli()` uses when its caller supplies none. */
+export const defaultAgentsHostCliDependencies: AgentsHostCliDependencies = {
   readEnv: (key) => Deno.env.get(key),
   start: startAgentsHost,
   addSignalListener: Deno.addSignalListener,
@@ -31,7 +33,7 @@ const defaultDependencies: AgentsHostCliDependencies = {
 
 export async function runAgentsHostCli(
   argv: string[] = Deno.args,
-  dependencies: AgentsHostCliDependencies = defaultDependencies,
+  dependencies: AgentsHostCliDependencies = defaultAgentsHostCliDependencies,
 ): Promise<number> {
   let running: RunningAgentsHost | undefined;
   const startupAbort = new AbortController();
@@ -168,9 +170,7 @@ export async function runAgentsHostCli(
     }
     if (!running && error === startupCancellation) return 0;
     dependencies.error(
-      `Agent host failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `Agent host failed: ${describeFailure(error)}`,
     );
     return 1;
   } finally {

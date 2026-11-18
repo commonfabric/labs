@@ -4,7 +4,11 @@ import { type Cell, type Runtime, UI } from "@commonfabric/runner";
 import { uiSchema } from "@commonfabric/runner/schemas";
 import { getLogger } from "@commonfabric/logger";
 
-import { loadPieces, resolveAddressedPieceConfig } from "./piece.ts";
+import {
+  loadPieces,
+  pullServed,
+  resolveAddressedPieceConfig,
+} from "./piece.ts";
 import type { PieceConfig, PieceResolutionDeps } from "./piece.ts";
 
 const logger = getLogger("piece-render", { level: "info", enabled: false });
@@ -35,15 +39,10 @@ export function renderVDomToHtml(
   settle: () => Promise<void>,
   onUpdate?: (html: string) => void,
 ): Promise<string> | (() => void) {
-  const mock = new MockDoc(
-    '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+  const { document, renderOptions } = new MockDoc(
+    "<!DOCTYPE html><html><body></body></html>",
   );
-  const { document, renderOptions } = mock;
-
-  const container = document.getElementById("root");
-  if (!container) {
-    throw new Error("Could not find root container");
-  }
+  const container = document.createElement("div");
 
   // In watch mode `report` takes over once the render exists; until then
   // applied batches need no announcement.
@@ -52,7 +51,7 @@ export function renderVDomToHtml(
     document,
     setProp: renderOptions.setProp,
     onError: (error) => {
-      logger.info("piece-render", () => `render error: ${error.message}`);
+      logger.info("render-error", () => error.message);
     },
     onApplied: () => report(),
   });
@@ -190,15 +189,19 @@ export async function renderPiece(
 ): Promise<string | (() => void)> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const resolvedConfig = await resolveAddressedPieceConfig(pieces, config);
+  const served = pieces.runtime?.experimental?.serverExecution === true;
   const piece = await pieces.get(
     resolvedConfig.piece,
-    options.start ?? true,
+    !served && (options.start ?? true),
     undefined,
     resolvedConfig.pieceScope,
   );
   const cell = piece.getCell().asSchema(uiSchema) as Cell<
     Record<string, unknown>
   >;
+  // Under server execution the server derives the view and this process only
+  // reads it, so it asks for the view as a renderer does.
+  await pullServed(pieces, cell);
 
   // Check if piece has UI
   if (!cell.get()?.[UI]) {

@@ -16,6 +16,7 @@ import {
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/async/defer";
 
+import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import {
@@ -186,6 +187,7 @@ describe("wish-profile-readiness", () => {
                 await base.send(payload);
               },
             },
+            instanceNames: namesInstancesByDefault(),
           });
           const session = await client.mount(
             space,

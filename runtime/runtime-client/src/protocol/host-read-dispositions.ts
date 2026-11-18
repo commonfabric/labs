@@ -146,6 +146,7 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.GetHomeSpaceCell]: reference,
   [RequestType.EnsureHomePatternRunning]: lifecycle,
   [RequestType.JoinVisitedRoom]: write,
+  [RequestType.OfferProfileSuggestion]: write,
   [RequestType.Idle]: lifecycle,
   [RequestType.ListEventAttention]: {
     kind: "no-cell-value",
@@ -157,12 +158,18 @@ export const REQUEST_DISPOSITIONS = {
   [RequestType.RegisterSpaceHost]: lifecycle,
   [RequestType.RegisterSpaceHostDetailed]: lifecycle,
   [RequestType.RetrySpaceAccess]: lifecycle,
+  [RequestType.RetryUnreachableSpaces]: lifecycle,
   [RequestType.FlushCompileCacheWrites]: lifecycle,
   [RequestType.GetGraphSnapshot]: {
     kind: "no-cell-value",
     why: "the scheduler's graph of actions and the cells they touch",
   },
   [RequestType.GetLoggerCounts]: setting,
+  [RequestType.GetLoggerErrorMessages]: {
+    kind: "ungated",
+    why: "the text of messages logged at `error`, which can quote a value, " +
+      "as an error report's message can",
+  },
   [RequestType.GetStorageDiagnostics]: {
     kind: "no-cell-value",
     why: "storage state, which exports no cell values",

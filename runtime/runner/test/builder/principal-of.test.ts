@@ -8,10 +8,17 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 
 import { currentPrincipal } from "../../src/builder/current-principal.ts";
 import { pattern, popFrame, pushFrame } from "../../src/builder/pattern.ts";
-import { principalOf, principalsOf } from "../../src/builder/principal-of.ts";
+import {
+  principalOf,
+  principalsOf,
+  requirePublicClaimSubject,
+  writtenPrincipalOf,
+} from "../../src/builder/principal-of.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import type { Cell } from "../../src/cell.ts";
+import { labelMetadataFieldIsProtected } from "../../src/cfc/label-metadata-population.ts";
 import { UnknownCfcMetadataVersionError } from "../../src/cfc/metadata.ts";
+import { PRINCIPAL_CLAIM_KINDS } from "../../src/cfc/represents-principal.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { setCfcImplementationIdentity } from "../../src/storage/extended-storage-transaction.ts";
@@ -805,6 +812,57 @@ describe("principalOf()", () => {
       }
     });
 
+    it("reads a subject the label-metadata classification makes public, for every claim kind it takes", () => {
+      // What `principalOf()` returns is a claim's subject, carried with no
+      // label of its own, which holds only while the classification makes
+      // the subject public.
+
+      expect([...PRINCIPAL_CLAIM_KINDS].sort()).toEqual([
+        "authored-by",
+        "represents-principal",
+      ]);
+      for (const kind of PRINCIPAL_CLAIM_KINDS) {
+        expect(labelMetadataFieldIsProtected({ kind }, "subject")).toBe(false);
+      }
+      expect(
+        labelMetadataFieldIsProtected({ kind: "represents-principal" }, "name"),
+      ).toBe(true);
+    });
+
+    it("refuses a claim kind whose subject the classification makes protected", () => {
+      const consulted: [unknown, string][] = [];
+      const protectingSubject = (atom: unknown, field: string) => {
+        consulted.push([atom, field]);
+        return field === "subject";
+      };
+
+      expect(() =>
+        requirePublicClaimSubject(
+          "principalOf(target, kind)",
+          "authored-by",
+          protectingSubject,
+        )
+      ).toThrow(
+        '`principalOf(target, kind)` cannot carry a label for the subject of a `"authored-by"` claim, which is not classified public.',
+      );
+      expect(consulted).toEqual([[{ kind: "authored-by" }, "subject"]]);
+      expect(() =>
+        requirePublicClaimSubject(
+          "principalOf(target, kind)",
+          "authored-by",
+          () => false,
+        )
+      ).not.toThrow();
+      const kinds: PrincipalClaimKind[] = [
+        "authored-by",
+        "represents-principal",
+      ];
+      for (const kind of kinds) {
+        expect(() => requirePublicClaimSubject("principalOf", kind)).not
+          .toThrow();
+      }
+    });
+
     it("records no label-metadata observation, since a claim's subject is public", async () => {
       const profile = await seed("profile", [
         claimsAt([], claim("represents-principal", bob.did())),
@@ -974,6 +1032,27 @@ describe("principalOf()", () => {
           "can only be called from a handler or a reactive computation",
         );
       });
+    });
+
+    it("throws in a computation whose frame holds no runtime", () => {
+      const frame = pushFrame({
+        runtime: undefined,
+        tx: undefined,
+        frameKind: "lift",
+      });
+      try {
+        expect(() => principalOf(undefined, "represents-principal")).toThrow(
+          "`principalOf(target, kind)` requires an executing runtime.",
+        );
+        expect(() => principalsOf(undefined, "authored-by")).toThrow(
+          "requires an executing runtime.",
+        );
+        expect(() => writtenPrincipalOf(undefined)).toThrow(
+          "`writtenPrincipalOf(target)` requires an executing runtime.",
+        );
+      } finally {
+        popFrame(frame);
+      }
     });
 
     it("throws for a `kind` that is not a principal claim kind", () => {

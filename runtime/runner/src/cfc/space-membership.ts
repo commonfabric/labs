@@ -9,8 +9,6 @@ import {
 } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import type { Cancel } from "../cancel.ts";
-import type { Cell } from "../cell.ts";
-import type { Runtime } from "../runtime.ts";
 
 /**
  * §4.9.3 render membership lookup (design:
@@ -99,6 +97,28 @@ export interface SpaceMembershipProvider {
    * arrives (and a revoke re-blocks).
    */
   subscribe(space: string, onChange: () => void): Cancel;
+
+  /**
+   * Resolves once the local replica holds the space's ACL doc as the space
+   * last sent it, or once the space refused the load, so that a decision
+   * made once, with no subscription to make it again, reads the role the
+   * ACL grants rather than the fail-closed `null` of a doc not yet synced.
+   */
+  load(space: string): Promise<void>;
+}
+
+/** What the membership provider uses of the cell holding an ACL document. */
+export interface AclDocumentCell {
+  get(): unknown;
+  sink(action: () => void): Cancel;
+  sync(): Promise<unknown>;
+}
+
+/** What the membership provider uses of a runtime. */
+export interface AclDocumentSource {
+  getCellFromLink(
+    link: { id: URI; path: readonly []; space: MemorySpace },
+  ): AclDocumentCell;
 }
 
 /**
@@ -109,14 +129,14 @@ export interface SpaceMembershipProvider {
  * the same reactive state.
  */
 const aclCellFor = (
-  runtime: Pick<Runtime, "getCellFromLink">,
-  cache: Map<string, Cell<unknown>>,
+  runtime: AclDocumentSource,
+  cache: Map<string, AclDocumentCell>,
   space: string,
-): Cell<unknown> => {
+): AclDocumentCell => {
   let cell = cache.get(space);
   if (cell === undefined) {
     // Read in-space — the same link `ACLManager` uses.
-    cell = runtime.getCellFromLink<unknown>({
+    cell = runtime.getCellFromLink({
       id: aclDocId(space) as URI,
       path: [],
       space: space as MemorySpace,
@@ -143,11 +163,11 @@ const aclCellFor = (
  * pass `[]` and service principals — which rarely render — fail closed.
  */
 export const createRuntimeSpaceMembershipProvider = (
-  runtime: Pick<Runtime, "getCellFromLink">,
+  runtime: AclDocumentSource,
   actingPrincipal: string,
   serviceDids: readonly string[] = [],
 ): SpaceMembershipProvider => {
-  const cells = new Map<string, Cell<unknown>>();
+  const cells = new Map<string, AclDocumentCell>();
   return {
     readerRole(space) {
       // Service principals are implicit OWNER — decided WITHOUT reading (or
@@ -169,6 +189,10 @@ export const createRuntimeSpaceMembershipProvider = (
         }
         onChange();
       });
+    },
+    async load(space) {
+      if (serviceDids.includes(actingPrincipal)) return;
+      await aclCellFor(runtime, cells, space).sync();
     },
   };
 };

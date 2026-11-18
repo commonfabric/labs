@@ -36,8 +36,8 @@ import {
   FabricDurationNsec,
   FabricEpochDay,
   FabricEpochNsec,
+  FabricHash,
   type FabricPrimitiveClassesByName,
-  FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
 import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "./codecs.ts";
@@ -48,7 +48,6 @@ import {
   type ExampleMakers,
   fabricValueOfTextWithMods,
   type FixtureJson,
-  type FixtureRequirements,
   fixtureTextOf,
   plainJsonTextOf,
   probedPathsOf,
@@ -91,9 +90,6 @@ export type Fvj1Outcome =
  * decoded, and what it decodes to is re-encoded.
  *
  * `section` names the part of the formal spec the case exercises.
- * `requires` names the flavors of regular expression whose construction the
- * case's outcome depends on; the fixture entry adds the guarantees of size the
- * case needs past the floors.
  * `divergence` is a note on what the format requires, for a case where this
  * package does not do it. The format's outcome is never typed here. For a
  * value, it is the value's own probes, and the text {@link plainJsonTextOf}
@@ -108,7 +104,6 @@ export type Fvj1ConformanceCase =
   & {
     readonly name: string;
     readonly section: string;
-    readonly requires?: Pick<FixtureRequirements, "flavors">;
     readonly divergence?: string;
   }
   & (
@@ -153,14 +148,14 @@ const SECTION_SYMBOL = "3-json-encoding.md section 3, `Symbol@1`";
 const SECTION_BIGINT = "3-json-encoding.md section 3, `BigInt@1`";
 const SECTION_BASE64 = "3-json-encoding.md section 3, base64url convention";
 const SECTION_UNKNOWN = "3-json-encoding.md section 8";
-const SECTION_TAG_SYNTAX = "3-json-encoding.md section 2";
+const SECTION_TAG_SYNTAX = "1-fabric-values.md section 2.5.1";
 const SECTION_RESERVATION = "3-json-encoding.md section 9";
 const SECTION_TYPES = "3-json-encoding.md section 3";
 const SECTION_TEMPORAL = "3-json-encoding.md section 3, temporal quantities";
 const SECTION_ERROR = "3-json-encoding.md section 3, `Error@1`";
 const SECTION_LINK = "3-json-encoding.md section 3, `Link@1`";
-const SECTION_REGEXP = "3-json-encoding.md section 3, `RegExp@1`";
 const SECTION_UNAVAILABLE = "3-json-encoding.md section 3, `Unavailable@1`";
+const SECTION_HASH_TAG = "1-fabric-values.md section 1.4.9";
 
 /**
  * The integers at and just past the edges of a signed 64-bit integer, and a
@@ -174,6 +169,45 @@ const WIDE_INTEGERS: readonly (readonly [string, bigint])[] = [
   ["-2^63 - 1", -(2n ** 63n) - 1n],
   ["2^100", 2n ** 100n],
   ["-2^100", -(2n ** 100n)],
+];
+
+/**
+ * Type tags at the limits of the syntax of `1-fabric-values.md` section 2.5.1,
+ * each beside what it has: ten components, a prefix and a name of 100
+ * characters, and a version of ten digits.
+ */
+const TYPE_TAGS_AT_THE_LIMITS: readonly (readonly [string, string])[] = [
+  ["ten components", "a.b.c.d.e.f.g.h.i.j@1"],
+  ["a prefix of 100 characters", `${"p".repeat(100)}.Boop@1`],
+  ["a name of 100 characters", `${"N".repeat(100)}@1`],
+  ["a version of ten digits", "Abc@1234567890"],
+];
+
+/**
+ * Strings just past those limits, each otherwise a type tag, beside what it
+ * has: eleven components, a prefix and a name of 101 characters, and a version
+ * of eleven digits.
+ */
+const TYPE_TAGS_PAST_THE_LIMITS: readonly (readonly [string, string])[] = [
+  ["eleven components", "a.b.c.d.e.f.g.h.i.j.k@1"],
+  ["a prefix of 101 characters", `${"p".repeat(101)}.Boop@1`],
+  ["a name of 101 characters", `${"N".repeat(101)}@1`],
+  ["a version of eleven digits", "Abc@12345678901"],
+];
+
+/**
+ * A tag in the general syntax at the limit of a name's length, having one
+ * component and no version, beside what it has.
+ */
+const UNVERSIONED_TAG_AT_THE_LIMIT: readonly [string, string] = [
+  "a name of 100 characters and no version",
+  "n".repeat(100),
+];
+
+/** A string just past that limit, otherwise a tag, beside what it has. */
+const UNVERSIONED_TAG_PAST_THE_LIMIT: readonly [string, string] = [
+  "a name of 101 characters and no version",
+  "n".repeat(101),
 ];
 
 /** Note shared by the cases with a key this implementation reserves. */
@@ -563,9 +597,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricUnavailable("error", "network"),
   },
   {
-    name: "regular expression of another flavor",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
-    make: () => new FabricRegExp("other", "(?<", ""),
+    name: "unavailable error whose message is this package's default for " +
+      "its kind, kept as it arrived",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"message":"A network request failed.","reason":"error"}}',
   },
   {
     name: "problematic value whose tag is not a tag",
@@ -585,6 +621,50 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_UNKNOWN,
     text: 'fvj1:[{"/Abc123@1234":null}]',
   },
+  {
+    name: 'unknown tag "RegExp@1", no longer a defined type, for alignment ' +
+      "among implementations that once recognized it",
+    section: SECTION_UNKNOWN,
+    text: 'fvj1:{"/RegExp@1":{"flags":"g","flavor":"es2025","source":"a"}}',
+  },
+  {
+    name: "unknown tag with prefixes",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/sys.beep.Boop@1":{"x":1}}',
+  },
+  {
+    name: "unknown tag with the prefix core",
+    section: SECTION_TAG_SYNTAX,
+    text: 'fvj1:{"/core.Thing@1":null}',
+  },
+  // Type tags in any case.
+  ...["bytes@1", "Sys.Boop@1", "sys.boop@1", "SYS.BEEP.boop@7"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  // A special form's name with a version is a type tag like any other, even
+  // among an array's elements.
+  ...["quote@1", "object@1", "hole@1"].map((tag): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
+  })),
+  // Type tags holding `_`, which a component treats as a letter.
+  ...["a_b@1", "_x@1", "_@1", "x__y@1", "A.b_c.D_@2"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  ...TYPE_TAGS_AT_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
+    name: `unknown tag with ${has}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
 
   // Decodes the spec refuses.
   { name: "text without the prefix", section: SECTION_PREFIX, text: "42" },
@@ -596,15 +676,34 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   { name: "prefix alone", section: SECTION_PREFIX, text: "fvj1:" },
   { name: "prefix over broken JSON", section: SECTION_PREFIX, text: "fvj1:{" },
   ...[
-    "bytes@1",
     "By-tes@1",
     "Bytes@0",
     "Bytes@01",
     "Bytes@1.0",
+    "Bytes@",
     " Bytes@1",
     "Bytes@1\n",
+    "1Bytes@1",
+    "sys..Boop@1",
+    ".Boop@1",
+    "sys.Boop.@1",
+    "sys$x.Boop@1",
+    "sys.Boop",
+    "core.Globals",
+    "sys.Boop@01",
   ].map((tag): Fvj1ConformanceCase => ({
     name: `malformed tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  ...TYPE_TAGS_PAST_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
+    name: `malformed tag with ${has}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
+  // Tags in the general syntax that, having no version, are not type tags.
+  ...["Bytes", "widget", "fid1", "my_hash"].map((tag): Fvj1ConformanceCase => ({
+    name: `key that is a tag but not a type tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
@@ -673,17 +772,37 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Hash@1`",
     text: 'fvj1:{"/Hash@1":{"hash":7,"tag":"fid1"}}',
   },
+  ...["sha256", "SHA256", "sys.sha@2", "my_hash", "_"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
+    section: SECTION_HASH_TAG,
+    make: () => new FabricHash(new Uint8Array([1]), tag),
+  })),
+  ...["fid-1", "", "sys.sha256", "1sha"].map((tag): Fvj1ConformanceCase => ({
+    name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
+    section: SECTION_HASH_TAG,
+    text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
+  })),
+  ...[...TYPE_TAGS_AT_THE_LIMITS, UNVERSIONED_TAG_AT_THE_LIMIT].map((
+    [has, tag],
+  ): Fvj1ConformanceCase => ({
+    name: `hash under an algorithm tag with ${has}`,
+    section: SECTION_HASH_TAG,
+    make: () => new FabricHash(new Uint8Array([1]), tag),
+  })),
+  ...[...TYPE_TAGS_PAST_THE_LIMITS, UNVERSIONED_TAG_PAST_THE_LIMIT].map((
+    [has, tag],
+  ): Fvj1ConformanceCase => ({
+    name: `hash under an algorithm tag with ${has}`,
+    section: SECTION_HASH_TAG,
+    text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
+  })),
   {
-    name: "key pair with a key outside base64url",
+    name: "key pair whose keys are strings rather than `Bytes@1` values",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","privateKey":"AA",' +
-      '"publicKey":"+"}}',
-  },
-  {
-    name: "regular expression that does not construct",
-    section: "3-json-encoding.md section 3, `RegExp@1`",
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":"("}}',
-    requires: { flavors: ["es2025"] },
+      '"publicKey":"AQ"}}',
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -701,6 +820,11 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     name: "slash key that is a tag, over a literal",
     section: SECTION_ESCAPE_DISPATCH,
     make: () => ({ "/Bytes@1": "AQ" }),
+  },
+  {
+    name: "slash key that is a tag with a prefix, over a literal",
+    section: SECTION_ESCAPE_DISPATCH,
+    make: () => ({ "/sys.Boop@1": 1 }),
   },
   {
     name: "quote escape nested in an object escape",
@@ -730,7 +854,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "quote escape over a key that is not a tag",
     section: SECTION_ESCAPES,
-    text: 'fvj1:{"/quote":{"/bytes@1":1}}',
+    text: 'fvj1:{"/quote":{"/sys.Boop":1}}',
   },
   {
     name: "object escape over a key that is an escape",
@@ -929,60 +1053,42 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "unavailable error with a numeric message",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","message":5,' +
       '"reason":"error"}}',
   },
   {
     name: "unavailable error with a null message",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
-      '"errorMessage":null,"reason":"error"}}',
+      '"message":null,"reason":"error"}}',
   },
   {
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+    text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
   },
   {
-    name: "regular expression with a string state",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":"a"}',
+    name: "unavailable error holding a field its codec does not read",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":"boom","reason":"error"}}',
   },
   {
-    name: "regular expression with a numeric source",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025","source":1}}',
+    name: "hash holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Hash@1`",
+    text: 'fvj1:{"/Hash@1":{"extra":1,"hash":"AQ","tag":"fid1"}}',
   },
   {
-    name: "regular expression with a numeric flavor",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":1,"source":"a"}}',
+    name: "problematic value holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Problematic@1`",
+    text: 'fvj1:{"/Problematic@1":{"error":"e","extra":1,"state":null,' +
+      '"tag":"x"}}',
   },
   {
-    name: "regular expression with a flag es2025 lacks",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"z","flavor":"es2025","source":"a"}}',
-    requires: { flavors: ["es2025"] },
-  },
-  {
-    name: "regular expression with no flags",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flavor":"es2025","source":"a"}}',
-  },
-  {
-    name: "regular expression with no flavor",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","source":"a"}}',
-  },
-  {
-    name: "regular expression with no source",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{"flags":"","flavor":"es2025"}}',
-  },
-  {
-    name: "regular expression with the empty state",
-    section: SECTION_REGEXP,
-    text: 'fvj1:{"/RegExp@1":{}}',
+    name: "key pair holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `KeyPair@1`",
+    text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","extra":1,' +
+      '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AQ"}}}',
   },
   {
     name: "tag with no version",
@@ -1015,7 +1121,6 @@ const PRIMITIVE_CLASS_NOTES: {
   },
   FabricHash: { section: "3-json-encoding.md section 3, `Hash@1`" },
   FabricKeyPair: { section: "3-json-encoding.md section 3, `KeyPair@1`" },
-  FabricRegExp: { section: "3-json-encoding.md section 3, `RegExp@1`" },
   FabricUnavailable: {
     section: "3-json-encoding.md section 3, `Unavailable@1`",
   },
@@ -1253,7 +1358,7 @@ function fixtureEntryOf(
     }
   }
 
-  const requires = requirementsOf(stated, conformanceCase.requires?.flavors);
+  const requires = requirementsOf(stated);
   const entry: Record<string, FixtureJson> = {
     name,
     section,

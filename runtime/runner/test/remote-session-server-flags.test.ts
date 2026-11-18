@@ -12,6 +12,7 @@ import {
   createStorageAddressResolver,
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 
 const SPACE = "did:key:z6Mk-remote-server-flags" as MemorySpace;
 
@@ -20,7 +21,10 @@ describe("RemoteSessionFactory.serverFlags()", () => {
   let factory: RemoteSessionFactory;
 
   beforeEach(async () => {
-    server = StandaloneMemoryServer.start({ connectionAuth: true });
+    server = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+      connectionAuth: true,
+    });
     factory = new RemoteSessionFactory(
       createStorageAddressResolver(server.url),
       await Identity.fromPassphrase("remote server flags user"),
@@ -49,7 +53,10 @@ describe("RemoteSessionFactory.serverFlags()", () => {
   it("waits out a shared connection's reconnection and returns the new server's flags", async () => {
     // A connection that redials lands on whichever server `target` names, so
     // the server behind a shared connection can change while it reconnects.
-    const next = StandaloneMemoryServer.start({ connectionAuth: true });
+    const next = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+      connectionAuth: true,
+    });
     let target = server;
     const sockets: MemorySocketConnection[] = [];
     const redialed = Promise.withResolvers<void>();

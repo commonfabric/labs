@@ -180,15 +180,15 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
     url: "https://example.com/bob-under-alice",
   });
   const addPieceAsAlice = action(() =>
-    setup.loom.addPiece.send({ piece, as: setup.handoff.get().profile })
+    setup.loom.addPiece.send({ piece, as: setup.handoff.get().profile! })
   );
   const addUrlAsAlice = action(() =>
-    setup.loom.addPanel.send({ panel: url, as: setup.handoff.get().profile })
+    setup.loom.addPanel.send({ panel: url, as: setup.handoff.get().profile! })
   );
   const duplicateAsAlice = action(() =>
     setup.loom.duplicatePanel.send({
       panel: setup.loom.panels[0],
-      as: setup.handoff.get().profile,
+      as: setup.handoff.get().profile!,
     })
   );
   const actAsAlice = action(() =>

@@ -247,10 +247,6 @@ export class CrossStageState {
     this.syntheticReactiveCollectionRegistry.add(symbol);
   }
 
-  isSyntheticReactiveCollection(symbol: ts.Symbol): boolean {
-    return this.syntheticReactiveCollectionRegistry.has(symbol);
-  }
-
   //
   // schemaHints
   //

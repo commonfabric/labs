@@ -601,4 +601,93 @@ describe("v2-server-session-open-proofs", () => {
       await server.close();
     }
   });
+  describe("deleting a self-owned space through a chain", () => {
+    /** Makes the space its own sole OWNER, declaring `kind` at genesis. */
+    const initializeKindedSelfOwnedSpace = async (
+      server: Server,
+      kind: string,
+    ): Promise<void> => {
+      const authority = await connect(server);
+      const opened = await openSession(authority, space.did(), [], {
+        spaceKind: kind,
+      });
+      expectExists(opened.ok, opened.error?.message);
+      await authority.connection.receive(encodeMemoryBoundary({
+        type: "transact",
+        requestId: nextRequestId("genesis"),
+        space: space.did(),
+        sessionId: opened.ok.sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          spaceKind: kind,
+          operations: [{
+            op: "set",
+            id: `of:${space.did()}`,
+            value: { value: { [space.did()]: "OWNER" } },
+          } as unknown as Operation],
+        },
+      }));
+      const genesis = nextResponse<{ seq: number }>(authority.messages);
+      expectExists(genesis.ok, genesis.error?.message);
+    };
+
+    it("admits the deletion of a space that declares a kind by the principal its chain makes OWNER, `by` naming the committer", async () => {
+      const server = createServer("memory://proofs-delete-kinded", {
+        mode: "enforce",
+        delegations: true,
+      });
+      try {
+        await initializeKindedSelfOwnedSpace(server, "notes");
+        const harness = await connect(server);
+        const opened = await openSession(harness, alice.did(), [
+          await spaceToAlice(),
+        ]);
+        expectExists(opened.ok, opened.error?.message);
+        const deleted = await transactSet(
+          harness,
+          opened.ok.sessionId,
+          `of:${space.did()}`,
+          { deleted: { by: alice.did() } },
+          1,
+        );
+        expectExists(deleted.ok, deleted.error?.message);
+        expect(
+          (await server.readDocument(space.did(), `of:${space.did()}`))
+            ?.value,
+        ).toEqual({ deleted: { by: alice.did() } });
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses the deletion through a chain of a self-owned space that declares no kind, a Home", async () => {
+      const server = createServer("memory://proofs-delete-home", {
+        mode: "enforce",
+        delegations: true,
+      });
+      try {
+        await initializeSelfOwnedSpace(server);
+        const harness = await connect(server);
+        const opened = await openSession(harness, alice.did(), [
+          await spaceToAlice(),
+        ]);
+        expectExists(opened.ok, opened.error?.message);
+        expect(
+          (await transactSet(
+            harness,
+            opened.ok.sessionId,
+            `of:${space.did()}`,
+            { deleted: { by: alice.did() } },
+            1,
+          )).error,
+        ).toEqual({
+          name: "AuthorizationError",
+          message: "A Home space cannot be deleted",
+        });
+      } finally {
+        await server.close();
+      }
+    });
+  });
 });

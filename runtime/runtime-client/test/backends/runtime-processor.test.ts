@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { stub } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
@@ -32,6 +32,7 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { profileSuggestionCell } from "@commonfabric/runner/profile-suggestion";
 import { siteTableCause, siteTableSchema } from "@commonfabric/home-schemas";
 import {
   PieceController,
@@ -63,6 +64,7 @@ import {
   linkCfcLabelView,
   withLinkCfcLabelView,
 } from "@commonfabric/runner/cfc";
+import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -77,9 +79,11 @@ import {
   type CellValueResponse,
   type CfcLabelView,
   ClientNotificationType,
-  type GetPatternSourcesRequest,
+  type InitializationData,
   type IPCRemotePost,
+  type LoggerErrorMessagesResponse,
   NotificationType,
+  type OfferProfileSuggestionRequest,
   RequestType,
   RuntimeErrorCode,
 } from "@/protocol/mod.ts";
@@ -87,6 +91,7 @@ import {
   assertServerExecutionPostureAgreement,
   browserWorkerParamsFromInitializationData,
   mountErrorSink,
+  type ProcessorRequest,
   renderConfidentialityResolverFor,
   renderMembershipProviderFor,
   RuntimeProcessor,
@@ -100,11 +105,20 @@ import {
   getCell,
   mapCellRefsToSigilLinks,
 } from "@/backends/utils.ts";
-import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";
+import {
+  clientScopedKey,
+  ownerClient,
+  type WorkerClient,
+} from "@/backends/worker-client.ts";
 import { txToReactivityLog } from "../../../runner/src/scheduler.ts";
 import { interceptTransaction } from "../../../runner/test/support/intercept-transaction.ts";
 import { patchableCell } from "../../../runner/test/support/patchable-cell.ts";
 import { createTrustedBuilder } from "../../../runner/test/support/trusted-builder.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../../runner/test/cfc-seed-envelope.ts";
 import { buildProcessor } from "./build-processor.ts";
 import { stubWorkerBoot } from "./stub-worker-boot.ts";
 import { createTransactionCommitReceipt } from "../../../runner/src/storage/commit-receipt.ts";
@@ -113,6 +127,9 @@ const cfcSigner = await Identity.fromPassphrase(
   "runtime-processor-cfc-label-tests",
 );
 const testSessionOpenAudience = "did:key:z6Mk-runtime-processor-test-audience";
+// A principal other than `cfcSigner`, whose labels no display of
+// `cfcSigner`'s admits.
+const otherUser = "did:key:z6Mk-runtime-processor-test-other-user";
 
 class SharedV2SessionFactory implements V2Storage.SessionFactory {
   readonly #server: MemoryV2Server.Server;
@@ -212,6 +229,70 @@ describe("runtime-processor", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("offering a profile suggestion", () => {
+    it("stores the suggested name and picture where the `#profile` wish reads them", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await processor.handleRequest({
+          type: RequestType.OfferProfileSuggestion,
+          name: "Sam Lee",
+          picture: new FabricBytes(new Uint8Array([0x89, 0x50, 1, 2])),
+        });
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()?.name).toBe("Sam Lee");
+        expect([...stored.get()?.picture?.slice() ?? []]).toEqual([
+          0x89,
+          0x50,
+          1,
+          2,
+        ]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a missing name, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+          } as unknown as OfferProfileSuggestionRequest),
+        ).rejects.toThrow("requires a name");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+
+    it("throws for a picture that is not bytes, and stores nothing", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const processor = buildProcessor({ runtime });
+        await expect(
+          processor.handleOfferProfileSuggestion({
+            type: RequestType.OfferProfileSuggestion,
+            name: "Sam Lee",
+            picture: "iVBORw" as unknown as FabricBytes,
+          }),
+        ).rejects.toThrow("requires a picture as bytes");
+        const stored = profileSuggestionCell(runtime);
+        await stored.sync();
+        expect(stored.get()).toBeUndefined();
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
   });
 
   it("returns `null` diagnostics for a storage manager without them", async () => {
@@ -2199,7 +2280,7 @@ describe("runtime-processor", () => {
       const processor = buildProcessor({ cc: {}, space });
 
       await expect(
-        processor.handlePieceCreate({
+        processor.handleRequest({
           type: RequestType.PieceCreate,
           space,
           source: { program: { main: "/main.tsx", files: [] } },
@@ -2650,6 +2731,7 @@ describe("runtime-processor", () => {
           },
         },
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: (_space: unknown, entityId: unknown) => {
             lookedUp.push(String(entityId));
@@ -2688,6 +2770,7 @@ describe("runtime-processor", () => {
       target: unknown,
     ) {
       return {
+        storageManager: {},
         runner: noSessionPointers,
         getCellFromEntityId: () => slugCell,
         getCellFromLink: (link: CellRef) =>
@@ -2976,6 +3059,7 @@ describe("runtime-processor", () => {
       };
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: () => slugCell,
           getCellFromLink: () => pieceCell,
@@ -3029,6 +3113,7 @@ describe("runtime-processor", () => {
       };
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: noSessionPointers,
           getCellFromEntityId: () => slugCell,
           getCellFromLink: () => targetCell,
@@ -3067,6 +3152,7 @@ describe("runtime-processor", () => {
       const calls: unknown[][] = [];
       const processor = buildProcessor({
         runtime: {
+          storageManager: {},
           runner: {
             sessionPatternPointerFor: (cell: unknown) =>
               cell === pieceCell
@@ -3213,7 +3299,7 @@ describe("runtime-processor", () => {
       it(`\`${handler}()\` resolves the piece in the scope the request names`, async () => {
         const { processor, scopes } = makeProcessor();
         await expect(
-          processor[handler]({ ...request, scope: "user" } as never),
+          processor.handleRequest({ ...request, scope: "user" }),
         ).rejects.toThrow(REFUSED);
         expect(scopes).toEqual(["user"]);
       });
@@ -3221,13 +3307,15 @@ describe("runtime-processor", () => {
 
     it("names no scope for a request carrying none, leaving the resolver's own default to apply", async () => {
       // The control on the cases above: what they read back tracks the
-      // request rather than being a constant the stub supplies.
+      // request rather than being a constant the stub supplies. Each request
+      // goes through `handleRequest()`, as the client registry sends it and
+      // as the cases above send theirs, so the two differ only in the scope.
 
-      for (const { handler, request } of cases) {
+      for (const { request } of cases) {
         const { processor, scopes } = makeProcessor();
-        await expect(
-          processor[handler](request as never),
-        ).rejects.toThrow(REFUSED);
+        await expect(processor.handleRequest(request)).rejects.toThrow(
+          REFUSED,
+        );
         expect(scopes).toEqual([undefined]);
       }
     });
@@ -3788,7 +3876,7 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = await processor.detectNonIdempotent({
+      const response = await processor.handleRequest({
         type: RequestType.DetectNonIdempotent,
         durationMs: 2500,
       });
@@ -3797,7 +3885,7 @@ describe("runtime-processor", () => {
       expect(response).toEqual({ result: expected });
     });
 
-    it("routes settle and trigger trace helpers to the scheduler", () => {
+    it("routes settle and trigger trace helpers to the scheduler", async () => {
       const expected = {
         iterations: [{
           workSetSize: 3,
@@ -3893,32 +3981,32 @@ describe("runtime-processor", () => {
         },
       });
 
-      processor.setSettleStatsEnabled({
+      await processor.handleRequest({
         type: RequestType.SetSettleStatsEnabled,
         enabled: true,
       });
-      processor.setActionRunTraceEnabled({
+      await processor.handleRequest({
         type: RequestType.SetActionRunTraceEnabled,
         enabled: true,
       });
-      processor.setTriggerTraceEnabled({
+      await processor.handleRequest({
         type: RequestType.SetTriggerTraceEnabled,
         enabled: true,
       });
 
-      const response = processor.getSettleStats({
+      const response = await processor.handleRequest({
         type: RequestType.GetSettleStats,
       });
-      const historyResponse = processor.getSettleStatsHistory({
+      const historyResponse = await processor.handleRequest({
         type: RequestType.GetSettleStatsHistory,
       });
-      const actionTraceResponse = processor.getActionRunTrace({
+      const actionTraceResponse = await processor.handleRequest({
         type: RequestType.GetActionRunTrace,
       });
-      const triggerTraceResponse = processor.getTriggerTrace({
+      const triggerTraceResponse = await processor.handleRequest({
         type: RequestType.GetTriggerTrace,
       });
-      const writeTraceResponse = processor.getWriteStackTrace({
+      const writeTraceResponse = await processor.handleRequest({
         type: RequestType.GetWriteStackTrace,
       });
 
@@ -3933,7 +4021,7 @@ describe("runtime-processor", () => {
         trace: writeTrace,
       });
 
-      processor.setWriteStackTraceMatchers({
+      await processor.handleRequest({
         type: RequestType.SetWriteStackTraceMatchers,
         matchers: [],
       });
@@ -4054,7 +4142,7 @@ describe("runtime-processor", () => {
       );
     });
 
-    it("returns the URL a blob's space's host serves it at", () => {
+    it("returns the URL a blob's space's host serves it at", async () => {
       const hostForSpaceCalls: string[] = [];
       const processor = buildProcessor({
         runtime: {
@@ -4065,13 +4153,13 @@ describe("runtime-processor", () => {
         },
       });
 
-      expect(
-        processor.handleBlobUrl({
+      await expect(
+        processor.handleRequest({
           type: RequestType.BlobUrl,
-          space: "did:key:test-space" as never,
+          space: "did:key:test-space",
           id: "fid1:abc_-123",
         }),
-      ).toEqual({
+      ).resolves.toEqual({
         url: "http://toolshed.test/did:key:test-space/blobs/abc_-123",
       });
       expect(hostForSpaceCalls).toEqual(["did:key:test-space"]);
@@ -4195,7 +4283,7 @@ describe("runtime-processor", () => {
       };
       try {
         await expect(
-          processor.handleEnsureHomePatternRunning({
+          processor.handleRequest({
             type: RequestType.EnsureHomePatternRunning,
           }),
         ).resolves.toEqual({ cell: defaultPatternRef });
@@ -4208,7 +4296,7 @@ describe("runtime-processor", () => {
     });
 
     /**
-     * Stands in for the four steps of the housekeeping, recording each
+     * Stands in for the five steps of the housekeeping, recording each
      * call, so that a case can say none was started even of a step that
      * fails at once.
      */
@@ -4234,6 +4322,11 @@ describe("runtime-processor", () => {
           "startShareIntake",
           () => Promise.resolve(undefined),
         ),
+        stub(
+          PiecesController.prototype,
+          "adoptCatalogRooms",
+          () => Promise.resolve(0),
+        ),
       ];
       return {
         /** How many times each step was started, in order. */
@@ -4251,7 +4344,9 @@ describe("runtime-processor", () => {
      * adoption run for real. Its `ensurePrivateInbox` is a real stream, whose
      * handler records the event and runs `onEnsurePrivateInbox`, so a throw
      * from that is a failure of Home's handling, which the host's ensure
-     * waits for and reports. Each
+     * waits for and reports. Its `createOwnPrivateInbox` is a real stream too,
+     * whose handler records the event; Home holds no inbox and none of its
+     * own, so the host's ensure has it create one first. Each
      * read the inbox ensure makes of Home waits for `inboxReadable`. Home
      * lists no profiles, so the profile root repair has none to repair. The
      * share intake's subscriptions to Home are recorded, and `onSubscribe` runs
@@ -4280,12 +4375,17 @@ describe("runtime-processor", () => {
       const sent: { stream: string; event: unknown }[] = [];
       const subscribed: string[] = [];
       const unsubscribed: string[] = [];
-      const streams = runtime.getCell<{ ensurePrivateInbox: unknown }>(
+      const streams = runtime.getCell<
+        { ensurePrivateInbox: unknown; createOwnPrivateInbox: unknown }
+      >(
         signer.did(),
         "home-worker-streams",
       );
       await runtime.editWithRetry((tx) =>
-        streams.withTx(tx).setRaw({ ensurePrivateInbox: { $stream: true } })
+        streams.withTx(tx).setRaw({
+          ensurePrivateInbox: { $stream: true },
+          createOwnPrivateInbox: { $stream: true },
+        })
       );
       const ensurePrivateInbox = streams.key("ensurePrivateInbox");
       const cancelEnsureHandler = runtime.scheduler.addEventHandler(
@@ -4295,7 +4395,17 @@ describe("runtime-processor", () => {
         },
         ensurePrivateInbox.getAsNormalizedFullLink(),
       );
+      const createOwnPrivateInbox = streams.key("createOwnPrivateInbox");
+      const cancelCreateOwnHandler = runtime.scheduler.addEventHandler(
+        (_tx, event: unknown) => {
+          sent.push({ stream: "createOwnPrivateInbox", event });
+        },
+        createOwnPrivateInbox.getAsNormalizedFullLink(),
+      );
       const home = {
+        // Home's space, whose allocation record the inbox ensure reads for
+        // the space Home's own inboxes live in: none is recorded.
+        space: homeRef.space,
         getAsLink: () => cellRefToSigilLink(homeRef),
         // The document Home's root is, which the inbox ensure loads before
         // reading Home's lists: none is stored, so it is absent.
@@ -4310,6 +4420,8 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : name === "ensurePrivateInbox"
             ? ensurePrivateInbox
+            : name === "createOwnPrivateInbox"
+            ? createOwnPrivateInbox
             : field(name),
       };
       // Any other field of Home's, as the inbox ensure, the profile root
@@ -4384,10 +4496,17 @@ describe("runtime-processor", () => {
         sent,
         /** What was sent to the streams that change the space list. */
         spaceListSends: () =>
-          sent.filter(({ stream }) => stream !== "ensurePrivateInbox"),
+          sent.filter(({ stream }) =>
+            stream !== "ensurePrivateInbox" &&
+            stream !== "createOwnPrivateInbox"
+          ),
         /** How many events were sent to `ensurePrivateInbox`. */
         privateInboxSends: () =>
           sent.filter(({ stream }) => stream === "ensurePrivateInbox").length,
+        /** How many events were sent to `createOwnPrivateInbox`. */
+        ownInboxCreations: () =>
+          sent.filter(({ stream }) => stream === "createOwnPrivateInbox")
+            .length,
         /** The Home fields the share intake has subscribed to, in order. */
         subscribed,
         /** The Home fields whose subscriptions the share intake has ended. */
@@ -4401,6 +4520,7 @@ describe("runtime-processor", () => {
         rootEnsures: () => ensure.calls.length,
         async [Symbol.asyncDispose]() {
           cancelEnsureHandler();
+          cancelCreateOwnHandler();
           ensure.restore();
           stored.restore();
           // A space context's first sync, unfinished at disposal, is logged
@@ -4534,7 +4654,7 @@ describe("runtime-processor", () => {
       await worker.processor.handleEnsureHomePatternRunning({
         type: RequestType.EnsureHomePatternRunning,
       });
-      await worker.processor.handleCreateSpace({
+      await worker.processor.handleRequest({
         type: RequestType.CreateSpace,
         label: "Fresh",
       });
@@ -4545,6 +4665,16 @@ describe("runtime-processor", () => {
         stream: "ensurePrivateInbox",
         event: {},
       });
+      // Home holds no inbox and none of its own, so the host has it create
+      // its own first, once.
+      expect(worker.ownInboxCreations()).toBe(1);
+      expect(
+        worker.sent.findIndex(({ stream }) =>
+          stream === "createOwnPrivateInbox"
+        ),
+      ).toBeLessThan(
+        worker.sent.findIndex(({ stream }) => stream === "ensurePrivateInbox"),
+      );
     });
 
     it("opens Home when Home's handling of the private inbox ensure fails, and sends it again on the next ensure", async () => {
@@ -4610,6 +4740,7 @@ describe("runtime-processor", () => {
       await ensured;
 
       expect(worker.privateInboxSends()).toBe(0);
+      expect(worker.ownInboxCreations()).toBe(0);
     });
 
     it("disposes without waiting for a private inbox ensure still reading, and reports nothing when it then fails", async () => {
@@ -4933,6 +5064,105 @@ describe("runtime-processor", () => {
         }
       });
 
+      it("asks the runtime to release what nothing reads once the housekeeping it started has settled", async () => {
+        const readable = Promise.withResolvers<void>();
+        const ensureSent = Promise.withResolvers<void>();
+        await using worker = await homeWorker(
+          [],
+          () => ensureSent.resolve(),
+          readable.promise,
+        );
+        // How many inbox ensures had been sent each time a release was asked
+        // for.
+        const releases: number[] = [];
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases.push(worker.privateInboxSends());
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.runtime.idle();
+
+        expect(releases).toEqual([]);
+        readable.resolve();
+        await ensureSent.promise;
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        expect(releases).toEqual([1]);
+      });
+
+      it("asks for that release once however often Home is brought up", async () => {
+        await using worker = await homeWorker([]);
+        let releases = 0;
+        const release = worker.runtime.releaseUnreadDocuments.bind(
+          worker.runtime,
+        );
+        worker.runtime.releaseUnreadDocuments = () => {
+          releases++;
+          return release();
+        };
+
+        await worker.processor.handleGetSpaceRootPattern({
+          type: RequestType.GetSpaceRootPattern,
+          space: worker.homeSpace,
+        });
+        await worker.processor.handleEnsureHomePatternRunning({
+          type: RequestType.EnsureHomePatternRunning,
+        });
+        await worker.processor.accessForTestingOnly.homeBringUpReleased;
+        await worker.processor.handleIdle();
+
+        expect(releases).toBe(1);
+      });
+
+      it("reports a failure of the release Home's bring-up asks for", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () =>
+          Promise.reject(new Error("release failure"));
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Releasing what Home's bring-up loaded:",
+          ]);
+        } finally {
+          warn.restore();
+        }
+      });
+
+      it("reports no failure of that release once the processor is disposed", async () => {
+        await using worker = await homeWorker([]);
+        worker.runtime.releaseUnreadDocuments = () => {
+          worker.processor.accessForTestingOnly.isDisposed = true;
+          return Promise.reject(new Error("release failure"));
+        };
+        const warn = stub(console, "warn", () => {});
+        try {
+          await worker.processor.handleGetSpaceRootPattern({
+            type: RequestType.GetSpaceRootPattern,
+            space: worker.homeSpace,
+          });
+          await worker.processor.handleIdle();
+          await worker.processor.accessForTestingOnly.homeBringUpReleased;
+
+          expect(warn.calls).toEqual([]);
+        } finally {
+          warn.restore();
+          worker.processor.accessForTestingOnly.isDisposed = false;
+        }
+      });
+
       it("starts no housekeeping when the root is read with `start` `false`", async () => {
         await using worker = await homeWorker([{ name: "team-lunch" }]);
         using housekeeping = stubHousekeeping();
@@ -4944,7 +5174,7 @@ describe("runtime-processor", () => {
         });
 
         expect(root.piece).toBeDefined();
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("starts no housekeeping when the root started is another space's", async () => {
@@ -4958,7 +5188,7 @@ describe("runtime-processor", () => {
         });
 
         expect(root.piece).toBeDefined();
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
 
@@ -4994,7 +5224,7 @@ describe("runtime-processor", () => {
 
         expect(response).toStrictEqual({});
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("treats a root that records no pattern yet as no Home", async () => {
@@ -5022,7 +5252,7 @@ describe("runtime-processor", () => {
         expect(root.getRaw()).toEqual({ name: "Home" });
         expect(response).toStrictEqual({});
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
 
       it("creates Home where it has no root when not asked for an existing Home only", async () => {
@@ -5038,6 +5268,84 @@ describe("runtime-processor", () => {
         expect(response.cell).toBeDefined();
         expect(worker.rootEnsures()).toBe(1);
         expect(housekeeping.starts()[0]).toBe(1);
+      });
+    });
+
+    describe("a Home whose every memory dial is refused", () => {
+      // The refusal is real: every dial, and every fetch of a pattern to
+      // create Home from, goes to a host that answers with a 403, so Home's
+      // memory session fails its first handshake on every attempt the client
+      // may make, and never opens.
+
+      /**
+       * A processor over a real runtime whose storage and API both reach a
+       * host that refuses everything it is asked.
+       */
+      async function refusedHomeWorker() {
+        const refuser = Deno.serve(
+          { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+          () => new Response(null, { status: 403 }),
+        );
+        const host = new URL(`http://127.0.0.1:${refuser.addr.port}/`);
+        const signer = await Identity.generate({ implementation: "noble" });
+        const storageManager = V2Storage.StorageManager.open({
+          as: signer,
+          memoryHost: host,
+        });
+        const runtime = new Runtime({ apiUrl: host, storageManager });
+        const processor = buildProcessor({
+          identity: signer,
+          runtime,
+          cc: new PiecesController(
+            { as: signer, space: signer.did() },
+            runtime,
+          ),
+          space: signer.did(),
+        });
+        return {
+          /** The Home bring-up's rejection, or `undefined` if it resolves. */
+          async bringUpFailure(existingOnly?: boolean): Promise<unknown> {
+            return await processor.handleEnsureHomePatternRunning({
+              type: RequestType.EnsureHomePatternRunning,
+              ...(existingOnly === undefined ? {} : { existingOnly }),
+            }).then(() => undefined, (error: unknown) => error);
+          },
+          async [Symbol.asyncDispose]() {
+            await runtime.dispose();
+            await storageManager.close();
+            await refuser.shutdown();
+          },
+        };
+      }
+
+      it("rejects the bring-up with the first handshake's failure, creating nothing", async () => {
+        await using worker = await refusedHomeWorker();
+        using housekeeping = stubHousekeeping();
+        using ensure = spy(PiecesController.prototype, "ensureDefaultPattern");
+
+        const failure = await worker.bringUpFailure();
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("failed its first handshake"),
+        });
+        expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
+        expect(ensure.calls.length).toBe(0);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
+      });
+
+      it("rejects an existing-only bring-up with the first handshake's failure, rather than returning no Home", async () => {
+        await using worker = await refusedHomeWorker();
+        using housekeeping = stubHousekeeping();
+
+        const failure = await worker.bringUpFailure(true);
+
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("failed its first handshake"),
+        });
+        expect(MemoryV2Client.isFirstHandshakeFailure(failure)).toBe(true);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
 
@@ -5081,7 +5389,7 @@ describe("runtime-processor", () => {
         expect(response).toStrictEqual({});
         expect(join.calls.length).toBe(0);
         expect(worker.rootEnsures()).toBe(0);
-        expect(housekeeping.starts()).toEqual([0, 0, 0, 0]);
+        expect(housekeeping.starts()).toEqual([0, 0, 0, 0, 0]);
       });
     });
   });
@@ -5105,6 +5413,7 @@ describe("runtime-processor", () => {
           ensurePrivateInbox: () => Promise.resolve(),
           repairProfileRoots: () => Promise.resolve(),
           startShareIntake: () => Promise.resolve(undefined),
+          adoptCatalogRooms: () => Promise.resolve(),
         };
         // The space is the identity's Home, which is the identity's own.
         const processor = buildProcessor({
@@ -5196,6 +5505,47 @@ describe("runtime-processor", () => {
         expect(result).toStrictEqual({});
         expect(calls).toEqual(["getDefaultPattern"]);
       });
+
+      for (const start of [true, false]) {
+        it(`rejects with the failed first handshake, and creates no root, for a Home never reached when \`start\` is \`${start}\``, async () => {
+          const unreachable = MemoryV2Client.firstHandshakeFailedError(
+            3,
+            "wss://memory.test/",
+            new Error("connection refused"),
+          );
+          const calls: string[] = [];
+          const cc = {
+            // A space never reached reads as one with nothing stored.
+            getDefaultPattern: () => {
+              calls.push("getDefaultPattern");
+              return Promise.resolve(undefined);
+            },
+            ensureDefaultPattern: () => {
+              calls.push("ensureDefaultPattern");
+              return Promise.reject(new Error("must not create the root"));
+            },
+          };
+          // The space is the identity's Home, which an owner would otherwise
+          // go on to create a root in.
+          const processor = buildProcessor({
+            runtime: {
+              userIdentityDID: "did:key:test-space",
+              storageManager: { spaceSessionError: () => unreachable },
+            },
+            cc,
+            space: "did:key:test-space",
+          });
+
+          const error = await processor.handleRequest({
+            type: RequestType.GetSpaceRootPattern,
+            space: "did:key:test-space",
+            start,
+          }).then(() => undefined, (error: unknown) => error);
+
+          expect(error).toBe(unreachable);
+          expect(calls).toEqual(["getDefaultPattern"]);
+        });
+      }
     });
   });
 
@@ -5360,6 +5710,122 @@ describe("runtime-processor", () => {
     });
   });
 
+  describe("`RuntimeProcessor` written principal IPC", () => {
+    /**
+     * A profile in `cfcSigner`'s space whose `picture` field is a write
+     * redirect to a cell of its own holding a picture labeled as representing
+     * `cfcSigner`, `relabel()` storing it again labeled as representing
+     * someone else, and a subscription to the field, asking for the written
+     * principal with `includeWrittenPrincipal`, which returns what it posted.
+     */
+    async function subscribedPicture(includeWrittenPrincipal?: boolean) {
+      const { runtime, storageManager } = createRuntime();
+      const space = cfcSigner.did();
+      const visitor = (await Identity.fromPassphrase("written-principal ipc"))
+        .did();
+      const bytes = new FabricBytes(new Uint8Array([1, 2, 3]));
+      const pictureCell = runtime.getCell<unknown>(space, "ipc-picture");
+      const profile = runtime.getCell(
+        space,
+        "ipc-profile",
+        {
+          type: "object",
+          properties: { picture: { type: "FabricBytes" } },
+        } as const satisfies JSONSchema,
+      );
+      const label = (subject: string) => ({
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: [{ kind: "represents-principal", subject }] },
+          }],
+        },
+      });
+      const commit = async (
+        edit: (tx: IExtendedStorageTransaction) => void,
+      ) => {
+        const tx = runtime.edit();
+        writeSeedEnvelopeDoc(tx, space);
+        edit(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await runtime.idle();
+        // The subscription posts from a microtask.
+        await Promise.resolve();
+      };
+      await commit((tx) => {
+        seedStoredEnvelope(
+          tx,
+          { ...pictureCell.getAsNormalizedFullLink(), path: [] },
+          { value: bytes, cfc: label(space) },
+        );
+        profile.withTx(tx).setRawUntyped(
+          { picture: pictureCell.getAsWriteRedirectLink() } as never,
+        );
+      });
+      const posted: Record<string, unknown>[] = [];
+      buildProcessor({ runtime }).handleCellSubscribe({
+        type: RequestType.CellSubscribe,
+        cell: createCellRef(profile.key("picture")),
+        ...(includeWrittenPrincipal && { includeWrittenPrincipal }),
+      }, {
+        id: 1,
+        post: (message) => {
+          posted.push(message as Record<string, unknown>);
+          return true;
+        },
+      });
+      await Promise.resolve();
+      return {
+        posted,
+        bytes,
+        space,
+        visitor,
+        relabel: () =>
+          commit((tx) =>
+            seedStoredEnvelope(
+              tx,
+              { ...pictureCell.getAsNormalizedFullLink(), path: ["cfc"] },
+              label(visitor) as never,
+            )
+          ),
+        [Symbol.asyncDispose]: async () => {
+          await runtime.dispose();
+          await storageManager.close();
+        },
+      };
+    }
+
+    it("posts with each value the principal its own cell represents, and posts again when only that principal changes", async () => {
+      await using picture = await subscribedPicture(true);
+      expect(picture.posted.map(({ value, writtenPrincipal }) => ({
+        value,
+        writtenPrincipal,
+      }))).toEqual([{ value: picture.bytes, writtenPrincipal: picture.space }]);
+
+      await picture.relabel();
+
+      expect(picture.posted.at(-1)).toMatchObject({
+        value: picture.bytes,
+        writtenPrincipal: picture.visitor,
+      });
+      expect(picture.posted).toHaveLength(2);
+    });
+
+    it("posts no principal to a subscription that did not ask for one", async () => {
+      await using picture = await subscribedPicture();
+      await picture.relabel();
+
+      expect(picture.posted.some((message) => "writtenPrincipal" in message))
+        .toBe(false);
+      expect(picture.posted.map(({ value }) => value)).toEqual([
+        picture.bytes,
+      ]);
+    });
+  });
+
   describe("`RuntimeProcessor` cell fields IPC", () => {
     it("lists the fields of a record it has not loaded yet, once it has synced it", async () => {
       const server = newLoopbackServer();
@@ -5520,7 +5986,7 @@ describe("runtime-processor", () => {
       >;
     }
 
-    it('fails closed on the raw `meta: "cfc"` seam', () => {
+    it('fails closed on the raw `meta: "cfc"` seam', async () => {
       const ref: CellRef = {
         id: "of:cfc-raw-meta-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -5558,13 +6024,13 @@ describe("runtime-processor", () => {
 
       // `cfc` is not a `MetaField`, but the wire is untyped JSON — a request
       // that sends it must get an error, never the raw metadata.
-      expect(() =>
-        processor.handleCellGet({
+      await expect(
+        processor.handleRequest({
           type: RequestType.CellGet,
           cell: ref,
           meta: "cfc" as never,
-        })
-      ).toThrow(/cfc/);
+        }),
+      ).rejects.toThrow(/cfc/);
     });
 
     it("returns a label view for a cell ref", async () => {
@@ -5673,10 +6139,12 @@ describe("runtime-processor", () => {
           },
         });
 
-        const response = admitted(processor.handleCellGet({
-          type: RequestType.CellGet,
-          cell: ref,
-        }));
+        const response = admitted(
+          await processor.handleCellGet({
+            type: RequestType.CellGet,
+            cell: ref,
+          }),
+        );
         const atom = sourcedCaveatOf(
           (response.value as { nested: SigilLink }).nested,
         );
@@ -5689,7 +6157,7 @@ describe("runtime-processor", () => {
       }
     });
 
-    it("returns the read cell's schema-bearing ref when `includeRef` is set", () => {
+    it("returns the read cell's schema-bearing ref when `includeRef` is set", async () => {
       const ref: CellRef = {
         id: "of:include-ref-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -5714,23 +6182,27 @@ describe("runtime-processor", () => {
         },
       });
 
-      const withRef = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-        includeRef: true,
-      }));
+      const withRef = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+          includeRef: true,
+        }),
+      );
       expect(withRef.cell?.id).toBe("of:include-ref-cell");
       expect(withRef.cell?.schema).toEqual({ type: "string" });
 
       // Not requested: not returned.
-      const without = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-      }));
+      const without = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+        }),
+      );
       expect(without.cell).toBeUndefined();
     });
 
-    it("returns the ref alongside the CFC label when both are requested", () => {
+    it("returns the ref alongside the CFC label when both are requested", async () => {
       const ref: CellRef = {
         id: "of:include-ref-label-cell" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -5763,19 +6235,21 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-        includeRef: true,
-        includeCfcLabel: true,
-      }));
+      const response = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+          includeRef: true,
+          includeCfcLabel: true,
+        }),
+      );
       expect(response.cell?.id).toBe("of:include-ref-label-cell");
       // The cell carries no label; the field is present-but-undefined.
       expect(response.cfcLabel).toBeUndefined();
       expect(response.value).toBe("plain value");
     });
 
-    it("leaves a view on a link the read handed it, which stored data never carries", () => {
+    it("leaves a view on a link the read handed it, which stored data never carries", async () => {
       // The response path redacts the views the conversion attaches from live
       // cells and no others: a link already in the read is rebuilt as the
       // container it is. Stored data holds no view on a link, the persist
@@ -5820,10 +6294,12 @@ describe("runtime-processor", () => {
         },
       });
 
-      const response = admitted(processor.handleCellGet({
-        type: RequestType.CellGet,
-        cell: ref,
-      }));
+      const response = admitted(
+        await processor.handleCellGet({
+          type: RequestType.CellGet,
+          cell: ref,
+        }),
+      );
       const atom = sourcedCaveatOf(
         (response.value as { nested: SigilLink }).nested,
       );
@@ -5962,19 +6438,19 @@ describe("runtime-processor", () => {
             label: { integrity: ["authored-by-bob"] },
           }],
         },
-      }, (resolvedCell) => {
+      }, async (resolvedCell) => {
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({ resolveAsCell: () => resolvedCell }),
           },
         });
 
-        expect(
-          processor.handleCellResolveAsCell({
+        await expect(
+          processor.handleRequest({
             type: RequestType.CellResolveAsCell,
             cell: sourceRef,
           }),
-        ).toEqual({
+        ).resolves.toEqual({
           cell: {
             ...resolvedRef,
             cfcLabelView: {
@@ -6038,7 +6514,7 @@ describe("runtime-processor", () => {
       });
     });
 
-    it("does not look up CFC labels from a result meta cell", () => {
+    it("does not look up CFC labels from a result meta cell", async () => {
       const resultRef: CellRef = {
         id: "of:cfc-label-result" as CellRef["id"],
         space: "did:key:test" as CellRef["space"],
@@ -6098,12 +6574,12 @@ describe("runtime-processor", () => {
       };
       const processor = buildProcessor({ runtime });
 
-      expect(
-        processor.handleCellGetCfcLabel({
+      await expect(
+        processor.handleRequest({
           type: RequestType.CellGetCfcLabel,
           cell: resultRef,
         }),
-      ).toEqual({
+      ).resolves.toEqual({
         cfcLabel: undefined,
       });
       // getCfcLabel is a pure read: it never syncs (the reactive caller owns
@@ -6477,6 +6953,10 @@ describe("runtime-processor", () => {
       };
       const resolvedCell = {
         marker: "resolved-cell",
+        // A send resolves its target before its transaction, and finds the
+        // replica holds the document it reaches, so it loads nothing.
+        resolveAsCell: () => resolvedCell,
+        getAsNormalizedFullLink: () => ref,
         withTx: (candidateTx: unknown) => {
           expect(candidateTx).toBe(tx);
           return cellWithTx;
@@ -6487,6 +6967,11 @@ describe("runtime-processor", () => {
         resolvedCell,
         processor: buildProcessor({
           runtime: {
+            storageManager: {
+              open: () => ({
+                replica: { hasLocalDocumentCoverage: () => true },
+              }),
+            },
             edit: () => tx,
             prepareTxForCommit: (candidate: unknown) => {
               expect(candidate).toBe(tx);
@@ -6537,7 +7022,7 @@ describe("runtime-processor", () => {
     it("prepares mergeable cell append transactions before committing", async () => {
       const { processor } = createProcessor();
 
-      await processor.handleCellPush({
+      await processor.handleRequest({
         type: RequestType.CellPush,
         cell: ref,
         values: ["new value"],
@@ -6671,7 +7156,7 @@ describe("runtime-processor", () => {
         error: { message: "send refused" },
       });
 
-      await expect(processor.handleCellSend({
+      await expect(processor.handleRequest({
         type: RequestType.CellSend,
         cell: ref,
         event: "new value",
@@ -7507,6 +7992,7 @@ describe("runtime-processor", () => {
           patternManager: { getCompileCacheStats: () => compileCacheStats },
           getSizes: () => runtimeSizes,
           getCellFromLink: () => ({ sink: () => () => {} }),
+          releaseUnreadDocuments: () => Promise.resolve(),
         },
       });
     }
@@ -7522,23 +8008,23 @@ describe("runtime-processor", () => {
       spaces: 1,
     };
 
-    function withFlag(
+    async function withFlag<T>(
       metadata: Record<string, unknown>,
-      body: () => void,
-    ): void {
+      body: () => T | Promise<T>,
+    ): Promise<T> {
       const logger = getLogger("getLoggerCounts-test");
       logger.flag("probe", "id:1", true, metadata);
       try {
-        body();
+        return await body();
       } finally {
         logger.resetFlags();
       }
     }
 
-    it("carries a raised flag's metadata through to the response", () => {
+    it("carries a raised flag's metadata through to the response", async () => {
       const processor = processorWithStats();
 
-      withFlag({ a: 1 }, () => {
+      await withFlag({ a: 1 }, () => {
         const response = processor.getLoggerCounts({
           type: RequestType.GetLoggerCounts,
         });
@@ -7630,17 +8116,18 @@ describe("runtime-processor", () => {
       expect(sizes()).toBe(0);
     });
 
-    it("refuses to answer at all when a flag holds unsendable metadata", () => {
+    it("refuses to answer at all when a flag holds unsendable metadata", async () => {
       // The assertion is wired into the handler, not merely available beside it:
       // a `Date` raised anywhere in the process stops this read.
 
       const processor = processorWithStats();
 
-      withFlag({ when: new Date(0) }, () => {
-        expect(() =>
-          processor.getLoggerCounts({ type: RequestType.GetLoggerCounts })
-        ).toThrow(/not being a `FabricValue`/);
-      });
+      await expect(
+        withFlag(
+          { when: new Date(0) },
+          () => processor.handleRequest({ type: RequestType.GetLoggerCounts }),
+        ),
+      ).rejects.toThrow(/not being a `FabricValue`/);
     });
   });
 
@@ -7812,6 +8299,23 @@ describe("runtime-processor", () => {
           type: RequestType.GetPatternCoverage,
         }),
       ).toEqual({ data: report });
+    });
+  });
+
+  describe("`RuntimeProcessor` logger error messages", () => {
+    it("routes a `GetLoggerErrorMessages` request to what the loggers kept", async () => {
+      const logger = getLogger("runtime-processor-kept-messages", {
+        enabled: false,
+      });
+      logger.error("a-key", "it broke");
+      const processor = buildProcessor();
+
+      const response = await processor.handleRequest({
+        type: RequestType.GetLoggerErrorMessages,
+      }) as LoggerErrorMessagesResponse;
+
+      expect(response.messages["runtime-processor-kept-messages"])
+        .toStrictEqual({ "a-key": ["it broke"] });
     });
   });
 
@@ -8125,9 +8629,14 @@ describe("runtime-processor", () => {
       ]]);
     });
 
-    it("surfaces attention index and sidecar synchronization failures", async () => {
-      const indexError = new Error("index failed");
-      const sidecarError = new Error("sidecar failed");
+    it("rejects with an `Error` carrying a failed synchronization's message", async () => {
+      // A storage result's error is a plain record rather than an `Error`.
+
+      const indexError = {
+        name: "AuthorizationError",
+        message: "index refused",
+      };
+      const sidecarError = { name: "ConnectionError", message: "sidecar lost" };
       const summary = {
         eventId: "evt-failed",
         seq: 43,
@@ -8145,15 +8654,22 @@ describe("runtime-processor", () => {
           type: RequestType.ListEventAttention,
           space,
         });
+      const failure = (provider: unknown) =>
+        invoke(provider).then(() => undefined, (error: unknown) => error);
 
-      await expect(invoke({
+      const indexFailure = await failure({
         sync: () => Promise.resolve({ error: indexError }),
-      })).rejects.toBe(indexError);
+      });
+      expect(indexFailure).toBeInstanceOf(Error);
+      expect(indexFailure).toMatchObject({
+        message: "index refused",
+        cause: indexError,
+      });
       await expect(invoke({
         sync: () => Promise.resolve({}),
       })).rejects.toThrow("does not expose an attention replica");
       let syncCount = 0;
-      await expect(invoke({
+      const sidecarFailure = await failure({
         sync: () =>
           Promise.resolve(
             ++syncCount === 1 ? {} : { error: sidecarError },
@@ -8170,7 +8686,12 @@ describe("runtime-processor", () => {
             },
           }),
         },
-      })).rejects.toBe(sidecarError);
+      });
+      expect(sidecarFailure).toBeInstanceOf(Error);
+      expect(sidecarFailure).toMatchObject({
+        message: "sidecar lost",
+        cause: sidecarError,
+      });
     });
 
     it("rejects resolution when the storage capability is absent", async () => {
@@ -8492,6 +9013,227 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("an idle space's context", () => {
+      const counterSchema = {
+        type: "object",
+        properties: { n: { type: "number" } },
+      } as const satisfies JSONSchema;
+      const client = (id: number): WorkerClient => ({ id, post: () => true });
+
+      /** A processor whose runtime holds a cell in a second space. */
+      async function spaceState() {
+        const state = makeProcessorState();
+        const spaceB = (await Identity.fromPassphrase(
+          "runtime-processor-idle-space",
+        )).did();
+        const cell = createCellRef(
+          state.runtime.getCell(spaceB, "idle-space-counter", counterSchema),
+        );
+        const subscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellSubscribe(
+            { type: RequestType.CellSubscribe, cell },
+            subscriber,
+          );
+        const unsubscribe = (subscriber: WorkerClient) =>
+          state.processor.handleCellUnsubscribe(
+            { type: RequestType.CellUnsubscribe, cell },
+            subscriber,
+          );
+        return { ...state, spaceB, subscribe, unsubscribe };
+      }
+
+      it("drops the context once its space's last subscription is cancelled, and makes a new one when the space is named again", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const first = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+          const again = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          expect(again).not.toBe(first);
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(again);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while another subscription in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          subscribe(client(2));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a view mount of a cell in its space stands", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          processor.accessForTestingOnly.vdomMounts = new Map([["2 1", {
+            reconciler: { unmount: () => {} },
+            cancel: () => {},
+            client: client(2),
+            space: spaceB,
+          }]]) as never;
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context while a piece in its space runs", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context once the last piece running in its space stops", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = true;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          using _stop = stub(ctx, "stopPiece", () => {
+            running = false;
+            return Promise.resolve();
+          });
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+
+          await processor.handlePieceStop({
+            type: RequestType.PieceStop,
+            pieceId: fid("idle-space-piece"),
+            space: spaceB,
+          });
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the context across a view mount replaced under the same id", async () => {
+        const { processor, runtime, spaceB } = await spaceState();
+        try {
+          const view = createCellRef(
+            runtime.getCell(spaceB, "idle-space-view", counterSchema),
+          );
+          const mount = () =>
+            processor.handleVDomMount(
+              { type: RequestType.VDomMount, mountId: 1, cell: view },
+              client(1),
+            );
+          const ctx = processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          await mount();
+
+          await mount();
+
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(ctx);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("finds a context for the pieces a running piece creates, after its space's was dropped", async () => {
+        const { processor, runtime, spaceB, subscribe, unsubscribe } =
+          await spaceState();
+        let running = false;
+        using _running = stub(
+          runtime.runner,
+          "runsPieceIn",
+          (space) => running && space === spaceB,
+        );
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+          unsubscribe(client(1));
+          expect(processor.piecesFor(spaceB)).toBeUndefined();
+
+          // The piece's start was under way when the context went.
+          running = true;
+
+          const found = processor.piecesFor(spaceB);
+          expect(found).toBeDefined();
+          expect(processor.accessForTestingOnly.spaces.get(spaceB)).toBe(found);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("keeps the home space's context when nothing in it is open", async () => {
+        const {
+          processor,
+          runtime,
+          homeSpace,
+          spaceB,
+          subscribe,
+          unsubscribe,
+        } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          unsubscribe(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.get(homeSpace)).toBe(
+            processor.accessForTestingOnly.cc,
+          );
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("drops the context of a space a departing client alone had open", async () => {
+        const { processor, runtime, spaceB, subscribe } = await spaceState();
+        try {
+          processor.accessForTestingOnly.getSpaceCtx(spaceB);
+          subscribe(client(1));
+
+          processor.disposeClient(client(1));
+
+          expect(processor.accessForTestingOnly.spaces.has(spaceB)).toBe(false);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
     describe("handleRuntimeSynced()", () => {
       it("awaits every opened space, naming none", async () => {
         const { processor, runtime } = makeProcessorState();
@@ -8538,6 +9280,7 @@ describe("runtime-processor", () => {
           "legacySpacesAdopted",
           "privateInboxEnsured",
           "profileRootsRepaired",
+          "catalogRoomsAdopted",
         ] as const
       ) {
         it(`resolves only once the \`${step}\` step of Home's housekeeping has settled`, async () => {
@@ -9311,6 +10054,64 @@ describe("runtime-processor", () => {
       });
     });
 
+    describe("`RequestType.RetryUnreachableSpaces`", () => {
+      it("retries each space the storage manager could not reach, and resolves once every retry has settled, failed ones included", async () => {
+        const calls: string[] = [];
+        const gates = new Map<string, PromiseWithResolvers<void>>();
+        let handled = false;
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              const gate = Promise.withResolvers<void>();
+              gates.set(space, gate);
+              return gate.promise;
+            },
+            storageManager: {
+              unreachableSpaces: () => [
+                "did:key:z6Mk-ipc-unreachable-a",
+                "did:key:z6Mk-ipc-unreachable-b",
+              ],
+            },
+          },
+        });
+        const request = processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        }).then(() => {
+          handled = true;
+        });
+        expect(calls).toEqual([
+          "did:key:z6Mk-ipc-unreachable-a",
+          "did:key:z6Mk-ipc-unreachable-b",
+        ]);
+        gates.get("did:key:z6Mk-ipc-unreachable-a")?.resolve();
+        await Promise.resolve();
+        expect(handled).toBe(false);
+        gates.get("did:key:z6Mk-ipc-unreachable-b")?.reject(
+          new Error("still out of reach"),
+        );
+        await request;
+        expect(handled).toBe(true);
+      });
+
+      it("retries nothing where no space is out of reach", async () => {
+        const calls: string[] = [];
+        const processor = buildProcessor({
+          runtime: {
+            retrySpaceAccess: (space: string) => {
+              calls.push(space);
+              return Promise.resolve();
+            },
+            storageManager: { unreachableSpaces: () => [] },
+          },
+        });
+        await processor.handleRequest({
+          type: RequestType.RetryUnreachableSpaces,
+        });
+        expect(calls).toEqual([]);
+      });
+    });
+
     describe("`RequestType.RetrySpaceAccess`", () => {
       it("forwards the space to the runtime and resolves after the runtime's retry does", async () => {
         const events: string[] = [];
@@ -9442,6 +10243,232 @@ describe("runtime-processor", () => {
         }
       });
     });
+  });
+
+  describe("`RuntimeProcessor` host reads under the render policy", () => {
+    it("decides a host's read under the ceiling it renders with, and returns it as read with none", async () => {
+      // A host's read is a display sink like a render, so the ceiling every
+      // mount starts from decides it, and a read of a value whose label the
+      // ceiling does not admit answers with a refusal.
+      const { runtime } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(
+          cfcSigner.did(),
+          "host-read-under-ceiling",
+          undefined,
+          tx,
+        );
+        cell.set("credential-behind-the-ceiling");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const ref = {
+          ...cell.getAsNormalizedFullLink(),
+          schema: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.resource("CredentialSecret")] },
+          },
+        } as unknown as CellRef;
+        const state = buildProcessor({ runtime });
+        const read = () =>
+          state.handleCellGet({ type: RequestType.CellGet, cell: ref });
+
+        expect(await read()).toEqual({
+          value: "credential-behind-the-ceiling",
+        });
+        state.accessForTestingOnly.renderConfidentialityCeiling = {
+          atoms: [],
+        } as never;
+        expect(await read()).toEqual({
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("decides a host's read of a document's metadata under the ceiling, on the document's labels", async () => {
+      // A metadata field sits beside the document's value, where no label
+      // covers it, so its read is decided on the labels the document holds.
+
+      const { runtime } = createRuntime();
+      try {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(
+          cfcSigner.did(),
+          "host-metadata-read-under-ceiling",
+          undefined,
+          tx,
+        );
+        cell.set("credential-behind-the-ceiling");
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const ref = {
+          ...cell.getAsNormalizedFullLink(),
+          schema: {
+            type: "string",
+            ifc: { confidentiality: [cfcAtom.resource("CredentialSecret")] },
+          },
+        } as unknown as CellRef;
+        const state = buildProcessor({ runtime });
+        const read = () =>
+          state.handleCellGet({
+            type: RequestType.CellGet,
+            cell: ref,
+            meta: "internal",
+          });
+
+        expect("refused" in await read()).toBe(false);
+        state.accessForTestingOnly.renderConfidentialityCeiling = {
+          atoms: [],
+        } as never;
+        expect(await read()).toEqual({
+          refused: { refusedBy: "display-ceiling", labelSource: "schema" },
+        });
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    /**
+     * Initializes a processor from `data` over a memory server that admits
+     * `cfcSigner`, runs `use` with it and a reader of a document `cfcSigner`'s
+     * space holds labeled `atom`, read as a host reads it, and disposes it.
+     */
+    async function initialized(
+      data: Partial<InitializationData>,
+      use: (
+        processor: RuntimeProcessor,
+        labeled: (id: string, atom: unknown) => Promise<CellGetResponse>,
+      ) => Promise<void> | void,
+    ): Promise<void> {
+      const space = cfcSigner.did();
+      const server = new MemoryV2Server.Server({
+        authorizeSessionOpen: () => cfcSigner.did(),
+        sessionOpenAuth: { audience: testSessionOpenAudience },
+      });
+      const storageManager = new SharedV2StorageManager({
+        as: cfcSigner,
+        memoryHost: new URL("memory://"),
+      }, server);
+      const restoreBoot = stubWorkerBoot(() => storageManager);
+      try {
+        const processor = await RuntimeProcessor.initialize({
+          apiUrl: "http://worker.test/",
+          identity: cfcSigner.keyPair,
+          spaceDid: space,
+          ...data,
+        });
+        try {
+          const runtime = processor.accessForTestingOnly.runtime;
+          const labeled = async (id: string, atom: unknown) => {
+            const tx = runtime.edit();
+            const cell = runtime.getCell<string>(space, id, undefined, tx);
+            writeSeedEnvelopeDoc(tx, space);
+            seedStoredEnvelope(tx, {
+              space,
+              id: cell.getAsNormalizedFullLink().id!,
+              type: "application/json",
+              path: [],
+            }, {
+              value: `value-of-${id}`,
+              cfc: {
+                version: 1,
+                schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+                labelMap: {
+                  version: 1,
+                  entries: [{ path: [], label: { confidentiality: [atom] } }],
+                },
+              },
+            } as never);
+            expect((await tx.commit().settled).ok).toBeDefined();
+            return processor.handleCellGet({
+              type: RequestType.CellGet,
+              cell: {
+                ...cell.getAsNormalizedFullLink(),
+                schema: { type: "string" },
+              } as unknown as CellRef,
+            });
+          };
+          await use(processor, labeled);
+        } finally {
+          await processor.dispose();
+        }
+      } finally {
+        restoreBoot();
+        await storageManager.close();
+        await server.close();
+      }
+    }
+
+    it("decides a host's read under the ceiling `initialize()` configures, with the resolver a mount gets", async () => {
+      // The ceiling admits what the acting user may see. A value labeled with
+      // the session's own space is admitted through the exchange rules alone,
+      // which the resolver built for that space applies, and a value labeled
+      // with a resource the ceiling does not name is refused.
+      const space = cfcSigner.did();
+      await initialized(
+        { renderConfidentialityCeiling: { atoms: [cfcAtom.user(space)] } },
+        async (_processor, labeled) => {
+          expect(await labeled("session-space-note", cfcAtom.space(space)))
+            .toEqual({ value: "value-of-session-space-note" });
+          expect(
+            await labeled(
+              "credential-note",
+              cfcAtom.resource("CredentialSecret"),
+            ),
+          ).toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+        },
+      );
+    });
+
+    it("decides a host's read under the default display ceiling for the acting principal when the host declares none", async () => {
+      // A display boundary no authored policy covers is fitted against the
+      // default display ceiling (spec §8.10.6), so a host that declares no
+      // ceiling is held to the one the shell declares.
+      await initialized({}, async (processor, labeled) => {
+        expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+          .toEqual(defaultDisplayCeiling(cfcSigner.did()));
+        expect(await labeled("own-note", cfcAtom.user(cfcSigner.did())))
+          .toEqual({ value: "value-of-own-note" });
+        expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+          .toEqual({
+            refused: { refusedBy: "display-ceiling", labelSource: "consumed" },
+          });
+      });
+    });
+
+    it("returns every read as read for a host that declares no ceiling with `null`", async () => {
+      await initialized(
+        { renderConfidentialityCeiling: null },
+        async (processor, labeled) => {
+          expect(processor.accessForTestingOnly.renderConfidentialityCeiling)
+            .toBeUndefined();
+          expect(await labeled("someone-elses-note", cfcAtom.user(otherUser)))
+            .toEqual({ value: "value-of-someone-elses-note" });
+        },
+      );
+    });
+
+    for (
+      const [data, expected] of [
+        [{}, "deny"],
+        [{ renderConfidentialityCeiling: { atoms: [] } }, "deny"],
+        [{ renderDeclassificationPolicy: "allow" }, "allow"],
+      ] as const
+    ) {
+      it(
+        `denies author declassification unless the host allows it, given ${
+          JSON.stringify(data)
+        }`,
+        async () => {
+          await initialized(data, (processor) => {
+            expect(processor.accessForTestingOnly.renderDeclassificationPolicy)
+              .toBe(expected);
+          });
+        },
+      );
+    }
   });
 
   describe("`RuntimeProcessor` vdom mount render policy", () => {
@@ -9620,6 +10647,16 @@ describe("runtime-processor", () => {
     });
   });
 
+  describe("RuntimeProcessor.handleRequest()", () => {
+    it("rejects a request of a type it does not know", async () => {
+      await expect(
+        buildProcessor().handleRequest(
+          { type: "bogus" } as unknown as ProcessorRequest,
+        ),
+      ).rejects.toThrow("Unknown message type: bogus");
+    });
+  });
+
   describe("RuntimeProcessor.handleNotification()", () => {
     // A real processor whose `vdomMounts` holds a stub that records what the
     // reconciler is asked to do.
@@ -9688,15 +10725,14 @@ describe("runtime-processor", () => {
 
     const processorOver = (
       programs: Record<string, unknown>,
+      nodes: unknown[] = Object.keys(programs).map((identity) => ({
+        patternIdentity: { identity, symbol: "default" },
+      })),
     ): RuntimeProcessor =>
       buildProcessor({
         runtime: {
           scheduler: {
-            getGraphSnapshot: () => ({
-              nodes: Object.keys(programs).map((identity) => ({
-                patternIdentity: { identity, symbol: "default" },
-              })),
-            }),
+            getGraphSnapshot: () => ({ nodes }),
           },
           patternManager: {
             getPatternProgramBySync: (identity: string) => programs[identity],
@@ -9705,45 +10741,53 @@ describe("runtime-processor", () => {
       });
 
     const sourcesOf = (processor: RuntimeProcessor) =>
-      processor.getPatternSources({
-        type: RequestType.GetPatternSources,
-      } as GetPatternSourcesRequest);
+      processor.handleRequest({ type: RequestType.GetPatternSources });
 
-    it("says which of a running pattern's files carry data", () => {
-      const { patterns } = sourcesOf(processorOver({
+    const main = { name: "/main.tsx", contents: "export default 1;" };
+
+    it("says which of a running pattern's files carry data", async () => {
+      const cities = { name: "/data/cities.json", contents: "[]" };
+
+      // Without `dataFiles` the view cannot tell the lookup table from the
+      // module.
+      await expect(sourcesOf(processorOver({
         "cf:module/abc": {
           main: "/main.tsx",
-          files: [
-            { name: "/main.tsx", contents: "export default 1;" },
-            { name: "/data/cities.json", contents: "[]" },
-          ],
+          files: [main, cities],
           dataFiles: ["/data/cities.json"],
         },
-      }));
-      expect(patterns.length).toBe(1);
-      expect(patterns[0].files.map((file) => file.name)).toEqual([
-        "/main.tsx",
-        "/data/cities.json",
-      ]);
-      // Without this the view cannot tell the lookup table from the module.
-      expect(patterns[0].dataFiles).toEqual(["/data/cities.json"]);
+      }))).resolves.toStrictEqual({
+        patterns: [{
+          identity: "cf:module/abc",
+          files: [main, cities],
+          dataFiles: ["/data/cities.json"],
+        }],
+      });
     });
 
-    it("omits the list for a pattern that carries no data", () => {
-      const { patterns } = sourcesOf(processorOver({
-        "cf:module/abc": {
-          main: "/main.tsx",
-          files: [{ name: "/main.tsx", contents: "export default 1;" }],
-        },
-      }));
-      expect(patterns[0].dataFiles).toBe(undefined);
+    it("omits the list for a pattern that carries no data", async () => {
+      await expect(sourcesOf(processorOver({
+        "cf:module/abc": { main: "/main.tsx", files: [main] },
+      }))).resolves.toStrictEqual({
+        patterns: [{ identity: "cf:module/abc", files: [main] }],
+      });
     });
 
-    it("omits a pattern whose program was never kept", () => {
-      const { patterns } = sourcesOf(
-        processorOver({ "cf:module/abc": undefined }),
-      );
-      expect(patterns).toEqual([]);
+    it("omits a pattern whose program was never kept", async () => {
+      await expect(
+        sourcesOf(processorOver({ "cf:module/abc": undefined })),
+      ).resolves.toStrictEqual({ patterns: [] });
+    });
+
+    it("lists a pattern once however many of its nodes run, and skips a node naming none", async () => {
+      const program = { main: "/main.tsx", files: [main] };
+      await expect(sourcesOf(processorOver({ "cf:module/abc": program }, [
+        { patternIdentity: { identity: "cf:module/abc", symbol: "a" } },
+        { patternIdentity: { identity: "cf:module/abc", symbol: "b" } },
+        {},
+      ]))).resolves.toStrictEqual({
+        patterns: [{ identity: "cf:module/abc", files: [main] }],
+      });
     });
   });
 
@@ -10386,6 +11430,8 @@ describe("runtime-processor", () => {
       function subscriptionHarness() {
         const cancelled: number[] = [];
         const sinks: Array<(value: unknown, cfcLabel: unknown) => void> = [];
+        // What had been cancelled each time a release was asked for.
+        const releases: number[][] = [];
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: () => ({
@@ -10396,9 +11442,13 @@ describe("runtime-processor", () => {
                 return () => cancelled.push(nth);
               },
             }),
+            releaseUnreadDocuments: () => {
+              releases.push([...cancelled]);
+              return Promise.resolve();
+            },
           },
         });
-        return { processor, sinks, cancelled };
+        return { processor, sinks, cancelled, releases };
       }
 
       const subscribe = (
@@ -10466,6 +11516,25 @@ describe("runtime-processor", () => {
         });
         expect(cancelled).toEqual([]);
       });
+
+      it("asks the runtime to release what nothing reads once the unsubscribed feed is gone", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+        subscribe(processor, testClient(2).client);
+
+        unsubscribe(processor, testClient(1).client);
+
+        expect(releases).toEqual([[1]]);
+      });
+
+      it("asks for no release for an unsubscribe that cancels nothing", () => {
+        const { processor, releases } = subscriptionHarness();
+        subscribe(processor, testClient(1).client);
+
+        unsubscribe(processor, testClient(2).client);
+
+        expect(releases).toEqual([]);
+      });
     });
 
     describe("VDOM mounts", () => {
@@ -10490,24 +11559,33 @@ describe("runtime-processor", () => {
 
       it("cancels view registration that completes after its mount was removed", async () => {
         const { runtime, link } = await mountState();
+        const registering = Promise.withResolvers<void>();
         const registered = Promise.withResolvers<() => void>();
         let cancellations = 0;
         const processor = buildProcessor({
           runtime: {
             getCellFromLink: runtime.getCellFromLink.bind(runtime),
             viewScopedReplicationRequested: true,
-            viewReplication: { mount: () => registered.promise },
+            viewReplication: {
+              mount: () => {
+                registering.resolve();
+                return registered.promise;
+              },
+            },
           },
         });
         const { client, posted } = testClient(1);
-        const mounting = processor.handleVDomMount({
+        const mounting = processor.handleRequest({
           type: RequestType.VDomMount,
           mountId: 37,
           cell: link,
         }, client);
         try {
+          // A mount that fails before it registers rejects `mounting`, which
+          // ends the wait rather than leaving it hanging.
+          await Promise.race([registering.promise, mounting]);
           expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
-          processor.handleVDomUnmount({
+          await processor.handleRequest({
             type: RequestType.VDomUnmount,
             mountId: 37,
           }, client);
@@ -10526,6 +11604,249 @@ describe("runtime-processor", () => {
           await mounting;
           await runtime.dispose();
         }
+      });
+
+      describe("of a space deleted before its view registers", () => {
+        // A view's registration can be refused because its space was deleted
+        // while the mount waited for it, or before the mount was asked for.
+        // Either way the mount renders the space's deleted placeholder, as a
+        // mount that was up when the deletion landed does, and does not fail.
+
+        /** The refusal a deleted space answers every command with. */
+        const deletedError = (space: string) =>
+          Object.assign(new Error(`Space ${space} is deleted`), {
+            name: "AuthorizationError",
+            deleted: true,
+          });
+
+        /**
+         * A processor whose view registrations settle as the promise
+         * `register` returns does, over a storage that reports the mounted
+         * space deleted once `markDeleted()` has been called.
+         */
+        async function deletedMountState(
+          register: () => Promise<(() => void) | undefined>,
+        ) {
+          const { runtime, link } = await mountState();
+          let deleted = false;
+          const processor = buildProcessor({
+            runtime: {
+              getCellFromLink: runtime.getCellFromLink.bind(runtime),
+              viewScopedReplicationRequested: true,
+              viewReplication: { mount: register },
+              storageManager: {
+                spaceAccessError: (space: string) =>
+                  deleted && space === link.space
+                    ? deletedError(space)
+                    : undefined,
+              },
+            },
+          });
+          return {
+            runtime,
+            link,
+            processor,
+            markDeleted: () => {
+              deleted = true;
+            },
+          };
+        }
+
+        /** Whether `posted` holds a batch that marks a node deleted. */
+        const deletedPlaceholderPosted = (posted: PostedMessage[]) =>
+          posted.some((message) =>
+            message.type === NotificationType.VDomBatch &&
+            (message.ops as { op: string; key?: string }[]).some((op) =>
+              op.op === "set-prop" && op.key === "data-space-deleted"
+            )
+          );
+
+        /**
+         * Has the reconciler of `client`'s mount `mountId` flush the ops it
+         * has queued, which it otherwise does on a microtask.
+         */
+        const flushOps = (
+          processor: ReturnType<typeof buildProcessor>,
+          client: WorkerClient,
+          mountId: number,
+        ) => {
+          const mount = processor.accessForTestingOnly.vdomMounts.get(
+            clientScopedKey(client, mountId),
+          );
+          expect(mount).toBeDefined();
+          mount!.reconciler.flush();
+        };
+
+        it("renders the deleted placeholder when the space is deleted while its view registers", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 41,
+              cell: link,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+            const response = await mounting;
+            flushOps(processor, client, 41);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when the space was deleted before the mount was asked for", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 42,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 42);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("renders the deleted placeholder when a deleted space registers no view", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => Promise.resolve(undefined));
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            const response = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 43,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 43);
+
+            expect(response.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        it("releases a placeholder mount when it is unmounted, and mounts the same cell again", async () => {
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() =>
+              Promise.reject(deletedError(link.space))
+            );
+          const { client, posted } = testClient(1);
+          try {
+            markDeleted();
+            await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+
+            posted.length = 0;
+            const again = await processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 44,
+              cell: link,
+            }, client);
+            flushOps(processor, client, 44);
+
+            expect(again.rootId).not.toBeNull();
+            expect(deletedPlaceholderPosted(posted)).toBe(true);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(1);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 44,
+            }, client);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+
+        /**
+         * Expects a mount whose view registration is refused with `refusal`
+         * to fail with it, leaving no mount behind.
+         */
+        async function expectRefusedMountToFail(refusal: Error) {
+          const { runtime, link, processor } = await deletedMountState(() =>
+            Promise.reject(refusal)
+          );
+          const { client } = testClient(1);
+          try {
+            await expect(processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 45,
+              cell: link,
+            }, client)).rejects.toBe(refusal);
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+          } finally {
+            await runtime.dispose();
+          }
+        }
+
+        it("fails a mount whose view registration cannot reach the memory server", async () => {
+          await expectRefusedMountToFail(
+            new Error("the memory server could not be reached"),
+          );
+        });
+
+        it("fails a mount whose view registration is refused without the space being deleted", async () => {
+          await expectRefusedMountToFail(
+            Object.assign(new Error("Access refused"), {
+              name: "AuthorizationError",
+            }),
+          );
+        });
+
+        it("resolves, rendering nothing, a mount unmounted while its view registers when the space is deleted", async () => {
+          const registered = Promise.withResolvers<(() => void) | undefined>();
+          const { runtime, link, processor, markDeleted } =
+            await deletedMountState(() => registered.promise);
+          const { client, posted } = testClient(1);
+          try {
+            const mounting = processor.handleVDomMount({
+              type: RequestType.VDomMount,
+              mountId: 46,
+              cell: link,
+            }, client);
+            processor.handleVDomUnmount({
+              type: RequestType.VDomUnmount,
+              mountId: 46,
+            }, client);
+            markDeleted();
+            registered.reject(deletedError(link.space));
+
+            await expect(mounting).resolves.toEqual({ rootId: null });
+            expect(processor.accessForTestingOnly.vdomMounts.size).toBe(0);
+            expect(
+              posted.filter((message) =>
+                message.type === NotificationType.VDomBatch
+              ),
+            ).toEqual([]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
       });
 
       it("keeps one client's mount when another mounts under the same mount id", async () => {
@@ -10752,14 +12073,14 @@ describe("runtime-processor", () => {
         expect(state.operationSubscriptions.has("sub-of-first")).toBe(true);
       });
 
-      it("returns `true` when the subscribing client unsubscribes its own", () => {
+      it("returns `true` when the subscribing client unsubscribes its own", async () => {
         const { processor, state, cancelled } = operationState();
-        expect(
-          processor.handleOperationUnsubscribe({
+        await expect(
+          processor.handleRequest({
             type: RequestType.OperationUnsubscribe,
             subscriptionId: "sub-of-first",
           }, testClient(1).client),
-        ).toEqual({ value: true });
+        ).resolves.toEqual({ value: true });
         expect(cancelled).toEqual(["first"]);
         expect(state.operationSubscriptions.has("sub-of-first")).toBe(false);
       });
@@ -10775,14 +12096,14 @@ describe("runtime-processor", () => {
         expect(state.operationSessions.has("session-of-first")).toBe(true);
       });
 
-      it("returns `true` when the owning client closes its own session", () => {
+      it("returns `true` when the owning client closes its own session", async () => {
         const { processor, state } = operationState();
-        expect(
-          processor.handleOperationSessionClose({
+        await expect(
+          processor.handleRequest({
             type: RequestType.OperationSessionClose,
             operationSessionId: "session-of-first",
           }, testClient(1).client),
-        ).toEqual({ value: true });
+        ).resolves.toEqual({ value: true });
         expect(state.operationSessions.has("session-of-first")).toBe(false);
       });
     });

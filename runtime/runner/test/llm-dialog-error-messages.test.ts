@@ -17,7 +17,7 @@ import {
   loadConversationFixture,
 } from "@commonfabric/llm/client";
 
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";

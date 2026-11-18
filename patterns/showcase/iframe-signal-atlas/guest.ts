@@ -1,4 +1,4 @@
-// The iframe generator bundles this pinned module into the self-contained guest.
+// `deno bundle` inlines this pinned module into the guest's bundle.
 // deno-lint-ignore no-external-import
 import {
   contours,
@@ -644,7 +644,6 @@ async function selectObservation(id: string | null): Promise<void> {
 }
 
 async function setTimeCursor(value: number): Promise<void> {
-  if (!Number.isFinite(value)) throw new Error("Time cursor must be a number.");
   await outputWrite.key("timeCursor").set(
     clampTimeCursor(
       Math.round(value),

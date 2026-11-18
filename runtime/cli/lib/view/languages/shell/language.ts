@@ -20,6 +20,8 @@ import { shellGrammar } from "./shell.ts";
 export const shellLanguage: Language = {
   id: "shell",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

@@ -368,20 +368,17 @@ async function collectDiagnostics(): Promise<Diagnostics> {
 }
 
 const diagnostics = await collectDiagnostics();
-
-function withStats(name: string, key: DiagnosticCase): string {
-  const stats = diagnostics[key];
-  if (stats === undefined) {
-    return name;
-  }
-  return `${name}, reads=${stats.managerReads}, traversals=${stats.schemaTraversals}, skips=${stats.coveredSelectorSkips}, memoHits=${stats.schemaMemoHits}`;
+if (INCLUDE_STATS) {
+  console.error(JSON.stringify({
+    benchmark: "v2-query-coverage",
+    documents: DOC_COUNT,
+    dirtyDocuments: DIRTY_COUNT,
+    diagnostics,
+  }));
 }
 
 Deno.bench({
-  name: withStats(
-    `trackGraph cold linked graph - docs=${DOC_COUNT}`,
-    "track-cold",
-  ),
+  name: `trackGraph cold linked graph - docs=${DOC_COUNT}`,
   group: "v2-query-coverage",
   baseline: true,
   async fn(b) {
@@ -397,10 +394,8 @@ Deno.bench({
 });
 
 Deno.bench({
-  name: withStats(
+  name:
     `extendTrackedGraph already-covered descendant root - docs=${DOC_COUNT}`,
-    "extend-covered",
-  ),
   group: "v2-query-coverage",
   async fn(b) {
     const { engine, path, tracked } = await setupTrackedEngine();
@@ -415,10 +410,8 @@ Deno.bench({
 });
 
 Deno.bench({
-  name: withStats(
+  name:
     `extendTrackedGraph overlapping root - docs=${DOC_COUNT}, new=${HIDDEN_COUNT}`,
-    "extend-overlap",
-  ),
   group: "v2-query-coverage",
   async fn(b) {
     const { engine, path, tracked } = await setupTrackedEngine();
@@ -433,10 +426,8 @@ Deno.bench({
 });
 
 Deno.bench({
-  name: withStats(
+  name:
     `refreshTrackedGraph dirty leaves - docs=${DOC_COUNT}, dirty=${DIRTY_COUNT}`,
-    "refresh-leaves",
-  ),
   group: "v2-query-coverage",
   async fn(b) {
     const { engine, path, tracked } = await setupTrackedEngine();
@@ -453,10 +444,7 @@ Deno.bench({
 });
 
 Deno.bench({
-  name: withStats(
-    `refreshTrackedGraph dirty root stable links - docs=${DOC_COUNT}`,
-    "refresh-root-stable",
-  ),
+  name: `refreshTrackedGraph dirty root stable links - docs=${DOC_COUNT}`,
   group: "v2-query-coverage",
   async fn(b) {
     const { engine, path, tracked } = await setupTrackedEngine();
@@ -472,10 +460,8 @@ Deno.bench({
 });
 
 Deno.bench({
-  name: withStats(
+  name:
     `refreshTrackedGraph dirty root retargeted links - docs=${DOC_COUNT}, new=${HIDDEN_COUNT}`,
-    "refresh-root-retargeted",
-  ),
   group: "v2-query-coverage",
   async fn(b) {
     const { engine, path, tracked } = await setupTrackedEngine();

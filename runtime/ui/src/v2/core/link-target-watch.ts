@@ -95,6 +95,33 @@ export class LinkTargetWatch {
     }
   }
 
+  /**
+   * Resolves `source`, follows its link, and returns the cell it ends at:
+   * `undefined` where the link names nothing readable. Returns `undefined` in
+   * place of the result once `superseded()` says a later resolution, or a
+   * disconnect, has replaced this one.
+   *
+   * @throws whatever resolving or synchronizing the link throws.
+   */
+  async follow(
+    source: CellHandle,
+    superseded: () => boolean,
+  ): Promise<{ cell: CellHandle | undefined } | undefined> {
+    let resolved = await source.resolveAsCell();
+    if (superseded()) return undefined;
+    const target = await this.watch(source, resolved);
+    if (superseded()) return undefined;
+    if (target === undefined) return { cell: undefined };
+    if (!target.equals(resolved)) {
+      // The watch reports every move from here on. A first hop other than the
+      // first resolution means the link moved before the watch began, or
+      // leads through further links, so resolving again finds where it ends.
+      resolved = await source.resolveAsCell();
+      if (superseded()) return undefined;
+    }
+    return { cell: resolved };
+  }
+
   /** Stops following, so that no further retarget is reported. */
   cancel(): void {
     const unsubscribe = this.#unsubscribe;

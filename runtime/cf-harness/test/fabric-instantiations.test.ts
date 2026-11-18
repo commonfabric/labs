@@ -120,6 +120,20 @@ describe("fabric-instantiations", () => {
       ).toBe("keyless:evicted");
     });
 
+    it("keeps the newest keyless records once more than its bound arrive", () => {
+      // The keyless buffer holds the last 128 session-only roots; the oldest
+      // is the one dropped, so a window still names a keyless record.
+      const recorder = createFabricInstantiationRecorder();
+      for (let i = 0; i <= 128; i++) {
+        recorder.observe(instantiation(`keyless:k${i}`, PIECE_ENTITY));
+      }
+
+      const kept = recorder.instantiations.keylessSince(0);
+      expect(kept).toHaveLength(128);
+      expect(kept[0].identity).toBe("keyless:k1");
+      expect(kept.at(-1)?.identity).toBe("keyless:k128");
+    });
+
     it("records nothing for an instantiation whose entity does not reduce", () => {
       // A kinded id names a different entity from the `of:` id over the same
       // hash, so the canonical helper refuses it rather than aliasing.

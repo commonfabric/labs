@@ -18,50 +18,19 @@
 
 import type { DID } from "@commonfabric/identity";
 import {
-  canRenderLabelUnderPolicy,
-  rootRenderPolicyFor,
+  defaultDisplayFit,
+  type LabelDisplayFit,
 } from "@commonfabric/html/worker";
-import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
-import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 
 /** Whether a value with a label may be shown on the console. */
-export type ConsoleDisplayFit = (label: IFCLabel) => boolean;
-
-/**
- * The fit of `label` under a ceiling of `atoms`, and of caveats of the
- * `caveatKinds` listed, as a display's root render policy fits it. A label
- * too malformed to fit at all does not fit.
- */
-const fitsCeiling = (ceiling: {
-  atoms: readonly CfcConfClause[];
-  caveatKinds: readonly string[];
-}): ConsoleDisplayFit => {
-  const policy = rootRenderPolicyFor(ceiling);
-  return (label) => {
-    try {
-      return policy !== undefined &&
-        canRenderLabelUnderPolicy(
-          label.confidentiality ?? [],
-          label.integrity ?? [],
-          () => [],
-          policy,
-          {},
-        );
-    } catch {
-      return false;
-    }
-  };
-};
+export type ConsoleDisplayFit = LabelDisplayFit;
 
 /**
  * The fit of a console whose owner it does not know: only a label naming no
  * one, which any display may show.
  */
-export const publicConsoleDisplay: ConsoleDisplayFit = fitsCeiling({
-  atoms: [],
-  caveatKinds: [],
-});
+export const publicConsoleDisplay: ConsoleDisplayFit = defaultDisplayFit();
 
 /** The fit of the console `owner` sees. */
 export const ownerConsoleDisplay = (owner: DID): ConsoleDisplayFit =>
-  fitsCeiling(defaultDisplayCeiling(owner));
+  defaultDisplayFit(owner);

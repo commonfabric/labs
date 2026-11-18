@@ -16,6 +16,8 @@ import {
 } from "../query-result-proxy.ts";
 import type { JSONObject, OpaqueCell } from "./types.ts";
 
+export { namesInstances, namesInstancesByDefault } from "./instance-naming.ts";
+
 /** The name each instance root was given, keyed by its root cell. */
 const instanceNames = new WeakMap<OpaqueCell<unknown>, string>();
 
@@ -35,18 +37,6 @@ export function nameInstance<T>(value: T, name: string): T {
     instanceNames.set(exportCell(cell).cell, name);
   }
   return value;
-}
-
-/**
- * Whether a runtime whose experimental options are `experimental` compiles a
- * pattern factory call bound to a `const` as a named instance. It is the one
- * read of the `instanceNames` flag: the compile and the key its compiled code
- * is cached under both take it from here, so that the two cannot disagree.
- */
-export function namesInstances(
-  experimental: { readonly instanceNames?: boolean | undefined },
-): boolean {
-  return experimental.instanceNames === true;
 }
 
 /** The instance name given to the root cell `root`, if any. */

@@ -213,8 +213,10 @@ export const loomCommandEntryOfRow = (
     ...(title !== undefined ? { title } : {}),
     ...(description !== undefined ? { description } : {}),
     inputSchema,
-    ...(effect === "read" || effect === "change"
-      ? { effect: effect as HarnessCallableEffect }
+    ...(effect === "read" || effect === "external"
+      ? { effect }
+      : effect === "write" || effect === "change"
+      ? { effect: "change" satisfies HarnessCallableEffect }
       : {}),
     target: typeof scope === "string" && scope.length > 0
       ? scope.slice(0, HARNESS_COMMAND_ID_MAX_LENGTH)

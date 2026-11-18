@@ -128,9 +128,9 @@ export class CodecRegistry<Encoded> {
    *
    * This is what lets a single curated class list serve every format. Which
    * symbol a given class binds is a question about that class and that format
-   * -- `FabricRegExp` supplies a nonterminal codec to JSON, having no pattern
-   * type of its own to terminate into -- and reading it here means no caller
-   * has to keep one list per format in step with the others.
+   * -- `FabricUnavailable` supplies a nonterminal codec to JSON, having no
+   * unavailability type of its own to terminate into -- and reading it here
+   * means no caller has to keep one list per format in step with the others.
    *
    * The parameter is only `Constructor`, and cannot be narrower: naming the
    * symbol a class must bind would name a format, which is the thing a shared
@@ -361,11 +361,11 @@ export class CodecRegistry<Encoded> {
 
   /**
    * Guards against registering a codec under a tag that is not one. A decoder
-   * refuses a tag that is not syntactically a tag, per Section 9 of the formal
-   * spec, so a codec indexed under such a string could emit a value this same
-   * system would then refuse to read back. Checking here is what keeps the two
-   * sides of a round trip from disagreeing, and does it once per codec rather
-   * than once per value.
+   * refuses a tag that is not syntactically a tag, per Section 2.5 of
+   * `1-fabric-values.md`, so a codec indexed under such a string could emit a
+   * value this same system would then refuse to read back. Checking here is
+   * what keeps the two sides of a round trip from disagreeing, and does it once
+   * per codec rather than once per value.
    *
    * `undefined` is allowed and is not a tag: it marks a codec whose tag is
    * per-instance, read from the value by `tagForValue()` rather than fixed.

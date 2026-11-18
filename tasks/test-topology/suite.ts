@@ -73,14 +73,6 @@ export interface UnitRequest {
    * them, which is what a unit selected whole asks for.
    */
   skip: readonly string[];
-
-  /**
-   * Seconds one run of the unit is expected to take, as the manifest the
-   * lane planned from prices the identities it runs. Absent where nothing
-   * priced it. A runner that runs units side by side starts the costliest
-   * first by it.
-   */
-  cost?: number;
 }
 
 /** One JUnit report an invocation writes, and how to read it. */
@@ -223,6 +215,16 @@ export interface Suite {
    * is, since no `deno test` checks types.
    */
   unitsForChange?(changed: ReadonlySet<string>): readonly Unit[];
+
+  /**
+   * The repository files a unit runs, for a unit that is not itself one
+   * file: the test files of a unit that holds a directory's tests, the files
+   * a shell suite's step can source, call or deploy, or the source a named
+   * unit judges. A change reaches the unit through what
+   * reaches them. Absent, or empty for a unit, a unit is the file it is
+   * named for where it is named for one, and stands for no file otherwise.
+   */
+  sourcesOf?(unit: Unit): readonly string[];
 
   /**
    * What this suite's coverage is gated on: one entry per workspace

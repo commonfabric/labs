@@ -61,7 +61,7 @@ export default pattern<QueueTestInput>(({ title }) => {
                 <strong>{prompts[i]}</strong>
                 {computed(() =>
                   r.pending
-                    ? <cf-loader show-elapsed />
+                    ? <cf-loader showElapsed />
                     : r.result
                     ? <span style="color: green">{r.result}</span>
                     : <span style="color: gray">waiting...</span>

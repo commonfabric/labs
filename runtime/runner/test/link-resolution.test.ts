@@ -14,7 +14,7 @@ import {
 } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 import {
@@ -29,9 +29,9 @@ import {
   toMemorySpaceAddress,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
-import {
-  type IExtendedStorageTransaction,
-  type IMemorySpaceAddress,
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
 } from "../src/storage/interface.ts";
 import { isLinkResolutionProbe } from "../src/storage/reactivity-log.ts";
 

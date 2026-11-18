@@ -6,8 +6,9 @@ import {
   RESET,
   sgr,
   stripAnsi,
-  visibleWidth,
+  term,
 } from "../lib/view/ansi.ts";
+import { visibleWidth } from "../lib/view/width.ts";
 
 Deno.test("hex parses #rrggbb", () => {
   assertEquals(hex("#ff8800"), [255, 136, 0]);
@@ -31,6 +32,7 @@ Deno.test("stripAnsi / visibleWidth ignore escapes", () => {
   assertEquals(stripAnsi(colored), "hello");
   assertEquals(visibleWidth(colored), 5);
   assert(colored.length > 5, "the colored form has escapes");
+  assertEquals(visibleWidth(paint("漢字", { bold: true })), 4);
 });
 
 Deno.test("cpLen counts a non-BMP glyph as one display column", () => {
@@ -39,6 +41,35 @@ Deno.test("cpLen counts a non-BMP glyph as one display column", () => {
   assertEquals(cpLen("𝑻"), 1, "one display column");
   assertEquals(cpLen("a𝑻b"), 3);
   assertEquals(cpLen(""), 0);
-  // visibleWidth (cpLen after stripping escapes) agrees
+  // visibleWidth, which counts columns after stripping escapes, agrees
   assertEquals(visibleWidth(paint("𝑻 lift", { bold: true })), 6);
+});
+
+Deno.test("cpLen counts a lone surrogate as one column, as for...of does", () => {
+  for (
+    const text of [
+      "\udc7b",
+      "\udc7baB",
+      "a\ud835",
+      "\ud835\ud835\udc7b",
+      "\udc7b\ud835",
+    ]
+  ) {
+    assertEquals(cpLen(text), [...text].length, JSON.stringify(text));
+  }
+  assertEquals(cpLen("\udc7baB"), 3);
+  assertEquals(cpLen("\ud835\udc7b"), 1, "a pair is still one column");
+});
+
+Deno.test("hyperlink percent-encodes what in its address could drive the terminal, as UTF-8", () => {
+  const link = term.hyperlink("https://x/a b\x07\x1b]0;é\x9c", "go");
+
+  assertEquals(
+    link,
+    "\x1b]8;;https://x/a%20b%07%1B]0;%C3%A9%C2%9C\x07go\x1b]8;;\x07",
+  );
+  assertEquals(
+    term.hyperlink("https://example.com/p?q=1#f", "x"),
+    "\x1b]8;;https://example.com/p?q=1#f\x07x\x1b]8;;\x07",
+  );
 });

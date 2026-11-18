@@ -78,10 +78,11 @@ export interface ModuleIdentityOptions {
   dataFiles?: ReadonlySet<string>;
 
   /**
-   * Modules already scanned, by name, as {@link scanModules} returns them. A
-   * module with an entry here is resolved from it rather than parsed again.
+   * Import lists already known, by module name: scans as {@link scanModules}
+   * returns them, or lists a compiler-stamped document attests. A module with
+   * an entry here is resolved from it rather than parsed again.
    */
-  declarations?: ReadonlyMap<string, ModuleDeclarations>;
+  declarations?: ReadonlyMap<string, Pick<ModuleDeclarations, "imports">>;
 }
 
 interface ModuleNode {
@@ -284,10 +285,13 @@ export function findInternalTarget(
   return undefined;
 }
 
-function normalizeSource(contents: string): string {
-  // Identity is over authored source; the only normalization is line endings,
-  // so a CRLF/LF difference does not change a module's hash. Data files are
-  // excluded from this: their bytes are content, not source text.
+/**
+ * Returns `contents` as a module's identity hashes it. Identity is over
+ * authored source, and the only normalization is line endings, so a CRLF/LF
+ * difference does not change a module's hash. Data files are excluded from
+ * this: their bytes are content, not source text.
+ */
+export function normalizeSource(contents: string): string {
   return contents.replace(/\r\n/g, "\n");
 }
 

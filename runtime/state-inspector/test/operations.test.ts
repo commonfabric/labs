@@ -11,6 +11,8 @@ import {
 import {
   CODEMIRROR_CHANGESET_CODEC,
   encodeMemoryBoundary,
+  operationAnchorsDocId,
+  resolveScopeKey,
   toValuePath,
 } from "@commonfabric/memory/v2";
 import {
@@ -51,6 +53,7 @@ describe("operation field inspection", () => {
           materialized: null,
           operations: [submitted],
         }),
+        mapAnchors: ({ anchors }) => anchors,
       }]),
     });
     try {
@@ -475,5 +478,205 @@ describe("operation field inspection", () => {
     } finally {
       await Deno.remove(path);
     }
+  });
+
+  describe("a field's anchors", () => {
+    const body = toValuePath(["body"]);
+
+    /** An `apply-op` on `id`'s `body`, which holds `ab`, inserting `c` ahead. */
+    const insertAhead = (id: string) => ({
+      op: "apply-op" as const,
+      id,
+      path: body,
+      codec: CODEMIRROR_CHANGESET_CODEC,
+      submissionId: "alice:1",
+      base: null,
+      baselineHash: operationBaselineHash("ab"),
+      payload: { updates: [{ clientId: "alice", changes: [[0, "c"], 2] }] },
+    });
+
+    /** The inspection of the one field of entity `id` in the store at `path`. */
+    const inspectOnly = (path: string, id: string) => {
+      const space = openSpace(path);
+      try {
+        const { fields } = inspectOperationFields(space, { id });
+        expect(fields).toHaveLength(1);
+        return fields[0];
+      } finally {
+        space.close();
+      }
+    };
+
+    it("addresses a per-user field's anchors document by scope name and reports one that holds no anchor map", async () => {
+      const principal = "did:key:z6MkAnchoredUser";
+      const scopeKey = resolveScopeKey("user", { principal });
+      const documentId = operationAnchorsDocId({
+        id: "of:mine",
+        scope: "user",
+        path: ["body"],
+      });
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      try {
+        const engine = await open({ url: toFileUrl(path) });
+        try {
+          applyCommit(engine, {
+            sessionId: "session:alice",
+            principal,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [{
+                op: "set",
+                id: "of:mine",
+                scope: "user",
+                value: { value: { body: "ab" } },
+              }, {
+                op: "set",
+                id: documentId,
+                scope: "user",
+                value: { value: { a: 0, b: 1 } },
+              }],
+            },
+          });
+          applyCommit(engine, {
+            sessionId: "session:alice",
+            principal,
+            commit: {
+              localSeq: 2,
+              reads: { confirmed: [], pending: [] },
+              operations: [{ ...insertAhead("of:mine"), scope: "user" }],
+            },
+          });
+        } finally {
+          close(engine);
+        }
+
+        const moved = inspectOnly(path, "of:mine");
+        expect(moved.address.scope).toBe(scopeKey);
+        expect(moved.anchors).toEqual({ a: 0, b: 2 });
+        expect(moved).toMatchObject({
+          anchorsDocumentId: documentId,
+          consistency: { anchorsDocumentValid: true, healthy: true },
+        });
+
+        // The edit rewrote the document with a patch of its value, which is
+        // the row that decides what the document holds.
+        const corrupt = new Database(path);
+        try {
+          corrupt.prepare(
+            "UPDATE revision SET data = :data WHERE id = :id AND op = 'patch'",
+          ).run({
+            id: documentId,
+            data: encodeMemoryBoundary([{
+              op: "replace",
+              path: "/value",
+              value: { a: { from: 0, to: 1 } },
+            }]),
+          });
+        } finally {
+          corrupt.close();
+        }
+        const malformed = inspectOnly(path, "of:mine");
+        expect(malformed.anchors).toEqual({});
+        expect(malformed.consistency).toMatchObject({
+          anchorsDocumentValid: false,
+          healthy: false,
+        });
+      } finally {
+        await Deno.remove(path);
+      }
+    });
+
+    it("reports no anchors for a field whose document was never written, was deleted or holds no value, and the anchors a released field keeps", async () => {
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const anchorsOf = (id: string) =>
+        operationAnchorsDocId({ id, path: ["body"] });
+      try {
+        const engine = await open({ url: toFileUrl(path) });
+        try {
+          applyCommit(engine, {
+            sessionId: "session:alice",
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              operations: [
+                "of:unwritten",
+                "of:released",
+                "of:cleared",
+                "of:valueless",
+              ]
+                .flatMap((id) => [{
+                  op: "set" as const,
+                  id,
+                  value: { value: { body: "ab" } },
+                }, insertAhead(id)]),
+            },
+          });
+          applyCommit(engine, {
+            sessionId: "session:alice",
+            commit: {
+              localSeq: 2,
+              reads: { confirmed: [], pending: [] },
+              operations: ["of:released", "of:cleared"].map((id) => ({
+                op: "set" as const,
+                id: anchorsOf(id),
+                value: { value: { b: 2 } },
+              })),
+            },
+          });
+          applyCommit(engine, {
+            sessionId: "session:alice",
+            commit: {
+              localSeq: 3,
+              reads: { confirmed: [], pending: [] },
+              operations: [
+                {
+                  op: "release-op-field",
+                  id: "of:released",
+                  path: body,
+                  codec: CODEMIRROR_CHANGESET_CODEC,
+                  cursor: { epoch: 1, version: 1 },
+                },
+                { op: "delete", id: anchorsOf("of:cleared") },
+                {
+                  op: "set",
+                  id: anchorsOf("of:valueless"),
+                  value: {},
+                },
+              ],
+            },
+          });
+        } finally {
+          close(engine);
+        }
+
+        const unwritten = inspectOnly(path, "of:unwritten");
+        expect(unwritten).toMatchObject({
+          active: true,
+          consistency: { anchorsDocumentValid: null, healthy: true },
+        });
+        expect(unwritten.anchors).toEqual({});
+        const cleared = inspectOnly(path, "of:cleared");
+        expect(cleared).toMatchObject({
+          active: true,
+          consistency: { anchorsDocumentValid: null, healthy: true },
+        });
+        expect(cleared.anchors).toEqual({});
+        const valueless = inspectOnly(path, "of:valueless");
+        expect(valueless).toMatchObject({
+          active: true,
+          consistency: { anchorsDocumentValid: true, healthy: true },
+        });
+        expect(valueless.anchors).toEqual({});
+        const released = inspectOnly(path, "of:released");
+        expect(released).toMatchObject({
+          active: false,
+          consistency: { anchorsDocumentValid: true, healthy: true },
+        });
+        expect(released.anchors).toEqual({ b: 2 });
+      } finally {
+        await Deno.remove(path);
+      }
+    });
   });
 });

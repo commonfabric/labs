@@ -1,0 +1,1 @@
+{"date":"2026-10-28","from":{"k":"unit","s":"cli","n":"word wrap plan: breaks at words and repeats the line prefix"},"to":{"k":"unit","s":"cli","n":"word wrap plan: breaks at words and indents by the line prefix"}}

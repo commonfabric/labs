@@ -206,6 +206,7 @@ export class CFCellLink extends BaseElement {
 
   private async _resolveCell() {
     const generation = ++this._resolveCellGeneration;
+    const superseded = () => generation !== this._resolveCellGeneration;
     const cell = this.cell;
     const link = this.link;
     const runtime = this.runtime;
@@ -214,10 +215,10 @@ export class CFCellLink extends BaseElement {
     if (cell) {
       this._prepareSubscriptionTarget(this._cellKey(cell));
       try {
-        const followed = await this.#follow(cell, generation);
+        const followed = await this.#linkTarget.follow(cell, superseded);
         if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
-        if (generation !== this._resolveCellGeneration) return;
+        if (superseded()) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
         // cancellation, not a failure to surface. Read the cell's own runtime,
         // not the ambient `this.runtime` (cleared to undefined on logout).
@@ -241,10 +242,10 @@ export class CFCellLink extends BaseElement {
         }
         const linkedCell = runtime.getCellFromRef(parsedLink as CellRef);
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
-        const followed = await this.#follow(linkedCell, generation);
+        const followed = await this.#linkTarget.follow(linkedCell, superseded);
         if (followed) this._setResolvedCell(followed.cell);
       } catch (e) {
-        if (generation !== this._resolveCellGeneration) return;
+        if (superseded()) return;
         // A disposal race (logout, runtime swap) cancels the resolve; that is
         // cancellation, not a failure to surface. Read the runtime the linked
         // cell was built from, not the ambient `this.runtime` (cleared on logout).
@@ -259,32 +260,6 @@ export class CFCellLink extends BaseElement {
       this._prepareSubscriptionTarget(undefined);
       this._setResolvedCell(undefined);
     }
-  }
-
-  /**
-   * Helper for `_resolveCell()`, which resolves `source`, follows its link,
-   * and returns the cell to show: `undefined` where the link names nothing
-   * readable. Returns `undefined` in place of the result once a later
-   * resolution or a disconnect supersedes the one numbered `generation`.
-   */
-  async #follow(
-    source: CellHandle,
-    generation: number,
-  ): Promise<{ cell: CellHandle | undefined } | undefined> {
-    const superseded = () => generation !== this._resolveCellGeneration;
-    let resolved = await source.resolveAsCell();
-    if (superseded()) return undefined;
-    const target = await this.#linkTarget.watch(source, resolved);
-    if (superseded()) return undefined;
-    if (target === undefined) return { cell: undefined };
-    if (!target.equals(resolved)) {
-      // The watch reports every move from here on. A first hop other than the
-      // first resolution means the link moved before the watch began, or
-      // leads through further links, so resolving again finds where it ends.
-      resolved = await source.resolveAsCell();
-      if (superseded()) return undefined;
-    }
-    return { cell: resolved };
   }
 
   private _updateSubscription() {
@@ -446,22 +421,50 @@ export class CFCellLink extends BaseElement {
 
   private _handleClick(e: MouseEvent) {
     e.stopPropagation();
-    if (this._resolvedCell) {
-      const { scope, path } = this._resolvedCell.ref();
-      const view = {
-        spaceDid: this._resolvedCell.space(),
-        pieceId: this._resolvedCell.id(),
-        ...(scope === "space" ? {} : { pieceScope: scope }),
-        ...(path.length === 0 ? {} : { piecePath: [...path] }),
-      };
-
-      // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
-      if (e.metaKey || e.ctrlKey) {
-        openInNewTab(view);
-      } else {
-        navigate(view);
-      }
+    const target = this._resolvedCell;
+    if (!target) {
+      // The pill shows its label whether or not the link resolved, so a click
+      // that opens nothing says which link it could not follow.
+      console.warn(
+        "cf-cell-link: the click opens nothing: the link names no cell to open.",
+        this._unfollowedLinkSummary(),
+      );
+      return;
     }
+    const { scope, path } = target.ref();
+    const view = {
+      spaceDid: target.space(),
+      pieceId: target.id(),
+      ...(scope === "space" ? {} : { pieceScope: scope }),
+      ...(path.length === 0 ? {} : { piecePath: [...path] }),
+    };
+
+    // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
+    if (e.metaKey || e.ctrlKey) {
+      openInNewTab(view);
+    } else {
+      navigate(view);
+    }
+  }
+
+  /**
+   * Helper for `_handleClick()`, which describes the link a click could not
+   * follow: the label it shows, and the cell or link it was given.
+   */
+  private _unfollowedLinkSummary(): Record<string, unknown> {
+    const ref = this.cell?.ref();
+    return {
+      label: this.label ?? this._name,
+      ...(ref === undefined ? {} : {
+        cell: {
+          space: ref.space,
+          id: ref.id,
+          scope: ref.scope ?? "space",
+          path: [...ref.path],
+        },
+      }),
+      ...(this.link === undefined ? {} : { link: this.link }),
+    };
   }
 
   override render() {

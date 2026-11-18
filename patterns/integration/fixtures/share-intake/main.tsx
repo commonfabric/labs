@@ -48,8 +48,10 @@ import ProfileHome, {
   type ProfileHomeOutput,
 } from "../../../system/profile-home/profile-home.tsx";
 import {
+  createOwnPrivateInbox,
   ensurePrivateInbox,
   type EnsurePrivateInboxEvent,
+  ensurePrivateInboxOnly,
   type OfferEvent,
   pointProfilesAtPrivateInbox,
   type PrivateInboxHolder,
@@ -179,6 +181,7 @@ function envelopeOf(
   kind: string = OFFER_KIND,
 ): OfferEvent {
   const host = new URL(getPatternEnvironment().apiUrl).origin;
+  const from = currentPrincipal();
   return {
     kind,
     id,
@@ -186,7 +189,7 @@ function envelopeOf(
     host,
     ownerOrigin: host,
     title,
-    from: currentPrincipal(),
+    ...(from !== undefined && { from }),
     sharedAt: Date.now(),
   };
 }
@@ -369,14 +372,25 @@ export default pattern<MainInput, MainOutput>((
     outgoingNotices,
   },
 ) => {
+  const ownPrivateInbox = new Writable<PrivateInboxHolder>({}).for(
+    "ownPrivateInbox",
+  );
   const retainedPrivateInboxes = new Writable<RetainedPrivateInboxes>([]).for(
     "retainedPrivateInboxes",
   );
   const privateInboxRefusal = new Writable<PrivateInboxRefusalHolder>({}).for(
     "privateInboxRefusal",
   );
+  const pointProfiles = pointProfilesAtPrivateInbox({
+    privateInbox,
+    retainedPrivateInboxes,
+    // deno-lint-ignore no-explicit-any
+    profiles: profiles as any,
+  });
+  const senderProfile = Writable.of<StandInProfile>({ name: "Sender" });
   const chats = FabriChatManagerCore({
-    myProfile: Writable.of<StandInProfile>({ name: "Sender" }),
+    myProfile: senderProfile,
+    sessionProfile: senderProfile,
     // The sender's own catalog, apart from the one the intake registers in.
     sharedSpaceCatalog: Writable.of<SharedSpaceCatalogStorage>({
       entries: {},
@@ -390,8 +404,10 @@ export default pattern<MainInput, MainOutput>((
     entries: {},
     offers: {},
   }).for("sharedSpaceCatalog");
+  const ownerProfile = firstProfileOf(profiles);
   const ownerChats = FabriChatManagerCore({
-    myProfile: firstProfileOf(profiles),
+    myProfile: ownerProfile,
+    sessionProfile: ownerProfile,
     sharedSpaceCatalog: catalog,
     direct: new Writable<Record<string, ChatIndexEntry>>({}).for(
       "ownerChatDirect",
@@ -416,14 +432,23 @@ export default pattern<MainInput, MainOutput>((
     changeSharedSpaceMembership: changeSharedSpaceMembership({ catalog }),
     ensurePrivateInbox: ensurePrivateInbox({
       privateInbox,
+      ownPrivateInbox,
       retainedPrivateInboxes,
       privateInboxRefusal,
       // deno-lint-ignore no-explicit-any
       profiles: profiles as any,
-      pointProfiles: pointProfilesAtPrivateInbox({
-        privateInbox,
-        // deno-lint-ignore no-explicit-any
-        profiles: profiles as any,
+      pointProfiles,
+      createOwn: createOwnPrivateInbox({
+        ownPrivateInbox,
+        ensure: ensurePrivateInboxOnly({
+          privateInbox,
+          ownPrivateInbox,
+          retainedPrivateInboxes,
+          privateInboxRefusal,
+          // deno-lint-ignore no-explicit-any
+          profiles: profiles as any,
+          pointProfiles,
+        }),
       }),
     }),
     createProfile: createProfile({ profiles }),

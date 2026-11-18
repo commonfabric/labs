@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
-import { type RuntimeTelemetryEvent } from "../src/telemetry.ts";
+import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 
 async function report(): Promise<void> {
   for (const size of [32, 128, 512]) {

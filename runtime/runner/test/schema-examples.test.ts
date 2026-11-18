@@ -13,7 +13,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { type Cell, isCell } from "../src/cell.ts";
 import { externalRefTo, resolvedSchema } from "./schema-ref-helpers.ts";
 import { SigilLink } from "../src/sigil-types.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { toURI } from "../src/uri-utils.ts";
 import { parseLink } from "../src/link-utils.ts";

@@ -23,12 +23,30 @@ import type { Capability } from "./acl.ts";
  */
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
-/** Host limits for version one of the invitation protocol. */
+/**
+ * Host limits for version one of the invitation protocol.
+ *
+ * `suggestedProfile` bounds the profile an issuer may suggest for the person
+ * an invitation is for (see {@link InviteProfileSuggestion}). It was added
+ * after version one shipped, as OWNER was: a service whose response lacks the
+ * field refuses a create carrying a suggestion with `invalid-request`, since
+ * both transports refuse unknown fields, so a client reads the field before it
+ * offers a suggestion.
+ *
+ * `preview` bounds the names an issuer may give an invitation for the person
+ * opening it to read before they redeem it (see {@link InvitePreview}). It was
+ * added after version one shipped, as `suggestedProfile` was: a service whose
+ * response lacks the field refuses a create carrying `spaceName` or
+ * `issuerName` with `invalid-request`, and has no `preview` operation, so a
+ * client reads the field before it sends either.
+ */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
   maxUses: 1000,
   maxTtlSeconds: 30 * 24 * 60 * 60,
   access: INVITE_ACCESS,
+  suggestedProfile: { maxNameLength: 128, maxPictureBytes: 64 * 1024 },
+  preview: { maxNameLength: 128 },
 } as const;
 
 /**
@@ -44,17 +62,108 @@ export function isInviteAccess(value: unknown): value is InviteAccess {
   return (INVITE_ACCESS as readonly unknown[]).includes(value);
 }
 
-/** Issuance parameters, signed by a current explicit space owner. */
-export interface CreateInvite {
+/**
+ * The profile an issuer suggests for the one person an invitation is for: the
+ * name, and optionally the picture, the issuer knows them by. The person who
+ * redeems the invitation is offered it when they make their first profile, and
+ * keeps, edits, or drops it; nothing applies it on their behalf.
+ *
+ * `name` is a well-formed string of between 1 and
+ * `SPACE_INVITE_CAPABILITY.suggestedProfile.maxNameLength` UTF-16 code units,
+ * with no leading or trailing whitespace and no control character, so that
+ * the service stores exactly the name it was given. `picture` is the bytes the
+ * issuer offers as the person's picture, at most `maxPictureBytes` of them, in
+ * unpadded base64url; the service holds them without inspecting them, as a
+ * profile's own picture is held.
+ */
+export type InviteProfileSuggestion = {
+  name: string;
+  picture?: string;
+};
+
+/** Whether a value is a well-formed {@link InviteProfileSuggestion}. */
+export function isInviteProfileSuggestion(
+  value: unknown,
+): value is InviteProfileSuggestion {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const { maxNameLength, maxPictureBytes } =
+    SPACE_INVITE_CAPABILITY.suggestedProfile;
+  const { name, picture, ...rest } = value as Record<string, unknown>;
+  if (Object.keys(rest).length !== 0) return false;
+  if (!isInviteName(name, maxNameLength)) return false;
+  if (picture === undefined) return true;
+  if (typeof picture !== "string" || !/^[A-Za-z0-9_-]+$/.test(picture)) {
+    return false;
+  }
+  let bytes: Uint8Array;
+  try {
+    bytes = fromBase64url(picture);
+  } catch {
+    return false;
+  }
+  return bytes.length > 0 && bytes.length <= maxPictureBytes &&
+    toUnpaddedBase64url(bytes) === picture;
+}
+
+/**
+ * Whether `value` is a name the service stores exactly as it was given: a
+ * well-formed string of between 1 and `maxLength` UTF-16 code units, with no
+ * leading or trailing whitespace and no control character.
+ */
+export function isInviteName(
+  value: unknown,
+  maxLength: number,
+): value is string {
+  return typeof value === "string" && value.length > 0 &&
+    value.length <= maxLength && value.isWellFormed() &&
+    value.trim() === value && !/\p{Cc}/u.test(value);
+}
+
+/**
+ * Whether `value` is a well-formed `spaceName` or `issuerName`: a name of at
+ * most `SPACE_INVITE_CAPABILITY.preview.maxNameLength` UTF-16 code units, as
+ * {@link isInviteName} judges it.
+ */
+export function isInvitePreviewName(value: unknown): value is string {
+  return isInviteName(value, SPACE_INVITE_CAPABILITY.preview.maxNameLength);
+}
+
+/**
+ * Issuance parameters, signed by a current explicit space owner. An
+ * invitation that carries a `suggestedProfile` is for one person, so its
+ * `maxUses` is 1. `spaceName` and `issuerName` are the names the issuer gives
+ * the space and themself for the person opening the invitation to read before
+ * they redeem it (see {@link InvitePreview}); any invitation may carry them.
+ */
+export type CreateInvite = {
   inviteId: string;
   codeVerifier: string;
   ttlSeconds: number;
   access: InviteAccess;
   maxUses?: number;
-}
+  suggestedProfile?: InviteProfileSuggestion;
+  spaceName?: string;
+  issuerName?: string;
+};
+
+/**
+ * What the person holding an invitation's code may read before redeeming it:
+ * the access it grants, the names its issuer gave the space and themself, and
+ * the profile its issuer suggests for them, each while the service holds it.
+ * The names are the issuer's claims, as the suggestion is; the service checks
+ * only their form. A preview consumes no use and grants nothing.
+ */
+export type InvitePreview = {
+  access: InviteAccess;
+  spaceName?: string;
+  issuerName?: string;
+  suggestedProfile?: InviteProfileSuggestion;
+};
 
 /** Public, owner-visible metadata while an invitation remains active. */
-export interface InviteMetadata {
+export type InviteMetadata = {
   inviteId: string;
   issuedBy: string;
   createdAt: number;
@@ -63,20 +172,25 @@ export interface InviteMetadata {
   maxUses: number;
   usedCount: number;
   remainingUses: number;
-}
+};
 
 /** The only durable redemption history. */
-export interface InviteRedemption {
+export type InviteRedemption = {
   inviteId: string;
   did: string;
-}
+};
 
-/** A successful admission decision and current ACL observation. */
-export interface RedeemReceipt {
+/**
+ * A successful admission decision and current ACL observation, with the
+ * profile the issuer suggested for the redeemer, when the invitation carries
+ * one and the service still holds it.
+ */
+export type RedeemReceipt = {
   outcome: "redeemed" | "already-redeemed";
   redemption: InviteRedemption;
   currentAccess: Capability | null;
-}
+  suggestedProfile?: InviteProfileSuggestion;
+};
 
 /**
  * The non-secret destination and fragment secret in an invitation link.
@@ -113,23 +227,29 @@ export class SpaceInviteError extends Error {
   }
 }
 
-/** Canonical secure service origin, allowing loopback HTTP for development. */
-export function normalizeInviteHost(host: string): string {
-  let url: URL;
-  try {
-    url = new URL(host);
-  } catch {
-    throw new SpaceInviteError("invalid-host");
-  }
+/**
+ * Canonical secure service origin, allowing loopback HTTP for development, or
+ * `undefined` for a host that is not one.
+ */
+export function inviteHostOrigin(host: string): string | undefined {
+  if (!URL.canParse(host)) return undefined;
+  const url = new URL(host);
   const loopback = isLoopbackHostname(url.hostname);
   if (
     url.username || url.password || url.pathname !== "/" || url.search ||
     url.hash ||
     !(url.protocol === "https:" || (url.protocol === "http:" && loopback))
   ) {
-    throw new SpaceInviteError("invalid-host");
+    return undefined;
   }
   return url.origin;
+}
+
+/** Canonical secure service origin, allowing loopback HTTP for development. */
+export function normalizeInviteHost(host: string): string {
+  const origin = inviteHostOrigin(host);
+  if (origin === undefined) throw new SpaceInviteError("invalid-host");
+  return origin;
 }
 
 /** Whether a value is the canonical unpadded encoding of exactly 32 bytes. */
@@ -156,7 +276,7 @@ export function isInviteId(value: unknown): value is string {
  * Whether a space or inviter has the DID key encoding accepted by invite
  * routes. The check is syntactic only.
  */
-function isInviteDIDKey(value: unknown): value is DIDKey {
+export function isInviteDIDKey(value: unknown): value is DIDKey {
   return isDIDKey(value) &&
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
 }
@@ -194,9 +314,60 @@ export function inviteCodeVerifier(link: InviteLink): string {
 }
 
 /**
- * Builds a join link whose secret is carried only in its fragment:
- * `/join?host&space&invite[&inviter]#code`. The optional `inviter` is an
- * unverified claim; see {@link InviteLink}.
+ * The custom URL scheme of the invitation link format, shared by every Weaver
+ * from any maker as `mailto:` is shared by mail clients, so a browser can hand
+ * an invitation to whichever Weaver its owner chose without anyone keeping a
+ * list of Weavers. The scheme has three actions, each named by the URL's host:
+ *
+ * - `fbrc://join?host&space&invite[&inviter]#code=…` is an invitation, with
+ *   the query and fragment of the canonical `https` link (see
+ *   {@link buildInviteLink}). On Android the code arrives instead as the
+ *   intent's `S.code` extra, and the URL has no fragment; pass it to
+ *   {@link parseInviteLink} as `options.code`.
+ * - `fbrc://setup?n=<nonce>` is a Weaver's setup reply: the page a Weaver opens
+ *   while making itself the browser's default for the scheme answers on it,
+ *   and the Weaver accepts only a nonce it issued. It is never an invitation,
+ *   and {@link parseInviteLink} returns undefined for it.
+ *
+ * - `fbrc://space?host&space` is a link to a space, which grants nothing
+ *   (`parseSpaceLink` in `./space-links.ts`).
+ *
+ * Each action's parser returns undefined for every other action, including
+ * ones added later, so that a newer link reaches an older reader as one it
+ * does not know rather than as a malformed one. Each refuses a malformed URL
+ * of its own action, and {@link parseInviteLink} also refuses a scheme URL
+ * that names no action (`fbrc:join?…`).
+ */
+export const INVITE_LINK_SCHEME = "fbrc";
+
+/**
+ * Whether `url`, a URL on {@link INVITE_LINK_SCHEME}, names `action`: false
+ * for another action, so that each action's parser passes over the others,
+ * including ones added later. Throws `invalid-link` for a URL that names no
+ * action (`fbrc:join?…`, `fbrc:///join?…`) or names `action` malformed (in
+ * another case, with a port, credentials or a path), as every parser of the
+ * scheme must.
+ */
+export function isSchemeAction(url: URL, action: string): boolean {
+  if (url.host === "") throw new SpaceInviteError("invalid-link");
+  if (url.hostname.toLowerCase() !== action) return false;
+  if (
+    url.host !== action || url.pathname !== "" || url.username || url.password
+  ) throw new SpaceInviteError("invalid-link");
+  return true;
+}
+
+/**
+ * The query keys that make a `/join` or `/open` URL an invitation, so that one
+ * carrying none of them, such as another site's `/open?id=…`, is not one.
+ */
+const INVITE_LINK_QUERY_KEYS = ["host", "space", "invite"] as const;
+
+/**
+ * Builds the canonical join link, `/join?host&space&invite[&inviter]#code`, on
+ * the `shell` origin, with the secret carried only in its fragment. The
+ * optional `inviter` is an unverified claim; see {@link InviteLink}.
+ * {@link parseInviteLink} documents the other forms of the same invitation.
  */
 export function buildInviteLink(shell: string, invite: InviteLink): URL {
   inviteCodeVerifier(invite);
@@ -215,12 +386,41 @@ export function buildInviteLink(shell: string, invite: InviteLink): URL {
 }
 
 /**
- * Parses a join link; unrelated routes return undefined, malformed joins throw
- * secret-free errors. A returned `inviter` is the link's unverified claim; see
+ * Parses an invitation link in any of its forms, each carrying the same query
+ * (`host`, `space`, `invite`, and optionally `inviter`) and nothing else:
+ *
+ * - `https://<origin>/join?…#code=…`, the canonical link
+ *   {@link buildInviteLink} makes, on any secure origin or loopback HTTP;
+ * - `https://<origin>/open?…#code=…`, the same link from a person who asked to
+ *   open it in Weaver rather than on the web;
+ * - `fbrc://join?…#code=…`, the {@link INVITE_LINK_SCHEME} form, in which
+ *   `join` is the URL's host and its path is empty;
+ * - `fbrc://join?…` with no fragment, given `options.code`, as Android
+ *   delivers the scheme form: the code travels as the intent's `S.code` extra,
+ *   because Android's `intent:` URL keeps its own fields in the fragment.
+ *
+ * Every form yields the same result, so the result does not say which form it
+ * came from, and it reports no origin of the link itself: `host` is always the
+ * service named in the query, which the code verifier binds, never the link's
+ * origin or the scheme form's `join`.
+ *
+ * A URL that is not an invitation returns undefined: another scheme's URL on
+ * any path but `/join` or `/open`, a `/join` or `/open` URL whose query names
+ * none of `host`, `space`, and `invite`, and any {@link INVITE_LINK_SCHEME}
+ * action but `join`, such as the setup reply, `fbrc://setup?…`, or a space
+ * link, `fbrc://space?…`. Anything else throws a secret-free
+ * {@link SpaceInviteError}: `invalid-link` for a malformed invitation,
+ * including a malformed `join` URL such as `fbrc://JOIN?…` or
+ * `fbrc://join/?…`, or a scheme URL naming no action, such as `fbrc:join?…`;
+ * `invalid-link` too for a code given both in a fragment and in
+ * `options.code`, or in `options.code` beside a `/join` or `/open` invitation.
+ * A URL that is not an invitation returns undefined whatever `options.code`
+ * holds. A returned `inviter` is the link's unverified claim; see
  * {@link InviteLink}.
  */
 export function parseInviteLink(
   link: string | URL,
+  options: { code?: string } = {},
 ): (InviteLink & { space: DIDKey; inviter?: DIDKey }) | undefined {
   let url: URL;
   try {
@@ -228,15 +428,28 @@ export function parseInviteLink(
   } catch {
     throw new SpaceInviteError("invalid-link");
   }
-  if (url.pathname !== "/join") return undefined;
-  normalizeInviteHost(url.origin);
+  if (url.protocol === `${INVITE_LINK_SCHEME}:`) {
+    // Another action, such as the setup reply or a space link, or one added
+    // later, is not an invitation: an older reader then sees a link it does
+    // not know rather than a malformed one.
+    if (!isSchemeAction(url, "join")) return undefined;
+  } else {
+    if (
+      (url.pathname !== "/join" && url.pathname !== "/open") ||
+      !INVITE_LINK_QUERY_KEYS.some((key) => url.searchParams.has(key))
+    ) return undefined;
+    normalizeInviteHost(url.origin);
+    if (options.code !== undefined) throw new SpaceInviteError("invalid-link");
+  }
   const fragment = new URLSearchParams(url.hash.slice(1));
   if (
-    url.username || url.password || url.pathname !== "/join" ||
+    url.username || url.password ||
     !["host,invite,space", "host,invite,inviter,space"].includes(
       [...url.searchParams.keys()].sort().join(","),
     ) ||
-    [...fragment.keys()].join(",") !== "code"
+    (options.code === undefined
+      ? [...fragment.keys()].join(",") !== "code"
+      : url.hash !== "")
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
   if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");
@@ -248,7 +461,7 @@ export function parseInviteLink(
     host: normalizeInviteHost(url.searchParams.get("host")!),
     space,
     inviteId: url.searchParams.get("invite")!,
-    code: fragment.get("code")!,
+    code: options.code ?? fragment.get("code")!,
     ...(inviter === null ? {} : { inviter }),
   };
   inviteCodeVerifier(invite);

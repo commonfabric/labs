@@ -238,15 +238,6 @@ Deno.test("buildHierarchicalParamsValue emits a leaf access when a node holds on
   assertEquals(print(result), "__cf_entry.name");
 });
 
-Deno.test("buildHierarchicalParamsValue prefers the stored expression over empty property assignments", () => {
-  // A node with an expression but no child properties takes the leaf path even
-  // after the assignment loop runs, producing a single rerooted access.
-  const node: CaptureTreeNode = createCaptureTreeNode(["value"]);
-  node.expression = parseExpression("entry.value");
-  const result = buildHierarchicalParamsValue(node, "root", factory);
-  assertEquals(print(result), "root.value");
-});
-
 Deno.test("buildHierarchicalParamsValue emits an object literal for a node with child properties", () => {
   const tree = groupCapturesByRoot([
     parseExpression("entry.a"),

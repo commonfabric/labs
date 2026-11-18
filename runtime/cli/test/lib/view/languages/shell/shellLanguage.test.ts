@@ -129,6 +129,175 @@ describe("shellLanguage", () => {
       expect(classesOf(lines, "PY")).toEqual(["string"]);
     });
 
+    describe("comments in command substitutions", () => {
+      function spansOf(source: string): [string, TokenClass][] {
+        return highlight(source)[0].spans.map((span) => [span.text, span.cls]);
+      }
+
+      it("ends a comment inside backticks at the closing backtick", () => {
+        expect(spansOf("echo `echo a # b`; run 1")).toEqual([
+          ["echo", "callName"],
+          [" ", "whitespace"],
+          ["`", "punctuation"],
+          ["echo", "callName"],
+          [" ", "whitespace"],
+          ["a", "plain"],
+          [" ", "whitespace"],
+          ["# b", "comment"],
+          ["`;", "punctuation"],
+          [" ", "whitespace"],
+          ["run", "callName"],
+          [" ", "whitespace"],
+          ["1", "number"],
+        ]);
+      });
+
+      it("ends a comment inside backticks inside `$(…)` at the closing backtick", () => {
+        const lines = highlight("echo $(echo `echo a # b` c); run 1");
+
+        expect(classesOf(lines, "# b")).toEqual(["comment"]);
+        expect(classesOf(lines, "c")).toEqual(["plain"]);
+        expect(classesOf(lines, "run")).toEqual(["callName"]);
+      });
+
+      it("keeps an escaped backtick inside the comment", () => {
+        const lines = highlight("echo `echo a # b \\` c` d; run 1");
+
+        expect(classesOf(lines, "# b \\` c")).toEqual(["comment"]);
+        expect(classesOf(lines, "d")).toEqual(["plain"]);
+        expect(classesOf(lines, "run")).toEqual(["callName"]);
+      });
+
+      it("ends a comment on a later line of a backtick substitution at its backtick", () => {
+        const lines = highlight("x=`a\n# b` c");
+
+        expect(classesOf(lines, "# b")).toEqual(["comment"]);
+        expect(classesOf(lines, "c")).toEqual(["callName"]);
+      });
+
+      it("ends the comment in each of a run of backtick substitutions", () => {
+        const lines = highlight("x=`echo # a`\ny=`echo # b`\nz");
+
+        expect(classesOf(lines, "# a")).toEqual(["comment"]);
+        expect(classesOf(lines, "# b")).toEqual(["comment"]);
+        expect(classesOf(lines, "y")).toEqual(["propertyName"]);
+        expect(classesOf(lines, "z")).toEqual(["callName"]);
+      });
+
+      it("ends comments on other lines when the parse cannot show where one ends", () => {
+        // The grammar reads the two substitutions on the first line as one,
+        // so the comment in the first of them cannot be shown to end.
+        const lines = highlight(
+          "echo `x # a` `y`\necho `echo c # d`; run 1\necho `x # e` `y`",
+        );
+
+        expect(classesOf(lines, "# d")).toEqual(["comment"]);
+        expect(classesOf(lines, "run")).toEqual(["callName"]);
+      });
+
+      it("ends the comment on each of a run of lines that each depend on the line before", () => {
+        // The grammar reads the two substitutions on each line as one, and
+        // the line after a comment it misreads only parses once that comment
+        // is read as blank space.
+        const source = "echo `x # a` `y`\n".repeat(5);
+        const lines = highlight(source);
+
+        expect(verbatim(lines)).toBe(source);
+        expect(
+          lines.flatMap((line) =>
+            line.spans.filter((span) => span.cls === "comment").map((span) =>
+              span.text
+            )
+          ),
+        ).toEqual(new Array(5).fill("# a"));
+      });
+
+      it("ends a comment that is all a backtick substitution holds at its backtick", () => {
+        const lines = highlight("echo `# x` y");
+
+        expect(classesOf(lines, "# x")).toEqual(["comment"]);
+        expect(classesOf(lines, "y")).not.toContain("comment");
+      });
+
+      it("runs a comment inside `$(…)` to the end of its line", () => {
+        expect(spansOf("echo $(echo a # b); run 1")).toEqual([
+          ["echo", "callName"],
+          [" ", "whitespace"],
+          ["$(", "punctuation"],
+          ["echo", "callName"],
+          [" ", "whitespace"],
+          ["a", "plain"],
+          [" ", "whitespace"],
+          ["# b); run 1", "comment"],
+        ]);
+      });
+
+      it("runs a comment outside any substitution to the end of its line, backticks and all", () => {
+        expect(spansOf("echo a # it is `x`; run 1")).toEqual([
+          ["echo", "callName"],
+          [" ", "whitespace"],
+          ["a", "plain"],
+          [" ", "whitespace"],
+          ["# it is `x`; run 1", "comment"],
+        ]);
+        expect(spansOf("echo `x` # it is `y`; run 1").at(-1)).toEqual(
+          ["# it is `y`; run 1", "comment"],
+        );
+      });
+
+      it("ends a comment after escaped backticks inside backticks at the closing backtick", () => {
+        const lines = highlight("echo `echo \\`echo d\\` # x`; run 1");
+
+        expect(classesOf(lines, "# x")).toEqual(["comment"]);
+        expect(classesOf(lines, "run")).toEqual(["callName"]);
+      });
+
+      it("runs comments to the end of their lines where the grammar misreads the backticks before them", () => {
+        // The grammar reads the backtick closing `date` as opening a
+        // substitution, and the one in `echo \`a\`` as closing one.
+        const lines = highlight(
+          "x=`date`\necho \\` # `tick`\necho `echo \\`a\\``\necho \\` # `tock`",
+        );
+
+        expect(classesOf(lines, "# `tick`")).toEqual(["comment"]);
+        expect(classesOf(lines, "# `tock`")).toEqual(["comment"]);
+        expect(
+          classesOf(
+            highlight("echo `|` # see `foo` here; run 1"),
+            "# see `foo` here; run 1",
+          ),
+        ).toEqual(["comment"]);
+        expect(
+          classesOf(
+            highlight(
+              "echo `echo \\`a\\``\necho \\` # `tick`\necho `echo \\`a\\``\necho '`'",
+            ),
+            "# `tick`",
+          ),
+        ).toEqual(["comment"]);
+      });
+
+      it("runs comments quoting commands to the end of their lines after an empty substitution", () => {
+        const lines = highlight(
+          "x=``\n# Run `make` first.\n# Then `make test`.",
+        );
+
+        expect(classesOf(lines, "# Run `make` first.")).toEqual(["comment"]);
+        expect(classesOf(lines, "# Then `make test`.")).toEqual(["comment"]);
+      });
+
+      it("runs a comment quoting a command to the end of its line in a script with an error", () => {
+        const lines = highlight(
+          "echo a # run `make` first; run 1\necho $(b `c` # see `d`\n;;",
+        );
+
+        expect(classesOf(lines, "# run `make` first; run 1")).toEqual([
+          "comment",
+        ]);
+        expect(classesOf(lines, "# see `d`")).toEqual(["comment"]);
+      });
+    });
+
     it("nests brackets and leaves unpaired delimiters out of bracket depth", () => {
       const lines = highlight(
         'case "$1" in a) f=$( (cd x; [ -d y ]) ) ;; esac',
@@ -235,6 +404,47 @@ describe("shellLanguage", () => {
           highlight(current).map((line) => line.spans),
         );
       }
+    });
+
+    it("matches a complete re-highlight as edits move a comment in and out of backticks", () => {
+      const source = "echo `echo a # b`; run 1\necho done\n";
+      const edits: [string, string][] = [
+        ["run 1", "run 2"],
+        ["# b`", "# b \\` c`"],
+        ["echo `echo", "echo $(echo"],
+        ["c`; run", "c); run"],
+        ["echo $(echo", "echo `echo"],
+        ["c); run", "c`; run"],
+        ["echo done", "echo `done # x`"],
+        ["echo `echo a # b", "echo `echo a x# b"],
+        ["echo `echo a x# b", "echo `echo a # b"],
+        ["done # x", "done x# x"],
+      ];
+      const highlighter = shellLanguage.createHighlighter(source);
+      let current = source;
+      for (const [from, to] of edits) {
+        expect(current).toContain(from);
+        current = current.replace(from, to);
+        const updated = highlighter.update(current);
+        expect(verbatim(updated)).toBe(current);
+        expect(updated.map((line) => line.spans)).toEqual(
+          highlight(current).map((line) => line.spans),
+        );
+      }
+      expect(classesOf(highlighter.lines, "# b \\` c")).toEqual(["comment"]);
+      expect(classesOf(highlighter.lines, "x#")).toEqual(["plain"]);
+    });
+
+    it("matches a complete re-highlight after an edit to malformed source with a comment that may end at a backtick", () => {
+      // A parse reused across this edit recovers from the errors differently
+      // from a fresh parse.
+      const before = "``\\`)\\``\\``echo\n)`#\\);`$ # c# c`";
+      const after = "``\\`)\\``\\``echo\n)`#\\)`$($ # c# c`";
+
+      const updated = shellLanguage.createHighlighter(before).update(after);
+
+      expect(verbatim(updated)).toBe(after);
+      expect(updated).toEqual(highlight(after));
     });
 
     it("colors a diff of an unavailable file from its heredoc context", () => {

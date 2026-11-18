@@ -17,6 +17,7 @@ import {
 } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { renderLineColored } from "../lib/view/highlight.ts";
+import { columns } from "../lib/view/width.ts";
 
 const MARKDOWN = [
   "# **Title** &amp;",
@@ -598,6 +599,81 @@ Deno.test("markdown rendered view retains readable source when lexing fails", ()
   );
 });
 
+Deno.test("markdown rendered view links a link's text, and a bare address, to where it points", () => {
+  const [line] = renderMarkdownLines(
+    "See [the spec](https://example.com/spec) or https://example.org/x.",
+  );
+  assertEquals(
+    line.spans.flatMap((span) =>
+      span.href === undefined ? [] : [[span.text, span.href]]
+    ),
+    [
+      ["the spec", "https://example.com/spec"],
+      ["https://example.org/x", "https://example.org/x"],
+    ],
+  );
+  assertEquals(
+    line.spans.find((span) => span.text === " or ")?.href,
+    undefined,
+  );
+});
+
+Deno.test("markdown rendered view marks a line that continues a paragraph across a soft break, and not across a hard one", () => {
+  const lines = renderMarkdownLines(
+    ["one", "two  ", "three", "", "four"].join("\n"),
+  );
+  assertEquals(lines.map((line) => [line.text, line.continues ?? false]), [
+    ["one", false],
+    ["two", true],
+    ["three", false],
+    ["", false],
+    ["four", false],
+  ]);
+});
+
+Deno.test("markdown rendered view gives a list item's and a quote's lines the indent their further rows hang at", () => {
+  const lines = renderMarkdownLines(
+    ["- first", "  more", "> - quoted", ">   on"].join("\n"),
+  );
+  assertEquals(
+    lines.map((line) => [line.text, line.hang, line.continues ?? false]),
+    [
+      ["• first", "  ", false],
+      ["  more", "  ", true],
+      ["│ • quoted", "│   ", false],
+      ["│   on", "│   ", true],
+    ],
+  );
+});
+
+Deno.test("markdown rendered view marks the lines of code blocks and tables as preformatted, and prose as not", () => {
+  const lines = renderMarkdownLines(
+    [
+      "prose",
+      "",
+      "```",
+      "code",
+      "```",
+      "",
+      "| a | b |",
+      "| --- | --- |",
+      "| 1 | 2 |",
+    ].join("\n"),
+  );
+  assertEquals(
+    lines.flatMap((line) =>
+      line.text === "" ? [] : [[line.text, line.preformatted ?? false]]
+    ),
+    [
+      ["prose", false],
+      ["code", true],
+      ["│ a │ b │", true],
+      ["├───┼───┤", true],
+      ["│ 1 │ 2 │", true],
+    ],
+  );
+});
+
 Deno.test("markdown rendered view handles incomplete block token data", () => {
   assertEquals(
     markdownInternals.renderBlockToken(
@@ -623,11 +699,13 @@ Deno.test("markdown rendered view handles incomplete block token data", () => {
         text: "first",
         spans: [{ col: 0, text: "first", cls: "string" }],
         renderedSourceHidden: true,
+        preformatted: true,
       },
       {
         text: "second",
         spans: [{ col: 0, text: "second", cls: "string" }],
         renderedSourceHidden: true,
+        preformatted: true,
       },
     ],
   );
@@ -1523,4 +1601,26 @@ Deno.test("diff expansion rebuilds the active rendered Markdown view", () => {
     session.doc.lines.some((line) => line.text === "+new value"),
     "the changed Markdown line remains rendered",
   );
+});
+
+Deno.test("markdown rendered view lines a table's rules up by the columns a terminal draws", () => {
+  const lines = renderMarkdownLines(
+    "| a | b |\n|---|---|\n| 👍🏽 | x |\n| 日本 | y |\n| ❤️ | z |",
+  );
+  const rules = lines.map((line) => {
+    const text = line.text;
+    return [...text.matchAll(/[│┼┤├]/g)].map((match) =>
+      columns(text.slice(0, match.index))
+    );
+  });
+  for (const at of rules) assertEquals(at, rules[0]);
+});
+
+Deno.test("markdown rendered view gives each line of a table its row's cells and alignment", () => {
+  const lines = renderMarkdownLines("| a | b |\n|---|---:|\n| x | y z |");
+
+  assertEquals(lines.map((line) => line.table?.header), [true, false, false]);
+  assertEquals(lines[1].table?.cells, undefined);
+  assertEquals(lines[2].table?.align, ["left", "right"]);
+  assertEquals(lines[2].table?.cells?.map((cell) => cell.text), ["x", "y z"]);
 });

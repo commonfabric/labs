@@ -8,19 +8,20 @@ import {
   tool,
 } from "ai";
 import { trace } from "@opentelemetry/api";
-import {
-  type LLMNativeModelToolId,
-  type LLMNativeModelToolResult,
-  type LLMRequest,
+import type {
+  LLMNativeModelToolId,
+  LLMNativeModelToolResult,
+  LLMRequest,
 } from "@commonfabric/llm/types";
-import { type BuiltInLLMMessage } from "@commonfabric/api";
+import type { BuiltInLLMMessage } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   LLMRequestError,
   LLMUpstreamError,
   upstreamStatusOf,
 } from "./errors.ts";
-import { type ModelConfig, resolveModel } from "./models.ts";
+import type { ModelConfig, ModelRegistry } from "./models.ts";
 import { normalizeSchemaForProvider } from "./schema.ts";
 import {
   metadataAttributeValue,
@@ -274,22 +275,18 @@ async function emptyResponseError(
 }
 
 async function readNativeModelToolResults(
-  llmStream: unknown,
+  llmStream: {
+    providerMetadata: PromiseLike<unknown>;
+    sources: PromiseLike<unknown>;
+  },
   nativeModelToolIds: readonly LLMNativeModelToolId[] | undefined,
   modelName: string,
 ): Promise<LLMNativeModelToolResult[] | undefined> {
   if (nativeModelToolIds === undefined || nativeModelToolIds.length === 0) {
     return undefined;
   }
-  const stream = llmStream as {
-    providerMetadata?: Promise<unknown> | unknown;
-    sources?: Promise<unknown> | unknown;
-  };
-  const providerMetadata = await Promise.resolve(stream.providerMetadata);
-  const sources = await Promise.resolve(stream.sources);
-  if (providerMetadata === undefined && sources === undefined) {
-    return undefined;
-  }
+  const providerMetadata = await llmStream.providerMetadata;
+  const sources = await llmStream.sources;
   const provider = modelName.includes(":")
     ? modelName.split(":")[0]
     : undefined;
@@ -298,7 +295,7 @@ async function readNativeModelToolResults(
     toolId,
     ...(provider !== undefined ? { provider } : {}),
     ...(providerMetadata !== undefined ? { providerMetadata } : {}),
-    ...(sources !== undefined ? { sources } : {}),
+    sources,
   }));
 }
 
@@ -310,15 +307,20 @@ async function readNativeModelToolResults(
  */
 export function generateText(
   params: GenerateTextParams,
+  models: Pick<ModelRegistry, "resolve">,
 ): Promise<GenerateTextResult> {
-  return withGatewayOperation("generate-text", () => generateTextCall(params));
+  return withGatewayOperation(
+    "generate-text",
+    () => generateTextCall(params, models),
+  );
 }
 
 async function generateTextCall(
   params: GenerateTextParams,
+  models: Pick<ModelRegistry, "resolve">,
 ): Promise<GenerateTextResult> {
   // Validate and configure model
-  const modelConfig = await resolveModel(params.model!);
+  const modelConfig = await models.resolve(params.model!);
   if (!modelConfig) {
     console.error("Unsupported model:", params.model);
     throw new LLMRequestError(`Unsupported model: ${params.model}`);
@@ -335,7 +337,7 @@ async function generateTextCall(
   const messages = params.messages as ModelMessage[];
 
   const streamParams: Parameters<typeof streamText>[0] = {
-    model: modelConfig.model || params.model,
+    model: modelConfig.model,
     messages,
     system: params.system,
     stopSequences: params.stop ? [params.stop] : undefined,
@@ -394,30 +396,18 @@ async function generateTextCall(
     !modelConfig.capabilities.systemPrompt && params.system &&
     messages.length > 0
   ) {
-    // Prepend system prompt to first message content
-    // Content can be a string or an array of content parts
+    // Prepend system prompt to first message content, which is a string or
+    // an array of content parts.
     const firstMessage = messages[0];
     if (typeof firstMessage.content === "string") {
       firstMessage.content = `${params.system}\n\n${firstMessage.content}`;
-    } else if (Array.isArray(firstMessage.content)) {
-      // Use type assertion to handle the union type properly
+    } else {
       firstMessage.content = [
         { type: "text" as const, text: params.system },
         ...firstMessage.content,
       ] as typeof firstMessage.content;
-    } else {
-      // Handle edge case: single object or unexpected type
-      firstMessage.content = [
-        { type: "text" as const, text: params.system },
-        firstMessage.content,
-      ] as typeof firstMessage.content;
     }
     streamParams.system = undefined;
-  }
-
-  // Add model-specific configuration
-  if (modelConfig.model) {
-    streamParams.model = modelConfig.model;
   }
 
   // Per-request metadata reaches the spans as runtime context.
@@ -673,9 +663,7 @@ async function generateTextCall(
         // Log error server-side for debugging
         console.error("[generateText Stream Error]:", error);
         // Send error event to client before closing stream
-        const errorMessage = error instanceof Error
-          ? error.message
-          : String(error);
+        const errorMessage = describeFailure(error);
         controller.enqueue(
           encoder.encode(
             JSON.stringify({

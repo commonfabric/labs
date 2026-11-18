@@ -195,9 +195,13 @@ export const DASHBOARD_THEME_STYLES = `
 export const dashboardThemeToggle = (): string =>
   `<button class="theme-toggle" type="button" data-theme-toggle aria-label="Theme: Dark. Switch to light mode" title="Theme: Dark. Switch to light mode"><span data-theme-icon aria-hidden="true">☾</span><span data-theme-label>Dark</span></button>`;
 
-/** Connect every theme switch on the page to the saved dashboard theme. */
+/**
+ * Connect every theme switch on the page to the saved dashboard theme, with
+ * `preference` saying whether the system prefers a light theme.
+ */
 export function initializeDashboardTheme(
-  preference = matchMedia("(prefers-color-scheme: light)"),
+  preference: Pick<MediaQueryList, "matches" | "addEventListener"> =
+    matchMedia("(prefers-color-scheme: light)"),
 ): void {
   const storageKey = "fabricWallTheme";
   const root = document.documentElement;
@@ -235,7 +239,7 @@ export function initializeDashboardTheme(
       const icon = button.querySelector<HTMLElement>("[data-theme-icon]");
       if (labelTarget) labelTarget.textContent = label;
       if (icon) icon.textContent = icons[mode];
-      button.ariaLabel = `Theme: ${label}. Switch to ${next} mode`;
+      button.setAttribute("aria-label", `Theme: ${label}. Switch to ${next} mode`);
       button.title = `Theme: ${label}. Switch to ${next} mode`;
     }
   };

@@ -5,7 +5,9 @@ import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { Runtime } from "@commonfabric/runner";
+import { DEPLOYMENT_RESPONSE_BOUND_MS } from "@commonfabric/runner/deployment-meta";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { StorageManager as EmulatedStorage } from "@commonfabric/runner/storage/cache.deno";
 
@@ -62,6 +64,53 @@ describe("pieces-controller", () => {
           // health probe that decides whether to go on at all. The stub's
           // 404 says the deployment publishes neither, which is why the
           // controller goes on to the health probe.
+          expect(requested).toEqual([
+            "http://toolshed.test/api/meta",
+            "http://toolshed.test/_health",
+          ]);
+        });
+
+        it("throws naming the API at the bounds when the server says nothing", async () => {
+          const metaAsked = Promise.withResolvers<void>();
+          const healthAsked = Promise.withResolvers<void>();
+          globalThis.fetch = (
+            input: string | URL | Request,
+            init?: RequestInit,
+          ) => {
+            const url = input instanceof Request ? input.url : input.toString();
+            requested.push(url);
+            (url.endsWith("/_health") ? healthAsked : metaAsked).resolve();
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                "abort",
+                () => reject(init.signal!.reason),
+              );
+            });
+          };
+          using _warn = stub(console, "warn");
+          using _error = stub(console, "error");
+          const logger = getLogger("deployment-meta");
+          const unreadBefore = logger.countsByKey["posture-unread"]?.error ?? 0;
+          using time = new FakeTime();
+          let settled = false;
+          const refused = expect(PiecesController.initialize({
+            apiUrl,
+            identity,
+            space: "unhealthy-space",
+          })).rejects.toThrow('Could not connect to "http://toolshed.test/".')
+            .finally(() => {
+              settled = true;
+            });
+          await metaAsked.promise;
+          await time.tickAsync(DEPLOYMENT_RESPONSE_BOUND_MS);
+          await healthAsked.promise;
+          expect(logger.countsByKey["posture-unread"]?.error).toBe(
+            unreadBefore + 1,
+          );
+          await time.tickAsync(DEPLOYMENT_RESPONSE_BOUND_MS - 1);
+          expect(settled).toBe(false);
+          await time.tickAsync(1);
+          await refused;
           expect(requested).toEqual([
             "http://toolshed.test/api/meta",
             "http://toolshed.test/_health",

@@ -1,13 +1,15 @@
 /**
  * The serving runtime's loopback storage plane (serving-loop.md §1 plane
- * (a)): a StorageManager whose sessions connect to the memory server, in
- * process or over transports that reach it on the thread that holds it, as
- * the only commit path the loop's runtime uses, with the same signed
- * `session.open` production clients present. No parallel auth scheme: the
- * loopback session's principal is the service identity, verified by whatever
+ * (a)): a StorageManager whose home-space session connects to the memory
+ * server, in process or over transports that reach it on the thread that
+ * holds it, as the only commit path the loop's runtime uses, with the same
+ * signed `session.open` production clients present. With a route
+ * (`serving-loop.md` §2), every other space's session dials that
+ * space's owner the same way, so a foreign read is a session with the owner,
+ * which wakes it on every commit there. No parallel auth scheme: the
+ * session's principal is the service identity, verified by whatever
  * `authorizeSessionOpen` the host process configured, which is what makes
- * the read-row admission's holder matching (protocol.md §2) meaningful in
- * production.
+ * the read-row admission (protocol.md §2) meaningful in production.
  */
 
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
@@ -18,6 +20,7 @@ import {
   type ClientInfo,
   createClientInfo,
 } from "@commonfabric/memory/v2/client-info";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { LoopbackMemoryServer } from "./host-memory-server.ts";
 import type { SpaceHostRegistration } from "../space-host.ts";
 import {
@@ -25,7 +28,11 @@ import {
   type SessionFactory,
   StorageManager,
 } from "../storage/v2.ts";
-import { createSignedSessionOpenAuth } from "../storage/v2-remote-session.ts";
+import {
+  createSignedSessionOpenAuth,
+  MEMORY_FIRST_HANDSHAKE_ATTEMPTS,
+} from "../storage/v2-remote-session.ts";
+import type { RouteOptions } from "./routed-plane.ts";
 import { runInServingContext } from "./serving-context.ts";
 
 /**
@@ -37,58 +44,193 @@ export type LoopbackPlane =
   | LoopbackMemoryServer
   | { createTransport(): MemoryClient.Transport };
 
+/**
+ * The options of a loopback storage manager: a storage manager's, and the
+ * deployment's route to each space's owner
+ * (`serving-loop.md` §2), over which every session but the home
+ * space's (`servingHomeSpace`) reaches its space's owner instead of the
+ * plane: the sessions of the spaces the runtime reads across, and a session
+ * signed by a key other than the manager's own, the genesis of a space the
+ * serving runtime creates signed by that space's key. A manager with a
+ * route and no home space routes every session.
+ */
+export type LoopbackOptions = Omit<Options, "memoryHost" | "spaceHostMap"> & {
+  route?: Pick<RouteOptions, "createTransport">;
+};
+
+/**
+ * `inner` with its receiver wrapped by `wrapReceiver`, every other member
+ * delegated. A transport is a class instance as often as a plain object,
+ * and a spread of one keeps no method of its class, so each member is
+ * named here, and `executor-loopback-storage.test.ts` holds the list to the type's
+ * members: a member the type gains and this leaves out is a member every
+ * loopback session loses. An optional member `inner` lacks is absent here
+ * too, since the client reads a member's presence as a capability.
+ */
+export function delegatingTransport(
+  inner: MemoryClient.Transport,
+  wrapReceiver: (
+    next: (payload: string) => void,
+  ) => (payload: string) => void,
+): MemoryClient.Transport {
+  return {
+    ...(inner.supportsMessageCompression === undefined ? {} : {
+      supportsMessageCompression: inner.supportsMessageCompression,
+    }),
+    ...(inner.supportsRouterStreaming === undefined ? {} : {
+      supportsRouterStreaming: inner.supportsRouterStreaming,
+    }),
+    ...(inner.messageLimits === undefined
+      ? {}
+      : { messageLimits: inner.messageLimits }),
+    send: (payload) => inner.send(payload),
+    close: () => inner.close(),
+    ...(inner.reset === undefined ? {} : { reset: () => inner.reset!() }),
+    setReceiver: (next) => inner.setReceiver(wrapReceiver(next)),
+    ...(inner.setCloseReceiver === undefined ? {} : {
+      setCloseReceiver: (receiver: (error?: Error) => void) =>
+        inner.setCloseReceiver!(receiver),
+    }),
+    ...(inner.setMessageCompressionEnabled === undefined ? {} : {
+      setMessageCompressionEnabled: (enabled: boolean) =>
+        inner.setMessageCompressionEnabled!(enabled),
+    }),
+    ...(inner.setRoutedMessagesEnabled === undefined ? {} : {
+      setRoutedMessagesEnabled: (
+        ...args: Parameters<
+          NonNullable<MemoryClient.Transport["setRoutedMessagesEnabled"]>
+        >
+      ) => inner.setRoutedMessagesEnabled!(...args),
+    }),
+    ...(inner.delivered === undefined
+      ? {}
+      : { delivered: () => inner.delivered!() }),
+  };
+}
+
 class LoopbackSessionFactory implements SessionFactory {
   readonly supportsAclBootstrap = true;
 
   readonly #plane: LoopbackPlane;
+  readonly #route: Pick<RouteOptions, "createTransport"> | undefined;
+
+  /** The space the manager serves, whose session stays on the plane. */
+  readonly #home: MemorySpace | undefined;
+
+  /** The manager's own signer, which every session but a genesis is signed by. */
+  readonly #as: Signer;
 
   readonly #onServerFrame?: (frame: string) => void;
   readonly #clientInfo: Readonly<ClientInfo>;
 
+  /**
+   * Whether this factory's sessions declare that their runtime names
+   * instances: what `setInstanceNames()` last chose, and until then this
+   * build's default.
+   */
+  #instanceNames = namesInstancesByDefault();
+
+  /**
+   * Whether this factory's connections take `cid:` schema documents by
+   * reference: what `setSyncCidReferences()` last chose, and until then not.
+   */
+  #syncCidReferences = false;
+
   constructor(
     plane: LoopbackPlane,
+    route: Pick<RouteOptions, "createTransport"> | undefined,
+    home: MemorySpace | undefined,
+    as: Signer,
     onServerFrame?: (frame: string) => void,
     clientBuild?: ClientBuild,
   ) {
     this.#plane = plane;
+    this.#route = route;
+    this.#home = home;
+    this.#as = as;
     this.#onServerFrame = onServerFrame;
     this.#clientInfo = createClientInfo(clientBuild);
   }
 
-  /** The loopback transport, with each server frame taken in the serving
-   * context and reported AFTER the session has taken it. */
-  #transport(): MemoryClient.Transport {
-    const inner = "createTransport" in this.#plane
+  /**
+   * The route a session on `space` signed by `signer` takes to the space's
+   * owner, if any: with a route, every session but the home space's own,
+   * signed by the manager's own key, is routed.
+   */
+  #routeFor(
+    space: MemorySpace,
+    signer: Signer,
+  ): Pick<RouteOptions, "createTransport"> | undefined {
+    if (this.#route === undefined) return undefined;
+    return space === this.#home && signer.did() === this.#as.did()
+      ? undefined
+      : this.#route;
+  }
+
+  /**
+   * The transport of a session on `space` signed by `signer`: the route's to
+   * the space's owner where `#routeFor` routes it, the plane's otherwise.
+   * Each server frame is taken in the serving context and reported AFTER
+   * the session has taken it.
+   */
+  #transport(space: MemorySpace, signer: Signer): MemoryClient.Transport {
+    const route = this.#routeFor(space, signer);
+    const inner = route !== undefined
+      ? route.createTransport(space)
+      : "createTransport" in this.#plane
       ? this.#plane.createTransport()
       : MemoryClient.loopback(this.#plane);
     const report = this.#onServerFrame;
-    return {
-      ...inner,
-      setReceiver: (next) =>
-        inner.setReceiver((payload) =>
-          runInServingContext(true, () => {
-            next(payload);
-            report?.(payload);
-          })
-        ),
-    };
+    return delegatingTransport(
+      inner,
+      (next) => (payload) =>
+        runInServingContext(true, () => {
+          next(payload);
+          report?.(payload);
+        }),
+    );
+  }
+
+  /** @inheritDoc */
+  setInstanceNames(enabled: boolean): void {
+    this.#instanceNames = enabled;
+  }
+
+  /** @inheritDoc */
+  setSyncCidReferences(enabled: boolean): void {
+    this.#syncCidReferences = enabled;
   }
 
   async create(
     space: MemorySpace,
-    signer?: Signer,
+    signer: Signer,
     mountOptions: MemoryClient.MountOptions = {},
+    signal?: AbortSignal,
   ) {
-    if (signer === undefined) {
-      throw new Error(
-        "loopback serving sessions require the service identity signer",
-      );
-    }
+    // A routed session dials the owner over the network, with the handshake
+    // attempts the routed plane gives its own sessions. `signal` aborts once
+    // the provider has no more use for the session, which ends the dial.
     const client = await MemoryClient.connect({
-      transport: this.#transport(),
+      transport: this.#transport(space, signer),
+      signal,
       client: this.#clientInfo,
+      instanceNames: this.#instanceNames,
+      syncCidReferences: this.#syncCidReferences,
+      ...(this.#routeFor(space, signer) === undefined
+        ? {}
+        : { firstHandshakeAttempts: MEMORY_FIRST_HANDSHAKE_ATTEMPTS }),
     });
+    // Until this returns, nothing else holds the client, so an abort closes
+    // it here. That ends whatever the mount is waiting on while its owner
+    // cannot be reached: its turn to be sent, or, once the owner answered it
+    // on a connection that then dropped, the restore of its session.
+    const closeForAbort = (): void => {
+      void client.close().catch(() => {});
+    };
+    signal?.addEventListener("abort", closeForAbort, { once: true });
     try {
+      // A signal that has aborted by now is refused by the mount as it
+      // starts, and the failure below closes the client.
       const session = await client.mount(
         space,
         mountOptions,
@@ -103,6 +245,7 @@ class LoopbackSessionFactory implements SessionFactory {
             descriptor,
             context,
           ),
+        signal,
       );
       return { client, session };
     } catch (error) {
@@ -111,6 +254,8 @@ class LoopbackSessionFactory implements SessionFactory {
       // the same close-before-rethrow RemoteSessionFactory.create does.
       await client.close().catch(() => {});
       throw error;
+    } finally {
+      signal?.removeEventListener("abort", closeForAbort);
     }
   }
 }
@@ -124,21 +269,29 @@ class LoopbackSessionFactory implements SessionFactory {
 export class LoopbackStorageManager extends StorageManager {
   static connect(
     plane: LoopbackPlane,
-    options: Omit<Options, "memoryHost" | "spaceHostMap">,
+    options: LoopbackOptions,
     /** DIAGNOSTIC (tests): each frame the server sends to this manager's
      * sessions, reported once the session has taken it. A session's own
      * termination arrives this way and nothing else reports it, so a test
      * that has to act after one waits on this. */
     onServerFrame?: (frame: string) => void,
   ): LoopbackStorageManager {
+    const { route, ...rest } = options;
     return new LoopbackStorageManager(
       {
-        ...options,
+        ...rest,
         // Placeholder: the loopback session factory never resolves a
         // storage address against this.
         memoryHost: new URL("memory://loopback"),
       },
-      new LoopbackSessionFactory(plane, onServerFrame, options.clientBuild),
+      new LoopbackSessionFactory(
+        plane,
+        route,
+        rest.servingHomeSpace,
+        rest.as,
+        onServerFrame,
+        rest.clientBuild,
+      ),
     );
   }
 

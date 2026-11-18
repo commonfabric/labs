@@ -8,6 +8,8 @@ import { parseArgs } from "@std/cli/parse-args";
 import { dirname, isAbsolute, join, relative, resolve } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { HarnessRunState } from "./run-state.ts";
 import type { CfHarnessStructuredResultConfig } from "./contracts/structured-result.ts";
 import type {
@@ -46,7 +48,6 @@ import {
   resolveHarnessRunPaths,
 } from "./artifacts.ts";
 import { httpOriginOf } from "./tools/handle-values.ts";
-import { errorMessage } from "./error-message.ts";
 import {
   createCliPromptSlotBinding,
   type PromptSlotRole,
@@ -82,7 +83,7 @@ import type {
   HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "./contracts/transcript.ts";
-import { CfHarnessEngine } from "./engine.ts";
+import { CfHarnessEngine, type CreateHarnessEngineOptions } from "./engine.ts";
 import {
   assertContinuationOutputPaths,
   assertHarnessRootSource,
@@ -281,6 +282,7 @@ const CLI_STRING_FLAGS = [
   "max-confidentiality",
   "space-db",
   "pattern-index-url",
+  "pattern-index-origin",
   "host-mount",
   "browser-access-lease-id",
   "browser-access-cdp-url",
@@ -500,12 +502,24 @@ export interface RunCfHarnessCliDependencies
   sandboxRuntimeNamedBy?: string;
 
   /**
+   * The platform this process runs on, for an embedder that sets
+   * `sandboxRuntimeNamedBy` and so states no `platform`; the one this process
+   * runs on when absent. It decides no default: on Linux, the host ports a
+   * run forwards are forwarded by pasta, and a named `runsc` under `bridge`
+   * runs under pasta.
+   */
+  processPlatform?: SandboxPlatform;
+
+  /**
    * Whether whoever starts this run can give it the sandbox selection flags,
    * which they can when absent. An embedder that writes the argument list
    * itself says `false`, and a refusal then names each setting's variable
    * alone, since a flag is nothing its operator can pass.
    */
   sandboxSelectionFlags?: boolean;
+
+  /** Host-owned opt-in progress return channel. */
+  reportProgress?: CreateHarnessEngineOptions["reportProgress"];
 
   writeTextFile?: (path: string, text: string) => Promise<void>;
 
@@ -556,18 +570,31 @@ const defaultCliIo = (): CfHarnessCliIO => ({
   stderr: (text) => Deno.stderr.writeSync(new TextEncoder().encode(text)),
 });
 
-const signalExitCode = (signal: CfHarnessCliSignal): number =>
+/** The exit status a process ended by `signal` reports, as a shell's. */
+export const signalExitCode = (signal: CfHarnessCliSignal): number =>
   signal === "SIGINT" ? 130 : 143;
 
-const defaultRegisterSignalHandler = (
+/** Where a process's signal listeners are added and removed. */
+export type CfHarnessSignalListeners = Pick<
+  typeof Deno,
+  "addSignalListener" | "removeSignalListener"
+>;
+
+/**
+ * Registers `handler` for each of `signals` with `signalSource`, the running
+ * process when absent, and returns the function that removes them again;
+ * calling that a second time removes nothing.
+ */
+export const registerCfHarnessSignalHandler = (
   signals: readonly CfHarnessCliSignal[],
   handler: CfHarnessCliSignalHandler,
+  signalSource: CfHarnessSignalListeners = Deno,
 ): () => void => {
   const listeners = signals.map((signal) => {
     const listener = () => {
       void handler(signal);
     };
-    Deno.addSignalListener(signal, listener);
+    signalSource.addSignalListener(signal, listener);
     return { signal, listener };
   });
   let disposed = false;
@@ -577,7 +604,7 @@ const defaultRegisterSignalHandler = (
     }
     disposed = true;
     for (const { signal, listener } of listeners) {
-      Deno.removeSignalListener(signal, listener);
+      signalSource.removeSignalListener(signal, listener);
     }
   };
 };
@@ -590,7 +617,7 @@ export const installCfHarnessSignalHandlers = (
   > = {},
 ): () => void => {
   const registerSignalHandler = deps.registerSignalHandler ??
-    defaultRegisterSignalHandler;
+    registerCfHarnessSignalHandler;
   const exit = deps.exit ?? ((code: number): never => Deno.exit(code));
   let handlingSignal = false;
   let cleanup = () => {};
@@ -705,7 +732,9 @@ Options:
   --sandbox-runtime <kind>      runsc: run runsc directly; the same on Linux and on
                                 macOS through the darwin runsc. Tool calls may name a
                                 sandbox session, except under pasta's network (the
-                                Linux default's). With no runtime
+                                Linux default's, any Linux run's that forwards host
+                                ports, and a named runsc's under bridge on Linux).
+                                With no runtime
                                 named, macOS (Apple silicon only) runs runsc from the
                                 native cfc-vm store (CFC_VM_HOME, or ~/Library/Application
                                 Support/cfc-vm), Linux runs it from the store under
@@ -765,6 +794,10 @@ Options:
                                 record_feedback, and run_pattern's patternId argument;
                                 signs with the fabric session identity, so it needs the
                                 three --fabric-* flags
+  --pattern-index-origin agent  The run is a person's own agent making patterns for
+                                them: each published version says so and names the
+                                piece it was deployed to, so the index shares it,
+                                under their sharing setting, once they use it
   --no-pattern-index-publish    Read the pattern index without contributing to it: a
                                 pattern the model authors and runs is not published back
   --host-mount <spec>           Extra host bind mount (repeatable: name=<id>,source=<host>,target=<sandbox>,mode=readonly|writable)
@@ -789,9 +822,13 @@ Environment:
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host, in Docker's words (default:
                                 bridge, which runsc reports as sandbox: on macOS the
-                                VM's network; on Linux under the default pasta's, with
-                                egress and the host as host.docker.internal; on Linux
-                                with no pasta configured, loopback alone)
+                                VM's network; on Linux pasta's, with egress, and the host
+                                as host.docker.internal: every port of its loopback for
+                                the default, the forwarded ports alone for a run that
+                                forwards some or a named runsc that names bridge. A
+                                named runsc on Linux whose network is unnamed and that
+                                forwards no host ports gets runsc's own, loopback alone.
+                                A run that needs pasta refuses to start without it)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
   CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
@@ -814,6 +851,10 @@ Environment:
                                 its store)
   CFC_VM_HOME                   The macOS cfc-vm store, read by the darwin runsc and by the
                                 macOS default (default: ~/Library/Application Support/cfc-vm)
+  CFC_VM_FORWARD_PORTS          Host ports the sandbox reaches, comma-separated: the darwin
+                                runsc forwards them into its VM; on Linux pasta forwards
+                                them and no other port of the host's loopback, for a
+                                named runsc too, and no sandbox session is offered
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
 `;
@@ -848,6 +889,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "report_progress",
   "submit_result",
   "loom_compose",
   "loom_inspect",
@@ -971,12 +1013,8 @@ export const parseCfHarnessCliToolId = (
     : undefined;
 
 const parseBuiltinToolIds = (
-  input: string | readonly string[] | undefined,
+  values: readonly string[],
 ): readonly BuiltinToolId[] | undefined => {
-  if (input === undefined) {
-    return undefined;
-  }
-  const values = Array.isArray(input) ? input : [input];
   if (values.length === 0) {
     return undefined;
   }
@@ -990,24 +1028,15 @@ const parseBuiltinToolIds = (
 };
 
 const parseAllowedSkillScripts = (
-  input: string | readonly string[] | undefined,
+  values: readonly string[],
 ): readonly HarnessAllowedSkillScript[] => {
-  if (input === undefined) {
-    return [];
-  }
-  const values = Array.isArray(input) ? input : [input];
-  if (values.length === 0) {
-    return [];
-  }
   try {
     return uniqueAllowedSkillScripts(
       values.map((value) => parseAllowedSkillScriptSpec(value)),
     );
   } catch (error) {
     throw new Error(
-      `invalid --allow-skill-script: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `invalid --allow-skill-script: ${describeFailure(error)}`,
     );
   }
 };
@@ -1034,12 +1063,8 @@ const parseSubagentProfile = (
     : undefined;
 
 const parseSubagentProfiles = (
-  input: string | readonly string[] | undefined,
+  values: readonly string[],
 ): readonly HarnessSubagentProfile[] | undefined => {
-  if (input === undefined) {
-    return undefined;
-  }
-  const values = Array.isArray(input) ? input : [input];
   if (values.length === 0) {
     return undefined;
   }
@@ -1095,11 +1120,8 @@ const optionalStringValue = <T extends string>(
  * list is the default and means no handle may be materialized anywhere.
  */
 const parseHandleValueOrigins = (
-  raw: string | readonly string[] | undefined,
+  values: readonly string[],
 ): readonly string[] => {
-  const values = raw === undefined
-    ? []
-    : (typeof raw === "string" ? [raw] : raw);
   const origins: string[] = [];
   for (const value of values) {
     const trimmed = value.trim();
@@ -1125,13 +1147,8 @@ const commandsConfigOf = (
   url: unknown,
   actor: unknown,
   runId: unknown,
-  relevant: string | readonly string[] | undefined,
+  named: readonly string[],
 ): HarnessLoomCommandsConfig | undefined => {
-  const named = relevant === undefined
-    ? []
-    : typeof relevant === "string"
-    ? [relevant]
-    : [...relevant];
   const given = [url, actor, runId].filter((value) => value !== undefined);
   if (given.length === 0) {
     if (named.length > 0) {
@@ -1152,7 +1169,7 @@ const commandsConfigOf = (
     url,
     actor,
     runId,
-    ...(named.length > 0 ? { relevant: named } : {}),
+    ...(named.length > 0 ? { relevant: [...named] } : {}),
   };
   validateLoomCommandsConfig(config);
   return config;
@@ -1167,11 +1184,8 @@ const commandsConfigOf = (
  * space is checked at mint time, where the space is known.
  */
 const parseInputCells = (
-  raw: string | readonly string[] | undefined,
+  values: readonly string[],
 ): readonly HarnessInputCellSpec[] => {
-  const values = raw === undefined
-    ? []
-    : (typeof raw === "string" ? [raw] : raw);
   const specs: HarnessInputCellSpec[] = [];
   const names = new Set<string>();
   for (const value of values) {
@@ -1250,19 +1264,11 @@ const parseBrowserAccessLease = (
 };
 
 /** The distinct non-empty values of a repeatable option. */
-const parseRepeatedValues = (
-  input: string | readonly string[] | undefined,
-): readonly string[] => {
-  if (input === undefined) {
-    return [];
-  }
-  const values = Array.isArray(input) ? input : [input];
-  return [
-    ...new Set(
-      values.map((value) => value.trim()).filter((value) => value.length > 0),
-    ),
-  ];
-};
+const parseRepeatedValues = (values: readonly string[]): readonly string[] => [
+  ...new Set(
+    values.map((value) => value.trim()).filter((value) => value.length > 0),
+  ),
+];
 
 interface CfHarnessAllowedHostRoot {
   hostPath: string;
@@ -1346,26 +1352,6 @@ const resolvePathWithinAllowedHostRoots = (
   };
 };
 
-const assertSkillsRootRealPathWithinAllowedHostRoots = async (
-  roots: readonly CfHarnessAllowedHostRoot[],
-  skillsRoot: string,
-): Promise<void> => {
-  let skillsRootRealPath: string;
-  try {
-    skillsRootRealPath = await Deno.realPath(skillsRoot);
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) {
-      throw new Error(`--skills-root must exist: ${skillsRoot}`);
-    }
-    throw error;
-  }
-  if (findAllowedHostRoot(roots, skillsRootRealPath) === undefined) {
-    throw new Error(
-      "--skills-root must stay within the workspace or a host mount",
-    );
-  }
-};
-
 const resolvePrompt = async (
   args: ReturnType<typeof parseArgs>,
   cwd: string,
@@ -1378,12 +1364,6 @@ const resolvePrompt = async (
   const resumeRun = typeof args["resume-run"] === "string"
     ? resolve(cwd, args["resume-run"])
     : undefined;
-  const continueRun = typeof args["continue-run"] === "string"
-    ? resolve(cwd, args["continue-run"])
-    : undefined;
-  if (continueRun !== undefined && resumeRun !== undefined) {
-    throw new Error("--continue-run cannot be combined with --resume-run");
-  }
   const positionalPrompt = args._.length > 0
     ? args._.map(String).join(" ").trim()
     : undefined;
@@ -1494,6 +1474,7 @@ type CliSandboxSelectionDependencies = Pick<
   | "sandboxHomeDir"
   | "platform"
   | "arch"
+  | "processPlatform"
   | "uid"
   | "readSysctl"
   | "which"
@@ -1513,7 +1494,12 @@ const cliSandboxRuntimeSelection = (
 ): Promise<SandboxRuntimeSelection> =>
   resolveSandboxRuntimeSelection(env, explicit, {
     ...(deps.sandboxRuntimeNamedBy !== undefined
-      ? { namedBy: deps.sandboxRuntimeNamedBy }
+      ? {
+        namedBy: deps.sandboxRuntimeNamedBy,
+        ...(deps.processPlatform !== undefined
+          ? { processPlatform: deps.processPlatform }
+          : {}),
+      }
       : { platform: deps.platform ?? Deno.build.os }),
     ...sandboxProcessOf(deps),
     flags: deps.sandboxSelectionFlags ?? true,
@@ -1630,6 +1616,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxRuntimeNamedBy"
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
+    | "reportProgress"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1663,7 +1650,7 @@ export const parseCfHarnessCliArgs = async (
     typeof args.workspace === "string" ? args.workspace : cwd,
   );
   const hostMounts = await parseHostMountSpecs(
-    args["host-mount"] as string | readonly string[] | undefined,
+    args["host-mount"],
     cwd,
   );
   const allowedHostRoots = createAllowedHostRoots(workspace, hostMounts);
@@ -1710,7 +1697,7 @@ export const parseCfHarnessCliArgs = async (
   // configuration, so a console started with no documentation flag is not
   // documentation-blind.
   const configuredDocsCorpusRoots = parseRepeatedValues(
-    args["docs-corpus-root"] as string | readonly string[] | undefined,
+    args["docs-corpus-root"],
   ).map((root) => resolve(workspace, root));
   // `--no-docs-corpus` wins over a named root: an operator who asked for no
   // corpus and also named one has said two things, and the safe reading of the
@@ -1730,13 +1717,13 @@ export const parseCfHarnessCliArgs = async (
         roots: configuredDocsCorpusRoots,
       };
   const skillNames = parseRepeatedValues(
-    args.skill as string | readonly string[] | undefined,
+    args.skill,
   );
   if (skillNames.length > 0 && skillsRoot === undefined) {
     throw new Error("--skill requires --skills-root");
   }
   const allowedSkillScripts = parseAllowedSkillScripts(
-    args["allow-skill-script"] as string | readonly string[] | undefined,
+    args["allow-skill-script"],
   );
   // A REGISTRY skill's script is addressed by the sandbox path only a named
   // tree has, so an entry keyed on a registry name asks for the flag rather
@@ -1761,20 +1748,15 @@ export const parseCfHarnessCliArgs = async (
       : undefined,
   );
   const allowedToolIds = parseBuiltinToolIds(
-    args["allow-tool"] as string | readonly string[] | undefined,
+    args["allow-tool"],
   );
   const allowedSubagentProfiles = resolveAllowedSubagentProfiles(
     allowedToolIds,
-    parseSubagentProfiles(
-      args["allow-subagent-profile"] as
-        | string
-        | readonly string[]
-        | undefined,
-    ),
+    parseSubagentProfiles(args["allow-subagent-profile"]),
   );
   const browserAccess = parseBrowserAccessLease(args);
   const handleValueOrigins = parseHandleValueOrigins(
-    args["handle-value-origin"] as string | readonly string[] | undefined,
+    args["handle-value-origin"],
   );
   const outputMode = parseCliOutputMode(
     typeof args["output-mode"] === "string" ? args["output-mode"] : undefined,
@@ -1815,18 +1797,21 @@ export const parseCfHarnessCliArgs = async (
     );
   }
   const imagePaths = parseImageAttachmentPaths(
-    args.image as string | readonly string[] | undefined,
+    args.image,
   );
   if (resumeRun !== undefined && imagePaths.length > 0) {
     throw new Error(
       "--image is not supported with --resume-run",
     );
   }
+  // The path was resolved through its real parents and held to the allowed
+  // roots above; what is left to ask is whether it is there at all.
   if (configuredSkillsRoot !== undefined) {
-    await assertSkillsRootRealPathWithinAllowedHostRoots(
-      allowedHostRoots,
-      configuredSkillsRoot,
-    );
+    await Deno.stat(configuredSkillsRoot).catch((error) => {
+      throw error instanceof Deno.errors.NotFound
+        ? new Error(`--skills-root must exist: ${configuredSkillsRoot}`)
+        : error;
+    });
   }
   const artifactRoot = resolve(
     typeof args["artifact-root"] === "string"
@@ -1991,10 +1976,10 @@ export const parseCfHarnessCliArgs = async (
     args["commands-url"],
     args["commands-actor"],
     args["commands-run-id"],
-    args["commands-relevant"] as string | readonly string[] | undefined,
+    args["commands-relevant"],
   );
   const inputCells = parseInputCells(
-    args["input-cell"] as string | readonly string[] | undefined,
+    args["input-cell"],
   );
   // A resumed run replays the input cells its run state recorded; a new
   // one on resume would be silently ignored, so it is refused like --skill
@@ -2035,18 +2020,7 @@ export const parseCfHarnessCliArgs = async (
   // One derivation shared with the interactive entrypoints; flags win over
   // the environment, and a default policy is looked up through
   // `deps.pathExists`.
-  const {
-    sandboxRuntimeKind,
-    sandboxRootfs,
-    sandboxCfcPolicy,
-    sandboxRunscBinary,
-    sandboxRunscNetworkMode,
-    sandboxRunscRootless,
-    sandboxRunscNetworkHelper,
-    sandboxRunscUnshare,
-    sandboxRunscSetpriv,
-    sandboxRuntimeChoice,
-  } = await cliSandboxRuntimeSelection(
+  const selection = await cliSandboxRuntimeSelection(
     env,
     {
       ...(typeof args["sandbox-runtime"] === "string"
@@ -2119,6 +2093,14 @@ export const parseCfHarnessCliArgs = async (
     throw new Error("--pattern-index-url requires a non-empty value");
   }
   let patternIndex: HarnessPatternIndexConfig | undefined;
+  if (
+    args["pattern-index-origin"] !== undefined &&
+    (rawPatternIndexUrl === undefined || rawPatternIndexUrl === "")
+  ) {
+    throw new Error(
+      "--pattern-index-origin needs --pattern-index-url: an origin says who a published pattern is for",
+    );
+  }
   if (rawPatternIndexUrl !== undefined) {
     try {
       new URL(rawPatternIndexUrl);
@@ -2142,10 +2124,17 @@ export const parseCfHarnessCliArgs = async (
     const publishDiscoverable = nonEmptyEnvValue(
       env.CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE,
     ) === "1";
+    const origin = args["pattern-index-origin"];
+    if (origin !== undefined && origin !== "agent") {
+      throw new Error(
+        `--pattern-index-origin must be "agent": ${String(origin)}`,
+      );
+    }
     patternIndex = {
       baseUrl: rawPatternIndexUrl,
       ...(publish ? {} : { publish: false }),
       ...(publishDiscoverable ? { publishDiscoverable: true } : {}),
+      ...(origin === "agent" ? { origin } : {}),
     };
   }
   const rawSkillsRegistryUrl = typeof args["skills-registry-url"] === "string"
@@ -2190,6 +2179,14 @@ export const parseCfHarnessCliArgs = async (
   if (indexTool !== undefined && patternIndex === undefined) {
     throw new Error(
       `--allow-tool ${indexTool} requires a pattern index; missing --pattern-index-url`,
+    );
+  }
+  if (
+    allowedToolIds?.includes("report_progress") === true &&
+    deps.reportProgress === undefined
+  ) {
+    throw new Error(
+      "--allow-tool report_progress requires a host progress publisher",
     );
   }
   if (
@@ -2305,20 +2302,8 @@ export const parseCfHarnessCliArgs = async (
     printTranscript: Boolean(args["print-transcript"]),
     ...(apiKey !== undefined ? { apiKey } : {}),
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
-    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
-    ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
-    ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
-    ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),
-    ...(sandboxRunscNetworkMode !== undefined
-      ? { sandboxRunscNetworkMode }
-      : {}),
-    ...(sandboxRunscRootless === true ? { sandboxRunscRootless } : {}),
-    ...(sandboxRunscNetworkHelper !== undefined
-      ? { sandboxRunscNetworkHelper }
-      : {}),
-    ...(sandboxRunscUnshare !== undefined ? { sandboxRunscUnshare } : {}),
-    ...(sandboxRunscSetpriv !== undefined ? { sandboxRunscSetpriv } : {}),
-    sandboxRuntimeChoice,
+    // The selection leaves out what it does not set.
+    ...selection,
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
@@ -2533,7 +2518,6 @@ export const formatCfHarnessCliUsage = (): string => usage;
 const toWorkspaceSandboxPath = (
   workspaceHostPath: string,
   hostPath?: string,
-  options: { strict?: boolean; errorPrefix?: string } = {},
 ): string => {
   if (hostPath === undefined) {
     return "/workspace";
@@ -2544,11 +2528,6 @@ const toWorkspaceSandboxPath = (
     relativePath.startsWith("../") ||
     relativePath.startsWith("..\\")
   ) {
-    if (options.strict) {
-      throw new Error(
-        `${options.errorPrefix ?? "path"} must stay within the workspace`,
-      );
-    }
     return "/workspace";
   }
   return relativePath.length > 0 ? `/workspace/${relativePath}` : "/workspace";
@@ -2674,11 +2653,14 @@ const appendStructuredResultInstructions = (
     lines.push(
       "- Finish by calling submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct; an accepted result ends the run, so make it your last call. Where the result refers to something you hold a handle for, write the handle token, not an address.",
     );
+  } else {
+    lines.push(
+      `- Write a JSON file at ${structuredResult.sandboxPath} when an available tool can write it; the run then still ends on your final response.`,
+      "- The harness validates that file against the configured structured-result schema after the run.",
+      "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
+    );
   }
   lines.push(
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it; the run then still ends on your final response.`,
-    "- The harness validates that file against the configured structured-result schema after the run.",
-    "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
     "",
     "Result schema (JSON):",
@@ -2749,12 +2731,15 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 
@@ -2795,12 +2780,15 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
+  // The caller's instructions come before the result contract: a caller's
+  // standing instructions are commonly the same in every run while its result
+  // schema is per call, and the provider caches only the prefix runs share.
+  appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
     config.structuredResult,
     config.allowedToolIds,
   );
-  appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 
@@ -2905,9 +2893,7 @@ export const validateCfHarnessStructuredResult = async (
       status: "invalid",
       schema_digest: schemaDigest,
       result_path: options.config.path,
-      validation_error: error instanceof Error
-        ? error.message
-        : "structured result file was not valid JSON",
+      validation_error: describeFailure(error),
     };
   }
   try {
@@ -2922,7 +2908,7 @@ export const validateCfHarnessStructuredResult = async (
       schema_digest: schemaDigest,
       result_path: options.config.path,
       validation_error: `structured result did not match the schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     };
   }
@@ -2992,161 +2978,87 @@ const summarizeToolResult = (content: string): string => {
     : singleLine;
 };
 
+/**
+ * How a transcript line shows an argument: a string quoted, a number as
+ * written, an array whole, or an array as its length.
+ */
+type ToolCallArgumentShape = "string" | "number" | "array" | "count";
+
+/**
+ * The arguments a transcript line shows for each tool, in order. The rest of
+ * a call's arguments stay in the transcript. `record_feedback`'s note is the
+ * model's prose about a run and can quote what the pattern produced, so the
+ * line names the verdict and the pattern and leaves the note out.
+ */
+const TOOL_CALL_SUMMARY_ARGUMENTS: ReadonlyMap<
+  string,
+  readonly (readonly [name: string, shape: ToolCallArgumentShape])[]
+> = new Map([
+  ["bash", [["command", "string"]]],
+  ["browser", [["action", "string"], ["ref", "string"], ["url", "string"]]],
+  ["read_file", [["path", "string"]]],
+  ["web_fetch", [["url", "string"]]],
+  ["edit_file", [["path", "string"], ["edits", "count"]]],
+  ["read_skill_resource", [["skill", "string"], ["path", "string"]]],
+  ["run_skill_script", [["skill", "string"], ["path", "string"], [
+    "args",
+    "count",
+  ]]],
+  ["write_file", [["path", "string"], ["mode", "string"]]],
+  ["search_patterns", [["tags", "array"], ["text", "string"]]],
+  ["search_skills", [["query", "string"], ["owner", "string"], [
+    "limit",
+    "number",
+  ]]],
+  ["acquire_skill", [["id", "string"]]],
+  ["research", [["task", "string"]]],
+  ["query_docs", [["question", "string"]]],
+  ["record_feedback", [["patternId", "string"], ["verdict", "string"]]],
+  ["run_pattern", [["patternId", "string"]]],
+  ["describe_handle", [["token", "string"]]],
+]);
+
+const summarizeToolCallArgument = (
+  name: string,
+  shape: ToolCallArgumentShape,
+  value: unknown,
+): string | undefined => {
+  switch (shape) {
+    case "string":
+      return typeof value === "string"
+        ? `${name}=${JSON.stringify(value)}`
+        : undefined;
+    case "number":
+      return typeof value === "number" ? `${name}=${value}` : undefined;
+    case "array":
+      return Array.isArray(value)
+        ? `${name}=${JSON.stringify(value)}`
+        : undefined;
+    case "count":
+      return Array.isArray(value) ? `${name}=${value.length}` : undefined;
+  }
+};
+
 const summarizeToolCallArguments = (
   toolName: string,
   rawArguments: string,
 ): string | undefined => {
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(rawArguments) as Record<string, unknown>;
-    switch (toolName) {
-      case "bash":
-        return typeof parsed.command === "string"
-          ? `command=${JSON.stringify(parsed.command)}`
-          : undefined;
-      case "browser": {
-        const action = typeof parsed.action === "string"
-          ? `action=${JSON.stringify(parsed.action)}`
-          : undefined;
-        const ref = typeof parsed.ref === "string"
-          ? `ref=${JSON.stringify(parsed.ref)}`
-          : undefined;
-        const url = typeof parsed.url === "string"
-          ? `url=${JSON.stringify(parsed.url)}`
-          : undefined;
-        const joined = [action, ref, url].filter((value): value is string =>
-          value !== undefined
-        ).join(" ");
-        return joined === "" ? undefined : joined;
-      }
-      case "read_file":
-        return typeof parsed.path === "string"
-          ? `path=${JSON.stringify(parsed.path)}`
-          : undefined;
-      case "web_fetch":
-        return typeof parsed.url === "string"
-          ? `url=${JSON.stringify(parsed.url)}`
-          : undefined;
-      case "edit_file": {
-        const path = typeof parsed.path === "string"
-          ? `path=${JSON.stringify(parsed.path)}`
-          : undefined;
-        const editCount = Array.isArray(parsed.edits)
-          ? `edits=${parsed.edits.length}`
-          : undefined;
-        return [path, editCount].filter((value): value is string =>
-          value !== undefined
-        )
-          .join(" ");
-      }
-      case "read_skill_resource": {
-        const skill = typeof parsed.skill === "string"
-          ? `skill=${JSON.stringify(parsed.skill)}`
-          : undefined;
-        const path = typeof parsed.path === "string"
-          ? `path=${JSON.stringify(parsed.path)}`
-          : undefined;
-        return [skill, path].filter((value): value is string =>
-          value !== undefined
-        )
-          .join(" ");
-      }
-      case "run_skill_script": {
-        const skill = typeof parsed.skill === "string"
-          ? `skill=${JSON.stringify(parsed.skill)}`
-          : undefined;
-        const path = typeof parsed.path === "string"
-          ? `path=${JSON.stringify(parsed.path)}`
-          : undefined;
-        const args = Array.isArray(parsed.args)
-          ? `args=${parsed.args.length}`
-          : undefined;
-        return [skill, path, args].filter((value): value is string =>
-          value !== undefined
-        )
-          .join(" ");
-      }
-      case "write_file": {
-        const path = typeof parsed.path === "string"
-          ? `path=${JSON.stringify(parsed.path)}`
-          : undefined;
-        const mode = typeof parsed.mode === "string"
-          ? `mode=${JSON.stringify(parsed.mode)}`
-          : undefined;
-        return [path, mode].filter((value): value is string =>
-          value !== undefined
-        )
-          .join(" ");
-      }
-      case "search_patterns": {
-        const tags = Array.isArray(parsed.tags)
-          ? `tags=${JSON.stringify(parsed.tags)}`
-          : undefined;
-        const text = typeof parsed.text === "string"
-          ? `text=${JSON.stringify(parsed.text)}`
-          : undefined;
-        const joined = [tags, text].filter((value): value is string =>
-          value !== undefined
-        ).join(" ");
-        return joined === "" ? undefined : joined;
-      }
-      case "search_skills": {
-        const query = typeof parsed.query === "string"
-          ? `query=${JSON.stringify(parsed.query)}`
-          : undefined;
-        const owner = typeof parsed.owner === "string"
-          ? `owner=${JSON.stringify(parsed.owner)}`
-          : undefined;
-        const limit = typeof parsed.limit === "number"
-          ? `limit=${parsed.limit}`
-          : undefined;
-        const joined = [query, owner, limit].filter((value): value is string =>
-          value !== undefined
-        ).join(" ");
-        return joined === "" ? undefined : joined;
-      }
-      case "acquire_skill":
-        return typeof parsed.id === "string"
-          ? `id=${JSON.stringify(parsed.id)}`
-          : undefined;
-      case "research":
-        return typeof parsed.task === "string"
-          ? `task=${JSON.stringify(parsed.task)}`
-          : undefined;
-      case "query_docs":
-        return typeof parsed.question === "string"
-          ? `question=${JSON.stringify(parsed.question)}`
-          : undefined;
-      case "record_feedback": {
-        // The note is the model's prose about a run and can quote what the
-        // pattern produced, so the line names the verdict and the pattern
-        // and leaves the note to the transcript.
-        const patternId = typeof parsed.patternId === "string"
-          ? `patternId=${JSON.stringify(parsed.patternId)}`
-          : undefined;
-        const verdict = typeof parsed.verdict === "string"
-          ? `verdict=${JSON.stringify(parsed.verdict)}`
-          : undefined;
-        const joined = [patternId, verdict].filter((value): value is string =>
-          value !== undefined
-        ).join(" ");
-        return joined === "" ? undefined : joined;
-      }
-      case "run_pattern":
-        return typeof parsed.patternId === "string"
-          ? `patternId=${JSON.stringify(parsed.patternId)}`
-          : undefined;
-      case "delegate_task":
-        return "subagent";
-      case "describe_handle":
-        return typeof parsed.token === "string"
-          ? `token=${JSON.stringify(parsed.token)}`
-          : undefined;
-      default:
-        return undefined;
-    }
+    parsed = JSON.parse(rawArguments);
   } catch {
     return undefined;
   }
+  if (toolName === "delegate_task") return "subagent";
+  const shown = TOOL_CALL_SUMMARY_ARGUMENTS.get(toolName);
+  if (shown === undefined || !isObjectNotArray(parsed)) return undefined;
+  const summary = shown
+    .map(([name, shape]) =>
+      summarizeToolCallArgument(name, shape, parsed[name])
+    )
+    .filter((value): value is string => value !== undefined)
+    .join(" ");
+  return summary === "" ? undefined : summary;
 };
 
 export const formatCfHarnessTranscriptEvent = (
@@ -3365,20 +3277,26 @@ export const cfHarnessCliInformationalControl = (
   return undefined;
 };
 
-const defaultOpenUrl = async (url: string): Promise<void> => {
-  const command = Deno.build.os === "darwin"
+/** The program, and its arguments, that opens `url` on `os`. */
+export const cfHarnessOpenUrlCommand = (
+  os: typeof Deno.build.os,
+  url: string,
+): { command: string; args: string[] } =>
+  os === "darwin"
     ? { command: "open", args: [url] }
-    : Deno.build.os === "windows"
+    : os === "windows"
     ? { command: "cmd", args: ["/c", "start", "", url] }
     : { command: "xdg-open", args: [url] };
+
+const defaultOpenUrl = async (url: string): Promise<void> => {
+  const command = cfHarnessOpenUrlCommand(Deno.build.os, url);
   try {
-    const status = await new Deno.Command(command.command, {
+    await new Deno.Command(command.command, {
       args: command.args,
       stdin: "null",
       stdout: "null",
       stderr: "null",
     }).output();
-    if (!status.success) return;
   } catch {
     // Printing the URL is the reliable fallback.
   }
@@ -3669,14 +3587,17 @@ const runCfHarnessAuthCommand = async (
   const signal = deps.controlSignal ?? loginController.signal;
   const cleanupSignal = deps.controlSignal !== undefined
     ? () => {}
-    : (deps.registerSignalHandler ?? defaultRegisterSignalHandler)(
+    : (deps.registerSignalHandler ?? registerCfHarnessSignalHandler)(
       ["SIGINT", "SIGTERM"],
       () =>
         loginController.abort(new DOMException("login canceled", "AbortError")),
     );
   try {
     if (normalized.includes("--device")) {
-      const device = await startOpenAICodexDeviceAuthorization({ signal });
+      const device = await startOpenAICodexDeviceAuthorization({
+        fetchFn: deps.fetchFn,
+        signal,
+      });
       if (json) {
         writeJsonControlEvent(io, command, "authorization-required", {
           method: "device",
@@ -3690,6 +3611,7 @@ const runCfHarnessAuthCommand = async (
       }
       const credential = await completeOpenAICodexDeviceAuthorization({
         device,
+        fetchFn: deps.fetchFn,
         signal,
       });
       await auth.save(credential, signal);
@@ -3768,12 +3690,7 @@ export const runCfHarnessCli = async (
     if (modelsResult !== undefined) return modelsResult;
     const whoamiResult = runCfHarnessWhoamiCommand(argv, deps, io);
     if (whoamiResult !== undefined) return whoamiResult;
-    const informationalControl = cfHarnessCliInformationalControl(argv);
-    if (informationalControl === "help") {
-      io.stdout(formatCfHarnessCliUsage());
-      return 0;
-    }
-    if (informationalControl === "describe-capabilities") {
+    if (cfHarnessCliInformationalControl(argv) === "describe-capabilities") {
       io.stdout(
         `${JSON.stringify(createCfHarnessCliCapabilities(), null, 2)}\n`,
       );
@@ -3809,7 +3726,7 @@ export const runCfHarnessCli = async (
       } catch (error) {
         throw new HarnessControlError(
           "provider-mismatch",
-          error instanceof Error ? error.message : String(error),
+          describeFailure(error),
         );
       }
     }
@@ -4051,6 +3968,7 @@ export const runCfHarnessCli = async (
               },
             }
             : {}),
+          reportProgress: deps.reportProgress,
           ...(deps.fabricSessionFactory !== undefined
             ? { fabricSessionFactory: deps.fabricSessionFactory }
             : {}),
@@ -4108,7 +4026,9 @@ export const runCfHarnessCli = async (
               engine: continuedEngine,
               config: parsed,
               onGrantsUnavailable: (error) =>
-                io.stderr(`fabric grants: unavailable (${String(error)})\n`),
+                io.stderr(
+                  `fabric grants: unavailable (${describeFailure(error)})\n`,
+                ),
             });
             return { messages, runState: continuedEngine.getRunState() };
           },
@@ -4244,6 +4164,7 @@ export const runCfHarnessCli = async (
       });
       const engine = new CfHarnessEngine({
         ...sessionOptions,
+        reportProgress: deps.reportProgress,
         modelProvider,
         credentialOwnerKey,
         ...(modelProvider === "openai-compatible-gateway"
@@ -4298,9 +4219,7 @@ export const runCfHarnessCli = async (
         config: parsed,
         onGrantsUnavailable: (error) =>
           io.stderr(
-            `fabric grants: unavailable (${
-              error instanceof Error ? error.message : String(error)
-            })\n`,
+            `fabric grants: unavailable (${describeFailure(error)})\n`,
           ),
       });
       // The classification decides how much orientation the run starts
@@ -4396,7 +4315,7 @@ export const runCfHarnessCli = async (
     io.stderr(
       deps.structuredHostFailures
         ? `${JSON.stringify(createCfHarnessHostFailure(hostError))}\n`
-        : `${error instanceof Error ? error.message : String(error)}\n`,
+        : `${describeFailure(error)}\n`,
     );
     return 1;
   } finally {

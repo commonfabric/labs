@@ -1,11 +1,11 @@
-import {
-  type CellKind,
-  type FactoryInput,
-  type JSONSchema,
-  type JSONValue,
-  type Reactive,
-  type SchemaWithoutCell,
-  type Stream,
+import type {
+  CellKind,
+  FactoryInput,
+  JSONSchema,
+  JSONValue,
+  Reactive,
+  SchemaWithoutCell,
+  Stream,
 } from "./types.ts";
 import { getTopFrame } from "./pattern.ts";
 import { encodableFormOf } from "../encodable-form.ts";

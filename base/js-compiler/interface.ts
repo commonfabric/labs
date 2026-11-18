@@ -1,4 +1,4 @@
-import { type RawSourceMap } from "source-map-js";
+import type { RawSourceMap } from "source-map-js";
 
 export type Source = {
   name: string;

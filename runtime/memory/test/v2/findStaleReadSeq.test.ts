@@ -85,8 +85,12 @@ describe("findStaleReadSeq()", () => {
     engine = await open({ url: toFileUrl(path) });
     localSeq = 0;
     count = 0;
-    const lease = new ExecutionLeaseCycle({ engine, space, holder });
-    if (!lease.acquire()) throw new Error("test lease acquire failed");
+    const lease = new ExecutionLeaseCycle({
+      leases: engine.executionLeases,
+      space,
+      holder,
+    });
+    if (!await lease.acquire()) throw new Error("test lease acquire failed");
   });
 
   afterEach(async () => {

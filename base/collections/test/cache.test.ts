@@ -112,6 +112,80 @@ describe("LRUCache", () => {
       expect(cache.has("a")).toBe(false);
       expect(cache.get("b")).toBe(2);
     });
+
+    it("reports the entries it drops for capacity or weight, and only those, through `onEvict`", () => {
+      const evicted: [string, number][] = [];
+      const cache = new LRUCache<string, number>({
+        capacity: 2,
+        weigh: (_, value) => value,
+        maxWeight: 10,
+        onEvict: (key, value) => evicted.push([key, value]),
+      });
+      cache.put("a", 1);
+      cache.put("b", 2);
+      cache.put("c", 3);
+      expect(evicted).toEqual([["a", 1]]);
+
+      cache.put("d", 8);
+      expect(evicted).toEqual([["a", 1], ["b", 2], ["c", 3]]);
+
+      cache.put("d", 9);
+      cache.put("e", 1);
+      cache.delete("e");
+      cache.clear();
+      expect(evicted).toEqual([["a", 1], ["b", 2], ["c", 3]]);
+    });
+
+    it("evicts in order from what a partial weight eviction left behind", () => {
+      const evicted: string[] = [];
+      const cache = new LRUCache<string, number>({
+        capacity: 3,
+        weigh: (_, value) => value,
+        maxWeight: 10,
+        onEvict: (key) => evicted.push(key),
+      });
+      cache.put("a", 4);
+      cache.put("b", 4);
+      cache.put("c", 1);
+      cache.put("d", 6);
+      expect(evicted).toEqual(["a", "b"]);
+      expect(["a", "b", "c", "d"].map((key) => cache.has(key))).toEqual([
+        false,
+        false,
+        true,
+        true,
+      ]);
+
+      expect(cache.get("c")).toBe(1);
+      cache.put("e", 5);
+      expect(evicted).toEqual(["a", "b", "d"]);
+      expect(cache.size).toBe(2);
+      expect(cache.weight).toBe(6);
+
+      cache.put("f", 5);
+      expect(evicted).toEqual(["a", "b", "d", "c"]);
+      expect(cache.size).toBe(2);
+      expect(cache.weight).toBe(10);
+    });
+
+    it("stays within its capacity when `onEvict` puts into the cache", () => {
+      const sizes: number[] = [];
+      const cache: LRUCache<string, number> = new LRUCache({
+        capacity: 2,
+        onEvict: (key) => {
+          sizes.push(cache.size);
+          if (!key.startsWith("again-")) cache.put(`again-${key}`, 0);
+        },
+      });
+      cache.put("a", 1);
+      cache.put("b", 2);
+      cache.put("c", 3);
+      cache.put("d", 4);
+
+      expect(cache.size).toBe(2);
+      expect(sizes.every((size) => size <= 2)).toBe(true);
+      expect(sizes.length).toBeGreaterThan(0);
+    });
   });
 
   describe("edge cases", () => {

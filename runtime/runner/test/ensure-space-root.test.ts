@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   createSpaceRootIfAbsent,
@@ -44,6 +45,15 @@ function rootSource(marker: string): string {
     "",
   ].join("\n");
 }
+
+/**
+ * How often the ensure has logged that it did not consult a configured
+ * `defaultAppUrl`.
+ */
+const notConsultedLogs = () =>
+  getLogger("runner.space-root-ensure").countsByKey[
+    "custom-default-app-url-not-consulted"
+  ]?.info ?? 0;
 
 describe("space-root ensure core", () => {
   /** The served patterns route, in-process: pathname → TSX. Mutable so a
@@ -180,10 +190,12 @@ describe("space-root ensure core", () => {
 
   it("ensure creates a fresh root, then resolves it on the next run", async () => {
     createRuntime();
+    const before = notConsultedLogs();
     const first = await ensureSpaceRootPattern(runtime, space, {
       isHomeSpace: true,
     });
     expect(first.outcome).toBe("created");
+    expect(notConsultedLogs()).toBe(before);
     await runtime.idle();
 
     const second = await ensureSpaceRootPattern(runtime, space, {
@@ -260,10 +272,12 @@ describe("space-root ensure core", () => {
 
   it("non-home ensure uses the system default-app source (the unruled custom-URL fork's interim)", async () => {
     createRuntime();
+    const before = notConsultedLogs();
     const result = await ensureSpaceRootPattern(runtime, space, {
       isHomeSpace: false,
     });
     expect(result.outcome).toBe("created");
+    expect(notConsultedLogs()).toBe(before + 1);
     await runtime.idle();
     const root = await resolveSpaceRootPattern(runtime, space);
     expect(getPatternSource(root!)).toBe(DEFAULT_APP_PATTERN_SOURCE);

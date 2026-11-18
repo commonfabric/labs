@@ -5,11 +5,11 @@
  * connection when asked.
  */
 
-import {
-  type GitHubDelivery,
-  GitHubWebhooks,
-  type RelayConnection,
-} from "../github-webhooks.ts";
+import type {
+  GitHubDelivery,
+  RelayConnection,
+} from "@commonfabric/github-webhooks/relay";
+import { GitHubWebhooks } from "../github-webhooks.ts";
 import type { GitHubRun } from "../github-runs.ts";
 
 const ENCODER = new TextEncoder();

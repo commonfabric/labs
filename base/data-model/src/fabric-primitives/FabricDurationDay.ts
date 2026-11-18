@@ -29,7 +29,7 @@ import {
 /**
  * Temporal type representing a span of time, as a count of days. Wraps a
  * `bigint` value. The companion to `FabricEpochDay`: the difference between two
- * days is one of these. See Section 1.4.14 of the formal spec.
+ * days is one of these. See Section 1.4.14 of `1-fabric-values.md`.
  */
 export class FabricDurationDay extends BaseFabricPrimitive
   implements ApiFabricDurationDay {

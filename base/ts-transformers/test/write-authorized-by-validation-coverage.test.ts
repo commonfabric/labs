@@ -1,4 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { validateFiles, validateSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -719,3 +721,32 @@ Deno.test(
     );
   },
 );
+
+describe("write-authorized-by-validation", () => {
+  it("walks a carrier tag whose payload is not a bare type parameter", async () => {
+    // The tag's payload wraps the carrier's type parameter, so the tag holds a
+    // payload the intersection beside it does not, and the tag is walked
+    // whole: the writer is reached through the tag as well as beside it.
+
+    const diagnostics = await cfcDiagnostics(`/// <cts-enable />
+      import { toSchema, type WriteAuthorizedBy } from "commonfabric";
+
+      type CfcTag<T, M> = {
+        readonly __ct_cfc__?: { readonly meta?: M; readonly of?: T };
+      };
+      type Cfc<T, M> = T & CfcTag<{ value: T }, M>;
+
+      const arbitrary = 123;
+
+      const schema = toSchema<
+        Cfc<WriteAuthorizedBy<string, typeof arbitrary>, {}>
+      >();
+
+      export { schema };
+    `);
+    expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
+      "cfc-write-authorized-by",
+      "cfc-write-authorized-by",
+    ]);
+  });
+});

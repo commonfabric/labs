@@ -6,6 +6,7 @@ import { createRef, Ref, ref } from "lit/directives/ref.js";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { type FabricBridge, FabricBridgeHost } from "./bridge.ts";
+import { guestDocument } from "./guest-document.ts";
 import { GuestSessions } from "./guest-sessions.ts";
 import * as IPC from "./ipc.ts";
 import OuterFrame from "./outer-frame.ts";
@@ -16,6 +17,7 @@ type CommonIframeLoadState = "" | "loading" | "loaded";
 // @summary A sandboxed iframe to execute arbitrary scripts.
 // @tag common-iframe-sandbox
 // @prop {string} src - String representation of HTML content to load within an iframe.
+// @prop {string} script - Module source the guest document runs once parsed.
 // @prop bridge - Explicit resources made available to the guest.
 // @event {CustomEvent} common-iframe-error - An error from the iframe.
 // @event {CustomEvent} load - The iframe was successfully loaded.
@@ -29,6 +31,22 @@ export class CommonIframeSandboxElement extends LitElement {
     const previousValue = this.#src;
     this.#src = value;
     this.requestUpdate("src", previousValue);
+  }
+
+  /**
+   * Module source the guest runs once its document is parsed, kept apart from
+   * `src` so a bundled guest need not be escaped into its document by hand.
+   * It is inlined as the document's last script; see `guestDocument()`.
+   */
+  get script(): string {
+    return this.#script;
+  }
+
+  @property({ attribute: false })
+  set script(value: string) {
+    const previousValue = this.#script;
+    this.#script = value;
+    this.requestUpdate("script", previousValue);
   }
 
   get bridge(): FabricBridge | undefined {
@@ -117,6 +135,7 @@ export class CommonIframeSandboxElement extends LitElement {
   `;
 
   #src = "";
+  #script = "";
   #presentation: IframePresentation | null = null;
   #bridge: FabricBridge | undefined;
 
@@ -322,18 +341,18 @@ export class CommonIframeSandboxElement extends LitElement {
   }
 
   /**
-   * Asks the outer frame to load `src`, letting go of the guest being replaced
-   * before asking rather than once the replacement arrives. What that guest
-   * sends over the interval between the two reaches a closed port, which is
-   * the whole of what this end can promise about a document still running in a
-   * frame it has asked to be rid of.
+   * Asks the outer frame to load `src`, with `script`, letting go of the
+   * guest being replaced before asking rather than once the replacement
+   * arrives. What that guest sends over the interval between the two reaches
+   * a closed port, which is the whole of what this end can promise about a
+   * document still running in a frame it has asked to be rid of.
    */
   #loadInnerDoc() {
     this.loadState = "loading";
     this.#releaseGuest();
     this.#toOuterFrame({
       type: IPC.IPCHostMessageType.LoadDocument,
-      data: this.src,
+      data: guestDocument(this.src, this.script),
       presentation: this.presentation,
     });
   }
@@ -362,12 +381,13 @@ export class CommonIframeSandboxElement extends LitElement {
   }
 
   /**
-   * Reloads on a change to `src` or `bridge`, once the frame is ready; until
-   * then `#onOuterReady` does the first load. Reacting here rather than in the
-   * setters folds a batch of changes into one load: assigning both properties
-   * asks for one document, carrying both new values, rather than reloading
-   * the old document under the new bridge on the way. Presentation updates
-   * travel separately and keep the current document and capability session.
+   * Reloads on a change to `src`, `script` or `bridge`, once the frame is
+   * ready; until then `#onOuterReady` does the first load. Reacting here
+   * rather than in the setters folds a batch of changes into one load:
+   * assigning several of them asks for one document, carrying every new
+   * value, rather than reloading the old document under the new bridge on
+   * the way. Presentation updates travel separately and keep the current
+   * document and capability session.
    */
   protected override updated(changed: PropertyValues) {
     super.updated(changed);
@@ -382,7 +402,10 @@ export class CommonIframeSandboxElement extends LitElement {
       return;
     }
     if (!this.#readyWindow) return;
-    if (changed.has("src") || (changed.has("bridge") && this.src)) {
+    if (
+      changed.has("src") ||
+      ((changed.has("script") || changed.has("bridge")) && this.src)
+    ) {
       this.#loadInnerDoc();
     } else if (changed.has("presentation")) {
       this.#toOuterFrame({

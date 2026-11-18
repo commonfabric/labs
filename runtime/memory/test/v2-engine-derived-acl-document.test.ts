@@ -11,10 +11,7 @@ import {
   read,
   serverSeq,
 } from "../v2/engine.ts";
-import {
-  acquireExecutionLease,
-  executionLeaseHolder,
-} from "../v2/execution-lease.ts";
+import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
   type ClientCommit,
   resetServerExecutionConfig,
@@ -56,7 +53,7 @@ describe("DerivedAclDocumentWriteError", () => {
       },
     });
     holder = executionLeaseHolder(`service:${SPACE}`);
-    expect(acquireExecutionLease(engine, { space: SPACE, holder })).toBe(true);
+    expect(engine.executionLeases.acquire(SPACE, holder)).toBe(true);
   });
 
   afterEach(() => {

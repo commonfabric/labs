@@ -10,8 +10,8 @@
  */
 
 import {
+  type Cell,
   computed,
-  type FabricBytes,
   handler,
   NAME,
   pattern,
@@ -21,7 +21,10 @@ import {
   type VNode,
   wish,
 } from "commonfabric";
-import { profileLook } from "../../../system/profile-look/profile-look.ts";
+import {
+  profileFace,
+  type ProfileFaceFields,
+} from "../../../system/profile-face/profile-face.ts";
 
 import BattleshipRoom from "./room.tsx";
 import {
@@ -43,6 +46,7 @@ import {
 } from "./schemas.tsx";
 
 export interface LobbyOutput {
+  [NAME]: string;
   [UI]: PerSession<VNode>;
   gameName: string;
   player1: PlayerData | null;
@@ -78,6 +82,16 @@ const startIfReady = (
 
 /** How a player is drawn: their picture, or else their avatar text. */
 type PlayerLook = Pick<PlayerData, "picture" | "avatar">;
+
+/** How the lobby shows a seat: its player's look and name, or "Open". A
+ * computed reads the seat's fields here, since reading a field through an
+ * empty seat's `null` is a read error. */
+const seatOf = (player: PlayerData | null) => ({
+  picture: player?.picture,
+  avatar: player?.avatar,
+  name: player?.name ?? "?",
+  label: player?.name ?? "Open",
+});
 
 const joinSlot = (
   slot: 1 | 2,
@@ -134,15 +148,16 @@ const joinAvailableSlot = (
   return true;
 };
 
-// Join with the viewer's resolved profile. `name`/`picture`/`avatar` arrive as
-// plain values (named `computed` values auto-unwrap as handler state). The
-// player is drawn with their picture, or else their avatar text.
+// Join with the viewer's resolved profile. `name` arrives as a plain value
+// (named `computed` values auto-unwrap as handler state), and `profile` as the
+// live profile cell. The player is drawn with their picture, or else their
+// avatar text, as their profile holds it for its owner.
 const joinGame = handler<
   void,
   {
     name: string;
-    picture?: FabricBytes;
-    avatar?: string;
+    // May be undefined until the viewer's `#profile` wish resolves.
+    profile: Cell<{ name?: string } & ProfileFaceFields> | undefined;
     myName: PlayerNameCell;
     myPlayerNumber: PlayerNumberCell;
     player1: PlayerCell;
@@ -154,8 +169,7 @@ const joinGame = handler<
   _event,
   {
     name,
-    picture,
-    avatar,
+    profile,
     myName,
     myPlayerNumber,
     player1,
@@ -165,11 +179,13 @@ const joinGame = handler<
   },
 ) => {
   const trimmed = trimmedName(name);
-  if (!trimmed) return; // No resolved profile name yet.
+  // Neither the name nor the profile, whose face the player is drawn with,
+  // has resolved yet.
+  if (!trimmed || profile === undefined) return;
 
   joinAvailableSlot(
     trimmed,
-    profileLook(picture, avatar),
+    profileFace(profile),
     myName,
     myPlayerNumber,
     player1,
@@ -244,7 +260,23 @@ const resetGame = handler<
   myPlayerNumber.set(null);
 });
 
-const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
+/** A lobby, given the viewer's profile rather than wishing for it. */
+export interface LobbyCoreInput extends LobbyState {
+  /** The viewer's profile, absent until it resolves. */
+  profile?: Cell<{ name?: string } & ProfileFaceFields>;
+
+  /** The name on the viewer's profile, absent until it resolves. */
+  profileName?: string;
+
+  /** What the viewer is shown to create or pick their profile. */
+  profileUI?: VNode;
+}
+
+/**
+ * The lobby, given the viewer's profile. `BattleshipLobby` resolves the real
+ * one; a test supplies a stand-in, which no pattern test can resolve.
+ */
+export const BattleshipLobbyCore = pattern<LobbyCoreInput, LobbyOutput>(
   (
     {
       gameName,
@@ -254,25 +286,13 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
       gameState,
       myName,
       myPlayerNumber,
+      profile,
+      profileName: givenName,
+      profileUI,
     },
   ) => {
-    // Resolve THIS viewer's shared profile. The `#profile` wish's built-in UI
-    // covers the whole lifecycle: a create surface when the viewer has no
-    // profile, a link when they have one, and a picker (with inline create)
-    // when they have several. The field targets give the snapshot values.
-    const profileWish = wish<{ name?: string; avatar?: string }>({
-      query: "#profile",
-    });
-    const profileNameWish = wish<string>({ query: "#profileName" });
-    const profilePictureWish = wish<FabricBytes>({ query: "#profilePicture" });
-    const profileAvatarWish = wish<string>({ query: "#profileAvatar" });
-
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const profilePicture = computed(() => profilePictureWish.result);
-    const profileAvatar = computed(() => profileAvatarWish.result);
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
-    );
+    const profileName = computed(() => givenName ?? "");
+    const hasProfile = computed(() => (givenName ?? "").trim() !== "");
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${profileName}` : "Create a profile to join"
     );
@@ -280,8 +300,7 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     const sharedCells = { player1, player2, shots, gameState };
     const join = joinGame({
       name: profileName,
-      picture: profilePicture,
-      avatar: profileAvatar,
+      profile,
       myName,
       myPlayerNumber,
       ...sharedCells,
@@ -314,6 +333,8 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
 
     const player1Data = computed(() => player1.get());
     const player2Data = computed(() => player2.get());
+    const seat1 = computed(() => seatOf(player1.get()));
+    const seat2 = computed(() => seatOf(player2.get()));
     const joined = computed(() => {
       const slot = normalizePlayerNumber(myPlayerNumber.get());
       if (slot === null) return false;
@@ -381,12 +402,12 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
                     }}
                   >
                     <cf-avatar
-                      bytes={player1Data?.picture}
-                      src={player1Data?.avatar}
-                      name={player1Data?.name ?? "?"}
+                      bytes={seat1.picture}
+                      src={seat1.avatar}
+                      name={seat1.name}
                       size="xs"
                     />
-                    Player 1: {String(player1Data?.name ?? "Open")}
+                    Player 1: {seat1.label}
                   </div>
                   <div
                     style={{
@@ -396,12 +417,12 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
                     }}
                   >
                     <cf-avatar
-                      bytes={player2Data?.picture}
-                      src={player2Data?.avatar}
-                      name={player2Data?.name ?? "?"}
+                      bytes={seat2.picture}
+                      src={seat2.avatar}
+                      name={seat2.name}
                       size="xs"
                     />
-                    Player 2: {String(player2Data?.name ?? "Open")}
+                    Player 2: {seat2.label}
                   </div>
                 </div>
 
@@ -422,7 +443,7 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
                         /* Built-in profile UI: create a profile when there is
                           none, pick between existing profiles otherwise. */
                       }
-                      <div>{profileWish[UI]}</div>
+                      <div>{profileUI}</div>
                       <cf-button
                         onClick={join}
                         disabled={computed(() => !hasProfile)}
@@ -464,5 +485,32 @@ const BattleshipLobby = pattern<LobbyState, LobbyOutput>(
     };
   },
 );
+
+/**
+ * The lobby whose viewer is the person looking at it. The `#profile` wish's
+ * built-in UI covers the whole lifecycle: a create surface when the viewer has
+ * no profile, a link when they have one, and a picker (with inline create)
+ * when they have several. Joining reads the face for the snapshot from it.
+ */
+const BattleshipLobby = pattern<LobbyState, LobbyOutput>((
+  { gameName, player1, player2, shots, gameState, myName, myPlayerNumber },
+) => {
+  const profileWish = wish<{ name?: string } & ProfileFaceFields>({
+    query: "#profile",
+  });
+  const profileNameWish = wish<string>({ query: "#profileName" });
+  return BattleshipLobbyCore({
+    gameName,
+    player1,
+    player2,
+    shots,
+    gameState,
+    myName,
+    myPlayerNumber,
+    profile: profileWish.result,
+    profileName: profileNameWish.result,
+    profileUI: profileWish[UI],
+  });
+});
 
 export default BattleshipLobby;

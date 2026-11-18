@@ -6,7 +6,7 @@
  * including in LLM context/prompts.
  */
 
-import { AsCellType } from "@commonfabric/api";
+import type { AsCellType } from "@commonfabric/api";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { JSONSchema } from "commonfabric";
 
@@ -287,7 +287,6 @@ function schemaToTypeStringInner(
     if (props && "pattern" in props && "extraParams" in props) {
       // This is a PatternToolResult schema - format as a handler
       const extraParamsSchema = props.extraParams;
-      if (depth >= maxDepth) return "(e: {...}) => void";
       const paramType = schemaToTypeString(extraParamsSchema, nextOpts);
       return `(e: ${paramType}) => void`;
     }

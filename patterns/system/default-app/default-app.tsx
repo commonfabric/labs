@@ -61,15 +61,6 @@ export interface PiecesListOutput {
   addParticipant: Stream<{ profile: ParticipantProfile }>;
 }
 
-const _visit = handler<
-  Record<string, never>,
-  { piece: Writable<MinimalPiece> }
->(
-  (_, state) => {
-    return navigateTo(state.piece);
-  },
-);
-
 const removePiece = handler<
   Record<string, never>,
   {
@@ -368,7 +359,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                 <cf-cell-link $cell={gridView} />
               </cf-hstack>
 
-              <cf-table full-width hover>
+              <cf-table fullWidth hover>
                 <tbody>
                   {visiblePieces.map((piece) => {
                     const isNotebook = computed(() => {

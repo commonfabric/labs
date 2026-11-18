@@ -475,10 +475,10 @@ const planPublication = handler(
     );
     const created = sanitizeEntry(
       {
-        id: event.id,
-        title: event.title,
-        summary: event.summary,
-        channel: event.channel,
+        ...(event.id !== undefined && { id: event.id }),
+        ...(event.title !== undefined && { title: event.title }),
+        ...(event.summary !== undefined && { summary: event.summary }),
+        ...(event.channel !== undefined && { channel: event.channel }),
         publishDate: event.publishDate,
       },
       fallback,

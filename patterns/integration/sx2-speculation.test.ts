@@ -30,6 +30,7 @@ import {
   waitForSettled,
   watermarkCell,
 } from "@commonfabric/runner/executor/watermark";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import type { MemorySpace } from "@commonfabric/runner";
 import {
   initializePiecesController,
@@ -187,9 +188,10 @@ describe("sx2 speculation (Phase 2 gates)", () => {
     // echo entry (speculation.md §4; the diagnostic is the client-side
     // witness of "commits nothing for derivations").
     await runtime.storageManager.synced();
-    await waitForSettled(runtime, space, watermarkBefore + 1, {
-      timeoutMs: 30_000,
-    });
+    await withStuckNet(
+      waitForSettled(runtime, space, watermarkBefore + 1),
+      "the watermark to cover the authored input",
+    );
     await overlay?.waitForSpaceQuiescence(space);
     assertEquals(
       overlay === undefined ? 0 : overlay.entryCount(space),
@@ -214,9 +216,10 @@ describe("sx2 speculation (Phase 2 gates)", () => {
         ?.seq ?? 0;
     await piece.result.set(9, ["value"]);
     await runtime.storageManager.synced();
-    await waitForSettled(runtime, space, watermarkBeforeSteady + 1, {
-      timeoutMs: 30_000,
-    });
+    await withStuckNet(
+      waitForSettled(runtime, space, watermarkBeforeSteady + 1),
+      "the watermark to cover the steady-state input",
+    );
     assertEquals(await piece.result.get(["value"]), 9);
 
     // Echo latency is recorded, not gated: the actor-side parity

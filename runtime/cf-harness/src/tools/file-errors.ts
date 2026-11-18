@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessToolContext } from "./types.ts";
 
@@ -162,11 +163,23 @@ export const classifyFileToolShellFailure = (
 export const classifyPathResolutionError = (
   error: unknown,
 ): StructuredFileToolErrorCode => {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = describeFailure(error);
   return message.toLowerCase().includes("path escapes workspace root")
     ? "path_outside_workspace"
     : "unknown";
 };
 
-export const detailFromUnknownError = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
+/**
+ * The error code for a failure to find or read a file on the host: `notFound`
+ * for a path that does not exist, `permission_denied` for one this process may
+ * not read, and `unknown` for anything else.
+ */
+export const fileSystemErrorCode = <NotFound extends string>(
+  error: unknown,
+  notFound: NotFound,
+): NotFound | "permission_denied" | "unknown" =>
+  error instanceof Deno.errors.NotFound
+    ? notFound
+    : error instanceof Deno.errors.PermissionDenied
+    ? "permission_denied"
+    : "unknown";

@@ -4,6 +4,7 @@ import { join } from "@std/path/join";
 
 import { Command } from "@cliffy/command";
 import { getCompilerOptions } from "@commonfabric/js-compiler/typescript";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { Engine } from "@commonfabric/runner";
 import { StaticCache } from "@commonfabric/static";
 
@@ -79,8 +80,19 @@ function createTsConfig() {
 // implicitly loaded jsx-runtime (`react/jsx-runtime`) and the
 // environment types (`cf-env`) loaded by the `tsconfig.json`.
 //
-// Also copies pattern documentation from docs/common to .cf-docs for reference.
-async function initWorkspace(cwd: string) {
+// Also copies the pattern documentation in `docsCommonPath`, the repository's
+// docs/common by default, to .cf-docs for reference.
+export async function initWorkspace(
+  cwd: string,
+  docsCommonPath = join(
+    dirname(fromFileUrl(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "docs",
+    "common",
+  ),
+) {
   const cache = StaticCache.fromFileSystem();
   const runtimeModuleTypes = await Engine.getRuntimeModuleTypes(
     cache,
@@ -124,31 +136,18 @@ async function initWorkspace(cwd: string) {
   try {
     const cfDocsPath = join(cwd, ".cf-docs");
     await Deno.mkdir(cfDocsPath, { recursive: true });
-
-    // In compiled binary, docs are bundled and accessible relative to the binary location
-    const currentDir = dirname(fromFileUrl(import.meta.url));
-    const docsCommonPath = join(currentDir, "..", "..", "..", "docs", "common");
-
-    // Copy each documentation file dynamically
-    try {
-      for await (const entry of Deno.readDir(docsCommonPath)) {
-        if (entry.isFile) {
-          const sourcePath = join(docsCommonPath, entry.name);
-          const targetPath = join(cfDocsPath, entry.name);
-          const content = await Deno.readTextFile(sourcePath);
-          await Deno.writeTextFile(targetPath, content);
-        }
+    for await (const entry of Deno.readDir(docsCommonPath)) {
+      if (entry.isFile) {
+        await Deno.writeTextFile(
+          join(cfDocsPath, entry.name),
+          await Deno.readTextFile(join(docsCommonPath, entry.name)),
+        );
       }
-    } catch (dirError) {
-      console.warn(
-        "Warning: Could not read docs directory:",
-        dirError instanceof Error ? dirError.message : String(dirError),
-      );
     }
   } catch (error) {
     console.warn(
       "Warning: Could not copy pattern documentation:",
-      error instanceof Error ? error.message : String(error),
+      describeFailure(error),
     );
   }
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { taggedHashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -13,6 +13,7 @@ import {
 } from "../src/harness/module-identity.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+import { PATTERN_COVERAGE_CACHE_VARIANT } from "../src/compilation-cache/cache-variants.ts";
 
 import {
   buildSourceDocs,
@@ -21,23 +22,31 @@ import {
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   compiledDocWriteSchema,
-  getCompileCacheRuntimeVersion,
   loadCompiledClosure,
   loadSourceClosure,
   loadVerifiedSourceClosure,
   ROOT_LINK_SPECIFIER,
   type SourceDoc,
   sourceDocKey,
+  stageModuleDelegations,
   verifySourceDocs,
   writeCompiledDocs,
+  writeSourceAndCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { parseLink } from "../src/link-utils.ts";
 import { compileCachePersistenceSlotKey } from "../src/pattern-manager.ts";
 import type { URI } from "../src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
-import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { compileCacheVersionOf } from "./support/compile-cache-version.ts";
 import { observeCacheWriteBacks } from "./support/telemetry-observers.ts";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
@@ -55,11 +64,6 @@ import { setCfcImplementationIdentity } from "../src/storage/extended-storage-tr
 await ensureCompilerStack();
 
 const signer = await Identity.fromPassphrase("cell-cache test");
-const resolvedRuntimeVersion = await getCompileCacheRuntimeVersion();
-if (resolvedRuntimeVersion === undefined) {
-  throw new Error("compile-cache runtime version unavailable in Deno test");
-}
-const runtimeVersion = resolvedRuntimeVersion;
 
 // Step 4.3.1–4.3.3 — content-addressed cache document model. The cache operates
 // in identity space on the engine's `CacheableModule[]`; these tests synthesize
@@ -994,8 +998,11 @@ describe("cell-cache", () => {
     let runtime: Runtime;
     const spaceA = signer.did();
     const RTVER = "rt-test-1";
+    // The version `runtime` itself compiles under, for the cases whose
+    // closures the manager reads.
+    let runtimeVersion: string;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       storageManager = StorageManager.emulate({ as: signer });
       runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
@@ -1005,6 +1012,7 @@ describe("cell-cache", () => {
           actingPrincipal: signer.did(),
         }),
       });
+      runtimeVersion = await compileCacheVersionOf(runtime);
     });
     afterEach(async () => {
       await runtime?.dispose();
@@ -1452,6 +1460,131 @@ describe("cell-cache", () => {
 
       await replace({ builderSourceSites: sidecar });
       expect(await load()).toBeUndefined();
+
+      await replace({ builderSourceSitesJson: "{not json" });
+      expect(await load()).toBeUndefined();
+    });
+
+    it("drops a document whose source map cannot be read, and keeps one whose map can", async () => {
+      // A source map that links into a redirect cycle throws when it is
+      // read, which is how an unreadable legacy link behaves too.
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      const wtx = runtime.edit();
+      writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+      wtx.prepareCfc();
+      expect((await wtx.commit().settled).error).toBeUndefined();
+
+      const storeAndLoad = async (
+        sourceMap: (tx: IExtendedStorageTransaction) => unknown,
+      ) => {
+        const tx = runtime.edit();
+        const previousIdentity = tx.getCfcState().implementationIdentity;
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: "compile-cache",
+        });
+        try {
+          const cell = runtime.getCell(
+            spaceA,
+            compiledDocKey(RTVER, entryIdentity),
+            compiledDocWriteSchema(),
+            tx,
+          );
+          cell.set({
+            ...(cell.get() as Record<string, unknown>),
+            sourceMap: sourceMap(tx),
+          });
+        } finally {
+          setCfcImplementationIdentity(tx, previousIdentity);
+        }
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+        );
+        rtx.abort?.();
+        return loaded;
+      };
+
+      const readable = await storeAndLoad(() => ({ mappings: "AAAA" }));
+      expect(readable.get(entryIdentity)?.sourceMap).toEqual({
+        mappings: "AAAA",
+      });
+
+      const unreadable = await storeAndLoad((tx) => {
+        const first = runtime.getCell(
+          spaceA,
+          "source-map-cycle-1",
+          undefined,
+          tx,
+        );
+        const second = runtime.getCell(
+          spaceA,
+          "source-map-cycle-2",
+          undefined,
+          tx,
+        );
+        first.setRaw(second.getAsWriteRedirectLink());
+        second.setRaw(first.getAsWriteRedirectLink());
+        return { mappings: first.getAsLink() };
+      });
+      expect(unreadable.has(entryIdentity)).toBe(false);
+    });
+
+    it("returns a stored source-import list only when every entry is a string", async () => {
+      const { modules, entryIdentity } = toModules(PROGRAM);
+      const wtx = runtime.edit();
+      writeCompiledDocs(runtime, spaceA, modules, entryIdentity, opts(), wtx);
+      wtx.prepareCfc();
+      expect((await wtx.commit().settled).error).toBeUndefined();
+
+      const storeAndLoad = async (sourceImports: unknown) => {
+        const tx = runtime.edit();
+        const previousIdentity = tx.getCfcState().implementationIdentity;
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: "compile-cache",
+        });
+        try {
+          const cell = runtime.getCell(
+            spaceA,
+            compiledDocKey(RTVER, entryIdentity),
+            compiledDocWriteSchema(),
+            tx,
+          );
+          cell.set({
+            ...(cell.get() as Record<string, unknown>),
+            sourceImports,
+          });
+        } finally {
+          setCfcImplementationIdentity(tx, previousIdentity);
+        }
+        tx.prepareCfc();
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        const rtx = runtime.edit();
+        const loaded = await loadCompiledClosure(
+          runtime,
+          spaceA,
+          entryIdentity,
+          opts(),
+          rtx,
+        );
+        rtx.abort?.();
+        expect(loaded.has(entryIdentity)).toBe(true);
+        return loaded.get(entryIdentity)?.sourceImports;
+      };
+
+      expect(await storeAndLoad(["./util.ts"])).toEqual(["./util.ts"]);
+      expect(await storeAndLoad(["./util.ts", 7])).toBeUndefined();
+      expect(await storeAndLoad("./util.ts")).toBeUndefined();
+      expect(await storeAndLoad({ 0: "./util.ts" })).toBeUndefined();
     });
 
     it("persists and cold-loads verified policy manifests without module evaluation", async () => {
@@ -1727,15 +1860,18 @@ describe("cell-cache", () => {
       expect((await rewireTx.commit().settled).error).toBeUndefined();
 
       const loadTx = runtime.edit();
+      const found: ClosureLoadTally = { entry: "absent", dropped: 0 };
       const loaded = await loadCompiledClosure(
         runtime,
         spaceA,
         entryIdentity,
         opts(),
         loadTx,
+        found,
       );
       loadTx.abort?.("mixed-space compiled closure rejected");
       expect(loaded.size).toBe(0);
+      expect(found).toEqual({ entry: "refused", dropped: 0 });
 
       const snapshotTx = runtime.edit();
       expect(snapshotTx.getCfcState().moduleDelegations.get(spaceA))
@@ -2266,7 +2402,10 @@ describe("cell-cache", () => {
       });
       const targetSpace = "did:key:z6MkCellCacheCoverageReplicationTarget";
       const { modules, entryIdentity } = toModules(PROGRAM);
-      const coverageRuntimeVersion = `${runtimeVersion}/pattern-coverage`;
+      const coverageRuntimeVersion = await compileCacheVersionOf(
+        coverageRuntime,
+        { patternCoverage: true },
+      );
 
       try {
         const writeTx = coverageRuntime.edit();
@@ -2342,7 +2481,10 @@ describe("cell-cache", () => {
         ),
       ).toBe(false);
 
-      const coverageRuntimeVersion = `${RTVER}/pattern-coverage`;
+      // No runtime reads this key: the check below decides coverage by the
+      // suffix it ends in alone.
+      const coverageRuntimeVersion =
+        `${RTVER}/${PATTERN_COVERAGE_CACHE_VARIANT}`;
       const uninstrumentedCoverageWrite = runtime.edit();
       writeCompiledDocs(
         runtime,
@@ -2657,7 +2799,7 @@ describe("cell-cache", () => {
     // The shared compile-cache space — owned by signerA (its DID is the
     // address).
     const sharedSpace = e2eSignerA.did();
-    const RTVER = runtimeVersion;
+    let RTVER: string;
 
     // Minimal two-file program for the e2e compile cycle.
     const E2E_PROGRAM: RuntimeProgram = {
@@ -2685,7 +2827,7 @@ describe("cell-cache", () => {
     let rtA: Runtime;
     let rtB: Runtime;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       server = newSharedServer();
       smA = EmulatedStorageManager.connectTo(server, { as: e2eSignerA });
       smB = EmulatedStorageManager.connectTo(server, { as: e2eSignerB });
@@ -2705,6 +2847,7 @@ describe("cell-cache", () => {
           actingPrincipal: e2eSignerB.did(),
         }),
       });
+      RTVER = await compileCacheVersionOf(rtA);
     });
 
     afterEach(async () => {
@@ -2954,6 +3097,467 @@ describe("cell-cache", () => {
       rtx.abort?.();
 
       expect(loaded.size).toBe(0);
+    });
+  });
+
+  describe("a record another identity writes in the cache writer's transaction", () => {
+    // The cache writer's claim that no schema declares a policy on its
+    // records, and the compiler's attestation its writes mint, stand for
+    // what it wrote. A write another identity makes to the record in the
+    // same transaction is measured and attested as that identity's write on
+    // a transaction of its own is: writer-fit refuses it after a labeled
+    // read, and it keeps no attestation at a path it reaches.
+
+    const space = signer.did();
+    const RTVER = "rt-attestation-scope";
+    const SECRET_OWNER = "did:example:secret-owner";
+    const SECRET_ID = "of:attestation-scope-secret" as URI;
+
+    let storageManager: ReturnType<typeof StorageManager.emulate>;
+    let runtime: Runtime;
+    let modules: CacheableModule[];
+    let entryIdentity: string;
+
+    beforeEach(async () => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+        trustSnapshotProvider: () => ({
+          id: "cell-cache-test",
+          actingPrincipal: signer.did(),
+        }),
+      });
+      ({ modules, entryIdentity } = toModules(PROGRAM));
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(seed, {
+        space,
+        scope: "space",
+        id: SECRET_ID,
+        path: [],
+      }, {
+        value: { s: "hush" },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              origin: "declared",
+              label: { confidentiality: [SECRET_OWNER] },
+            }],
+          },
+        },
+      });
+      expect((await seed.commit().settled).error).toBeUndefined();
+    });
+
+    afterEach(async () => {
+      await runtime?.dispose();
+      await storageManager?.close();
+    });
+
+    /**
+     * Commits one transaction that reads the labeled document first when
+     * `labeled`, runs `before`, writes the program's records through the
+     * cache writer, and then runs `after` outside it, and returns the
+     * commit's error.
+     */
+    const commitWith = async (
+      labeled: boolean,
+      after: (tx: IExtendedStorageTransaction) => void,
+      before: (tx: IExtendedStorageTransaction) => void = () => {},
+    ) => {
+      const tx = runtime.edit();
+      if (labeled) {
+        tx.readOrThrow({ space, scope: "space", id: SECRET_ID, path: [] });
+      }
+      before(tx);
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        modules,
+        entryIdentity,
+        { runtimeVersion: RTVER },
+        tx,
+      );
+      after(tx);
+      tx.prepareCfc();
+      return (await tx.commit().settled).error;
+    };
+
+    /** The entry's record in the source set, or the compiled set. */
+    const record = (
+      set: "source" | "compiled",
+      tx: IExtendedStorageTransaction,
+    ) =>
+      runtime.getCell<Record<string, unknown>>(
+        space,
+        set === "source"
+          ? sourceDocKey(entryIdentity)
+          : compiledDocKey(RTVER, entryIdentity),
+        undefined,
+        tx,
+      );
+
+    /** An extra cache-root edge on the entry, to a module of the program. */
+    const rootLinkOf = (set: "source" | "compiled") => {
+      const target = modules.find((m) => m.identity !== entryIdentity)!;
+      return {
+        specifier: `${ROOT_LINK_SPECIFIER}${target.identity}`,
+        link: runtime.getCell(
+          space,
+          set === "source"
+            ? sourceDocKey(target.identity)
+            : compiledDocKey(RTVER, target.identity),
+        ).getAsLink(),
+      };
+    };
+
+    /** The entry's compiled closure, as an integrity-checked load reads it. */
+    const compiledEntryLoads = async () => {
+      const rtx = runtime.edit();
+      try {
+        return (await loadCompiledClosure(
+          runtime,
+          space,
+          entryIdentity,
+          { runtimeVersion: RTVER },
+          rtx,
+        )).has(entryIdentity);
+      } finally {
+        rtx.abort();
+      }
+    };
+
+    it("leaves a compiled record a load accepts when the cache writer writes it alone", async () => {
+      expect(await commitWith(false, () => {})).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(true);
+    });
+
+    it("leaves a compiled record that no load accepts when another identity wrote a field of it before the cache writer rewrote it whole", async () => {
+      // The cache writer reads the transaction's view and writes it back, so
+      // its later write is no evidence that the value is its own.
+
+      expect(
+        await commitWith(false, () => {}, (tx) => {
+          record("compiled", tx).key("exportNames").set(["hush"]);
+        }),
+      ).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(false);
+    });
+
+    it("keeps no attestation on a delegation list another identity wrote raw before the cache writer carried it forward", async () => {
+      // A raw write records no schema input, so the record of the writes
+      // another identity made is all that holds the cache writer's union of
+      // the list it reads back.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
+      const tx = runtime.edit();
+      for (const set of ["source", "compiled"] as const) {
+        tx.writeValueOrThrow(
+          record(set, tx).key("delegatedModuleIdentities")
+            .getAsNormalizedFullLink(),
+          ["chosen-identity"],
+        );
+      }
+      writeSourceAndCompiledDocs(
+        runtime,
+        space,
+        modules,
+        entryIdentity,
+        {
+          runtimeVersion: RTVER,
+          moduleDelegations: new Map([[
+            entryIdentity,
+            new Set(["predecessor-identity"]),
+          ]]),
+        },
+        tx,
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(false);
+      const rtx = runtime.edit();
+      try {
+        const link = record("source", rtx).getAsNormalizedFullLink();
+        expect(
+          (readStoredCfcMetadata(rtx, { space, id: link.id })?.labelMap
+            .entries ?? []).filter((entry) => entry.origin === "minted"),
+        ).toEqual([]);
+      } finally {
+        rtx.abort();
+      }
+    });
+
+    it("returns a writer-fit misfit from the commit when another identity wrote annotations raw before the cache writer carried them forward after a labeled read", async () => {
+      const error = await commitWith(true, () => {}, (tx) => {
+        tx.writeValueOrThrow(
+          record("source", tx).key("annotations").getAsNormalizedFullLink(),
+          { leak: "hush" },
+        );
+      });
+
+      expect(error?.message).toContain("writer-fit confidentiality misfit");
+    });
+
+    it("leaves a compiled record that no load accepts when another identity rewrote it before the cache writer staged only its list", async () => {
+      // Staging writes the delegation list alone, which leaves the rest of
+      // the value the other identity wrote.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
+      const tx = runtime.edit();
+      const raw = record("compiled", tx).getRaw() as Record<string, unknown>;
+      record("compiled", tx).setRawUntyped({ ...raw, exportNames: ["hush"] });
+      stageModuleDelegations(
+        runtime,
+        space,
+        new Map([[entryIdentity, new Set(["predecessor-identity"])]]),
+        RTVER,
+        tx,
+      );
+      tx.prepareCfc();
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect(await compiledEntryLoads()).toBe(false);
+    });
+
+    /**
+     * A write another identity makes to the entry's record of `set` at
+     * `field`, of the value `valueOf` returns from the record as stored in
+     * `tx`: through the cell (which records a write-policy input), raw
+     * (which records none), or through the storage transaction beneath `tx`
+     * (which passes none of its write chokepoint).
+     */
+    const foreignWrite = (
+      set: "source" | "compiled",
+      field: string,
+      valueOf: (stored: Record<string, unknown>) => FabricValue,
+      how: "through the cell" | "raw" | "through the storage transaction",
+    ) =>
+    (tx: IExtendedStorageTransaction) => {
+      const cell = record(set, tx);
+      const value = valueOf(cell.getRaw() as Record<string, unknown>);
+      const link = cell.key(field).getAsNormalizedFullLink();
+      if (how === "raw") {
+        tx.writeValueOrThrow(link, value);
+      } else if (how === "through the storage transaction") {
+        const { error } = tx.tx.write(toMemorySpaceAddress(link), value);
+        if (error) throw error;
+      } else {
+        cell.key(field).set(value);
+      }
+    };
+
+    for (
+      const how of [
+        "through the cell",
+        "raw",
+        "through the storage transaction",
+      ] as const
+    ) {
+      describe(`for a write another identity makes ${how}`, () => {
+        for (
+          const [what, set, field, valueOf] of [
+            [
+              "writes the `exportNames` of the compiled record",
+              "compiled",
+              "exportNames",
+              () => ["hush"],
+            ],
+            [
+              "adds a cache-root edge to the compiled record",
+              "compiled",
+              "imports",
+              (stored: Record<string, unknown>) => [
+                ...(stored.imports as FabricValue[]),
+                rootLinkOf("compiled") as FabricValue,
+              ],
+            ],
+            [
+              "writes the delegation list of the compiled record",
+              "compiled",
+              "delegatedModuleIdentities",
+              () => ["chosen-identity"],
+            ],
+          ] as const
+        ) {
+          const write = foreignWrite(set, field, valueOf, how);
+
+          it(`leaves a compiled record that no load accepts when another identity ${what}`, async () => {
+            expect(await commitWith(false, write)).toBeUndefined();
+
+            expect(await compiledEntryLoads()).toBe(false);
+          });
+
+          it(`returns a writer-fit misfit from the commit when another identity ${what} after a labeled read`, async () => {
+            const error = await commitWith(true, write);
+
+            expect(error?.message).toContain(
+              "writer-fit confidentiality misfit",
+            );
+          });
+        }
+
+        for (
+          const [what, field, valueOf] of [
+            [
+              "changes an import specifier of the source record",
+              "imports",
+              (stored: Record<string, unknown>) =>
+                (stored.imports as { specifier: string; link: FabricValue }[])
+                  .map((edge, index) =>
+                    index === 0 ? { ...edge, specifier: "hush" } : edge
+                  ),
+            ],
+            [
+              "adds a cache-root edge to the source record",
+              "imports",
+              (stored: Record<string, unknown>) => [
+                ...(stored.imports as FabricValue[]),
+                rootLinkOf("source") as FabricValue,
+              ],
+            ],
+            [
+              "writes the annotations of the source record",
+              "annotations",
+              () => ({ leak: "hush" }),
+            ],
+          ] as const
+        ) {
+          it(`returns a writer-fit misfit from the commit when another identity ${what} after a labeled read`, async () => {
+            const error = await commitWith(
+              true,
+              foreignWrite("source", field, valueOf, how),
+            );
+
+            expect(error?.message).toContain(
+              "writer-fit confidentiality misfit",
+            );
+          });
+        }
+
+        for (const set of ["source", "compiled"] as const) {
+          it(`stores no identity another identity wrote into the ${set} record's delegation list, on either record`, async () => {
+            // The cache writer unions the lists it finds attested on both
+            // records into both, so a list another identity wrote on one
+            // record would otherwise reach the other under a fresh
+            // attestation.
+
+            const delegated = new Map([[
+              entryIdentity,
+              new Set(["predecessor-identity"]),
+            ]]);
+            const seed = runtime.edit();
+            writeSourceAndCompiledDocs(runtime, space, modules, entryIdentity, {
+              runtimeVersion: RTVER,
+              moduleDelegations: delegated,
+            }, seed);
+            seed.prepareCfc();
+            expect((await seed.commit().settled).error).toBeUndefined();
+
+            const tx = runtime.edit();
+            foreignWrite(
+              set,
+              "delegatedModuleIdentities",
+              () => ["chosen-identity"],
+              how,
+            )(tx);
+            const effective = writeSourceAndCompiledDocs(
+              runtime,
+              space,
+              modules,
+              entryIdentity,
+              { runtimeVersion: RTVER, moduleDelegations: delegated },
+              tx,
+            );
+            tx.prepareCfc();
+            expect((await tx.commit().settled).error).toBeUndefined();
+
+            expect([...(effective.get(entryIdentity) ?? [])]).toEqual([
+              "predecessor-identity",
+            ]);
+            const rtx = runtime.edit();
+            try {
+              for (const other of ["source", "compiled"] as const) {
+                expect(
+                  record(other, rtx).getRaw()?.delegatedModuleIdentities,
+                  other,
+                ).not.toContain("chosen-identity");
+              }
+            } finally {
+              rtx.abort();
+            }
+          });
+        }
+      });
+    }
+
+    it("commits the cache writer's records alone after a labeled read", async () => {
+      expect(await commitWith(true, () => {})).toBeUndefined();
+    });
+
+    it("keeps an annotation stored before the transaction when another identity writes another one", async () => {
+      // The cache writer carries the record's annotations forward, the other
+      // identity's included: annotations bear no evidence, and that write
+      // leaves the record measured.
+
+      expect(await commitWith(false, () => {})).toBeUndefined();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        space,
+        "name",
+        { "/": "name-doc-link" },
+      );
+
+      expect(
+        await commitWith(false, () => {}, (tx) => {
+          tx.writeValueOrThrow(
+            record("source", tx).key("annotations").key("other")
+              .getAsNormalizedFullLink(),
+            "chosen",
+          );
+        }),
+      ).toBeUndefined();
+
+      const tx = runtime.edit();
+      try {
+        expect(record("source", tx).getRaw()?.annotations).toEqual({
+          name: { "/": "name-doc-link" },
+          other: "chosen",
+        });
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("stores an annotation on a source record that holds a flow stamp", async () => {
+      // `annotatePattern()` reads the record, and so its stamp, and writes
+      // as the cache writer does, which keeps the record's claim.
+
+      expect(await commitWith(true, () => {})).toBeUndefined();
+      await runtime.patternManager.annotatePattern(
+        entryIdentity,
+        space,
+        "name",
+        { "/": "name-doc-link" },
+      );
+
+      const tx = runtime.edit();
+      try {
+        expect(record("source", tx).getRaw()?.annotations).toEqual({
+          name: { "/": "name-doc-link" },
+        });
+      } finally {
+        tx.abort();
+      }
     });
   });
 });

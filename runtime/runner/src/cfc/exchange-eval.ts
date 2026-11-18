@@ -10,6 +10,14 @@ import {
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
 import { utf8Compare } from "@commonfabric/text/utf8";
+import {
+  type CfcConfClause,
+  type CfcOrClause,
+  clauseAlternatives,
+  commitmentAwareEquals,
+  isCfcFieldCommitment,
+  isOrClause,
+} from "@commonfabric/memory/v2/cfc-release-authority";
 
 import { matchesOnlyValueBoundClaims } from "./atom-classes.ts";
 
@@ -22,17 +30,7 @@ import {
   matchAtomPattern,
   matchAtomPatternAgainstAtoms,
 } from "./atom-pattern.ts";
-import {
-  type CfcConfClause,
-  type CfcOrClause,
-  clauseAlternatives,
-  isOrClause,
-  normalizeClause,
-} from "./clause.ts";
-import {
-  commitmentAwareEquals,
-  isCfcFieldCommitment,
-} from "./label-representation.ts";
+import { normalizeClause } from "./clause.ts";
 import type { IFCLabel } from "./label-view-core.ts";
 import {
   type ExchangeRule,

@@ -70,6 +70,7 @@ import {
   getPatternIdentityRef,
   getPatternSource,
   getPieceReconciliation,
+  getPieceSourceRecord,
   getPieceSourceSnapshot,
   keepLaterConfirmation,
   knownPieceReleasedAt,
@@ -144,10 +145,18 @@ const logger = getLogger("runner.source-reconcile", {
  *   candidate or the piece's source state changes, the envelopes a stored
  *   envelope's refusal was reached over change, or the space's memory session
  *   is replaced.
- * - `unavailable`: the origin's current source could not be adopted this
- *   time — it could not be reached, the write that adopts it did not commit,
- *   or the piece changed underneath the attempt and the write it was going to
- *   make no longer describes it.
+ * - `invalid`: the origin's source compiled to no pattern identity, so there
+ *   is nothing to adopt until the origin serves other source.
+ * - `mismatched`: the origin's source compiled to an identity other than the
+ *   one the origin advertised, so what it serves is not the source it names.
+ * - `unapplied`: the origin resolved, and the write this reconciliation makes
+ *   — adopting the source the origin offered, or recording the origin itself
+ *   in its canonical spelling or on a piece that had none — did not land this
+ *   time: it did not commit, or the piece changed underneath the attempt and
+ *   the write it was going to make no longer describes it. The next
+ *   reconciliation makes it again.
+ * - `unavailable`: the origin could not be reached, or the attempt ended
+ *   before it had a candidate to weigh.
  */
 export type ReconcileOutcome =
   | "detached"
@@ -158,6 +167,9 @@ export type ReconcileOutcome =
   | "ahead"
   | "incompatible"
   | "rejected"
+  | "invalid"
+  | "mismatched"
+  | "unapplied"
   | "unavailable";
 
 /**
@@ -180,11 +192,14 @@ const RECORDED_OUTCOME: Record<
   updated: { outcome: "followed" },
   ahead: { outcome: "followed" },
   unavailable: { outcome: "unreachable" },
+  unapplied: { outcome: "unapplied" },
   // The reason travels with the result rather than being inferred from the
   // outcome, so a second kind of refusal has to say which one it is instead
   // of inheriting this one.
   incompatible: { outcome: "refused", reason: "incompatible-schema" },
   rejected: { outcome: "refused", reason: "apply-failed" },
+  invalid: { outcome: "refused", reason: "source-invalid" },
+  mismatched: { outcome: "refused", reason: "identity-mismatch" },
   detached: undefined,
   unusable: undefined,
 };
@@ -711,11 +726,13 @@ export class SourceReconciler {
     }
   }
 
-  /** Re-enter after the current pass, for a followed source that moved. */
+  /**
+   * Re-enter after the current pass, for a followed source that moved. Only a
+   * live follower gets here: `unwatch()` and `dispose()` cancel its sinks and
+   * forget it as a system follower, and a pass they abort follows nothing.
+   */
   #reconcileFromSourceEvent(resultCell: Cell<unknown>): void {
-    const key = this.#followerKey(resultCell);
-    if (this.#disposed || this.#stoppedFabricFollowers.has(key)) return;
-    const pending = this.#pending.get(key);
+    const pending = this.#pending.get(this.#followerKey(resultCell));
     if (pending !== undefined) {
       pending.reschedule = true;
       return;
@@ -833,7 +850,7 @@ export class SourceReconciler {
     signal: AbortSignal,
   ): Promise<ReconcileOutcome> {
     const host = this.#runtime.hostForSpace(state.space).href;
-    let origin = classifyPieceOriginString(state.storedSource, host);
+    const origin = classifyPieceOriginString(state.storedSource, host);
 
     if (origin.kind === "legacy-path") {
       // A rooted path predates the `system:` scheme. A `system:` ref can name a
@@ -857,13 +874,7 @@ export class SourceReconciler {
       if (migrated !== "migrated") return migrated;
       state.storedSource = origin.ref;
       state.snapshot = getPieceSourceSnapshot(resultCell)!;
-      origin = classifyPieceOriginString(origin.ref, host);
-      const followed = await this.#follow(
-        resultCell,
-        state,
-        origin,
-        signal,
-      );
+      const followed = await this.#dispatch(resultCell, state, signal);
       return followed === "current" ? "migrated" : followed;
     }
 
@@ -873,7 +884,7 @@ export class SourceReconciler {
   #follow(
     resultCell: Cell<unknown>,
     state: FollowedPieceState,
-    origin: PieceOriginKind,
+    origin: Exclude<PieceOriginKind, { kind: "legacy-path" }>,
     signal: AbortSignal,
   ): Promise<ReconcileOutcome> {
     const key = this.#followerKey(resultCell);
@@ -903,9 +914,6 @@ export class SourceReconciler {
           origin,
           signal,
         );
-      case "legacy-path":
-        // Rewritten before dispatch.
-        return Promise.resolve("unusable");
     }
   }
 
@@ -1203,6 +1211,15 @@ export class SourceReconciler {
         ]);
         return undefined;
       }
+      // A piece created from this source records a creation revision, which
+      // reads the closure in the creating transaction: a wish's, which cannot
+      // wait. So the closure is repaired here, ahead of it, when an earlier
+      // runtime left a flow stamp on it.
+      await this.#runtime.patternManager.prepareSourceClosureVerification(
+        space,
+        [advertised],
+      );
+      signal.throwIfAborted();
       // A pattern compiled across a registry clear carries references the
       // clear retired, so it is answered but not kept.
       if (schemaRegistryEpoch() === epoch) {
@@ -1482,7 +1499,8 @@ export class SourceReconciler {
         state.space,
         state.storedSource,
       ]);
-      return "unavailable";
+      state.detail = "the source produced no pattern identity";
+      return "invalid";
     }
     if (
       advertised !== undefined &&
@@ -1496,7 +1514,7 @@ export class SourceReconciler {
       ]);
       state.detail =
         "the source did not match the version its origin advertised";
-      return "unavailable";
+      return "mismatched";
     }
     state.offered = candidateRef;
     if (
@@ -1523,7 +1541,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: candidateRef.identity },
     );
     // A release re-mints every handler identity in the file, so a field the
     // running pattern's handler protects would refuse the successor's write
@@ -1536,6 +1554,7 @@ export class SourceReconciler {
         state.space,
         state.running.identity,
         candidateRef.identity,
+        getPieceSourceRecord(resultCell, state.running.identity),
       )
       : undefined;
     const transition: PieceSourceTransition = {
@@ -1570,36 +1589,59 @@ export class SourceReconciler {
     // the piece keeps its running source against an earlier candidate is
     // decided there too, by the history the commit reads.
     const ordered = origin.kind === "system";
-    const loadable = ordered &&
+    // Whether this runtime can load the source the piece runs matters only
+    // against an earlier offer, and finding out loads that pattern, which for
+    // one this runtime has not loaded means compiling its whole closure. So it
+    // is asked here only when the history read now makes the offer earlier. A
+    // commit whose own read makes it earlier where this one did not declines
+    // instead, and is made again once the answer is in.
+    const loadRunning = async () =>
       await this.#loadPattern(state.running, state.space) !== undefined;
+    let loadable = ordered &&
+        isEarlierRelease(
+          advertised?.releasedAt,
+          knownPieceReleasedAt(resultCell, state.running),
+        )
+      ? await loadRunning()
+      : undefined;
+    // The transition reads the candidate's closure, which the compile above
+    // wrote back. A serving runtime sealed that write into a wave, and the
+    // direct commit a source update takes may read only state the store
+    // holds (serving-loop.md §3d), so it waits for that wave to commit.
+    if (sourceUpdate !== undefined) {
+      await runtime.sealsCommitted?.();
+      if (signal.aborted) return "unavailable";
+    }
     let overtaken = false;
-    const failure = await this.#commit(resultCell, state, signal, (tx) => {
+    let undecided = false;
+    const write = (
+      tx: Parameters<typeof applyPieceSourceTransition>[2],
+    ): boolean => {
       overtaken = false;
+      undecided = false;
       if (!argumentUnchanged(resultCell.withTx(tx))) return false;
       if (
         ordered &&
         isEarlierRelease(
           advertised?.releasedAt,
           knownPieceReleasedAt(resultCell.withTx(tx), state.running),
-        ) &&
-        keepsRunningSource(
-          resultCell.withTx(tx),
-          state.running,
-          candidateRef,
-          loadable,
         )
       ) {
-        overtaken = true;
-        return false;
-      }
-      if (sourceUpdate !== undefined) {
-        runtime.patternManager.stageSourceUpdate(
-          sourceUpdate,
-          state.space,
-          state.running.identity,
-          candidateRef.identity,
-          tx,
-        );
+        if (loadable === undefined) {
+          undecided = true;
+          return false;
+        }
+        if (
+          keepsRunningSource(
+            resultCell.withTx(tx),
+            state.running,
+            candidateRef,
+            loadable,
+          )
+        ) {
+          overtaken = true;
+          return false;
+        }
       }
       applyPieceSourceTransition(
         runtime,
@@ -1607,18 +1649,39 @@ export class SourceReconciler {
         tx,
         candidateRef,
         transition,
+        { sourceUpdate },
       );
       // Staging the candidate belongs to this transaction whether or not the
       // piece is running, so a refusal costs nothing either way: setup that
       // cannot take the piece's data fails the transaction and the piece keeps
       // what it has. A running piece is then re-instantiated by the pattern
       // watcher, which sees its own completion marker and does not stage it a
-      // second time.
+      // second time. The runtime adopts the release on its own, with none of
+      // the reads that chose it in this transaction, so the setup leaves the
+      // value of a result it finds unchanged as stored (`runtimeStarted`).
       void runtime.setup(tx, candidate, undefined, resultCell.withTx(tx), {
         prepareForResume: true,
+        runtimeStarted: true,
       });
       return true;
-    }, sourceUpdate);
+    };
+    let failure = await this.#commit(
+      resultCell,
+      state,
+      signal,
+      write,
+      sourceUpdate,
+    );
+    if (undecided && !signal.aborted) {
+      loadable = await loadRunning();
+      failure = await this.#commit(
+        resultCell,
+        state,
+        signal,
+        write,
+        sourceUpdate,
+      );
+    }
     if (overtaken) {
       // The piece keeps what it runs, as an earlier offer leaves it, and the
       // record confirms that source at the release time that overtook this
@@ -1643,7 +1706,7 @@ export class SourceReconciler {
       return "updated";
     }
     state.detail = failure.detail;
-    if (failure.lasting === undefined) return "unavailable";
+    if (failure.lasting === undefined) return "unapplied";
     if (replacements !== this.#replacementsOf(state.space)) return "rejected";
     // The refused commit wrote nothing, so the envelopes stored now are the
     // ones the refusing merge read.
@@ -1780,7 +1843,7 @@ export class SourceReconciler {
       runtime,
       resultCell,
       state.snapshot,
-      { allowUnavailable: true },
+      { allowUnavailable: true, candidateIdentity: state.running.identity },
     );
     const transition: PieceSourceTransition = {
       revisionId: crypto.randomUUID(),
@@ -1807,7 +1870,7 @@ export class SourceReconciler {
     );
     if (failure === undefined) return "migrated";
     state.detail = failure.detail;
-    return "unavailable";
+    return "unapplied";
   }
 
   /**

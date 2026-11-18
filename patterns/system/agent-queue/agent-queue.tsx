@@ -34,7 +34,10 @@ import {
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
-import AgentRunView, { type AgentRun } from "../agent-run/agent-run.tsx";
+import AgentRunView, {
+  type AgentRun,
+  isTerminalAgentRunState,
+} from "../agent-run/agent-run.tsx";
 
 /**
  * One submitted run. `host` is the origin of the toolshed serving the
@@ -61,6 +64,7 @@ type MaterializedAgentQueueEntry = {
 export type AgentRunnerEntry = {
   host: string;
   tools: string[];
+  progress?: boolean;
   registrationId?: string;
   registeredAt: string;
   lastClaimAt?: string;
@@ -97,6 +101,23 @@ export const setAgentRunner = handler<
     return;
   }
   state.agentRunner.set(event.runner);
+});
+
+/**
+ * Takes an entry off the queue. The record stays where it is, and the piece
+ * that requested it keeps following it. The entry's link is all this reads:
+ * a transaction that read the entry's `run`, or the record behind it, could
+ * not write the list when that link carries another space's label. So the
+ * page decides whether a run has finished, and offers this only then.
+ */
+const removeEntry = handler<
+  void,
+  {
+    entries: Writable<MaterializedAgentQueueEntry[]>;
+    entry: Writable<MaterializedAgentQueueEntry>;
+  }
+>((_event, { entries, entry }) => {
+  entries.removeByValue(entry);
 });
 
 export type AgentQueueOutput = {
@@ -191,6 +212,14 @@ const AgentQueue = pattern(
                   ? entry.run.requestHash
                   : resolved.cell?.get()?.requestHash ?? ""
               );
+              // A record that has not ended is listed again by its node.
+              const finished = computed(() =>
+                isTerminalAgentRunState(
+                  entry.address === undefined
+                    ? entry.run.state
+                    : resolved.cell?.get()?.state,
+                )
+              );
               return (
                 <cf-card data-agent-run={requestHash}>
                   <cf-vstack gap="2">
@@ -203,6 +232,16 @@ const AgentQueue = pattern(
                       })
                       : <span>Run unavailable</span>}
                     <small>{entry.host}</small>
+                    {finished
+                      ? (
+                        <cf-button
+                          size="sm"
+                          onClick={removeEntry({ entries, entry })}
+                        >
+                          Remove
+                        </cf-button>
+                      )
+                      : null}
                   </cf-vstack>
                 </cf-card>
               );

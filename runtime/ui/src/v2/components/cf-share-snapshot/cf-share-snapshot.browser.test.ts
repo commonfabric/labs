@@ -14,6 +14,7 @@ Deno.test("cf-share-snapshot presents the exact snapshot and verified audience",
     name: "Untrusted display name",
   });
   element.result = createMockCellHandle();
+  element.buttonText = "Share with the host";
   element.runtime = {
     cancelSnapshotShare: () => Promise.resolve(),
     prepareSnapshotShare: () =>
@@ -41,6 +42,20 @@ Deno.test("cf-share-snapshot presents the exact snapshot and verified audience",
       .toContain("did:key:verified-reader");
     expect(element.shadowRoot?.querySelector(".audience")?.textContent).not
       .toContain("Untrusted display name");
+    expect(element.shadowRoot?.querySelector(".audience")?.textContent)
+      .toContain("One verified person");
+    expect(
+      Array.from(element.shadowRoot?.querySelectorAll("dt") ?? [])
+        .map((dt) => dt.textContent),
+    ).toEqual(["books", "0", "title", "author"]);
+    expect(
+      Array.from(element.shadowRoot?.querySelectorAll("dd dd dd") ?? [])
+        .map((dd) => dd.textContent),
+    ).toEqual(["Solaris", "Lem"]);
+    expect(element.shadowRoot?.querySelector("cf-button.open")?.textContent)
+      .toBe("Share with the host");
+    expect(element.shadowRoot?.querySelector("dialog")?.textContent).not
+      .toContain("Share with the host");
   } finally {
     element.remove();
   }

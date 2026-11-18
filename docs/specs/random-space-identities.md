@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented in this repository. The
+Implemented in this repository, deletion and reaping included. The
 [implementation plan](../plans/random-space-identities.md) says what is built
 and the deployment steps that remain.
 
@@ -154,6 +154,172 @@ run and resolves before it is retried, and a name that has resolved once must
 resolve again without suspending, for as long as the run is being retried.
 A resolver that can forget a name it has resolved, or that can leave a name
 unresolved after an attempt, turns the retry into a loop with no bound.
+
+## Deleting a space
+
+A space lives from its genesis commit until it is deleted, and deletion ends
+it for everyone, for good. Nothing else a principal does ends a space:
+removing members, forgetting it in a list, or losing every reference to it
+leaves it in place.
+
+- Only the space's sole member deletes it, holding OWNER: the access list's one
+  entry has to be the deleting principal, or, for a space that owns itself, the
+  space's own DID, which the deleting principal acts for through a [delegation
+  chain](memory-v2/04-protocol.md#proof-chains). A space with other members is
+  deleted once an OWNER has removed them, each removal an ordinary access-list
+  change of its own. Other holders of a delegation are not members of the list,
+  and lose access with no change of their own first.
+- Deletion is one access-list-only commit, which replaces the access list
+  with a deletion tombstone naming the deleting principal. It writes the
+  access-control document and never removes it.
+- A Home space is not deleted, whoever asks, while its access list has a Home's
+  shape. Its DID is its user's identity DID, so its access list grants its own
+  DID OWNER, and it declares no kind, which is how the Memory server tells it
+  from a self-owned space of a declared kind such as a profile's. The test reads
+  the list, which a deployment's service identity can rewrite, so a service
+  identity is trusted not to reshape a Home's list, and a Home with no list has
+  to be given one before deletion is deployed
+  ([INV-15](memory-v2/09-invariants.md#inv-15--space-deletion)).
+- From that commit on, the Memory server refuses the space to every principal,
+  a deployment's service identities included, in every access-control mode, and
+  the space takes no further commit on any write path, the serving plane's
+  included, so deletion is not undone. The refusal says that the space is
+  deleted, which a reader can tell apart from a refusal of access to a space
+  that goes on, and it comes before every check of access, shape and genesis.
+- Every invitation operation on a deleted space is refused with a code of its
+  own, `space-deleted`, once the request has passed rate limiting, proof
+  verification and body validation
+  ([invitation service contract](../../runtime/toolshed/README.md#space-invitations)),
+  so an invitation to a deleted space reads differently from one that has
+  expired or been revoked.
+- A client takes both refusals as final. It does not retry an invitation
+  operation answered `space-deleted`, and it does not treat an
+  `AuthorizationError` marked `deleted` as a refusal a later grant could heal,
+  as it may an ordinary refusal of access.
+
+Deleting a space reclaims no storage by itself. A deleted space's contents
+become unreadable from the Memory server at once. A runtime keeps what it had
+already fetched of the space in its replica, as it does for any refused space,
+and its renderer withholds that content
+([authorization failure surfacing](../features/authorization-failure-surfacing.md)).
+The space's storage is the operator's to reclaim by reaping the space, below,
+which leaves the deletion tombstone in place. A store removed outright would
+leave a DID with no history, and that DID would then be a space its key could
+create again: no one holds the key of a space created under this specification,
+but a legacy space's key can be recomputed from its name.
+
+References to a deleted space keep their DID: a Home list entry, a link stored
+in another space, an `inSpace` allocation record. They reach the refusal.
+Removing them is the work of whatever holds them, and an allocation record,
+being immutable, is never removed. A person's shared-space catalog keeps its
+entry for the space and records the deletion in it
+([`shared-space-catalog.md`](../features/shared-space-catalog.md#deleted-spaces)).
+The refusal reaches a client as an `AuthorizationError` marked `deleted`, and
+pattern code as `spaceDeleted(target)`
+([`space-access.md`](../features/space-access.md#a-deleted-space)).
+
+A space that is not yet down to one member takes ordinary access-list commits
+first, each made with the CLI's ACL commands
+([`random-space-identities` plan](../plans/random-space-identities.md#deleting-a-space)
+says which spaces this covers):
+
+- **Other members.** An OWNER removes every other entry, each with its own
+  `cf acl remove <DID>`, the `*` entry included as `cf acl remove ANYONE`,
+  until the list's one entry names the principal that will delete the space.
+- **No access-control document.** A populated space that predates genesis has
+  no list, and a deployment's service identity holds OWNER there implicitly,
+  which the sole-member clause does not count. A service identity first writes
+  a list naming the deleting principal, `cf acl set <DID> OWNER`, which that
+  implicit OWNER admits: service identities hold it on every space so that
+  they can initialize or repair access-control state
+  ([the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass)).
+  INV-13's genesis rules bind only a space with no history, which a populated
+  space is not. Such a space is
+  open to every authenticated principal, so that one commit is where all of
+  their access ends, with no entry naming any of them, and nothing records who
+  they were. A Home with no list is never one of these: it gets its own list,
+  granting its own DID OWNER, before deletion is deployed.
+- **A list naming only service identities.** A service identity the list names
+  is a named principal, so it could remove the other entries and delete the
+  space itself, as its sole member. The recipe has it add the deleting person at
+  OWNER instead, who then removes the service identities' entries, so that the
+  deletion tombstone's `by` records the person who chose the deletion rather
+  than an operator's identity. That is a choice of record, not something INV-15
+  requires.
+
+The admission rule and the refusal are
+[INV-15](memory-v2/09-invariants.md#inv-15--space-deletion) and
+[the Memory protocol's access-control section](memory-v2/04-protocol.md#451-current-pass).
+`cf space delete` sends the deletion commit, and the Memory server and the
+serving loop implement what follows it.
+
+### Reaping a deleted space
+
+Reaping reclaims a deleted space's storage. It is an operation of its own rather
+than a compaction, and it is not a Memory protocol command, since the protocol
+refuses a deleted space to every principal, service identities included.
+Compaction refuses a deleted space's store: its run writes an audit revision
+that restates the access-control document's value, which it does only over a
+value that is an access list, so it refuses a store whose access-control
+document is a `set` of anything else, a deletion tombstone included. Its outcome
+for an access-control document that a document `delete` removed is a different
+case, one INV-12 forbids, and not a deleted space. Compaction's refusal of a
+deletion tombstone names reaping, so that an operator who reaches for
+`cf space compact` on a deleted space is sent to `cf space reap`.
+
+Reaping follows the compaction plan's safety rails rather than rules of its own.
+It runs offline against the space's store file and never against a file a server
+has open
+([the compaction plan](../plans/compact-space.md#the-store-must-be-offline)),
+and its authority is the operator's access to that file. It writes a copy of the
+backup, never the backup itself
+([backup first](../plans/compact-space.md#backup-first)), and its result is
+checked before it is installed, as a compaction's is
+([verification obligations](../plans/compact-space.md#verification-obligations)):
+the deletion commit and the deletion tombstone read back unchanged, the server
+sequence is the same, and nothing else of the space is left. The state inspector
+reads a reaped store as a deleted space, not as a corrupt one.
+`cf space reap <store.sqlite>` performs it.
+
+- A reap takes only a store whose access-control document holds a deletion
+  tombstone, and refuses any other.
+- It keeps the deletion commit and what that commit needs to stand: the commit's
+  own row in the commit log, the invocation and authorization rows it
+  references, and the deletion tombstone's revision and head rows. The server
+  sequence is the highest `seq` in the commit log, so keeping the deletion
+  commit keeps it at that commit's `seq`. The space therefore goes on refusing
+  every principal as deleted, its refusal names the same `aclRevision` as
+  before, and its DID never again has no history.
+- It removes everything else the store holds for the space: every earlier
+  commit, every other document and its history, the earlier revisions of the
+  access-control document, the genesis receipt, the private tables such as an
+  invitation's admission records and receipts, the outbox, and the
+  instance-naming mark (INV-16). A deleted space admits no session, so the
+  mark has nothing left to decide. Rows the engine's schema itself needs to
+  open a store, such as the default branch's, stay.
+- The space's cell databases are not in the store. They are files beside the
+  live store, `cell-<hash>-*.sqlite`, where `<hash>` is the token the Memory
+  server derives from the space's DID, so a reap, which runs against a copy of
+  the backup, cannot reach them. Its report names them by that pattern, and
+  the install that puts the result in place of the live store moves them out
+  of the live directory, beside the live store it moves aside. The token is a
+  32-bit hash, so the install moves the files under the space's prefix only
+  when no other store in the live directory shares that prefix; when one
+  does, it moves none and reports which store shares it.
+
+### Deleting a space from the command line
+
+`cf space delete` deletes a space as its sole member. While the access list
+names any principal besides the one the command connects as, it refuses, and
+names those principals, so that each one's removal is an ordinary
+`cf acl remove` of its own. Since deletion cannot be undone, it also refuses to
+run without `--confirm <space-DID>`, whose DID has to be the space's own, so
+that a mistyped `--space` deletes nothing. It deletes only a space whose list
+names the connecting principal; deleting a self-owned space through a
+delegation chain is not part of this command.
+
+The CLI's own documentation describes `cf space delete` beside
+`cf space create`, and `cf space reap` beside `cf space compact`.
 
 ## Routing across provider processes
 

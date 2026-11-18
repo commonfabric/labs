@@ -1,4 +1,5 @@
 import type { JSONSchema } from "@commonfabric/api";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { HarnessImageAttachment } from "../contracts/image.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
@@ -7,7 +8,6 @@ import type { HarnessToolDefinition } from "./types.ts";
 import {
   classifyPathResolutionError,
   createStructuredFileToolErrorOutput,
-  detailFromUnknownError,
   type StructuredFileToolErrorOutput,
   structuredFileToolErrorOutputSchema,
 } from "./file-errors.ts";
@@ -115,7 +115,7 @@ export const viewImageTool: HarnessToolDefinition<
       return createStructuredFileToolErrorOutput(context, "view_image", {
         path: input.path,
         code: classifyPathResolutionError(error),
-        detail: detailFromUnknownError(error),
+        detail: describeFailure(error),
       });
     }
     if (await isResolvedPathInsideArtifactRoot(context, resolvedPath)) {
@@ -134,7 +134,7 @@ export const viewImageTool: HarnessToolDefinition<
       return createStructuredFileToolErrorOutput(context, "view_image", {
         path: resolvedPath,
         code: classifyPathResolutionError(error),
-        detail: detailFromUnknownError(error),
+        detail: describeFailure(error),
       });
     }
     try {
@@ -153,15 +153,13 @@ export const viewImageTool: HarnessToolDefinition<
         imageAttachment,
       };
     } catch (error) {
-      const detail = detailFromUnknownError(error);
+      const detail = describeFailure(error);
       return createStructuredFileToolErrorOutput(context, "view_image", {
         path: resolvedPath,
         code: detail.includes("not a file")
           ? "not_a_file"
           : detail.includes("paths must stay within the workspace")
           ? "path_outside_workspace"
-          : detail.includes("path is not a file")
-          ? "not_a_file"
           : detail.includes("path is empty") ||
               detail.includes("path is too large") ||
               detail.includes("supported image type")

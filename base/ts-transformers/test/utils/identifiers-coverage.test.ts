@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import {
@@ -35,6 +36,36 @@ Deno.test("isSafeIdentifierText rejects a reserved word", () => {
   assertEquals(isSafeIdentifierText("class"), false);
   assertEquals(isSafeIdentifierText("return"), false);
 });
+
+Deno.test(
+  "isSafeIdentifierText rejects a word strict-mode or module code reserves or forbids binding",
+  () => {
+    const words = [
+      "implements",
+      "interface",
+      "let",
+      "package",
+      "private",
+      "protected",
+      "public",
+      "static",
+      "yield",
+      "await",
+      "eval",
+      "arguments",
+    ];
+    expect(words.filter(isSafeIdentifierText)).toEqual([]);
+  },
+);
+
+Deno.test(
+  "reserveIdentifier returns the fallback in place of a word module code reserves",
+  () => {
+    const used = new Set<string>();
+    expect(reserveIdentifier("let", used, factory).text).toBe("ref");
+    expect([...used]).toEqual(["ref"]);
+  },
+);
 
 Deno.test(
   "isSafeIdentifierText accepts contextual keywords that are not reserved",

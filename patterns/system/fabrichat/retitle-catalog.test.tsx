@@ -216,6 +216,7 @@ const Viewer = pattern<ViewerInput, ViewerOutput>((input) => {
   });
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: Writable.of<Record<string, ChatRequestOutcome>>({}),

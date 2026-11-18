@@ -80,8 +80,10 @@ import { loadHarnessSkillContext } from "./skills/registry.ts";
 import { persistHarnessRunSkillRegistry } from "./skills/run-registry.ts";
 import {
   AUTHOR_TOOL_GUIDANCE,
+  COMMAND_ENFORCEMENT_GUIDANCE,
   LOOM_COMMANDS_TOOL_GUIDANCE,
   LOOM_RETRIEVAL_TOOL_GUIDANCE,
+  PIECE_SOURCE_TOOL_GUIDANCE,
   PIECES_TOOL_GUIDANCE,
   RESEARCH_TOOL_GUIDANCE,
   RESOLVE_PIECE_TOOL_GUIDANCE,
@@ -130,6 +132,8 @@ export interface HarnessSessionConfig {
   sandboxRunscUnshare?: string;
   /** The `setpriv` that ties what pasta runs to pasta. */
   sandboxRunscSetpriv?: string;
+  /** The host ports a container under pasta reaches, and the only ones. */
+  sandboxRunscForwardedHostPorts?: readonly number[];
 
   /** How the sandbox runtime was selected, as the run records it. */
   sandboxRuntimeChoice?: SandboxRuntimeChoice;
@@ -354,6 +358,11 @@ export const harnessSessionEngineOptions = (
     ...(config.sandboxRunscSetpriv !== undefined
       ? { sandboxRunscSetpriv: config.sandboxRunscSetpriv }
       : {}),
+    ...(config.sandboxRunscForwardedHostPorts !== undefined
+      ? {
+        sandboxRunscForwardedHostPorts: config.sandboxRunscForwardedHostPorts,
+      }
+      : {}),
     ...(config.sandboxRuntimeChoice !== undefined
       ? { sandboxRuntimeChoice: config.sandboxRuntimeChoice }
       : {}),
@@ -433,10 +442,16 @@ export const harnessSessionEngineOptions = (
 export interface EstablishHarnessSessionContextOptions {
   engine: CfHarnessEngine;
 
-  config: Pick<
-    HarnessSessionConfig,
-    "skillsRoot" | "skillsRootSandboxPath" | "skillNames"
-  >;
+  /**
+   * The session's configuration. A session that names no subagent profiles is
+   * told of none: its guidance leaves out whatever only a named profile does.
+   */
+  config:
+    & Pick<
+      HarnessSessionConfig,
+      "skillsRoot" | "skillsRootSandboxPath" | "skillNames" | "allowedToolIds"
+    >
+    & Partial<Pick<HarnessSessionConfig, "allowedSubagentProfiles">>;
 
   /**
    * Where a session that could not connect its fabric is reported. The run
@@ -449,8 +464,9 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, host-supplied input
- * cells, the guidance for selecting a piece target, for a run whose host
+ * skills, the well-known grants of the session's space when a tool can use
+ * them (`describe_handle`, `run_pattern`, `read_value` or `call_verb`),
+ * host-supplied input cells, the guidance for selecting a piece target, for a run whose host
  * opted in to `weaver_action` the guidance for using the Weaver's commands,
  * and the guidance for using the tools the session's backings carry.
  *
@@ -511,10 +527,21 @@ const establishContextMessages = async (
       messages.push(context.contextText);
     }
   }
-  if (engine.fabricSessionAvailable) {
+  if (
+    engine.fabricSessionAvailable &&
+    (config.allowedToolIds === undefined ||
+      config.allowedToolIds.some((tool) =>
+        tool === "describe_handle" || tool === "run_pattern" ||
+        tool === "read_value" || tool === "call_verb"
+      ))
+  ) {
     try {
       const grantMessage = wellKnownGrantsContextMessage(
         await engine.establishWellKnownGrants(),
+        {
+          describeHandleAvailable: config.allowedToolIds === undefined ||
+            config.allowedToolIds.includes("describe_handle"),
+        },
       );
       if (grantMessage !== undefined) {
         messages.push(grantMessage);
@@ -541,6 +568,9 @@ const establishContextMessages = async (
     fabricSessionAvailable: engine.fabricSessionAvailable,
     loomCommandsAvailable: engine.config.loomCommands !== undefined,
     loomRetrievalAvailable: engine.config.loomRetrieval !== undefined,
+    allowedToolIds: config.allowedToolIds,
+    subagentProfiles: config.allowedSubagentProfiles,
+    cfcEnforcementMode: engine.config.cfcEnforcementMode,
   });
   for (const message of toolGuidance) {
     messages.push(message);
@@ -555,8 +585,10 @@ const CONTEXT_MESSAGE_SECTIONS: ReadonlyMap<string, PromptSection> = new Map([
   [AUTHOR_TOOL_GUIDANCE, "author-tools"],
   [RESEARCH_TOOL_GUIDANCE, "research-tools"],
   [PIECES_TOOL_GUIDANCE, "pieces-tools"],
+  [PIECE_SOURCE_TOOL_GUIDANCE, "piece-source-tools"],
   [RESOLVE_PIECE_TOOL_GUIDANCE, "resolve-piece-tools"],
   [LOOM_COMMANDS_TOOL_GUIDANCE, "loom-commands-tools"],
+  [COMMAND_ENFORCEMENT_GUIDANCE, "loom-commands-tools"],
   [LOOM_RETRIEVAL_TOOL_GUIDANCE, "loom-retrieval-tools"],
 ]);
 

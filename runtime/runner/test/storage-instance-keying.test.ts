@@ -272,7 +272,7 @@ describe("stage A: instance keying — unit pins", () => {
     // user-scoped doc (from its own commit) plus Alice's instance (from
     // a KEYED lease-holder frame). Then the memory server retracts
     // Alice's entry — a former holder's catch-up (protocol.md §3's
-    // filter once the lease lapsed). The wire invariant the memory server
+    // filter once the lease ended). The wire invariant the memory server
     // now keeps (`v2-explicit-read.test.ts` "finding 1 (wire half)"): a
     // keyed delivery is retracted KEYED. This is the replica's side of
     // that contract — a keyed remove resolves to the named instance, an

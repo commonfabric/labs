@@ -46,6 +46,7 @@ import {
   type ProfileSpaceRootConfig,
   ProfileSpaceRootRefusal,
 } from "../lib/profile-space-root.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 const unrootedOwner = await Identity.fromPassphrase("repair-root unrooted");
 const plantedOwner = await Identity.fromPassphrase("repair-root planted");
@@ -69,6 +70,7 @@ describe("profileSpaceRoot()", () => {
 
   const serve = () => {
     server = new MemoryV2Server.Server({
+      namesInstances: namesInstancesByDefault,
       store: toFileUrl(`${storeDir}/`),
       authorizeSessionOpen: authorizeLoopbackSessionOpen,
       sessionOpenAuth: { audience: "did:key:z6Mk-profile-repair-root" },
@@ -502,7 +504,10 @@ describe("profileSpaceRoot()", () => {
         );
 
       beforeEach(async () => {
-        standalone = StandaloneMemoryServer.start({ connectionAuth: true });
+        standalone = StandaloneMemoryServer.start({
+          namesInstances: namesInstancesByDefault,
+          connectionAuth: true,
+        });
         keyDir = await Deno.makeTempDir({ prefix: "repair-root-key-" });
         await Deno.writeFile(
           join(keyDir, "admin.key"),

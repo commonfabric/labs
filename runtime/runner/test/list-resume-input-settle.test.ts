@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
   type SessionFactory,
@@ -45,6 +46,7 @@ class F implements SessionFactory {
   }
   async create(id: string, s?: Signer) {
     const client = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: loopback(this.#gs()),
     });
     const session = await client.mount(

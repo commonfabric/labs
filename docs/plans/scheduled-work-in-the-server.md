@@ -132,8 +132,8 @@ The declaration is already durable, because it sits on the piece's result. What
 is missing is an index the host can consult without loading every piece in
 every space.
 
-The proposal is a row on the direct-engine plane, alongside the existing
-`execution_lease` table: for each space, when its next scheduled wake is due.
+The proposal is a row on the direct-engine plane: for each space, when its next
+scheduled wake is due.
 That plane already carries exactly this kind of bookkeeping, under the rule
 that nothing on it is ever a commit.
 
@@ -266,8 +266,8 @@ Meter the wave rather than the action. The wave is already the unit that
 commits, is already counted, and already carries a deadline. Attribute within
 it by action for diagnosis rather than for billing.
 
-Keep a durable per-space ledger on the direct-engine plane, next to the lease
-and the schedule index, so the existing rule holds: bookkeeping never rides the
+Keep a durable per-space ledger on the direct-engine plane, next to the schedule
+index, so the existing rule holds: bookkeeping never rides the
 commit stream.
 
 Enforce at activation rather than mid-wave. Declining to activate a space whose

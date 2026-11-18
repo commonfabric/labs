@@ -61,50 +61,25 @@ export class CFSvg extends BaseElement {
   @property({ attribute: false })
   accessor content: CellHandle<string> | string = "";
 
-  private _unsubscribe: (() => void) | null = null;
+  /** The cell whose changes redraw the element, while it is connected. */
+  #followed: { cell: CellHandle<string>; cancel: () => void } | undefined;
 
-  constructor() {
-    super();
-    this.content = "";
+  override connectedCallback() {
+    super.connectedCallback();
+    this.#follow();
   }
 
-  private _getContentValue(): string {
-    if (isCellHandle<string>(this.content)) {
-      const read = this.content.lastRead();
-      return "value" in read ? read.value ?? "" : "";
-    }
-    return this.content ?? "";
+  override disconnectedCallback() {
+    super.disconnectedCallback();
+    this.#follow();
   }
 
   override willUpdate(
     changedProperties: Map<string | number | symbol, unknown>,
   ) {
     super.willUpdate(changedProperties);
-
-    // Handle Cell subscription before render so first render has correct value
-    if (changedProperties.has("content")) {
-      // Clean up previous subscription
-      if (this._unsubscribe) {
-        this._unsubscribe();
-        this._unsubscribe = null;
-      }
-
-      // Subscribe to new Cell if it's a Cell
-      if (this.content && isCellHandle(this.content)) {
-        const update = () => this.requestUpdate();
-        this._unsubscribe = this.content.subscribe(update, {
-          onRefused: update,
-        });
-      }
-    }
-  }
-
-  override disconnectedCallback() {
-    super.disconnectedCallback();
-    if (this._unsubscribe) {
-      this._unsubscribe();
-      this._unsubscribe = null;
-    }
+    // Before render, so that the first render reads the cell it follows.
+    this.#follow();
   }
 
   override render() {
@@ -117,12 +92,37 @@ export class CFSvg extends BaseElement {
         <div class="svg-content" part="content">${CFC_POLICY_PLACEHOLDER_TEXT}</div>
       `;
     }
-    const contentValue = this._getContentValue();
+    const contentValue = this.#getContentValue();
 
     return html`
       <div class="svg-content" part="content">
         ${sanitizeSvg(contentValue)}
       </div>
     `;
+  }
+
+  /**
+   * Subscribes to the cell `content` holds while the element is connected,
+   * and to nothing otherwise, cancelling the subscription it held before.
+   */
+  #follow(): void {
+    const cell = this.isConnected && isCellHandle<string>(this.content)
+      ? this.content
+      : undefined;
+    if (cell === this.#followed?.cell) return;
+    this.#followed?.cancel();
+    const update = () => this.requestUpdate();
+    this.#followed = cell && {
+      cell,
+      cancel: cell.subscribe(update, { onRefused: update }),
+    };
+  }
+
+  #getContentValue(): string {
+    if (isCellHandle<string>(this.content)) {
+      const read = this.content.lastRead();
+      return "value" in read ? read.value ?? "" : "";
+    }
+    return this.content ?? "";
   }
 }

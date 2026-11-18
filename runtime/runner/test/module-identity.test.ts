@@ -178,4 +178,35 @@ describe("computeModuleHashes", () => {
     // z imports nothing external, so it is independent of the runtime fingerprint
     expect(fp2.get("/z.ts")).toBe(fp1.get("/z.ts"));
   });
+
+  it("folds an additional identity dependency into its importer's identity", () => {
+    const p = program("/a.ts", {
+      "/a.ts": `export const a = 1;`,
+      "/b.ts": `export const b = 2;`,
+    });
+
+    const plain = computeModuleHashes(p);
+    const linked = computeModuleHashes(p, {
+      additionalInternalDeps: new Map([
+        ["/a.ts", [{ specifier: "source-root:b", target: "/b.ts" }]],
+      ]),
+    });
+
+    expect(linked.get("/a.ts")).not.toBe(plain.get("/a.ts"));
+    expect(linked.get("/b.ts")).toBe(plain.get("/b.ts"));
+  });
+
+  it("throws for an additional identity dependency on a module the program lacks", () => {
+    const p = program("/a.ts", { "/a.ts": `export const a = 1;` });
+
+    expect(() =>
+      computeModuleHashes(p, {
+        additionalInternalDeps: new Map([
+          ["/a.ts", [{ specifier: "source-root:b", target: "/b.ts" }]],
+        ]),
+      })
+    ).toThrow(
+      "Additional identity dependency from '/a.ts' targets missing module '/b.ts'.",
+    );
+  });
 });

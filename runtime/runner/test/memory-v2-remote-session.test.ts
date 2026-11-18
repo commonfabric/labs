@@ -28,6 +28,7 @@ import {
   type MemoryMessageFrame,
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   createStorageAddressResolver,
   MEMORY_STORAGE_PATH,
@@ -52,6 +53,7 @@ import {
   TEST_HELLO_SESSION_OPEN,
   testSessionOpenAuthFactory,
 } from "./memory-v2-test-utils.ts";
+import { DrivableWebSocket } from "./storage/drivable-web-socket.ts";
 
 function captureError(run: () => unknown): Error {
   try {
@@ -568,71 +570,10 @@ describe("StorageManager.registerSpaceHost", () => {
 });
 
 describe("WebSocketTransport failure signaling", () => {
-  // A socket the test opens, closes, and errors by hand. Nothing here waits on
-  // a real connection or a timer: the transport reaches its close and error
-  // handlers because the test dispatches those events synchronously.
-  class DrivableWebSocket extends EventTarget {
-    static readonly CONNECTING = 0;
-    static readonly OPEN = 1;
-    static readonly CLOSING = 2;
-    static readonly CLOSED = 3;
-    static instances: DrivableWebSocket[] = [];
-    readyState = DrivableWebSocket.CONNECTING;
-    bufferedAmount = 0;
-    /** Models native buffering, drained only by an explicit peer event. */
-    trackBuffer = false;
-
-    /** Largest observed native queue. */
-    peakBuffer = 0;
-
-    /** Peer notification when a frame enters the native queue. */
-    onSend?: (payload: EncodedMemoryMessage) => void;
-
-    binaryType: BinaryType = "blob";
-    readonly sent: EncodedMemoryMessage[] = [];
-    #sentWaiters: Array<{ count: number; resolve: () => void }> = [];
-    constructor(readonly url: string | URL) {
-      super();
-      DrivableWebSocket.instances.push(this);
-    }
-    send(payload: EncodedMemoryMessage): void {
-      if (this.trackBuffer) {
-        this.bufferedAmount += typeof payload === "string"
-          ? new TextEncoder().encode(payload).length
-          : payload.length;
-        this.peakBuffer = Math.max(this.peakBuffer, this.bufferedAmount);
-      }
-      this.sent.push(payload);
-      this.onSend?.(payload);
-      this.#sentWaiters = this.#sentWaiters.filter((waiter) => {
-        if (this.sent.length >= waiter.count) {
-          waiter.resolve();
-          return false;
-        }
-        return true;
-      });
-    }
-    whenSent(count: number): Promise<void> {
-      if (this.sent.length >= count) return Promise.resolve();
-      return new Promise((resolve) =>
-        this.#sentWaiters.push({ count, resolve })
-      );
-    }
-    openConnection(): void {
-      this.readyState = DrivableWebSocket.OPEN;
-      this.dispatchEvent(new Event("open"));
-    }
-    receive(payload: MemoryMessageFrame): void {
-      this.dispatchEvent(new MessageEvent("message", { data: payload }));
-    }
-    fail(error: Error): void {
-      this.dispatchEvent(new ErrorEvent("error", { error }));
-    }
-    close(): void {
-      this.readyState = DrivableWebSocket.CLOSED;
-      this.dispatchEvent(new Event("close"));
-    }
-  }
+  // The transport's sockets are `DrivableWebSocket`s, which the test opens,
+  // closes, and errors by hand. Nothing here waits on a real connection or a
+  // timer: the transport reaches its close and error handlers because the test
+  // dispatches those events synchronously.
 
   class DeferredBlob extends Blob {
     readonly started = Promise.withResolvers<void>();
@@ -793,7 +734,10 @@ describe("WebSocketTransport failure signaling", () => {
     it("keeps sending a refused control's remaining body records after the refusal arrives mid-body", async () => {
       const audience = (await Identity.fromPassphrase("credit-refusal")).did();
       await withTransport(async (transport, socket) => {
-        const connecting = MemoryClient.connect({ transport });
+        const connecting = MemoryClient.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport,
+        });
         const active = socket();
         active.openConnection();
         await active.whenSent(1);
@@ -1219,7 +1163,10 @@ describe("WebSocketTransport failure signaling", () => {
     it("disposes a Memory client while its session commit is blocked on credit", async () => {
       const audience = (await Identity.fromPassphrase("credit-disposal")).did();
       await withTransport(async (transport, socket) => {
-        const connecting = MemoryClient.connect({ transport });
+        const connecting = MemoryClient.connect({
+          instanceNames: namesInstancesByDefault(),
+          transport,
+        });
         const active = socket();
         active.openConnection();
         await active.whenSent(1);
@@ -1454,7 +1401,10 @@ describe("WebSocketTransport failure signaling", () => {
         ]
       ) {
         await withTransport(async (transport, socket) => {
-          const connecting = MemoryClient.connect({ transport });
+          const connecting = MemoryClient.connect({
+            instanceNames: namesInstancesByDefault(),
+            transport,
+          });
           const active = socket();
           active.openConnection();
           await active.whenSent(1);
@@ -2945,6 +2895,10 @@ describe("WebSocketTransport failure signaling", () => {
         signer,
         createNativeMemorySocket,
       );
+      // Positional, so the signed open this case reads as a text frame stays
+      // under the size the transport compresses from, which a naming
+      // declaration takes it over.
+      factory.setInstanceNames(false);
       let opened:
         | Awaited<ReturnType<RemoteSessionFactory["create"]>>
         | undefined;
@@ -3059,6 +3013,10 @@ describe("WebSocketTransport failure signaling", () => {
           signer,
           createNativeMemorySocket,
         );
+        // Positional, so the signed open this case reads as a text frame
+        // stays under the size the transport compresses from, which a naming
+        // declaration takes it over.
+        factory.setInstanceNames(false);
         const opening = factory.create(
           signer.did(),
           signer,
@@ -3148,7 +3106,10 @@ describe("WebSocketTransport failure signaling", () => {
         return write.promise;
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-queued-commit-replay",
@@ -3197,7 +3158,10 @@ describe("WebSocketTransport failure signaling", () => {
         return write.promise;
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-closing-commit-replay",
@@ -3245,7 +3209,10 @@ describe("WebSocketTransport failure signaling", () => {
         return Promise.reject(new Error("write failed"));
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-silent-write-failure",
@@ -3321,7 +3288,10 @@ describe("WebSocketTransport failure signaling", () => {
         };
       },
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-duplicate-commit",
@@ -3369,7 +3339,10 @@ describe("WebSocketTransport failure signaling", () => {
         return Promise.reject(writeFailure);
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-refused-write",
@@ -3419,7 +3392,10 @@ describe("WebSocketTransport failure signaling", () => {
         );
       }),
     );
-    const client = await MemoryClient.connect({ transport });
+    const client = await MemoryClient.connect({
+      instanceNames: namesInstancesByDefault(),
+      transport,
+    });
     try {
       const session = await client.mount(
         "did:key:z6Mk-closing-refusals",

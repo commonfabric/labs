@@ -160,18 +160,14 @@ export class CFHScroll extends BaseElement {
 
   get scrollContainer(): HTMLElement | null {
     if (!this._scrollContainer) {
-      this._scrollContainer = this.shadowRoot?.querySelector(
-        ".scroll-container",
-      ) as HTMLElement | null;
+      this._scrollContainer =
+        this.shadowRoot?.querySelector<HTMLElement>(".scroll-container") ??
+          null;
     }
     return this._scrollContainer;
   }
 
   override firstUpdated() {
-    // Cache reference
-    this._scrollContainer = this.shadowRoot?.querySelector(
-      ".scroll-container",
-    ) as HTMLElement | null;
     this.updateScrollState();
   }
 
@@ -179,39 +175,27 @@ export class CFHScroll extends BaseElement {
     super.connectedCallback();
     // Set up scroll listener after element is ready
     this.updateComplete.then(() => {
-      if (this.scrollContainer) {
-        (this.scrollContainer as HTMLElement).addEventListener(
-          "scroll",
-          this.handleScroll,
-        );
-      }
+      this.scrollContainer?.addEventListener("scroll", this.handleScroll);
     });
   }
 
   override disconnectedCallback() {
     super.disconnectedCallback();
-    if (this.scrollContainer) {
-      (this.scrollContainer as HTMLElement).removeEventListener(
-        "scroll",
-        this.handleScroll,
-      );
-    }
+    this.scrollContainer?.removeEventListener("scroll", this.handleScroll);
   }
 
   private handleScroll = () => {
     this.updateScrollState();
-    this.emit("cf-scroll", {
-      scrollLeft: (this.scrollContainer as HTMLElement)?.scrollLeft || 0,
-      scrollWidth: (this.scrollContainer as HTMLElement)?.scrollWidth || 0,
-      clientWidth: (this.scrollContainer as HTMLElement)?.clientWidth || 0,
-    });
+    // This listens on the scroll container, so there is one.
+    const { scrollLeft, scrollWidth, clientWidth } = this.scrollContainer!;
+    this.emit("cf-scroll", { scrollLeft, scrollWidth, clientWidth });
   };
 
   private updateScrollState() {
-    if (!this.scrollContainer || !this.fadeEdges) return;
+    const container = this.scrollContainer;
+    if (!container || !this.fadeEdges) return;
 
-    const { scrollLeft, scrollWidth, clientWidth } = this
-      .scrollContainer as HTMLElement;
+    const { scrollLeft, scrollWidth, clientWidth } = container;
     this._atStart = scrollLeft <= 0;
     this._atEnd = scrollLeft + clientWidth >= scrollWidth - 1;
   }
@@ -241,23 +225,19 @@ export class CFHScroll extends BaseElement {
    * Scroll to a specific horizontal position
    */
   scrollToX(x: number, smooth: boolean = true) {
-    if (this.scrollContainer) {
-      (this.scrollContainer as HTMLElement).scrollTo({
-        left: x,
-        behavior: smooth ? "smooth" : "auto",
-      });
-    }
+    this.scrollContainer?.scrollTo({
+      left: x,
+      behavior: smooth ? "smooth" : "auto",
+    });
   }
 
   /**
    * Scroll by a specific horizontal amount
    */
   scrollByX(x: number, smooth: boolean = true) {
-    if (this.scrollContainer) {
-      (this.scrollContainer as HTMLElement).scrollBy({
-        left: x,
-        behavior: smooth ? "smooth" : "auto",
-      });
-    }
+    this.scrollContainer?.scrollBy({
+      left: x,
+      behavior: smooth ? "smooth" : "auto",
+    });
   }
 }

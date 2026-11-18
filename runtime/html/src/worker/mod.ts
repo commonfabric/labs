@@ -13,11 +13,15 @@ export {
   canRenderLabelUnderPolicy,
   cellLabelRefusal,
   cellLabelSources,
+  defaultDisplayFit,
   type DisplayFitSources,
   type FitWatch,
+  integrityLabels,
+  type LabelDisplayFit,
   readRefusal,
   type RenderLabelSummary,
   rootRenderPolicyFor,
+  UNREADABLE_LABELS,
 } from "./display-fit.ts";
 export { generateChildKeys, generateKey } from "./keying.ts";
 export type {

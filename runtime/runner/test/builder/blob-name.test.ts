@@ -281,6 +281,22 @@ describe("nameBlob()", () => {
     expect(root.refusals[0]).toContain("`blobId`");
   });
 
+  it("throws in a handler whose frame holds no runtime", () => {
+    const frame = pushFrame({
+      runtime: undefined,
+      tx: undefined,
+      inHandler: true,
+      frameKind: "handler",
+    });
+    try {
+      expect(() => nameBlob(undefined, idOf(photo), "holiday.png")).toThrow(
+        "`nameBlob()` requires an executing runtime.",
+      );
+    } finally {
+      popFrame(frame);
+    }
+  });
+
   it("throws when called anywhere but a handler", () => {
     const frame = pushFrame({
       runtime,

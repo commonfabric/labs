@@ -2,6 +2,7 @@ import {
   createGithubGraphqlTransport,
   GithubClient,
 } from "@commonfabric/github-connector/client";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveGithubToken } from "./auth.ts";
 import { CollectionRequestQueue } from "./collection-request-queue.ts";
 import { GITHUB_HOST_USAGE, parseGithubHostCliOptions } from "./cli-options.ts";
@@ -31,7 +32,8 @@ export interface GithubHostCliDependencies {
   error: typeof console.error;
 }
 
-const defaultDependencies: GithubHostCliDependencies = {
+/** The dependencies `runGithubHostCli()` uses when its caller supplies none. */
+export const defaultGithubHostCliDependencies: GithubHostCliDependencies = {
   readEnv: (key) => Deno.env.get(key),
   resolveToken: resolveGithubToken,
   openFabric: openGithubFabricRuntime,
@@ -51,7 +53,7 @@ const defaultDependencies: GithubHostCliDependencies = {
 /** Run the laptop GitHub host until one collection or a shutdown signal. */
 export async function runGithubHostCli(
   argv: string[] = Deno.args,
-  dependencies: GithubHostCliDependencies = defaultDependencies,
+  dependencies: GithubHostCliDependencies = defaultGithubHostCliDependencies,
 ): Promise<number> {
   let fabric: GithubFabricRuntime | undefined;
   let host: GithubHost | undefined;
@@ -105,9 +107,7 @@ export async function runGithubHostCli(
         );
       } catch (error) {
         dependencies.error(
-          `${reason} GitHub collection failed: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+          `${reason} GitHub collection failed: ${describeFailure(error)}`,
         );
         if (options.once) throw error;
       } finally {
@@ -160,9 +160,7 @@ export async function runGithubHostCli(
     return 0;
   } catch (error) {
     dependencies.error(
-      `GitHub host failed: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `GitHub host failed: ${describeFailure(error)}`,
     );
     return 1;
   } finally {

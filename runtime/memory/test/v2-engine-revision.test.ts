@@ -31,6 +31,7 @@ Deno.test("memory v2 engine bootstraps the revision schema", async () => {
         "execution_lease",
         "execution_outbox",
         "head",
+        "instance_name_mark",
         "invocation",
         "op_checkpoint",
         "op_field_epoch",

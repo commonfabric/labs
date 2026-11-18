@@ -1,0 +1,316 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "IframeInputData": {
+        "properties": {
+          "subtitle": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "subtitle"
+        ],
+        "type": "object"
+      },
+      "IframeOutputData": {
+        "properties": {
+          "accentColor": {
+            "type": "string"
+          },
+          "bookmarks": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "preferredTool": {
+            "$ref": "#/$defs/YardTool"
+          }
+        },
+        "required": [
+          "preferredTool",
+          "accentColor",
+          "bookmarks"
+        ],
+        "type": "object"
+      },
+      "YardTool": {
+        "enum": [
+          "inspect",
+          "move"
+        ]
+      }
+    },
+    "description": "What a Orbital Salvage Yard piece is instantiated with.",
+    "properties": {
+      "input": {
+        "$ref": "#/$defs/IframeInputData",
+        "default": {
+          "subtitle": "Recover drifting hardware and assemble a station that every operator can shape.",
+          "title": "Orbital Salvage Yard"
+        },
+        "description": "What the guest reads and cannot write."
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "user"
+          }
+        ],
+        "default": {
+          "accentColor": "#f4b860",
+          "bookmarks": {},
+          "preferredTool": "move"
+        },
+        "description": "This user's own tool and camera."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "iframe-orbital-salvage-yard/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "IframeOutputData": {
+        "properties": {
+          "accentColor": {
+            "type": "string"
+          },
+          "bookmarks": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "preferredTool": {
+            "$ref": "#/$defs/YardTool"
+          }
+        },
+        "required": [
+          "preferredTool",
+          "accentColor",
+          "bookmarks"
+        ],
+        "type": "object"
+      },
+      "IframeStateData": {
+        "properties": {
+          "moduleTransformIds": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "moduleTransforms": {
+            "additionalProperties": {
+              "$ref": "#/$defs/ModuleTransform"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "modules": {
+            "items": {
+              "$ref": "#/$defs/StationModule"
+            },
+            "type": "array"
+          },
+          "releasedSnapClaims": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "snapClaims": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ModuleSnapClaim"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "snapTargets": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "modules",
+          "moduleTransforms",
+          "moduleTransformIds",
+          "snapClaims",
+          "snapTargets"
+        ],
+        "type": "object"
+      },
+      "ModuleConnector": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "normal": {
+            "$ref": "#/$defs/Vector3Tuple"
+          },
+          "offset": {
+            "$ref": "#/$defs/Vector3Tuple"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "offset",
+          "normal"
+        ],
+        "type": "object"
+      },
+      "ModuleKind": {
+        "enum": [
+          "hub",
+          "habitat",
+          "cargo",
+          "solar",
+          "relay"
+        ]
+      },
+      "ModuleSnapClaim": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "movingConnectorId": {
+            "type": "string"
+          },
+          "rotationQuarterTurns": {
+            "type": "number"
+          },
+          "targetConnectorId": {
+            "type": "string"
+          },
+          "targetModuleId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "movingConnectorId",
+          "targetModuleId",
+          "targetConnectorId",
+          "rotationQuarterTurns"
+        ],
+        "type": "object"
+      },
+      "ModuleTransform": {
+        "properties": {
+          "position": {
+            "$ref": "#/$defs/Vector3Tuple"
+          },
+          "rotationQuarterTurns": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "position",
+          "rotationQuarterTurns"
+        ],
+        "type": "object"
+      },
+      "StationModule": {
+        "properties": {
+          "color": {
+            "$ref": "#/$defs/Vector3Tuple"
+          },
+          "connectors": {
+            "items": {
+              "$ref": "#/$defs/ModuleConnector"
+            },
+            "type": "array"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ModuleKind"
+          },
+          "label": {
+            "type": "string"
+          },
+          "transform": {
+            "$ref": "#/$defs/ModuleTransform"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "color",
+          "transform",
+          "connectors"
+        ],
+        "type": "object"
+      },
+      "Vector3Tuple": {
+        "items": {
+          "type": "number"
+        },
+        "type": "array"
+      },
+      "YardTool": {
+        "enum": [
+          "inspect",
+          "move"
+        ]
+      }
+    },
+    "description": "A Orbital Salvage Yard piece.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "output": {
+        "$ref": "#/$defs/IframeOutputData",
+        "description": "What the guest publishes, kept for each user."
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "What the guest stores, shared by everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "output",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

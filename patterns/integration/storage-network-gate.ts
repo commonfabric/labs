@@ -1,5 +1,7 @@
 /** Relays a test client's storage traffic and holds reconnections during an outage. */
 
+import { upgradeMemoryWebSocket } from "@commonfabric/memory/v2/websocket-upgrade";
+
 /** Owns a local relay whose paused requests wait for an explicit resume. */
 export class StorageNetworkGate {
   #server: Deno.HttpServer<Deno.NetAddr>;
@@ -74,7 +76,7 @@ export class StorageNetworkGate {
     }
     target.protocol = target.protocol === "https:" ? "wss:" : "ws:";
     const upstream = new WebSocket(target);
-    const { socket, response } = Deno.upgradeWebSocket(request);
+    const { socket, response } = upgradeMemoryWebSocket(request);
     const opened = new Promise<void>((resolve, reject) => {
       upstream.addEventListener("open", () => resolve(), { once: true });
       upstream.addEventListener(

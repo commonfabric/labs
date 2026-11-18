@@ -3,9 +3,15 @@ import { describe, it } from "@std/testing/bdd";
 
 import { createNativeMemorySocket } from "../../src/storage/memory-socket.ts";
 import {
+  MemoryDialLimiter,
   ROUTED_FRAME_SLOTS,
   WebSocketTransport,
 } from "../../src/storage/v2-remote-session.ts";
+import {
+  type DrivableSockets,
+  drivableSockets,
+  type DrivableWebSocket,
+} from "./drivable-web-socket.ts";
 
 describe("WebSocketTransport", () => {
   it("receives a large native frame with a null limit and rejects it after the limit is omitted", async () => {
@@ -181,5 +187,106 @@ describe("WebSocketTransport", () => {
       await Promise.all([...socketClosures, ...peerClosures]);
       await server.shutdown();
     }
+  });
+
+  describe("dials", () => {
+    // `send()` reaches its transport's dial before it first waits, so every
+    // dial the limiter admits is in `dials` by the time `send()` returns.
+
+    /** A transport per space at `origin`, all dialing through `limiter`. */
+    const transportsFor = (
+      sockets: DrivableSockets,
+      limiter: MemoryDialLimiter,
+      origin: string,
+      spaces: string[],
+    ): WebSocketTransport[] =>
+      spaces.map((space) =>
+        new WebSocketTransport(
+          new URL(`${origin}/api/storage/memory?space=${space}`),
+          true,
+          () => {},
+          sockets.createSocket,
+          limiter,
+        )
+      );
+
+    /** Sends on each transport, and returns how each send settled. */
+    const sendOn = (
+      transports: WebSocketTransport[],
+    ): Promise<"sent" | Error>[] =>
+      transports.map((transport) =>
+        transport.send("hello").then(() => "sent" as const, (error) => error)
+      );
+
+    /** The space each dial so far names. */
+    const dialedSpaces = (sockets: DrivableSockets): (string | null)[] =>
+      sockets.dials.map((dial) => new URL(dial.url).searchParams.get("space"));
+
+    const events: [string, (dial: DrivableWebSocket) => void][] = [
+      ["opens", (dial) => dial.openConnection()],
+      ["closes", (dial) => dial.close()],
+      ["fails", (dial) => dial.fail(new Error("handshake refused"))],
+    ];
+    for (const [event, fire] of events) {
+      it(`starts a host's next dial once a dial in flight ${event}`, async () => {
+        const sockets = drivableSockets();
+        const transports = transportsFor(
+          sockets,
+          new MemoryDialLimiter(2),
+          "ws://memory.test",
+          ["one", "two", "three"],
+        );
+        const sends = sendOn(transports);
+        try {
+          expect(dialedSpaces(sockets)).toEqual(["one", "two"]);
+          fire(sockets.dials[1]);
+          await sockets.dialed(3);
+          expect(dialedSpaces(sockets)).toEqual(["one", "two", "three"]);
+        } finally {
+          await Promise.all(transports.map((transport) => transport.close()));
+          await Promise.all(sends);
+        }
+      });
+    }
+
+    it("dials another host while one host's dials wait", async () => {
+      const sockets = drivableSockets();
+      const limiter = new MemoryDialLimiter(1);
+      const transports = [
+        ...transportsFor(sockets, limiter, "ws://memory.test", ["one", "two"]),
+        ...transportsFor(sockets, limiter, "ws://other.test", ["three"]),
+      ];
+      const sends = sendOn(transports);
+      try {
+        expect(dialedSpaces(sockets)).toEqual(["one", "three"]);
+      } finally {
+        await Promise.all(transports.map((transport) => transport.close()));
+        await Promise.all(sends);
+      }
+    });
+
+    it("refuses a send whose dial is waiting when its transport closes, and never dials it", async () => {
+      const sockets = drivableSockets();
+      const transports = transportsFor(
+        sockets,
+        new MemoryDialLimiter(1),
+        "ws://memory.test",
+        ["one", "two", "three"],
+      );
+      const sends = sendOn(transports);
+      try {
+        await transports[1].close();
+        expect(await sends[1]).toMatchObject({
+          name: "ConnectionError",
+          message: "Memory transport closed",
+        });
+        sockets.dials[0].close();
+        await sockets.dialed(2);
+        expect(dialedSpaces(sockets)).toEqual(["one", "three"]);
+      } finally {
+        await Promise.all(transports.map((transport) => transport.close()));
+        await Promise.all(sends);
+      }
+    });
   });
 });

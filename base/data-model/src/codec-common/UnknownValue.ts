@@ -19,7 +19,7 @@ import { ProblematicStateError } from "./ProblematicStateError.ts";
  * Container for an unrecognized type's data, used for round-tripping. When the
  * codec system encounters a tag no codec claims during decoding, it wraps the
  * tag and state here; on re-encoding, the preserved pair reproduces the
- * original wire form. See Section 3.3 of the formal spec.
+ * original wire form. See Section 3.3 of `1-fabric-values.md`.
  *
  * The tag is a real tag, checked at construction. That is what makes the round
  * trip a promise rather than a hope: this class encodes back to `<its tag>`

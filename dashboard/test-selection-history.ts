@@ -18,6 +18,7 @@
 import { pooledMap } from "@std/async/pool";
 import { z } from "zod";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type Manifest,
   MANIFESTS_LOOKED_BACK,
@@ -26,7 +27,6 @@ import {
 import { dashboardCacheFile } from "./history-files.ts";
 import { escapeHtml, friendlyError, memo, multiSparkline } from "./lib.ts";
 import {
-  corpusSeconds,
   flakyCount,
   generatedAtOf,
   MANIFEST_SHARE_MS,
@@ -34,7 +34,7 @@ import {
   manifestNames,
   type ManifestReader,
   readManifest,
-  selectedSeconds,
+  selectedCount,
   selectedShare,
   TEST_SELECTION_BUCKET,
   TEST_SELECTION_PREFIX,
@@ -43,18 +43,17 @@ import { CHART_LINE } from "./theme.ts";
 import type { TileView } from "./types.ts";
 
 /**
- * Counts and test times retained from one validated manifest. A cache entry
- * missing any of them fails the file's validation, which rebuilds the cache
- * from the bucket.
+ * Counts retained from one validated manifest. A cache entry missing any of
+ * them fails the file's validation, which rebuilds the cache from the bucket.
  */
 const countsSchema = z.object({
   flaky: z.number().int().nonnegative(),
 
-  /** Seconds one execution of every identity in the corpus costs. */
-  corpusSeconds: z.number().nonnegative(),
+  /** How many identities the corpus holds. */
+  corpus: z.number().int().nonnegative(),
 
-  /** Seconds one execution of every identity the packing would run costs. */
-  selectedSeconds: z.number().nonnegative(),
+  /** How many identities the packing would run. */
+  selected: z.number().int().nonnegative(),
 });
 
 /** Validated contents of the derived cache file. */
@@ -74,8 +73,7 @@ export interface SelectionSample {
   at: number;
 
   /**
-   * Counts, or `null` for an unreadable manifest or a corpus with no test
-   * time.
+   * Counts, or `null` for an unreadable manifest or an empty corpus.
    */
   counts: SelectionCounts | null;
 }
@@ -102,8 +100,8 @@ export interface TestSelectionSource {
 function countsOf(manifest: Manifest): SelectionCounts {
   return {
     flaky: flakyCount(manifest),
-    corpusSeconds: corpusSeconds(manifest),
-    selectedSeconds: selectedSeconds(manifest),
+    corpus: manifest.entries.length,
+    selected: selectedCount(manifest),
   };
 }
 
@@ -237,14 +235,14 @@ export function makeTestSelectionSource(options: {
                   keptRefusals.set(name, error);
                 }
                 errors.push(
-                  `${name}: ${error instanceof Error ? error.message : error}`,
+                  `${name}: ${describeFailure(error)}`,
                 );
               }
             }
             if (counts !== undefined) kept[name] = counts;
             return {
               at: Date.parse(generatedAtOf(name) ?? ""),
-              counts: counts === undefined || counts.corpusSeconds === 0
+              counts: counts === undefined || counts.corpus === 0
                 ? null
                 : counts,
             };
@@ -335,7 +333,7 @@ export function withSelectionHistory(
     segment.vals.push(
       metric === "flaky"
         ? counts.flaky
-        : selectedShare(counts.selectedSeconds, counts.corpusSeconds),
+        : selectedShare(counts.selected, counts.corpus),
     );
     segment.xs?.push(duration === 0 ? 0.5 : (at - first) / duration);
   }

@@ -285,6 +285,9 @@ export const recentOrders = (orders: SqliteDb) =>
   );
 ```
 
+The scope is read when the pattern is built, so it is written in the pattern:
+a pattern input or a computed value cannot supply it.
+
 `PerSession<>` on the result field and `.asScope("session")` on the query do
 the same thing, and a session-scoped database makes its queries session-scoped
 without a declaration. Use a session-scoped result when each session needs its

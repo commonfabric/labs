@@ -20,6 +20,7 @@ import {
   startFuseMemoryProxy,
   TraceBeforeRelayQueue,
 } from "../../integration/fuse-memory-proxy.ts";
+import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
 
 describe("fuse-memory-proxy", () => {
   it("persists a trace before relaying its upstream frame", async () => {
@@ -80,7 +81,9 @@ describe("fuse-memory-proxy", () => {
   it("relays binary frames and records their expanded text", async () => {
     const directory = await Deno.makeTempDir();
     const tracePath = `${directory}/memory-frames`;
-    const upstream = StandaloneMemoryServer.start();
+    const upstream = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+    });
     const proxy = startFuseMemoryProxy(new URL(upstream.url), tracePath);
     const address = proxy.server.addr as Deno.NetAddr;
     const socket = new WebSocket(`ws://${address.hostname}:${address.port}`);
@@ -130,7 +133,9 @@ describe("fuse-memory-proxy", () => {
   it("records each upstream frame before forwarding it", async () => {
     const directory = await Deno.makeTempDir();
     const tracePath = `${directory}/memory-frames`;
-    const upstream = StandaloneMemoryServer.start();
+    const upstream = StandaloneMemoryServer.start({
+      namesInstances: namesInstancesByDefault,
+    });
     const proxy = startFuseMemoryProxy(new URL(upstream.url), tracePath);
     const address = proxy.server.addr as Deno.NetAddr;
     const socket = new WebSocket(`ws://${address.hostname}:${address.port}`);

@@ -11,6 +11,7 @@
  * string can be in that name no source at all.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   type FabricRef,
   parseFabricRef,
@@ -71,9 +72,7 @@ export function classifyPieceOriginString(
   } catch (cause) {
     return {
       kind: "unusable",
-      reason: `${source} is not a usable fabric URL: ${
-        cause instanceof Error ? cause.message : String(cause)
-      }`,
+      reason: `${source} is not a usable fabric URL: ${describeFailure(cause)}`,
     };
   }
   if (ref !== undefined) {

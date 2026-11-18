@@ -198,18 +198,24 @@ currency. The existing overlay and retirement rules below still apply.
      routes link chains through user-scoped docs (the #6179 review's
      population audit).
      A serving runtime's commit reads one such row differently (a
-     corollary that narrows the ruling above and awaits the owner's
-     ruling): an absent user- or session-scoped instance of a document
-     that another derivation registered in the same serving runtime
-     declares as a write — its output, or a store a builtin keeps
-     (scheduler-v2 README §4.3) — is one the serving loop owes and has
-     not produced yet, so it is transit for that runtime, not knowledge.
-     The read still reads `undefined`, but the served run that read it
-     commits nothing (serving-loop.md §3d) and runs again once the
-     instance is produced. A writer that never produces a principal's
-     instance therefore holds back its served readers' commits for that
-     instance indefinitely; the client's own echo of it persists (§4's
-     arrival gate).
+     corollary that narrows the ruling above): an absent user- or
+     session-scoped instance of a document that another derivation
+     registered in the same serving runtime declares as a write — its
+     output, or a store a builtin keeps (scheduler-v2 README §4.3) — and
+     that has not yet run for that instance is one the serving loop owes
+     and has not produced yet, so it is transit for that runtime, not
+     knowledge. The read still reads `undefined`, but the served run that
+     read it commits nothing (serving-loop.md §3d) and runs again once
+     the instance is produced. A JavaScript derivation whose run for the
+     instance finished without being withdrawn has produced it, whether
+     or not anything is there: a run whose result is `undefined` writes
+     nothing, and the absence is then the instance's state (RULED
+     2026-11-17, owner: "a served run that yields `undefined` counts as
+     having produced its instance"). A run that was itself withdrawn
+     produced nothing, and a builtin, which can write its output after its
+     run returns, is owed until it writes. Only such a writer holds back
+     its served readers' commits for a principal's instance; the client's
+     own echo of it persists (§4's arrival gate).
   2. **A lift that THROWS the error takes the same disposition.** The
      refusal propagates out of the lift body (the body did not catch
      it) and produces an undefined result through the ordinary result
@@ -530,11 +536,35 @@ renders the STORED value whatever the layer holds: the store wins,
 the disposition every divergence gets (a divergent speculative cid
 layer is inadmissible content that can never arrive; holding the
 entry for it would strand the entry, and its sibling layers,
-forever). A cid doc with NO confirmed cover still holds the entry:
-nothing has served the schema document yet. Pinned in
-`speculation-arrival-gate.test.ts` — scripted with its mutation, and
-on a real replica for identical, divergent, and unstored cid
-writes.** Carriage: the covering commit's class rides session-frame
+forever). A cid doc with NO confirmed cover holds the entry while an
+arrived document the entry wrote names it — the confirmed version's
+envelope, as the store has it, names it as its schema document or a
+version-2 label document, which a frame delivers apart from the
+envelope, so the cid doc can arrive after the document naming it —
+and while the entry wrote no other document: nothing has served the
+cid doc, and the layer may be all that holds it. Once every other
+document the entry wrote has arrived and none of them names it, it no
+longer holds the entry: the speculative run minted it for an envelope
+the served derivation did not write (a labeled write the serving
+runtime refused, a schema the serving side stamps differently), so
+the store never comes to hold it, and holding the entry for it would
+strand the entry and mask the served values of every document beside
+it. Only the documents the entry wrote are consulted: another
+confirmed document naming the same cid does not hold the entry.
+Retirement drops the cid layer from the replica, so a read of the cid
+doc there finds nothing; CFC schema resolution falls back to the
+realm's schema registry, which holds what the speculative run
+registered as it staged the document (`loadSchemaDocument` in
+`runtime/runner/src/cfc/prepare.ts`). A replica double that reports no
+names (`envelopeDocuments` absent from `speculationRetirementView`)
+holds the entry, as a name would. Pinned in
+`speculation-arrival-gate.test.ts` — scripted with its mutation, on a
+real replica for identical, divergent, and unstored cid writes, and
+scripted for an unstored cid beside arrived documents that do and do
+not name it — and in `served-effect-watching-client.test.ts`, where a
+client watching a served `fetchText` or `generateText` whose first
+request was refused shows the served results.** Carriage: the covering
+commit's class rides session-frame
 upserts as `coverClass` (populated only under the flag — the OFF wire
 is byte-identical), is recorded on the replica's confirmed record
 (frames on integrate; `authored`/`derived` at own-commit promotions),

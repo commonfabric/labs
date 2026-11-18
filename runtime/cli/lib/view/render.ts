@@ -13,24 +13,29 @@
 import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
 import {
   cpLen,
-  LEADING_ESCAPE,
+  ESCAPE_SPLIT,
   paint,
   RESET,
   stripAnsi,
   type Style,
   term,
-  visibleWidth,
 } from "./ansi.ts";
 import { BLAME_WIDTH, blameLabel, type BlameLine } from "./blame.ts";
 import type { Document, Line, StructureNode, ViewMode } from "./model.ts";
 import {
   type DisplayCell,
+  displayColumnOf,
   displayLine,
   type DisplayMode,
   displayWidth,
-  glyphFor,
+  drawnCharacters,
+  showControls,
+  shownCells,
+  truncate,
 } from "./display.ts";
 import { overlaySpanStyle, spanStyle } from "./highlight.ts";
+import { firstShown } from "./lineedit.ts";
+import { charColumns, columns, graphemes, visibleWidth } from "./width.ts";
 import { lineBg, styleFor, ui } from "./theme.ts";
 import {
   buildWrapPlan,
@@ -247,8 +252,9 @@ export interface ViewState {
    * coexist. */
   dialog?: DialogState | null;
 
-  /** The text cursor, in document coordinates (line + display column), when
-   * edit mode has it visible. The pager positions the real terminal cursor. */
+  /** The text cursor, in document coordinates (line + source column, in code
+   * points), when edit mode has it visible. The pager positions the real
+   * terminal cursor. */
   cursor?: { line: number; col: number } | null;
 
   /** Edit-mode key hints, shown on the status line in place of the navigation
@@ -288,7 +294,7 @@ export interface ViewState {
   viewMode?: ViewMode;
 
   /** Whether the content holds non-printable characters, so the navigation help
-   * advertises the display-mode key `C`. */
+   * advertises the display-mode key `c`. */
   hasNonPrintables?: boolean;
 
   /** Lines shown just above the status/prompt bar (e.g. the list of files an
@@ -346,21 +352,24 @@ function layout(
 }
 
 /**
- * 1-based terminal (row, col) for the text cursor, or null when there is no
- * cursor, it is scrolled off screen, or an overlay or dialog covers the content.
- * Mirrors the layout `renderFrame` uses, including a wrapped continuation's
- * screen row and display-column offset.
+ * 1-based terminal (row, col) for the text cursor: the one in a dialog's
+ * focused input line while a dialog is up, and otherwise the one in the
+ * content. Null when there is no cursor, it is scrolled off screen, or an
+ * overlay covers the content. Mirrors the layout `renderFrame` uses, including
+ * a wrapped continuation's screen row and display-column offset.
  */
 export function cursorScreenPos(
   doc: Document,
   view: ViewState,
 ): { row: number; col: number } | null {
-  if (!view.cursor || view.overlay || view.dialog) return null;
+  if (view.dialog) return dialogCursorPos(view, view.dialog);
+  if (!view.cursor || view.overlay) return null;
   const { line, col } = view.cursor;
   if (line < 0 || line >= doc.lines.length) return null;
   const { gutterWidth, guideWidth, contentWidth } = layout(doc, view);
+  const displayCol = displayColumnOf(doc.lines[line], view.displayMode, col);
   let screenLine = line;
-  let contentCol = col - view.left;
+  let contentCol = displayCol - view.left;
   if (view.wrapMode !== "off") {
     const plan = view.wrapPlan ??
       buildWrapPlan(
@@ -370,9 +379,9 @@ export function cursorScreenPos(
         new Map(),
         view.wrapMode,
       );
-    const row = wrappedRowForPosition(plan, line, col);
+    const row = wrappedRowForPosition(plan, line, displayCol);
     screenLine = row?.row ?? plan.firstRow[line];
-    contentCol = (row?.prefixWidth ?? 0) + col - (row?.offset ?? 0);
+    contentCol = (row?.indentWidth ?? 0) + displayCol - (row?.offset ?? 0);
   }
   const contentHeight = view.height - 1;
   const r = screenLine - view.top;
@@ -422,6 +431,13 @@ export interface DialogState {
    * rather than being centered. */
   readonly output?: boolean;
 
+  /** The indexes of the body's rows that are drawn emphasized, brighter
+   * than the rest. */
+  readonly emphasized?: readonly number[];
+
+  /** The links on each of the body's rows, by row. */
+  readonly links?: readonly (readonly DialogLink[])[];
+
   /** The width the box gives the body, in columns, when that is fixed rather
    * than fitted to the body's lines. */
   readonly width?: number;
@@ -433,11 +449,89 @@ export interface DialogState {
   /** Index of a button drawn mid-press: shifted one column right with its
    * shadow hidden, for the brief animation after it is activated. */
   readonly pushed?: number;
+
+  /** Controls drawn under the body, each after a blank row. Tab visits them
+   * before the buttons. */
+  readonly fields?: readonly DialogField[];
+
+  /** Index of the focused field, or -1 when none is. */
+  readonly fieldFocus?: number;
 }
+
+/** A link to `url` on the columns of a row of text from `from` up to `to`,
+ * counted in code points. */
+export interface DialogLink {
+  readonly from: number;
+  readonly to: number;
+  readonly url: string;
+}
+
+/** Returns the web addresses in `text`, each of which ends before
+ * punctuation that ends a clause or a sentence. */
+export function webAddresses(text: string): IterableIterator<RegExpExecArray> {
+  return text.matchAll(/https?:\/\/\S*[^\s.,;:!?)\]'"]/g);
+}
+
+/** A check box, drawn as Turbo Vision draws one: `[X]` when it is checked
+ * and `[ ]` when it is not, then its label, whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogCheckBox {
+  readonly kind: "checkBox";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly checked: boolean;
+}
+
+/** A field that one line of text is typed into, under a label whose first
+ * letter matching {@link hotkey} is drawn highlighted. The field shows
+ * `value` from the character at `scroll`, moved on as far as it takes to
+ * show the cursor, and an arrow at either end says the text runs on past
+ * it. Selected text is drawn highlighted. */
+export interface DialogInputLine {
+  readonly kind: "inputLine";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly value: string;
+
+  /** How many characters precede the cursor. */
+  readonly cursor: number;
+
+  readonly scroll: number;
+
+  /** Whether the whole of `value` is selected. */
+  readonly selected: boolean;
+}
+
+/** One of a set of radio buttons: a label whose first letter matching
+ * {@link hotkey} is drawn highlighted. */
+export interface DialogRadioButton {
+  readonly label: string;
+  readonly hotkey: string;
+}
+
+/** A set of radio buttons, drawn as Turbo Vision draws them: under a label
+ * whose first letter matching {@link hotkey} is drawn highlighted, a row for
+ * each button, with `(•)` before the selected button and `( )` before each
+ * other. */
+export interface DialogRadioButtons {
+  readonly kind: "radioButtons";
+  readonly label: string;
+  readonly hotkey: string;
+  readonly buttons: readonly DialogRadioButton[];
+
+  /** The index in {@link buttons} of the selected button. */
+  readonly selected: number;
+}
+
+/** A control in a dialog other than a button. */
+export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
 
 interface Cell {
   ch: string;
   style: Style;
+
+  /** The address the cell links to, if any. */
+  link?: string;
 }
 
 const EMPTY_STYLE: Style = {};
@@ -707,7 +801,7 @@ export function renderFrame(doc: Document, view: ViewState): string[] {
         wrappedRow?.offset ?? view.left,
         sourceWidth,
         wrappedRow?.sourceEnd ?? Number.POSITIVE_INFINITY,
-        wrappedRow?.prefixWidth ?? 0,
+        wrappedRow?.indentWidth ?? 0,
         wrappedRow?.wrapMarker ?? false,
         displayedCells,
         displayedSelection,
@@ -746,7 +840,7 @@ function renderContentRow(
   offset: number,
   sourceWidth: number,
   sourceEnd: number,
-  prefixWidth: number,
+  indentWidth: number,
   wrapMarker: boolean,
   display: readonly DisplayCell[] | undefined,
   selection: SelectionSpan | null,
@@ -801,7 +895,7 @@ function renderContentRow(
     contentWidth,
     sourceWidth,
     sourceEnd,
-    prefixWidth,
+    indentWidth,
     wrapMarker,
     selection,
     display,
@@ -963,7 +1057,7 @@ function composeContent(
   width: number,
   sourceWidth: number,
   sourceEnd: number,
-  prefixWidth: number,
+  indentWidth: number,
   showWrapMarker: boolean,
   sel: SelectionSpan | null,
   display: readonly DisplayCell[] | undefined,
@@ -982,39 +1076,39 @@ function composeContent(
   for (let i = 0; i < cells.length; i++) {
     cells[i] = { ch: " ", style: rowBg };
   }
+  // A row whose one character is wider than its text draws the character
+  // over the marker's column instead of the marker.
+  const overMarker = showWrapMarker && display !== undefined &&
+    Math.min(display.length, sourceEnd) > offset + sourceWidth;
   if (line && display) {
     // The display list may hold fewer cells than the line has code points —
     // ANSI sequences are hidden and runs of control codes collapse — so cells
     // are placed by their position in this list, not by their source column.
     // Each cell still knows the source column it stands for, which is what the
     // selection and search ranges are stated in.
+    // A cell is in a match or the selection when any source column it
+    // stands for is.
     const styleCell = (dc: DisplayCell): Style => {
       if (!color) return EMPTY_STYLE;
-      const hit = lineMatches ? matchStyle(lineMatches, dc.col) : null;
-      if (hit) return hit;
+      for (let col = dc.col; lineMatches && col < dc.sourceEnd; col++) {
+        const hit = matchStyle(lineMatches, col);
+        if (hit) return hit;
+      }
       const base = mergeBg(dc.ansi ?? dc.syntax, rowBg);
       const inSel = sel !== null &&
-        dc.col >= sel.lo && dc.col < sel.hi;
+        dc.sourceEnd > sel.lo && dc.col < sel.hi;
       return inSel ? mergeBg(base, sel.bg) : base;
     };
-    for (let d = 0; d < prefixWidth && d < display.length; d++) {
-      const dc = display[d];
-      cells[d] = { ch: dc.ch, style: styleCell(dc) };
-    }
     const end = Math.min(
       display.length,
       sourceEnd,
-      offset + sourceWidth,
+      offset + sourceWidth + (overMarker ? 1 : 0),
     );
-    for (let d = offset; d < end; d++) {
-      const idx = prefixWidth + d - offset;
-      const dc = display[d];
-      cells[idx] = { ch: dc.ch, style: styleCell(dc) };
-    }
+    placeDisplayCells(cells, indentWidth, display, offset, end, styleCell);
   }
 
-  if (showWrapMarker) {
-    cells[prefixWidth + sourceWidth] = {
+  if (showWrapMarker && !overMarker) {
+    cells[indentWidth + sourceWidth] = {
       ch: "\\",
       style: color ? mergeBg(ui.wrapMarker, rowBg) : EMPTY_STYLE,
     };
@@ -1048,6 +1142,30 @@ function composeContent(
   }
 
   return cellsToAnsi(cells, color);
+}
+
+/** Write the cells of `display` from `from` to `to` in `cells` from column
+ * `at`, each in `style(cell)`, leaving blank the columns of a wide character
+ * that either end cuts. */
+function placeDisplayCells(
+  cells: Cell[],
+  at: number,
+  display: readonly DisplayCell[],
+  from: number,
+  to: number,
+  style: (cell: DisplayCell) => Style,
+): void {
+  for (let d = from; d < to; d++) {
+    let first = d;
+    while (first > from && display[first].ch === "") first--;
+    let end = d + 1;
+    while (display[end]?.ch === "") end++;
+    const cut = display[first].ch === "" || end > to;
+    cells[at + d - from] = {
+      ch: cut ? " " : display[d].ch,
+      style: style(display[d]),
+    };
+  }
 }
 
 /** The search-match style for a cell at source column `col`, or null when the
@@ -1153,7 +1271,7 @@ function renderStatus(
       label: b.label,
     }));
   } else if (view.message) {
-    text = view.message;
+    text = showControls(view.message);
   } else if (view.editHint) {
     hints = view.editHint;
   } else if (view.selected) {
@@ -1192,7 +1310,7 @@ function renderStatus(
   }
   const leftAnsi = leftHints
     ? hintsAnsi(leftHints)
-    : paint(leftPlain, ui.statusBar);
+    : linkAddresses(text, leftPlain, (part) => paint(part, ui.statusBar));
   const rightAnsi =
     (file ? paint(file, ui.statusFile) + paint("  ", ui.statusBar) : "") +
     paint(pos, ui.statusBar);
@@ -1201,6 +1319,28 @@ function renderStatus(
   const line = leftAnsi + paint(" ".repeat(space), ui.statusBar) + rightAnsi;
   const pad = view.width - (leftW + space + rightW);
   return pad > 0 ? line + paint(" ".repeat(pad), ui.statusBar) : line;
+}
+
+/**
+ * Returns `shown`, the start of `text` that fits, painted with `paintText`,
+ * with each web address in it made a link to the whole address in `text`.
+ */
+function linkAddresses(
+  text: string,
+  shown: string,
+  paintText: (part: string) => string,
+): string {
+  const kept = shown === text ? text.length : shown.length - 1;
+  let out = "";
+  let at = 0;
+  for (const match of webAddresses(text)) {
+    if (match.index >= kept) break;
+    const end = Math.min(match.index + match[0].length, kept);
+    out += paintText(shown.slice(at, match.index)) +
+      term.hyperlink(match[0], paintText(shown.slice(match.index, end)));
+    at = end;
+  }
+  return out + paintText(shown.slice(at));
 }
 
 /** Keep the leading key hints that fit within `budget` visible columns. */
@@ -1214,29 +1354,6 @@ function fitHints(
     out.push(h);
   }
   return out;
-}
-
-/** Replace the control characters in `text` with their Control Pictures glyphs,
- * the same substitution the content rows use. This is applied to the strings
- * that reach the terminal outside `displayLine` — the status bar's file name and
- * the dialog body — which can carry a file name a user chose. One code point in
- * gives one code point out, so the callers' width arithmetic is unchanged. */
-function showControls(text: string): string {
-  let out = "";
-  for (const cp of text) out += glyphFor(cp);
-  return out;
-}
-
-/** Truncate `text` to `max` columns with an ellipsis. `dropTail` keeps the head
- * (a trailing `…`); otherwise it keeps the tail (a leading `…`, for a path whose
- * file name matters most). */
-function truncate(text: string, max: number, dropTail: boolean): string {
-  const cps = [...text];
-  if (cps.length <= max) return text;
-  if (max <= 1) return "…";
-  return dropTail
-    ? cps.slice(0, max - 1).join("") + "…"
-    : "…" + cps.slice(cps.length - (max - 1)).join("");
 }
 
 /** The default browsing key hints, in priority order (most important first) so
@@ -1257,7 +1374,7 @@ function browseHints(view: ViewState): KeyHint[] {
     });
   }
   if (view.canEdit) hints.push({ key: "e", label: "Edit" });
-  if (view.hasNonPrintables) hints.push({ key: "C", label: "Chars" });
+  if (view.hasNonPrintables) hints.push({ key: "c", label: "Chars" });
   const wrapLabel = view.wrapMode === "off"
     ? "Hard wrap"
     : view.wrapMode === "hard"
@@ -1380,13 +1497,14 @@ function applyOverlay(
       const display = displayLine(srcLine, view.displayMode, styler);
       // One blank column of margin sits inside each border, so content is drawn
       // into cells[1 … innerW-2].
-      for (let idx = 0; idx < display.length; idx++) {
-        const col = idx + 1;
-        if (col >= innerW - 1) break;
-        const dc = display[idx];
-        const style = view.color ? mergeBg(dc.ansi ?? dc.syntax, rowBg) : rowBg;
-        cells[col] = { ch: dc.ch, style };
-      }
+      placeDisplayCells(
+        cells,
+        1,
+        display,
+        0,
+        Math.min(display.length, innerW - 2),
+        (dc) => view.color ? mergeBg(dc.ansi ?? dc.syntax, rowBg) : rowBg,
+      );
     }
     const body = cellsToAnsi(cells, view.color);
     const rowText = paintIf("║", border, view.color) + body +
@@ -1427,8 +1545,8 @@ function darkenSpan(
   if (r < 0 || r >= rows.length || from < 0) return;
   const n = Math.min(count, view.width - from);
   if (n <= 0) return;
-  const chars = stripAnsi(sliceVisible(rows[r], from, from + n))
-    .padEnd(n, " ").slice(0, n);
+  const shown = stripAnsi(sliceVisible(rows[r], from, from + n));
+  const chars = shown + " ".repeat(n - columns(shown));
   rows[r] = overlayRow(rows[r], from, paint(chars, ui.overlayShadow));
 }
 
@@ -1449,7 +1567,7 @@ function faceText(b: DialogButton): string {
 }
 
 function faceWidth(b: DialogButton): number {
-  return cpLen(faceText(b));
+  return shownCells(faceText(b)).length;
 }
 
 /** The face plus the one column of right-hand shadow it casts. */
@@ -1480,19 +1598,25 @@ export function dialogBox(
   view: Pick<ViewState, "width" | "height">,
   dialog: DialogState,
 ): DialogBox {
-  const titleW = cpLen(dialog.title) + 4; // the padding spaces and some fill
+  const titleW = shownCells(dialog.title).length + 4; // the padding and fill
   const bodyW = dialog.width ??
-    dialog.body.reduce((m, l) => Math.max(m, cpLen(l)), 0);
+    [...dialog.body, ...(dialog.fields ?? []).flatMap(fieldTexts)].reduce(
+      (m, l) => Math.max(m, shownCells(l).length),
+      0,
+    );
   const btnW = buttonsWidth(dialog.buttons);
   const contentW = Math.max(titleW, bodyW, btnW);
   // The margin columns each side, then the two borders.
-  // Inner rows: a blank under the title, the body, a blank, the buttons, and the
-  // buttons' shadow.
+  // Inner rows: a blank under the title, the body and fields, a blank, the
+  // buttons, and the buttons' shadow.
   const boxW = Math.max(
     0,
     Math.min(contentW + 2 * DIALOG_HMARGIN + 2, view.width - 2),
   );
-  const boxH = Math.max(0, Math.min(dialog.body.length + 6, view.height - 1));
+  const boxH = Math.max(
+    0,
+    Math.min(contentRows(dialog) + 6, view.height - 1),
+  );
   return {
     x: Math.max(0, Math.floor((view.width - boxW) / 2)),
     y: Math.max(0, Math.floor((view.height - boxH) / 2)),
@@ -1506,8 +1630,21 @@ export function dialogBox(
 /** The top border of a dialog: the title centered in the width and filled with
  * the double rule. */
 function titleBar(title: string, width: number): string {
-  if (width <= 0) return "";
   return truncCenter(` ${title} `, width, "═");
+}
+
+/** The first `width` of `chars`, the cells of some text, with a wide
+ * character that would be cut in two left blank. */
+function clip(chars: readonly string[], width: number): string[] {
+  const out = chars.slice(0, Math.max(0, width));
+  let k = out.length;
+  while (k > 0 && chars[k] === "") out[--k] = " ";
+  return out;
+}
+
+/** The cells of each character of an input line's value. */
+function inputChars(field: DialogInputLine): string[][] {
+  return drawnCharacters(field.value).map(shownCells);
 }
 
 interface ButtonPos {
@@ -1533,40 +1670,234 @@ function layoutButtons(
 
 /**
  * Returns the inner row of a dialog box of `innerH` rows that the buttons are
- * drawn on, or -1 when the box is too short to show them below the body.
+ * drawn on, or -1 when the box is too short to show them below the body, or
+ * below the body and fields of a dialog without fields to scroll.
  */
 function buttonRowOf(dialog: DialogState, innerH: number): number {
   const row = innerH - 2; // the buttons' shadow takes the last row
-  return row > dialog.body.length ? row : -1;
+  const above = dialog.fields?.length
+    ? dialog.body.length
+    : contentRows(dialog);
+  return row > above ? row : -1;
+}
+
+/** The text of the rows of a field that set how wide it is: a check box's
+ * mark and label, an input line's label, or the label of a set of radio
+ * buttons and each button's mark and label. */
+function fieldTexts(field: DialogField): string[] {
+  if (field.kind === "checkBox") return [`[X] ${field.label}`];
+  if (field.kind === "inputLine") return [field.label];
+  return [field.label, ...field.buttons.map((b) => `(•) ${b.label}`)];
+}
+
+/** The rows a field takes: a check box's one, an input line's label and the
+ * line under it, or the label of a set of radio buttons and a row for each
+ * button. */
+function fieldHeight(field: DialogField): number {
+  if (field.kind === "checkBox") return 1;
+  if (field.kind === "inputLine") return 2;
+  return 1 + field.buttons.length;
 }
 
 /**
- * Returns the index of the button drawn at the zero-based screen cell `x`, `y`,
- * at rest or pushed one column right, or -1 when no button is drawn there.
+ * Returns the inner row of a dialog box that each of its fields starts on.
+ * One blank row sits under the title, and another before each field that
+ * follows the body or another field.
  */
-export function dialogButtonAt(
+function fieldRows(dialog: DialogState): number[] {
+  const rows: number[] = [];
+  let row = 1 + dialog.body.length;
+  for (const field of dialog.fields ?? []) {
+    if (row > 1) row++;
+    rows.push(row);
+    row += fieldHeight(field);
+  }
+  return rows;
+}
+
+/** How many rows the body and fields of a dialog take together. */
+function contentRows(dialog: DialogState): number {
+  const fields = dialog.fields ?? [];
+  const last = fields.length - 1;
+  const start = fieldRows(dialog)[last];
+  return start === undefined
+    ? dialog.body.length
+    : start + fieldHeight(fields[last]) - 1;
+}
+
+/**
+ * Returns the first character of `field`'s value that its line shows when
+ * it is `width` columns wide, the cursor showing in the columns between the
+ * arrows.
+ */
+function inputLineStart(field: DialogInputLine, width: number): number {
+  return firstShown(
+    field.scroll,
+    field.cursor,
+    width - 2,
+    drawnCharacters(field.value),
+  );
+}
+
+/**
+ * Returns where in the box of `dialog` each field is drawn, as the box's
+ * inner row it starts on, or null for a field the box is too short to show
+ * whole between its body and its buttons. When the fields do not all fit,
+ * they scroll up as far as it takes to show the focused one.
+ */
+function shownFieldRows(
+  dialog: DialogState,
+  innerH: number,
+): Array<number | null> {
+  const buttonRow = buttonRowOf(dialog, innerH);
+  const bottom = buttonRow < 0 ? innerH : buttonRow;
+  const fields = dialog.fields ?? [];
+  const rows = fieldRows(dialog);
+  const focus = dialog.fieldFocus ?? -1;
+  const focused = fields[focus];
+  const scroll = focused === undefined
+    ? 0
+    : Math.max(0, rows[focus] + fieldHeight(focused) - bottom);
+  return rows.map((row, i) =>
+    row - scroll > dialog.body.length &&
+      row - scroll + fieldHeight(fields[i]) <= bottom
+      ? row - scroll
+      : null
+  );
+}
+
+/**
+ * Returns the 1-based terminal row and column of the cursor in a dialog's
+ * focused input line, or null when no input line is focused or the box is
+ * too small to show it.
+ */
+function dialogCursorPos(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): { row: number; col: number } | null {
+  const index = dialog.fieldFocus ?? -1;
+  const field = dialog.fields?.[index];
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const width = box.innerW - 2 * DIALOG_HMARGIN;
+  if (field?.kind !== "inputLine" || row == null || width < 3) return null;
+  const shown = inputChars(field)
+    .slice(inputLineStart(field, width), field.cursor).flat().length;
+  const col = DIALOG_HMARGIN + 1 + shown;
+  return { row: box.y + row + 3, col: box.x + col + 2 };
+}
+
+/**
+ * Returns the index of the control drawn at the zero-based screen cell `x`,
+ * `y`, counting the fields first and then the buttons, or -1 when none is
+ * drawn there. A button counts at rest or pushed one column right, and a
+ * field anywhere on its rows.
+ */
+export function dialogControlAt(
   view: Pick<ViewState, "width" | "height">,
   dialog: DialogState,
   x: number,
   y: number,
 ): number {
   const box = dialogBox(view, dialog);
-  const buttonRow = buttonRowOf(dialog, box.innerH);
+  const row = y - box.y - 1;
   const col = x - box.x - 1;
-  if (
-    box.boxW < 2 || buttonRow < 0 || y !== box.y + 1 + buttonRow ||
-    col >= box.innerW
-  ) return -1;
-  return layoutButtons(dialog.buttons, box.innerW).findIndex((
+  if (box.boxW < 2 || col < 0 || col >= box.innerW) return -1;
+  const fields = dialog.fields ?? [];
+  const field = shownFieldRows(dialog, box.innerH).findIndex((start, i) =>
+    start !== null && row >= start && row < start + fieldHeight(fields[i])
+  );
+  const buttonRow = buttonRowOf(dialog, box.innerH);
+  if (field >= 0) return field;
+  if (buttonRow < 0 || row !== buttonRow) return -1;
+  const button = layoutButtons(dialog.buttons, box.innerW).findIndex((
     { start, faceW },
   ) => col >= start && col <= start + faceW);
+  return button < 0 ? -1 : fields.length + button;
+}
+
+/** Returns how many columns an input line of `dialog` shows, between the
+ * arrows at its ends. */
+export function inputLineColumns(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+): number {
+  return Math.max(1, dialogBox(view, dialog).innerW - 2 * DIALOG_HMARGIN - 2);
+}
+
+/**
+ * Returns the index of the character of input line `index` of `dialog` drawn
+ * at the zero-based screen cell `x`, `y`, which is where a click there puts
+ * the cursor: the start of the text left of it, and its end right of it. Returns
+ * null when `y` is not the row the line is drawn on, and throws when field
+ * `index` is not an input line.
+ */
+export function inputLineIndexAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "inputLine") {
+    throw new Error(`field ${index} of the dialog is not an input line`);
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  if (row == null || y !== box.y + 1 + row + 1) return null;
+  const width = inputLineColumns(view, dialog);
+  const column = Math.min(x - box.x - 1 - DIALOG_HMARGIN - 1, width - 1);
+  const chars = inputChars(field);
+  let at = inputLineStart(field, width + 2);
+  for (let used = 0; at < chars.length; at++) {
+    used += chars[at].length;
+    if (used > column) break;
+  }
+  return at;
+}
+
+/**
+ * Returns the index of the radio button of field `index` of `dialog` drawn at
+ * the zero-based screen cell `x`, `y`, or null when none is drawn there, as on
+ * the row of the buttons' label. Throws when field `index` is not a set of
+ * radio buttons.
+ */
+export function radioButtonAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "radioButtons") {
+    throw new Error(
+      `field ${index} of the dialog is not a set of radio buttons`,
+    );
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  const button = row == null ? -1 : y - box.y - 1 - row - 1;
+  const col = x - box.x - 1;
+  return button >= 0 && button < field.buttons.length && col >= 0 &&
+      col < box.innerW
+    ? button
+    : null;
+}
+
+/** The index in `chars`, the cells of a label, of the highlighted shortcut
+ * letter, its first that matches `hotkey` in either case, or -1 when none
+ * does. */
+function hotkeyIndex(chars: readonly string[], hotkey: string): number {
+  const hk = hotkey.toLowerCase();
+  return chars.findIndex((c) => c.toLowerCase() === hk);
 }
 
 /** The face index of the highlighted shortcut letter, or -1 if the hotkey does
  * not appear in the label. Offset by one for the leading pad space. */
 function hotkeyFaceIndex(b: DialogButton): number {
-  const hk = b.hotkey.toLowerCase();
-  const idx = [...b.label].findIndex((c) => c.toLowerCase() === hk);
+  const idx = hotkeyIndex(shownCells(b.label), b.hotkey);
   return idx < 0 ? -1 : idx + 1;
 }
 
@@ -1583,6 +1914,9 @@ function applyDialog(
     : EMPTY_STYLE;
   const panelBg: Style = { bg: ui.overlayBg };
   const textStyle = view.color ? mergeBg(ui.dialogText, panelBg) : panelBg;
+  const emphasisStyle = view.color
+    ? mergeBg(ui.dialogEmphasis, panelBg)
+    : panelBg;
 
   const top = `╔${titleBar(dialog.title, boxW - 2)}╗`;
   const bottom = `╚${"═".repeat(Math.max(0, boxW - 2))}╝`;
@@ -1600,12 +1934,33 @@ function applyDialog(
   const focusIdx = dialog.focus ??
     dialog.buttons.findIndex((b) => b.kind === "default");
   const pushedIdx = dialog.pushed ?? -1;
+  const starts = shownFieldRows(dialog, innerH);
   for (let i = 0; i < innerH; i++) {
     const cells: Cell[] = new Array(innerW);
     for (let c = 0; c < innerW; c++) cells[c] = { ch: " ", style: panelBg };
     const bodyIdx = i - 1; // one blank row sits under the title
+    const fieldIdx = starts.findLastIndex((start) =>
+      start !== null && start <= i
+    );
+    const field = dialog.fields?.[fieldIdx];
+    const fieldRow = i - (starts[fieldIdx] ?? 0);
     if (bodyIdx >= 0 && bodyIdx < dialog.body.length) {
-      placeText(cells, dialog.body[bodyIdx], textStyle, dialog.output);
+      placeText(
+        cells,
+        dialog.body[bodyIdx],
+        dialog.emphasized?.includes(bodyIdx) ? emphasisStyle : textStyle,
+        dialog.output,
+        dialog.links?.[bodyIdx],
+      );
+    } else if (field && fieldRow < fieldHeight(field)) {
+      placeField(
+        cells,
+        field,
+        fieldRow,
+        fieldIdx === dialog.fieldFocus,
+        view.color,
+        textStyle,
+      );
     } else if (i === buttonRow) {
       placeButtonFaces(cells, layout, view.color, panelBg, focusIdx, pushedIdx);
     } else if (buttonRow >= 0 && i === buttonRow + 1 && view.color) {
@@ -1619,23 +1974,126 @@ function applyDialog(
   if (view.color) castShadow(rows, view, x, y, boxW, boxH);
 }
 
+/** Write `chars`, the cells of some text, in `cells` from column `from`,
+ * the one at index `j` in `style(j)`, clipped to end before column `end`. */
+function putCells(
+  cells: Cell[],
+  from: number,
+  end: number,
+  chars: readonly string[],
+  style: (j: number) => Style,
+): void {
+  clip(chars, end - from).forEach((ch, j) => {
+    cells[from + j] = { ch, style: style(j) };
+  });
+}
+
 /** Write `text` in `cells`, centered or starting after the dialog's margin,
- * and clipped to leave one blank column inside each edge. */
+ * and clipped to leave one blank column inside each edge, with `links` on
+ * it. */
 function placeText(
   cells: Cell[],
   text: string,
   style: Style,
   leftAligned = false,
+  links: readonly DialogLink[] = [],
 ): void {
   const innerW = cells.length;
-  const chars = [...showControls(text)];
+  const chars = shownCells(text);
   const start = leftAligned
     ? DIALOG_HMARGIN
     : 1 + Math.max(0, Math.floor((innerW - 2 - chars.length) / 2));
-  for (let j = 0; j < chars.length; j++) {
-    const col = start + j;
-    if (col >= 1 && col <= innerW - 2) cells[col] = { ch: chars[j], style };
+  putCells(cells, start, innerW - 1, chars, () => style);
+  // Each cell links where the code point of `text` it draws does.
+  let at = 0;
+  let cell = start;
+  for (const char of drawnCharacters(text)) {
+    const link = links.find(({ from, to }) => from <= at && at < to)?.url;
+    for (const _ of shownCells(char)) {
+      if (link !== undefined && cell >= 1 && cell < innerW - 1) {
+        cells[cell] = { ...cells[cell], link };
+      }
+      cell++;
+    }
+    at += cpLen(char);
   }
+}
+
+/**
+ * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
+ * box's mark and label, an input line's label and then its line, or the label
+ * of a set of radio buttons and then each button's mark and label. The
+ * focused check box is drawn highlighted, as are the label of the focused
+ * input line and the label and selected button of the focused set of radio
+ * buttons.
+ */
+function placeField(
+  cells: Cell[],
+  field: DialogField,
+  row: number,
+  focused: boolean,
+  color: boolean,
+  textStyle: Style,
+): void {
+  const width = cells.length - 2 * DIALOG_HMARGIN;
+  const put = (
+    at: number,
+    chars: readonly string[],
+    style: (j: number) => Style,
+  ) =>
+    putCells(
+      cells,
+      DIALOG_HMARGIN + at,
+      DIALOG_HMARGIN + width,
+      chars,
+      (j) => color ? style(j) : EMPTY_STYLE,
+    );
+  const label = (
+    from: number,
+    text: string,
+    hotkey: string,
+    highlighted = focused,
+  ) => {
+    const style = highlighted ? ui.fieldFocus : textStyle;
+    const keyStyle = { ...ui.fieldKey, bg: style.bg ?? textStyle.bg };
+    const chars = shownCells(text);
+    const key = hotkeyIndex(chars, hotkey);
+    put(from, chars, (j) => j === key ? keyStyle : style);
+  };
+  const mark = (
+    open: string,
+    on: string,
+    close: string,
+    highlighted: boolean,
+  ) =>
+    put(
+      0,
+      [open, on, close, " "],
+      () => highlighted ? ui.fieldFocus : textStyle,
+    );
+  if (field.kind === "checkBox") {
+    mark("[", field.checked ? "X" : " ", "]", focused);
+    label(4, field.label, field.hotkey);
+    return;
+  }
+  if (row === 0) {
+    label(0, field.label, field.hotkey);
+    return;
+  }
+  if (field.kind === "radioButtons") {
+    const button = field.buttons[row - 1];
+    const selected = row - 1 === field.selected;
+    mark("(", selected ? "•" : " ", ")", focused && selected);
+    label(4, button.label, button.hotkey, focused && selected);
+    return;
+  }
+  const start = inputLineStart(field, width);
+  const shown = inputChars(field).slice(start).flat();
+  put(0, [..." ".repeat(Math.max(0, width))], () => ui.inputLine);
+  if (start > 0) put(0, ["◄"], () => ui.inputArrow);
+  const valueStyle = field.selected ? ui.inputSelection : ui.inputLine;
+  put(1, clip(shown, width - 2), () => valueStyle);
+  if (shown.length > width - 2) put(width - 1, ["►"], () => ui.inputArrow);
 }
 
 function placeButtonFaces(
@@ -1647,7 +2105,7 @@ function placeButtonFaces(
   pushed: number,
 ): void {
   layout.forEach(({ b, start, faceW }, idx) => {
-    const chars = [...faceText(b)];
+    const chars = shownCells(faceText(b));
     const face = !color
       ? panelBg
       : idx === focus
@@ -1657,12 +2115,13 @@ function placeButtonFaces(
     const hk = hotkeyFaceIndex(b);
     // A pressed button slides one column right, into the space its shadow held.
     const shift = idx === pushed ? 1 : 0;
-    for (let j = 0; j < chars.length; j++) {
-      const col = start + shift + j;
-      if (col >= 0 && col < cells.length) {
-        cells[col] = { ch: chars[j], style: j === hk ? keyStyle : face };
-      }
-    }
+    putCells(
+      cells,
+      start + shift,
+      cells.length,
+      chars,
+      (j) => j === hk ? keyStyle : face,
+    );
     const rightShadow = start + faceW;
     if (
       color && idx !== pushed && rightShadow >= 0 && rightShadow < cells.length
@@ -1700,7 +2159,7 @@ function placeButtonShadows(
 /** Splice `insert` into `base` starting at visible column `x`. */
 function overlayRow(base: string, x: number, insert: string): string {
   const left = sliceVisible(base, 0, x);
-  const insertW = visibleWidth(insert);
+  const insertW = columns(stripAnsi(insert));
   const right = sliceVisible(base, x + insertW, Number.MAX_SAFE_INTEGER);
   return left + RESET + insert + RESET + right;
 }
@@ -1714,7 +2173,13 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
   let out = "";
   let curKey: string | null = null;
   let curOpen = "";
+  let curLink: string | undefined;
   for (const cell of cells) {
+    if (cell.link !== curLink) {
+      if (curLink !== undefined) out += term.linkEnd;
+      if (cell.link !== undefined) out += term.linkStart(cell.link);
+      curLink = cell.link;
+    }
     const open = sgrInline(cell.style);
     if (open !== curKey) {
       if (curKey !== null) out += RESET;
@@ -1724,6 +2189,7 @@ function cellsToAnsi(cells: Cell[], color: boolean): string {
     }
     out += cell.ch;
   }
+  if (curLink !== undefined) out += term.linkEnd;
   if (curOpen !== "") out += RESET;
   return out;
 }
@@ -1791,44 +2257,56 @@ function padTo(text: string, width: number): string {
   return text + " ".repeat(width - len);
 }
 
-/** Slice by visible columns (code points), keeping ANSI escapes before kept
- * text. A non-BMP code point counts as one column. */
+/** Slice by visible columns, keeping every ANSI escape. A character counts
+ * as many columns as it takes, and the columns of one that the slice cuts in
+ * two are kept as spaces, after the escapes inside it. A character that
+ * takes no column is kept with the character before it. */
 function sliceVisible(text: string, from: number, to: number): string {
+  const parts = text.split(ESCAPE_SPLIT);
+  const escapes: Array<{ at: number; escape: string }> = [];
+  let plain = "";
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) escapes.push({ at: plain.length, escape: part });
+    else plain += part;
+  });
   let out = "";
   let col = 0;
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] === "\x1b") {
-      const m = text.slice(i).match(LEADING_ESCAPE);
-      if (m) {
-        out += m[0];
-        i += m[0].length;
-        continue;
-      }
+  let at = 0;
+  let next = 0;
+  for (const char of graphemes(plain)) {
+    const start = at;
+    at += char.length;
+    while (next < escapes.length && escapes[next].at <= start) {
+      out += escapes[next++].escape;
     }
-    const ch = String.fromCodePoint(text.codePointAt(i)!);
-    if (col >= from && col < to) out += ch;
-    col += 1;
-    i += ch.length;
+    // The character as the text writes it, with the escapes inside it.
+    let source = "";
+    let inside = "";
+    let copied = start;
+    while (next < escapes.length && escapes[next].at < at) {
+      const { at: escapeAt, escape } = escapes[next++];
+      source += plain.slice(copied, escapeAt) + escape;
+      inside += escape;
+      copied = escapeAt;
+    }
+    source += plain.slice(copied, at);
+    const end = col + charColumns(char);
+    const kept = end > col ? col >= from && end <= to : col > from && col <= to;
+    out += kept ? source : inside +
+      " ".repeat(Math.max(0, Math.min(end, to) - Math.max(col, from)));
+    col = end;
   }
+  for (const { escape } of escapes.slice(next)) out += escape;
   return out;
 }
 
+/** `text` centered in `width` columns between runs of `fill`, or as much of
+ * it as fits when it is wider. */
 function truncCenter(text: string, width: number, fill: string): string {
-  const len = cpLen(text);
-  if (len >= width) {
-    let out = "";
-    let c = 0;
-    for (const ch of text) {
-      if (c >= width) break;
-      out += ch;
-      c += 1;
-    }
-    return out;
-  }
-  const total = width - len;
+  const chars = clip(shownCells(text), width);
+  const total = Math.max(0, width - chars.length);
   const leftN = Math.floor(total / 2);
-  return fill.repeat(leftN) + text + fill.repeat(total - leftN);
+  return fill.repeat(leftN) + chars.join("") + fill.repeat(total - leftN);
 }
 
 export const _internal = {

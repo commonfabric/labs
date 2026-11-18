@@ -13,6 +13,7 @@
 import { parseArgs } from "@std/cli/parse-args";
 import { join } from "@std/path";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   defaultHarnessCredentialStorePath,
   FileHarnessCredentialStore,
@@ -111,7 +112,7 @@ export const main = async (
       "`task-classification-eval`",
     );
   } catch (error) {
-    log(error instanceof Error ? error.message : String(error));
+    log(describeFailure(error));
     return 2;
   }
   const model = flags["rule-only"] ? undefined : (options.model ??
@@ -137,9 +138,7 @@ export const main = async (
       try {
         byModel = label(await classifyTaskByModel(task, context, model.ask));
       } catch (error) {
-        byModel = `error: ${
-          error instanceof Error ? error.message : String(error)
-        }`;
+        byModel = `error: ${describeFailure(error)}`;
       }
       modelMs.push(performance.now() - modelStarted);
       if (byModel === want) modelCorrect += 1;

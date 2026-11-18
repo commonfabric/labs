@@ -11,7 +11,7 @@ import {
 } from "@commonfabric/llm/client";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";

@@ -39,9 +39,18 @@ of the classification below.
 ## Reading the reserved position
 
 [metadata.ts](../../runtime/runner/src/cfc/metadata.ts) is the only module
-that produces labels from what stands at `["cfc"]`. Its
+in the runner that produces labels from what stands at `["cfc"]`. Its
 `interpretStoredEnvelope` is the one place that decides which of three
-outcomes a stored value gets:
+outcomes a stored value gets. Which envelopes it reads is decided by the
+checks of
+[cfc-stored-envelope.ts](../../runtime/memory/v2/cfc-stored-envelope.ts) in
+Memory, the one definition of a readable envelope. The store's labeling of
+the anchors an edit moves
+([cfc-anchors-label.ts](../../runtime/memory/v2/cfc-anchors-label.ts)) reads
+a field's envelope through the same checks, and refuses the edit for every
+envelope that fails them. Resolving the labels an envelope names stays with
+each reader; §7.7.4 of the Memory v2 operations spec says which ones the
+store resolves.
 
 - **Nothing stored.** The position holds `null`, a scalar, or nothing at
   all. The reader returns `undefined` and the document carries no labels.
@@ -79,6 +88,16 @@ one is a place a looser reader would read a labeled document as unlabeled:
   document is held to the same shape for a second reason: its content hash
   is its identity, so the shape check is what stops a record that merely
   hashes correctly from registering as a label.
+- **A label is a plain object.** A stored value can decode to a class
+  instance, such as `FabricBytes` or `FabricEpochNsec`, and one keeps its
+  state in private fields, so it shows no members of its own. A check of
+  members alone would read one at a label position as a label with no
+  clauses. So a label, inline or in a label document, is refused unless its
+  prototype is `Object.prototype` or `null`, and the store refuses a commit
+  naming a label document that is not one. The other records an envelope
+  holds each need a member a rule names (`version`, `entries`, `path`,
+  `$ref`), which none of those classes defines, so no instance passes
+  there, and their prototypes are not checked.
 - **A template-origin entry that is not keyed and classed as a template is
   not an entry.** The `label-metadata` origin marks an entry as keyed
   against the stored document rather than against `value`, and a reader
@@ -134,6 +153,8 @@ unlabeled:
 | The display label view ([label-view.ts](../../runtime/runner/src/cfc/label-view.ts)) | Records the read as failed; the fail-closed variant merges a blocking entry into the view it hands back |
 | The label-introspection builtin ([label-introspection.ts](../../runtime/runner/src/cfc/label-introspection.ts)) | Declines to answer, the same as for a target it cannot observe — it discloses a label rather than reading a payload, so declining is the refusal, and a write the caller then makes still reaches the envelope at the gates above |
 | The label-erasure guard ([extended-storage-transaction.ts](../../runtime/runner/src/storage/extended-storage-transaction.ts)) | Counts an uninterpretable envelope as a label map, so a root write replacing one with nothing records as an erasure |
+| A sink that decides on what its read consumed (`includeConsumedLabel`, [cell.ts](../../runtime/runner/src/cell.ts)) | Converts to no consumed labels and the projection of no value, which its consumer decides on as labels that could not be read; the sink stays subscribed, so a later write it can interpret runs it again |
+| The host read gate ([host-read-gate.ts](../../runtime/runtime-client/src/backends/host-read-gate.ts)) | Converts a one-shot read's failure to a refusal naming `unreadable`; a subscription's arrives through the sink above |
 
 Other code looks at the reserved position for purposes that produce no
 labels, and the rule does not reach it. The delivery seams read the
@@ -148,6 +169,62 @@ at all. An envelope those walks cannot make sense of delivers nothing extra,
 and the reader that goes on to want its labels fails closed.
 
 A new consumer adopts the rule by leaving `StoredCfcMetadataError` alone.
+
+## What the store refuses of a handed envelope
+
+The rule above is the reader's. The store that receives an envelope has a
+check of its own, because a writer can hand it an envelope the runtime never
+derived: a client that skips its runtime's label machinery and writes the
+reserved position itself. Specification §8.12.8 makes the declared
+component, the store policy, monotone, so the store can judge it against
+what it already holds without re-deriving anything.
+
+The memory engine refuses a commit that leaves a path whose stored declared
+entries (`origin: "declared"`) hold a confidentiality clause with no
+declared entry at that path, the whole `cfc` member erased included
+([envelope-admission.ts](../../runtime/memory/v2/envelope-admission.ts),
+called from `applyCommitTransaction` in
+[engine.ts](../../runtime/memory/v2/engine.ts)). The runtime writes that
+shape only in the two owner releases of
+[confidentiality-release.ts](../../runtime/runner/src/cfc/confidentiality-release.ts).
+In the first, §8.12.7 route 2c, a commit the space's owner signs, every clause
+of whose dropped entries is the owner's alone to release, is admitted. That
+decision is `clauseReleasableBy()`, which the runtime's release makes too
+and which lives in the memory package
+([cfc-release-authority.ts](../../runtime/memory/v2/cfc-release-authority.ts))
+so that both read it. A label held by reference is read from the label
+document the space stores; one that doesn't resolve can't be released. A
+commit leaving the document deleted is admitted, and a later commit writing
+it is a creation; a commit that deletes the document and writes it again is
+judged by what it writes.
+
+In the second, a release by intent (§8.12.7 route 2d), the dropped clauses
+need not be the owner's alone, and the store admits the drop on the record the
+commit creates beside it
+([cfc-owner-release-by-intent.ts](../../runtime/memory/v2/cfc-owner-release-by-intent.ts)).
+The record holds the request the space's owner signed, and the store verifies
+it at the commit: the signature, that the signer is the owner the space's
+access list names, that the request names this space and a document the commit
+writes an envelope of, that the stored envelope's digest is the one the
+request names, that every clause it releases is stored at its path and gone
+from it afterwards while every other clause there stays, in an entry of the
+same component and class, that the record's stored label holds a declared
+`User(owner)` clause at its root, and that its record is new, at the id the
+document's id and the request's digest derive. A dropped declared path that
+such a release names is admitted. Any write to an id under the record scheme
+other than that one creation is refused, so a record is never forged, altered
+or removed by a commit.
+
+This is the interim rule of
+[specs#89](https://github.com/commonfabric/specs/pull/89), which this
+runtime implements ahead of the ruling. The rule that pull request proposes
+also refuses a lowering that keeps a declared entry at the path, and a
+change to a still-existing path's existence entry. Those are left to the
+runtime here until its own declared-monotonicity gate
+([`cfcDeclaredMonotonicity`](../development/EXPERIMENTAL_OPTIONS.md#cfcdeclaredmonotonicity))
+runs at `enforce`. The derived and link-carried components are the
+runtime's to get right under either rule, since judging them means
+re-deriving them.
 
 ## Recovery
 
@@ -170,6 +247,11 @@ are memoized by the identity of the stored label map, never failures.
   — a version-2 entry naming a label document nothing backs, one naming a
   document that does not hold a label, one whose content does not hash to
   its id, and a reference in a version-1 envelope.
+- [v2-envelope-admission.test.ts](../../runtime/memory/test/v2-envelope-admission.test.ts)
+  — the store refuses a commit dropping another principal's declared label,
+  by erasure, by a rewrite or patch leaving its entry out, or through a
+  label held by reference, and admits the space owner's drop of their own
+  clause, a lowering that keeps the entry, and a delete.
 - [cfc/verifier-metadata.test.ts](../../runtime/runner/test/cfc/verifier-metadata.test.ts)
   — a transaction that consumed an uninterpretable envelope is refused even
   when its write target declares no gate.

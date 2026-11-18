@@ -4,6 +4,7 @@
  */
 
 import { type Page, waitForCondition } from "@commonfabric/integration";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 const GUEST_WAIT_BACKSTOP_MS = 5 * 60 * 1_000;
 
@@ -110,7 +111,7 @@ export class GuestDomDriver {
           } catch (error) {
             inspected.push(
               `${target.type}:${target.url}:${frameId}:` +
-                (error instanceof Error ? error.message : String(error)),
+                describeFailure(error),
             );
           }
         }

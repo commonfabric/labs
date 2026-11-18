@@ -336,7 +336,10 @@ describe("cfc-policy-manifest-shared-install", () => {
       expect(failures).toEqual([]);
     });
 
-    it("reports a start refused over the piece's own documents without running it again", async () => {
+    it("starts a piece refused over its own documents from the stored ones, without running it again", async () => {
+      // A read over a revision the first participant moved past is that
+      // participant winning the race, so the start catches up rather than
+      // running again or failing.
       await setUpByFirstParticipant();
       const failures = observeStartFailures();
       const attempts = refuseStarts(() =>
@@ -344,10 +347,11 @@ describe("cfc-policy-manifest-shared-install", () => {
       );
 
       await runShared(rtB, "b-piece secret");
+      await rtB.runner.idleDeferredStartCatchUps();
       await rtB.idle();
 
       expect(attempts.count).toBe(1);
-      expect(failures).toHaveLength(1);
+      expect(failures).toEqual([]);
     });
 
     it("runs it again after a refusal claiming a document absent that the store holds", async () => {

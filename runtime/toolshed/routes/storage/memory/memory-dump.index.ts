@@ -15,6 +15,7 @@
 // A dump is the ENTIRE contents of a space, so this is intentionally narrow.
 
 import type { MiddlewareHandler } from "@hono/hono";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import {
   listSpaceStores,
@@ -28,9 +29,6 @@ import { memoryEngineStoreUrl } from "@/routes/storage/memory-store-url.ts";
 import { dumpAllowSet, isDumpEnabled } from "./memory-dump-policy.ts";
 
 const DUMP_BASE = "/api/storage/memory/dump";
-
-const errMessage = (e: unknown): string =>
-  e instanceof Error ? e.message : String(e);
 
 const dumpEndpointEnabled = (): boolean =>
   isDumpEnabled({ enabled: env.MEMORY_DUMP_ENABLED, env: env.ENV });
@@ -50,7 +48,7 @@ const requireDumpAccess: MiddlewareHandler<AppBindings> = async (c, next) => {
     ({ userDid } = await verifyFirstPartyHttpRequest({ request: c.req.raw }));
   } catch (error) {
     c.get("logger").warn(
-      { path: c.req.path, method: c.req.method, error: errMessage(error) },
+      { path: c.req.path, method: c.req.method, error: describeFailure(error) },
       "memory dump: rejected unauthenticated request",
     );
     return c.json({ error: "Unauthorized" }, 401);
@@ -101,7 +99,7 @@ router.get(`${DUMP_BASE}/:space`, async (c) => {
   } catch (error) {
     await Deno.remove(tmpDir, { recursive: true }).catch(() => {});
     c.get("logger").error(
-      { space, error: errMessage(error) },
+      { space, error: describeFailure(error) },
       "memory dump: snapshot failed",
     );
     return c.json({ error: "snapshot failed" }, 500);
@@ -124,7 +122,7 @@ router.get(`${DUMP_BASE}/:space`, async (c) => {
     }
   } catch (error) {
     c.get("logger").error(
-      { space, error: errMessage(error) },
+      { space, error: describeFailure(error) },
       "memory dump: could not serve snapshot",
     );
     return c.json({ error: "snapshot failed" }, 500);

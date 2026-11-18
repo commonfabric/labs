@@ -1,6 +1,7 @@
 import type { Runtime } from "@commonfabric/runner";
+import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
-import { normalizeInviteHost } from "@commonfabric/memory/space-invites";
+import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
 import app from "@/app.ts";
 import {
   backgroundLogFile,
@@ -12,215 +13,122 @@ import {
 } from "@/background.ts";
 import env from "@/env.ts";
 import { toolshedClientBuild } from "@/lib/build-info.ts";
-import { announceCloneIfServed } from "@/lib/clone-banner.ts";
 import { identity } from "@/lib/identity.ts";
-import {
-  admitInternalApiOrigin,
-  selfDirectedFetch,
-  startupGate,
-  verifyInternalApiOrigin,
-} from "@/lib/internal-api-origin.ts";
+import { selfDirectedFetch } from "@/lib/internal-api-origin.ts";
 import { createToolshedRuntime } from "@/runtime-options.ts";
-import { memory, memoryServer } from "@/routes/storage/memory.ts";
 import {
+  memory,
+  memoryEngineStoreUrl,
+  memoryServer,
+} from "@/routes/storage/memory.ts";
+import {
+  serverExecutionHost,
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
+import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
-// Create a global runtime instance for the server
-let runtime: Runtime;
-
-// Initialize runtime with storage and signer
-// FIXME(ja): should we do this even on memory-only toolsheds?
-const initializeRuntime = () => {
-  try {
-    console.log(`Initializing runtime with signer ${identity.did()}...`);
-
-    // Options assembly (the MEMORY_URL/API_URL split, EXPERIMENTAL_* wiring)
-    // lives in runtime-options.ts, where it is unit-tested (CT-1814).
-    runtime = createToolshedRuntime(
-      env,
-      StorageManager.open({
-        memoryHost: new URL(env.MEMORY_URL),
-        as: identity,
-        clientBuild: toolshedClientBuild(),
-      }),
-    );
-    console.log("Runtime initialized successfully");
-    console.log("Configured to remote storage:", env.MEMORY_URL);
-  } catch (error) {
-    console.error("Failed to initialize runtime:", error);
-    throw error;
-  }
-};
-
-// Export runtime for use in other parts of the application
-export { runtime };
+import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
+import {
+  createShutdown,
+  startRuntimes,
+  startServer,
+} from "@/lib/server-lifecycle.ts";
 
 /**
- * This process's runtimes: the webhook runtime and, under the flag, the
- * serving loop's host. Both address their own pattern-source, compile and
- * API requests to API_URL; with API_INTERNAL_URL set, both send them there
- * instead (lib/internal-api-origin.ts), so neither exists until that origin
- * is known to be this server's own listener.
+ * The server's runtime, assigned when the server starts it; `undefined` in
+ * any process that is not the server.
  */
-function startRuntimes() {
-  initializeRuntime();
-  // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
-  // this process hosts the serving loop; OFF (the default) this is a
-  // no-op and toolshed is byte-identical to today.
-  const fetch = selfDirectedFetch(env);
-  startServerExecutionHost({
-    server: memoryServer,
-    identity,
-    apiUrl: new URL(env.API_URL),
-    ...(fetch !== undefined ? { fetch } : {}),
-  });
-}
+let runtime: Runtime;
+export { runtime };
 
 export type AppType = typeof app;
 
-// Graceful shutdown with timeout
-const ac = new AbortController();
-let isShuttingDown = false;
-const SHUTDOWN_TIMEOUT = 10000; // 10 seconds
-
-const handleShutdown = async () => {
-  if (isShuttingDown) {
-    console.log("Shutdown already in progress...");
-    return;
-  }
-
-  isShuttingDown = true;
-  console.log("Shutdown signal received, closing server...");
-
-  // Create a timeout promise
-  const timeoutPromise = new Promise((_, reject) => {
-    setTimeout(() => reject(new Error("Shutdown timed out")), SHUTDOWN_TIMEOUT);
+if (import.meta.main) {
+  // Read at each call, since a background launch redirects the console.
+  const log = (...data: unknown[]) => console.log(...data);
+  const error = (...data: unknown[]) => console.error(...data);
+  const ac = new AbortController();
+  const shutdown = createShutdown({
+    abort: () => ac.abort(),
+    memoryServer,
+    stopServingHost: stopServerExecutionHost,
+    closeMemory: () => memory.close(),
+    flushTelemetry: shutdownOpenTelemetry,
+    limitMs: 10_000,
+    exit: Deno.exit,
+    log,
+  });
+  Deno.addSignalListener("SIGINT", shutdown.handle);
+  Deno.addSignalListener("SIGTERM", shutdown.handle);
+  await listenForHeapProfileSignal({
+    directory: Deno.env.get("HEAP_PROFILE_DIR") ||
+      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    workerHeapProfiles: (directory) =>
+      serverExecutionHost()?.workerHeapProfiles(directory) ??
+        Promise.resolve(undefined),
+    log,
+    error,
   });
 
-  try {
-    // Race between graceful shutdown and timeout
-    await Promise.race([
-      (async () => {
-        // Remove signal listeners to prevent multiple shutdown attempts
-        Deno.removeSignalListener("SIGINT", handleShutdown);
-        Deno.removeSignalListener("SIGTERM", handleShutdown);
-
-        ac.abort();
-
-        console.log("Closing memory system...");
-        await stopServerExecutionHost();
-        const result = await memory.close();
-        if ("error" in result) {
-          console.error("Error closing memory:", result.error);
-        } else {
-          console.log("Memory system closed successfully");
-        }
-
-        // Flush buffered spans so the last batch isn't dropped on exit. No-op
-        // when telemetry is disabled; bounded by the SHUTDOWN_TIMEOUT race above.
-        await shutdownOpenTelemetry();
-      })(),
-      timeoutPromise,
-    ]);
-  } catch (err) {
-    console.error("Error during shutdown:", err);
-  }
-
-  console.log("Shutdown complete");
-  Deno.exit(0);
-};
-
-// Start server with the abort controller
-function startServer(onListening?: () => void) {
-  console.log(`Server is starting on port http://${env.HOST}:${env.PORT}`);
-  // A rehearsal clone keeps the source space's DID, so nothing else in this
-  // log distinguishes it from production. Announce it before anything else.
-  announceCloneIfServed({ memoryDir: env.MEMORY_DIR, dbPath: env.DB_PATH });
-  // The signed routes check every first-party proof against this origin rather
-  // than the host the client dialed, so a wrong API_URL refuses every
-  // correctly signed client. Say it before anyone signs anything, normalized
-  // the way those routes normalize it.
-  console.log(
-    "Configured first-party authority:",
-    normalizeInviteHost(env.API_URL),
-  );
-  // Where this process's own runtimes send their self-addressed requests.
-  // Unset, that is API_URL and the runtimes start before the listener, as
-  // they always have. Set, it must be this server's own listener, verified
-  // once the listener is up and before any runtime exists to fetch from it;
-  // the gate answers 503 to everything but the probe until then.
-  const internalApiOrigin = env.API_INTERNAL_URL;
-  const probeToken = crypto.randomUUID();
-  const gate = internalApiOrigin === undefined
-    ? undefined
-    : startupGate(app.fetch, probeToken);
-  if (gate === undefined) {
-    startRuntimes();
-  } else {
-    console.log("Configured internal API origin:", internalApiOrigin);
-  }
-
-  const serverOptions = {
-    hostname: env.HOST,
-    port: env.PORT,
-    signal: ac.signal,
-    onError: (error: unknown) => {
-      console.error("Server error:", error);
-      return new Response("Internal Server Error", { status: 500 });
-    },
-    onListen: ({ port, hostname }: { port: number; hostname: string }) => {
-      const ready = () => {
-        console.log(`Server running on http://${hostname}:${port}`);
-        onListening?.();
-      };
-      if (gate === undefined || internalApiOrigin === undefined) {
-        ready();
-        return;
-      }
-      admitInternalApiOrigin({
-        origin: internalApiOrigin,
-        verify: () =>
-          verifyInternalApiOrigin({
-            origin: internalApiOrigin,
-            token: probeToken,
-            probeArrived: gate.probeArrived,
+  // This process's runtimes: the webhook runtime and, under
+  // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host. Both address
+  // their own pattern-source, compile and API requests to API_URL, or to
+  // API_INTERNAL_URL when that is set (lib/internal-api-origin.ts).
+  const startProcessRuntimes = () => {
+    const fetch = selfDirectedFetch(env);
+    runtime = startRuntimes({
+      signerDid: identity.did(),
+      memoryUrl: env.MEMORY_URL,
+      createRuntime: () =>
+        createToolshedRuntime(
+          env,
+          StorageManager.open({
+            memoryHost: new URL(env.MEMORY_URL),
+            as: identity,
+            clientBuild: toolshedClientBuild(),
+            // This runtime keeps a session on every space a webhook, ingest
+            // or token write touched for as long as the process runs, and no
+            // one waits on what those spaces compute through it. As demand,
+            // those sessions would keep each such space served until a
+            // restart.
+            demand: false,
           }),
-        startRuntimes,
-        admit: gate.admit,
-        onListening: ready,
-        shuttingDown: () => isShuttingDown || ac.signal.aborted,
-        exit: Deno.exit,
-        log: console.log,
-        error: console.error,
-      }).catch((error) => {
-        // Nothing above is expected to throw; a throw here would otherwise
-        // leave the gate closed and a background launch's parent waiting.
-        console.error("Internal API origin check failed:", error);
-        Deno.exit(1);
-      });
-    },
+        ),
+      startServingHost: () =>
+        startServerExecutionHost({
+          server: memoryServer,
+          identity,
+          apiUrl: new URL(env.API_URL),
+          store: memoryEngineStoreUrl,
+          memoryUrl: new URL(env.MEMORY_URL),
+          compileCacheDir: `${env.CACHE_DIR}/compiled-modules`,
+          ...(fetch !== undefined ? { fetch } : {}),
+        }) !== undefined,
+      memoryServer,
+      lifecycleHandler: lifecycleRequestHandler,
+      servedHandler: servedRequestHandler({ server: memoryServer }),
+      log,
+      error,
+    });
   };
 
-  try {
-    Deno.serve(serverOptions, gate?.fetch ?? app.fetch);
-  } catch (err) {
-    if (err instanceof Deno.errors.AddrInUse) {
-      console.error(`Port ${env.PORT} is already in use`);
-      // Distinct exit code so callers can tell a port collision from other
-      // startup failures and retry on a different port.
-      Deno.exit(3);
-    }
-    console.error("Failed to start server:", err);
-    Deno.exit(1);
-  }
-}
+  const serve = (onListening?: () => void) =>
+    void startServer({
+      env,
+      handler: app.fetch,
+      serve: Deno.serve,
+      startRuntimes: startProcessRuntimes,
+      signal: ac.signal,
+      shuttingDown: () => shutdown.inProgress() || ac.signal.aborted,
+      exposeGarbageCollector,
+      probeFetch: fetch,
+      ...(onListening !== undefined ? { onListening } : {}),
+      exit: Deno.exit,
+      log,
+      error,
+    });
 
-Deno.addSignalListener("SIGINT", handleShutdown);
-Deno.addSignalListener("SIGTERM", handleShutdown);
-
-if (import.meta.main) {
   const backgroundLog = backgroundLogFile();
   if (backgroundLog) {
     // This process is the server half of a background launch. Its request
@@ -230,7 +138,7 @@ if (import.meta.main) {
     // otherwise reach a discarded stderr.
     redirectConsoleToFile(backgroundLog);
     logUncaughtErrors();
-    startServer(writeListeningMarker);
+    serve(writeListeningMarker);
   } else {
     const launch = classifyLaunch(Deno.args);
     if (launch.background) {
@@ -244,7 +152,7 @@ if (import.meta.main) {
         logFile: launch.logFile,
       });
     } else {
-      startServer();
+      serve();
     }
   }
 }

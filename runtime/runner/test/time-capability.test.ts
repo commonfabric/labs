@@ -5,7 +5,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { sandboxDateNow, sandboxRandom } from "../src/builder/safe-builtins.ts";
 import { Runtime } from "../src/runtime.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
 const signer = await Identity.fromPassphrase("test operator");

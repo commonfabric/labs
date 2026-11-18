@@ -1,7 +1,7 @@
 import { css, html } from "lit";
 import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
-import { type ComponentSize } from "../theme-context.ts";
+import type { ComponentSize } from "../theme-context.ts";
 
 /**
  * A minimal chevron button that rotates between up/down states

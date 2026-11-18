@@ -17,6 +17,7 @@
  * run shape.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { CheckResult, FailOnThreshold } from "./report.ts";
 import { verdictFailsThreshold } from "./report.ts";
@@ -87,7 +88,7 @@ export const assertUsableExpectedFailure = (
   } catch (error) {
     throw new Error(
       `${at} has a \`runs\` that is not a regular expression: ${
-        error instanceof Error ? error.message : String(error)
+        describeFailure(error)
       }`,
     );
   }

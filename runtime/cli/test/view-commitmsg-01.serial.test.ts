@@ -1,4 +1,5 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   commitSubjects,
   findCommitMessages,
@@ -196,7 +197,7 @@ Deno.test({
       try {
         runner.amendCommit("amended", new Map(), head, branch);
       } catch (caught) {
-        error = caught instanceof Error ? caught.message : String(caught);
+        error = describeFailure(caught);
       }
       assert(error.length > 0, "the branch-switching amend failed");
       assertEquals(runner.headRef!(), "refs/heads/topic");

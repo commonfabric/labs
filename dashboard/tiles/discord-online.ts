@@ -12,6 +12,7 @@
  * with 4014.
  */
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { Status, Tile, TileView } from "../types.ts";
 import { escapeHtml, multiSparkline, thin } from "../lib.ts";
@@ -245,7 +246,7 @@ export const discordOnline: Tile = {
     try {
       snap = await takeSnapshot(token, guildId);
     } catch (e) {
-      const reason = e instanceof Error ? e.message : String(e);
+      const reason = describeFailure(e);
       return { status: "unknown" as Status, value: "—", sub: escapeHtml(reason).slice(0, 80) };
     }
 

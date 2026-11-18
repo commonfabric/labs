@@ -276,7 +276,7 @@ export async function repairProfileNameProtection(
     const result = await tx.commit().settled;
     if (result.error) throw new Error(result.error.message);
     await runtime.storageManager.synced();
-    return await inspectProfileNameProtection(runtime, profile.withTx());
+    return await inspectProfileNameProtection(runtime, profile);
   } finally {
     tx.abort();
   }

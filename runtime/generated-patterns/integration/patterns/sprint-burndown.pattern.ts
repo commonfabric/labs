@@ -276,7 +276,7 @@ const logSprintProgress = handler(
       burnedToday,
       totalBurned,
       remaining: nextRemaining,
-      note: typeof event?.note === "string" ? event?.note : undefined,
+      ...(typeof event?.note === "string" && { note: event.note }),
     });
     appendLogEntry(context.log, message);
   },

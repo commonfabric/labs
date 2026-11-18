@@ -126,7 +126,8 @@ export type FabricErrorState = {
  * frozen and immutable thereafter. Every mutator -- the slot setters along with
  * `setExtra` / `deleteExtra` -- throws once the instance is `Object.freeze`'d.
  * The codec layer handles `FabricError` via its static `[CODEC]`, which is the
- * source of truth for the encoded form. See Section 1.4.1 of the formal spec.
+ * source of truth for the encoded form. See Section 1.4.2 of
+ * `1-fabric-values.md`.
  */
 export class FabricError extends FabricNativeWrapper<Error>
   implements ApiFabricError {
@@ -151,7 +152,7 @@ export class FabricError extends FabricNativeWrapper<Error>
   /**
    * Cached lazy JS projection, populated only once this instance is
    * frozen (so the projection can never go stale against mutable state).
-   * While unfrozen, `wrappedValue` rebuilds on each access; thawed copies
+   * While unfrozen, `toNativeFrozen()` rebuilds on each call; thawed copies
    * are always minted fresh by `toNativeThawed()`.
    */
   #nativeFrozen: Error | undefined;
@@ -354,20 +355,13 @@ export class FabricError extends FabricNativeWrapper<Error>
   }
 
   /**
-   * Returns the frozen JS projection. Once this instance is frozen the
-   * projection is cached (state can no longer change, so the cache is always
-   * valid); while mutable it is rebuilt on each access. `toNativeValue(false)`
-   * uses `toNativeThawed()` to mint a thawed copy each time.
+   * The frozen JS projection, which `toNativeFrozen()` returns. The wrapped
+   * value is always frozen, so `toNativeValue(true)` hands it over as is, and
+   * `toNativeValue(false)` uses `toNativeThawed()` to mint a thawed copy each
+   * time.
    */
   protected get wrappedValue(): Error {
-    if (!Object.isFrozen(this)) {
-      // Mutable: state may still change, so never cache.
-      return this.#buildNativeError(true);
-    }
-    if (this.#nativeFrozen === undefined) {
-      this.#nativeFrozen = this.#buildNativeError(true);
-    }
-    return this.#nativeFrozen;
+    return this.toNativeFrozen();
   }
 
   /** @inheritDoc */
@@ -382,9 +376,22 @@ export class FabricError extends FabricNativeWrapper<Error>
     });
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * Once this instance is frozen the projection is cached (state can no
+   * longer change, so the cache is always valid); while mutable it is rebuilt
+   * on each call.
+   */
   protected toNativeFrozen(): Error {
-    return this.wrappedValue;
+    if (!Object.isFrozen(this)) {
+      // Mutable: state may still change, so never cache.
+      return this.#buildNativeError(true);
+    }
+    if (this.#nativeFrozen === undefined) {
+      this.#nativeFrozen = this.#buildNativeError(true);
+    }
+    return this.#nativeFrozen;
   }
 
   /** @inheritDoc */

@@ -1,8 +1,8 @@
-import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import * as bip39 from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english.js";
 
-import { AsBytes, DIDKey, Signer, Verifier } from "../interface.ts";
+import type { AsBytes, DIDKey, Signer, Verifier } from "../interface.ts";
 import { NativeEd25519Signer, NativeEd25519Verifier } from "./native.ts";
 import { NobleEd25519Signer, NobleEd25519Verifier } from "./noble.ts";
 import {
@@ -201,14 +201,19 @@ export class Ed25519Verifier<ID extends DIDKey> implements Verifier<ID> {
   }
 }
 
-// Returns `true` if native WebCrypto should be used,
-// or `false` if Noble implementation should be used.
-//
-// If WebCrypto explicitly requested and not supported,
-// throws an error.
-async function canUseNative(config: Ed25519CreateConfig = {}) {
+/**
+ * Returns `true` if native WebCrypto should be used, or `false` if the Noble
+ * implementation should be used, given what `config` asks for and whether
+ * `isSupported()` says this platform has native Ed25519.
+ *
+ * @throws If WebCrypto is explicitly requested and not supported.
+ */
+export async function canUseNative(
+  config: Ed25519CreateConfig = {},
+  isSupported: () => Promise<boolean> = isNativeEd25519Supported,
+): Promise<boolean> {
   if (config.implementation === "webcrypto") {
-    if (!(await isNativeEd25519Supported())) {
+    if (!(await isSupported())) {
       throw new Error(
         "Required WebCrypto features are not supported on this platform.",
       );
@@ -218,5 +223,5 @@ async function canUseNative(config: Ed25519CreateConfig = {}) {
   if (config.implementation === "noble") {
     return false;
   }
-  return await isNativeEd25519Supported();
+  return await isSupported();
 }

@@ -596,6 +596,16 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
           if (appliedBatchId === undefined) {
             throw new Error("expected listener update batch");
           }
+          // A batch before the one that retired the old listener leaves it
+          // in place: the main thread may still deliver its events.
+          reconciler.acknowledgeBatchApplied(appliedBatchId - 1);
+          assertEquals(
+            reconciler.dispatchEvent(
+              firstEventOp.handlerId,
+              { type: "click", phase: "before-ack" },
+            ),
+            true,
+          );
           reconciler.acknowledgeBatchApplied(appliedBatchId);
           assertEquals(
             reconciler.dispatchEvent(
@@ -1035,6 +1045,78 @@ Deno.test("worker reconciler - Cell<Props> handling", async (t) => {
               }],
             },
           );
+        } finally {
+          cancel();
+        }
+      },
+    );
+
+    await t.step(
+      "renderer VDOM schema binds a record of cells as the record's own slot",
+      async () => {
+        const collector = createOpsCollector();
+        const reconciler = new WorkerReconciler({
+          onOps: collector.onOps,
+        });
+
+        const tx = runtime.edit();
+        const glaze = runtime.getCell(
+          signer.did(),
+          "record-binding-glaze",
+          undefined,
+          tx,
+        );
+        glaze.set("maple");
+        const fillings = runtime.getCell(
+          signer.did(),
+          "record-binding-fillings",
+          undefined,
+          tx,
+        );
+        fillings.set(["custard"]);
+        const rootCell = runtime.getCell(
+          signer.did(),
+          "record-binding-root",
+          undefined,
+          tx,
+        );
+        rootCell.set({
+          type: "vnode",
+          name: "cf-iframe",
+          props: { $context: { glaze, fillings } },
+          children: [],
+        });
+        runtime.prepareTxForCommit(tx);
+        const commitResult = await tx.commit().settled;
+        assertEquals(commitResult.ok !== undefined, true);
+
+        const rootVDOMCell = runtime.getCell(
+          signer.did(),
+          "record-binding-root",
+        ).asSchema(rendererVDOMSchema);
+        const cancel = reconciler.mount(rootVDOMCell as never);
+        try {
+          await t.settle();
+
+          const bindingOp = collector.getOpsOfType("set-binding")[0] as
+            | Extract<VDomOp, { op: "set-binding" }>
+            | undefined;
+          assertEquals(bindingOp?.propName, "context");
+          assertEquals(
+            bindingOp?.cellRef.id,
+            rootCell.getAsNormalizedFullLink().id,
+          );
+          assertEquals(bindingOp?.cellRef.path, ["props", "$context"]);
+          const slot = runtime.getCellFromLink(bindingOp!.cellRef);
+          assertEquals(
+            slot.key("glaze").resolveAsCell().getAsNormalizedFullLink().id,
+            glaze.getAsNormalizedFullLink().id,
+          );
+          assertEquals(
+            slot.key("fillings").resolveAsCell().getAsNormalizedFullLink().id,
+            fillings.getAsNormalizedFullLink().id,
+          );
+          assertEquals(slot.key("fillings").get(), ["custard"]);
         } finally {
           cancel();
         }

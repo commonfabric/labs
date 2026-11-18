@@ -4,16 +4,18 @@
  * direct chats with Alice, Carol, and Dave by principal alone, which queues a
  * notice for each. Once a later start with Alice names her profile, which
  * points at her private inbox, the room is offered there, she is added to its
- * participants, the notice for her is withdrawn, and the start's outcome is
- * the room found, listed again though Bob had forgotten it. A start before
+ * participants, the notice for her stays but is no longer listed, since she
+ * is on the room's roster, and the start's outcome is the room found, listed
+ * again though Bob had forgotten it. A start before
  * that whose id is too long to key an offer by sends none. A start after that
  * sends no second offer, and neither does one from another manager whose
  * notice for her a client reported delivered, though she hasn't joined its
  * room. Carol has joined her room before Bob names her profile, so she is
- * offered nothing, and Dave's profile points at no inbox, so he is offered
- * nothing either; both keep their notices, though the manager lists only
- * Dave's, since Carol is on her room's roster. Each person writes their own
- * profile here, so its label names them, as a Fabric profile's does.
+ * offered nothing, and Dave's profile points at no inbox, so he is sent
+ * nothing, though naming it puts him on his room's roster as it would anyone;
+ * both keep their notices, and the manager lists neither, since each is on
+ * their room's roster. Each person writes their own profile here, so its label
+ * names them, as a Fabric profile's does.
  */
 import {
   action,
@@ -282,6 +284,7 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -360,6 +363,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -381,6 +385,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const otherNotices = Writable.of<ChatManagerNotice[]>([]);
   const other = FabriChatManagerCore({
     myProfile: profile,
+    sessionProfile: profile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: otherRequests,
@@ -476,8 +481,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       // Naming Alice's profile lists the room the first start created again,
-      // offers it to her, and withdraws her notice. It takes no gesture: the
-      // start that created the room, and granted her access, was one.
+      // and offers it to her. Her notice stays, should the offer not be sent,
+      // and is no longer listed once the offer puts her on the room's roster.
+      // It takes no gesture: the start that created the room, and granted her
+      // access, was one.
       {
         action: manager.openDirect,
         event: {
@@ -492,7 +499,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           return outcome?.status === "done" &&
             equals(outcome.entry?.room, aliceRoom.key("room")) &&
             outcome.delivery === undefined && manager.rooms.length === 3 &&
-            noticeIdsFor(notices, setup.aliceDid).length === 0;
+            noticeIdsFor(notices, setup.aliceDid).length === 1 &&
+            !manager.outgoingNotices.some((notice) =>
+              notice.recipient === setup.aliceDid.get()
+            );
         }),
       },
       // She was added to its participants, beside Bob, as an offered member
@@ -507,7 +517,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       // Carol has joined her room, and Dave's profile points at no inbox, so
-      // neither is offered anything, and each keeps the notice their room's
+      // neither is sent anything, and each keeps the notice their room's
       // creation queued.
       {
         action: manager.openDirect,
@@ -537,19 +547,21 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             JSON.stringify([setup.daveDid.get(), "d-dave"])
         ),
       },
-      // Carol is on her room's roster, so the manager lists no notice for
-      // her, though it still holds one. Dave isn't on his, and his is listed.
+      // Carol is on her room's roster, and naming Dave's profile put him on
+      // his, wherever it points, so the manager lists no notice for either,
+      // though it still holds both.
       {
         assertion: assert(() => {
           const listed = manager.outgoingNotices.map((notice) =>
             notice.recipient
           );
-          return !listed.includes(setup.carolDid.get()) &&
-            listed.includes(setup.daveDid.get());
+          return noticeIdsFor(notices, setup.daveDid).length === 1 &&
+            !listed.includes(setup.carolDid.get()) &&
+            !listed.includes(setup.daveDid.get());
         }),
       },
-      // She has no notice waiting now, and is on the room's roster, so
-      // naming her profile again offers her nothing more.
+      // She is on the room's roster now, so naming her profile again offers
+      // her nothing more.
       {
         action: manager.openDirect,
         event: {
@@ -562,7 +574,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           requests.get()["d-alice-thrice"]?.status === "done" &&
-          notices.get().length === 2
+          notices.get().length === 3
         ),
       },
       // A room whose notice for her a client has delivered has none waiting,

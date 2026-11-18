@@ -1,4 +1,6 @@
-import { common, dirname, join } from "@std/path";
+import { common } from "@std/path/common";
+import { dirname } from "@std/path/dirname";
+import { join } from "@std/path/join";
 import {
   FileSystemProgramResolver,
   type ProgramResolver,

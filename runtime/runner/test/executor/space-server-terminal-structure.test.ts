@@ -11,7 +11,7 @@ import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { cellTx } from "../../src/cell.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
-import { readWatermarkSeq } from "../../src/executor/watermark.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import { parseLink } from "../../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -180,7 +180,7 @@ describe("SpaceServer", () => {
             return result;
           };
           const facade = new Proxy(server, {
-            get(target, key, receiver) {
+            get(target, key) {
               if (key === "demandForSpace") {
                 return (
                   requestedSpace: string,
@@ -191,7 +191,7 @@ describe("SpaceServer", () => {
                       .map((row) => ({ ...row, root: row.id === rootId })),
                   );
               }
-              const value = Reflect.get(target, key, receiver);
+              const value = Reflect.get(target, key);
               return typeof value === "function" ? value.bind(target) : value;
             },
           });

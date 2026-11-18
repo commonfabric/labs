@@ -19,9 +19,11 @@
  *   verified signatures, as toolshed's are.
  *
  * Either runs its loop on this thread over a non-persistent store, or, as a
- * toolshed does under `SERVER_EXECUTION_WORKER`, in a Worker of this process
- * over a store in a temporary directory ({@link ServingMemoryServerOptions}'
- * `worker`).
+ * toolshed does over its file store, in Workers of this process, one per
+ * served space, over a store in a temporary directory
+ * ({@link ServingMemoryServerOptions}' `worker`).
+ * Unlike a toolshed, it keeps the worker and the store read-through off
+ * unless the environment turns them on, so a run chooses its arm.
  *
  * The loop's work runs in the serving context, so a test hosting its clients
  * in the same realm tells their output apart with {@link inServingContext}.
@@ -40,20 +42,18 @@ import { toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
-import {
-  getLoggerCountsBreakdown,
-  getTimingStatsBreakdown,
-} from "@commonfabric/logger";
+import { namesInstancesByDefault } from "../builder/instance-name.ts";
 import type { ExperimentalOptions } from "../runtime.ts";
 import { newLoopbackServer } from "../storage/v2-emulate.ts";
 import { ExecutorHost, type ExecutorHostOptions } from "./host.ts";
+import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import {
   servingRuntimeFactory,
   type ServingRuntimeFactoryOptions,
 } from "./serving-runtime.ts";
 import {
   type ServingLoopHandle,
-  ServingWorker,
+  ServingWorkerPool,
 } from "./serving-worker-host.ts";
 import type { SpaceServerPolicy } from "./space-server.ts";
 
@@ -77,6 +77,8 @@ export interface ServingMemoryServer extends AsyncDisposable {
    * Resolves once the memory server has applied every commit it received and
    * sent the fan-out they produced. The serving loop's own waves are not part
    * of this: a served consequence of an event may still be in flight.
+   * With the loop on this thread, `host.host.whenQuiescent()` waits for those;
+   * a loop in a worker offers no such wait.
    */
   idle(): Promise<void>;
 
@@ -128,26 +130,37 @@ export type ServingMemoryServerOptions =
     ensureSpaceRoots?: boolean;
 
     /**
-     * Whether the serving loop runs in a Worker of this process, over a store
-     * in a temporary directory, as a toolshed's does under
-     * `SERVER_EXECUTION_WORKER`. Default: `true` when that variable is the
-     * literal `true` in this process's environment, so a run with it set
-     * runs every test that leaves this unset under the worker. A worker
-     * takes no closure, so `prepareStorageManager`, `fetch`,
-     * `moduleByteCache`, a policy field holding a function, and the host's
-     * diagnostic hooks other than `onActivationSettled` and `onSpaceParked`
-     * are refused under it; a test that needs one says `false` here.
+     * Whether the serving loop runs in Workers of this process, over a store
+     * in a temporary directory, as a toolshed's does over its file store.
+     * Default: `true` when `SERVER_EXECUTION_WORKER` is the literal `true` in
+     * this process's environment, so a run with it set runs every test that
+     * leaves this unset under the worker. A worker takes no closure, so
+     * `prepareStorageManager`, `fetch`, `moduleByteCache`, a policy field
+     * holding a function, and the host's diagnostic hooks other than
+     * `onActivationSettled` and `onSpaceParked` are refused under it; a test
+     * that needs one says `false` here.
      *
      * The environment fills three more of the policy's fields when they are
-     * left unset, as a toolshed's bootstrap does: `storeReadThrough` takes
-     * `true` when `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal
-     * `true`, `overlapWaveCommit` takes `true` when
+     * left unset, from the variables a toolshed's bootstrap reads, as
+     * `policyFromEnvironment()` says: `storeReadThrough` takes `true` when
+     * `SERVER_EXECUTION_STORE_READ_THROUGH` is the literal `true`, where a
+     * toolshed takes it unless the variable is the literal `false`, so the
+     * read-through is opt-in here; `overlapWaveCommit` takes `true` when
      * `SERVER_EXECUTION_OVERLAP_COMMIT` is, and `flushDeadlineMs` and
      * `flushDeadlineMaxMs` take `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
      * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` when those are positive
      * decimal integers.
      */
     worker?: boolean;
+
+    /**
+     * How many workers the loop places spaces on at most, under `worker`
+     * (`ServingWorkerPoolOptions.maxWorkers`); `1` serves every space from
+     * one worker. Default: `SERVER_EXECUTION_MAX_WORKERS` when it is a
+     * positive decimal integer in this process's environment, else the
+     * pool's own default.
+     */
+    maxWorkers?: number;
   }
   & Omit<
     ExecutorHostOptions,
@@ -182,29 +195,32 @@ export function runsInWorker(
 const TIMER_DELAY_MAX_MS = 2_147_483_647;
 
 /**
- * The loop's policy, with what `policy` leaves unset taken from the
- * environment as the toolshed bootstrap takes it: the store read-through
- * from `SERVER_EXECUTION_STORE_READ_THROUGH` and the overlapped wave commit
- * from `SERVER_EXECUTION_OVERLAP_COMMIT`, each on for the literal `true`,
- * and the flush deadline and the cap it grows to from
+ * The loop's policy, with what `policy` leaves unset taken from the variables
+ * the toolshed bootstrap reads, each through `env`, by default this
+ * process's environment. The store read-through
+ * (`SERVER_EXECUTION_STORE_READ_THROUGH`) and the overlapped wave commit
+ * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
+ * alone, where a toolshed keeps the read-through on unless the variable is
+ * `false`. The flush deadline and the cap it grows to come from
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them
  * unset under the posture; a benchmark sets the others to measure a cadence.
  */
-const policyFromEnvironment = (
+export const policyFromEnvironment = (
   policy: SpaceServerPolicy | undefined,
+  env: (name: string) => string | undefined = (name) => Deno.env.get(name),
 ): SpaceServerPolicy | undefined => {
   let resolved = policy;
   if (
     resolved?.storeReadThrough === undefined &&
-    Deno.env.get("SERVER_EXECUTION_STORE_READ_THROUGH") === "true"
+    env("SERVER_EXECUTION_STORE_READ_THROUGH") === "true"
   ) {
     resolved = { ...resolved, storeReadThrough: true };
   }
   if (
     resolved?.overlapWaveCommit === undefined &&
-    Deno.env.get("SERVER_EXECUTION_OVERLAP_COMMIT") === "true"
+    env("SERVER_EXECUTION_OVERLAP_COMMIT") === "true"
   ) {
     resolved = { ...resolved, overlapWaveCommit: true };
   }
@@ -214,7 +230,7 @@ const policyFromEnvironment = (
   // fires at once, so a value past it reads as unset rather than as a
   // cadence of immediate cuts.
   const milliseconds = (name: string): number | undefined => {
-    const raw = Deno.env.get(name) ?? "";
+    const raw = env(name) ?? "";
     const value = /^\d+$/.test(raw) ? Number.parseInt(raw, 10) : 0;
     return value > 0 && value <= TIMER_DELAY_MAX_MS ? value : undefined;
   };
@@ -255,10 +271,18 @@ export async function startServingMemoryServer(
   const serviceIdentity = options.serviceIdentity ?? await Identity.generate();
   const worker = runsInWorker(options);
   const store = worker ? await temporaryStore() : undefined;
+  // The service identity is the server's one delegating principal, as a
+  // toolshed running server execution lists its own process identity, which
+  // is what admits the serving loop's named reads of a space it does not
+  // serve (protocol.md §2's read row).
   const server = newLoopbackServer({
     store: store?.url ??
       new URL(`memory://serving-memory-server-${crypto.randomUUID()}`),
     subscriptionRefreshDelayMs,
+    delegatingDids: [serviceIdentity.did()],
+    // The posture of a toolshed whose runtimes run the serving runtimes'
+    // flags (INV-16).
+    namesInstances: () => namesInstancesByDefault(hostOptions.experimental),
   });
   return await attachServingLoop({
     server,
@@ -297,11 +321,12 @@ export async function listenServingMemoryServer(
     ) => Response | undefined | Promise<Response | undefined>;
 
     /**
-     * The memory server's access-list mode. When given, the service identity
-     * is the server's one delegating principal, as a toolshed running server
-     * execution lists its own process identity, and no principal is a
-     * service principal. Absent, the server has no access-list
-     * configuration at all: `off`, with no delegating principal.
+     * The memory server's access-list mode, `off` when absent. In every mode
+     * the service identity is the server's one delegating principal, as a
+     * toolshed running server execution lists its own process identity,
+     * which is what admits the serving loop's named reads of a space it does
+     * not serve (protocol.md §2's read row); no principal is a service
+     * principal.
      */
     aclMode?: MemoryV2Server.MemoryAclMode;
   } = {},
@@ -311,9 +336,10 @@ export async function listenServingMemoryServer(
   const worker = runsInWorker(options);
   const store = worker ? await temporaryStore() : undefined;
   const standalone = StandaloneMemoryServer.start({
-    ...(aclMode !== undefined
-      ? { acl: { mode: aclMode, delegatingDids: [serviceIdentity.did()] } }
-      : {}),
+    acl: { mode: aclMode ?? "off", delegatingDids: [serviceIdentity.did()] },
+    // The posture of a toolshed whose runtimes run the serving runtimes'
+    // flags (INV-16).
+    namesInstances: () => namesInstancesByDefault(hostOptions.experimental),
     ...(answer !== undefined ? { serve: answer } : {}),
     ...(store === undefined ? {} : { store: store.url }),
   });
@@ -366,6 +392,7 @@ async function attachServingLoop(params: {
   const {
     serviceIdentity: _serviceIdentity,
     worker: _worker,
+    maxWorkers: requestedMaxWorkers,
     experimental,
     prepareStorageManager,
     fetch,
@@ -391,13 +418,26 @@ async function attachServingLoop(params: {
           "pass `worker: false` to run the loop on this thread",
       );
     }
-    let worker: ServingWorker | undefined;
+    const environmentMaxWorkers =
+      Deno.env.get("SERVER_EXECUTION_MAX_WORKERS") ??
+        "";
+    // A positive decimal integer, as the toolshed bootstrap reads it; a run
+    // of digits long enough parses to `Infinity`, which is no count.
+    const environmentCount = /^\d+$/.test(environmentMaxWorkers)
+      ? Number.parseInt(environmentMaxWorkers, 10)
+      : 0;
+    const maxWorkers = requestedMaxWorkers ??
+      (Number.isSafeInteger(environmentCount) && environmentCount > 0
+        ? environmentCount
+        : undefined);
+    let worker: ServingWorkerPool | undefined;
     try {
-      worker = new ServingWorker({
+      worker = new ServingWorkerPool({
         server: params.server,
         identity: serviceIdentity,
         apiUrl: params.apiUrl,
         ensureSpaceRoots,
+        ...(maxWorkers === undefined ? {} : { maxWorkers }),
         ...(policy === undefined ? {} : { policy }),
         ...(experimental === undefined ? {} : { experimental }),
         ...(hostOptions.onActivationSettled === undefined
@@ -438,11 +478,7 @@ async function attachServingLoop(params: {
     });
     loop = {
       stats: () => host.stats(),
-      diagnostics: () =>
-        Promise.resolve({
-          loggerCounts: getLoggerCountsBreakdown(),
-          timingStats: getTimingStatsBreakdown(),
-        }),
+      diagnostics: () => Promise.resolve(servingLoopDiagnostics()),
       host,
       close: () => host.close(),
     };

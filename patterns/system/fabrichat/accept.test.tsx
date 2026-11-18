@@ -219,8 +219,10 @@ const stateOf = (
 export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
   const catalog = emptyCatalog();
+  const aliceProfile = Writable.of<TestProfile>({ name: "Alice" });
   const manager = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Alice" }),
+    myProfile: aliceProfile,
+    sessionProfile: aliceProfile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -232,8 +234,10 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
     )
   );
   const againRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const againProfile = Writable.of<TestProfile>({ name: "Alice, again" });
   const again = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Alice, again" }),
+    myProfile: againProfile,
+    sessionProfile: againProfile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests: againRequests,
@@ -361,6 +365,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const catalog = emptyCatalog();
   const manager = FabriChatManagerCore({
     myProfile: bobProfile,
+    sessionProfile: bobProfile,
     sharedSpaceCatalog: catalog,
     direct: Writable.of<Record<string, ChatIndexEntry>>({}),
     requests,
@@ -386,8 +391,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const profilelessRequests = Writable.of<Record<string, ChatRequestOutcome>>(
     {},
   );
+  const unresolvedProfile = Writable.of<TestProfile>();
   const profileless = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>(),
+    myProfile: unresolvedProfile,
+    sessionProfile: unresolvedProfile,
     sharedSpaceCatalog: emptyCatalog(),
     direct: profilelessDirect,
     requests: profilelessRequests,
@@ -412,8 +419,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
   const offeredCatalog = emptyCatalog();
   const offeredDirect = Writable.of<Record<string, ChatIndexEntry>>({});
   const offeredRequests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const offeredProfile = Writable.of<TestProfile>({ name: "Bob, offered" });
   const offered = FabriChatManagerCore({
-    myProfile: Writable.of<TestProfile>({ name: "Bob, offered" }),
+    myProfile: offeredProfile,
+    sessionProfile: offeredProfile,
     sharedSpaceCatalog: offeredCatalog,
     direct: offeredDirect,
     requests: offeredRequests,
@@ -557,24 +566,22 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             rosterBefore.get()
         ),
       },
-      // A room listed only by the catalog names its labeled creator as its
-      // counterpart.
+      // A room the catalog lists with no membership isn't listed: the list
+      // reads the manager's memberships alone.
       { action: action_register_offered },
-      {
-        assertion: assert(() =>
-          offered.rooms.length === 1 &&
-          offered.rooms[0]?.kind === "direct" &&
-          offered.rooms[0]?.counterpart === setup.aliceDid.get()
-        ),
-      },
-      // The host accepts the room on Bob's behalf, which records it in
-      // `direct`, and a start with Alice finds it there, creating none.
+      { assertion: assert(() => offered.rooms.length === 0) },
+      // The host accepts the room on Bob's behalf, which lists it, naming its
+      // labeled creator as its counterpart, and records it in `direct`, and a
+      // start with Alice finds it there, creating none.
       { action: action_accept_offered },
       {
         assertion: assert(() =>
           offeredRequests.get()["intake-1"]?.status === "done" &&
           spaceOf(offeredDirect.get()[setup.aliceDid.get()]?.room) ===
-            spaceOf(setup.held.key("room"))
+            spaceOf(setup.held.key("room")) &&
+          offered.rooms.length === 1 &&
+          offered.rooms[0]?.kind === "direct" &&
+          offered.rooms[0]?.counterpart === setup.aliceDid.get()
         ),
       },
       {

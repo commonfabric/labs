@@ -35,7 +35,7 @@ import { RUN_CHECKS } from "../../../audit/checks/registry.ts";
 import { auditRunFamily } from "../../../audit/checks/structural.ts";
 import { discoverRunFamilies } from "../../../audit/evidence.ts";
 import type { CheckResult, CheckVerdict } from "../../../audit/report.ts";
-import { type PromptSlotBinding } from "../../../src/contracts/prompt-slot.ts";
+import type { PromptSlotBinding } from "../../../src/contracts/prompt-slot.ts";
 
 import { CAPABILITY_PROBE_SENTINEL } from "../../../src/diagnostics.ts";
 import type {

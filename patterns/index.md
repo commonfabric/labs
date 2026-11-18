@@ -138,8 +138,8 @@ blob store, cells hold descriptors), `apps/habit-tracker/`,
 are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
-item only by sending the pattern's `addItem` verb, which the generated frame
-takes as a stream), `product/lobby/`, `apps/lunch-poll/`,
+item only by sending the pattern's `addItem` verb, which writes the pattern's
+own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`,
 [`apps/recommend-a-book/`](apps/recommend-a-book/README.md) (personal reading
 shelf and private visitor recommendations), `examples/router/`,
@@ -306,10 +306,11 @@ interface TopicsInput {
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the two wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor) and boardCrossrefs
-// (the reference pivot) — plus shortName, the number the create allocated,
-// which the topic stores and reports.
+// TopicInput additionally takes the three wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor), boardCrossrefs
+// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
+// topic number, which lets a topic read its own row alone) — plus shortName,
+// the number the create allocated, which the topic stores and reports.
 ```
 
 ### Output Schema
@@ -323,8 +324,11 @@ interface TopicsOutput {
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy } per topic — the reference graph, derived once here
-  crossrefs: TopicCrossrefRow[];
+  // { topic, mentionedBy, name? } per topic — the reference graph, derived
+  // once here; a row carries its topic's number when the topic has one
+  crossrefs: TopicCrossrefNamedRow[];
+  // { source, byName } — the pivot's positions grouped by topic number
+  crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
   names: Default<NamesMap, {}>;
@@ -1090,8 +1094,17 @@ field as its cursor label. The same compact view serves as `UI` and `TILE_UI`,
 so the note embeds in other surfaces, and editing or live-cursor failures show
 as notices above the editor.
 
+A panel beside the editor holds comments on ranges of the body, with replies and
+a resolved state. Each comment names two anchors of the body, points that Memory
+moves through every edit, which the pattern reads and writes as a cell through
+`anchorsOf()`; the editor draws the text between each open comment's anchors as
+a highlight. Comments and replies are labeled `authored-by` their writer through
+`AuthoredByCurrentUser`, and shown through `cf-cfc-authorship`. Verbs let an
+agent comment on text it quotes, reply, resolve, reopen, and delete.
+
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
-co-presence, CodeMirror
+co-presence, CodeMirror, comments, annotations, anchors, anchorsOf,
+AuthoredByCurrentUser
 
 ### Input Schema
 
@@ -1099,6 +1112,7 @@ co-presence, CodeMirror
 interface SharedNoteInput {
   title?: PerSpace<string | Default<"Untitled note">>;
   content?: PerSpace<string | Default<"">>;
+  comments?: PerSpace<StoredComment[] | Default<[]>>;
 }
 ```
 
@@ -1108,7 +1122,17 @@ interface SharedNoteInput {
 interface SharedNoteOutput {
   title: PerSpace<string>;
   content: PerSpace<string>;
+  comments: PerSpace<StoredComment[]>;
   participantName: PerUser<string>;
+  commentAnchors: FieldAnchors | undefined;
+  appendLine: Stream<LineEvent>;
+  prependLine: Stream<LineEvent>;
+  replaceText: Stream<ReplaceTextEvent>;
+  addComment: Stream<AddCommentEvent>;
+  replyToComment: Stream<CommentReplyEvent>;
+  resolveComment: Stream<CommentIdEvent>;
+  reopenComment: Stream<CommentIdEvent>;
+  deleteComment: Stream<CommentIdEvent>;
 }
 ```
 
@@ -1921,14 +1945,16 @@ metadata and screenshot.
 
 ```ts
 interface LinkPreviewInput {
-  url: string | Default<"https://github.com">;
+  url?: string | Default<"https://github.com">;
 }
 ```
 
 ### Output Schema
 
 ```ts
-interface LinkPreviewInput {
+interface LinkPreviewOutput {
+  [NAME]: string;
+  [UI]: VNode;
   url: string;
 }
 ```

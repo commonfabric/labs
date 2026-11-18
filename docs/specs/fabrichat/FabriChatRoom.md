@@ -45,20 +45,30 @@ the messages' authors, keyed by profile cell. A room with `about`, which only a
 manager creates, is its space's root, and reads only its own roster: its
 `#default` is itself. `roster` is computed from those who joined alone.
 `messages` (its `count`, `oldestAt`, `newestAt`, `latest`, and `threads`) is
-computed from the messages, and `canSend` from the reader's access and profile,
-when they're read. Neither is stored. `viewer` and `messageRights` are computed
-for each reader too, `viewer` from their profile and access, and
-`messageRights` from those and the messages, for every message at once.
+computed from the messages when it's read, and isn't stored. The reader's
+profile is what the room's `#profile` wish finds, in a `PerSession` instance,
+so each session holds its own. `canSend`, `canAdd`, `viewer`, and
+`messageRights` are computed for each session, in a `PerSession` instance of
+each: `canSend` from the reader's access and profile, `canAdd` from their
+access, `viewer` from their profile and access, and `messageRights` from those
+and the messages, for every message at once. So are the values the room's
+rendering derives from them: whether its composers are disabled, and, in one
+record for all the message rows, keyed by message, which of each row's edit,
+delete, and obliterate controls show and whether its editor does. A row reads
+its own entry.
 
-`participantEntries` is computed from `participants`, reading whose own profile
-each is with `profileOwnerOf()`, and
-`participantPrincipals` is computed from those entries. A profile lives in its
-owner's own space, so a reader that space refuses reads no principal from it.
-Both are derived per user, so each user reads instances of their own, derived
-under their own access, which every session of theirs shares.
+`members` is computed by `memberSet()`, in the shared social-space code
+(`patterns/system/social-space/member-set.ts`), from the space's access list,
+which `spaceMembers()` reads, and from the profiles `participants` lists ahead
+of the authors. Only a member can read the list, and a profile lives in its
+owner's own space, so a reader that space refuses reads no owner from it. So
+`members` is derived per user: each user reads an instance of their own,
+derived under their own access, which every session of theirs shares. The
+deprecated `participantEntries` and `participantPrincipals` are computed from
+`members`, per user as well.
 
-The contract's derived `PerUser` values are `participantEntries` and
-`participantPrincipals`.
+The contract's derived `PerUser` values are `members`, `participantEntries`
+and `participantPrincipals`.
 
 The room's `[UI]` keeps its composer's state, the drafts, the reply and the
 attachments being composed, in `PerSession` values of its own, so two
@@ -84,14 +94,37 @@ the time a file is picked. Each file it stores in the blob store it adds to the
 space's store with `add`, under its own name or a free one
 ([FabriFile's clients](../fabrifile/clients.md#adding-a-file)), and keeps in the
 composer as that request, which the composer shows as being attached, attached,
-or refused with the store's reason. A file can be taken out before the send,
-and its entry stays in the store. The composer's send attaches the entries the
-store added, in the order the files were picked, leaves out any the store
+or refused with the store's reason. The composer's send attaches the entries
+the store added, in the order the files were picked, leaves out any the store
 refused, and waits, refusing the send, while a file is still being added; it
 reads each request's outcome by its id alone. A send ends the composer's
-attachments. Picking more files than the room's `maxAttachments`, or picking
+attachments, and the entries it attaches stay in the store; a refused send
+keeps both. Picking more files than the room's `maxAttachments`, or picking
 any in a space that still has no store, is refused. The thread composer
 attaches nothing.
+
+A file can be taken out before the send, and the composer then removes the
+entry its request added, as
+[FabriFile's clients](../fabrifile/clients.md#attaching-a-file) require: with
+the store's `remove`, under the request id `<add's request id>-remove`, and
+only for an entry the outcome of its own `add` names. A file the store has
+added is removed as it is taken out. A file still being added leaves the list
+and the send at once, and is kept in the composer's session state until the
+store answers: nothing in a pattern runs when an outcome lands, so the
+composer sends its `remove` at the first run of one of its own handlers, an
+attach, a take-out or a send, that finds the `add` done, and drops it once the
+`add` is refused. A `remove` refused as `not-found` counts as done. Any other
+refusal the composer shows once, as the file's name and the store's reason,
+until the person dismisses it, and never sends that `remove` again, so the
+entry stays. Attaching the same file again is a new `add`. The composer
+removes nothing when its room leaves the client, as when the person forgets
+it, since nothing it can observe marks that: a file in a draft left that way,
+and one taken out while being added with no later run of the composer's
+handlers in its session, keeps its entry. That is acceptable, because the
+store is meant to be reachable and managed directly, through its own view
+([`FileStoreView`](../fabrifile/FileStoreView.md)), where such an entry can be
+removed like any other; the composer's removal keeps the common case tidy, and
+an entry it leaves is not lost.
 
 ## Writers
 
@@ -246,10 +279,10 @@ changes nothing; a refusal writes nothing else. A thread's title is stored the
 same way, labeled with the member who last set it, by `commitSetThreadTitle`,
 which records its outcomes in `threadTitleRequests`, and by `commitSend` and
 `commitThreadSend` for a send that titles the thread it starts. Its record's
-policy names those three, and a later schema can neither add a writer to a
-stored policy nor drop one.
-`canSend` is computed for each viewer from their access and whether their
-profile resolves.
+policy names those three. A stored policy keeps every writer it names, whether
+or not a later schema lists it, and gains one only where a release admits it.
+`canSend` is computed for each session from the reader's access and whether
+their profile resolves.
 
 ## Configuration
 
@@ -267,13 +300,14 @@ each setting at an initial value:
 | How far before the clock a proposed time is accepted | `proposedTimeMaxAgeNsec` | 10 minutes |
 | How far after the clock a proposed time is accepted | `proposedTimeMaxLeadNsec` | 10 seconds |
 | How long an entry stays in `recentActivity` | `recentActivityWindowNsec` | 10 minutes |
-| How many of the newest messages `messages.latest` holds | `maxWindowCount` | 100 |
+| How many of the newest messages `messages.latest`, and a window, hold | `maxWindowCount` | 100 |
 | The most message windows a session can have open | `maxOpenWindows` | 50 |
 | The most attachments a message may have | `maxAttachments` | 10 |
 
 These are the first build's values. Once the configuration exists, rooms can
 differ from them. The room reads `ownersMayObliterate`,
-`deletionIsObliteration`, `maxWindowCount`, and `maxAttachments`; the other
+`deletionIsObliteration`, `maxWindowCount`, `maxOpenWindows`, and
+`maxAttachments`; the other
 keys are stated for
 the policy's shape, which a user's Home carries, and read by nothing. `ownersMayObliterate` is there for a group room with many
 OWNERs; a direct room is set up without it, and its two people each obliterate

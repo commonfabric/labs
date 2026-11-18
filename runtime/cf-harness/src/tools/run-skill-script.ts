@@ -2,6 +2,7 @@ import { basename, isAbsolute, relative } from "@std/path";
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { CfcLabelView, CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
 import {
@@ -29,6 +30,7 @@ import {
   normalizeSkillScriptPath,
   parseAcquiredSkillPin,
 } from "../skills/scripts.ts";
+import { fileSystemErrorCode } from "./file-errors.ts";
 import { createClearedHostProcessEnv } from "./host-process-env.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
@@ -1156,7 +1158,7 @@ export const runSkillScriptTool: HarnessToolDefinition<
         skill: input.skill,
         path: input.path,
         code: "script_path_invalid",
-        message: error instanceof Error ? error.message : String(error),
+        message: describeFailure(error),
       });
       await context.recordSkillScriptExecution(
         buildExecutionRecord({ output, runId: context.runId, executedAt }),
@@ -1224,17 +1226,12 @@ export const runSkillScriptTool: HarnessToolDefinition<
       );
       resolvedResourcePath = await Deno.realPath(resource.resourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "script_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
       const output = errorOutput({
         outputId,
         skill: skillName,
         path: normalizedPath,
-        code,
-        message: error instanceof Error ? error.message : String(error),
+        code: fileSystemErrorCode(error, "script_not_found"),
+        message: describeFailure(error),
         resource,
         acquisition,
       });
@@ -1300,17 +1297,12 @@ export const runSkillScriptTool: HarnessToolDefinition<
       }
       content = await Deno.readFile(resolvedResourcePath);
     } catch (error) {
-      const code = error instanceof Deno.errors.NotFound
-        ? "script_not_found"
-        : error instanceof Deno.errors.PermissionDenied
-        ? "permission_denied"
-        : "unknown";
       const output = errorOutput({
         outputId,
         skill: skillName,
         path: normalizedPath,
-        code,
-        message: error instanceof Error ? error.message : String(error),
+        code: fileSystemErrorCode(error, "script_not_found"),
+        message: describeFailure(error),
         resource,
         acquisition,
       });

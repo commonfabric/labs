@@ -6,6 +6,7 @@ import type { URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type { Server as MemoryV2Server } from "@commonfabric/memory/v2/server";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
@@ -60,6 +61,7 @@ describe("Memory v2 pull reactivity", () => {
       throw new Error("Expected a memory/v2 emulated storage manager");
     }
     remoteClient = await MemoryV2Client.connect({
+      instanceNames: namesInstancesByDefault(),
       transport: MemoryV2Client.loopback(candidate.server()),
     });
     remoteSession = await remoteClient.mount(

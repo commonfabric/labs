@@ -23,6 +23,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,
@@ -35,6 +36,12 @@ import {
 } from "../src/ops/piece-origin.ts";
 import { installCustomRoot } from "./install-custom-root.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { readStoredCfcMetadata } from "../../runner/src/cfc/metadata.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { getLogger } from "@commonfabric/logger";
 
 // The routes those refs resolve to. A system pattern is still SERVED at, and
@@ -576,6 +583,89 @@ describe("opening a space root", () => {
     expect(getPatternSetupIdentityRef(repairedRoot)).toEqual(currentRef);
   });
 
+  it("keeps a stale value stamp on the root's result across a re-stage of its setup", async () => {
+    // The re-stage is a repair the runtime starts on its own, which holds
+    // none of the reads that chose the pattern, so it leaves the value entry
+    // of a result it finds unchanged as stored (`runtimeStarted`). The
+    // versions differ only by a comment, so the result is unchanged, and the
+    // re-stage reads no stored name (`reapplyStoredSetup`), so nothing it
+    // reads takes the stamp again.
+
+    const atom = "earlier-attempt-secret";
+    const commented = `${SOURCE_V1}// v2\n`;
+    await setup();
+    const piece = await controller.ensureDefaultPattern();
+    const root = piece.getCell();
+    const originalRef = getPatternIdentityRef(root)!;
+    await controller.stopPiece(root);
+
+    stub.setSource(commented);
+    const currentPattern = await runtime.patternManager.compilePattern(
+      {
+        main: DEFAULT_APP_PATTERN_PATH,
+        files: [{ name: DEFAULT_APP_PATTERN_PATH, contents: commented }],
+      },
+      { space: controller.getSpace() },
+    );
+    const currentRef = runtime.patternManager.getArtifactEntryRef(
+      currentPattern,
+    )!;
+    expect(currentRef).not.toEqual(originalRef);
+    const link = root.getAsNormalizedFullLink();
+    const document = { space: link.space, scope: link.scope, id: link.id };
+    const stamped = await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setMetaRaw(
+        "patternIdentity",
+        currentRef,
+        rawMetaWriteAuthorization,
+      );
+      const stored = tx.readOrThrow({
+        ...document,
+        path: [],
+        type: "application/json",
+      });
+      writeSeedEnvelopeDoc(tx, link.space);
+      seedStoredEnvelope(tx, { ...document, path: [] }, {
+        ...(stored as Record<string, FabricValue>),
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: { confidentiality: [atom] },
+              origin: "derived",
+              observes: "value",
+            }],
+          },
+        },
+      } as FabricValue);
+    });
+    expect(stamped.error).toBeUndefined();
+    const valueStamp = () => {
+      const tx = runtime.edit();
+      try {
+        return (readStoredCfcMetadata(tx, document)?.labelMap.entries ?? [])
+          .filter((entry) =>
+            entry.origin === "derived" && entry.observes === "value"
+          )
+          .flatMap((entry) => entry.label.confidentiality ?? []);
+      } finally {
+        tx.abort("label read");
+      }
+    };
+    expect(valueStamp()).toEqual([atom]);
+
+    await controller.ensureDefaultPattern();
+    await runtime.idle();
+    const repairedRoot = (await controller.getDefaultPattern(false))!;
+    await repairedRoot.pull();
+
+    expect(getPatternSetupIdentityRef(repairedRoot)).toEqual(currentRef);
+    expect(valueStamp()).toEqual([atom]);
+  });
+
   it("repairs argument setup from source after a metadata-only update", async () => {
     const argumentSourceV1 = [
       "import { pattern } from 'commonfabric';",
@@ -621,7 +711,11 @@ describe("opening a space root", () => {
     expect(metadataUpdate.error).toBeUndefined();
     const metadataOnlyRoot = (await controller.getDefaultPattern(false))!;
     expect(getPatternSetupIdentityRef(metadataOnlyRoot)).toEqual(originalRef);
-    expect(controller.getArgument(metadataOnlyRoot).get()).toEqual({});
+    // Once the cells holding the argument document have been collected, the
+    // stop lets a release pass drop it, so the read syncs it first.
+    const metadataOnlyArgument = controller.getArgument(metadataOnlyRoot);
+    await metadataOnlyArgument.sync();
+    expect(metadataOnlyArgument.get()).toEqual({});
 
     const originalLoad = runtime.patternManager.loadPatternByIdentity;
     let blockedCurrentLoad = false;
@@ -693,7 +787,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -782,7 +876,7 @@ describe("opening a space root", () => {
     };
 
     try {
-      expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+      expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     } finally {
       runtime.syncStoredSetupArgument = originalSync;
     }
@@ -2018,7 +2112,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 1);
@@ -2050,7 +2144,7 @@ describe("opening a space root", () => {
         runtime,
         (await controller.getDefaultPattern(false))!,
       ),
-    ).toBe("unavailable");
+    ).toBe("mismatched");
     expect(getPatternIdentityRef(piece.getCell())).toEqual(before);
     expect(stub.identityFetches()).toBe(1);
     expect(stub.sourceFetches()).toBe(sourceFetchesBefore + 2);
@@ -2487,7 +2581,7 @@ describe("opening a space root", () => {
     await controller.stopPiece(root);
 
     stub.setSource(SOURCE_INCOMPATIBLE);
-    expect(await reconcilePieceSource(runtime, root)).toBe("unavailable");
+    expect(await reconcilePieceSource(runtime, root)).toBe("unapplied");
     await runtime.idle();
     const after = (await controller.getDefaultPattern(true))!;
     await runtime.idle();
@@ -3175,7 +3269,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain(oldRef.identity);
     expect(message).toContain("also failed CFC migration");
@@ -3234,7 +3328,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("is already the pinned entry");
     expect(message).toContain("#default");
@@ -3337,7 +3431,7 @@ describe("opening a space root", () => {
     } finally {
       restore();
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("could not be compiled");
   });
@@ -3366,7 +3460,7 @@ describe("opening a space root", () => {
       restore();
       pm.getArtifactEntryRef = realGetRef;
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("did not yield an entry identity");
   });
@@ -3402,7 +3496,7 @@ describe("opening a space root", () => {
       (runtime as unknown as { editWithRetry: unknown }).editWithRetry =
         realEdit;
     }
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    const message = describeFailure(thrown);
     expect(message).toContain("default-root heal failed");
     expect(message).toContain("identity swap could not commit");
     expect(message).toContain("swap backend down");

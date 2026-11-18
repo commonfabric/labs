@@ -18,6 +18,8 @@ import { pythonGrammar } from "./python.ts";
 export const pythonLanguage: Language = {
   id: "python",
 
+  commentLinesAreInert: true,
+
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {

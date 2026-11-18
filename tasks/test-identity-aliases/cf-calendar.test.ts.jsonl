@@ -1,0 +1,1 @@
+{"date":"2026-11-11","from":{"k":"unit","s":"ui","n":"CFCalendar view-month resync on cell writes > moves the view when the user selects a leading other-month day"},"to":{"k":"unit","s":"ui","n":"CFCalendar view-month resync on cell writes > moves the view when the user selects a trailing other-month day"}}

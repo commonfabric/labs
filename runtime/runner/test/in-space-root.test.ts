@@ -5,7 +5,7 @@ import { Identity } from "@commonfabric/identity";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
-import { type Cell } from "../src/cell.ts";
+import type { Cell } from "../src/cell.ts";
 import { getEntityId } from "../src/create-ref.ts";
 import {
   DEFAULT_APP_PATTERN_SOURCE,

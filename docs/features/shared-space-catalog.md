@@ -4,8 +4,9 @@ The Home pattern owns the shared-space catalog: which social spaces a person
 keeps in their collection. Its `sharedSpaces` surface separates private
 observations from command bindings. Authored patterns and host applications use
 the same operations. The flat `sharedSpaceCatalog`, `registerSharedSpace`,
-`changeSharedSpaceMembership`, and `removeSharedSpace` fields are aliases over
-the same storage and streams.
+`changeSharedSpaceMembership`, `retitleSharedSpace`, and `removeSharedSpace`
+fields are aliases over the same storage and streams, as is
+`markSharedSpaceDeleted`.
 Catalog types, validation, and transitions live in
 `patterns/system/shared-space/shared-space-catalog.ts`.
 
@@ -28,6 +29,8 @@ its stable cause. Importing Home's full output type or binding the whole
 | --- | --- |
 | `sharedSpaces.commands.register` | Admit a target the caller has vetted |
 | `sharedSpaces.commands.changeMembership` | Archive or restore at the observed revision |
+| `sharedSpaces.commands.retitle` | Set a listed space's display title |
+| `sharedSpaces.commands.markDeleted` | Record that a listed space is deleted, at the observed revision |
 | `sharedSpaces.view` | Validated collection observation and membership lists |
 | `sharedSpaces.receipts` | Validated offer-admission evidence |
 | `sharedSpaces.profiles` | Which of the person's profiles acts in each space |
@@ -65,17 +68,20 @@ alias them through Home's own result. Home exposes its collection browser as
 names the browser's instance, so adding it does not consume an existing
 anonymous cause or move the flat catalog observation's computed document.
 
-The collection view is either `status: "ready"` or `status: "unavailable"`.
-An unavailable observation reports `loading` for an undefined value and
-`malformed` for a value the complete catalog validator refuses. A ready view has
-`entries`, keyed by space DID, and `saved`, `archived`, and `other` lists. It
+The collection view is either `status: "ready"` or `status: "unavailable"`. An
+unavailable observation reports `loading` for an undefined value and `malformed`
+for a value the complete catalog validator refuses. A ready view has `entries`,
+keyed by space DID, and `saved`, `archived`, `deleted`, and `other` lists. It
 also has `byKind`, whose keys are the kinds actually present and whose values
-contain those three lists. An absent kind has no entry. For presentation, lists
-sort admission hints newest first, treating missing times as zero and breaking
-ties by space DID. This display order establishes no authoritative chronology
-or conflict precedence. Entries retain extension fields and opaque revisions;
-unfamiliar states appear under `other`. The receipts view has the same
-availability distinction and exposes `offers` when ready.
+contain those four lists. An absent kind has no entry. The `deleted` lists are
+absent from a view a Home older than them produced, and the host projections in
+`@commonfabric/home-schemas` declare them optional for that reason; a reader
+takes their absence as empty. For presentation, lists sort admission hints
+newest first, treating missing times as zero and breaking ties by space DID.
+This display order establishes no authoritative chronology or conflict
+precedence. Entries retain extension fields and opaque revisions; unfamiliar
+states appear under `other`. The receipts view has the same availability
+distinction and exposes `offers` when ready.
 
 Read availability establishes a valid initialized observation. It does not
 establish synchronized loading, producer-interface absence, or durable command
@@ -102,8 +108,9 @@ establish that those reads are safe.
 
 Home's **Social spaces** tab browses the same validated collection. Search,
 kind, and membership filters are session-local. It lists saved and archived
-spaces independently of target-space availability, and preserves unfamiliar
-states in a separate view with no membership control. Archive and restore use
+spaces independently of target-space availability, deleted spaces in a view of
+their own with no membership control, and preserves unfamiliar states in a
+separate view with no membership control. Archive and restore use
 the revision embedded in the rendered control's event, so a newer peer choice
 causes a conflict notice instead of being replaced. Opening uses ordinary shell
 space navigation and its configured routing; listing does not fetch target
@@ -182,9 +189,14 @@ handler's transaction, to the title the space's root now gives. It writes only
 when the title differs, and returns `retitled`, `unchanged`, or `conflict` for a
 space with no entry. It moves no revision, state, or last action: a title is a
 display hint, not a membership choice, so a choice made from a list shown
-before the retitle still names the current revision. Home exposes no command
-for it; the application that knows the root's current title calls it from its
-own handler.
+before the retitle still names the current revision. An application with a
+handler in Home calls it from there. One with none, such as a Loom daemon that
+reaches Home only through its streams, sends `retitleSharedSpace`, which does
+the same and returns the same. The stream takes the caller's word for the
+title, as registration does, and reads nothing from the space's root, so whoever
+holds the current title is the one to send it, to their own Home. The stream is
+optional in `sharedSpaceCommandsSchema`: a caller that needs it reports
+`home-update-required` for a Home without it.
 
 FabriChat's manager in Home calls all three from its own handlers. For standalone
 `fabrichat-room` spaces, the catalog's current state and revision govern the
@@ -229,10 +241,13 @@ recipient admission time.
 `saved` entries belong in the ordinary collection. `archived` entries belong in
 the archived collection with an explicit restore action. Both states retain the
 entry and leave the space's ACL unchanged. Access loss is an independent
-observation, not a membership change. Stored states are extensible nonempty
-strings of at most 32 characters. Readers retain `left` and other unfamiliar
-states without listing them as saved or archived. This API can apply only saved
-and archived choices; an action on an entry in another state returns
+observation, not a membership change. A `deleted` entry names a space that has
+been deleted, as [Deleted spaces](#deleted-spaces) describes. Stored states are
+extensible nonempty strings of at most 32 characters. Readers retain `left` and
+other unfamiliar states without listing them as saved, archived, or deleted.
+`changeMembership` applies only saved and archived choices, and `markDeleted`
+moves only a saved or archived entry to `deleted`; an action on an entry in
+another state returns
 `conflict: unsupported-state`, including an attempted confirmation. A future
 writer must define the additional state's transitions.
 
@@ -271,6 +286,93 @@ An operation result describes the request and contains only its outcome and
 identifiers. Consumers obtain current membership from the catalog's reactive
 read surface. They never install membership from an operation reply. `confirmed`
 means the action was applied, not that it remains the latest choice.
+
+## Deleted spaces
+
+Deleting a space
+([random space identities](../specs/random-space-identities.md#deleting-a-space))
+ends it for everyone, and writes nothing in anyone's catalog: each entry naming
+the space keeps its state and revision until a consumer comes upon the deletion.
+The consumer then records it with `markDeleted`, which takes the space DID and
+the revision its caller observed, and moves the entry to the `deleted` state.
+That carries the space's deletion tombstone into the person's own collection, so
+a list stops offering a space nobody can open.
+
+`markDeleted` changes the entry only when all of these hold, checked in this
+order, and otherwise returns `conflict` with the reason given:
+
+| Condition | Reason |
+| --- | --- |
+| the catalog has an entry for the space | `missing` |
+| the entry is still at the observed revision | `revision` |
+| the entry is `saved` or `archived` | `unsupported-state` |
+| `spaceDeleted(space)` returns `true` in the handler | `not-deleted` |
+
+The last check is the handler's own: it asks the runtime it runs on, as
+[`space-access.md`](space-access.md#a-deleted-space) describes, so an event
+naming a space that is not deleted, forged or mistaken, changes nothing. The
+handler passes the entry's space DID. On a runtime that has not opened the
+space, the call has the handler run again once the memory server has answered
+for it, for a served run and for an event its sender allows retries, as an
+ordinary send does. An unserved event sent with `retries: false` is dropped
+instead ([`space-access.md`](space-access.md#a-deleted-space)), so a sender that
+may not have opened the space sends with retries. Where server execution is off,
+Home's handlers run on the client and are unserved, so there it is the sender's
+`retries` that decides. A runtime with no memory server it can ask about the
+space reads `undefined`, and the handler returns `not-deleted`. Success returns
+`deleted`, advances the entry's revision as a membership change does, and keeps
+`since`, `from`, the title, and every offer receipt naming the space.
+
+`deleted` is terminal. No command restores or saves a deleted entry:
+`changeMembership` returns `conflict: unsupported-state` for it, and a later
+registration of the same space, from an offer or a direct save, returns
+`existing` and leaves it `deleted`, as registration leaves any existing entry's
+membership. The entry and its receipts stay, so a replayed or stale offer for
+the space is refused as before rather than admitting it as a new entry. A view
+lists a deleted entry under `deleted`, apart from saved and archived ones, with
+no membership control.
+
+The runtime that holds a person's catalog records a deletion with
+`markDeleted` when it comes upon a deleted space, and nothing sweeps the catalog
+for it. Every runtime that holds the catalog and hears of a refusal marked
+`deleted` sends it, when the catalog holds the space as saved or archived, at
+the revision its view shows: the shell on a `spaceaccesslost` marked `deleted`,
+and a runtime that holds the catalog outside the shell, such as a native
+client's, on the same refusal. A catalog only the shell kept up would never
+record a deletion for a person who uses another client. A pattern that lists
+catalog entries reads `spaceDeleted(space)` to show a space as deleted, and
+records nothing. Two runtimes, or two of one person's tabs, often race to
+record the same deletion, and the one that loses gets `conflict` with the
+reason `revision`, the winner having advanced the entry. That conflict is expected: it
+means the deletion is already recorded, and its sender surfaces nothing. As with
+the other commands, the whole of what the handler does is
+`markSharedSpaceDeletedIn()`, exported beside it, so a Home-space handler
+holding the catalog cell can record the deletion in its own transaction.
+
+The same runtime retires a deleted profile with Home's `retireProfile`, where
+the deleted space is one of the person's profiles
+([`HOME_SPACE.md`](../common/conventions/HOME_SPACE.md)): both are sent by
+`PiecesController.markDeletedSpace`, each whatever becomes of the other. A
+Home older than `retireProfile` is sent the mark alone, and a Home-space
+handler that records a deletion through `markSharedSpaceDeletedIn()` retires
+nothing.
+
+A runtime hears of a deletion only from the memory server's answer for the
+space. One refused the space before it was deleted learns of the deletion only
+when it asks again, with `retrySpaceAccess(space)`, since the server sends no
+`session/admissible` for a deleted space
+([`space-access.md`](space-access.md#a-deleted-space)). The shell asks on
+navigation and on regaining focus. A runtime outside the shell asks on
+occasions of its own, and until it does, its person's catalog keeps such an
+entry as it was.
+
+The memory server admits a space's deletion by its sole member, and from then on
+refuses the space marked `deleted`, so a runtime that holds such a space comes
+upon the deletion as this section describes. `cf space delete` sends the
+deletion commit. Until a space is deleted, `spaceDeleted(space)` reads `false`
+once the server has answered for the space and `undefined` before, a mark for a
+saved or archived entry at its observed revision answers `not-deleted`, and the
+`deleted` lists stay empty.
 
 ## The profile acting in a space
 

@@ -1,8 +1,8 @@
 import { internSchema } from "@commonfabric/data-model-schema";
 
-import { type Cell } from "../cell.ts";
-import { type RawBuiltinResult, type RawNodeCause } from "../module.ts";
-import { type Runtime } from "../runtime.ts";
+import type { Cell } from "../cell.ts";
+import type { RawBuiltinResult, RawNodeCause } from "../module.ts";
+import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { forwardReference } from "./forward-reference.ts";
 

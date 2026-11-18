@@ -9,7 +9,10 @@ import {
   isRunnableSchedulingSeed,
   type PullSchedulingState,
 } from "../src/scheduler/work-oracle.ts";
-import type { SchedulerNode } from "../src/scheduler/node-record.ts";
+import {
+  NodeRegistry,
+  type SchedulerNode,
+} from "../src/scheduler/node-record.ts";
 import type { QueuedEvent } from "../src/scheduler/types.ts";
 
 describe("split-clock readiness decisions", () => {
@@ -43,7 +46,7 @@ describe("split-clock readiness decisions", () => {
     const state = {
       pullScheduling: {
         pending: new Set(),
-        nodes: { getInvalidNodes: () => [] },
+        nodes: new NodeRegistry(),
       } as unknown as PullSchedulingState,
       eventQueue: [{ notBefore: NOT_BEFORE } as unknown as QueuedEvent],
       idlePromises: [() => {
@@ -51,14 +54,14 @@ describe("split-clock readiness decisions", () => {
       }],
       consumeRerunAfterCurrentExecute: () => false,
       hasPendingLineageHeadEvent: () => false,
-      hasLoadParkedHeadEvent: () => false,
+      hasLoadWaitingHeadEvent: () => false,
       settleDeferredForLoadPark: () => false,
       scheduleWake: () => {},
       hasWakeTimer: () => false,
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => {},
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -81,14 +84,14 @@ describe("split-clock readiness decisions", () => {
       }],
       consumeRerunAfterCurrentExecute: () => false,
       hasPendingLineageHeadEvent: () => false,
-      hasLoadParkedHeadEvent: () => false,
+      hasLoadWaitingHeadEvent: () => false,
       settleDeferredForLoadPark: () => false,
       scheduleWake: () => {},
       hasWakeTimer: () => true,
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -113,7 +116,7 @@ describe("split-clock readiness decisions", () => {
       }],
       consumeRerunAfterCurrentExecute: () => false,
       hasPendingLineageHeadEvent: () => false,
-      hasLoadParkedHeadEvent: () => false,
+      hasLoadWaitingHeadEvent: () => false,
       settleDeferredForLoadPark: () => false,
       scheduleWake: () => {},
       // With no nextDirtyPullRunAt and no parked event, this timer belongs only
@@ -122,7 +125,7 @@ describe("split-clock readiness decisions", () => {
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 
@@ -143,14 +146,14 @@ describe("split-clock readiness decisions", () => {
       }],
       consumeRerunAfterCurrentExecute: () => false,
       hasPendingLineageHeadEvent: () => false,
-      hasLoadParkedHeadEvent: () => false,
+      hasLoadWaitingHeadEvent: () => false,
       settleDeferredForLoadPark: () => false,
       scheduleWake: () => {},
       hasWakeTimer: () => false,
       setScheduled: () => {},
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => holdResets++,
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => {},
     } satisfies ExecuteContinuationState;
 

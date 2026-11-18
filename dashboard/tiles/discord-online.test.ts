@@ -12,6 +12,7 @@ import {
   assertMatch,
   assertStringIncludes,
 } from "@std/assert";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { Ctx, Tile } from "../types.ts";
 import { buildSnapshot, discordOnline, loadHistory } from "./discord-online.ts";
 import type * as discordOnlineModule from "./discord-online.ts";
@@ -542,7 +543,7 @@ Deno.test("discord history: an unreadable store starts from an empty history", a
       await loadHistory();
       return null;
     } catch (e) {
-      return e instanceof Error ? e.message : String(e);
+      return describeFailure(e);
     }
   };
   try {

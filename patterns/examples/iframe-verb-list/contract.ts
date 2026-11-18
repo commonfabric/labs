@@ -1,9 +1,8 @@
 /**
- * The data contract of the verb list's frame. The items belong to the pattern
- * in `main.tsx`, which hands them to the guest as input and changes them only
- * through its `addItem` verb; the frame takes that verb as the stream the
- * guest sends to. What the guest owns is which items are checked off, and
- * whether the list hides them.
+ * The data the verb list's pattern and its guest share. The pattern keeps the
+ * items in its `state` and changes them only through its `addItem` verb, which
+ * the guest sends an event to; the guest is granted the items to read, and
+ * writes only which of them are checked off, and whether the list hides them.
  */
 
 /** One entry on the list. */
@@ -15,14 +14,11 @@ export interface ListItem {
   text: string;
 }
 
-/** What the guest is handed: the pattern's items, which it cannot write. */
-export interface IframeInputData {
+/** What the pattern stores, shared by everyone on the piece. */
+export interface IframeStateData {
   /** Every item on the list, in the order they were added. */
   items: ListItem[];
-}
 
-/** What the guest stores, shared by everyone on the piece. */
-export interface IframeStateData {
   /** Whether each item is checked off, by item id. */
   checked: Record<string, boolean>;
 }
@@ -42,29 +38,11 @@ export interface AddItemEvent {
   text: string;
 }
 
-/** The event each stream the frame takes carries, by stream name. */
-export interface IframeStreamEvents {
-  addItem: AddItemEvent;
-}
-
-export const DEFAULT_INPUT: IframeInputData = {
-  items: [],
-};
-
 export const DEFAULT_STATE: IframeStateData = {
+  items: [],
   checked: {},
 };
 
 export const DEFAULT_OUTPUT: IframeOutputData = {
   hideChecked: false,
 };
-
-export const IFRAME_PATTERN = {
-  name: "VerbListFrame",
-  displayName: "Verb list",
-  stateScope: "space",
-  outputScope: "space",
-  frameHeight: "100vh",
-  databases: {},
-  streams: ["addItem"],
-} as const;

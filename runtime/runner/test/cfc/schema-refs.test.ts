@@ -92,11 +92,24 @@ describe("schema-refs", () => {
 
     it("leaves the view of a deep-frozen fragment unfrozen under a mutable map", () => {
       const map = definitions();
-      const view = cfcSchemaWithInheritedDefs(deepFreeze(fragment()), map);
+      const ref = deepFreeze(fragment());
+      const view = cfcSchemaWithInheritedDefs(ref, map);
 
       expect(view).toEqual({ $ref: "#/$defs/Name", $defs: map });
       expect(Object.isFrozen(view)).toBe(false);
       expect(Object.isFrozen(map)).toBe(false);
+      expect(cfcSchemaWithInheritedDefs(ref, map)).toBe(view);
+    });
+
+    it("returns a fresh view of a mutable fragment, local reference or not", () => {
+      const map = deepFreeze(definitions());
+      for (const mutable of [fragment(), { type: "number" } as JSONSchemaObj]) {
+        const view = cfcSchemaWithInheritedDefs(mutable, map);
+
+        expect(view).toEqual({ ...mutable, $defs: map });
+        expect(cfcSchemaWithInheritedDefs(mutable, map)).not.toBe(view);
+        expect(Object.isFrozen(view)).toBe(false);
+      }
     });
   });
 

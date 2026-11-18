@@ -80,6 +80,7 @@ export type AgentRun = {
   resultSchema: unknown;
   maxConfidentiality?: unknown[];
   tools?: string[];
+  progressRequested?: boolean;
   submittedAt: string;
   state: AgentRunState;
   stateSince: string;
@@ -87,6 +88,7 @@ export type AgentRun = {
   // Written by the runner, from the claim on.
   claim?: { runner: string; leaseUntil: string };
   attempts?: number;
+  progress?: unknown;
   result?: unknown;
   outcome?: AgentRunOutcome;
   errorCode?: AgentRunErrorCode;

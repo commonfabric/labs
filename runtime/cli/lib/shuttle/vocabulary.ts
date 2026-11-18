@@ -32,14 +32,14 @@ import type {
   warmPiece,
 } from "../piece.ts";
 import type { readWish } from "../wish.ts";
-import { type Announce } from "./announce.ts";
-import { type HeldConnection } from "./connection.ts";
-import { type Editing } from "./editor.ts";
-import { type ExternalLocation } from "./external.ts";
+import type { Announce } from "./announce.ts";
+import type { HeldConnection } from "./connection.ts";
+import type { Editing } from "./editor.ts";
+import type { ExternalLocation } from "./external.ts";
 import { resolveHandle } from "./handles.ts";
 import type { ValueLens } from "./lens.ts";
-import { type ListingDeps, type RowKind } from "./listing.ts";
-import { type VerbOptions } from "./options.ts";
+import type { ListingDeps, RowKind } from "./listing.ts";
+import type { VerbOptions } from "./options.ts";
 import {
   ASSUMED_COLUMNS,
   ASSUMED_ROWS,
@@ -49,17 +49,17 @@ import {
   pageOf,
   statusLine,
 } from "./page.ts";
-import {
-  type Aim,
+import type {
+  Aim,
   CurrentPlace,
-  type FacetPosition,
-  type HandleMove,
-  type PiecePlace,
-  type PiecePosition,
-  type Place,
-  type SpaceRootPosition,
+  FacetPosition,
+  HandleMove,
+  PiecePlace,
+  PiecePosition,
+  Place,
+  SpaceRootPosition,
 } from "./place.ts";
-import { ShuttleSession } from "./session.ts";
+import type { ShuttleSession } from "./session.ts";
 
 /** What running a line did. */
 export type Outcome =

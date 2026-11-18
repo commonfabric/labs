@@ -109,22 +109,33 @@ export async function runTestBatches(
     }).spawn().status;
     if (!status.success && code === 0) code = status.code;
   }
-  if (junitPath !== undefined) {
-    const written: string[] = [];
-    for (const report of reports) {
-      try {
-        written.push(await Deno.readTextFile(report));
-      } catch (error) {
-        if (error instanceof Deno.errors.NotFound) continue;
-        throw error;
-      }
-      await Deno.remove(report);
-    }
-    if (written.length > 0) {
-      await Deno.writeTextFile(junitPath, mergeJUnitReports(written));
-    }
-  }
+  if (junitPath !== undefined) await mergeWrittenReports(junitPath, reports);
   return code;
+}
+
+/**
+ * Merges into one report at `junitPath` each of `reports` that was written,
+ * in the order given, and removes them. A report that is not there is
+ * skipped, and where none is there, nothing is written. Throws where a
+ * report is there and cannot be read.
+ */
+export async function mergeWrittenReports(
+  junitPath: string,
+  reports: readonly string[],
+): Promise<void> {
+  const written: string[] = [];
+  for (const report of reports) {
+    try {
+      written.push(await Deno.readTextFile(report));
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) continue;
+      throw error;
+    }
+    await Deno.remove(report);
+  }
+  if (written.length > 0) {
+    await Deno.writeTextFile(junitPath, mergeJUnitReports(written));
+  }
 }
 
 /**
@@ -164,9 +175,4 @@ export async function runMemberBatches(
   return await runTestBatches(testBatches(test, files), memberDir);
 }
 
-async function main(): Promise<void> {
-  const code = await runMemberBatches(Deno.args, Deno.cwd());
-  if (code !== 0) Deno.exit(code);
-}
-
-if (import.meta.main) await main();
+if (import.meta.main) Deno.exit(await runMemberBatches(Deno.args, Deno.cwd()));

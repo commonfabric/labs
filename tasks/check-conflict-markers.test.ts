@@ -166,6 +166,19 @@ describe("check-conflict-markers", () => {
       }
     });
 
+    it("throws for a tracked file it cannot read for any other reason", async () => {
+      // A path that loops back on itself is neither binary nor absent, so
+      // the run stops rather than passing a file it never read.
+      const root = await fixtureRepo("harmless");
+      try {
+        await Deno.remove(join(root, "subject.md"));
+        await Deno.symlink("subject.md", join(root, "subject.md"));
+        await expect(scan(root)).rejects.toThrow(Deno.errors.FilesystemLoop);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
     it("throws when the directory is not a git repository", async () => {
       // Every path here comes from `git ls-files`, so a failure to list means
       // the check saw nothing rather than that there was nothing to see.

@@ -14,7 +14,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/logger";
 
 import { Runtime } from "../src/runtime.ts";
-import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("test oncommit race");

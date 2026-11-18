@@ -5,6 +5,7 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 
+import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -101,6 +102,7 @@ describe("StorageManager.pullOpenSpacesToHead", () => {
 
     beforeEach(async () => {
       enforcing = new MemoryV2Server.Server({
+        namesInstances: namesInstancesByDefault,
         authorizeSessionOpen: authorizeLoopbackSessionOpen,
         sessionOpenAuth: { audience: TEST_SESSION_OPEN_AUDIENCE },
         acl: { mode: "enforce" },

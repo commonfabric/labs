@@ -65,8 +65,10 @@ const ESCAPE_SOURCE = String.raw`\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*\x07`;
 
 const ANSI_PATTERN = new RegExp(ESCAPE_SOURCE, "g");
 
-/** An escape sequence at the start of a string. */
-export const LEADING_ESCAPE = new RegExp(`^(?:${ESCAPE_SOURCE})`);
+/** An escape sequence, captured, so that splitting a string on it gives the
+ * text between escape sequences at even indices and the sequences at odd
+ * ones. */
+export const ESCAPE_SPLIT = new RegExp(`(${ESCAPE_SOURCE})`);
 
 /** Strip every ANSI escape from `text`. Used for width maths and tests. */
 export function stripAnsi(text: string): string {
@@ -74,22 +76,23 @@ export function stripAnsi(text: string): string {
 }
 
 /**
- * Number of Unicode code points in `s` — a non-BMP character (surrogate pair)
- * counts as one display column rather than two UTF-16 units. Column maths uses
- * this so glyphs like `𝑻` line up correctly.
+ * Number of code points in `s`, counted as `for...of` iterates them: a
+ * surrogate pair counts once, and a lone surrogate counts once too. Column maths
+ * uses this so glyphs like `𝑻` line up correctly.
  */
 export function cpLen(s: string): number {
-  let n = 0;
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i);
-    if (c < 0xdc00 || c > 0xdfff) n++; // count everything but low surrogates
-  }
+  let n = s.length;
+  for (let i = 1; i < s.length; i++) if (isSurrogatePairEnd(s, i)) n--;
   return n;
 }
 
-/** Visible width of `text` (code points) once ANSI escapes are removed. */
-export function visibleWidth(text: string): number {
-  return cpLen(stripAnsi(text));
+/** Whether the UTF-16 unit at `i` is a low surrogate that completes a pair
+ * with the high surrogate before it. */
+export function isSurrogatePairEnd(s: string, i: number): boolean {
+  const unit = s.charCodeAt(i);
+  const previous = s.charCodeAt(i - 1);
+  return unit >= 0xdc00 && unit <= 0xdfff &&
+    previous >= 0xd800 && previous <= 0xdbff;
 }
 
 //
@@ -126,8 +129,27 @@ export const term = {
   resetDefaultBg: `${OSC}111${BEL}`,
 
   /** `text` as a link to `url` (OSC 8), which a terminal without links
-   * shows as the text alone. */
+   * shows as the text alone. Every character of `url` outside printable
+   * ASCII is percent-encoded as its UTF-8 bytes, so that a link taken
+   * from content cannot end the sequence or start another. */
   hyperlink(url: string, text: string): string {
-    return `${OSC}8;;${url}${BEL}${text}${OSC}8;;${BEL}`;
+    return `${term.linkStart(url)}${text}${term.linkEnd}`;
   },
+
+  /** Starts a link to `url` (OSC 8), percent-encoded as
+   * {@link term.hyperlink} encodes it, which {@link term.linkEnd} ends. */
+  linkStart(url: string): string {
+    const safe = url.replace(
+      /[^!-~]/gu,
+      (char) =>
+        Array.from(
+          new TextEncoder().encode(char),
+          (byte) => `%${byte.toString(16).toUpperCase().padStart(2, "0")}`,
+        ).join(""),
+    );
+    return `${OSC}8;;${safe}${BEL}`;
+  },
+
+  /** Ends the link {@link term.linkStart} started. */
+  linkEnd: `${OSC}8;;${BEL}`,
 };

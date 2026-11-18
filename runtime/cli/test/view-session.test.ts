@@ -216,16 +216,13 @@ Deno.test("session: lines without diff annotations use the full width", () => {
 
 Deno.test("session: full-width lines count displayed cells", () => {
   const cases = [
-    { text: "😀😀😀😀😀", displayModeKeys: 0, expected: "😀😀😀😀😀  " },
-    {
-      text: "\x1b[31mabcde\x1b[0m",
-      displayModeKeys: 1,
-      expected: "abcde  ",
-    },
+    // Each emoji takes two columns.
+    { text: "😀😀😀", expected: "😀😀😀 " },
+    { text: "\x1b[31mabcde\x1b[0m", expected: "abcde  " },
+    { text: "a\bab\bbc\bcd\bde\be", expected: "abcde  " },
   ];
-  for (const { text, displayModeKeys, expected } of cases) {
+  for (const { text, expected } of cases) {
     const s = expandableSession(text, 7);
-    for (let i = 0; i < displayModeKeys; i++) press(s, "c");
     press(s, "l", "l");
     assertEquals(s.view().left, 0);
     assertEquals(renderFrame(s.displayDoc(), s.view())[0], expected);
@@ -442,7 +439,7 @@ Deno.test("session: backslash cycles wrapping and keeps its content anchor", () 
   assertEquals(s.view().message, "Line wrapping: off");
 });
 
-Deno.test("session: word wrapping repeats punctuation and whitespace prefixes", () => {
+Deno.test("session: word wrapping indents continuations by the line prefix", () => {
   const s = new Session(
     parseDocument("  #  foo bar"),
     { color: false, showLineNumbers: false },
@@ -454,7 +451,7 @@ Deno.test("session: word wrapping repeats punctuation and whitespace prefixes", 
   assertEquals(s.view().wrapMode, "word");
   const rows = renderFrame(s.displayDoc(), s.view());
   assertEquals(rows[0], "  #  foo  \\");
-  assertEquals(rows[1], "  #  bar   ");
+  assertEquals(rows[1], "     bar   ");
 });
 
 Deno.test("session: word wrapping restores the visible source at a word", () => {
@@ -560,15 +557,15 @@ Deno.test("session: clearing a selection reflows a wrapped logical line", () => 
 });
 
 Deno.test("session: changing display mode reflows a wrapped logical line", () => {
-  const doc = parseDocument("abcdefgh\x1b[31mijklmnop");
+  const doc = parseDocument("ab\x1b[31mcdefghijklmnop");
   const s = new Session(
     doc,
     { color: false, showLineNumbers: false },
     { width: 4, height: 3 },
   );
-  press(s, "\\", "j", "j", "c");
-  assertEquals(s.view().displayMode, "ansi");
-  assertEquals(s.view().top, 2, "the same source column stays in view");
+  press(s, "\\", "j", "j", "c", "c");
+  assertEquals(s.view().displayMode, "pictures");
+  assertEquals(s.view().top, 3, "the same source column stays in view");
 });
 
 Deno.test("session: selecting a node preserves the wrapped viewport anchor", () => {
@@ -746,6 +743,24 @@ Deno.test("session: incremental search then commit", () => {
   assert(s.view().currentMatch !== before || count === 1);
 });
 
+Deno.test("session: search columns count a lone surrogate the same either case", () => {
+  // Smartcase makes "B" a case-sensitive search and "b" a case-insensitive
+  // one; both find the same character after the lone surrogate.
+  for (const query of ["B", "b"]) {
+    const s = new Session(
+      parseDocument("\udc7baB\n"),
+      { color: false, showLineNumbers: false },
+      { width: 20, height: 6 },
+    );
+    press(s, "/", query, "enter");
+    assertEquals(
+      s.view().matches,
+      [{ line: 0, start: 2, end: 3 }],
+      `search for ${query}`,
+    );
+  }
+});
+
 Deno.test("session: search miss reports a message", () => {
   const s = makeSession();
   press(s, "/");
@@ -865,18 +880,16 @@ Deno.test("session: help overlay opens with ?", () => {
 
 Deno.test("session: c cycles the non-printable display mode and reports it", () => {
   const s = makeSession();
-  assertEquals(s.view().displayMode, "pictures", "starts on the first mode");
-  press(s, "c");
-  assertEquals(s.view().displayMode, "ansi");
-  assert(s.view().message.includes("ANSI color"), "reports the new mode");
+  assertEquals(s.view().displayMode, "ansi", "starts in ANSI color mode");
   press(s, "c");
   assertEquals(s.view().displayMode, "hidden");
+  assert(s.view().message.includes("hidden"), "reports the new mode");
   press(s, "c");
-  assertEquals(
-    s.view().displayMode,
-    "pictures",
-    "wraps back to the first mode",
-  );
+  assertEquals(s.view().displayMode, "pictures");
+  assert(s.view().message.includes("control pictures"));
+  press(s, "c");
+  assertEquals(s.view().displayMode, "ansi", "wraps back to the first mode");
+  assert(s.view().message.includes("ANSI color"));
 });
 
 Deno.test("session: a search reveal in a compacting mode scrolls to the display column", () => {
@@ -890,7 +903,7 @@ Deno.test("session: a search reveal in a compacting mode scrolls to the display 
     { color: true, showLineNumbers: false },
     { width: 20, height: 6 },
   );
-  press(s, "c", "c"); // pictures → ansi → hidden
+  press(s, "c"); // ansi → hidden
   assertEquals(s.view().displayMode, "hidden");
   press(s, "/");
   for (const ch of "NEEDLE") press(s, ch);
@@ -899,6 +912,68 @@ Deno.test("session: a search reveal in a compacting mode scrolls to the display 
   // column ~42, not its source column ~51. The viewport frames the display one.
   const left = s.view().left;
   assert(left > 0 && left <= 42, `reveal used a display column, left=${left}`);
+});
+
+Deno.test("session: ANSI-mode tabs widen how far a line can scroll", () => {
+  // Thirty tabs draw 120 cells in ANSI mode but are only 30 source code
+  // points, so the scroll limit has to count drawn cells to reach "NEEDLE".
+  const tabbed = () => {
+    const s = new Session(
+      parseDocument(`${"\t".repeat(30)}NEEDLE\n`),
+      { color: false, showLineNumbers: false },
+      { width: 20, height: 6 },
+    );
+    assertEquals(s.view().displayMode, "ansi");
+    return s;
+  };
+
+  const searched = tabbed();
+  press(searched, "/");
+  for (const ch of "NEEDLE") press(searched, ch);
+  press(searched, "enter");
+  assert(
+    renderFrame(searched.displayDoc(), searched.view())[0].includes("NEEDLE"),
+    `search reveals the match, left=${searched.view().left}`,
+  );
+
+  const panned = tabbed();
+  press(panned, ...Array(50).fill("l"));
+  assertEquals(
+    panned.view().left,
+    126,
+    "panning right stops once the line's drawn width has scrolled past",
+  );
+});
+
+Deno.test("session: a search inside an overstrike scrolls as the drawn text would", () => {
+  // `man` prints an underlined `q` as `_\bq`, so the match starts inside the
+  // cell that draws it.
+  const searched = (text: string) => {
+    const s = new Session(
+      parseDocument(`${"x".repeat(60)}${text}${"y".repeat(60)}\n`),
+      { color: false, showLineNumbers: false },
+      { width: 20, height: 6 },
+    );
+    press(s, "/", "q", "enter");
+    return s.view().left;
+  };
+
+  assertEquals(searched("_\bq"), searched("q"));
+  assertEquals(searched("q"), 56);
+});
+
+Deno.test("session: hidden escape sequences do not widen how far a line can scroll", () => {
+  // Ten color sequences are 160 source code points but draw nothing in
+  // hidden mode, so panning stops at the three drawn cells.
+  const s = new Session(
+    parseDocument(`${"\x1b[38;2;10;20;30m".repeat(10)}abc\n`),
+    { color: false, showLineNumbers: false },
+    { width: 20, height: 6 },
+  );
+  press(s, "c"); // ansi → hidden
+  assertEquals(s.view().displayMode, "hidden");
+  press(s, ...Array(50).fill("l"));
+  assertEquals(s.view().left, 3);
 });
 
 Deno.test("session: resize reclamps scroll to the ordinary end", () => {

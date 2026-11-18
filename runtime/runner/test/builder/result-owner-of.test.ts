@@ -140,6 +140,21 @@ describe("resultOwnerOf()", () => {
     expect(callIn(undefined)).toBeUndefined();
   });
 
+  it("throws in a computation whose frame holds no runtime", () => {
+    const frame = pushFrame({
+      runtime: undefined,
+      tx: undefined,
+      frameKind: "lift",
+    });
+    try {
+      expect(() => resultOwnerOf(undefined)).toThrow(
+        "`resultOwnerOf(target)` requires an executing runtime.",
+      );
+    } finally {
+      popFrame(frame);
+    }
+  });
+
   it("throws when called outside a handler or a reactive computation", async () => {
     const owned = await seed("owned", [], "owner");
 

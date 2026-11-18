@@ -6,10 +6,11 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { preparedDigestFor } from "../src/cfc/canonical.ts";
-import { type CfcConfClause, clausesEqual } from "../src/cfc/clause.ts";
+import { clausesEqual } from "../src/cfc/clause.ts";
 import { evaluateExchangeRules } from "../src/cfc/exchange-eval.ts";
 import type { CfcGrantResolverQuery } from "../src/cfc/exchange-eval.ts";
 import {

@@ -1359,12 +1359,3 @@ serialTest(
     }
   },
 );
-
-// Registered last so it runs after every case above. Per-test `idle()` only
-// drains the singleton's refresh timer; its SQLite engine handles and read-pool
-// connections stay open until `close()`. Deno isolates each test file's module
-// graph, so this instance is owned by this file alone. Closing it here releases
-// those handles.
-serialTest("memory websocket server releases its resources", async () => {
-  await memoryServer.close();
-});

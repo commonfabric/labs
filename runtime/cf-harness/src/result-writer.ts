@@ -1,6 +1,6 @@
 /**
  * The agent result writer: the trusted host routine that puts a run's
- * structured result into the fabric and returns a link to it.
+ * structured result or interim progress into the fabric and returns its link.
  *
  * The harness is what knows what the model observed and what each handle in
  * the answer stands for, so the harness writes the result itself, from its
@@ -20,9 +20,10 @@
  * result carries the runtime-minted `LlmDerived` family a pattern cannot
  * forge.
  *
- * This is not a model tool. It runs on the trusted host over the session's
- * runtime, after a run reaches its structured result, and every runtime gate
- * applies to its write (AH-TOOL-7).
+ * The trusted host invokes this over its session runtime for final results
+ * and opt-in progress reports. Every runtime gate applies to the write
+ * (AH-TOOL-7). Progress selects literal strings: tokens remain display text
+ * while the same observed inputs contribute their labels.
  */
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -46,6 +47,7 @@ import {
   type NormalizedFullLink,
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -134,11 +136,14 @@ export interface WriteAgentResultOptions {
   /** The run's handle table, the only source of a cell handle's address. */
   handleTable: HarnessHandleTable;
 
-  /** The model's structured result, as it finished the run. */
+  /** The model-authored output being published. */
   structuredResult: unknown;
 
   /** The schema the result was requested against. */
   resultSchema: JSONSchema;
+
+  /** Keeps strings as display text, including strings naming held handles. */
+  literalStrings?: boolean;
 
   /**
    * Everything the run observed: cells, and the document referents it holds.
@@ -705,9 +710,6 @@ const fitsPositionCeiling = (
     atomsOutsideCeiling(confidentiality, ceiling).length === 0;
 };
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Maps a failed commit to the writer's typed failure: a
  * `CfcCommitRefusalError` is the boundary's decision and becomes
@@ -811,7 +813,7 @@ export const writeAgentResult = async (
     throw new AgentResultWriteError(
       "invalid_result",
       `the structured result does not satisfy the result schema: ${
-        errorMessage(error)
+        describeFailure(error)
       }`,
     );
   }
@@ -855,7 +857,7 @@ export const writeAgentResult = async (
     } catch (error) {
       throw new AgentResultWriteError(
         "unresolvable_handle",
-        `a handle's address does not parse: ${errorMessage(error)}`,
+        `a handle's address does not parse: ${describeFailure(error)}`,
       );
     }
     if (link.space !== space) {
@@ -871,14 +873,16 @@ export const writeAgentResult = async (
     reference: Reference;
     ceiling: readonly CfcConfClause[] | undefined;
   }[] = [];
-  resolveReferences(
-    options.structuredResult,
-    resultSchema,
-    resultSchema,
-    [],
-    resolve,
-    resolved,
-  );
+  if (options.literalStrings !== true) {
+    resolveReferences(
+      options.structuredResult,
+      resultSchema,
+      resultSchema,
+      [],
+      resolve,
+      resolved,
+    );
+  }
 
   const placements: Placement[] = resolved.map(({ reference, ceiling }) =>
     fitsPositionCeiling(reference, ceiling, runtime)

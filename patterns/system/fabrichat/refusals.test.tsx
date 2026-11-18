@@ -102,7 +102,8 @@ export default pattern(() => {
     { myProfile: aliceProfile, ...group } as RoomArg,
   );
   const bob = FabriChatRoomCore({ myProfile: bobProfile, ...group } as RoomArg);
-  const carol = FabriChatRoomCore({ ...group } as RoomArg);
+  // @ts-expect-error: A reader with no profile is what this room is here for.
+  const carol = FabriChatRoomCore({ ...group });
   const curator = FabriChatRoomCore(
     { myProfile: bobProfile, ...group, ownersMayObliterate: true } as RoomArg,
   );

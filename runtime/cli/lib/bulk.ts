@@ -7,8 +7,11 @@
  * above it stay seams.
  */
 
-import { dirname, join, toFileUrl } from "@std/path";
+import { dirname } from "@std/path/dirname";
+import { join } from "@std/path/join";
+import { toFileUrl } from "@std/path/to-file-url";
 
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import {
   type ApplyReport,
@@ -34,12 +37,7 @@ import {
   surveyPieces,
   type SurveyResult,
 } from "@commonfabric/piece/ops";
-import {
-  localRetargetOp,
-  programEntryIdentity,
-  resolveLocalSourceProgram,
-} from "@commonfabric/piece/ops/bulk-local";
-import { retargetPieces } from "@commonfabric/piece/ops/bulk-retarget";
+import type { retargetPieces } from "@commonfabric/piece/ops/bulk-retarget";
 import type { JSONSchema, RuntimeProgram } from "@commonfabric/runner";
 
 import {
@@ -49,6 +47,15 @@ import {
   resolveAddressedPieceConfig,
   type SpaceConfig,
 } from "./piece.ts";
+
+/**
+ * What resolves a program from disk, which reaches the compiler. Only the
+ * survey and repair stages use it, and every other `piece` command imports this
+ * module.
+ */
+const bulkLocal = () =>
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  import("@commonfabric/piece/ops/bulk-local");
 
 /** What {@link readSourcePin} resolves its address and connection through. */
 export type SourcePinDependencies = PieceResolutionDeps;
@@ -155,13 +162,14 @@ export async function runRepair(
   // between the hash and the code — the path is read exactly once. The
   // resolution and the hash are reads, never executions.
   const program = await (deps.resolveFixerProgram ??
-    ((path: string) =>
-      resolveLocalSourceProgram(pieces.runtime, { main: path })))(
-      request.fixerPath,
+    (async (path: string) =>
+      (await bulkLocal()).resolveLocalSourceProgram(pieces.runtime, {
+        main: path,
+      })))(request.fixerPath);
+  const fixerIdentity =
+    await (deps.programIdentity ?? (await bulkLocal()).programEntryIdentity)(
+      program,
     );
-  const fixerIdentity = await (deps.programIdentity ?? programEntryIdentity)(
-    program,
-  );
   const plan = request.planPath === undefined ? undefined : decodePlan(
     await (deps.readTextFile ?? Deno.readTextFile)(request.planPath),
   );
@@ -282,7 +290,7 @@ async function teardownProblem(
     await step();
     return undefined;
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    return describeFailure(error);
   }
 }
 
@@ -346,7 +354,10 @@ export async function runRetarget(
     await (deps.readTextFile ?? Deno.readTextFile)(request.planPath),
   );
   const sessions = groupSessions(config, deps.loadPieces ?? loadPieces);
-  return await (deps.retargetPieces ?? retargetPieces)(sessions, {
+  const retarget = deps.retargetPieces ??
+    // deno-lint-ignore cf-imports/no-inline-module-import
+    (await import("@commonfabric/piece/ops/bulk-retarget")).retargetPieces;
+  return await retarget(sessions, {
     plan,
     ...(request.accept === undefined ? {} : { accepted: request.accept }),
     ...(request.apply === true ? { apply: true } : {}),
@@ -536,6 +547,7 @@ export async function runSurvey(
   // an own key rather than a write through the prototype chain.
   const operations: Record<string, PlannedRetarget> = Object.create(null);
   for (const retarget of request.retargets ?? []) {
+    const { localRetargetOp } = await bulkLocal();
     const { kind: _, ...planned } = await localRetargetOp(pieces.runtime, {
       source: retarget.source,
       ...(retarget.rev === undefined ? {} : { rev: retarget.rev }),

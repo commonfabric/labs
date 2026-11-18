@@ -1,4 +1,3 @@
-import { exists } from "@std/fs";
 import * as path from "@std/path";
 
 import ports from "@commonfabric/ports" with { type: "json" };
@@ -10,7 +9,7 @@ import {
 } from "@commonfabric/runner/deployment-meta";
 
 import env from "@/env.ts";
-import { buildInfo } from "@/lib/build-info.ts";
+import { buildInfo, compiled, shellBuildId } from "@/lib/build-info.ts";
 import { createRouter } from "@/lib/create-app.ts";
 import { experimentalPosture } from "@/lib/experimental-posture.ts";
 import {
@@ -61,11 +60,7 @@ export async function compiledShellRouter(
   posture: () => Record<string, boolean> | null = experimentalPosture,
 ) {
   return createShellStaticRouter(staticRoot, {
-    // build-binaries uses the mode name when no commit SHA was supplied;
-    // mirror that fallback so locally compiled binaries retain a working
-    // default worker URL too.
-    immutableBuildId: commitSha ??
-      (environment.ENV === "production" ? "production" : "development"),
+    immutableBuildId: shellBuildId(commitSha, environment.ENV),
     index: await loadShellIndex(
       staticRoot,
       () => shellDeploymentPage(environment, posture()),
@@ -73,6 +68,70 @@ export async function compiledShellRouter(
     ),
     ...(deps !== undefined ? { deps } : {}),
   });
+}
+
+/**
+ * Where a compiled toolshed's shell bundle sits: the production build in a
+ * production deployment, and the development build in any other.
+ */
+export function compiledShellRoot(environment: Pick<typeof env, "ENV">) {
+  return path.fromFileUrl(
+    new URL(
+      environment.ENV === "production"
+        ? "../../shell-frontend"
+        : "../../shell-frontend-dev",
+      import.meta.url,
+    ),
+  );
+}
+
+/**
+ * The router serving the shell's pages: the bundle `compiledRouter` builds in
+ * a compiled toolshed; otherwise the shell's dev server at `shellUrl`, reached
+ * through `fetch`, when one is named; and otherwise a 404 saying how to bring
+ * the shell up.
+ */
+export async function shellFrontendRouter(
+  { compiled, shellUrl, compiledRouter, fetch = globalThis.fetch }: {
+    compiled: boolean;
+    shellUrl: string | undefined;
+    compiledRouter: () => ReturnType<typeof compiledShellRouter>;
+    fetch?: typeof globalThis.fetch;
+  },
+) {
+  if (compiled) {
+    return await compiledRouter();
+  }
+  const router = createRouter();
+  if (!shellUrl) {
+    router.get("/*", (c) =>
+      c.text(
+        `Shell app not available. Set SHELL_URL=http://localhost:${ports.shell} or run the compiled binary`,
+        404,
+      ));
+    return router;
+  }
+  // Root-level resources the shell app requests.
+  for (
+    const resource of ["/DEV_SOCKET.js", "/scripts/*", "/styles/*", "/assets/*"]
+  ) {
+    router.get(resource, (c) => fetch(`${shellUrl}${c.req.path}`));
+  }
+  router.get("/*", async (c) => {
+    const targetUrl = `${shellUrl}${c.req.path || "/"}`;
+    try {
+      return await fetch(targetUrl, {
+        method: c.req.method,
+        headers: c.req.header(),
+      });
+    } catch (_) {
+      return c.text(
+        `Failed to proxy to ${targetUrl}. Is the shell dev server running?`,
+        502,
+      );
+    }
+  });
+  return router;
 }
 
 const router = createRouter();
@@ -112,70 +171,14 @@ router.use("/*", async (c, next) => {
   c.header("Cross-Origin-Embedder-Policy", "unsafe-none");
 });
 
-const dirname = import.meta?.dirname;
-if (!dirname) {
-  throw new Error("File does not have dirname in toolshed.");
-}
-const projectRoot = path.join(dirname, "..", "..");
-const shellStaticRoot = path.join(
-  projectRoot,
-  env.ENV === "production" ? "shell-frontend" : "shell-frontend-dev",
+router.route(
+  "/",
+  await shellFrontendRouter({
+    compiled,
+    shellUrl: Deno.env.get("SHELL_URL"),
+    compiledRouter: () =>
+      compiledShellRouter(compiledShellRoot(env), env, buildInfo.commitSha),
+  }),
 );
-const COMPILED = await exists(path.join(projectRoot, "COMPILED"));
-const SHELL_URL = Deno.env.get("SHELL_URL");
-
-if (COMPILED) {
-  // Production mode - serve static files
-  router.route(
-    "/",
-    await compiledShellRouter(shellStaticRoot, env, buildInfo.commitSha),
-  );
-} else if (SHELL_URL) {
-  // Development mode with proxy
-
-  // Handle root-level resources that shell app requests
-  router.get("/DEV_SOCKET.js", async (_) => {
-    return await fetch(`${SHELL_URL}/DEV_SOCKET.js`);
-  });
-
-  router.get("/scripts/*", async (c) => {
-    return await fetch(`${SHELL_URL}${c.req.path}`);
-  });
-
-  router.get("/styles/*", async (c) => {
-    return await fetch(`${SHELL_URL}${c.req.path}`);
-  });
-
-  router.get("/assets/*", async (c) => {
-    return await fetch(`${SHELL_URL}${c.req.path}`);
-  });
-
-  router.get("/*", async (c) => {
-    const reqPath = c.req.path || "/";
-    const targetUrl = `${SHELL_URL}${reqPath}`;
-
-    try {
-      const response = await fetch(targetUrl, {
-        method: c.req.method,
-        headers: c.req.header(),
-      });
-
-      return response;
-    } catch (_) {
-      return c.text(
-        `Failed to proxy to ${targetUrl}. Is the shell dev server running?`,
-        502,
-      );
-    }
-  });
-} else {
-  // Development mode without proxy
-  router.get("/*", (c) => {
-    return c.text(
-      `Shell app not available. Set SHELL_URL=http://localhost:${ports.shell} or run the compiled binary`,
-      404,
-    );
-  });
-}
 
 export default router;

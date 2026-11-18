@@ -26,12 +26,11 @@ import {
  * lose `getValueAtPath("abc", ["length"])`, which callers rely on to
  * reconstruct write details over primitive subtrees; indexing unconditionally,
  * as this did before, would hand back the prototype methods. `Object.hasOwn`
- * is the line both want.
+ * is the line both want. It throws for `null` and `undefined`, so neither may be
+ * `container`.
  */
 // deno-lint-ignore no-explicit-any
 function ownSegment(container: unknown, key: PropertyKey): any {
-  // `Object.hasOwn` throws on these two and only these two.
-  if (container === null || container === undefined) return undefined;
   return Object.hasOwn(container as object, key as string)
     ? (container as Record<PropertyKey, any>)[key]
     : undefined;

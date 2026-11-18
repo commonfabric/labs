@@ -19,7 +19,9 @@ departs from this design.
 - Records a room holds:
   - [`ChatMessage`](ChatMessage.md)
   - [`ChatMessageList`](ChatMessageList.md): a room's messages: facts, the
-    newest, and its threads.
+    newest, its threads, and a session's windows onto them.
+  - [`ChatMessageWindow`](ChatMessageWindow.md): a run of a room's messages
+    that a session opens.
   - [`ChatReply`](ChatReply.md): the thread a message joins, the message it
     quotes, and where it's shown.
   - [`ChatThreadSummary`](ChatThreadSummary.md): a thread's title, reply count,
@@ -105,7 +107,9 @@ provide, the document says so, under the heading "Prerequisites".
    [`ChatManagerOutput.md`](ChatManagerOutput.md), named for the roles rather
    than the patterns that fill them.
 6. The records a room holds: [`ChatMessage.md`](ChatMessage.md),
-   [`ChatMessageList.md`](ChatMessageList.md), [`ChatReply.md`](ChatReply.md),
+   [`ChatMessageList.md`](ChatMessageList.md),
+   [`ChatMessageWindow.md`](ChatMessageWindow.md),
+   [`ChatReply.md`](ChatReply.md),
    [`ChatThreadSummary.md`](ChatThreadSummary.md),
    [`ChatReaction.md`](ChatReaction.md), [`ChatRoomAbout.md`](ChatRoomAbout.md),
    [`ChatRoomPolicy.md`](ChatRoomPolicy.md), and
@@ -210,11 +214,16 @@ offers two halves of that:
   joining the space ([shared-profile rosters](../shared-profile-rosters.md)). A
   room in a space of its own is that root, and keeps them itself.
 
-A **member set**, the participants whose profile represents a principal the
-access list names, plus any named principal with no entry, would combine the
-two. The `*` entry adds no one to it. It is a property of the space, the same
-for every pattern in it. Until a space offers one, a reader shows the
-participants as claims.
+A **member set**, each principal the access list names with the participants
+whose profile is that principal's own (`profileOwnerOf()`), and with none for a
+named principal who has no entry, combines the two. The `*` entry adds no one
+to it. It is a property of the space, the same for every pattern in it.
+`memberSet()` in the shared social-space code
+(`patterns/system/social-space/member-set.ts`) joins it from the access list and
+the roster. A client reads a space's members from the member set its root
+offers, as `members`, rather than from any one room in it; a FabriChat room in
+a space of its own is that root, and offers it. Until a space offers one, a
+reader shows the participants as claims.
 
 With a member set:
 
@@ -242,8 +251,9 @@ names the ones it needs, and they are gathered here:
 
 - **A member set for a social space**, readable by the space's members and by
   patterns running there (see [Social spaces](#social-spaces)).
-  `spaceMembers()` gives its principals; pairing each with a participant's
-  profile is still to come.
+  `spaceMembers()` gives its principals, and `memberSet()` pairs each with
+  its profiles; a FabriChat room offers the result as `members`, and no other
+  space's root offers it yet.
 - **Creating a private space from a pattern.** `Factory.inSpace()` creates a
   space with a random DID whose genesis document grants only its creator
   (`{ [creator]: "OWNER" }`), or the grants `inSpace(name, { grants })` names
@@ -315,8 +325,8 @@ design, as below.
   nothing when it arrives again.
 - **No container creates placements.** A client does. A placement reads its
   viewer's access to the room's space, so `"none"` shows as `"not-member"`,
-  and a level not known yet as `"unavailable"`.
-
+  and a level not known yet as `"unavailable"`, except that a room whose
+  `spaceDeleted(room)` returns `true` shows as `"deleted"` whatever its level.
 ### Writers and labels
 
 - **Every record names its writers.** Beyond what the design requires of
@@ -383,7 +393,8 @@ design, as below.
   and queues a notice only for a member offered nothing. An `openDirect` that
   names `profile` and finds a direct room with a notice for its counterpart
   still waiting offers them the room then, unless its roster lists them, and
-  withdraws the notice. A room is offered only
+  keeps the notice, which is no longer listed once the offer puts them on the
+  room's roster. A room is offered only
   to someone the request names by profile, when the profile points at an inbox:
   an `openDirect` naming `profile`, a participant's chip, whose click names
   the participant's profile, or a `createGroup` naming `profiles`, as the

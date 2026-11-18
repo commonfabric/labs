@@ -74,7 +74,10 @@ export type ServingLoopStats = {
   /** Demanded-structure loads that THREW (serving-loop.md §1: a value
    * the server cannot serve is counted AND surfaced here, not just
    * logged). Counted per attempt; the loop retries the root on each
-   * subsequent input-driven demand cycle until the load lands. */
+   * subsequent input-driven demand cycle until the load lands. Also
+   * counts a piece-start commit that failed after its start resolved;
+   * the piece's demanded documents then park until a commit touches
+   * the piece (serving-loop.md §3d). */
   structureLoadFailures: number;
 
   /** Demanded-structure loads REFUSED because the piece's stored setup is
@@ -88,6 +91,11 @@ export type ServingLoopStats = {
    * commit landing while the refusing pass ran re-arms the root in place of
    * the park. A refusal on a commit's retry parks nothing. */
   structureLoadRefused: number;
+
+  /** Piece origins the serving loop followed before the tenure's first start
+   * of the piece (serving-loop.md §3e), counted per piece per tenure,
+   * whatever the follow found. */
+  originFollows: number;
 
   /** Demanded-structure ensure attempts that returned FALSE — the root
    * carried no loadable pattern identity yet, typically the creation
@@ -277,10 +285,10 @@ export type ServingLoopStats = {
    * dominate the early passes; the reconcile itself is map work over the
    * keys whose rows changed — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
-   * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
-   * the 300 ms grace coalesces them into a pending callback. A callback
-   * can lead to multiple passes, and input cycles can run a pass before
-   * it fires; notification and pass counts have different boundaries.
+   * `demandChanged` and the `session.watch.set` / `.add` notifies). The
+   * notifies that arrive before a cycle's demand pass share it, and a notify
+   * that lands while a pass is in flight owes another; notification and pass
+   * counts have different boundaries.
    * The service (loopback) session's notifies are dropped (they
    * are the serving graph's own reads, MINOR-4). `demandArrivals` is the
    * pre-existing top-level `servingLoop.demandArrivals` counter (the
@@ -336,8 +344,8 @@ export type ServingLoopStats = {
      * request's staged instances entering the tenure's warm demand,
      * serving-loop.md §1; RULED 2026-08-21) — counted apart so
      * `watchWakes` keeps meaning exactly the session-watch notifies.
-     * Like the other wake counters, counts notifies before the grace
-     * coalescing. */
+     * Like the other wake counters, counts notifies; the notifies that
+     * arrive before a cycle's demand pass share it. */
     warmWakes: number;
   };
 
@@ -384,8 +392,8 @@ export type ServingLoopStats = {
       growthWaves?: number;
 
       /** ms from the growth notification to its attributed landing.
-       * Includes intervening scheduling and derivation; input-driven work
-       * can bypass the grace timer. Present when a wake time was seen. */
+       * Includes intervening scheduling and derivation. Present when a wake
+       * time was seen. */
       graceMs?: number;
 
       /** performance.now() of the growth landing; present only when
@@ -535,6 +543,15 @@ export type ServingLoopStats = {
     handlerNotRunDeferrals: number;
 
     /**
+     * Of `handlerNotRunDeferrals`, the withdrawals that waited on a document
+     * rather than spending the deferral budget (events.md §5): the run read
+     * a scoped instance of it the serving loop had not produced, and a writer
+     * that owes it will still run. A commit writing the document re-drains
+     * the entry.
+     */
+    handlerNotRunWaits: number;
+
+    /**
      * Events requeued at a wave commit because a recorded read of the handler
      * run was stale: a commit the serving replica had not taken wrote what
      * the run read (serving-loop.md §3d). Counted per event, the later
@@ -555,6 +572,26 @@ export type ServingLoopStats = {
      * the events held behind it.
      */
     arrivalHeldDeferrals: number;
+
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * piece's start waited on the loop's own follow of its origin
+     * (serving-loop.md §3e). Counted per deferral: an event that arrives
+     * while the follow compiles a new release defers once per scan the
+     * follow outlasts. A count that grows while `originFollows` does not
+     * names a follow that never completes.
+     */
+    originPendingDeferrals: number;
+
+    /**
+     * Drain deferrals that spent none of the deferral budget because the
+     * event's piece names a pattern whose program closure the space does not
+     * hold yet, within the grace the loop gives the closure to arrive
+     * (events.md §5). Counted per deferral. A count that grows while
+     * `processed` does not names a closure that is not arriving; past the
+     * grace the event becomes a `program-unavailable` delivery failure.
+     */
+    programWaitDeferrals: number;
 
     /** The pre-dispatch LOAD-PARK deferrals (verification-coverage.md's
      * OW45 residue member, fixed 2026-08-26): a served event's dispatch
@@ -631,6 +668,15 @@ export type ServingLoopStats = {
     dropped: number;
   };
   memo: { hits: number; misses: number; inflight: number };
+
+  /** The crossings this process sent to another space's owner through the
+   * deployment's route (`serving-loop.md` §2), by kind, each
+   * counted once the owner answered: the outbox's event appends, the
+   * wave's foreign batches, and its access-list changes into other
+   * spaces. Zero with the route off, and zero on a process every
+   * crossing of which stays home, so a deployment reads here whether
+   * routing is carrying its crossings. */
+  routed: { appends: number; batches: number; aclChanges: number };
   outbox: {
     queued: number;
     completed: number;
@@ -645,6 +691,12 @@ export type ServingLoopStats = {
     /** Completions that wrote nothing because their request was superseded. */
     superseded: number;
   };
+  /**
+   * `held` counts the tenures that acquired a lease. `lost` counts the leases
+   * the watchdog released when it killed a stalled serving worker
+   * (serving-loop.md §2). The thread that holds the memory server adds it to the
+   * counters each worker posts, so it carries across a worker's successors.
+   */
   lease: { held: number; lost: number };
 
   /** OW45 arm-B server-ensure stage 1 (design PR #6209 §10): the
@@ -708,7 +760,42 @@ export type ServingLoopStats = {
     discarded: number;
     held: number;
   };
+
+  /**
+   * The serving workers of a process whose loop runs in workers
+   * (serving-loop.md §1, "Workers"), counted by the pool that starts them;
+   * all zero where the loop runs on the process's main thread. `serving`,
+   * `spare` and `parked` are how many there are now: workers a space is
+   * placed on, workers started ahead of a placement, and, among the serving
+   * ones, those whose host holds nothing but runtimes kept from idle parks.
+   * `heapUsed` is the sum of the JavaScript heaps the workers last reported,
+   * in bytes. The rest accumulate: `started` workers spawned, `retired`
+   * those closed once their host held nothing, `evicted` those closed while
+   * parked to stay within the parked-worker cap or the heap budget,
+   * `failed` those that reported an error, failed to start or were killed
+   * by the watchdog, `shared` the placements that joined a worker
+   * already serving another space because the pool was at its cap, and
+   * `heapLimited` the workers, among the `failed` ones, that reached their
+   * heap limit. `heapStopped` is how many spaces are on no worker now because
+   * a worker they were alone on reached its heap limit.
+   */
+  workers: {
+    serving: number;
+    spare: number;
+    parked: number;
+    heapUsed: number;
+    started: number;
+    retired: number;
+    evicted: number;
+    failed: number;
+    shared: number;
+    heapLimited: number;
+    heapStopped: number;
+  };
 };
+
+/** How many rows each of the bounded settle series keeps. */
+export const SETTLE_SERIES_MAX = 4000;
 
 export const emptyServingLoopStats = (): ServingLoopStats => ({
   activeSpaces: 0,
@@ -723,6 +810,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   derivedCommitsBySpaceDropped: 0,
   structureLoadFailures: 0,
   structureLoadRefused: 0,
+  originFollows: 0,
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
@@ -779,8 +867,11 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     lt1LateSealsRefused: 0,
     orphanDeliveriesRefused: 0,
     handlerNotRunDeferrals: 0,
+    handlerNotRunWaits: 0,
     staleReadRequeues: 0,
     arrivalHeldDeferrals: 0,
+    originPendingDeferrals: 0,
+    programWaitDeferrals: 0,
     loadParkDeferrals: 0,
     loadParkFailures: 0,
     deliveryDeferralsActive: 0,
@@ -802,6 +893,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     dropped: 0,
   },
   memo: { hits: 0, misses: 0, inflight: 0 },
+  routed: { appends: 0, batches: 0, aclChanges: 0 },
   outbox: {
     queued: 0,
     completed: 0,
@@ -818,6 +910,19 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   },
   lifecycleVerbs: { runs: 0, failures: 0 },
   parkedRuntimes: { retained: 0, reused: 0, discarded: 0, held: 0 },
+  workers: {
+    serving: 0,
+    spare: 0,
+    parked: 0,
+    heapUsed: 0,
+    started: 0,
+    retired: 0,
+    evicted: 0,
+    failed: 0,
+    shared: 0,
+    heapLimited: 0,
+    heapStopped: 0,
+  },
 });
 
 type ActiveDeliveryCheckpointStat = {
@@ -894,6 +999,15 @@ export const bumpDerivedCommits = (
   }
   bySpace[space] += 1;
 };
+
+/** The counters without the settle blocks, whose series cost about as much
+ * to post as a wave commit. A serving worker posts these ahead of each wave
+ * commit, so a client that has seen the commit reads counts that include
+ * what the wave counted before its commit. */
+export type ServingLoopCounters = Omit<
+  ServingLoopStats,
+  "settle" | "settleAdvances"
+>;
 
 // One provider per process (the ExecutorHost registers itself); the
 // health route reads through this seam so toolshed needs no reference to

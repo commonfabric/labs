@@ -25,6 +25,7 @@ import {
   type IFCLabel,
   joinCfcObservedConfidentiality,
 } from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import { REFERENT_HANDLE_TOKEN_PREFIX } from "../contracts/handle-table.ts";
@@ -414,9 +415,6 @@ const enforcing = (context: HarnessToolContext): boolean =>
   context.cfcEnforcementMode === "enforce-explicit" ||
   context.cfcEnforcementMode === "enforce-strict";
 
-const errorMessage = (error: unknown): string =>
-  error instanceof Error ? error.message : String(error);
-
 /**
  * Executes one parsed `browser` call on `host` and returns the tool's output.
  * `timeoutMs` is the input's, which no action on a host takes.
@@ -502,7 +500,7 @@ export const invokeBrowserOnHost = async (
     context.signal?.throwIfAborted();
     return errorOutput(
       "host_unavailable",
-      `the browser host could not be reached: ${errorMessage(error)}`,
+      `the browser host could not be reached: ${describeFailure(error)}`,
     );
   }
   if (result.status !== "ok") {
@@ -568,7 +566,7 @@ export const invokeBrowserOnHost = async (
     } catch (error) {
       return errorOutput(
         "command_failed",
-        `the screenshot could not be kept: ${errorMessage(error)}`,
+        `the screenshot could not be kept: ${describeFailure(error)}`,
       );
     }
   }

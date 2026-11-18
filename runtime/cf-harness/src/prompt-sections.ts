@@ -28,6 +28,7 @@ export const PROMPT_SECTIONS = [
   "author-tools",
   "research-tools",
   "pieces-tools",
+  "piece-source-tools",
   "resolve-piece-tools",
   "loom-commands-tools",
   "loom-retrieval-tools",
@@ -108,19 +109,21 @@ export const PROMPT_SECTION_AUDIENCE: Readonly<
   // The Weaver's commands, which read as well as change the application.
   "weaver-commands": { anyOf: ["find", "act"] },
   // Tool guidance: writing and running patterns, building on research,
-  // reading and acting on held handles, resolving a named piece (authoring
+  // reading and acting on held handles, changing a piece's source (any task
+  // that does work may come to hold one), resolving a named piece (authoring
   // reads that inside piece targeting), the host's commands and retrieval.
   "author-tools": { anyOf: ["author"] },
   "research-tools": { anyOf: ["author", "find", "pieces"] },
   "pieces-tools": { anyOf: ["pieces"] },
+  "piece-source-tools": { anyOf: ["find", "act", "pieces", "author"] },
   "resolve-piece-tools": {
-    anyOf: ["find", "act", "pieces"],
+    anyOf: ["pieces"],
     noneOf: ["author"],
   },
   "loom-commands-tools": { anyOf: ["find", "act"] },
   "loom-retrieval-tools": { anyOf: ["find", "act"] },
   // How far to take the work (`strategy.ts`): a quick run answers directly or
-  // takes the shortest path that does what was asked; a deep run searches the
+  // stops when evidence answers the task or a final refusal ends it; a deep run searches the
   // person's data exhaustively or reads several independent web sources, where
   // its domains say, holds what it leaves to a bar, and reads its result back
   // before it finishes.

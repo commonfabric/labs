@@ -19,6 +19,7 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { seedFabrichatRoom } from "./fabrichat-room-fixture.ts";
 
 const flags = parseArgs(Deno.args, {
@@ -82,7 +83,7 @@ try {
   fixture = await seeding;
 } catch (error) {
   console.error(
-    `Seeding failed: ${error instanceof Error ? error.message : error}`,
+    `Seeding failed: ${describeFailure(error)}`,
   );
   Deno.exit(1);
 }

@@ -104,12 +104,19 @@ They part in two places.
   declares an `ownerPrincipal`, that includes a write which would bind the
   serving runtime as the field's owner or match it against one, so such a run
   can neither claim an unowned field nor write a field a user owns. A value it
-  initializes on nobody's behalf mints no claim, binds no owner, and is
-  admitted, except under a literal owner DID, which every write must come
-  from. A run of the serving loop's own that it attaches a principal's
+  initializes on nobody's behalf is admitted, except under a literal owner
+  DID, which every write must come from, and mints no claim of the run's and
+  binds no owner, with one exception: where the piece records its creator,
+  which it does while the `pieceCreatorRecord` experimental option is on,
+  such a value at a placeholder owner binds the recorded creator, a claim the
+  record vouches for rather than the run's snapshot
+  ([`cfc-protected-initialization.md`](../specs/cfc-protected-initialization.md),
+  "Attribution of an initialized value"). A reference the runtime stages at
+  an owner position, the result document's binding to an argument field,
+  writes nothing of the value and is admitted the same way. A run of the serving loop's own that it attaches a principal's
   snapshot to, as the space-root ensure attaches the owner it resolves, acts
-  for that principal, and so does a piece start it defers that initializes on
-  its behalf. A demanded derivation with no actor carries its demander's
+  for that principal, and so does a piece start it defers, which takes that
+  run's snapshot. A demanded derivation with no actor carries its demander's
   snapshot for its reads but acts for no one, and is refused the same writes.
 - A host embedding the runtime can supply its own trust snapshot naming a
   different acting principal. The placeholder then resolves to that principal,
@@ -194,6 +201,9 @@ initialization on nobody's behalf. Its serving-loop cases cover a run of the
 loop's own under a principal's snapshot, which labels what it initializes for
 that principal and binds them as owner, and a demanded derivation with no
 actor under its demander's snapshot, which is refused both.
+`runtime/runner/test/cfc-creator-owner-binding.test.ts` covers a release
+adding an owner field to a piece that records its creator, installed by a
+serving runtime acting for no one among others, which binds the creator.
 `runtime/runner/test/executor-space-root-ensure.test.ts` covers the root's
 deferred start taking the owner's snapshot from the ensure, and
 `runtime/runner/test/executor-effect-channel.test.ts` a served handler's

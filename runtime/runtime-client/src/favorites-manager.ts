@@ -13,13 +13,13 @@ import {
   Home,
   homeSchema,
 } from "@commonfabric/home-schemas";
-import { DID } from "@commonfabric/identity";
+import type { DID } from "@commonfabric/identity";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { CellHandle, CellReadRefusedError } from "./cell-handle.ts";
 import type { CellRef } from "./protocol/types.ts";
-import { RuntimeClient } from "./runtime-client.ts";
+import type { RuntimeClient } from "./runtime-client.ts";
 import { tagsFromSchema } from "./schema-tags.ts";
-import { describeFailure } from "@/shared/utils.ts";
 
 /**
  * Which piece a favorite names: the space it lives in, its routing id there,

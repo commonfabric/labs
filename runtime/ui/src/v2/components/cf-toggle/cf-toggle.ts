@@ -50,8 +50,6 @@ export class CFToggle extends BaseElement {
   declare size: "sm" | "md" | "lg";
   declare ariaLabel: string;
 
-  private _buttonElement: HTMLButtonElement | null = null;
-
   constructor() {
     super();
     this.pressed = false;
@@ -59,14 +57,6 @@ export class CFToggle extends BaseElement {
     this.variant = "default";
     this.size = "md";
     this.ariaLabel = "";
-  }
-
-  get buttonElement(): HTMLButtonElement | null {
-    if (!this._buttonElement) {
-      this._buttonElement =
-        this.shadowRoot?.querySelector("button") as HTMLButtonElement || null;
-    }
-    return this._buttonElement;
   }
 
   override updated(changedProperties: PropertyValues) {
@@ -167,19 +157,5 @@ export class CFToggle extends BaseElement {
     if (!this.disabled) {
       this.pressed = !this.pressed;
     }
-  }
-
-  /**
-   * Focus the toggle programmatically
-   */
-  override focus(): void {
-    super.focus();
-  }
-
-  /**
-   * Blur the toggle programmatically
-   */
-  override blur(): void {
-    super.blur();
   }
 }

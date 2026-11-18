@@ -1,20 +1,26 @@
 import { computed, NAME, pattern, UI, wish } from "commonfabric";
 
+type Profile = { initialNameApplied?: string };
+
+/** The name shown for the viewer: the name their profile was created with,
+ * then their profile name, then a placeholder when they have no profile. */
+export const displayNameFor = (
+  profile: Profile | undefined,
+  profileName: string | undefined,
+): string => profile?.initialNameApplied ?? profileName ?? "No profile";
+
+/** The status line for the viewer's profile name. */
+export const statusFor = (profileName: string | undefined): string =>
+  profileName ? `Profile: ${profileName}` : "No profile";
+
 export default pattern(
   () => {
-    const profileWish = wish<{ initialNameApplied?: string }>({
-      query: "#profile",
-    });
+    const profileWish = wish<Profile>({ query: "#profile" });
     const profileNameWish = wish<string>({ query: "#profileName" });
     const displayName = computed(() =>
-      profileWish.result?.initialNameApplied ??
-        profileNameWish.result ?? "No profile"
+      displayNameFor(profileWish.result, profileNameWish.result)
     );
-    const status = computed(() =>
-      profileNameWish.result
-        ? `Profile: ${profileNameWish.result}`
-        : "No profile"
-    );
+    const status = computed(() => statusFor(profileNameWish.result));
     return {
       [NAME]: "Shared Profile Demo",
       [UI]: (

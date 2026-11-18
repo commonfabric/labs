@@ -137,6 +137,22 @@ describe("selectPatchOps()", () => {
     ]);
   });
 
+  it("keeps a covering candidate beneath a non-covering one that is not a tail splice", () => {
+    const splice: PatchDraftCandidate = {
+      ...tailSplice(["value", "list"], 0),
+      tailSpliceStartIndex: undefined,
+    };
+
+    expect(keptPointers([cover(["value", "list", "3"])], [splice])).toEqual([
+      "/value/list/3",
+      "/value/list",
+    ]);
+    expect(keptPointers(
+      [cover(["value", "list", "3"])],
+      [tailSplice(["value", "list"], 0)],
+    )).toEqual(["/value/list"]);
+  });
+
   it("drops a non-covering candidate beneath a kept covering one", () => {
     expect(keptPointers(
       [cover(["value", "a"])],

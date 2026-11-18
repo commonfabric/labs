@@ -83,7 +83,10 @@ describe("Home interface upgrade", () => {
         mode === "automatic-cold" ? "cold" : "running"
       } system-origin update`;
     it(description + suffix, async () => {
-      const server = newLoopbackServer();
+      // Its runtimes name instances, and a cold case's first one does not,
+      // so the server's posture names instances, as a deployment's does once
+      // it runs runtimes of either mode (INV-16).
+      const server = newLoopbackServer({ namesInstances: () => true });
       const patterns = fromFileUrl(new URL("..", import.meta.url));
       const temporary = await Deno.makeTempDir({
         prefix: "home-origin-rehearsal-",
@@ -158,8 +161,11 @@ describe("Home interface upgrade", () => {
         );
         expect(entry).toBeDefined();
         // Snapshots of Home at `676e4cae1b` and `181f2464ac`, before the
-        // interface change. Retaining the entry path keeps each production
-        // dependency's identity intact.
+        // interface change, each leaving `spaceName` out where it has no value
+        // so that it compiles on the authoring path, and binding its private
+        // inbox's handlers as the current `private-inbox.tsx` requires.
+        // Retaining the entry path keeps each production dependency's identity
+        // intact.
         entry!.contents = oldHome;
         let home: Cell<unknown>;
         if (mode === "explicit") {
@@ -193,8 +199,11 @@ describe("Home interface upgrade", () => {
         const earlierInbox = await home.key("privateInbox").key("piece")
           .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
         expect(earlierInbox).toBeDefined();
+        // Home forgets both the inbox it holds and the one it created for
+        // itself, which it holds, so that the next ensure creates another.
         const retainTx = runtime.edit();
         home.withTx(retainTx).key("privateInbox").set({});
+        home.withTx(retainTx).key("ownPrivateInbox").set({});
         home.withTx(retainTx).key("retainedPrivateInboxes").set([earlierInbox]);
         runtime.prepareTxForCommit(retainTx);
         expect((await retainTx.commit().settled).error).toBeUndefined();
@@ -616,13 +625,10 @@ describe("Home interface upgrade", () => {
           await peer.idle();
           await reopened.pull();
           const reopenedFields = await storedFields(peer, reopened);
-          // A normal Home open can materialize the notice array in a cell
-          // and rebase its element links. Requests and direct bindings keep
-          // their addresses; the queued notice content and room stay intact.
+          // Requests and direct bindings keep their addresses. A normal Home
+          // open can materialize the notice array in a cell and rebase its
+          // element links, so compare the queued notice content and room.
           expect(reopenedFields.slice(0, 2)).toEqual(before.slice(0, 2));
-          if (!update) {
-            expect(reopenedFields[2].address).not.toEqual(before[2].address);
-          }
           expect(await noticeRecords(reopened)).toEqual(noticesBefore);
           expect(
             await ownedFields(

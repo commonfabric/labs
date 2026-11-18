@@ -226,6 +226,12 @@ export interface HarnessToolContext {
   patternIndexPublishDiscoverable?: boolean;
 
   /**
+   * `"agent"` when the run is a person's own agent making patterns for them
+   * (`HarnessPatternIndexConfig.origin`); absent for any other run.
+   */
+  patternIndexOrigin?: "agent";
+
+  /**
    * Where this run's writes to the pattern index go: a pattern it authored is
    * held there until the session ends, so search is offered one candidate per
    * capability while the index still records every iteration, and a report
@@ -296,6 +302,9 @@ export interface HarnessToolContext {
     label: IFCLabel,
   ): Promise<string>;
 
+  /** Opt-in host return channel; false reports a recoverable publication failure. */
+  reportProgress?: (message: string) => Promise<void | boolean>;
+
   /**
    * Where the run's structured result goes, absent when the run was
    * configured with no schema. `record` writes a validated value where the
@@ -320,11 +329,7 @@ export interface HarnessToolContext {
   resolvePath(path: string): string;
   resolveHostPath(path: string): string;
   resolveHostRootPath(path: string): string;
-  hostPathToWorkspacePath(path: string): string | undefined;
-  isHostPathWithinWorkspace(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
+  isHostPathWithinWorkspace(path: string): Promise<boolean>;
   isHostPathWithinArtifactRoot(
     path: string,
     options?: { allowMissing?: boolean },
@@ -337,10 +342,6 @@ export interface HarnessToolContext {
    */
   imageAttachmentSnapshotDir?: string;
 
-  doesHostPathIntersectArtifactRoot(
-    path: string,
-    options?: { allowMissing?: boolean },
-  ): Promise<boolean>;
   setCurrentDir(path: string): void;
   nextOutputId(toolId: string): ToolOutputId;
   now(): string;
@@ -422,7 +423,10 @@ export interface HarnessToolDefinition<Input = unknown, Output = unknown> {
    * authorized as one even when the tool's ordinary calls are reads. A tool
    * without it has the descriptor's class for every call.
    */
-  effectClassOf?(input: Record<string, unknown>): HarnessToolEffectClass;
+  effectClassOf?(
+    input: Record<string, unknown>,
+    context: HarnessToolContext,
+  ): HarnessToolEffectClass | Promise<HarnessToolEffectClass>;
 
   invoke(context: HarnessToolContext, input: Input): Promise<Output>;
 }

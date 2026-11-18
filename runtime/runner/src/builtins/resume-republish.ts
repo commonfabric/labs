@@ -4,6 +4,7 @@ import type { Logger } from "@commonfabric/logger";
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
+import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
   linkResolutionProbe,
   machineryRead,
@@ -36,6 +37,41 @@ export const resumeSettleRunKind = (
   runtime: Runtime,
 ): "bookkeeping" | "derivation" =>
   runtime.servingPosture ? "bookkeeping" : "derivation";
+
+/**
+ * Runs a list builtin's resume-SETTLE write, `settle`, once `sync` — the sync
+ * of the resolved input list — resolves, while `isActive` still reports the
+ * coordinator live. `settle` runs under `editWithRetry`, so it re-checks what
+ * it needs inside each attempt. A failed settle and a rejected sync are each
+ * reported through `logger`, and the returned promise rejects for neither.
+ *
+ * The chain is registered with the storage manager's settle barrier, so
+ * `storageManager.synced()` holds until the settle has landed.
+ */
+export function settleOnceInputSyncs(
+  runtime: Runtime,
+  logger: Logger,
+  sync: Promise<unknown>,
+  isActive: () => boolean,
+  settle: (tx: IExtendedStorageTransaction) => void,
+): Promise<void> {
+  const reportSettle = ({ error }: { error?: unknown }): void => {
+    if (error) {
+      logger.warn("resume-input", "settling the resumed input failed", {
+        error,
+      });
+    }
+  };
+  const settleIfActive = (): Promise<void> | undefined =>
+    isActive() ? runtime.editWithRetry(settle).then(reportSettle) : undefined;
+  const reportSyncRejection = (error: unknown): void =>
+    logger.warn("resume-input", "the resumed input list sync rejected", {
+      error,
+    });
+  const settled = sync.then(settleIfActive).catch(reportSyncRejection);
+  runtime.storageManager.trackUntilSettled(settled);
+  return settled;
+}
 
 /**
  * Decide what one element contributes to the rebuilt aggregate. `value` is the

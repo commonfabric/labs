@@ -25,14 +25,14 @@ describe("continuation", () => {
         return latched;
       },
       hasPendingLineageHeadEvent: () => false,
-      hasLoadParkedHeadEvent: () => true,
+      hasLoadWaitingHeadEvent: () => true,
       settleDeferredForLoadPark: () => true,
       scheduleWake: () => {},
       hasWakeTimer: () => false,
       setScheduled: (value) => scheduled.push(value),
       resetSettlingTracker: () => {},
       resetConvergenceHoldPasses: () => {},
-      setPendingQueueTaskTimer: () => {},
+      setQueuedPass: () => {},
       execute: () => executes++,
     } satisfies ExecuteContinuationState;
 

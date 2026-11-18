@@ -12,6 +12,7 @@ import {
   hasEntityUriScheme,
   hashStringForEntityAddress,
   isEntityKind,
+  RECEIPT_URI_SCHEME,
   stripEntityUriScheme,
   uriSchemeForEntityKind,
 } from "../src/entity-kind.ts";
@@ -60,7 +61,17 @@ describe("entity-kind", () => {
   it("recognizes only known kinds", () => {
     expect(isEntityKind("computed")).toBe(true);
     expect(isEntityKind("state")).toBe(false);
+    expect(isEntityKind(RECEIPT_URI_SCHEME)).toBe(false);
     expect(isEntityKind(undefined)).toBe(false);
+  });
+
+  it("recognizes `receipt:` as an entity scheme with no kind, so strict", () => {
+    const id = `${RECEIPT_URI_SCHEME}:${base.toString()}`;
+    expect(RECEIPT_URI_SCHEME).toBe("receipt");
+    expect(hasEntityUriScheme(id)).toBe(true);
+    expect(entityUriSchemePrefix(id)).toBe("receipt:");
+    expect(stripEntityUriScheme(id)).toBe(base.toString());
+    expect(entityKindOfIdString(id)).toBeUndefined();
   });
 
   it("recognizes exactly the canonical entity URI scheme prefixes", () => {

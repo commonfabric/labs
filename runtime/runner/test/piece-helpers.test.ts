@@ -4,10 +4,14 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
+  cellWithScopedLinkRequiredsRelaxed,
+  compileAndSavePattern,
   getResultCellWithSourceSchema,
   parseCellPath,
   resolveCellPath,
+  schemaWithScopedLinkRequiredsRelaxed,
 } from "../src/piece-helpers.ts";
+import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -358,5 +362,87 @@ describe("getResultCellWithSourceSchema", () => {
     const annotated = getResultCellWithSourceSchema(explicitCell);
 
     assertEquals(annotated.getAsNormalizedFullLink().schema, explicitSchema);
+  });
+});
+
+describe("scoped-link relaxation", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+  });
+
+  afterEach(async () => {
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  describe("schemaWithScopedLinkRequiredsRelaxed()", () => {
+    it("returns a schema whose reference resolves to no record as it is", async () => {
+      const cell = runtime.getCell(space, "relax boolean ref");
+      await runtime.editWithRetry((tx) => cell.withTx(tx).set({ a: 1 }));
+      const toTrue: JSONSchema = {
+        $ref: "#/$defs/anything",
+        $defs: { anything: true },
+      };
+      const toNothing: JSONSchema = { $ref: "#/$defs/missing" };
+
+      expect(schemaWithScopedLinkRequiredsRelaxed(toTrue, { a: 1 }, cell))
+        .toBe(toTrue);
+      expect(schemaWithScopedLinkRequiredsRelaxed(toNothing, { a: 1 }, cell))
+        .toBe(toNothing);
+    });
+  });
+
+  describe("cellWithScopedLinkRequiredsRelaxed()", () => {
+    it("returns a cell whose raw value cannot be read as it is", async () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { a: { type: "number" } },
+        required: ["a"],
+      };
+      const document = runtime.getCell<Record<string, unknown>>(
+        space,
+        "relax unreadable",
+      );
+      await runtime.editWithRetry((tx) => {
+        const own = document.withTx(tx);
+        own.setRaw({ x: own.key("x").getAsLink() });
+      });
+      // Reading below `x` follows the link `x` holds back to `x` itself.
+      const cell = document.key("x").key("y").asSchema(schema);
+
+      expect(() => cell.getRaw()).toThrow();
+      expect(cellWithScopedLinkRequiredsRelaxed(cell)).toBe(cell);
+    });
+  });
+});
+
+describe("compileAndSavePattern()", () => {
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+  });
+
+  afterEach(async () => {
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("throws for a program with no default pattern", async () => {
+    await expect(
+      compileAndSavePattern(runtime, "export const answer = 42;", { space }),
+    ).rejects.toThrow('No "default" export found in compiled pattern.');
   });
 });
