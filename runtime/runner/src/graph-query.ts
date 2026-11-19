@@ -71,6 +71,7 @@ export type {
   SchemaPathSelector,
 };
 export {
+  coverageKind,
   coveringSelector,
   createSchemaMemo,
   MapSetStringToPathSelectors,
@@ -221,6 +222,18 @@ export type GraphQueryWalkOptions = {
 };
 
 /**
+ * The range of a referrer's attributions a pair's traversal stands for, as a
+ * memoized position lists its range, with the referrers whose traversal the
+ * pair cut short, which stand for it. Its end is set when the traversal
+ * ends; until then it is pending, and a reader of it waits.
+ */
+type HeldRange =
+  & {
+    -readonly [Key in keyof MemoizedAttributions]: MemoizedAttributions[Key];
+  }
+  & { pending: boolean; readonly waiters: Set<string | undefined> };
+
+/**
  * Resolves a schema query against documents a storage engine supplies, rather
  * than against a live replica: the traversal a memory server runs to decide
  * which documents a subscriber's schema reaches.
@@ -264,6 +277,28 @@ export class GraphQueryWalk {
       position: object | undefined;
     }[]
   >();
+
+  /** The pairs of the cycle tracker being traversed, by number: the
+   * referrer walking each, how many attributions it had made when the pair
+   * was admitted, and, once the pair cut another referrer's traversal
+   * short, the range of the referrer's attributions the pair's traversal
+   * stands for, which ends when the pair's traversal does. */
+  readonly #pairs = new Map<
+    number,
+    { referrer: string | undefined; start: number; range?: HeldRange }
+  >();
+
+  /** The ranges pairs held when they cut a traversal short, by the entry
+   * the referrers they cut list them as. */
+  readonly #held = new Map<MemoizedAttributions, HeldRange>();
+
+  /** For each list of attributions, the ranges in it whose traversal has
+   * ended and that no range ended since encloses, in order. */
+  readonly #ended = new Map<readonly AttributionEntry[], HeldRange[]>();
+
+  /** The records this visit has entered, by record key, as an attribution
+   * to each that a walker of it makes. */
+  readonly #records = new Map<string, TrackedAttribution>();
 
   /** The positions being traversed, which the traversal keeps
    * (`RecordWalk.positions`). */
@@ -367,16 +402,18 @@ export class GraphQueryWalk {
       return true;
     };
     // The attributions `memoized` stands for that `held` does not, with
-    // those of the memoized positions it stands for in turn, each once, and
-    // the memoized positions read. A memoized position `held` holds already
-    // stands; one whose range lies inside the range being read lists nothing
-    // that range does not.
+    // those of the memoized positions it stands for in turn, each once; the
+    // memoized positions read; and the ranges among them whose traversal is
+    // still in progress. A memoized position `held` holds already stands;
+    // one whose range lies inside the range being read lists nothing that
+    // range does not.
     const standsFor = (
       memoized: MemoizedAttributions,
       held: ReadonlySet<AttributionEntry>,
     ) => {
       const attributions = new Set<RecordAttribution>();
       const seen = new Set<MemoizedAttributions>([memoized]);
+      const waits = new Set<HeldRange>();
       const pending = [memoized];
       for (let entry = pending.pop(); entry; entry = pending.pop()) {
         for (let i = entry.start; i < entry.end; i++) {
@@ -384,6 +421,11 @@ export class GraphQueryWalk {
           if (made.kind !== "memoized") {
             if (!held.has(made)) attributions.add(made);
           } else if (!seen.has(made) && !held.has(made)) {
+            const held = this.#held.get(made);
+            if (held?.pending) {
+              waits.add(held);
+              continue;
+            }
             seen.add(made);
             const inside = made.made === entry.made &&
               made.start >= entry.start && made.end <= entry.end;
@@ -391,7 +433,7 @@ export class GraphQueryWalk {
           }
         }
       }
-      return { attributions, read: seen };
+      return { attributions, read: seen, waits };
     };
     // Record a value-link dead-end with the caller: a same-space target as a
     // miss (see `onMissedDoc` above for the contract and why it is not the
@@ -456,9 +498,149 @@ export class GraphQueryWalk {
       list(made, itself ? undefined : source, referrer);
       if (kind === "walked" && !itself) this.#enter(key, selector);
     };
+    const tracker = options.schemaTracker;
+    // Makes for `referrer` every attribution `memoized` stands for that it
+    // does not hold, and waits for each range in it still being traversed.
+    // Returns `false`, making none, when `check` is set and one of them
+    // names a record the tracker no longer holds.
+    const standFor = (
+      memoized: MemoizedAttributions,
+      referrer: string | undefined,
+      check: boolean,
+    ): boolean => {
+      const attributions = attributionsTo(referrer);
+      const { attributions: reached, read, waits } = standsFor(
+        memoized,
+        attributions.held,
+      );
+      if (check) {
+        for (const made of reached) {
+          if (
+            made.kind !== "missing" &&
+            !tracker.hasValue(made.key, made.selector)
+          ) {
+            return false;
+          }
+        }
+      }
+      for (const made of reached) {
+        if (made.kind === "missing") {
+          attributeMissing(made, referrer);
+        } else {
+          attributeTracked(made, referrer);
+        }
+      }
+      // Every memoized position read stands now, as it does once a record
+      // has made all it stands for.
+      for (const position of read) attributions.held.add(position);
+      for (const range of waits) range.waiters.add(referrer);
+      return true;
+    };
+    // Stands `referrer` for `range`, whose traversal has ended. A range
+    // nested in it that the pair's traversal cut short is read as the
+    // record standing for it, which was entered within the nested range, so
+    // that what it reaches is that range's reach: attributing the record
+    // stands for the nested range without reading it again.
+    const settle = (
+      range: HeldRange,
+      nested: readonly HeldRange[],
+      referrer: string | undefined,
+    ) => {
+      const gap = (start: number, end: number) => {
+        if (start === end) return;
+        const { made } = range;
+        standFor(
+          {
+            kind: "memoized",
+            made,
+            start,
+            end,
+            cut: -Infinity,
+            replayable: false,
+          },
+          referrer,
+          false,
+        );
+      };
+      let at = range.start;
+      for (const inner of nested) {
+        if (inner.waiters.has(referrer)) {
+          gap(at, inner.start);
+          at = inner.end;
+          continue;
+        }
+        const record = [...inner.waiters].find((waiter) =>
+          waiter !== undefined && this.#records.has(waiter)
+        );
+        if (record === undefined) continue;
+        gap(at, inner.start);
+        attributeTracked(this.#records.get(record)!, referrer);
+        at = inner.end;
+      }
+      gap(at, range.end);
+      attributionsTo(referrer).held.add(range);
+    };
+    // A pair in progress that cuts short the traversal of a referrer other
+    // than the one walking the pair stands, once its traversal ends, for all
+    // the cut traversal would have reached. The cut referrer lists the range
+    // the pair's traversal attributes, and is made all of it then.
     this.#context = createTraversalContext(
-      new CompoundCycleTracker<FabricValue, JSONSchema | undefined>({
+      new CompoundCycleTracker<
+        FabricValue,
+        JSONSchema | undefined,
+        unknown,
+        IMemorySpaceValueAttestation
+      >({
         numbered: true,
+        walkers: onTrackedDoc === undefined ? undefined : {
+          admitted: (pair, doc) => {
+            const referrer = referrerOf(doc.address);
+            const start = attributionsTo(referrer).made.length;
+            this.#pairs.set(pair, { referrer, start });
+          },
+          cut: (pair, doc) => {
+            const held = this.#pairs.get(pair);
+            const referrer = referrerOf(doc.address);
+            if (held === undefined || held.referrer === referrer) return;
+            if (held.range === undefined) {
+              const { made } = attributionsTo(held.referrer);
+              held.range = {
+                kind: "memoized",
+                made,
+                start: held.start,
+                end: made.length,
+                cut: -Infinity,
+                replayable: false,
+                pending: true,
+                waiters: new Set(),
+              };
+              this.#held.set(held.range, held.range);
+            }
+            held.range.waiters.add(referrer);
+            attributionsTo(referrer).made.push(held.range);
+          },
+          // Pairs end innermost first, so the ranges that ended in the same
+          // list since this one began are the ranges nested in it.
+          released: (pair) => {
+            const range = this.#pairs.get(pair)?.range;
+            this.#pairs.delete(pair);
+            if (range === undefined) return;
+            range.end = range.made.length;
+            range.pending = false;
+            let ended = this.#ended.get(range.made);
+            if (ended === undefined) {
+              ended = [];
+              this.#ended.set(range.made, ended);
+            }
+            let first = ended.length;
+            while (first > 0 && ended[first - 1].start >= range.start) first--;
+            const nested = ended.splice(first);
+            ended.push(range);
+            for (const referrer of range.waiters) {
+              settle(range, nested, referrer);
+            }
+          },
+        },
       }),
       options.schemaTracker,
       identity,
@@ -480,7 +662,6 @@ export class GraphQueryWalk {
       onTrackedDoc === undefined ? undefined : reportTracked,
     );
     if (onTrackedDoc !== undefined) {
-      const tracker = options.schemaTracker;
       this.#context.records = {
         positions: this.#positions,
         // A position that begins just after the walk attributed to its
@@ -514,30 +695,10 @@ export class GraphQueryWalk {
           const attributions = attributionsTo(referrer);
           if (
             memoized.made !== attributions.made &&
-            !attributions.held.has(memoized)
+            !attributions.held.has(memoized) &&
+            !standFor(memoized, referrer, true)
           ) {
-            const { attributions: reached, read } = standsFor(
-              memoized,
-              attributions.held,
-            );
-            for (const made of reached) {
-              if (
-                made.kind !== "missing" &&
-                !tracker.hasValue(made.key, made.selector)
-              ) {
-                return false;
-              }
-            }
-            for (const made of reached) {
-              if (made.kind === "missing") {
-                attributeMissing(made, referrer);
-              } else {
-                attributeTracked(made, referrer);
-              }
-            }
-            // Every memoized position read stands now, as it does once a
-            // record has made all it stands for.
-            for (const position of read) attributions.held.add(position);
+            return false;
           }
           attributions.held.add(memoized);
           attributions.made.push(memoized);
@@ -563,8 +724,10 @@ export class GraphQueryWalk {
       entered = [];
       this.#entered.set(at, entered);
     }
+    const record = trackedRecordKey(docKey, selector);
+    this.#records.set(record, { kind: "walked", key: docKey, selector });
     entered.push({
-      record: trackedRecordKey(docKey, selector),
+      record,
       docKey,
       depth: this.#positions.length,
       position: this.#positions.at(-1),
@@ -657,12 +820,11 @@ export class GraphQueryWalk {
     // A covered root is walked under the record covering it, which is the
     // record its walk keeps.
     this.#entered.clear();
+    this.#records.clear();
+    this.#held.clear();
+    this.#ended.clear();
     this.#attributions.clear();
     this.#enter(docKey, covering ?? internedSelector);
-    this.#context.trackedReferrer = {
-      id: document.address.id,
-      scope: document.address.scope,
-    };
 
     if (!isObjectNotArray(document.value)) {
       return;
@@ -691,6 +853,13 @@ export class GraphQueryWalk {
         nextSelector !== undefined &&
         nextSelector.schema !== false
       ) {
+        // The traversal begins at the document the selector's path leads
+        // to, whose record the link that led there was attributed, if one
+        // did: the traversal's own report of it attributes it to itself.
+        this.#context.trackedReferrer = {
+          id: nextDoc.address.id,
+          scope: nextDoc.address.scope,
+        };
         const traverser = new SchemaObjectTraverser(
           tx,
           nextSelector,

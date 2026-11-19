@@ -1,7 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import type { FabricValue, JSONSchema } from "@commonfabric/api";
+import type {
+  FabricValue,
+  JSONSchema,
+  SchemaPathSelector,
+} from "@commonfabric/api";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   refreshTrackedGraph,
@@ -671,9 +675,340 @@ describe("v2-record-attribution", () => {
         expect(ids(tracked.state.entities.keys())).toEqual(["of:x", "of:y"]);
       });
     });
+
+    it("retracts a cycle of records that a root's link only covers once the link that walked it changes away", async () => {
+      // The root walks `of:p` whole, and through it `of:d` whole, which
+      // links to `of:q` and back. The root's own link reaches `of:d.sub`,
+      // which the whole record of `of:d` covers. Once `of:p` stops linking
+      // to `of:d`, the cycle between `of:d` and `of:q` keeps each record
+      // walked, and the root's link needs `of:d.sub` alone.
+
+      await withEngine((engine) => {
+        commit(engine, [
+          set("of:r", { a: link("of:p"), b: link("of:d", ["sub"]) }),
+          set("of:p", { to: link("of:d") }),
+          set("of:d", { sub: { n: 1 }, loop: link("of:q") }),
+          set("of:q", { back: link("of:d") }),
+        ]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          {
+            roots: [{
+              id: "of:r",
+              selector: {
+                path: [],
+                schema: { type: "object", properties: { a: true, b: true } },
+              },
+            }],
+          },
+          undefined,
+          identity,
+        );
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:d",
+          "of:p",
+          "of:q",
+          "of:r",
+        ]);
+
+        commit(engine, [set("of:p", {})]);
+        const refreshed = refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set([toDirtyKey("of:p")]),
+        );
+
+        expect(ids(refreshed!.removed)).toEqual(["of:q"]);
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:d",
+          "of:p",
+          "of:r",
+        ]);
+      });
+    });
+
+    it("retracts what a document's whole record reached once the link that walked it needs only a part the record covers", async () => {
+      await withEngine((engine) => {
+        commit(engine, [
+          set("of:r", { to: link("of:p") }),
+          set("of:p", { to: link("of:d") }),
+          set("of:d", { sub: { n: 1 }, more: link("of:m") }),
+          set("of:m", { n: 2 }),
+        ]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots: [{ id: "of:r", selector: { path: [], schema: true } }] },
+          undefined,
+          identity,
+        );
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:d",
+          "of:m",
+          "of:p",
+          "of:r",
+        ]);
+
+        commit(engine, [set("of:p", { to: link("of:d", ["sub"]) })]);
+        const refreshed = refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set([toDirtyKey("of:p")]),
+        );
+
+        expect(ids(refreshed!.removed)).toEqual(["of:m"]);
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:d",
+          "of:p",
+          "of:r",
+        ]);
+      });
+    });
+
+    it("stops delivering what a record reached when one commit removes its last walker and creates a missing document that links back into it", async () => {
+      // The root reaches `of:x` through `of:list.a`, and `of:x` reaches the
+      // missing `of:n` through `of:y`. One commit removes `of:list.a` and
+      // creates `of:n` linking back to `of:list`, whose whole record then
+      // walks `of:x` again: a cycle no root reaches.
+
+      await withEngine((engine) => {
+        commit(engine, [
+          set("of:root", { to: link("of:list", ["a"]) }),
+          set("of:list", { a: { to: link("of:x") } }),
+          set("of:x", { to: link("of:y") }),
+          set("of:y", { to: link("of:n") }),
+        ]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots: [{ id: "of:root", selector: { path: [], schema: true } }] },
+          undefined,
+          identity,
+        );
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:list",
+          "of:root",
+          "of:x",
+          "of:y",
+        ]);
+
+        commit(engine, [
+          set("of:list", { b: link("of:x") }),
+          set("of:n", { to: link("of:list") }),
+        ]);
+        const refreshed = refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set(["of:list", "of:n"].map((id) => toDirtyKey(id))),
+        );
+
+        // `of:n` was never delivered, so its retirement is no retraction.
+        expect(ids(refreshed!.removed)).toEqual(["of:x", "of:y"]);
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:list",
+          "of:root",
+        ]);
+      });
+    });
+
+    describe("over a missing document two roots link to", () => {
+      // `of:a` and `of:b` each link to `of:n` before it exists: `of:a`'s
+      // root needs all of it, and `of:b`'s root its name alone.
+
+      const roots: { id: string; selector: SchemaPathSelector }[] = [
+        { id: "of:a", selector: { path: [], schema: true } },
+        {
+          id: "of:b",
+          selector: {
+            path: [],
+            schema: {
+              type: "object",
+              properties: {
+                to: {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                },
+              },
+            },
+          },
+        },
+      ];
+
+      /** Tracks both roots over `of:n` missing, then makes each commit of
+       * `commits` and refreshes after it. */
+      const afterCommits = (
+        engine: Engine,
+        commits: [string, FabricValue][][],
+      ) => {
+        commit(engine, [
+          set("of:a", { to: link("of:n") }),
+          set("of:b", { to: link("of:n") }),
+        ]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots },
+          undefined,
+          identity,
+        );
+        for (const writes of commits) {
+          commit(engine, writes.map(([id, value]) => set(id, value)));
+          refreshTrackedGraph(
+            space,
+            engine,
+            tracked.state,
+            new Set(writes.map(([id]) => toDirtyKey(id))),
+          );
+        }
+        return ids(tracked.state.entities.keys());
+      };
+
+      it("reaches through the document's arrival only what a root still linking to it needs", async () => {
+        await withEngine((engine) => {
+          expect(afterCommits(engine, [
+            [["of:a", {}]],
+            [["of:n", { name: "n", more: link("of:m") }], ["of:m", {}]],
+          ])).toEqual(["of:a", "of:b", "of:n"]);
+        });
+      });
+
+      it("keeps the document a root needs part of once the root needing all of it stops linking to it", async () => {
+        await withEngine((engine) => {
+          expect(afterCommits(engine, [
+            [["of:n", { name: "n" }]],
+            [["of:a", {}]],
+          ])).toEqual(["of:a", "of:b", "of:n"]);
+        });
+      });
+    });
+
+    it("keeps of a document two roots link to in another space the selector a root still linking to it needs, and no other", async () => {
+      const elsewhere = "did:key:z6Mk-memory-v2-record-attribution-elsewhere";
+      const away = {
+        "/": {
+          "link@1": { id: "of:n", path: [], space: elsewhere, scope: "space" },
+        },
+      };
+      const named = {
+        type: "object",
+        properties: { name: { type: "string" } },
+      } as const;
+      const rootUnder = (
+        id: string,
+        to: JSONSchema,
+      ): { id: string; selector: SchemaPathSelector } => ({
+        id,
+        selector: {
+          path: [],
+          schema: { type: "object", properties: { to } },
+        },
+      });
+      await withEngine((engine) => {
+        commit(engine, [set("of:a", { to: away }), set("of:b", { to: away })]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots: [rootUnder("of:a", true), rootUnder("of:b", named)] },
+          undefined,
+          identity,
+        );
+        const crossing = JSON.stringify([elsewhere, "space", "of:n"]);
+        expect([...tracked.state.crossings.values(crossing)]).toHaveLength(2);
+
+        commit(engine, [set("of:a", {})]);
+        refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set([toDirtyKey("of:a")]),
+        );
+
+        expect(
+          [...tracked.state.crossings.values(crossing)].map(({ schema }) =>
+            schema
+          ),
+        ).toEqual([named]);
+      });
+    });
+
+    it("delivers nothing for a missing document that one commit creates while removing the only link to it", async () => {
+      await withEngine((engine) => {
+        commit(engine, [set("of:r", { b: link("of:n") })]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots: [{ id: "of:r", selector: { path: [], schema: true } }] },
+          undefined,
+          identity,
+        );
+        commit(engine, [set("of:n", {}), set("of:r", {})]);
+        const refreshed = refreshTrackedGraph(
+          space,
+          engine,
+          tracked.state,
+          new Set(["of:n", "of:r"].map((id) => toDirtyKey(id))),
+        );
+
+        expect(ids(refreshed!.updates.keys())).toEqual(["of:r"]);
+        expect(ids(tracked.state.entities.keys())).toEqual(["of:r"]);
+      });
+    });
   });
 
   describe("releaseTrackedRoots()", () => {
+    it("keeps what a root reaches through a record another root's walk entered while its own record of the document was traversing the same position", async () => {
+      // The first root walks `of:x`, whose link through `of:y` enters
+      // `of:x` again under the record the link names while the root's own
+      // record is still traversing it. The second root reaches `of:x`
+      // through `of:z` under that same record, which the tracker already
+      // holds, so only that record's own attribution keeps `of:y` once the
+      // first root goes.
+
+      const node = (properties: string[]): JSONSchema => ({
+        type: "object",
+        properties: Object.fromEntries(
+          properties.map((property) => [property, { $ref: "#/$defs/Node" }]),
+        ),
+      });
+      const $defs = { Node: node(["next", "more"]), Head: node(["next"]) };
+      const rootUnder = (id: string, name: string) => ({
+        id,
+        selector: { path: [], schema: { $ref: `#/$defs/${name}`, $defs } },
+      });
+      const first = rootUnder("of:x", "Node");
+      await withEngine((engine) => {
+        commit(engine, [
+          set("of:x", { more: { next: link("of:y") } }),
+          set("of:y", { next: link("of:x") }),
+          set("of:z", { next: link("of:x") }),
+        ]);
+        const tracked = trackGraph(
+          space,
+          engine,
+          { roots: [first, rootUnder("of:z", "Head")] },
+          undefined,
+          identity,
+        );
+        const released = releaseTrackedRoots(
+          space,
+          engine,
+          tracked.state,
+          rootReferrersOf(space, [first], identity),
+        );
+
+        expect(ids(released.removed)).toEqual([]);
+        expect(ids(tracked.state.entities.keys())).toEqual([
+          "of:x",
+          "of:y",
+          "of:z",
+        ]);
+      });
+    });
+
     it("keeps what a root reaches through a position another walk reached by resolving a cycle of links into it", async () => {
       // `of:x.a` links to `of:d.p`, which links to `of:e.p`, which links back
       // to `of:d.p`. Resolving `of:x.a` follows `of:d.p`'s link before a
@@ -983,6 +1318,223 @@ describe("v2-record-attribution", () => {
         expect(ids(released.removed)).toEqual(["of:d", "of:f"]);
         expect(ids(tracked.state.entities.keys())).toEqual(["of:other"]);
       });
+    });
+  });
+
+  describe("over random edits and releases", () => {
+    // Random documents linking to one another, an absent one among the
+    // targets, under random schemas: plain, recursive, unions, and one
+    // schema shared under several properties. After each random edit or
+    // root release, the graph kept up to date holds exactly the documents a
+    // fresh evaluation of the remaining roots does.
+
+    /** A generator of numbers in [0, 1) from `seed`. */
+    const randomFrom = (seed: number) => {
+      let state = seed >>> 0;
+      return () => {
+        state = (state + 0x6D2B79F5) >>> 0;
+        let t = state;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+
+    /** How the kept graph differs from a fresh evaluation at each step of
+     * the run `seed` drives, as `step: missing ...; extra ...`. */
+    const differencesOver = (engine: Engine, seed: number): string[] => {
+      const random = randomFrom(seed);
+      const pick = <T>(values: readonly T[]): T =>
+        values[Math.floor(random() * values.length)];
+      const ids = Array.from({ length: 6 }, (_, i) => `of:d${i}`);
+      const randomLink = () =>
+        link(pick([...ids, "of:absent"]), pick([[], [], ["sub"], ["a"]]));
+      const randomValue = (depth: number): FabricValue => {
+        const value: Record<string, FabricValue> = {};
+        if (random() < 0.7) value.name = pick(["x", "y", 1]);
+        for (const field of ["a", "b"]) {
+          const r = random();
+          if (r < 0.5) value[field] = randomLink();
+          else if (r < 0.7 && depth > 0) value[field] = randomValue(depth - 1);
+        }
+        if (random() < 0.4) {
+          value.items = Array.from(
+            { length: Math.floor(random() * 3) },
+            () =>
+              random() < 0.8
+                ? randomLink()
+                : depth > 0
+                ? randomValue(depth - 1)
+                : 1,
+          );
+        }
+        if (random() < 0.4 && depth > 0) value.sub = randomValue(depth - 1);
+        return value;
+      };
+      const name = { type: "string" } as const;
+      const recursive: JSONSchema = {
+        $ref: "#/$defs/N",
+        $defs: {
+          N: {
+            anyOf: [
+              {
+                type: "object",
+                properties: {
+                  a: { $ref: "#/$defs/N" },
+                  items: { type: "array", items: { $ref: "#/$defs/N" } },
+                  name,
+                },
+              },
+              {
+                type: "object",
+                properties: {
+                  b: { $ref: "#/$defs/N" },
+                  a: { $ref: "#/$defs/N" },
+                  sub: { $ref: "#/$defs/N" },
+                  name: { type: "number" },
+                },
+              },
+            ],
+          },
+        },
+      };
+      const randomSchema = (depth: number): JSONSchema => {
+        const r = random();
+        if (depth === 0 || r < 0.12) {
+          return pick<JSONSchema>([
+            true,
+            { type: "object", properties: { name } },
+            {},
+            { type: "object" },
+          ]);
+        }
+        if (r < 0.22) return recursive;
+        if (r < 0.42) {
+          const properties: Record<string, JSONSchema> = {};
+          for (const field of ["a", "b", "sub"]) {
+            if (random() < 0.6) properties[field] = randomSchema(depth - 1);
+          }
+          if (random() < 0.5) properties.name = name;
+          return { type: "object", properties };
+        }
+        if (r < 0.55) {
+          return {
+            type: "object",
+            properties: {
+              items: { type: "array", items: randomSchema(depth - 1) },
+              ...(random() < 0.5 ? { a: randomSchema(depth - 1) } : {}),
+            },
+          };
+        }
+        const shared = randomSchema(depth - 1);
+        if (r < 0.8) {
+          return {
+            anyOf: Array.from({ length: 2 + Math.floor(random() * 2) }, (
+              _,
+              i,
+            ) => ({
+              type: "object",
+              properties: {
+                a: random() < 0.7 ? shared : randomSchema(depth - 1),
+                [pick(["sub", "b", "items"])]: random() < 0.5
+                  ? shared
+                  : randomSchema(depth - 1),
+                [`t${i}`]: { type: "string" },
+              },
+            })),
+          };
+        }
+        return {
+          type: "object",
+          properties: {
+            a: shared,
+            b: shared,
+            sub: random() < 0.5 ? shared : randomSchema(depth - 1),
+          },
+        };
+      };
+
+      commit(engine, ids.map((id) => set(id, randomValue(2))));
+      const roots: { id: string; selector: SchemaPathSelector }[] = [];
+      const rootCount = 2 + Math.floor(random() * 3);
+      for (let i = 0; i < rootCount; i++) {
+        const root = {
+          id: pick(ids),
+          selector: {
+            path: random() < 0.8 ? [] : ["sub"],
+            schema: randomSchema(3),
+          },
+        };
+        if (!roots.some((r) => JSON.stringify(r) === JSON.stringify(root))) {
+          roots.push(root);
+        }
+      }
+      const tracked = trackGraph(
+        space,
+        engine,
+        { roots: [...roots] },
+        undefined,
+        identity,
+      );
+      const documentIds = (keys: Iterable<string>) =>
+        new Set([...keys].map((key) => key.slice(key.lastIndexOf("/") + 1)));
+      const differences: string[] = [];
+      for (let step = 0; step < 12; step++) {
+        if (random() < 0.25 && roots.length > 1) {
+          const [root] = roots.splice(Math.floor(random() * roots.length), 1);
+          releaseTrackedRoots(
+            space,
+            engine,
+            tracked.state,
+            rootReferrersOf(space, [root], identity),
+          );
+        } else {
+          const edited = new Map<string, FabricValue>();
+          for (let n = 1 + Math.floor(random() * 2); n > 0; n--) {
+            const id = random() < 0.1 ? "of:absent" : pick(ids);
+            if (!edited.has(id)) edited.set(id, randomValue(2));
+          }
+          commit(engine, [...edited].map(([id, value]) => set(id, value)));
+          refreshTrackedGraph(
+            space,
+            engine,
+            tracked.state,
+            new Set([...edited.keys()].map((id) => toDirtyKey(id))),
+          );
+        }
+        const fresh = documentIds(
+          trackGraph(space, engine, { roots: [...roots] }, undefined, identity)
+            .state.entities.keys(),
+        );
+        const kept = documentIds(tracked.state.entities.keys());
+        const missing = [...fresh].filter((id) => !kept.has(id));
+        const extra = [...kept].filter((id) => !fresh.has(id));
+        if (missing.length > 0 || extra.length > 0) {
+          differences.push(`${step}: missing ${missing}; extra ${extra}`);
+        }
+      }
+      return differences;
+    };
+
+    it("keeps after each step exactly the documents a fresh evaluation of the remaining roots reaches", async () => {
+      // Beyond the first 210 seeds, seed 226's run has one commit both
+      // orphan a record and give it a walker again, and seed 1620's run
+      // walks a record whose path runs through a chain of links.
+      const seeds = [
+        ...Array.from({ length: 210 }, (_, i) => i + 1),
+        226,
+        1620,
+      ];
+      const differences: string[] = [];
+      for (const seed of seeds) {
+        await withEngine((engine) => {
+          for (const difference of differencesOver(engine, seed)) {
+            differences.push(`seed ${seed} step ${difference}`);
+          }
+        });
+      }
+
+      expect(differences).toEqual([]);
     });
   });
 });

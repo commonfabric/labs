@@ -320,10 +320,15 @@ record covering it: as a walker of it when that record is under the selector
 the root or link needs, since it is the record a walk of its own would have
 made, and as a cover when the record is wider. A record whose last walking
 referrer lets go retires and releases what its own walk reached, and the
-referrers it covered are walked on their own. Removing a watch releases its
-roots, and a write re-walks the changed document and releases what the
-re-walk does not reach again. Either way the documents nothing reaches any
-more leave the result.
+referrers it covered are walked on their own. A cover keeps nothing alive:
+records that only walk one another, with no walking path back to a root,
+retire together however many referrers they cover. Removing a watch releases
+its roots, and a write re-walks the changed document and releases what the
+re-walk does not reach again, as walker or as cover. A link that reaches a
+missing document is kept under the selector it needed, and the document's
+arrival attributes each such link to the record that holds its selector, as
+a walker or a cover. Either way the documents nothing reaches any more leave
+the result.
 
 Content-addressed schema documents ride the same mechanism
 (`docs/specs/content-addressed-schemas.md`): a link or selector schema
@@ -347,6 +352,13 @@ cycle, and the second visit does not descend. The same entity can be visited
 multiple times with different schemas without triggering a false cycle. This is
 important because a single entity may be reachable via different schema paths
 that expose different subsets of its data.
+
+A server's walk attributes what it reaches to the record walking each
+document. When a node on the path under one record cuts short another
+record's traversal, the second record stands for the first record's
+traversal of the node: once that traversal is done, the second record is
+attributed all it attributed, the way a walk of the second record alone would
+be, without traversing the node again.
 
 ```typescript
 // Shown for illustration only.

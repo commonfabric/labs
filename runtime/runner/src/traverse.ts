@@ -1482,6 +1482,10 @@ export type CutSpan = { readonly admitted: number; readonly enclosing: number };
  * Schema's "accept everything"): both are normalized to `true`, so they share
  * one cache entry.
  *
+ * A tracker given `walkers` numbers its pairs, and tells them of each pair
+ * it admits, each cut a pair in progress makes, and each pair whose
+ * traversal is done.
+ *
  * This will not work correctly if the key is modified after being
  * added.
  */
@@ -1489,6 +1493,7 @@ export class CompoundCycleTracker<
   EqualKey,
   ExtraKey extends JSONSchema | undefined,
   Value = unknown,
+  Context = unknown,
 > {
   /** `partialKey` (identity) → `Map<interned extraKey hashString, Value?>`. */
   readonly #partial = new Map<EqualKey, Map<string, Value | undefined>>();
@@ -1504,13 +1509,20 @@ export class CompoundCycleTracker<
    * the latest span began (`openSpan()`), or `Infinity`. */
   #lowestCut = Infinity;
 
+  readonly #walkers: CycleWalkers<Context> | undefined;
+
   /**
    * A tracker that numbers the pairs it admits tells a span of a traversal
    * whether it was cut short at a traversal that began outside the span
-   * (`openSpan()`).
+   * (`openSpan()`), and tells `walkers` of the traversal of each pair.
    */
-  constructor(options: { numbered?: boolean } = {}) {
-    this.#numbers = options.numbered ? new Map() : undefined;
+  constructor(
+    options: { numbered?: boolean; walkers?: CycleWalkers<Context> } = {},
+  ) {
+    this.#numbers = options.numbered || options.walkers !== undefined
+      ? new Map()
+      : undefined;
+    this.#walkers = options.walkers;
   }
 
   /**
@@ -1556,7 +1568,7 @@ export class CompoundCycleTracker<
     partialKey: EqualKey,
     extraKey: ExtraKey,
     value?: Value,
-    _context?: unknown,
+    context?: Context,
   ): Disposable | null {
     let existing = this.#partial.get(partialKey);
     if (existing === undefined) {
@@ -1566,17 +1578,23 @@ export class CompoundCycleTracker<
     const hash = internSchemaAsTaggedHashString(extraKey ?? true);
     if (existing.has(hash)) {
       const number = this.#numbers?.get(partialKey)?.get(hash);
-      if (number !== undefined) this.noteCut(number);
+      if (number !== undefined) {
+        this.noteCut(number);
+        if (context !== undefined) this.#walkers?.cut(number, context);
+      }
       return null;
     }
     existing.set(hash, value);
+    let admitted: number | undefined;
     if (this.#numbers !== undefined) {
       let numbers = this.#numbers.get(partialKey);
       if (numbers === undefined) {
         numbers = new Map();
         this.#numbers.set(partialKey, numbers);
       }
-      numbers.set(hash, this.#admitted++);
+      admitted = this.#admitted++;
+      numbers.set(hash, admitted);
+      if (context !== undefined) this.#walkers?.admitted(admitted, context);
     }
     return {
       [Symbol.dispose]: () => {
@@ -1593,6 +1611,7 @@ export class CompoundCycleTracker<
           pairNumbers.delete(hash);
           if (pairNumbers.size === 0) numbers.delete(partialKey);
         }
+        if (admitted !== undefined) this.#walkers?.released(admitted);
       },
     };
   }
@@ -1611,10 +1630,23 @@ export class CompoundCycleTracker<
   }
 }
 
+/**
+ * What a `CompoundCycleTracker` tells of the traversal of its pairs, each
+ * named by its number: that a traversal at `context` admitted it, that it
+ * cut short a traversal at `context` while in progress, and that the
+ * traversal that admitted it is done.
+ */
+export type CycleWalkers<Context> = {
+  admitted(pair: number, context: Context): void;
+  cut(pair: number, context: Context): void;
+  released(pair: number): void;
+};
+
 export type PointerCycleTracker = CompoundCycleTracker<
   FabricValue,
   JSONSchema | undefined,
-  any
+  any,
+  IMemorySpaceValueAttestation
 >;
 
 /**
@@ -6473,8 +6505,6 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ): TraverseResult<FabricValue> {
     this.traversePointerCalls++;
     const selector = { path: doc.address.path, schema };
-    const alreadyTracked = this.traverseCells &&
-      this.isLinkedDocumentCovered(doc.address, pointerLink, selector);
 
     // Opaque handles preserve their link directly. An unknown-valued
     // handle also preserves an ordinary link: transferring its address needs
@@ -6506,8 +6536,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       };
     }
 
+    // A handle answered above follows nothing, so only a link followed here
+    // asks whether the tracker already covers its target.
     if (
-      this.traverseCells && alreadyTracked &&
+      this.traverseCells &&
+      this.isLinkedDocumentCovered(doc.address, pointerLink, selector) &&
       pointerLink.id !== doc.address.id
     ) {
       return { ok: null };

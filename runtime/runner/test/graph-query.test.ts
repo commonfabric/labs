@@ -114,6 +114,58 @@ const trackedKeys = (tracker: MapSetStringToPathSelectors): string[] =>
   [...tracker].map(([key]) => key).toSorted();
 
 /**
+ * Visits each of `roots` in turn, sharing one tracker and, when given one,
+ * `memo`, and returns the documents a root reaches through the
+ * attributions the walks reported, by the root's name.
+ */
+const walkRoots = (
+  documents: Map<string, FabricValue>,
+  roots: readonly (readonly [name: string, id: string, schema: JSONSchema])[],
+  memo?: ReturnType<typeof createSchemaMemo>,
+): (name: string) => string[] => {
+  const schemaTracker = new MapSetStringToPathSelectors(true);
+  const edges = new Map<string, Set<string>>();
+  const documentOf = new Map<string, string>();
+  for (const [name, id, schema] of roots) {
+    const { manager, walk } = walkOver(documents, {
+      schemaTracker,
+      ...(memo === undefined ? {} : { memo }),
+      onTrackedDoc: (key, selector, referrer) => {
+        const record = trackedRecordKey(key, selector);
+        documentOf.set(record, key);
+        let reached = edges.get(referrer ?? "");
+        if (reached === undefined) {
+          reached = new Set();
+          edges.set(referrer ?? "", reached);
+        }
+        reached.add(record);
+      },
+    });
+    walk.visit(
+      documentFor(manager, id),
+      { path: ["value"], schema },
+      undefined,
+      name,
+    );
+  }
+  return (name) => {
+    const seen = new Set<string>([name]);
+    const pending: string[] = [name];
+    for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+      for (const record of edges.get(at) ?? []) {
+        if (!seen.has(record)) {
+          seen.add(record);
+          pending.push(record);
+        }
+      }
+    }
+    return [
+      ...new Set([...seen].flatMap((record) => documentOf.get(record) ?? [])),
+    ].toSorted();
+  };
+};
+
+/**
  * Two selectors of `of:list` that differ at its root, where the second also
  * reaches `note`, and agree on `properties`.
  */
@@ -1122,55 +1174,227 @@ describe("graph-query", () => {
         /** Walks every root, then the first two again, over one tracker,
          * and returns the documents each root reaches. */
         const reaches = (memo?: ReturnType<typeof createSchemaMemo>) => {
-          const schemaTracker = new MapSetStringToPathSelectors(true);
-          const edges = new Map<string, Set<string>>();
-          const documentOf = new Map<string, string>();
-          for (const [name, id, def] of [...roots, ...roots.slice(0, 2)]) {
-            const { manager, walk } = walkOver(documents, {
-              schemaTracker,
-              ...(memo === undefined ? {} : { memo }),
-              onTrackedDoc: (key, selector, referrer) => {
-                const record = trackedRecordKey(key, selector);
-                documentOf.set(record, key);
-                let reached = edges.get(referrer ?? "");
-                if (reached === undefined) {
-                  reached = new Set();
-                  edges.set(referrer ?? "", reached);
-                }
-                reached.add(record);
-              },
-            });
-            walk.visit(
-              documentFor(manager, id),
-              {
-                path: ["value"],
-                schema: { $ref: `#/$defs/${def}`, $defs },
-              },
-              undefined,
-              name,
-            );
-          }
-          return roots.map(([name]) => {
-            const seen = new Set<string>([name]);
-            const pending: string[] = [name];
-            for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-              for (const record of edges.get(at) ?? []) {
-                if (!seen.has(record)) {
-                  seen.add(record);
-                  pending.push(record);
-                }
-              }
-            }
-            return [
-              ...new Set(
-                [...seen].flatMap((record) => documentOf.get(record) ?? []),
-              ),
-            ].toSorted();
-          });
+          const walked = roots.map(([name, id, def]) =>
+            [name, id, { $ref: `#/$defs/${def}`, $defs }] as const
+          );
+          const reach = walkRoots(
+            documents,
+            [...walked, ...walked.slice(0, 2)],
+            memo,
+          );
+          return roots.map(([name]) => reach(name));
         };
 
         // Each walk given no memo takes a memo of its own.
         expect(reaches(createSchemaMemo())).toEqual(reaches());
+      });
+
+      describe("over roots that share a tracker", () => {
+        const node = (properties: string[], ref: string): JSONSchema => ({
+          type: "object",
+          properties: Object.fromEntries(
+            properties.map((property) => [property, { $ref: ref }]),
+          ),
+        });
+
+        it("attributes to a record entered while another record of its document traverses the same position what that position reaches", () => {
+          // The first root walks `of:x`, whose link through `of:y` enters
+          // `of:x` again under the record the link names while the root's
+          // own record is still traversing it. The second root reaches
+          // `of:x` through `of:z` under that same record, which the tracker
+          // already holds, so it is not walked again: only the record's
+          // own attribution carries the second root on to `of:y`.
+
+          const $defs = {
+            Node: node(["next", "more"], "#/$defs/Node"),
+            Head: node(["next"], "#/$defs/Node"),
+          };
+          const documents = new Map<string, FabricValue>([
+            [keyFor("of:x"), { more: { next: linkTo("of:y") } }],
+            [keyFor("of:y"), { next: linkTo("of:x") }],
+            [keyFor("of:z"), { next: linkTo("of:x") }],
+          ]);
+          const first: [string, string, JSONSchema] = [
+            "first",
+            "of:x",
+            { $ref: "#/$defs/Node", $defs },
+          ];
+          const second: [string, string, JSONSchema] = [
+            "second",
+            "of:z",
+            { $ref: "#/$defs/Head", $defs },
+          ];
+
+          const reach = walkRoots(documents, [first, second]);
+
+          expect(reach("second")).toEqual(
+            walkRoots(documents, [second])("second"),
+          );
+          expect(reach("second")).toEqual(
+            ["of:x", "of:y", "of:z"].map(keyFor).toSorted(),
+          );
+        });
+
+        it("attributes a document a covering record holds to a link that follows it, and not to a handle naming it", () => {
+          // `of:glaze` is walked first as a root of its own, so its record
+          // covers what a link into it needs. Coverage is consulted only
+          // for a link that names its scope.
+
+          const documents = new Map<string, FabricValue>([
+            [keyFor("of:glaze"), { flavor: "maple" }],
+            [keyFor("of:donut"), {
+              glaze: {
+                "/": {
+                  [LINK_V1_TAG]: { id: "of:glaze", path: [], scope: "space" },
+                },
+              },
+            }],
+          ]);
+          const referrersOfGlaze = (glaze: JSONSchema) => {
+            const schemaTracker = new MapSetStringToPathSelectors(true);
+            const referrers: string[] = [];
+            for (
+              const [id, schema, name] of [
+                ["of:glaze", true, "glaze"],
+                [
+                  "of:donut",
+                  { type: "object", properties: { glaze } },
+                  "donut",
+                ],
+              ] as const
+            ) {
+              const { manager, walk } = walkOver(documents, {
+                schemaTracker,
+                onTrackedDoc: (key, _selector, referrer) => {
+                  // The document of each record attributing `of:glaze`,
+                  // other than its own.
+                  const document = referrer?.split("\0")[0];
+                  if (
+                    key === keyFor("of:glaze") && referrer !== "glaze" &&
+                    document !== keyFor("of:glaze")
+                  ) {
+                    referrers.push(document ?? "");
+                  }
+                },
+              });
+              walk.visit(
+                documentFor(manager, id),
+                { path: ["value"], schema },
+                undefined,
+                name,
+              );
+            }
+            return referrers;
+          };
+
+          expect(referrersOfGlaze({ type: "object" })).toEqual([
+            keyFor("of:donut"),
+          ]);
+          expect(referrersOfGlaze({ type: "unknown", asCell: ["cell"] }))
+            .toEqual([]);
+        });
+
+        it("attributes the document a root's path reaches through a chain of links to the record holding the last link alone", () => {
+          // The root's path runs through `of:list.a`, a link to `of:x.a`,
+          // which links on to `of:y`.
+
+          const documents = new Map<string, FabricValue>([
+            [keyFor("of:list"), { a: linkTo("of:x", ["a"]) }],
+            [keyFor("of:x"), { a: linkTo("of:y") }],
+            [keyFor("of:y"), { n: 1 }],
+          ]);
+          const referrers: string[] = [];
+          const { manager, walk } = walkOver(documents, {
+            onTrackedDoc: (key, _selector, referrer, kind) => {
+              if (key === keyFor("of:y") && kind === "walked") {
+                referrers.push(referrer?.split("\0")[0] ?? "");
+              }
+            },
+          });
+
+          walk.visit(
+            documentFor(manager, "of:list"),
+            { path: ["value", "a"], schema: true },
+            undefined,
+            "root",
+          );
+
+          expect(referrers.filter((referrer) => referrer !== keyFor("of:y")))
+            .toEqual([keyFor("of:x")]);
+        });
+
+        it("reaches from each root every document that root reaches when walked alone", () => {
+          // Random documents linking to one another under recursive and
+          // `anyOf` schemas, from a fixed seed. Each case walks four roots,
+          // and the first two again, over one tracker.
+
+          let seed = 1;
+          const random = () => {
+            seed = (seed * 1103515245 + 12345) % 2147483648;
+            return seed / 2147483648;
+          };
+          const pick = <T>(values: readonly T[]): T =>
+            values[Math.floor(random() * values.length)];
+          const fields = ["f0", "f1", "f2"];
+          const ids = ["of:d0", "of:d1", "of:d2", "of:d3", "of:d4"];
+          const valueAt = (depth: number): FabricValue => {
+            const r = random();
+            if (r < 0.45) {
+              return linkTo(pick(ids), random() < 0.3 ? [pick(fields)] : []);
+            }
+            if (r < 0.65 && depth < 2) {
+              return Object.fromEntries(
+                fields.filter(() => random() < 0.7).map((
+                  field,
+                ) => [field, valueAt(depth + 1)]),
+              );
+            }
+            return Math.floor(random() * 3);
+          };
+          const $defs = {
+            A: node(["f0", "f1", "f2"], "#/$defs/A"),
+            B: node(["f0", "f1"], "#/$defs/B"),
+            C: {
+              anyOf: [
+                node(["f0", "f2"], "#/$defs/C"),
+                node(["f1", "f2"], "#/$defs/C"),
+              ],
+            },
+            D: node(["f1", "f2"], "#/$defs/A"),
+          };
+          const schemas: JSONSchema[] = ["A", "B", "C", "D"].map((name) => ({
+            $ref: `#/$defs/${name}`,
+            $defs,
+          }));
+          const short: string[] = [];
+          for (let i = 0; i < 100; i++) {
+            const documents = new Map<string, FabricValue>(
+              ids.map((id) => [
+                keyFor(id),
+                Object.fromEntries(
+                  fields.map((field) => [field, valueAt(0)]),
+                ),
+              ]),
+            );
+            const roots = Array.from(
+              { length: 4 },
+              (_, k) => [`root${k}`, pick(ids), pick(schemas)] as const,
+            );
+            const shared = walkRoots(documents, [
+              ...roots,
+              ...roots.slice(0, 2),
+            ]);
+            for (const root of roots) {
+              const together = new Set(shared(root[0]));
+              const alone = walkRoots(documents, [root])(root[0]);
+              if (alone.some((key) => !together.has(key))) {
+                short.push(`case ${i} ${root[0]}`);
+              }
+            }
+          }
+
+          expect(short).toEqual([]);
+        });
       });
 
       it("traverses a tree whose nodes link back to its root, under a recursive union, in work linear in its depth", () => {
@@ -1229,6 +1453,53 @@ describe("graph-query", () => {
         );
 
         expect(stats.schemaTraversals).toBeLessThan(40 * depth);
+      });
+
+      it("traverses a chain whose nodes link back to their parents within the document in work linear in its depth", () => {
+        // Each node's `up` links to its parent's position, entering the
+        // document under a record of that position, while the record of the
+        // node below it is still traversing the position. Each record that
+        // meets a position another record is traversing stands for that
+        // traversal rather than repeating it, and for a traversal nested in
+        // it through the record standing for that one.
+
+        const pathTo = (level: number) =>
+          Array.from({ length: level }, () => ["kids", "0"]).flat();
+        const depth = 12;
+        const chain = (level: number): FabricValue => ({
+          up: linkTo("of:tree", pathTo(Math.max(0, level - 1))),
+          kids: level === depth ? [] : [chain(level + 1)],
+        });
+        const stats = createGraphQueryWalkStats();
+        let reports = 0;
+        const { manager, walk } = walkOver(
+          new Map<string, FabricValue>([[keyFor("of:tree"), chain(0)]]),
+          { stats, onTrackedDoc: () => reports++ },
+        );
+
+        walk.visit(
+          documentFor(manager, "of:tree"),
+          {
+            path: ["value"],
+            schema: {
+              $ref: "#/$defs/Node",
+              $defs: {
+                Node: {
+                  type: "object",
+                  properties: {
+                    up: { $ref: "#/$defs/Node" },
+                    kids: { type: "array", items: { $ref: "#/$defs/Node" } },
+                  },
+                },
+              },
+            },
+          },
+          undefined,
+          "root",
+        );
+
+        expect(stats.schemaTraversals).toBeLessThan(10 * depth);
+        expect(reports).toBeLessThan(5 * depth);
       });
 
       it("reports a memo hit when a later walk sharing the memo re-reaches a document", () => {

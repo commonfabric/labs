@@ -75,7 +75,9 @@ caller keeps them, walks them under a schema, and records what it reached.
   record a visit or a followed link entered it by while the traversal of
   the position that entered it lasts, which the traversal reports through
   `TraversalContext.records`. Misses and crossings are reported by record
-  in the same way. `memory` attributes its tracker with that, so a
+  in the same way, and `memory` keeps each by key and selector, so a link
+  edited away releases the selector it needed and nothing another link
+  still needs. `memory` attributes its tracker with that, so a
   document nothing reaches any more can leave a session's result
   (`../specs/memory-v2/04-protocol.md`, section 4.6.3), and a record that
   retires releases what its own walk reached without a walk.
@@ -116,10 +118,14 @@ watch bookkeeping, the branch and sequence handling — stays in `memory`.
 ## Sharing a tracker and a memo across walks
 
 A walk owns its pointer-cycle tracker, which is what makes a cycle of documents
-that link to each other terminate. Walks within one evaluation share a schema
-memo, so repeated visits can reuse their traversal results. The memo is released
-when that evaluation finishes. Establishment, extension, root removal, and dirty
-refresh each take a fresh memo.
+that link to each other terminate. The tracker tells the walk of the traversal
+of each pair it admits (`CompoundCycleTracker`'s `walkers`), so a record whose
+traversal another record's traversal in progress cuts short stands for that
+traversal: once it is done, the cut record is attributed what it attributed.
+Walks within one evaluation share a schema memo, so repeated visits can reuse
+their traversal results. The memo is released when that evaluation finishes.
+Establishment, extension, root removal, and dirty refresh each take a fresh
+memo.
 
 A tracked graph keeps its tracker and the attributions that say which roots and
 links keep each record alive. That is the state later operations need to
