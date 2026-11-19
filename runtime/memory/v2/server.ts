@@ -8799,8 +8799,8 @@ export class Server {
           // opened it, so its documents and their labels are that client's
           // word, which a restore would write onto the default branch. Only
           // the default branch's own history is restored from until the
-          // specification rules on what a restore may admit (the ruling
-          // request is in the description of labs pull request 10022).
+          // specification rules on what a restore may admit.
+          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
           if (
             message.source !== undefined && message.source !== DEFAULT_BRANCH
           ) {
