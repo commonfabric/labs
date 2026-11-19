@@ -121,9 +121,12 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #receipts: {
     receipt: TransactionCommitReceipt;
     writes: RecordedPlanWrite[];
+    created: string[];
   }[] = [];
   /** The write records recorded in the transaction in progress. */
   #recorded: RecordedPlanWrite[] = [];
+  /** The documents the transaction in progress wrote first. */
+  #created: string[] = [];
   /** What hears of the write records of each commit that settled. */
   #onCommitted: ((writes: readonly RecordedPlanWrite[]) => void) | undefined;
   /** Removes this adapter from the readers of the storage manager. */
@@ -327,6 +330,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#written.clear();
     this.#metadata.clear();
     this.#recorded = [];
+    this.#created = [];
   }
 
   /** @inheritDoc */
@@ -403,6 +407,7 @@ export class RuntimeTransactions implements TransactionHooks {
       // from the place's default, and the change names only the path
       // written.
       this.#documents.add(doc);
+      this.#created.push(doc);
       tx.writeValueOrThrow(
         this.#address(doc, []),
         this.#encode(document.value),
@@ -595,10 +600,16 @@ export class RuntimeTransactions implements TransactionHooks {
     if (!committed) {
       tx.abort();
       this.#counts.aborted += 1;
+      for (const doc of this.#created) this.#documents.delete(doc);
       return;
     }
-    this.#receipts.push({ receipt: tx.commit(), writes: this.#recorded });
+    this.#receipts.push({
+      receipt: tx.commit(),
+      writes: this.#recorded,
+      created: this.#created,
+    });
     this.#recorded = [];
+    this.#created = [];
     this.#reportLabels();
     this.#counts.committed += 1;
     this.#counts.byCause[this.#cause] = (this.#counts.byCause[this.#cause] ??
@@ -611,10 +622,16 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   async settled(): Promise<string[]> {
     const refused: string[] = [];
-    for (const { receipt, writes } of this.#receipts.splice(0)) {
+    for (const { receipt, writes, created } of this.#receipts.splice(0)) {
       const { error } = await receipt.settled;
-      if (error !== undefined) refused.push(`${error.name}: ${error.message}`);
-      else this.#onCommitted?.(writes);
+      if (error === undefined) {
+        this.#onCommitted?.(writes);
+        continue;
+      }
+      refused.push(`${error.name}: ${error.message}`);
+      // The storage does not hold a document whose first write was refused:
+      // the next change of it writes it whole again.
+      for (const doc of created) this.#documents.delete(doc);
     }
     return refused;
   }

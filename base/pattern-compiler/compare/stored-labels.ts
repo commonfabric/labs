@@ -120,8 +120,22 @@ export type OracleCheck = {
   record: PlanRecord;
   /** The written path of the executor's document. */
   path: string[];
-  /** The label stored at the path after the commit. */
+  /**
+   * The label stored at the path after the commit: the entry of origin
+   * `derived` and class `value` there (`templateEntryAt`).
+   */
   stored: Label;
+  /**
+   * Whether the runtime stored an entry at the path. A commit that read no
+   * labeled document is not prepared, and stores none.
+   */
+  entry: boolean;
+  /**
+   * The label a read of the value at the path consumes after the commit,
+   * through the links stored there (`storedLabelAt`), which is what today's
+   * rows are read as.
+   */
+  read: Label;
   /** The evaluator's label, where it evaluated one. */
   oracle?: Label;
   /** The evaluator found a selection or a pick unreported. */
@@ -269,6 +283,38 @@ const consumedAt = (
   return {
     confidentiality: [...label?.confidentiality ?? []],
     integrity: [...label?.integrity ?? []],
+  };
+};
+
+/**
+ * The label the runtime stored for a path a write record covers: the
+ * entry of origin `derived` and class `value` at the path, or at a path
+ * whose `*` segments match it where there is none at the path itself. The
+ * entries above and below the path, and those of other origins, such as
+ * what the document's type declares, are not part of it.
+ */
+const templateEntryAt = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+): Label | undefined => {
+  const entries = readStoredCfcMetadata(tx, linkOf(address))?.labelMap
+    .entries ?? [];
+  const of = (exact: boolean) =>
+    entries.filter((entry) =>
+      entry.origin === "derived" && entry.observes !== "shape" &&
+      entry.path.length === address.path.length &&
+      entry.path.every((segment, index) =>
+        segment === address.path[index] || (!exact && segment === "*")
+      )
+    );
+  const exact = of(true);
+  const found = exact.length > 0 ? exact : of(false);
+  if (found.length === 0) return undefined;
+  return {
+    confidentiality: union(
+      found.map((entry) => [...entry.label.confidentiality ?? []]),
+    ),
+    integrity: union(found.map((entry) => [...entry.label.integrity ?? []])),
   };
 };
 
@@ -529,11 +575,17 @@ export const checkWrites = (
     };
 
     return writes.map((write): OracleCheck => {
-      const stored = asEvaluatorLabel(consumedAt(tx, write.target), patterns);
+      const entry = templateEntryAt(tx, write.target);
+      const stored = asEvaluatorLabel(
+        entry ?? { confidentiality: [], integrity: [] },
+        patterns,
+      );
       const base = {
         record: write.record,
         path: [...write.target.path],
         stored,
+        entry: entry !== undefined,
+        read: storedLabelAt(tx, write.target),
         bound: false,
         unsupported: [],
       };
@@ -612,6 +664,12 @@ export type ModuleLabels = {
   refusedOnly?: string[];
   /** Commits refused with the option off. */
   refusedOff?: number;
+  /**
+   * Why the run with the option on stopped before its last event, where it
+   * did: a write the executor made after a refused commit, which the
+   * storage does not hold the document of.
+   */
+  failedOn?: string;
   off?: Totals;
   on?: Totals;
 };
@@ -649,7 +707,9 @@ const agrees = (check: OracleCheck): boolean =>
 
 /** A check that does not agree, as the results file holds it. */
 export const differenceOf = (check: OracleCheck): Difference => ({
-  what: check.error !== undefined
+  what: !check.entry
+    ? "no entry stored at the path"
+    : check.error !== undefined
     ? `not evaluated: ${refusalReason(check.error)}`
     : `C ${check.confidentiality}, I ${check.integrity}${
       check.bound ? ", the evaluator's label a bound" : ""
@@ -761,7 +821,7 @@ const readStored = (
       if (!("body" in check.record)) continue;
       for (let start = 0; start <= check.path.length; start++) {
         const key = storedKey(check.record, check.path.slice(start));
-        if (!into.has(key)) into.set(key, check.stored);
+        if (!into.has(key)) into.set(key, check.read);
       }
     }
   } finally {
@@ -812,6 +872,7 @@ export const compareModule = async (
   const options = instanceOptions(module.module, space, artifacts);
   const checks: OracleCheck[] = [];
   const stored = new Map<string, Label>();
+  const refusedOn: string[] = [];
   const off = await inStorage(
     artifact,
     argument,
@@ -821,24 +882,37 @@ export const compareModule = async (
     true,
     false,
   );
-  const on = await inStorage(
-    artifact,
-    argument,
-    events,
-    options,
-    undefined,
-    true,
-    true,
-    {
-      committed: (runtime, _hooks, writes) => {
-        for (const check of checkWrites(runtime, plan, writes)) {
-          checks.push(check);
-        }
+  // A refused commit leaves the storage without what the executor holds,
+  // and a later write of the executor can fail on that: the run with the
+  // option on reports what it found up to there.
+  let failed: string | undefined;
+  let on: Awaited<ReturnType<typeof inStorage>> | undefined;
+  try {
+    on = await inStorage(
+      artifact,
+      argument,
+      events,
+      options,
+      undefined,
+      true,
+      true,
+      {
+        committed: (runtime, _hooks, writes) => {
+          for (const check of checkWrites(runtime, plan, writes)) {
+            checks.push(check);
+          }
+        },
+        refused: (reasons) => {
+          for (const reason of reasons) refusedOn.push(reason);
+        },
+        end: (runtime, hooks, instance) =>
+          readStored(runtime, hooks, instance, plan, checks, stored),
       },
-      end: (runtime, hooks, instance) =>
-        readStored(runtime, hooks, instance, plan, checks, stored),
-    },
-  );
+    );
+  } catch (error) {
+    failed = `${(error as Error)?.message ?? error}`.split("\n")[0]
+      .slice(0, 160);
+  }
   const { rows, unmatched } = compareWithToday(
     plan,
     today.rows ?? [],
@@ -856,12 +930,15 @@ export const compareModule = async (
       agree: checks.filter(agrees).length,
       differs: checks.filter((check) => !agrees(check)).map(differenceOf),
     },
-    refusedOnly: refused(on).filter((reason) =>
+    refusedOnly: refusedOn.filter((reason) =>
       !offReasons.has(refusalReason(reason))
     ),
     refusedOff: refused(off).length,
     off: totals([off.arm.settle, ...off.arm.events]),
-    on: totals([on.arm.settle, ...on.arm.events]),
+    ...(on === undefined ? {} : {
+      on: totals([on.arm.settle, ...on.arm.events]),
+    }),
+    ...(failed === undefined ? {} : { failedOn: failed }),
   };
 };
 
@@ -1051,6 +1128,13 @@ const report = async (file: string, tables: string | undefined) => {
         new Set(group.map(({ module }) => module)).size
       } modules: ${reason}\n      e.g. ${group[0].module}`,
     );
+  }
+  const stopped = ran.filter((result) => result.failedOn !== undefined);
+  console.log(
+    `runs with the option on that stopped after a refused commit: ${stopped.length}`,
+  );
+  for (const [reason, group] of count(stopped, (r) => r.failedOn!)) {
+    console.log(`  ${group.length}: ${reason}`);
   }
   const sum = (arm: "off" | "on", key: keyof Totals) =>
     ran.reduce((total, result) => total + (result[arm]?.[key] ?? 0), 0);

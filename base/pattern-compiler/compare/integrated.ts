@@ -139,6 +139,8 @@ export type Inspect = {
     hooks: RuntimeTransactions,
     writes: readonly RecordedPlanWrite[],
   ): void;
+  /** The reasons of the commits refused at each settle, as it settles. */
+  refused?(reasons: readonly string[]): void;
   /** The instance and its storage once every event was handled. */
   end?(
     runtime: Runtime,
@@ -361,6 +363,7 @@ export const inStorage = async (
       work();
       const local = performance.now() - began;
       const refused = await hooks.settled();
+      inspect.refused?.(refused);
       const settled = performance.now() - began;
       const after = hooks.counts;
       return {
