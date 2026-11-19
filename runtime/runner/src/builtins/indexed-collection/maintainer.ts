@@ -185,10 +185,15 @@ export class IndexedCollectionMaintainer {
   async #loadRegistry(space: MemorySpace, state: SpaceState): Promise<void> {
     try {
       const registry = this.#registryCell(space);
+      // Asked without loading the document: a space that holds no collection
+      // has no registry, and takes on no watch of one.
+      const listed = await this.#runtime.storageManager.open(space)
+        .entityIdExists?.(registry.getAsNormalizedFullLink().id);
+      if (listed !== true) return;
       await registry.sync();
-      const listed = registry.getRaw({ lastNode: "value" });
-      if (!isPlainObject(listed)) return;
-      for (const [id, link] of Object.entries(listed)) {
+      const entries = registry.getRaw({ lastNode: "value" });
+      if (!isPlainObject(entries)) return;
+      for (const [id, link] of Object.entries(entries)) {
         const sigil = parseCfLinkToSigil(link);
         if (sigil === null || state.collections.has(id)) continue;
         const handle = this.#runtime.getCellFromLink(sigil);

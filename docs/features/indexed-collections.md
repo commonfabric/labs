@@ -137,8 +137,10 @@ Three properties follow from the design, and each is a thing to preserve:
   than a direct edit.
 
 Each space lists its collections in a registry cell, so a serving runtime
-that never loaded the declaring piece still maintains them. The maintainer
-reads the registry the first time it hears of a write to that space.
+that never loaded the declaring piece still maintains them. The first
+time the maintainer hears of a write to a space, it asks whether that space
+has a registry, without loading the document, and reads it only if it does. A
+space that holds no collection therefore takes on no watch of one.
 
 ## Queries
 
