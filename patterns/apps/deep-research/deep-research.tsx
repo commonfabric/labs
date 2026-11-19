@@ -1,3 +1,9 @@
+/**
+ * A research assistant that takes a question, then searches the web and reads
+ * pages on its own before presenting a structured write-up: a summary with a
+ * confidence note, findings, and sources. You can follow up with a refinement
+ * prompt to steer further research.
+ */
 import {
   type BuiltInLLMMessage,
   computed,

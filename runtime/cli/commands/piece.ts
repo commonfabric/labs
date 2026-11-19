@@ -151,8 +151,8 @@ import {
   PatternIndexStore,
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
+import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import { noteWroteTo } from "../lib/write-receipt.ts";
-import { loadIdentity } from "../lib/identity.ts";
 import type {
   DeployedSource,
   VersionOutcome,
@@ -1495,6 +1495,12 @@ const EX_COMP_PIECE = `${EX_COMP} --cell ${EX_PIECE}`;
  */
 const CELL_FLAG = `"--cell" (or "--piece")`;
 
+const VERSION_ENTRY_HELP =
+  "The entry file whose version history this deploy continues, when the file deployed is a copy of it (a snapshot in a temporary directory).";
+
+const NO_INDEX_VERSION_HELP =
+  "Keep no version of this deploy in the pattern index, and do not wait on it.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2525,6 +2531,7 @@ export const piece = targetOptions(
     "Create the piece from this published pattern instead of local source.",
     {
       conflicts: [
+        "version-entry",
         "main-export",
         "root",
         "repository",
@@ -2540,8 +2547,10 @@ export const piece = targetOptions(
   )
   .option(
     "--pattern-index-url <url:string>",
-    "Base URL of the pattern index --from-index reads.",
+    "Base URL of the pattern index --from-index reads; the deployment's by default.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
+  .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2704,6 +2713,8 @@ export const piece = targetOptions(
     "--origin <origin:string>",
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
+  .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3604,6 +3615,15 @@ export interface PieceCLIOptions {
 
   /** `setsrc`: the origin the piece follows from then on. */
   origin?: string;
+
+  /** `setsrc` and `new`: `false` under `--no-index-version`. */
+  indexVersion?: boolean;
+
+  /**
+   * `setsrc` and `new`: the entry whose version history the deploy
+   * continues, in place of the file deployed.
+   */
+  versionEntry?: string;
   json?: boolean;
 }
 
@@ -5258,49 +5278,58 @@ export async function restoreFromCommand(
   }
 }
 
-/** The modules recording a version needs, loaded on first use. */
+/** The module recording a version, loaded on first use. */
 const loadVersionModules = async () => ({
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  access: await import("@commonfabric/pattern-index/access"),
   // deno-lint-ignore cf-imports/no-inline-module-import
   versions: await import("../lib/pattern-versions.ts"),
 });
 
 /**
- * Keeps a deploy of the person's own source as a private version in the
- * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
- * signing as the deploying identity. Never throws, synchronously or not:
- * the deploy it follows has committed, and an index that is misconfigured
- * or unreachable must not turn that into a failure.
+ * Keeps a deploy as a private version: `recordVersionInIndex` in
+ * `lib/pattern-versions.ts`, loaded here rather than with the command,
+ * since recording reaches the compiler's identity code, which starting
+ * `cf piece` must not load. Never throws.
  */
 export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
-  // Loaded here rather than with the command: recording reaches the
-  // compiler's identity code, which starting `cf piece` must not load.
   let modules;
-  let baseUrl: string;
-  let store: PatternIndexStore;
   try {
     modules = await loadVersionModules();
-    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
-    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
   } catch (error) {
     return { status: "failed", reason: describeFailure(error) };
   }
-  const { openPatternIndexClient } = modules.access;
-  return await modules.versions.recordDeployedVersion(deployed, {
-    store,
-    openClient: async () =>
-      openPatternIndexClient({
-        baseUrl,
-        signer: await loadIdentity(identity),
-        store,
-      }),
-    readTextFile: (path) => Deno.readTextFile(path),
-  });
+  return await modules.versions.recordVersionInIndex(identity, deployed);
 }
+
+/**
+ * The entry whose lineage a deploy of `main` continues: `--version-entry`
+ * when given, else `main` itself.
+ *
+ * @throws ValidationError for `--version-entry` beside `--no-index-version`,
+ * which keeps no version to place in a lineage.
+ */
+function versionEntryOf(
+  options: Pick<PieceCLIOptions, "indexVersion" | "versionEntry">,
+  main: string,
+): string {
+  if (options.versionEntry === undefined) return absPath(main);
+  if (options.indexVersion === false) {
+    throw new ValidationError(
+      "--version-entry names the history a version continues; --no-index-version keeps none.",
+      { exitCode: 1 },
+    );
+  }
+  return absPath(options.versionEntry);
+}
+
+/**
+ * Records no version, for `--no-index-version`: a deploy in a tight edit
+ * loop makes no index call and never waits on the index.
+ */
+const skipIndexVersion = (): Promise<VersionOutcome> =>
+  Promise.resolve({ status: "skipped", reason: "--no-index-version" });
 
 /**
  * The version a deploy is recording, started from `onDeployed` once the
@@ -5402,8 +5431,9 @@ export const recordIndexedPiece = async (
 /**
  * Where `cf piece new`'s program comes from: the `main` file, or the
  * published pattern `--from-index` names, never both and never neither. A
- * published pattern needs the index to read it from, and a missing one is
- * refused here rather than when the deploy reaches the network.
+ * published pattern is read from the index the flag or `CF_PATTERN_INDEX_URL`
+ * names, else the deployment's, and a malformed URL is refused here rather
+ * than when the deploy reaches the network.
  */
 function newPieceEntry(
   options: {
@@ -5434,12 +5464,10 @@ function newPieceEntry(
   if (patternId === "") {
     throw new ValidationError("--from-index requires a non-blank pattern id.");
   }
-  const patternIndexUrl = options.patternIndexUrl?.trim();
-  if (patternIndexUrl === undefined || patternIndexUrl === "") {
-    throw new ValidationError(
-      "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
-    );
-  }
+  // The same index every cf pattern command uses: the flag, else
+  // CF_PATTERN_INDEX_URL, else the deployment's.
+  const patternIndexUrl = options.patternIndexUrl?.trim() ||
+    DEFAULT_PATTERN_INDEX_URL;
   // The index client appends a function name to the base's path, so it
   // refuses a base with a query or fragment; refused here too, before the
   // space root is touched.
@@ -5478,9 +5506,9 @@ export async function newPieceFromCommand(
     throw new Error("`--input-file` must contain a JSON object.");
   }
   const version = main === undefined ? undefined : versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
-    absPath(main),
+    versionEntryOf(options, main),
     undefined,
     deps.note ?? note,
   );
@@ -5871,10 +5899,10 @@ export async function applyPieceSourceCommandAction(
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
   const version = versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) =>
         recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
-    absPath(mainPath),
+    versionEntryOf(options, mainPath),
     options.origin,
     deps.warn ?? note,
   );

@@ -643,11 +643,13 @@ calls "Esc+" and Terminal calls "Use Option as Meta key".
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
-active. On a commit row, `f` hides all of that commit's files. Pressing it again
-shows them. Each commit row reports its total added and removed lines under the
-selected count policy. The list's summary reports added and removed lines for
-the complete diff and for the files that are currently shown.
+and last entry. Pressing the primary mouse button on an entry selects it, in
+this list and in the list of files that Ctrl-X Ctrl-F opens. The `f`, `F`, `E`,
+`T`, `M`, and `C` file-visibility keys remain active. On a commit row, `f` hides
+all of that commit's files. Pressing it again shows them. Each commit row
+reports its total added and removed lines under the selected count policy. The
+list's summary reports added and removed lines for the complete diff and for the
+files that are currently shown.
 
 Use `<` and `>` to move to the preceding or following commit header in the main
 view or the index list. From within a commit, `<` returns to that commit's
@@ -2291,6 +2293,7 @@ What the Fabric lane does, in order:
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
 | finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
 | failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
+| was stopped by a read the read ceiling withholds      | `failed`, `CFC_REFUSED`      |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -3434,13 +3437,13 @@ the same person through chains the root issues:
 `cf index sharing` shows the person's give-to-get setting, the same one their
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
-they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared on its own (what they shared with
-`cf pattern share` stays shared until `cf pattern unshare`), and search and
-listings show them only patterns published under a name, though a shared pattern
-opened by its id, as an import or `--from-index` does, still works.
-`--self-built` says whether that covers the patterns they build themselves in
-`cf` and Claude Code.
+they have used them in their loom for a day with no newer version and they pass
+the privacy check, and they see what others share; off, nothing of theirs is
+shared on its own (what they shared with `cf pattern share` stays shared until
+`cf pattern unshare`), and search and listings show them only patterns published
+under a name, though a shared pattern opened by its id, as an import or
+`--from-index` does, still works. `--self-built` says whether that covers the
+patterns they build themselves in `cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
@@ -3469,13 +3472,36 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
+`--version-entry <path>` on `piece new` and `piece setsrc` keeps the version in
+the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
+of it (a snapshot in a temporary directory), so the copy continues the
+original's history.
+
+`cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
+private version of the entry's lineage, without deploying: the pattern the piece
+points at, with its source, so it is exactly what was deployed. It is shared as
+a deployed version is: by `cf pattern share`, or by the sharing setting once it
+settles. It pairs with `--no-index-version` deploys, keeping one when a change
+is done, and exits 1 with the reason when no version was kept. A checkpoint of a
+source the newest version already has keeps no new one, says so, and exits 0. It
+refuses an entry file whose contents are not what the piece runs (another file,
+or this one edited since its deploy). A piece following an origin keeps no
+version, as a deploy of it does not.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
-index shares a version once it settles, when its owner opens it in a loom, and
-only while their sharing setting (kept by the index; `cf index sharing` and
-Loom's settings change it) covers what they build; the deploy's line says so,
-and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
-shares one at once. The index write follows the deploy's commit and never
-changes its outcome, but the command waits for it before exiting.
+index shares a version once it settles, when its owner has used it in a loom for
+a day with no newer version and it passes the privacy check, and only while
+their sharing setting (kept by the index; `cf index sharing` and Loom's settings
+change it) covers what they build; the deploy's line says so, and `--json`
+carries it as `version.autoShare: "when_used"`. `cf pattern share` shares one at
+once. The index write follows the deploy's commit and never changes its outcome,
+but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`
 lists one entry's versions, newest first, and where each stands.

@@ -375,6 +375,15 @@ Deno.test("EXPOSE_GC parses strictly, and only on a development or test server",
   }
 });
 
+Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
+  const sample = (env: Record<string, string>) =>
+    EnvSchema.parse(env).HEAP_PROFILE_MAIN_THREAD;
+
+  assertEquals(sample({}), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "false" }), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "true" }), true);
+});
+
 Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
   const dump = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_DUMP_ENABLED: v })

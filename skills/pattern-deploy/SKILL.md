@@ -69,10 +69,12 @@ unchanged, keeps none. Nobody runs a save command. To undo a bad step,
 `cf pattern rollback <entry> <version>` restores one over the files (then
 `setsrc` to update the piece). Rollback refuses over edits never deployed.
 Deploys never share by themselves. When the person's sharing setting covers what
-they build, the index shares a version anonymously once they open it in a loom,
-and the deploy line says so (`version.autoShare: "when_used"` under `--json`).
-Run `cf pattern share` only when the person asks to share it sooner, or to share
-it with the setting off.
+they build, the index shares a version anonymously once they have used it in a
+loom for a day with no newer version and it passes the privacy check, and the
+deploy line says so (`version.autoShare: "when_used"` under `--json`). Run
+`cf pattern share` only when the person asks to share it sooner, or to share it
+with the setting off. In a tight edit loop, pass `--no-index-version` so deploys
+do not wait on the index.
 
 **Sharing**, so others can find it, takes the same identity, API URL, space and
 packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id
@@ -116,12 +118,13 @@ A pattern reads a file that is not code — a fixture, a lookup table — with
 reads it. That call is the declaration, so `new`, `setsrc`, `check` and `test`
 all attach the file without being told. It is never parsed, compiled, or
 importable, and `getsrc` returns it byte for byte. It must sit inside the
-deployment root, and be UTF-8 text or an image, a font, or a sound, which
-`dataFile.url(path)` reads as a `data:` URL (`dataFile.urls(directory)` reads a
-directory of them). Repeatable `--datafile <path>` remains for a file the source
-cannot name: one read by a computed path, or one that ships with a pattern that
-does not read it. The same complete-revision rule applies to those, so repeat
-every data-file flag on each update too.
+deployment root, and be UTF-8 text, which `dataFile(path)` reads, or an image, a
+font, or a sound, which `dataFile.url(path)` reads as a `data:` URL
+(`dataFile.urls(directory)` reads a directory of them). Repeatable
+`--datafile <path>` remains for a file the source cannot name: one read by a
+computed path, or one that ships with a pattern that does not read it. The same
+complete-revision rule applies to those, so repeat every data-file flag on each
+update too.
 
 **Inspect piece state:**
 

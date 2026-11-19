@@ -208,7 +208,8 @@ events; otherwise it MAY be parked (lease released, loop stopped, and
 the runtime disposed or kept for the space's next tenure — Parking
 below). A client session is any session except a serving loop's own
 and one that declared that it is not demand. A serving loop's own is a
-session of the deployment's service identity that reached the memory
+session of the delegating class (the identities of the deployment's serving
+processes, memory-v2 04-protocol.md §4.3.12) that reached the memory
 server from the process holding it, or declared the serving binding
 (`actingAs: "space-owner"`, a serving runtime of another process). A
 session of any identity declares that it is not demand with
