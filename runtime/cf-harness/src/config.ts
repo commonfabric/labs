@@ -194,7 +194,7 @@ export interface HarnessPatternIndexConfig {
    * person's own agent making it for them in their loom: each version names
    * that origin and the piece it was deployed to, so the index shares it,
    * under the person's sharing setting, once they have used it in a loom for
-   * a day without changing it. Absent (any other run) names no origin, and
+   * a day with no newer version. Absent (any other run) names no origin, and
    * the index never shares it on its own.
    */
   origin?: "agent";

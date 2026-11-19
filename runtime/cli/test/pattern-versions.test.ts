@@ -225,7 +225,7 @@ describe("pattern-versions", () => {
       const outcome = await recordDeployedVersion(deployed(), deps);
 
       expect(versionLine(outcome)).toContain(
-        "shares it anonymously once you have used it in a loom for a day without changing it",
+        "shares it anonymously once you have used it in a loom for a day with no newer version",
       );
     });
 

@@ -92,7 +92,7 @@ describe("cf pattern checkpoint", () => {
     });
     expect(Object.hasOwn(deployed, "origin")).toBe(false);
     expect(printed).toEqual([
-      "Kept as private version 4; cf pattern history lists them. Your sharing setting shares it anonymously once you have used it in a loom for a day without changing it.",
+      "Kept as private version 4; cf pattern history lists them. Your sharing setting shares it anonymously once you have used it in a loom for a day with no newer version.",
     ]);
     expect(Deno.exitCode).toBe(0);
   });

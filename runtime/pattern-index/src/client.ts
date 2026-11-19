@@ -495,8 +495,8 @@ export type PatternIndexUsageEventType =
 /**
  * A usage event and what it is about. The owner's `viewed_in_loom` about the
  * piece a version was deployed to counts toward settling that version: once
- * they have used it for a day with no newer version, the index shares it,
- * while the sharing setting covers it.
+ * they have used it for a day with no newer version and it passes the
+ * privacy check, the index shares it, while the sharing setting covers it.
  */
 export type PatternIndexRecordUsageEventRequest = PatternIndexEventSubject & {
   eventType: PatternIndexUsageEventType;
@@ -858,8 +858,8 @@ export interface PatternIndexSetSharingSettingsRequest {
 /**
  * What a publish did about sharing the version it recorded. A publish never
  * shares by itself: `when_used` means the index shares the version once its
- * owner has used it in a loom for a day without changing it, while the
- * sharing setting allows.
+ * owner has used it in a loom for a day with no newer version and it passes
+ * the privacy check, while the sharing setting allows.
  */
 export type PatternIndexAutoShare =
   | "when_used"
