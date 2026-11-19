@@ -400,7 +400,8 @@ impl<'a> Resolver<'_, 'a> {
 
     /// Binds the type parameters of a function for one call: from the
     /// written type arguments, or from the argument whose parameter is the
-    /// type parameter, an array of it, or a handle of it.
+    /// type parameter, an array of it, or a handle of it, each also in a
+    /// union with `undefined` or `null`.
     pub(crate) fn bind_type_parameters(
         &self,
         module: usize,
@@ -424,11 +425,33 @@ impl<'a> Resolver<'_, 'a> {
                 env.push((symbol, written));
                 continue;
             }
-            let names = |ty: &TSType<'a>| {
+            let named = |ty: &TSType<'a>| {
                 matches!(ty, TSType::TSTypeReference(reference)
                     if reference.type_arguments.is_none()
                         && matches!(&reference.type_name, TSTypeName::IdentifierReference(name)
                             if symbol_of(scoping, name) == Some(symbol)))
+            };
+            // The type parameter itself, or a union of it with `undefined`
+            // or `null`, which binds it to the argument's type without
+            // those (§7.3, "Inference at a call").
+            let names = |ty: &TSType<'a>| {
+                let mut ty = ty;
+                while let TSType::TSParenthesizedType(inner) = ty {
+                    ty = &inner.type_annotation;
+                }
+                match ty {
+                    TSType::TSUnionType(union) => {
+                        union.types.iter().filter(|member| named(member)).count() == 1
+                            && union.types.iter().all(|member| {
+                                named(member)
+                                    || matches!(
+                                        member,
+                                        TSType::TSUndefinedKeyword(_) | TSType::TSNullKeyword(_)
+                                    )
+                            })
+                    }
+                    _ => named(ty),
+                }
             };
             let bound =
                 function
@@ -440,7 +463,10 @@ impl<'a> Resolver<'_, 'a> {
                         let annotation = &formal.type_annotation.as_ref()?.type_annotation;
                         let argument = call.arguments.get(position)?.as_expression()?;
                         if names(annotation) {
-                            return self.typed_at(site, argument, depth + 1).ok();
+                            return self
+                                .typed_at(site, argument, depth + 1)
+                                .ok()
+                                .map(|ty| self.present(ty));
                         }
                         let inner = match annotation {
                             TSType::TSArrayType(array) => Some(&array.element_type),
@@ -465,7 +491,7 @@ impl<'a> Resolver<'_, 'a> {
                             {
                                 Some(value)
                             }
-                            _ => self.element_of(argument),
+                            _ => self.element_of(argument).map(|ty| self.present(ty)),
                         }
                     });
             if let Some(bound) = bound {

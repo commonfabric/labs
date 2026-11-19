@@ -386,6 +386,24 @@ fn assignment_inside_a_loop_or_a_branch_does_not_narrow_after_it() {
     );
 }
 
+#[test]
+fn assignment_in_one_branch_does_not_undo_the_condition_in_the_other() {
+    // An assignment in the branch where the condition holds cannot run
+    // before a reference in the branch where it fails.
+    assert_eq!(
+        types(
+            "function show(given: string | undefined, names: string[]) {\n\
+               let name = given;\n\
+               if (!name) { name = names.join(\",\"); }\n\
+               else if (/*?*/name.length > 3) { return /*?*/name; }\n\
+               const other = !name ? (name = \"x\") : /*?*/name;\n\
+               return other;\n\
+             }\n"
+        ),
+        ["string", "string", "string"]
+    );
+}
+
 // ----- §7.8: a handle of `unknown` -----
 
 #[test]
