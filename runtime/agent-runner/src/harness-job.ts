@@ -738,10 +738,12 @@ export const runHarnessJob = async (
     return {
       outcome: "failed",
       recordedRun,
-      errorCode: limit
-        ? LIMIT_REACHED
-        : isReadCeilingRefusal(loopError)
+      // The ceiling's refusal is decided first: the turn limit is told
+      // apart by its message alone, which a wrapping error could repeat.
+      errorCode: isReadCeilingRefusal(loopError)
         ? CFC_REFUSED
+        : limit
+        ? LIMIT_REACHED
         : PROVIDER_FAILURE,
       ...(errorDetail !== undefined ? { errorDetail } : {}),
       ...(report !== undefined ? { report } : {}),

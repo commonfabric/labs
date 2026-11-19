@@ -958,7 +958,7 @@ describe("runHarnessJob()", () => {
         plainSpec(),
         () =>
           Promise.reject(
-            new Error("the seal needs a wider read ceiling", {
+            new Error("exceeded max model turns while sealing", {
               cause: new CfcReadCeilingError(),
             }),
           ),

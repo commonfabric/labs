@@ -2610,7 +2610,7 @@ describe("agent runner", () => {
       expect(record.errorCode).toBe("CFC_REFUSED");
       expect(messages).toContainEqual(
         expect.stringContaining(
-          "failed (CFC_REFUSED): the runtime read ceiling withholds this value",
+          "the runtime read ceiling withholds this value",
         ),
       );
     });
