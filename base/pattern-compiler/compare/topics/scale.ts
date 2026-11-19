@@ -37,6 +37,7 @@
  * crate emits. Today's runtime runs the program of the repository.
  */
 import { Identity } from "@commonfabric/identity";
+import { fromFileUrl } from "@std/path";
 
 import {
   getTimingStatsBreakdown,
@@ -49,7 +50,7 @@ import { type Artifact, Instance } from "../../exec/executor.ts";
 import { Ref } from "../../exec/store.ts";
 import { TOPICS_FILES, writeTopicsTree } from "./tree.ts";
 
-const repository = new URL("../../../../", import.meta.url).pathname;
+const repository = fromFileUrl(new URL("../../../../", import.meta.url));
 
 /** What one topic of the seeded board holds, with `mentions` as indexes. */
 const topicOf = (index: number) => ({
