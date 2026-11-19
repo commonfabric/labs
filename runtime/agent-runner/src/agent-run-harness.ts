@@ -44,7 +44,7 @@ import {
   spaceReaderRole,
 } from "@commonfabric/runner/cfc";
 
-import { CFC_REFUSED, runHarnessJob } from "./harness-job.ts";
+import { runHarnessJob } from "./harness-job.ts";
 
 import type { AgentRunExecution, ClaimedAgentRun } from "./agent-runner.ts";
 
@@ -301,21 +301,12 @@ export const createHarnessAgentRunExecutor = (
         : {}),
       ...(options.report !== undefined ? { report: options.report } : {}),
     });
-    // The record's taxonomy holds no code for a run the information-flow
-    // rules stopped, so it records the provider failure it was before.
-    if (job.outcome === "failed") {
-      // The record keeps no detail, so the operator's log says why.
-      if (job.errorDetail !== undefined) {
-        options.report?.(
-          `agent run ${runKey} failed (${job.errorCode}): ${job.errorDetail}`,
-        );
-      }
-      return {
-        ...job,
-        errorCode: job.errorCode === CFC_REFUSED
-          ? PROVIDER_FAILURE
-          : job.errorCode,
-      };
+    if (job.outcome === "failed" && job.errorDetail !== undefined) {
+      // The record keeps the code but no detail, so the operator's log says
+      // why.
+      options.report?.(
+        `agent run ${runKey} failed (${job.errorCode}): ${job.errorDetail}`,
+      );
     }
     if (job.outcome !== "completed") return job;
     const { structuredResult, handleTable, report } = job;

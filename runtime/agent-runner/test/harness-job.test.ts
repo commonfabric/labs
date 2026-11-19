@@ -953,6 +953,23 @@ describe("runHarnessJob()", () => {
       });
     });
 
+    it("ends `failed` as `CFC_REFUSED` when the read ceiling's refusal is the cause of the error that ended the loop", async () => {
+      const { result } = await runScripted(
+        plainSpec(),
+        () =>
+          Promise.reject(
+            new Error("the seal needs a wider read ceiling", {
+              cause: new CfcReadCeilingError(),
+            }),
+          ),
+      );
+
+      expect(result).toMatchObject({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
+      });
+    });
+
     for (
       const [given, flags] of [
         ["", {}],

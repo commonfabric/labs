@@ -57,6 +57,7 @@ import type {
 } from "@commonfabric/cf-harness/task-classification";
 import {
   type AgentRunErrorCode,
+  CFC_REFUSED,
   INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
@@ -70,14 +71,22 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { AgentRunReport } from "./agent-runner.ts";
 
 /**
- * The error code of a job the runtime's information-flow rules stopped: a
- * read the session's read ceiling withholds threw out of the run. Not a
- * provider's failure, and not `REFUSED`, which is a result the boundary would
- * not release. A local job carries it as written; an `AgentRun` record, whose
- * taxonomy (`AGENT_RUN_ERROR_CODES`) a system pattern's result declares,
- * records it as `PROVIDER_FAILURE`.
+ * Whether `error`, or an error it was thrown for (its `cause`, at any depth),
+ * is the read ceiling withholding a value: a run the information-flow rules
+ * stopped, rather than one that failed.
  */
-export const CFC_REFUSED = "CFC_REFUSED";
+const isReadCeilingRefusal = (error: unknown): boolean => {
+  const seen = new Set<unknown>();
+  for (
+    let current = error;
+    current instanceof Error && !seen.has(current);
+    current = current.cause
+  ) {
+    if (current instanceof CfcReadCeilingError) return true;
+    seen.add(current);
+  }
+  return false;
+};
 
 /** The host command endpoint a job's command tools call. */
 export interface HarnessJobCommands {
@@ -317,7 +326,7 @@ export type HarnessJobResult =
     }
     | {
       outcome: "failed";
-      errorCode: AgentRunErrorCode | typeof CFC_REFUSED;
+      errorCode: AgentRunErrorCode;
 
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
@@ -731,7 +740,7 @@ export const runHarnessJob = async (
       recordedRun,
       errorCode: limit
         ? LIMIT_REACHED
-        : loopError instanceof CfcReadCeilingError
+        : isReadCeilingRefusal(loopError)
         ? CFC_REFUSED
         : PROVIDER_FAILURE,
       ...(errorDetail !== undefined ? { errorDetail } : {}),

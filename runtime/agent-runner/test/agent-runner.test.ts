@@ -2598,9 +2598,7 @@ describe("agent runner", () => {
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
     });
 
-    it("records as `PROVIDER_FAILURE` a run a read above the session's read ceiling ended", async () => {
-      // The job reports `CFC_REFUSED`; the record's taxonomy, which a system
-      // pattern's result declares, holds no such code.
+    it("fails as `CFC_REFUSED` a run a read above the session's read ceiling ended, saying why in the operator log", async () => {
       const messages: string[] = [];
       await startHarnessRunner(
         () => Promise.reject(new CfcReadCeilingError()),
@@ -2609,7 +2607,7 @@ describe("agent runner", () => {
       const result = await submit();
       const record = await waitForState(result, "failed");
 
-      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.errorCode).toBe("CFC_REFUSED");
       expect(messages).toContainEqual(
         expect.stringContaining(
           "failed (CFC_REFUSED): the runtime read ceiling withholds this value",
