@@ -225,6 +225,7 @@ import {
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  type FullResyncCause,
   isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -461,9 +462,9 @@ export type SlowQuery = {
    * request the session sent, `selection` for checking a planner selection
    * before it is accepted, `support-replaced` for a selection that dropped
    * a delivered root, `unscoped-flush` for a refresh pass that names no
-   * dirty documents, and otherwise the cause that marked the session for a
-   * full evaluation (`FullResyncCause` in `session-registry.ts`). */
-  cause?: string;
+   * dirty documents, and otherwise the {@link FullResyncCause} that marked
+   * the session for a full evaluation. */
+  cause?: WatchEvaluationCause;
 
   /** Watch evaluations: which of the session's graphs the entry evaluated.
    * `demand` is its ordinary watches and its views' roots, `support` the
@@ -618,6 +619,14 @@ const recordSlowQueryDuration = (
   });
 };
 
+/** Why a watch evaluation ran ({@link SlowQuery}'s `cause` defines each). */
+export type WatchEvaluationCause =
+  | "request"
+  | "selection"
+  | "support-replaced"
+  | "unscoped-flush"
+  | FullResyncCause;
+
 /**
  * What a watch evaluation's slow-query entry records about why it ran:
  * the operation it is filed under, the cause, the part of the session's
@@ -626,7 +635,7 @@ const recordSlowQueryDuration = (
  */
 export type WatchEvaluationRecord = {
   operation: string;
-  cause: string;
+  cause: WatchEvaluationCause;
   part: "demand" | "support" | "selection";
   views?: number;
 };
