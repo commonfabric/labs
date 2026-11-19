@@ -94,25 +94,26 @@ step checks before it changes anything.
   sharing, though a version already shared stays readable by anyone who has it.
   Putting their name on it is
   `cf pattern publish <entry> --as "<profile name>"`, only when they ask for
-  that and confirm the name it shows.
+  that and confirm the name it shows; it runs the same privacy check, so the
+  same tell-then-save follows.
 - **open**: getting a pattern into a folder, with commands that already exist.
-  - **One of theirs** they made here is already in `my-patterns/<name>/`. On
-    another Mac, the same path is the same history:
-    `cf pattern history
-    my-patterns/<name>/<entry>` then
-    `cf pattern rollback` to its newest version writes the files into the empty
-    folder. That needs the entry file's name, so keep it `main.tsx`.
+  `cf` reads paths from the folder the session started in, `my-patterns/`, so a
+  pattern's folder is `<name>/`.
+  - **One of theirs** they made here is already in `<name>/`. On another Mac,
+    the same path is the same history: `cf pattern history <name>/main.tsx`
+    lists its versions, and `cf pattern rollback <name>/main.tsx <version>` with
+    the newest one writes the files into the empty folder. That needs the entry
+    file's name, so keep it `main.tsx`.
   - **One in their Weaver with no history** (their Weaver's agent made it):
-    `cf piece getsrc --cell <piece> my-patterns/<name>/` gets its source, and
-    their first save keeps it as theirs.
+    `cf piece getsrc --cell <piece> <name>/` gets its source, and
+    `cf piece set-slug my-<name> <piece>` gives the piece its slug, so every
+    save after that is the usual `setsrc --cell my-<name>`, and keeps it as
+    theirs.
   - **Someone else's, as a remix**:
-    `cf piece new --from-index <patternId>
-    --slug my-<name>` gives them
-    their own piece of it, then
-    `cf piece getsrc
-    --cell my-<name> my-patterns/<name>/` writes the files.
-    `cf` remembers where that piece came from, so sharing it later credits the
-    original.
+    `cf piece new --from-index <patternId> --slug my-<name>` gives them their
+    own piece of it, then `cf piece getsrc --cell my-<name> <name>/` writes the
+    files. `cf` remembers where that piece came from, so sharing it later
+    credits the original.
 - **list**: `cf pattern history` (all of theirs) and `cf pattern mine` (what
   they share, and how many people use it).
 
