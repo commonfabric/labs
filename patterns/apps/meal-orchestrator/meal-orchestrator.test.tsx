@@ -29,7 +29,7 @@ import MealOrchestrator from "./meal-orchestrator.tsx";
 
 export const llmMocks = [
   {
-    promptIncludes: "- 1 whole turkey",
+    when: { lastMessageContains: "- 1 whole turkey" },
     object: {
       compatible: ["gluten-free"],
       incompatible: ["vegan", "vegetarian"],
@@ -38,7 +38,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "- 2 cup pumpkin",
+    when: { lastMessageContains: "- 2 cup pumpkin" },
     object: {
       compatible: ["vegan", "vegetarian"],
       incompatible: ["gluten-free"],
@@ -47,7 +47,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "Sam brings rolls",
+    when: { lastMessageContains: "Sam brings rolls" },
     object: {
       items: [
         {
@@ -82,7 +82,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "Meal: Thanksgiving",
+    when: { lastMessageContains: "Meal: Thanksgiving" },
     object: { suggestions: ["Add a vegan main for Sam."] },
   },
 ];

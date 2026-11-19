@@ -643,7 +643,9 @@ interface AssumptionSurfacerInput {
   /** The user's verdict on each recorded assumption, by its id. The
    * assumptions themselves are read from the model's tool calls in
    * `messages`. */
-  verdicts?: PerSpace<Writable<Record<string, StoredVerdict> | Default<{}>>>;
+  verdicts?: PerSpace<
+    Writable<Record<string, StoredVerdict> | Default<Record<string, never>>>
+  >;
   /** Every message of assumption updates sent, landed or not. */
   updates?: PerSpace<Writable<SentUpdate[] | Default<[]>>>;
   /** The assistant's persona. The assumption instructions are added to it. */

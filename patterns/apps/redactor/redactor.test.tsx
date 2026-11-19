@@ -21,7 +21,10 @@ const DRAFT =
 
 // "Send to model" asks the model; CI blocks live calls.
 export const llmMocks = [
-  { promptIncludes: "polite note", text: "Dear Bob Brown, see you Friday." },
+  {
+    when: { lastMessageContains: "polite note" },
+    text: "Dear Bob Brown, see you Friday.",
+  },
 ];
 
 export default pattern(() => {

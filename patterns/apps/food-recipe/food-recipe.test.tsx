@@ -38,7 +38,7 @@ import type { StepGroup } from "./schemas.tsx";
 
 export const llmMocks = [
   {
-    promptIncludes: "Grandma's roast chicken",
+    when: { lastMessageContains: "Grandma's roast chicken" },
     // The all-required wire shape the model fills: "" and 0 mean unknown.
     object: {
       name: "Roast Chicken",
@@ -77,7 +77,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "Step groups:",
+    when: { lastMessageContains: "Step groups:" },
     object: {
       stepGroups: [
         { id: "base", nightsBeforeServing: 1, duration: 10, maxWaitMinutes: 0 },

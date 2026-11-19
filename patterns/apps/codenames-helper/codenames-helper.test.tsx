@@ -62,7 +62,7 @@ const keyReading: PhotoReading = {
 // reaches a model (CI blocks live calls).
 export const llmMocks = [
   {
-    promptIncludes: "Team: RED",
+    when: { lastMessageContains: "Team: RED" },
     object: {
       clues: [{
         clue: "ocean",
@@ -73,7 +73,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "Team: BLUE",
+    when: { lastMessageContains: "Team: BLUE" },
     object: {
       clues: [{
         clue: "forest",
@@ -84,10 +84,10 @@ export const llmMocks = [
     },
   },
   // A request re-sent when the board changes under an open request.
-  { promptIncludes: "Team:", object: { clues: [] } },
+  { when: { lastMessageContains: "Team:" }, object: { clues: [] } },
   // The placeholder photo the steps add is read once.
   {
-    promptIncludes: "Read this photo",
+    when: { lastMessageContains: "Read this photo" },
     object: { kind: "unknown", notes: "test photo" },
   },
 ];

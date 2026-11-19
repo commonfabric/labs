@@ -48,9 +48,13 @@ const QUICK_ADD_PLACEHOLDER =
 
 export const llmMocks = [
   {
-    promptIncludes: "sunny loft near the park",
+    when: { lastMessageContains: "sunny loft near the park" },
     object: LOFT_ANSWER,
   },
+  // Every other request fails, as an unanswered one did before `cf test`
+  // answered every request: these steps check what the pattern does without
+  // the answer.
+  { error: "Not answered in this test.", repeat: true },
 ];
 
 const location: Dimension = {

@@ -36,7 +36,7 @@ const WIDE_SYNOPSIS = "Two sisters share one lighthouse.";
 
 export const llmMocks = [
   {
-    promptIncludes: SYNOPSIS,
+    when: { lastMessageContains: SYNOPSIS },
     object: {
       options: [
         { content: "Mara, the keeper, fears the tide." },
@@ -47,7 +47,10 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "Mara, the keeper, fears the tide.\n\nWrite detailed",
+    when: {
+      lastMessageContains:
+        "Mara, the keeper, fears the tide.\n\nWrite detailed",
+    },
     object: {
       options: [
         { content: "Chapter one: the door opens." },
@@ -57,7 +60,9 @@ export const llmMocks = [
   },
   // The wide board's own story, so the two boards never answer each other.
   {
-    promptIncludes: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 1`,
+    when: {
+      lastMessageContains: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 1`,
+    },
     object: {
       options: [{ content: "Ada keeps the lamp." }, {
         content: "Bea keeps the log.",
@@ -65,29 +70,35 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 2`,
+    when: {
+      lastMessageContains: `${WIDE_SYNOPSIS}\n\nName them.\n\nThis is part 2`,
+    },
     object: {
       options: [{ content: "Cy rows out." }, { content: "Di stays home." }],
     },
   },
   {
-    promptIncludes: "Cy rows out.\n\nWrite detailed",
+    when: { lastMessageContains: "Cy rows out.\n\nWrite detailed" },
     object: { options: [{ content: "Cy's chapter: the crossing." }] },
   },
   // Asked again once Ada's chapter takes its card: the request follows the
   // card, not the path. Toolshed's cache answers that live.
   {
-    promptIncludes: "Cy rows out.\n\nWrite detailed",
+    when: { lastMessageContains: "Cy rows out.\n\nWrite detailed" },
     object: { options: [{ content: "Cy's chapter: the crossing." }] },
   },
   {
-    promptIncludes: "Ada keeps the lamp.\n\nWrite detailed",
+    when: { lastMessageContains: "Ada keeps the lamp.\n\nWrite detailed" },
     object: { options: [{ content: "Ada's chapter: the lamp." }] },
   },
   {
-    promptIncludes: "Summarize the above",
+    when: { lastMessageContains: "Summarize the above" },
     object: { summary: "A keeper who fears the tide." },
   },
+  // Every other request fails, as an unanswered one did before `cf test`
+  // answered every request: these steps check what the pattern does without
+  // the answer.
+  { error: "Not answered in this test.", repeat: true },
 ];
 
 const LEVELS: Level[] = [

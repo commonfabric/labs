@@ -51,7 +51,14 @@ import AssumptionSurfacer, {
 const FOLLOW_UP = "Make it work in a browser";
 
 export const llmMocks = [
-  { promptIncludes: FOLLOW_UP, text: "Here is a browser version." },
+  {
+    when: { lastMessageContains: FOLLOW_UP },
+    text: "Here is a browser version.",
+  },
+  // Every other request fails, as an unanswered one did before `cf test`
+  // answered every request: these steps check what the pattern does without
+  // the answer.
+  { error: "Not answered in this test.", repeat: true },
 ];
 
 const user = (text: string): BuiltInLLMMessage => ({

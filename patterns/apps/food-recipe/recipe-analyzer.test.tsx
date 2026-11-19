@@ -15,7 +15,7 @@ import type { Ingredient } from "./schemas.tsx";
 
 export const llmMocks = [
   {
-    promptIncludes: "- 2 cup flour",
+    when: { lastMessageContains: "- 2 cup flour" },
     object: {
       compatible: ["vegetarian", "nut-free"],
       incompatible: ["vegan", "gluten-free"],
@@ -24,7 +24,7 @@ export const llmMocks = [
     },
   },
   {
-    promptIncludes: "(retry",
+    when: { lastMessageContains: "(retry" },
     object: {
       compatible: ["vegetarian"],
       incompatible: ["vegan"],
@@ -32,6 +32,10 @@ export const llmMocks = [
       primaryIngredients: ["flour", "butter", "sugar"],
     },
   },
+  // Every other request fails, as an unanswered one did before `cf test`
+  // answered every request: these steps check what the pattern does without
+  // the answer.
+  { error: "Not answered in this test.", repeat: true },
 ];
 
 export default pattern(() => {
