@@ -385,10 +385,10 @@ export class IndexedCollectionMaintainer {
    * Makes `event`, whose transaction was withdrawn, owed again. Members are
    * owed through the documents they were read from, so that the drain asks
    * the database what it holds for them now rather than trusting the rows
-   * the event carried. After `WITHDRAWALS_OWED_AGAIN` withdrawals with no
-   * transaction landing between them, what is owed waits for the next write
-   * to the collection: a refusal that repeats is not one to answer by asking
-   * again.
+   * the event carried. Past `WITHDRAWALS_OWED_AGAIN` withdrawals with no
+   * transaction landing between them, what is owed waits for the drain the
+   * next write to the space starts: a refusal that repeats is not one to
+   * answer by asking again.
    */
   #owe(collection: CollectionState, event: MaintenanceEvent): void {
     if (this.#disposed) return;
