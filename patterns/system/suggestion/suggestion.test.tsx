@@ -30,6 +30,14 @@ import {
 } from "../../tools/test-support/vnode-helpers.ts";
 import Suggestion, { setQuestion } from "./suggestion.tsx";
 
+export const fetchMocks = [
+  {
+    urlIncludes: "/api/patterns/index.md",
+    contentType: "text/markdown",
+    body: "# Pattern index\n- counter",
+  },
+];
+
 // The model fails the agent's reply to each message of the conversation.
 export const llmMocks = [
   {

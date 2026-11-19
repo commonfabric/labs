@@ -1,7 +1,9 @@
 import {
+  type AsyncResult,
   computed,
   type Default,
   hasError,
+  lift,
   NAME,
   pattern,
   patternTool,
@@ -10,6 +12,7 @@ import {
   UI,
   type VNode,
   wish,
+  type WishErrorCode,
   Writable,
 } from "commonfabric";
 
@@ -31,6 +34,18 @@ function isHistoryEntry(
 ): entry is SuggestionHistoryEntry {
   return entry?.result != null && Array.isArray(entry.messages);
 }
+
+/** Selects valid history entries, preserving failures other than confirmed absence. */
+export const historyEntries = lift<{
+  response: AsyncResult<Partial<SuggestionHistoryEntry>[]>;
+  errorCode?: WishErrorCode;
+}, SuggestionHistoryEntry[]>(({ response, errorCode }) => {
+  if (hasError(response)) {
+    if (errorCode === "no-match") return [];
+    return resultOf<SuggestionHistoryEntry[]>(response);
+  }
+  return resultOf(response).filter(isHistoryEntry);
+});
 
 function extractText(content: any): string {
   if (typeof content === "string") return content;
@@ -76,15 +91,9 @@ const SuggestionHistory = pattern<Input, Output>(() => {
   >({
     query: "#suggestions",
   });
-  const entries = history.result;
-  const allEntries = computed((): SuggestionHistoryEntry[] => {
-    if (hasError(entries)) {
-      if (history.errorCode === "no-match") return [];
-      return resultOf<SuggestionHistoryEntry[]>(entries);
-    }
-    return resultOf(entries).flatMap((entry) =>
-      isHistoryEntry(entry) ? [entry] : []
-    );
+  const allEntries = historyEntries({
+    response: history.result,
+    errorCode: history.errorCode,
   });
 
   return {

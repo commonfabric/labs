@@ -1328,6 +1328,21 @@ function hasReactiveCollectionProvenanceInternal(
       );
     }
 
+    if (
+      options.sameScope &&
+      detectCallKind(target, checker)?.kind === "availability-result"
+    ) {
+      // A result view preserves its source's ownership; it does not create
+      // a fresh reactive collection inside an existing computation.
+      const source = target.arguments[0];
+      return source !== undefined && hasReactiveCollectionProvenanceInternal(
+        source,
+        checker,
+        options,
+        seenSymbols,
+      );
+    }
+
     if (isReactiveOriginCall(target, checker)) {
       return true;
     }

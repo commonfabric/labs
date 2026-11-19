@@ -14,6 +14,70 @@ const commonfabricTypes = await StaticCache.fromFileSystem().getText(
   "types/commonfabric.d.ts",
 );
 
+for (const localAlias of [false, true]) {
+  Deno.test(`resultOf keeps collection methods plain inside a computation with local alias ${localAlias}`, async () => {
+    const output = await transformSource(
+      `
+      import { AsyncResult, computed, pattern, resultOf } from "commonfabric";
+      export default pattern((input: { entries: AsyncResult<number[]> }) => ({
+        values: computed(() => {
+          ${localAlias ? "const usable = resultOf(input.entries);" : ""}
+          return ${
+        localAlias ? "usable" : "resultOf(input.entries)"
+      }.flatMap(n => [n + 1]);
+        }),
+      }));
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    expect(output).toContain(".flatMap(");
+    expect(output).not.toContain(".flatMapWithPattern(");
+  });
+}
+
+Deno.test("resultOf retains reactive collection lowering at pattern scope", async () => {
+  const output = await transformSource(
+    `
+    import { AsyncResult, pattern, resultOf } from "commonfabric";
+    export default pattern((input: { entries: AsyncResult<number[]> }) => ({
+      values: resultOf(input.entries).flatMap(n => [n + 1]),
+    }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  expect(output).toContain(".flatMapWithPattern(");
+});
+
+Deno.test("resultOf preserves a genuinely nested reactive collection producer", async () => {
+  const output = await transformSource(
+    `
+    import { computed, pattern, resultOf } from "commonfabric";
+    export default pattern(() => ({
+      values: computed(() => {
+        const local = computed(() => [1, 2]);
+        return resultOf(local).flatMap(n => [n + 1]);
+      }),
+    }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  expect(output).toContain(".flatMapWithPattern(");
+});
+
+Deno.test("resultOf preserves explicit cell collection capabilities inside a computation", async () => {
+  const output = await transformSource(
+    `
+    import { Cell, computed, pattern, resultOf } from "commonfabric";
+    export default pattern((input: { rows: Cell<number[]> }) => ({
+      values: computed(() => resultOf(input.rows).flatMap(n => [n + 1])),
+    }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  expect(output).toContain(".flatMapWithPattern(");
+  expect(output).toContain('asCell: ["cell"]');
+});
+
 for (
   const [kind, definition] of [
     ["interface", "interface Input { request: AsyncResult<{ name: string }> }"],

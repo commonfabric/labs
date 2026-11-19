@@ -2084,7 +2084,11 @@ Primary behaviors:
   same-name false rewrites across scopes
 - `resultOf(...)` preserves its operand's representation: a projection of an
   already materialized callback capture remains plain, while a projection of
-  a local reactive producer remains opaque and receives `.key(...)` lowering
+  a local reactive producer remains opaque and receives `.key(...)` lowering.
+  Collection provenance follows that same distinction: inline views and local
+  view aliases of materialized captures use ordinary array methods inside a
+  computation, while pattern-level views and genuinely nested reactive
+  producers retain reactive collection lowering.
 - static property and element chains in variable initializers directly on
   `resultOf(...)` of an inline or already-bound reactive producer are normalized
   through the destructuring path before opaque-root discovery, including inside

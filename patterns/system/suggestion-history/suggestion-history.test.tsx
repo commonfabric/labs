@@ -67,6 +67,9 @@ export default pattern(() => {
 
   const stored = new Writable<unknown[]>([]);
   const history = SuggestionHistory({});
+  const assert_absent_history_is_empty = assert(() =>
+    history.entries.length === 0
+  );
 
   const action_favorite_history = action(() => {
     stored.set([
@@ -114,6 +117,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_absent_history_is_empty },
       { action: action_favorite_history },
       { assertion: assert_reads_history_entries },
       { assertion: assert_view_shows_entries },
