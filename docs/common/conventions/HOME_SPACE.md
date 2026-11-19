@@ -302,9 +302,10 @@ nothing writes now; its contract names `setDefaultProfile`, so nothing else can
 replace it either, and Home says its space as `legacyDefaultProfileSpace`,
 which is what its handlers and the picker read, since a handle to a cell whose
 root holds a link denotes the linked profile. Any pattern that reaches Home's
-streams can retire or restore a profile by sending those handlers' events, as
-it can rename one or set its picture; what the contracts refuse is a write by
-anything else. A link written into an older Home's lists before its source
+streams can retire or restore a profile by sending those handlers' events. It
+can send a profile's `setName` and `setPicture` events too, but the profile
+takes a new name or picture only from its owner. What the contracts refuse is
+a write by anything else. A link written into an older Home's lists before its source
 updated stays there, and is subject to the rule below like any other.
 
 A profile a list links is the person's own when its `name`, followed through
