@@ -200,7 +200,15 @@ const runExecutor = async (size: number): Promise<Step[]> => {
     const began = performance.now();
     change();
     const settled = performance.now();
-    const result = instance!.result() as Record<string, unknown>;
+    // The result read under the board's result schema, as today's
+    // runtime reads it: a reference at a position typed `unknown` is not
+    // followed.
+    const result = instance!.store.read(
+      new Ref(instance!.id, []),
+      undefined,
+      false,
+      instance!.schemaOf(board.plan.resultSchema),
+    ) as Record<string, unknown>;
     const read = performance.now();
     const transactions = instance!.transactions.slice(before.transactions);
     steps.push({

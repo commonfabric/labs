@@ -1,5 +1,11 @@
 /// <cts-enable />
-import { Default, equalsKey, lift, pattern, type ReadonlyCell } from "commonfabric";
+import {
+  Default,
+  equalsKey,
+  lift,
+  pattern,
+  type ReadonlyCell,
+} from "commonfabric";
 
 interface Item {
   name: string;
@@ -15,7 +21,9 @@ const named = lift(
     },
   ): string[] =>
     Object.entries(byName).map(([key, member]) =>
-      `${key}:${member.get()?.name}:${equalsKey(member) === equalsKey(byName.a)}`
+      `${key}:${member.get()?.name}:${
+        equalsKey(member) === equalsKey(byName.a)
+      }`
     ),
 );
 

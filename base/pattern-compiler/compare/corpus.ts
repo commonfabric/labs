@@ -11,7 +11,9 @@
  *
  * `run` appends one line per module to the results file and leaves out a
  * module the file already has, so a run that stopped is continued by
- * running it again. A module the file says was started and not finished
+ * running it again. With `--stubbed` it runs the modules that need `wish`
+ * or request an effect, with the answers of `stubs.ts` in place of the
+ * network. A module the file says was started and not finished
  * is recorded as one that ended the process.
  *
  * The corpus is the `patterns/` directory of the repository, or, with
@@ -39,6 +41,7 @@ import {
   type WriteRow,
 } from "./harness.ts";
 import { showLabel } from "./scenarios.ts";
+import { stubFetch } from "./stubs.ts";
 import { argumentOf, ExecutorRun } from "./values.ts";
 import {
   type Category,
@@ -528,6 +531,7 @@ const run = async (
   file: string,
   only: string | undefined,
   order: EventOrder,
+  stubbed = false,
 ) => {
   const emitted = await corpusModules();
   const artifacts = artifactsOf(emitted);
@@ -552,13 +556,20 @@ const run = async (
       { append: true },
     );
     console.error(module.module);
-    const result = await runModule(
-      module,
-      order,
-      undefined,
-      undefined,
-      artifacts,
-    );
+    const restoreFetch = stubbed ? stubFetch() : undefined;
+    let result: ModuleResult;
+    try {
+      result = await runModule(
+        module,
+        order,
+        undefined,
+        undefined,
+        artifacts,
+        stubbed,
+      );
+    } finally {
+      restoreFetch?.();
+    }
     await Deno.writeTextFile(file, `${JSON.stringify(result)}\n`, {
       append: true,
     });
@@ -951,15 +962,16 @@ const report = async (file: string) => {
 
 if (import.meta.main) {
   const planOrder = Deno.args.includes("--plan-order");
+  const stubbed = Deno.args.includes("--stubbed");
   const [command, file, only] = Deno.args.filter((argument) =>
-    argument !== "--plan-order"
+    argument !== "--plan-order" && argument !== "--stubbed"
   );
   if (command === "run" && file !== undefined) {
-    await run(file, only, planOrder ? "plan" : "outside first");
+    await run(file, only, planOrder ? "plan" : "outside first", stubbed);
   } else if (command === "report" && file !== undefined) await report(file);
   else {
     console.error(
-      "usage: corpus.ts run|report <results.jsonl> [module text] [--plan-order]",
+      "usage: corpus.ts run|report <results.jsonl> [module text] [--plan-order] [--stubbed]",
     );
     Deno.exit(2);
   }

@@ -465,6 +465,50 @@ is relitigated.
   a new one under the same name. An `inSpace` instantiation's identifiers
   are known before the cross-space commit.
 
+- **P31. An entry of `Body.reads` says where the body declares a handle**
+  (`ReadInput.handle`). *The case:* `execution-and-storage.md` §2.4 has the
+  runtime decide what an `identity` entry puts into the argument by the
+  type of the position, a handle at a position of handle type and a
+  reference stand-in at a position of data type, and takes that type from
+  `Slot.schema`, "the type the body declares for the formal input at the
+  path". The crate's slot holds the type of the place, and one slot of root
+  `argument` serves every body that reads the place in the same way, so
+  two bodies that declare a handle and a value at one input share an
+  `identity` slot. In Topics, `migrateTopicState` declares
+  `Writable<TopicAuthor | undefined>` at `createdBy` and `createdByOf`
+  declares `TopicAuthor`; the executor handed `createdByOf` a handle, and
+  `createdBy.name.trim()` threw. *Decision:* an entry of `Body.reads` at a
+  position of handle type in the body's declaration has `handle: true`
+  (from the positions of handle type that footprint analysis records), and
+  the runtime gives a handle there, before every entry at or below it. An
+  `identity` entry without it, at a place where the body also has a
+  `value` entry, gives way to the value, which carries the address. An
+  entry at `*` with it puts a handle at each element of an array and each
+  member of a record. *Alternative:* the slot holds the declared type, and
+  two bodies that declare different types at one place have two slots;
+  that changes the indexes of slots in every plan. *Tests:*
+  `exec/test/executor.test.ts`, "hands a body the value where it reads one
+  at a place that another body takes as a handle", "hands a body a handle
+  at each member of a record where it declares one at `*`"; the fixtures'
+  artifacts differ from before by this flag alone. *If decided otherwise:*
+  the crate splits the slots by the declared type, and the executor reads
+  the type from `Slot.schema`.
+- **P32. `equalsKey` is accepted, and is what `equals` compares of its
+  operand.** *The case:* `base/api` exports `equalsKey`, which returns a
+  string that two values share exactly when `equals` matches them, so that
+  a `Set` or a `Map` finds distinct references in one pass; Topics' board
+  uses it in `distinctByIdentity` and `mentionedByEach`.
+  `builtin-inventory.md` does not list it. *Decision:* a built-in of tier
+  F with the footprint of one operand of `equals` (a resolution of the
+  operand, decided on its own) and the type `string | undefined`. The key
+  holds for one run and is not stored, as `base/api` states. *Alternative:*
+  refused, and the board rewritten with `equals` in pairs, which is
+  quadratic in the number of topics. *Tests:* `tests/footprint_calls.rs`,
+  `equals_key_resolves_its_operand_as_equals_does`;
+  `exec/test/executor.test.ts`, "gives two references to one cell one
+  `equalsKey`". *If decided otherwise:* the crate reports the call, and the
+  Topics rewrite replaces the two helpers.
+
 ## Open, and needing the owner
 
 Each entry names where the question is stated in full and the assumption the

@@ -1,5 +1,11 @@
 /// <cts-enable />
-import { Default, equalsKey, lift, pattern, type ReadonlyCell } from "commonfabric";
+import {
+  Default,
+  equalsKey,
+  lift,
+  pattern,
+  type ReadonlyCell,
+} from "commonfabric";
 
 interface Item {
   name: string;
