@@ -1,3 +1,9 @@
+/**
+ * A small square illustration of a dish, drawn by an image generator from a
+ * restaurant name, with a placeholder shown until the image arrives. When given
+ * a stored image address it shows that instead and does not generate, so a
+ * parent can save the result and reuse it.
+ */
 import {
   computed,
   Default,
