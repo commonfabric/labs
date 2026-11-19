@@ -4,8 +4,10 @@
  * What is secret: every value in the vault, and the draft the user types,
  * which holds the same people, numbers and addresses in context. Both are
  * `Confidential` under this module's policy, so the runtime refuses to write
- * them, or anything computed from them, anywhere that admits only public
- * values: a language model's prompt, a shared document, the network.
+ * them, or anything computed from them, to any store that admits only public
+ * values, such as the redactor's `modelPrompt`. The model call itself is not
+ * gated: `generateText` is an ungated sink today, so the guarantee holds
+ * because the prompt is read from `modelPrompt` (README, CFC debt 2).
  *
  * What is released: the output of `redactDraft`, and nothing else. The rule
  * below drops the policy's clause from a value only when the runtime attests

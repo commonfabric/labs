@@ -8,12 +8,14 @@
  * may be sent to the model. Its reply comes back in stand-ins, and the
  * redactor puts your originals back, for your eyes only.
  *
- * The boundary is enforced by Contextual Flow Control, not by this pattern's
- * good behavior: the draft and the vault are `Secret` under `policy.tsx`, whose
- * one exchange rule releases only what `redactDraft` computes. The model's
- * prompt is a `PublicText` store, so the runtime itself refuses to write the
- * raw draft there, or the stand-in key, or the restored reply. `sendRawDraft`
- * exists to show that refusal.
+ * The boundary at the model's prompt is enforced by Contextual Flow Control,
+ * not by this pattern's good behavior: the draft and the vault are `Secret`
+ * under `policy.tsx`, whose only release to a public store is what
+ * `redactDraft` computes. The model's prompt is a `PublicText` store, so the
+ * runtime itself refuses to write the raw draft there, or the stand-in key, or
+ * the restored reply. `sendRawDraft` exists to show that refusal. The model
+ * call itself is not gated, so the model sees only what this pattern reads
+ * from that store (README, CFC debt 2).
  *
  * Ported from jkomoros/community-patterns `redactor.tsx` and
  * `simple-pii-vault.tsx`, which relied on the user to copy the redacted text
@@ -166,11 +168,15 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
     const leaks = leaksInText({ text: redacted, found, substitutions });
 
     // A list of secret items, like the vault: a list that starts empty holds
-    // nothing labeled at piece start (README, CFC debt 2).
+    // nothing labeled at piece start (README, CFC debt 3).
     const sentKey = new Writable<Secret<Substitution>[]>([]);
+    // Whether a send happened. The sent key alone cannot say: a draft with
+    // nothing to replace sends an empty key.
+    const sent = new Writable(false);
     const sendRedacted = copyInto({ from: redacted, to: modelPrompt });
     const keepSentKey = keepKey({ substitutions, sentKey });
     const send = action(() => {
+      sent.set(true);
       sendRedacted.send();
       keepSentKey.send();
     });
@@ -188,7 +194,7 @@ const Redactor = pattern<RedactorInput, RedactorOutput>(
     // A pasted reply is restored with the current draft's key; a sent one
     // with the key captured when it was sent.
     const replyKey = computed((): Substitution[] =>
-      pastedReply.get().trim() !== "" || sentKey.get().length === 0
+      pastedReply.get().trim() !== "" || !sent.get()
         ? [...substitutions]
         : sentKey.get().map((sub) => ({ ...sub }))
     );

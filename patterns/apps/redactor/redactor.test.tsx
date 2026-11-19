@@ -25,7 +25,15 @@ export const llmMocks = [
     when: { lastMessageContains: "polite note" },
     text: "Dear Bob Brown, see you Friday.",
   },
+  {
+    when: { lastMessageContains: "rent is late" },
+    text: "Tell Alice the rent is fine.",
+  },
 ];
+
+// A draft with nothing to replace, sent, then edited to mention a vault name.
+const PLAIN_DRAFT = "Explain politely that the rent is late.";
+const LATER_DRAFT = "Jordan Rivera says the rent is late.";
 
 export default pattern(() => {
   const pastedReply = new Writable("");
@@ -35,6 +43,29 @@ export default pattern(() => {
 
   const action_type_draft = action(() =>
     redactor.typeDraft.send({ text: DRAFT })
+  );
+
+  // A second redactor: its reply must keep the key it was sent with, even
+  // when that key is empty and the draft changes afterwards.
+  const plain = Redactor(
+    { pastedReply: new Writable("") } as Parameters<typeof Redactor>[0],
+  );
+  const action_type_plain = action(() =>
+    plain.typeDraft.send({ text: PLAIN_DRAFT })
+  );
+  const action_edit_plain = action(() =>
+    plain.typeDraft.send({ text: LATER_DRAFT })
+  );
+  const assert_plain_sent = assert(() =>
+    plain.modelPrompt === PLAIN_DRAFT && plain.redacted === PLAIN_DRAFT
+  );
+  const assert_plain_edited = assert(() =>
+    plain.redacted.startsWith("Alice Anderson says")
+  );
+  // "Alice" is now Jordan's stand-in, but the reply was written against the
+  // empty key it was sent with, so nothing is swapped.
+  const assert_plain_reply_kept = assert(() =>
+    plain.restored === "Tell Alice the rent is fine."
   );
   // "Jordan Rivera" is the first name found. "Alice Anderson" and every
   // Anderson are in the draft already, so its stand-in is "Bob Brown".
@@ -116,6 +147,9 @@ export default pattern(() => {
       { assertion: assert_no_leaks },
       { assertion: assert_found_list },
       { assertion: assert_raw_refused },
+      // The raw draft is refused at the public prompt.
+      { action: redactor.sendRawDraft },
+      { assertion: assert_raw_refused },
       { action: redactor.send },
       { assertion: assert_redacted_sent },
       // The raw draft cannot overwrite what was sent.
@@ -124,6 +158,16 @@ export default pattern(() => {
       { action: action_paste_reply },
       { assertion: assert_reply_restored },
       { assertion: assert_restore_whole_words },
+      { action: action_type_plain },
+      { action: plain.send },
+      { assertion: assert_plain_sent },
+      {
+        action: plain.vault.addEntry,
+        event: { category: "name", value: "Jordan Rivera" },
+      },
+      { action: action_edit_plain },
+      { assertion: assert_plain_edited },
+      { assertion: assert_plain_reply_kept },
     ],
     // The refused raw send logs the CFC refusal; the refusal is the point.
     allowConsoleWarnings: true,

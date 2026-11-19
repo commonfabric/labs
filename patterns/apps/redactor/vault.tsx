@@ -4,9 +4,10 @@
  *
  * Every entry is `Secret` under the redaction policy (`policy.tsx`): the
  * runtime refuses to write an entry, or anything computed from one, to any
- * store that admits only public values. The only thing the policy releases is
- * the redactor's redacted draft. The vault runs standalone, and the redactor
- * embeds it.
+ * store that admits only public values. Readers of the space that holds the
+ * vault may read its entries (`releaseToSpaceReader`); the only thing released
+ * to a public store, such as the model's prompt, is the redactor's redacted
+ * draft. The vault runs standalone, and the redactor embeds it.
  */
 import {
   action,
@@ -74,7 +75,7 @@ const PIIVault = pattern<VaultInput, VaultOutput>(({ entries }) => {
   const newCategory = new Writable.perSession<PIICategory>("name");
   // Holds a value before it is added. It should be as secret as the vault,
   // but a scalar Secret with a value trips the piece-start ceiling-gate bug
-  // (README, CFC debt 2), so it is a plain per-session cell for now.
+  // (README, CFC debt 3), so it is a plain per-session cell for now.
   const newValue = new Writable.perSession("");
 
   const addEntry = addEntryHandler({ entries });

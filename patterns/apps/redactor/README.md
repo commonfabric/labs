@@ -9,10 +9,12 @@ scrubbing them by hand. The Redactor swaps every personal value for a realistic
 stand-in before anything reaches the model, then swaps the originals back into
 the reply for the owner alone.
 
-It is also a showcase for Contextual Flow Control. The promise "only the
-redacted draft leaves" is kept by the runtime, not by this pattern's good
-behavior: the runtime refuses to write the raw draft, or anything else computed
-from it, into the model's prompt.
+It is also a showcase for Contextual Flow Control. The runtime, not this
+pattern's good behavior, refuses to write the raw draft, or anything else
+computed from it, into `modelPrompt`, the public store the model's prompt is
+read from; only the redacted draft may be written there. The model call itself
+is not yet a gated sink, so that promise also rests on the prompt being read
+from `modelPrompt` alone (CFC debt 2).
 
 ## Using it
 
@@ -20,7 +22,9 @@ from it, into the model's prompt.
    always replaced, even in forms detection would miss, like "Rivera" on its
    own).
 2. Type the draft. The chips show what will be replaced; the second card shows
-   exactly what the model will see.
+   exactly what the model will see. (In the live browser these two derived views
+   do not render yet, a runtime issue tracked as top/3113; the pattern computes
+   them correctly and its tests check them.)
 3. **Send to model.** The reply comes back in stand-ins and the third card shows
    it with your originals restored. Asked another model yourself? Copy the
    redacted draft out and paste its reply back in.
@@ -45,27 +49,32 @@ detections, the stand-in key, the restored reply.
 
 **Who may learn what.** Readers of the space that holds the data, which in a
 personal space is the owner, may see all of it: `releaseToSpaceReader` adds them
-as an alternative, so the owner's display renders it. That makes it readable by
-those users, not public, so it still cannot be written to a public store. The
-model may learn the redacted draft and nothing else.
+as an alternative, so the owner's display may render it (values derived from the
+secrets, like the chips and the redacted preview, do not render in the live
+browser yet: top/3113). That makes it readable by those users, not public, so it
+still cannot be written to a public store. The model may learn the redacted
+draft and nothing else.
 
 **What is released to the model, and how.** `releaseRedactedDraft` drops the
 policy's clause from a value only when the runtime attests (`TransformedBy`,
 bound to `policy.tsx`'s content identity) that the exported lift `redactDraft`
 alone computed it — the idiom of
-`examples/cfc-exchange-rules/blessed-computation.tsx`. Format detection always
-runs inside `redactDraft`, so no caller can switch it off. The release discloses
-how many distinct values of each category the draft held and where they sat. A
-stand-in is chosen only against text that stays visible and other stand-ins,
-never against a hidden value, so it carries no hint of one.
+`patterns/examples/cfc-exchange-rules/blessed-computation.tsx`. Format detection
+always runs inside `redactDraft`, so no caller can switch it off. The release
+discloses how many distinct values of each category the draft held and where
+they sat. A stand-in is chosen only against text that stays visible and other
+stand-ins, never against a hidden value, so it carries no hint of one, and a
+vault entry the draft never mentions changes nothing (`redaction.test.ts` pins
+both).
 
 **The sink.** The model's prompt is a `MaxConfidentiality<string, []>` input
 (`modelPrompt`), which admits only public values. "Send to model" copies
 `redacted` into it; `sendRawDraft` copies the draft and is refused with
 `maxConfidentiality failed at /modelPrompt`. `redactor.test.tsx` pins both,
-including that the raw send cannot overwrite what was sent. Sending also keeps
-the stand-in key (secret) beside the reply, in a separate event: a transaction
-that reads the secret key may not also write the public prompt.
+before any send and after one (the raw send cannot overwrite what was sent).
+Sending also keeps the stand-in key (secret) beside the reply, in a separate
+event: a transaction that reads the secret key may not also write the public
+prompt.
 
 **Scope.** The inputs carry no scope wrapper, so they live at the piece's own
 scope: everyone with access to the space sees the vault and the draft, which
@@ -85,8 +94,8 @@ Five gaps shape it:
    released as written. Principled CFC would bind that argument by provenance:
    release only when `vault` is this owner's labeled vault (an input-witness or
    argument-provenance condition on the rule, in the spirit of `inputWitness` in
-   `examples/cfc-exchange-rules/witnessed-chain.tsx`). This is the semantic to
-   raise with Berni.
+   `patterns/examples/cfc-exchange-rules/witnessed-chain.tsx`). This is the
+   semantic to raise with Berni.
 2. **The model call is not itself a sink.** `generateText`, `generateObject`,
    `llm` and `llmDialog` are `ungatedSink` today
    (`runtime/runner/src/runtime-presets.ts`;
