@@ -28,6 +28,7 @@ import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
+import { type Figures, measure } from "../template-cost.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
@@ -520,7 +521,9 @@ describe("RuntimeTransactions with labels from templates", () => {
       hooks.external(id);
       const plain = hooks.labelOf(id, []);
       const changes: LabelChange[] = [];
-      hooks.watchLabels((changed) => changes.push(...changed));
+      hooks.watchLabels((changed) => {
+        for (const change of changed) changes.push(change);
+      });
       await write({
         type: "string",
         ifc: { confidentiality: [inputClause("probe")] },
@@ -543,5 +546,24 @@ describe("RuntimeTransactions with labels from templates", () => {
     expect(climate.clauses).toContain("demo-secret");
     expect(text.clauses).toContain("demo-secret");
     expect(climate.atom).toBe(false);
+  });
+});
+
+describe("the cost of labels from templates for a `filter`", () => {
+  it("commits a change of one element over plain values in place, over references, and over the result of a `map`, with the same work and stored entries at 20 and at 200 elements", async () => {
+    for (const which of ["in place", "references", "map result"] as const) {
+      const [small, large] = [
+        await measure(which, 20, true),
+        await measure(which, 200, true),
+      ];
+      for (const figures of [small, large]) {
+        expect({ which, refused: figures.refused }).toEqual({
+          which,
+          refused: [],
+        });
+      }
+      const work = ({ prepareMs: _ms, size: _size, ...rest }: Figures) => rest;
+      expect(work(large)).toEqual(work(small));
+    }
   });
 });

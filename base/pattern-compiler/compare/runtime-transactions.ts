@@ -136,6 +136,8 @@ export class RuntimeTransactions implements TransactionHooks {
    * given; write records are recorded only then.
    */
   readonly #compiledPattern: string | undefined;
+  /** The observations of slots' chains journaled in the transaction. */
+  readonly #observed = new Set<string>();
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -307,6 +309,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#cause = cause;
     this.#tx = this.#runtime.edit();
     this.#read.clear();
+    this.#observed.clear();
     this.#written.clear();
     this.#metadata.clear();
   }
@@ -511,12 +514,41 @@ export class RuntimeTransactions implements TransactionHooks {
     if (last !== undefined && this.#wrote(last)) {
       return { staged: this.#cfcAddress(last) };
     }
+    const observes = observesOf(binding.observes);
+    this.#observe(binding.chain, observes);
     return {
       chain: binding.chain.map((address) => this.#cfcAddress(address)),
-      observes: binding.observes === "identity"
-        ? "followRef"
-        : binding.observes as "value" | "shape",
+      observes,
     };
+  }
+
+  /**
+   * Journals, in the transaction in progress, the observations a slot's
+   * chain names that it has not journaled: a probe at each link position
+   * and at a position whose reference the slot observes, and a read of the
+   * value at the last position otherwise. A group of a fold's elements is
+   * bound to the positions one of its elements read, possibly in an
+   * earlier transaction, and every element of the group has labels with
+   * the same identifiers there: the transaction observes the group's label
+   * by observing that element's, which costs one read per group and not
+   * one per element. A path holding `*` is observed where the transaction
+   * read a position it matches.
+   */
+  #observe(chain: readonly Address[], observes: string): void {
+    const tx = this.#open();
+    chain.forEach(({ doc, path }, index) => {
+      if (path.includes("*")) return;
+      const probe = index < chain.length - 1 || observes === "followRef";
+      const text = JSON.stringify([doc, path, probe]);
+      if (this.#observed.has(text)) return;
+      this.#observed.add(text);
+      const address = this.#address(doc, path);
+      if (probe) readMaybeLink(tx, address);
+      else if (!this.#read.has(JSON.stringify([doc, path]))) {
+        this.#read.add(JSON.stringify([doc, path]));
+        tx.readValueOrThrow(address);
+      }
+    });
   }
 
   /**
@@ -715,6 +747,19 @@ export class RuntimeTransactions implements TransactionHooks {
     return value;
   }
 }
+
+/**
+ * The runtime's observation class of a plan's. A read of `identity` is the
+ * runtime's `followRef`. The executor's read of an array it enumerates is
+ * journaled as a read of the array's value, which is what an `enumeration`
+ * slot is bound to.
+ */
+const observesOf = (observes: string): "value" | "shape" | "followRef" =>
+  observes === "identity"
+    ? "followRef"
+    : observes === "shape"
+    ? "shape"
+    : "value";
 
 /**
  * The label entries of stored labels, each as text by the text of its path;

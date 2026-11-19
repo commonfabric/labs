@@ -162,6 +162,8 @@ export type Plan = {
     construct: string;
     within: Step[];
     source: { slot?: number; collection?: number; output?: number };
+    /** The label template of what the collection iterates (PL §3.2). */
+    membership?: Template;
     /**
      * The key fields that the array type of the receiver declares with
      * `ArrayByKey`, in the order of their names, for a source that is a
@@ -7247,14 +7249,14 @@ export class Instance {
           const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
           if (upstream === undefined) return "";
           const id = this.#idOf(upstream);
-          positions.push(...upstream.positions ?? []);
+          for (const at of upstream.positions ?? []) positions.push(at);
           return id;
         });
         parts.push(`${slot}<${ids.join("|")}>`);
         continue;
       }
       const addresses = this.#addressesOf(bound.at);
-      positions.push(...addresses);
+      for (const at of addresses) positions.push(at);
       const labels = addresses.map(({ doc, path }) =>
         this.root.options.transactions?.labelOf?.(doc, path) ??
           JSON.stringify([doc, path])
@@ -7425,7 +7427,7 @@ export class Instance {
       const inputs = this.#inputsOf(cone, keys);
       if (inputs === undefined) return "";
       const id = this.#idOf(inputs);
-      positions.push(...inputs.positions ?? []);
+      for (const at of inputs.positions ?? []) positions.push(at);
       return id;
     });
     this.#indexReader(
@@ -7478,6 +7480,83 @@ export class Instance {
     );
     if (!table?.byKey.has(key)) return;
     this.#regroupKey(outer, outerAround, key);
+  }
+
+  /**
+   * What the slot of an element is bound to where no evaluation bound it,
+   * for the element keys given: the position the element is at, for an
+   * element that is a reference or a plain value in place, and the
+   * upstream element, for an element of the result of another
+   * per-element construct. A kept output of each element of a `filter`
+   * reads its element in this way, in no cone of the element body.
+   */
+  #elementBound(
+    slot: number,
+    byCollection: ReadonlyMap<number, string>,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    if (record.root.kind !== "element") return undefined;
+    const collection = record.root.collection ?? -1;
+    const key = byCollection.get(collection);
+    if (key === undefined) return undefined;
+    const outer = this.#outerOf(collection);
+    const pairs = outer.map((step): [number, string] => [
+      step,
+      byCollection.get(step) ?? "?",
+    ]);
+    const upstream = this.plan.collections[collection]?.source.collection;
+    if (upstream !== undefined) {
+      return {
+        upstream: {
+          collection: upstream,
+          keys: [
+            ...this.#outerOf(upstream).map((step): [number, string] => [
+              step,
+              byCollection.get(step) ?? "?",
+            ]),
+            [upstream, key],
+          ],
+        },
+      };
+    }
+    const element = this.#tables.get(
+      this.#name("assembly", collection, pairs.map(([, at]) => at)),
+    )?.byKey.get(key);
+    if (!(element?.source instanceof Ref)) return undefined;
+    const { source } = element;
+    return {
+      observes: record.observes,
+      at: [new Ref(source.doc, [...source.path, ...record.path])],
+    };
+  }
+
+  /**
+   * The slots the membership of a collection reaches: those of its
+   * membership template, or, for a `filter`, whose membership template is
+   * the fold over its own elements, those of the membership of its source
+   * (`membership` of `runtime/runner/src/cfc/plan-labels.ts`). `source`
+   * names the collection a slot is the source of.
+   */
+  #membershipSlots(
+    collection: number,
+  ): { slot: number; source?: number }[] {
+    const templates = this.plan.templates ?? [];
+    const { membership, source } = this.plan.collections[collection];
+    const expanded = membership?.op === "shared"
+      ? templates[membership.template]
+      : membership;
+    if (expanded?.op === "fold" && expanded.collection === collection) {
+      if (source.collection !== undefined) {
+        return this.#membershipSlots(source.collection);
+      }
+      return source.slot === undefined
+        ? []
+        : [{ slot: source.slot, source: collection }];
+    }
+    return [...reachedBy(membership, templates).slots].map((slot) => ({
+      slot,
+      ...(source.slot === slot ? { source: collection } : {}),
+    }));
   }
 
   /** The folded collections whose innermost enclosing one is `collection`. */
@@ -7646,9 +7725,11 @@ export class Instance {
     // A chain of outputs is as long as the plan is deep; one that is
     // longer than this is a cycle of the plan, and is not followed.
     if (depth < 64) {
+      const byCollection = new Map(keys);
       const bindingsOf = (reaching: Iterable<number>, into: SlotBindings) => {
         for (const slot of [...reaching].sort((a, b) => a - b)) {
-          const bound = first((source) => source.slots.get(slot));
+          const bound = first((source) => source.slots.get(slot)) ??
+            this.#elementBound(slot, byCollection);
           if (bound !== undefined) {
             into[slot] = this.#bindingOf(slot, bound, outputs, depth);
           }
@@ -7656,6 +7737,27 @@ export class Instance {
         return into;
       };
       bindingsOf(reached.slots, slots);
+      // The label of a fold takes the membership of its collection, whose
+      // template reaches slots of its own.
+      // A collection's source slot that no cone read is the stored array
+      // its assembly found.
+      for (const folded of reached.folds.keys()) {
+        for (const { slot, source } of this.#membershipSlots(folded)) {
+          if (slots[slot] !== undefined) continue;
+          const bound = first((inputs) => inputs.slots.get(slot));
+          if (bound !== undefined) {
+            slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
+          } else if (source !== undefined) {
+            const around = this.#outerOf(source).map((step) =>
+              byCollection.get(step) ?? "?"
+            );
+            slots[slot] = {
+              chain: this.#arrayChain(this.#name("assembly", source, around)),
+              observes: this.plan.slots[slot].observes,
+            };
+          }
+        }
+      }
       for (const selector of [...reached.selectors].sort((a, b) => a - b)) {
         const branch = first((source) => source.selections.get(selector));
         if (branch !== undefined) selections[selector] = branch;
@@ -7711,12 +7813,19 @@ export class Instance {
     const own = this.#keysFor(output.cone, pairs);
     const inputs = this.#inputsOf(output.cone, own);
     const result = this.#inputs.get(RESULT_INPUTS);
+    const within = this.collectionsOf(output.cone);
+    // The keys of the collections the output is within, and the others
+    // given: the element an output of each element of a collection is of,
+    // where its cone is within none.
     return this.#inputsFor(
       output.template,
-      this.collectionsOf(output.cone).map((collection, at) => [
-        collection,
-        own[at],
-      ]),
+      [
+        ...within.map((collection, at): [number, string] => [
+          collection,
+          own[at],
+        ]),
+        ...pairs.filter(([collection]) => !within.includes(collection)),
+      ],
       [inputs, result],
       depth,
     );
