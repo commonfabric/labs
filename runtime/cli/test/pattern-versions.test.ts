@@ -587,6 +587,54 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
       ]);
     });
 
+    it("continues --version-entry's lineage when the file deployed is a copy, and refuses it beside --no-index-version", async () => {
+      const recorded: string[] = [];
+      const original = join(dir, "original", "bins.tsx");
+      const run = (more: Record<string, unknown>) =>
+        applyPieceSourceCommandAction(
+          {
+            identity: "/unused/test.key",
+            space: "s",
+            apiUrl: "https://cf.dev",
+            ...more,
+          },
+          entry,
+          {
+            setPieceSourceFromCommand: (_options, _main, deps) => {
+              deps?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
+              });
+              return Promise.resolve({
+                config: { piece: "fid1:p" },
+                update: {
+                  ref: { identity: "pat-1", symbol: "default" },
+                  revisionId: "rev-1",
+                  seq: 7,
+                  refresh: { status: "completed" },
+                },
+              } as never);
+            },
+            recordVersion: (deployed) => {
+              recorded.push(deployed.entry);
+              return Promise.resolve({ status: "skipped", reason: "test" });
+            },
+            render: () => {},
+            warn: () => {},
+            hint: () => {},
+          },
+        );
+
+      await run({ versionEntry: original });
+      await run({});
+      expect(recorded).toEqual([original, entry]);
+
+      await expect(run({ versionEntry: original, indexVersion: false }))
+        .rejects.toThrow(/--version-entry/);
+      expect(recorded).toHaveLength(2);
+    });
+
     it("makes no index call under --no-index-version, so the deploy never waits on the index", async () => {
       const recorded: DeployedSource[] = [];
       const lines: string[] = [];

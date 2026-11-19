@@ -3481,6 +3481,11 @@ edit loop never waits on the index (`--json` reports `skipped`). A
 `--from-index` deploy still reads the index for its source, and keeps no version
 either way.
 
+`--version-entry <path>` on `piece new` and `piece setsrc` keeps the version in
+the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
+of it (a snapshot in a temporary directory), so the copy continues the
+original's history.
+
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece
 points at, with its source, so it is exactly what was deployed. The sharing
