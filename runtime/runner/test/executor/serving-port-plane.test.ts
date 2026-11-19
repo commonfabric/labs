@@ -280,6 +280,7 @@ describe("serving-port-plane", () => {
         asked.push(params);
         return {
           servable: [{ root: "of:argument", piece: "of:piece" }],
+          refused: { marked: 2 },
           marked: [],
         };
       });
@@ -299,6 +300,7 @@ describe("serving-port-plane", () => {
         }),
       ).toEqual({
         servable: [{ root: "of:argument", piece: "of:piece" }],
+        refused: { marked: 2 },
         marked: [],
       });
       expect(asked).toEqual([

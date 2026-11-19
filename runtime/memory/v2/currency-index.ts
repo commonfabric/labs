@@ -751,6 +751,30 @@ export const storeCurrencyRecords = (
   return result;
 };
 
+/** Why a root is not one the store can serve. */
+export type CurrencyRefusal =
+  /** The root's piece has no record. */
+  | "no-record"
+  /** The root's piece is marked. */
+  | "marked"
+  /** The root's piece was recorded under another epoch. */
+  | "other-epoch"
+  /** A session demands an instance the piece writes and does not vouch for. */
+  | "unvouched-instance"
+  /** A session demands an instance of an owned cell the store does not hold. */
+  | "absent-owned"
+  /** A piece that owns a demanded instance is marked or of another epoch. */
+  | "owner-not-clean";
+
+/** What a judgment of roots found. */
+export type CurrencyJudgment = {
+  /** The roots the store can serve. */
+  servable: string[];
+
+  /** The roots it cannot, each with the first reason found. */
+  refused: Array<{ root: string; reason: CurrencyRefusal }>;
+};
+
 /**
  * Judges which of `roots` can be served from the store as it stands, with no
  * piece started. `roots` are raw ids of space-scoped result documents, and
@@ -771,19 +795,29 @@ export const judgeCurrencyRoots = (
     rows: Iterable<CurrencyInstance>;
     epoch: string;
   },
-): string[] => {
+): CurrencyJudgment => {
   const context = contextFor(engine, options.space);
   const { branch, statements } = context;
-  const candidates = options.roots.filter((root) => {
+  const judgment: CurrencyJudgment = { servable: [], refused: [] };
+  const candidates: string[] = [];
+  for (const root of options.roots) {
     const row = statements.selectPiece.get({ branch, piece: root }) as
       | CurrencyPieceRow
       | undefined;
-    return row !== undefined && row.mark === 0 && row.epoch === options.epoch;
-  });
-  if (candidates.length === 0) return [];
+    if (row === undefined) {
+      judgment.refused.push({ root, reason: "no-record" });
+    } else if (row.mark !== 0) {
+      judgment.refused.push({ root, reason: "marked" });
+    } else if (row.epoch !== options.epoch) {
+      judgment.refused.push({ root, reason: "other-epoch" });
+    } else {
+      candidates.push(root);
+    }
+  }
+  if (candidates.length === 0) return judgment;
 
   /** The pieces that own a demanded instance they do not vouch for. */
-  const failing = new Set<string>();
+  const failing = new Map<string, CurrencyRefusal>();
   const judged = new Set<string>();
   for (const { id, scopeKey } of options.rows) {
     const key = `${scopeKey}\0${id}`;
@@ -794,23 +828,36 @@ export const judgeCurrencyRoots = (
     >;
     for (const owner of owners) {
       if (failing.has(owner.piece)) continue;
-      const vouched = owner.mark === 0 && owner.epoch === options.epoch &&
-        (owner.owned !== 0
-          ? isLive(context, id, scopeKey)
-          : statements.selectVouch.get({
-            branch,
-            piece: owner.piece,
-            id,
-            scope_key: scopeKey,
-          }) !== undefined);
-      if (!vouched) failing.add(owner.piece);
+      if (owner.mark !== 0 || owner.epoch !== options.epoch) {
+        failing.set(owner.piece, "owner-not-clean");
+      } else if (owner.owned !== 0) {
+        if (!isLive(context, id, scopeKey)) {
+          failing.set(owner.piece, "absent-owned");
+        }
+      } else if (
+        statements.selectVouch.get({
+          branch,
+          piece: owner.piece,
+          id,
+          scope_key: scopeKey,
+        }) === undefined
+      ) {
+        failing.set(owner.piece, "unvouched-instance");
+      }
     }
   }
-  const failingRoots = new Set(failing);
-  for (const piece of failing) {
-    for (const root of underOf(context, piece)) failingRoots.add(root);
+  const failingRoots = new Map(failing);
+  for (const [piece, reason] of failing) {
+    for (const root of underOf(context, piece)) {
+      if (!failingRoots.has(root)) failingRoots.set(root, reason);
+    }
   }
-  return candidates.filter((root) => !failingRoots.has(root));
+  for (const root of candidates) {
+    const reason = failingRoots.get(root);
+    if (reason === undefined) judgment.servable.push(root);
+    else judgment.refused.push({ root, reason });
+  }
+  return judgment;
 };
 
 /** Whether the store holds a live document at `(id, scopeKey)`. */

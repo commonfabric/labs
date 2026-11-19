@@ -561,7 +561,19 @@ describe("currency-index", () => {
       roots: string[],
       rows: Array<{ id: string; scopeKey: string }>,
       epoch = EPOCH,
-    ) => judgeCurrencyRoots(engine, { space: SPACE, roots, rows, epoch });
+    ) =>
+      judgeCurrencyRoots(engine, { space: SPACE, roots, rows, epoch }).servable;
+
+    /** The reason each of `roots` is refused for, by root. */
+    const refusals = (
+      roots: string[],
+      rows: Array<{ id: string; scopeKey: string }>,
+      epoch = EPOCH,
+    ) =>
+      Object.fromEntries(
+        judgeCurrencyRoots(engine, { space: SPACE, roots, rows, epoch })
+          .refused.map(({ root, reason }) => [root, reason]),
+      );
 
     /** A clean record of `of:piece` that vouches for its one output. */
     const storeVouching = (parts: Partial<CurrencyRecord> = {}): number => {
@@ -684,6 +696,41 @@ describe("currency-index", () => {
       ]);
 
       expect(judge(["of:piece"], [ROOT_ROW, OUT_ROW])).toEqual(["of:piece"]);
+    });
+
+    it("names the reason it refuses each root for", () => {
+      const asOf = storeVouching({
+        writes: ["computed:out", "computed:lazy"],
+        owned: ["of:state"],
+      });
+      store(asOf, [
+        record("of:unvouched", { vouched: false }),
+        record("of:nested", {
+          under: ["of:outer"],
+          vouched: false,
+          writes: ["computed:nested"],
+        }),
+        record("of:outer"),
+      ]);
+
+      expect(refusals(["of:unrecorded", "of:unvouched"], [])).toEqual({
+        "of:unrecorded": "no-record",
+        "of:unvouched": "marked",
+      });
+      expect(refusals(["of:piece"], [ROOT_ROW], "epoch-two")).toEqual({
+        "of:piece": "other-epoch",
+      });
+      expect(
+        refusals(["of:piece"], [{ id: "computed:lazy", scopeKey: "space" }]),
+      ).toEqual({ "of:piece": "unvouched-instance" });
+      expect(
+        refusals(["of:piece"], [
+          { id: "of:state", scopeKey: "session:alice:one" },
+        ]),
+      ).toEqual({ "of:piece": "absent-owned" });
+      expect(
+        refusals(["of:outer"], [{ id: "computed:nested", scopeKey: "space" }]),
+      ).toEqual({ "of:outer": "owner-not-clean" });
     });
 
     it("returns each root that passes and omits each that does not", () => {

@@ -170,12 +170,19 @@ export class StoreCurrency {
           scope: "space",
         }),
       );
+      const reasons: string[] = [...taken.unvouched];
+      // A start is where a piece's source origin is followed, so a piece
+      // that records one is never left unstarted.
+      if (facts === undefined) reasons.push("no-pattern");
+      else if (facts.followsOrigin) reasons.push("source-origin");
+      for (const reason of reasons) {
+        const counts = this.#stats.currency.unvouched;
+        counts[reason] = (counts[reason] ?? 0) + 1;
+      }
       records.push({
         piece,
         under: taken.under,
-        // A start is where a piece's source origin is followed, so a piece
-        // that records one is never left unstarted.
-        vouched: taken.vouched && facts !== undefined && !facts.followsOrigin,
+        vouched: reasons.length === 0,
         reads: taken.reads,
         writes: taken.writes,
         owned: facts?.owned ?? [],
@@ -306,11 +313,16 @@ export class StoreCurrency {
       [...candidates.keys()].every((key) => this.#served.has(key));
     if (settled) return { servable: [...candidates.keys()], rearm: [] };
     this.#judgmentOwed = false;
+    this.#stats.currency.judged += candidates.size;
     const judged = await this.#server.judgeCurrencyRoots(
       this.#space,
       [...new Set(candidates.values())],
       { excludePrincipal: this.#serviceIdentity, epoch: this.#epoch },
     );
+    for (const [reason, count] of Object.entries(judged.refused)) {
+      const counts = this.#stats.currency.refused;
+      counts[reason] = (counts[reason] ?? 0) + count;
+    }
     const pieces = new Map(
       judged.servable.map(({ root, piece }) => [root, piece]),
     );

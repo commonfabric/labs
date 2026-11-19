@@ -356,9 +356,25 @@ export type ServingLoopStats = {
     /** Piece records the loops sent to the store. */
     recordsStored: number;
 
+    /** Records sent of a piece the loop could not vouch for, by reason:
+     * `not-clean` (a live computation was not clean), `foreign-read` and
+     * `foreign-write` (another space), `unattributed-writer` (it read a
+     * document whose writer names no piece), `scoped-root`, `source-origin`
+     * and `no-pattern`. A record with two reasons counts under both. */
+    unvouched: Record<string, number>;
+
+    /** Roots put to a judgment, counted at each judgment made. */
+    judged: number;
+
     /** Roots a judgment found the store could serve with no piece started,
      * counted at each judgment that found it so. */
     servable: number;
+
+    /** Roots a judgment found the store could not serve, by the first reason
+     * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
+     * `unvouched-instance`, `absent-owned`, `owner-not-clean` (a demanded
+     * instance of the piece or of one beneath it). */
+    refused: Record<string, number>;
 
     /** Roots left unloaded and unstarted on that judgment, which only the
      * `skip` mode does, counted once each time a root is first left. */
@@ -877,7 +893,10 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   },
   currency: {
     recordsStored: 0,
+    unvouched: {},
+    judged: 0,
     servable: 0,
+    refused: {},
     servedFromStore: 0,
     rearmed: 0,
     falseClean: 0,

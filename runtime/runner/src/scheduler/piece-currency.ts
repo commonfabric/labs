@@ -21,6 +21,19 @@ import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import type { SchedulerWriteIndex } from "./scheduling-writes.ts";
 import type { Action, ReactivityLog, TelemetryAnnotations } from "./types.ts";
 
+/** One reason a piece cannot be vouched for. */
+export type PieceUnvouchedReason =
+  /** The piece's root is narrower than the space. */
+  | "scoped-root"
+  /** A computation of the piece declares a write in another space. */
+  | "foreign-write"
+  /** A live computation of the piece is not clean in some instance. */
+  | "not-clean"
+  /** A live computation of the piece read a document in another space. */
+  | "foreign-read"
+  /** A live computation read a document whose writer names no piece. */
+  | "unattributed-writer";
+
 /** One piece as the scheduler holds it at an instant. */
 export type PieceCurrencySnapshot = {
   /** The raw id of the piece's result document. */
@@ -30,11 +43,12 @@ export type PieceCurrencySnapshot = {
   under: string[];
 
   /**
-   * Whether every live node of the piece is clean in every instance it runs,
-   * the piece's root is space-scoped, and everything it reads and writes is
-   * in its own space with a writer that names a piece.
+   * Why the piece cannot be vouched for, empty when it can: every live node
+   * of it is clean in every instance it runs, its root is space-scoped, and
+   * everything it reads and writes is in its own space with a writer that
+   * names a piece.
    */
-  vouched: boolean;
+  unvouched: PieceUnvouchedReason[];
 
   /** The documents the piece's live nodes read. */
   reads: Array<{ space: MemorySpace; id: string; derived: boolean }>;
@@ -103,7 +117,8 @@ export function snapshotPieceCurrency(
   );
   if (nodes.length === 0) return undefined;
   const identity = identityOf(nodes[0].action)!;
-  let vouched = identity.pieceId.startsWith("space:");
+  const unvouched = new Set<PieceUnvouchedReason>();
+  if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
   const under = (identity.demandRootIds ?? []).filter((id) => id !== piece);
   const reads = new Map<string, Pick<IMemorySpaceAddress, "space" | "id">>();
   const writes = new Set<string>();
@@ -113,7 +128,7 @@ export function snapshotPieceCurrency(
     const surface = state.writeIndex.getSchedulingWrites(node.action) ?? [];
     for (const write of surface) {
       if (write.space !== space) {
-        vouched = false;
+        unvouched.add("foreign-write");
         continue;
       }
       writes.add(write.id);
@@ -135,7 +150,7 @@ export function snapshotPieceCurrency(
       }
     }
     if (!isCleanThroughout(node)) {
-      vouched = false;
+      unvouched.add("not-clean");
       continue;
     }
     for (const write of surface) {
@@ -154,7 +169,7 @@ export function snapshotPieceCurrency(
   const readRows: PieceCurrencySnapshot["reads"] = [];
   for (const read of reads.values()) {
     if (read.space !== space) {
-      vouched = false;
+      unvouched.add("foreign-read");
       readRows.push({ ...read, derived: false });
       continue;
     }
@@ -168,7 +183,9 @@ export function snapshotPieceCurrency(
         written = true;
         // A writer that names no piece is one no record covers, so nothing
         // says whether what it wrote is current.
-        if (identityOf(writer)?.pieceRootId === undefined) vouched = false;
+        if (identityOf(writer)?.pieceRootId === undefined) {
+          unvouched.add("unattributed-writer");
+        }
       }
     }
     readRows.push({
@@ -180,7 +197,7 @@ export function snapshotPieceCurrency(
   return {
     piece,
     under,
-    vouched,
+    unvouched: [...unvouched],
     reads: readRows,
     writes: [...writes],
     vouches: [...vouches.values()],

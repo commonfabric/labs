@@ -429,7 +429,10 @@ describe("SpaceServer", () => {
         expect(await recordOf(piece.root)).toBeUndefined();
         expect(host.stats().currency).toEqual({
           recordsStored: 0,
+          unvouched: {},
+          judged: 0,
           servable: 0,
+          refused: {},
           servedFromStore: 0,
           rearmed: 0,
           falseClean: 0,

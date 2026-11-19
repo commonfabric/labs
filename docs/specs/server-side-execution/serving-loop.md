@@ -2470,7 +2470,8 @@ demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
 structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
-{recordsStored, servable, servedFromStore, rearmed, falseClean}, settle:
+{recordsStored, unvouched, judged, servable, refused, servedFromStore,
+rearmed, falseClean}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2650,7 +2651,10 @@ over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
 `currency` counts the currency index (§3b), and is all zero where the
 policy keeps none: `recordsStored` the piece records the loops sent to the
-store; `servable` the roots a judgment found the store could serve (§1);
+store; `unvouched` how many of those were of a piece the loop could not
+vouch for, by reason (§3b); `judged` the roots put to a judgment; `servable`
+the roots a judgment found the store could serve (§1), and `refused` the
+ones it could not, by the first reason found;
 `servedFromStore` the roots the `skip` mode left unloaded on it, once each
 time a root is first left; `rearmed` the roots so left that were then
 loaded, because an input marked the piece or a session's demand reached an

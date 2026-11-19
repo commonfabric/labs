@@ -156,6 +156,7 @@ import {
   type CurrencyBatch,
   type CurrencyInstance,
   type CurrencyMarked,
+  type CurrencyRefusal,
   type CurrencyStored,
   judgeCurrencyRoots,
   selectCurrencyPiece,
@@ -11935,8 +11936,8 @@ export class Server {
    * is judged as the piece its `result` back-links lead to, which is the
    * piece a structure load of it starts.
    *
-   * @returns The roots that pass, each with the piece it was judged as, and
-   * the pieces the advance marked.
+   * @returns The roots that pass, each with the piece it was judged as, how
+   * many roots each reason refused, and the pieces the advance marked.
    */
   async judgeCurrencyRoots(
     space: string,
@@ -11944,11 +11945,13 @@ export class Server {
     options: { excludePrincipal?: string; epoch: string },
   ): Promise<{
     servable: Array<{ root: string; piece: string }>;
+    refused: Partial<Record<CurrencyRefusal, number>>;
     marked: CurrencyMarked[];
   }> {
     const engine = await this.#openEngine(space);
     const marked = advanceCurrencyCursor(engine, { space });
-    if (roots.length === 0) return { servable: [], marked };
+    const refused: Partial<Record<CurrencyRefusal, number>> = {};
+    if (roots.length === 0) return { servable: [], refused, marked };
 
     /** The recorded piece `root` leads to, if its back-links reach one. */
     const pieceOf = (root: string): string | undefined => {
@@ -11975,8 +11978,9 @@ export class Server {
     for (const root of roots) {
       const piece = pieceOf(root);
       if (piece !== undefined) pieces.set(root, piece);
+      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
     }
-    if (pieces.size === 0) return { servable: [], marked };
+    if (pieces.size === 0) return { servable: [], refused, marked };
     const demand = this.demandForSpace(
       space,
       options.excludePrincipal === undefined
@@ -11990,16 +11994,26 @@ export class Server {
         }
       }
     };
-    const passing = new Set(judgeCurrencyRoots(engine, {
+    const judgment = judgeCurrencyRoots(engine, {
       space,
       roots: [...new Set(pieces.values())],
       rows: rows(),
       epoch: options.epoch,
-    }));
-    const servable = [...pieces]
-      .filter(([, piece]) => passing.has(piece))
-      .map(([root, piece]) => ({ root, piece }));
-    return { servable, marked };
+    });
+    const passing = new Set(judgment.servable);
+    const reasons = new Map(
+      judgment.refused.map(({ root, reason }) => [root, reason]),
+    );
+    const servable: Array<{ root: string; piece: string }> = [];
+    for (const [root, piece] of pieces) {
+      if (passing.has(piece)) {
+        servable.push({ root, piece });
+        continue;
+      }
+      const reason = reasons.get(piece);
+      if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
+    }
+    return { servable, refused, marked };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
