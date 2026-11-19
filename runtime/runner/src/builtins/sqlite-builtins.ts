@@ -1403,10 +1403,13 @@ export function sqliteQuery(
       inFlightHere: inFlightIssues.has(effectKey),
       speculativeRun: speculationRunContextOf(tx) !== undefined,
     });
-    // A settled result asked under an older revision of its collection is
-    // asked again in place: no claim is written, so the result changes only
-    // if the rows do. A speculative run owns no query, as for any request.
-    const quietRefresh = decision === "hit" && refreshToken !== undefined &&
+    // A result asked under an older revision of its collection is asked
+    // again in place: no claim is written, so a settled result changes only
+    // if the rows do. A request still in flight is asked again as well, since
+    // it may have read the database ahead of the write this run follows; its
+    // writeback then steps aside for the later one. A speculative run owns no
+    // query, as for any request.
+    const quietRefresh = decision !== "issue" && refreshToken !== undefined &&
       refreshTokens.get(effectKey) !== refreshToken &&
       speculationRunContextOf(tx) === undefined;
     if (refreshToken !== undefined && (quietRefresh || decision === "issue")) {
@@ -1427,7 +1430,7 @@ export function sqliteQuery(
       runtime.effectMemoObserver?.({ kind: "hit", id: `sqliteQuery:${hash}` });
       return;
     }
-    if (decision === "dedupe") return;
+    if (decision === "dedupe" && !quietRefresh) return;
     // Forced here, where the request is going out: the flush settles on a
     // transaction of its own, so a label read then would be read from a
     // transaction that has already committed. The settle supplies it to the

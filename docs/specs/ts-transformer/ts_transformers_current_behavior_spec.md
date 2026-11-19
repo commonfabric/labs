@@ -326,8 +326,8 @@ list — is the authoritative source. As of this writing it recognizes:
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
   `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
-  `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
-  schema injection)
+  `sqliteQuery` / `indexedCollection` (`sqliteQuery<Row>` additionally gets
+  dedicated type-argument schema injection)
 - `patternTool` — recognized, but explicitly **not** a reactive origin
   (`reactiveOrigin: false`)
 

@@ -12,8 +12,8 @@ import {
   computed,
   type Default,
   handler,
-  indexedCollection,
   type IndexedCollection,
+  indexedCollection,
   NAME,
   pattern,
   SELF,
@@ -86,9 +86,7 @@ export const Topic = pattern<TopicInput, TopicOutput>(
         <cf-vstack gap="1">
           <cf-heading level={4}>{title}</cf-heading>
           <cf-label id="mentioned-by">
-            Mentioned by: {mentionedByTitles.map((name) => (
-              <span>{name}</span>
-            ))}
+            Mentioned by: {mentionedByTitles.map((name) => <span>{name}</span>)}
           </cf-label>
         </cf-vstack>
       ),

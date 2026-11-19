@@ -322,6 +322,76 @@ the path crosses and reports the
 column's label from the row's own doc. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.
 
+## Indexed collections
+
+A list of thousands of cells is expensive to ask questions of, because a
+computation that reads the list reads all of it. An indexed collection holds
+the same cells with no list at all. You declare which fields to mirror, add
+cells in a handler, and ask your questions in SQL.
+
+```tsx
+import {
+  type Cell,
+  handler,
+  indexedCollection,
+  type IndexedCollection,
+  pattern,
+  type Stream,
+} from "commonfabric";
+
+interface Donut {
+  name: string;
+  price: number;
+  pairsWith: Donut[];
+}
+
+const stock = handler<
+  { donut: Donut },
+  { donuts: IndexedCollection<Donut> }
+>(({ donut }, { donuts }) => donuts.add(donut));
+
+export default pattern<{ favorite: Cell<Donut> }, {
+  pairedWithFavorite: { pending: boolean; result?: { name: string }[] };
+  stock: Stream<{ donut: Donut }>;
+}>(({ favorite }) => {
+  const donuts = indexedCollection<Donut>({
+    columns: { name: "text", price: "real" },
+    relations: ["pairsWith"],
+  });
+  return {
+    pairedWithFavorite: donuts.query<{ name: string }>(
+      "SELECT m.name AS name FROM pairsWith e JOIN members m " +
+        "ON m.member_cf_link = e.source_cf_link " +
+        "WHERE e.target_cf_link = :favorite_cf_link ORDER BY m.name LIMIT 50",
+      { params: { favorite_cf_link: favorite } },
+    ),
+    stock: stock({ donuts }),
+  };
+});
+```
+
+- The `members` table has one row per member: `member_cf_link`, the member's
+  own reference, and a column per field in `columns`.
+- Each field in `relations` becomes a table of that name with a
+  `source_cf_link` and a `target_cf_link` column, one row per reference. Both
+  are indexed, so "which members refer to this one" is a lookup.
+- A member is identified by its cell reference and by nothing else. Bind a
+  cell to a `:name_cf_link` parameter to look one up, and type a row field as
+  `Cell<Donut>` to get a member back as a cell.
+- `add(member)` and `remove(member)` are called in a handler. After `add()`,
+  you write to the member and nothing else: the runtime re-reads a member when
+  a document its mirrored fields were read from is written.
+- A query over a collection needs no `reactOn`. It re-runs when the collection
+  changes, and its result changes only when its rows do.
+
+Mirror the fields your queries filter, order, or join on, and read the rest
+from the member cell. A column holds a string, a number, or a boolean; any
+other value is stored as `NULL`.
+[Indexed collections](../../features/indexed-collections.md) describes how the
+mirror is maintained and where it stops, and
+`patterns/examples/indexed-topics/` is a board of topics that mention one
+another, built this way.
+
 ## The rest of the API
 
 [`docs/specs/sqlite-builtin/`](../../specs/sqlite-builtin/README.md) is the full

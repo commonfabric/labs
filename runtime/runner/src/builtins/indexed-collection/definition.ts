@@ -82,7 +82,8 @@ const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export function defineIndexedCollection(
   options: IndexedCollectionOptions = {},
 ): IndexedCollectionDefinition {
-  if (!isPlainObject(options)) {
+  const declared: unknown = options;
+  if (!isPlainObject(declared)) {
     throw new TypeError(
       "`indexedCollection()` takes its declaration written in the pattern, " +
         "not a pattern input or a computed value",
@@ -119,9 +120,14 @@ export function defineIndexedCollection(
     seen.add(name);
   }
 
+  // Typed as an open map, so that an index may name any mirrored column.
+  const memberColumns: Record<string, string> = {
+    [MEMBER_COLUMN]: "text primary key",
+    ...columns,
+  };
   const tables: Record<string, TableSchema> = {
     [MEMBERS_TABLE]: table(
-      { [MEMBER_COLUMN]: "text primary key", ...columns },
+      memberColumns,
       undefined,
       { indexes: (options.indexes ?? []).map((index) => [...index]) },
     ),
@@ -149,7 +155,8 @@ export function defineIndexedCollection(
 
 /**
  * Returns the descriptor stored on a database handle value, or `undefined`
- * when the handle is an ordinary database.
+ * when the handle is an ordinary database or carries a descriptor naming
+ * anything but identifiers.
  */
 export function indexedCollectionDescriptorOf(
   handle: unknown,
@@ -158,13 +165,19 @@ export function indexedCollectionDescriptorOf(
   const index = handle.index;
   if (!isPlainObject(index)) return undefined;
   const { columns, relations } = index;
-  if (!isStringArray(columns) || !isStringArray(relations)) return undefined;
+  if (!isNameList(columns) || !isNameList(relations)) return undefined;
   return { columns: [...columns], relations: [...relations] };
 }
 
-function isStringArray(value: unknown): value is readonly string[] {
+/**
+ * Whether `value` is a list of identifiers. A descriptor is read back from a
+ * stored handle, and its names are written into SQL statements.
+ */
+function isNameList(value: unknown): value is readonly string[] {
   return Array.isArray(value) &&
-    value.every((entry) => typeof entry === "string");
+    value.every((entry) =>
+      typeof entry === "string" && IDENTIFIER_RE.test(entry)
+    );
 }
 
 /** Helper for `defineIndexedCollection()`, which validates one field name. */

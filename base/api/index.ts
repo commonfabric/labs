@@ -3438,7 +3438,7 @@ export type SqliteDatabaseFunction = {
 
 /**
  * What an indexed collection mirrors of its members, each of which is a cell
- * holding a `T` (docs/specs/indexed-collection/README.md).
+ * holding a `T` (docs/features/indexed-collections.md).
  */
 export interface IndexedCollectionOptions<T = unknown> {
   /**

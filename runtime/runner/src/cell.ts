@@ -42,6 +42,7 @@ import {
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import {
+  isSqliteDbRef,
   type ScopeKeyIdentity,
   type SqliteDbRef,
   type SqliteParamsWire,
@@ -1421,6 +1422,18 @@ export function createCell<T>(
 }
 
 /**
+ * Returns the write half of the database handle cell at `link`, bound to
+ * `tx`: its `exec()` records a SQLite write onto that transaction.
+ */
+export function createSqliteWriter(
+  runtime: Runtime,
+  link: NormalizedFullLink,
+  tx: IExtendedStorageTransaction,
+): IndexedCollectionWriter {
+  return new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+}
+
+/**
  * Mark a cell handle as covered by a document-level sync barrier owned by the
  * caller. Separate handles for the same document otherwise each try to load it.
  */
@@ -2411,7 +2424,7 @@ export class CellImpl<T extends FabricValue>
     }
     const rows = projectMember(this.#tx, descriptor, cell);
     writeMemberRows(
-      this as unknown as IndexedCollectionWriter,
+      this,
       descriptor,
       rows,
     );
@@ -2437,7 +2450,9 @@ export class CellImpl<T extends FabricValue>
    */
   #registerIndexedCollection(written: readonly string[] = []): void {
     const handle = this.resolveAsCell().getAsNormalizedFullLink();
-    const id = (this.getRaw({ lastNode: "value" }) as { id: string }).id;
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    if (!isSqliteDbRef(value)) return;
+    const id = value.id;
     const maintainer = this.#runtime.indexedCollections;
     const durable = () => {
       maintainer.register(handle, id);
@@ -3883,7 +3898,7 @@ export class CellImpl<T extends FabricValue>
       const member = asBoundCell(ref);
       if (descriptor !== undefined && member !== undefined && this.#tx) {
         deleteMemberRows(
-          this as unknown as IndexedCollectionWriter,
+          this,
           descriptor,
           memberKeyOf(member.withTx(this.#tx)),
         );

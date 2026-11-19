@@ -1,8 +1,8 @@
 import { isPlainObject } from "@commonfabric/js-values/types";
 import { getLogger } from "@commonfabric/logger";
-import type { SqliteDbRef } from "@commonfabric/memory/v2";
+import { isSqliteDbRef, type SqliteDbRef } from "@commonfabric/memory/v2";
 
-import { type Cell, createCell } from "../../cell.ts";
+import { type Cell, createSqliteWriter } from "../../cell.ts";
 import type { NormalizedFullLink } from "../../link-types.ts";
 import type { Runtime } from "../../runtime.ts";
 import type {
@@ -23,7 +23,6 @@ import {
 } from "./definition.ts";
 import {
   deleteMemberRows,
-  type IndexedCollectionWriter,
   type IndexedColumnValue,
   type MemberRows,
   projectMember,
@@ -157,28 +156,6 @@ export class IndexedCollectionMaintainer {
     }));
   }
 
-  /**
-   * Returns a promise that settles once every write reported so far has been
-   * carried into the collections it affects.
-   */
-  async settled(): Promise<void> {
-    for (;;) {
-      const waits: Promise<void>[] = [];
-      for (const space of this.#spaces.values()) {
-        if (space.loaded !== undefined && space.early.size > 0) {
-          waits.push(space.loaded);
-        }
-        for (const collection of space.collections.values()) {
-          if (collection.draining !== undefined) {
-            waits.push(collection.draining);
-          }
-        }
-      }
-      if (waits.length === 0) return;
-      await Promise.all(waits);
-    }
-  }
-
   /** Stops maintaining. Writes reported afterward are dropped. */
   dispose(): void {
     this.#disposed = true;
@@ -212,10 +189,9 @@ export class IndexedCollectionMaintainer {
       const listed = registry.getRaw({ lastNode: "value" });
       if (!isPlainObject(listed)) return;
       for (const [id, link] of Object.entries(listed)) {
-        if (state.collections.has(id)) continue;
-        const handle = this.#runtime.getCellFromLink(
-          parseCfLinkToSigil(link)!,
-        );
+        const sigil = parseCfLinkToSigil(link);
+        if (sigil === null || state.collections.has(id)) continue;
+        const handle = this.#runtime.getCellFromLink(sigil);
         await handle.sync();
         this.#adopt(state, handle.getAsNormalizedFullLink(), id);
       }
@@ -247,6 +223,18 @@ export class IndexedCollectionMaintainer {
     return collection;
   }
 
+  /** Returns the member cell `rows` is stored under. */
+  #memberCell(
+    rows: MemberRows,
+    tx?: IExtendedStorageTransaction,
+  ): Cell<unknown> {
+    const sigil = parseCfLinkToSigil(rows.member);
+    if (sigil === null) {
+      throw new TypeError("an indexed collection row names no member");
+    }
+    return this.#runtime.getCellFromLink(sigil, undefined, tx);
+  }
+
   #schedule(collection: CollectionState): void {
     if (collection.draining !== undefined || collection.pending.size === 0) {
       return;
@@ -255,9 +243,12 @@ export class IndexedCollectionMaintainer {
       if (!this.#disposed) {
         logger.warn("drain-failed", () => [collection.handle.id, error]);
       }
-    }).finally(() => {
+      // A failed drain keeps what it owes for the drain the next write
+      // starts, and is not started again by itself.
+      return false;
+    }).then((drained) => {
       collection.draining = undefined;
-      if (!this.#disposed) this.#schedule(collection);
+      if (drained !== false && !this.#disposed) this.#schedule(collection);
     });
     collection.draining = draining;
     // `runtime.settled()` waits for tracked work, which neither `idle()` nor
@@ -271,24 +262,27 @@ export class IndexedCollectionMaintainer {
     collection.pending.clear();
     const handle = this.#runtime.getCellFromLink(collection.handle);
     await handle.sync();
-    const value = handle.getRaw({ lastNode: "value" });
+    const value: unknown = handle.getRaw({ lastNode: "value" });
     const descriptor = indexedCollectionDescriptorOf(value);
-    if (descriptor === undefined) return;
+    if (descriptor === undefined || !isSqliteDbRef(value)) return;
     const provider = this.#runtime.storageManager.open(collection.handle.space);
     if (provider.sqliteQuery === undefined) return;
-    const { rows } = await provider.sqliteQuery(
-      toDbRef(value),
-      affectedRowsSql(descriptor),
-      { docs: JSON.stringify(docs) },
-    );
-    if (this.#disposed) return;
-    const members = groupMemberRows(descriptor, rows);
-    if (members.length === 0) return;
-    await Promise.all(
-      members.map((rows) =>
-        this.#runtime.getCellFromLink(parseCfLinkToSigil(rows.member)!).sync()
-      ),
-    );
+    let members: MemberRows[];
+    try {
+      const { rows } = await provider.sqliteQuery(
+        toDbRef(value),
+        affectedRowsSql(descriptor),
+        { docs: JSON.stringify(docs) },
+      );
+      members = groupMemberRows(descriptor, rows);
+    } catch (error) {
+      // The writes stay owed: the next drain of this collection asks about
+      // them again.
+      for (const doc of docs) collection.pending.add(doc);
+      throw error;
+    }
+    if (this.#disposed || members.length === 0) return;
+    await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
     for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
       if (this.#disposed) return;
       const event: MaintenanceEvent = {
@@ -326,18 +320,15 @@ export class IndexedCollectionMaintainer {
       }
       return;
     }
-    const db = createCell(this.#runtime, handle, tx, false, "sqlite");
     const descriptor = indexedCollectionDescriptorOf(
-      db.getRaw({ lastNode: "value" }),
+      this.#runtime.getCellFromLink(handle, undefined, tx).getRaw({
+        lastNode: "value",
+      }),
     );
     if (descriptor === undefined) return;
-    const writer = db as unknown as IndexedCollectionWriter;
+    const writer = createSqliteWriter(this.#runtime, handle, tx);
     for (const previous of event.members) {
-      const member = this.#runtime.getCellFromLink(
-        parseCfLinkToSigil(previous.member)!,
-        undefined,
-        tx,
-      );
+      const member = this.#memberCell(previous, tx);
       const rows = projectMember(tx, descriptor, member);
       if (rows.member !== previous.member) {
         // A member added by the transaction that created it was stored
@@ -353,8 +344,8 @@ export class IndexedCollectionMaintainer {
 }
 
 /** Helper for `#drain()`, which reads the wire form of a handle value. */
-function toDbRef(handle: unknown): SqliteDbRef {
-  const { id, tables, scope, owner } = handle as SqliteDbRef;
+function toDbRef(handle: SqliteDbRef): SqliteDbRef {
+  const { id, tables, scope, owner } = handle;
   return {
     id,
     ...(tables !== undefined && { tables }),

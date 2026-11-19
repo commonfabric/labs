@@ -46,7 +46,7 @@ describe("indexed-collection", () => {
     await storageManager?.close();
   });
 
-  /** Commits `fn`, then waits for the maintainer to carry the commit over. */
+  /** Commits `fn`, then waits for the collection to follow the commit. */
   async function commit<T>(
     fn: (tx: IExtendedStorageTransaction) => T,
   ): Promise<T> {
@@ -54,9 +54,7 @@ describe("indexed-collection", () => {
     const result = fn(tx);
     const { error } = await tx.commit().settled;
     expect(error).toBeUndefined();
-    await runtime.indexedCollections.settled();
-    await runtime.idle();
-    await runtime.indexedCollections.settled();
+    await runtime.settled();
     return result;
   }
 
@@ -215,6 +213,16 @@ describe("indexed-collection", () => {
         .toEqual([{ title: "a", rank: 7 }, { title: "b", rank: 0 }]);
     });
 
+    it("writes one statement for one changed member, however many members there are", async () => {
+      for (let n = 0; n < 60; n++) await addTopic(`extra-${n}`);
+      const before = await rev() as number;
+      await commit((tx) => topic("a", tx).key("rank").set(9));
+
+      // Each statement advances the handle's revision by one, so the
+      // difference counts the statements the re-read wrote.
+      expect((await rev() as number) - before).toBe(1);
+    });
+
     it("leaves the database unwritten when no mirrored field changed", async () => {
       const before = await rev();
       await commit((tx) => topic("a", tx).key("body").set("unmirrored"));
@@ -237,7 +245,7 @@ describe("indexed-collection", () => {
         const shared = runtime.getCell<string>(space, "shared", undefined, tx);
         shared.set("first");
         const cell = topic("a", tx);
-        cell.setRaw({ title: shared.getAsLink(), body: "", rank: 0 });
+        cell.setRawUntyped({ title: shared.getAsLink(), body: "", rank: 0 });
         collection(tx).add(cell);
       });
       expect(await rows("SELECT title FROM members")).toEqual([
