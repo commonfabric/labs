@@ -91,9 +91,9 @@ import {
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
-  normalizeBranches,
   normalizeSpaceHostMap,
 } from "./shared/security-context.ts";
 import { cellRefToInstanceId, cellRefToKey } from "./shared/utils.ts";

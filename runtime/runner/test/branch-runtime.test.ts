@@ -19,7 +19,8 @@ import {
 import type { MemorySpace } from "../src/storage/interface.ts";
 
 const counterPath = "/api/patterns/system/counter.tsx";
-const counterSource = `import { computed, handler, pattern, Writable } from 'commonfabric';
+const counterSource =
+  `import { computed, handler, pattern, Writable } from 'commonfabric';
 const add = handler<{ by: number }, { count: Writable<number> }>(
   ({ by }, { count }) => { count.set(count.get() + by); },
 );

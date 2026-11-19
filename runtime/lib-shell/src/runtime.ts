@@ -17,6 +17,7 @@ import {
   attachOptionsFrom,
   CellHandle,
   FavoritesManager,
+  type HistoryStep,
   PieceHandle,
   type PieceSourceView,
   Program,
@@ -76,6 +77,8 @@ export function defaultRenderConfidentialityCeiling(
   return defaultDisplayCeiling(actingUser);
 }
 
+export type { HistoryStep };
+
 export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };
 
 export type RuntimeInternalsCallbacks = {
@@ -112,6 +115,15 @@ export type RuntimeInternalsCreateOptions = RuntimeInternalsCallbacks & {
    * worker. Spaces absent from the map resolve to the default host.
    */
   spaceHostMap?: Record<string, string>;
+
+  /**
+   * The branch each space listed here is opened on, forwarded to the worker:
+   * the runtime runs such a space as that branch holds it and writes there.
+   * A runtime given any computes what a branch stores itself, whatever
+   * `experimental.serverExecution` says. Absent, every space is opened as it
+   * stands.
+   */
+  branches?: Record<DID, string>;
 
   experimental?: ExperimentalRuntimeFlags;
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
@@ -300,6 +312,7 @@ export function createRuntimeClientOptions({
   apiUrl,
   memoryUrl,
   spaceHostMap,
+  branches,
   experimental,
   cfcEnforcementMode = "enforce-strict",
   // Epic H2 (docs/history/plans/cfc-future-work-implementation.md): shell hosts run the
@@ -333,6 +346,7 @@ export function createRuntimeClientOptions({
   apiUrl: URL;
   memoryUrl?: URL;
   spaceHostMap?: Record<string, string>;
+  branches?: Record<DID, string>;
   experimental?: ExperimentalRuntimeFlags;
   cfcEnforcementMode?: RuntimeCfcEnforcementMode;
   cfcFlowLabels?: RuntimeCfcFlowLabelsMode;
@@ -349,6 +363,7 @@ export function createRuntimeClientOptions({
   // as the render audience, the fallback the worker's own resolver applies to
   // the same field in `runtime-processor.ts`.
   const actingPrincipal = trustSnapshot?.actingPrincipal ?? session.as.did();
+  const onBranches = branches !== undefined && Object.keys(branches).length > 0;
   const resolvedTrustSnapshot = trustSnapshot === undefined
     ? { id: `principal:${actingPrincipal}`, actingPrincipal }
     : trustSnapshot ?? undefined;
@@ -360,7 +375,11 @@ export function createRuntimeClientOptions({
     spaceHostMap,
     identity: session.as,
     spaceDid: session.space,
-    experimental,
+    // No serving loop runs a branch, so the runtime that opens one computes
+    // what it stores.
+    ...(onBranches
+      ? { branches, experimental: { ...experimental, serverExecution: false } }
+      : { experimental }),
     cfcEnforcementMode,
     cfcFlowLabels,
     ...(cfcRenderCeiling
@@ -525,15 +544,29 @@ export class RuntimeInternals extends EventTarget {
   /** Optional OTel sink (browser telemetry enabled). Inert when `undefined`. */
   #telemetrySink?: RuntimeTelemetrySink;
 
+  /**
+   * Stands up a second runtime like this one that opens the given spaces on
+   * the given branches, which `forkSpace()` runs a fork in. Absent where
+   * this runtime's embedder supplied its connection, since there is then no
+   * worker of this page's to stand another beside.
+   */
+  #spawnOnBranches?: (
+    branches: Record<DID, string>,
+  ) => Promise<RuntimeInternals>;
+
   constructor(
     client: RuntimeClient,
     callbacks: RuntimeInternalsCallbacks = {},
     telemetry?: RuntimeTelemetrySink,
+    spawnOnBranches?: (
+      branches: Record<DID, string>,
+    ) => Promise<RuntimeInternals>,
   ) {
     super();
     this.#client = client;
     this.#callbacks = callbacks;
     this.#telemetrySink = telemetry;
+    this.#spawnOnBranches = spawnOnBranches;
     this.#favorites = new FavoritesManager(client);
     this.#client.on("console", this.#onConsole);
     this.#client.on("navigaterequest", this.#onNavigateRequest);
@@ -878,6 +911,62 @@ export class RuntimeInternals extends EventTarget {
     await this.#client.synced(space);
   }
 
+  /**
+   * Returns a stretch of the history of `space`, newest first: its steps
+   * that began below `before`, or its newest ones, and the seq to pass as
+   * `before` for the stretch older than this one.
+   */
+  async spaceHistory(
+    space: DID,
+    before?: number,
+  ): Promise<{ steps: HistoryStep[]; next?: number }> {
+    this.#check();
+    return await this.#client.spaceHistory({
+      space,
+      ...(before !== undefined ? { before } : {}),
+    });
+  }
+
+  /**
+   * Forks `space` as it stood at the point `seq` of its history, and returns
+   * the fork with a runtime of its own running it. The space itself is left
+   * as it is, whatever happens in the fork, until the fork is restored.
+   *
+   * @throws When this runtime's embedder supplied its connection, or when
+   * the principal may not write to the space.
+   */
+  async forkSpace(space: DID, seq: number): Promise<SpaceFork> {
+    this.#check();
+    const spawn = this.#spawnOnBranches;
+    if (spawn === undefined) {
+      throw new Error(
+        "a runtime whose embedder supplied its connection cannot fork a space",
+      );
+    }
+    const branch = `history:${crypto.randomUUID()}`;
+    await this.#client.createSpaceBranch({ space, name: branch, forkSeq: seq });
+    let runtime: RuntimeInternals;
+    try {
+      runtime = await spawn({ [space]: branch });
+    } catch (error) {
+      await this.#client.deleteSpaceBranch({ space, name: branch });
+      throw error;
+    }
+    return new SpaceFork(space, branch, seq, runtime, this.#client);
+  }
+
+  /**
+   * Restores `space` to the state the point `seq` of its history held, as
+   * one new step of that history. Returns the seq of the step, or
+   * `undefined` when the space already held the state.
+   *
+   * @throws When the principal is not an owner of the space.
+   */
+  async restoreSpace(space: DID, seq: number): Promise<number | undefined> {
+    this.#check();
+    return await this.#client.restoreSpace({ space, seq });
+  }
+
   /** See RuntimeClient.registerSpaceHost — the site-table v0 hint API. */
   async registerSpaceHost(space: DID, host: string): Promise<boolean> {
     this.#check();
@@ -1082,6 +1171,7 @@ export class RuntimeInternals extends EventTarget {
     apiUrl,
     memoryUrl,
     spaceHostMap,
+    branches,
     experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
@@ -1130,6 +1220,7 @@ export class RuntimeInternals extends EventTarget {
       apiUrl,
       memoryUrl,
       spaceHostMap,
+      branches,
       experimental,
       cfcEnforcementMode,
       cfcFlowLabels,
@@ -1172,7 +1263,121 @@ export class RuntimeInternals extends EventTarget {
       client,
       { navigate, onConsole, onError },
       telemetry,
+      transport === undefined
+        ? (onBranches) =>
+          RuntimeInternals.create({
+            identity,
+            apiUrl,
+            memoryUrl,
+            spaceHostMap,
+            branches: onBranches,
+            experimental,
+            cfcEnforcementMode,
+            cfcFlowLabels,
+            cfcRenderCeiling,
+            trustSnapshot,
+            clientVersion,
+            clientBuild,
+            forwardWorkerConsole,
+            concurrentWatchRefresh,
+            awaitHealth,
+            iframeOuterFrameUrl,
+            getBuildHash,
+            workerUrl,
+            navigate,
+            onConsole,
+            onError,
+          })
+        : undefined,
     );
+  }
+}
+
+/**
+ * A fork of a space: a branch that holds the space as it stood at one point
+ * of its history, and a runtime that runs it there. What is done in the fork
+ * stays in the fork, so it can be looked at and interacted with freely, and
+ * is then either restored into the space or discarded.
+ */
+export class SpaceFork {
+  readonly #space: DID;
+  readonly #branch: string;
+  readonly #seq: number;
+  readonly #runtime: RuntimeInternals;
+  readonly #origin: RuntimeClient;
+  #ended = false;
+
+  /**
+   * Constructs the fork of `space` on `branch`, taken at `seq`, which
+   * `runtime` runs and `origin`, the client of the runtime that forked it,
+   * restores and deletes.
+   */
+  constructor(
+    space: DID,
+    branch: string,
+    seq: number,
+    runtime: RuntimeInternals,
+    origin: RuntimeClient,
+  ) {
+    this.#space = space;
+    this.#branch = branch;
+    this.#seq = seq;
+    this.#runtime = runtime;
+    this.#origin = origin;
+  }
+
+  /** The space this is a fork of. */
+  get space(): DID {
+    return this.#space;
+  }
+
+  /** The name of the branch holding the fork. */
+  get branch(): string {
+    return this.#branch;
+  }
+
+  /** The point of the space's history the fork was taken at. */
+  get seq(): number {
+    return this.#seq;
+  }
+
+  /** The runtime running the fork, which opens the space on its branch. */
+  get runtime(): RuntimeInternals {
+    return this.#runtime;
+  }
+
+  /**
+   * Restores the space to the state the fork holds now, as one new step of
+   * the space's history, and ends the fork. Returns the seq of that step, or
+   * `undefined` when the space already held the state.
+   *
+   * @throws When the principal is not an owner of the space. The fork is
+   * then left as it was.
+   */
+  async restore(): Promise<number | undefined> {
+    if (this.#ended) throw new Error("the fork has ended");
+    await this.#runtime.idle();
+    await this.#runtime.synced(this.#space);
+    const seq = await this.#origin.restoreSpace({
+      space: this.#space,
+      branch: this.#branch,
+    });
+    await this.discard();
+    return seq;
+  }
+
+  /**
+   * Ends the fork: disposes of its runtime and deletes its branch. What was
+   * done in it stays in the space's store, unreachable from the space.
+   */
+  async discard(): Promise<void> {
+    if (this.#ended) return;
+    this.#ended = true;
+    await this.#runtime.dispose();
+    await this.#origin.deleteSpaceBranch({
+      space: this.#space,
+      name: this.#branch,
+    });
   }
 }
 

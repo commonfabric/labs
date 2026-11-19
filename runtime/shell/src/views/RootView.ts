@@ -1,6 +1,11 @@
 import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
-import { resolveSpaceDid, RuntimeInternals } from "@commonfabric/lib-shell";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  resolveSpaceDid,
+  RuntimeInternals,
+  type SpaceFork,
+} from "@commonfabric/lib-shell";
 import {
   AppView,
   isAppViewEqual,
@@ -61,6 +66,7 @@ import {
   SHELL_COMMAND,
 } from "./BaseView.ts";
 import type { LoadError } from "./BodyView.ts";
+import type { OpenHistory } from "./HistoryView.ts";
 
 function getCommonfabricGlobal(): typeof globalThis & {
   commonfabric?: CommonfabricDebugState;
@@ -208,7 +214,7 @@ export class XRootView extends BaseView implements ShellApp {
         ...event,
         unconfirmedWrites: event.unconfirmedWrites === true ||
           this._clientUpdateRequired?.unconfirmedWrites === true ||
-          this.runtime?.hasPendingWrites() === true,
+          this.#mainClient?.hasPendingWrites() === true,
       };
       return;
     }
@@ -240,9 +246,27 @@ export class XRootView extends BaseView implements ShellApp {
   @property()
   accessor keyStore: KeyStore | undefined = undefined;
 
+  /**
+   * The runtime `cf-` components act through: that of the open fork while
+   * the shell shows one, and otherwise the one this element created.
+   */
   @provide({ context: runtimeContext })
   @state()
   private accessor runtime: RuntimeClient | undefined = undefined;
+
+  /** The client of the runtime this element created. */
+  #mainClient: RuntimeClient | undefined = undefined;
+
+  /** The fork of the viewed space the shell is showing, when it shows one. */
+  #fork: SpaceFork | undefined = undefined;
+
+  /** What the history panel is told of the fork. */
+  @state()
+  private accessor _openHistory: OpenHistory | undefined = undefined;
+
+  /** Why the last fork, return or restore failed, when one did. */
+  @state()
+  private accessor _historyError: string | undefined = undefined;
 
   @provide({ context: spaceContext })
   @state()
@@ -267,9 +291,11 @@ export class XRootView extends BaseView implements ShellApp {
       task: async ([app]: [AppState | undefined], { signal }) => {
         const generation = ++this.#runtimeGeneration;
         this._runtimeLoadErrors = [];
+        // A fork is deleted through the runtime that took it.
+        this.#dropFork();
         const previous = this.#rt.value;
         if (previous) {
-          this.runtime?.off(
+          this.#mainClient?.off(
             "eventneedsattention",
             this._handleEventNeedsAttention,
           );
@@ -285,7 +311,8 @@ export class XRootView extends BaseView implements ShellApp {
           // Clear the runtime when no app state. The space belongs to the
           // view, and #syncViewSpace has already cleared it for the same
           // change that took the identity away.
-          this.runtime = undefined;
+          this.#mainClient = undefined;
+          this.#provideRuntime();
           this.#telemetry = undefined;
           clearRuntimeDebugGlobals(getCommonfabricGlobal());
           return undefined;
@@ -348,19 +375,23 @@ export class XRootView extends BaseView implements ShellApp {
           // leave the space alone: which space the view addresses does not
           // depend on which runtime creation won.
           rt.dispose().catch(console.error);
-          this.runtime = undefined;
+          this.#mainClient = undefined;
+          this.#provideRuntime();
           clearRuntimeDebugGlobals(getCommonfabricGlobal());
           return;
         }
 
         // Update the provided runtime; `space` is view state, resolved
         // from app.view in willUpdate() independent of the runtime's life.
-        this.runtime = rt.runtime();
-        this.runtime.on(
+        this.#mainClient = rt.runtime();
+        this.#provideRuntime();
+        this.#mainClient.on(
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
-        this.#unavailableSpaceRetry = new UnavailableSpaceRetry(this.runtime);
+        this.#unavailableSpaceRetry = new UnavailableSpaceRetry(
+          this.#mainClient,
+        );
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
         }
@@ -369,8 +400,8 @@ export class XRootView extends BaseView implements ShellApp {
         // (e.g. commonfabric.rt.setLoggerLevel("debug")).
         exposeCommonfabricGlobals(
           getCommonfabricGlobal(),
-          this.runtime,
-          () => this.runtime,
+          this.#mainClient,
+          () => this.#mainClient,
           () => this.space as DID,
           () => this.#appView?.settling,
         );
@@ -410,8 +441,14 @@ export class XRootView extends BaseView implements ShellApp {
     // A Lit element can be detached and reattached without rebuilding its
     // worker runtime. Reinstall the live notice listener that disconnect
     // removes; off-first keeps repeated connects idempotent.
-    this.runtime?.off("eventneedsattention", this._handleEventNeedsAttention);
-    this.runtime?.on("eventneedsattention", this._handleEventNeedsAttention);
+    this.#mainClient?.off(
+      "eventneedsattention",
+      this._handleEventNeedsAttention,
+    );
+    this.#mainClient?.on(
+      "eventneedsattention",
+      this._handleEventNeedsAttention,
+    );
     this.addEventListener(SHELL_COMMAND, this.onCommand);
     document.addEventListener(
       "theme-preference-changed",
@@ -424,7 +461,10 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   override disconnectedCallback(): void {
-    this.runtime?.off("eventneedsattention", this._handleEventNeedsAttention);
+    this.#mainClient?.off(
+      "eventneedsattention",
+      this._handleEventNeedsAttention,
+    );
     this.removeEventListener(SHELL_COMMAND, this.onCommand);
     document.removeEventListener(
       "theme-preference-changed",
@@ -451,7 +491,7 @@ export class XRootView extends BaseView implements ShellApp {
    */
   #onBeforeUnload = (event: BeforeUnloadEvent): void => {
     if (
-      this.runtime?.hasPendingWrites() ||
+      this.#mainClient?.hasPendingWrites() ||
       this._clientUpdateRequired?.unconfirmedWrites === true
     ) {
       event.preventDefault();
@@ -597,6 +637,8 @@ export class XRootView extends BaseView implements ShellApp {
     if (token !== this.#resolveSpaceToken || space === this.space) return;
     const previousSpace = this.space;
     this.space = space;
+    // A fork is of the space the view was on.
+    this.#dropFork();
     this._eventAttention = [];
     if (previousSpace !== undefined) {
       this.#eventAttentionMutationVersions.delete(previousSpace);
@@ -633,7 +675,7 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   async #refreshEventAttention(space: DID, generation: number): Promise<void> {
-    const runtime = this.runtime;
+    const runtime = this.#mainClient;
     if (runtime === undefined) return;
     const owner = Symbol(space);
     const startedAt = this.#eventAttentionMutation;
@@ -641,7 +683,8 @@ export class XRootView extends BaseView implements ShellApp {
     try {
       const notices = await runtime.listEventAttention(space);
       if (
-        generation !== this.#runtimeGeneration || runtime !== this.runtime ||
+        generation !== this.#runtimeGeneration ||
+        runtime !== this.#mainClient ||
         space !== this.space ||
         this.#eventAttentionRefreshOwners.get(space) !== owner
       ) return;
@@ -670,7 +713,8 @@ export class XRootView extends BaseView implements ShellApp {
       ];
     } catch (error) {
       if (
-        generation === this.#runtimeGeneration && runtime === this.runtime &&
+        generation === this.#runtimeGeneration &&
+        runtime === this.#mainClient &&
         space === this.space &&
         this.#eventAttentionRefreshOwners.get(space) === owner
       ) {
@@ -688,7 +732,7 @@ export class XRootView extends BaseView implements ShellApp {
     notice: EventAttentionNotice,
     action: "retry" | "dismiss",
   ): Promise<void> => {
-    const runtime = this.runtime;
+    const runtime = this.#mainClient;
     if (runtime === undefined) return;
     const key = eventAttentionNoticeKey(notice);
     if (this._resolvingAttention.has(key)) return;
@@ -735,6 +779,12 @@ export class XRootView extends BaseView implements ShellApp {
         return this.setIdentity(command.identity);
       case "set-config":
         return this.setConfig(command.key, command.value);
+      case "open-history":
+        return this.openHistory(command.seq);
+      case "close-history":
+        return this.closeHistory();
+      case "restore-history":
+        return this.restoreHistory();
     }
     throw new Error(
       debugStr`Received a non-command: $quote,long${command}`,
@@ -780,7 +830,103 @@ export class XRootView extends BaseView implements ShellApp {
     }
     const next = clone(this.app);
     next.config[key] = value;
+    // The panel is the only way back from a fork, so it takes the fork with
+    // it.
+    if (key === "showHistoryView" && !value) this.#dropFork();
     return this.#commit(next, `set-config ${key}=${value}`);
+  }
+
+  /**
+   * Shows the viewed space as it stood at the point `seq` of its history: in
+   * a fork of it, which replaces any fork already open. The space itself is
+   * left as it is.
+   */
+  async openHistory(seq: number): Promise<void> {
+    const rt = this.#rt.value;
+    const space = this.space;
+    if (
+      rt === undefined || space === undefined ||
+      this._openHistory?.busy === true || !Number.isSafeInteger(seq)
+    ) return;
+    this._historyError = undefined;
+    this._openHistory = { seq, busy: true };
+    const previous = this.#fork;
+    try {
+      const fork = await rt.forkSpace(space, seq);
+      // The view moved on while the fork was being taken.
+      if (rt !== this.#rt.value || space !== this.space) {
+        await fork.discard();
+        return;
+      }
+      this.#fork = fork;
+      this._openHistory = { seq, busy: false };
+      this.#provideRuntime();
+      await previous?.discard();
+    } catch (error) {
+      console.error("[RootView] Failed to open history:", error);
+      this._historyError = describeFailure(error);
+      this._openHistory = previous === undefined || previous !== this.#fork
+        ? undefined
+        : { seq: previous.seq, busy: false };
+    }
+  }
+
+  /** Returns from the open fork to the space as it stands. */
+  async closeHistory(): Promise<void> {
+    const fork = this.#fork;
+    if (fork === undefined || this._openHistory?.busy === true) return;
+    this._historyError = undefined;
+    this.#fork = undefined;
+    this._openHistory = undefined;
+    this.#provideRuntime();
+    try {
+      await fork.discard();
+    } catch (error) {
+      console.error("[RootView] Failed to discard a fork:", error);
+    }
+  }
+
+  /**
+   * Restores the viewed space to the state the open fork holds, and returns
+   * to the space as it then stands.
+   */
+  async restoreHistory(): Promise<void> {
+    const fork = this.#fork;
+    if (fork === undefined || this._openHistory?.busy === true) return;
+    this._historyError = undefined;
+    this._openHistory = { seq: fork.seq, busy: true };
+    try {
+      await fork.restore();
+    } catch (error) {
+      console.error("[RootView] Failed to restore from history:", error);
+      this._historyError = describeFailure(error);
+      if (fork === this.#fork) {
+        this._openHistory = { seq: fork.seq, busy: false };
+      }
+      return;
+    }
+    if (fork !== this.#fork) return;
+    this.#fork = undefined;
+    this._openHistory = undefined;
+    this.#provideRuntime();
+  }
+
+  /** Lets go of the open fork, where there is one, and deletes it. */
+  #dropFork(): void {
+    const fork = this.#fork;
+    this._historyError = undefined;
+    this._openHistory = undefined;
+    if (fork === undefined) return;
+    this.#fork = undefined;
+    this.#provideRuntime();
+    fork.discard().catch((error) =>
+      console.error("[RootView] Failed to discard a fork:", error)
+    );
+  }
+
+  /** Points the provided runtime at the open fork's, or else at this one's. */
+  #provideRuntime(): void {
+    this.runtime = this.#fork?.runtime.runtime() ?? this.#mainClient;
   }
 
   /**
@@ -815,13 +961,24 @@ export class XRootView extends BaseView implements ShellApp {
         <x-app-view
           .app="${this.app}"
           .keyStore="${this.keyStore}"
-          .rt="${this.#rt.value}"
+          .rt="${this.#fork?.runtime ?? this.#rt.value}"
           .space="${this.space}"
           .spaceLoadError="${loadError}"
           .runtimeLoadErrors="${this._runtimeLoadErrors}"
           .preserveRuntimeErrorsForNextViewChange="${this
             .preserveRuntimeErrorsForNextViewChange}"
         ></x-app-view>
+        ${this.app.identity !== undefined &&
+            this.app.config.showHistoryView === true
+          ? html`
+            <x-history-view
+              .rt="${this.#rt.value}"
+              .space="${this.space}"
+              .open="${this._openHistory}"
+              .error="${this._historyError}"
+            ></x-history-view>
+          `
+          : undefined}
         ${this._clientUpdateRequired === undefined ? undefined : html`
           <aside id="client-update-required" class="attention-card" role="alert">
             <h2>Update required</h2>
