@@ -863,6 +863,57 @@ describe("write records the runtime instantiates with the option on", () => {
   }
 });
 
+describe("a commit the preparation refuses", () => {
+  it("writes a document whole in the next transaction where the refused commit created it, before the refused commit settles", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const doc = identifierOf({ test: "refused-first-write" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: doc,
+      artifact: await artifactOf("coalesce"),
+    });
+    try {
+      const store = new Store();
+      store.docs.set(doc, { kind: "result", value: { box: {} } });
+      // The first transaction creates the document with a write record
+      // that binds none of its template's slots: the preparation refuses
+      // the commit.
+      hooks.begin("send");
+      hooks.change(doc, [], store, undefined, [{
+        target: { doc, path: ["elsewhere"] },
+        record: { output: 0 },
+        instance: doc,
+        keys: [],
+        slots: {},
+      }]);
+      hooks.end({ committed: true });
+      // The second, begun before the first settled, writes below the root.
+      store.put(doc, ["box"], { n: 1 });
+      hooks.begin("send");
+      hooks.change(doc, ["box"], store);
+      hooks.end({ committed: true });
+      const refused = await hooks.settled();
+      expect(refused.length).toBe(1);
+      expect(refused[0]).toContain("plan-label refused");
+      expect(withoutSchemas(hooks.stored().get(doc))).toEqual({
+        box: { n: 1 },
+      });
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
 describe("the cost of labels from templates for a `filter`", () => {
   it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
     for (const which of CASES) {

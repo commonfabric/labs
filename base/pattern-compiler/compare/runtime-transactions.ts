@@ -603,10 +603,22 @@ export class RuntimeTransactions implements TransactionHooks {
       for (const doc of this.#created) this.#documents.delete(doc);
       return;
     }
+    // The preparation runs here, before the commit, so that a refusal is
+    // known before the executor begins its next transaction, which can
+    // depend on what this one wrote. The storage holds nothing this
+    // transaction wrote then, so the next change of each document it wrote
+    // writes the document whole. The commit finds the transaction prepared.
+    this.#runtime.prepareTxForCommit(tx);
+    const refused = tx.getCfcState().prepare.status === "invalidated";
+    if (refused) {
+      for (const doc of this.#written.keys()) this.#documents.delete(doc);
+    }
     this.#receipts.push({
       receipt: tx.commit(),
       writes: this.#recorded,
-      created: this.#created,
+      // A document forgotten here may be written again by a later
+      // transaction before this one settles.
+      created: refused ? [] : this.#created,
     });
     this.#recorded = [];
     this.#created = [];
