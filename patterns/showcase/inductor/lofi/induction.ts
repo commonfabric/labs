@@ -428,7 +428,7 @@ Respond with:
  * The JSON schema of a `HifiAnswer`, in the form strict structured outputs
  * take: no extra properties, and every property required.
  */
-// TODO(alex-claude): drop the explicit schema once generateObject's inferred
+// TODO(strict-schema): drop the explicit schema once generateObject's inferred
 // schemas pass strict providers (top/3218)
 export const HIFI_SCHEMA = {
   type: "object",
@@ -463,7 +463,7 @@ Never put personal details (names, addresses, account numbers) in a pattern; rul
 Also give a one-sentence reasoning.`;
 
 /** The JSON schema of a `Proposal`, in the strict form `HIFI_SCHEMA` takes. */
-// TODO(alex-claude): drop the explicit schema once generateObject's inferred
+// TODO(strict-schema): drop the explicit schema once generateObject's inferred
 // schemas pass strict providers (top/3218)
 export const PROPOSAL_SCHEMA = {
   type: "object",
