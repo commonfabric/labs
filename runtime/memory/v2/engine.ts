@@ -82,6 +82,18 @@ import {
   containsSyncSchemaRefString,
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
+import {
+  VALUE_STORE_SCHEMA,
+  type ValueCell,
+  ValueStore,
+} from "./value-store.ts";
+import {
+  COMMIT_RECORD_SCHEMA,
+  CommitRecords,
+  encodeResolution,
+  resolutionText,
+} from "./commit-record.ts";
+import { SharedValues } from "./shared-values.ts";
 import { aclDocId, isDeletionTombstone } from "../acl.ts";
 import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
@@ -92,8 +104,6 @@ import {
   type ClientCommit,
   type CommitClass,
   commitPreconditionValueHash,
-  decodeStoredDocumentPayload,
-  decodeStoredPatchListPayload,
   decodeTrustedMemoryBoundary,
   DEFAULT_BRANCH,
   type DeleteOperation,
@@ -295,14 +305,17 @@ CREATE TABLE IF NOT EXISTS "commit" (
   acting_principal   TEXT,
   acting_session     TEXT,
   capability_ref     TEXT,
+  -- The compact form of a row (commit-record.ts): the replay identity of a
+  -- row whose \`original\` is a blob, and its chunked confirmed reads. Both
+  -- NULL on a row in text form. Declared last so a migrated store, which
+  -- gains them by ALTER TABLE, agrees on column order.
+  digest             BLOB,
+  reads              BLOB,
   FOREIGN KEY (invocation_ref) REFERENCES invocation(ref),
   FOREIGN KEY (authorization_ref) REFERENCES authorization(ref)
 );
-CREATE INDEX IF NOT EXISTS idx_commit_branch ON "commit" (branch);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commit_session_local_seq
   ON "commit" (session_id, local_seq);
-CREATE INDEX IF NOT EXISTS idx_commit_invocation_ref
-  ON "commit" (invocation_ref);
 
 CREATE TABLE IF NOT EXISTS revision (
   branch      TEXT    NOT NULL DEFAULT '',
@@ -316,12 +329,8 @@ CREATE TABLE IF NOT EXISTS revision (
   PRIMARY KEY (branch, id, scope_key, seq, op_index),
   FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
-CREATE INDEX IF NOT EXISTS idx_revision_branch_id_seq
-  ON revision (branch, id, scope_key, seq, op_index);
 CREATE INDEX IF NOT EXISTS idx_revision_commit
   ON revision (commit_seq);
-CREATE INDEX IF NOT EXISTS idx_revision_branch
-  ON revision (branch, seq);
 
 CREATE TABLE IF NOT EXISTS head (
   branch    TEXT    NOT NULL,
@@ -332,7 +341,6 @@ CREATE TABLE IF NOT EXISTS head (
   op        TEXT    NOT NULL CHECK (op IN ('set', 'patch', 'delete')),
   PRIMARY KEY (branch, id, scope_key)
 );
-CREATE INDEX IF NOT EXISTS idx_head_branch ON head (branch);
 
 CREATE TABLE IF NOT EXISTS snapshot (
   branch  TEXT    NOT NULL DEFAULT '',
@@ -342,7 +350,6 @@ CREATE TABLE IF NOT EXISTS snapshot (
   value   JSON    NOT NULL,
   PRIMARY KEY (branch, id, scope_key, seq)
 );
-CREATE INDEX IF NOT EXISTS idx_snapshot_lookup ON snapshot (branch, id, scope_key, seq);
 
 CREATE TABLE IF NOT EXISTS op_field_epoch (
   branch         TEXT    NOT NULL DEFAULT '',
@@ -471,11 +478,6 @@ CREATE TABLE IF NOT EXISTS scheduler_basis (
   PRIMARY KEY (branch, action, action_scope_key,
                entity_space, entity, entity_scope_key)
 );
--- Entity-keyed lookup mirror (implementation detail per serving-loop.md
--- §3b): activation's re-mark scan resolves "who read this doc" without a
--- full-table walk, the successor of idx_scheduler_read_index_lookup.
-CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
-  ON scheduler_basis (branch, entity_space, entity, entity_scope_key);
 
 -- Server-execution v2: the DURABLE half of the outbox
 -- (docs/specs/server-side-execution/serving-loop.md §5, FP1 RULED
@@ -548,6 +550,31 @@ CREATE TABLE IF NOT EXISTS instance_name_mark (
   FOREIGN KEY (commit_seq) REFERENCES "commit"(seq)
 );
 
+-- The compact store. Value objects (value-store.ts) hold what a
+-- \`revision.data\` or \`snapshot.value\` cell names by vid; the dictionaries
+-- and read chunks (commit-record.ts) hold what a compact \`commit\` row names.
+-- Every table is prefixed \`mem_\` because pattern SQL shares this file, and
+-- its rows are never updated.
+${VALUE_STORE_SCHEMA}
+${COMMIT_RECORD_SCHEMA}
+
+-- The store's format: 1 when rows may be in the compact form. An engine
+-- refuses a store whose version it does not know.
+CREATE TABLE IF NOT EXISTS mem_store_format (
+  singleton INTEGER NOT NULL PRIMARY KEY CHECK (singleton = 1),
+  version   INTEGER NOT NULL
+);
+
+-- The conversion of rows written in text form to the compact form, one row
+-- per phase. A store this engine created has every phase \`done\`.
+CREATE TABLE IF NOT EXISTS mem_store_migration (
+  phase   TEXT    NOT NULL PRIMARY KEY
+          CHECK (phase IN ('basis', 'values', 'snapshots', 'commits', 'vacuum')),
+  state   TEXT    NOT NULL CHECK (state IN ('pending', 'done', 'failed')),
+  cursor  TEXT,
+  detail  TEXT
+);
+
 COMMIT;
 `;
 
@@ -578,7 +605,9 @@ INSERT INTO "commit" (
   derived_through,
   acting_principal,
   acting_session,
-  capability_ref
+  capability_ref,
+  digest,
+  reads
 )
 VALUES (
   :seq,
@@ -596,7 +625,9 @@ VALUES (
   :derived_through,
   :acting_principal,
   :acting_session,
-  :capability_ref
+  :capability_ref,
+  :digest,
+  :reads
 )
 `;
 
@@ -842,7 +873,8 @@ WHERE class = 'authored' AND seq <= :seq AND branch = :branch
 `;
 
 const SELECT_EXISTING_COMMIT = `
-SELECT seq, branch, original, resolution, class, holder
+SELECT seq, branch, session_id, original, resolution, digest, reads, class,
+  holder
 FROM "commit"
 WHERE session_id = :session_id
   AND local_seq = :local_seq
@@ -1097,6 +1129,11 @@ export type DocumentCacheEntry = {
    * as it would be stored: what the entry retains, not the rows replayed
    * to produce it. */
   weight: number;
+
+  /** Set when `document` is the one {@link Engine.shared} holds for a vid
+   * cell. That table already gives every revision holding the vid one copy,
+   * so the document is not interned in {@link Engine.heldDocuments}. */
+  shared?: true;
 };
 
 /** One engine's lifetime counters: the document cache's own events, and the
@@ -1238,6 +1275,28 @@ export type Engine = {
    * by the branches that exist rather than by the names readers ask for.
    */
   branchLineages: Map<BranchName, BranchLineage>;
+
+  /**
+   * The value objects `revision.data` and `snapshot.value` cells name by vid:
+   * every value is written through it and every cell read through it.
+   */
+  values: ValueStore;
+
+  /** The compact `commit` rows: every commit is written and read through it. */
+  commits: CommitRecords;
+
+  /**
+   * The decoded form of each value object, shared by vid: every vid cell is
+   * decoded through it.
+   */
+  shared: SharedValues;
+
+  /**
+   * Set by {@link close}. Work that runs between event-loop turns on this
+   * engine, such as the store migration (store-migration.ts), stops when it
+   * finds the flag set.
+   */
+  closed: boolean;
 };
 
 /** What {@link Engine.branchLineages} records of one branch. */
@@ -1646,8 +1705,11 @@ type HeadRow = {
 type CommitRow = {
   seq: number;
   branch: string;
-  original: string;
-  resolution: string;
+  session_id: string;
+  original: string | Uint8Array;
+  resolution: string | Uint8Array;
+  digest: Uint8Array | null;
+  reads: Uint8Array | null;
   class: string;
   holder: string | null;
 };
@@ -1659,7 +1721,7 @@ type RevisionRow = {
   seq: number;
   op_index: number;
   op: AppliedRevision["op"];
-  data: string | null;
+  data: ValueCell;
   commit_seq: number;
 };
 
@@ -1667,12 +1729,12 @@ type ReadRow = {
   seq: number;
   op_index: number;
   op: AppliedRevision["op"];
-  data: string | null;
+  data: ValueCell;
 };
 
 type SnapshotRow = {
   seq: number;
-  value: string;
+  value: string | number;
 };
 
 type BlobRow = {
@@ -2323,6 +2385,165 @@ const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   }).immediate();
 };
 
+// A compact `commit` row (commit-record.ts) adds two columns, one guarded
+// statement per column (the migrateCommitWaveCarriage crash-window
+// rationale). Runs after every other `commit` migration so migrated stores
+// and fresh stores agree on column order.
+const migrateCommitDigestColumns = (database: Database): void => {
+  for (const column of ["digest", "reads"]) {
+    if (!hasColumn(database, "commit", column)) {
+      database.exec(`
+ALTER TABLE "commit"
+ADD COLUMN ${column} BLOB;
+`);
+    }
+  }
+};
+
+/**
+ * Indexes no statement reads through: each repeats a primary key's prefix, or
+ * serves a lookup the primary key already serves. The schema above declares
+ * none of them; a store that holds one loses it at every open, after the
+ * migrations above, which re-create some of them when they rebuild a table.
+ */
+const REDUNDANT_INDEXES = [
+  "idx_revision_branch_id_seq",
+  "idx_revision_branch",
+  "idx_head_branch",
+  "idx_commit_branch",
+  "idx_snapshot_lookup",
+];
+
+/**
+ * Drops `idx_commit_invocation_ref`, the index over every row's
+ * `invocation_ref` that a store from before the compact form holds. It serves
+ * the same lookups as the partial index {@link createInvocationRefIndex}
+ * creates, which is what lets a store keep it until its `commit` table is
+ * compact.
+ */
+export const dropFullInvocationRefIndex = (database: Database): void => {
+  database.exec(`DROP INDEX IF EXISTS idx_commit_invocation_ref`);
+};
+
+/**
+ * Creates the index the foreign-key checks of `invocation_ref` read through,
+ * over the rows that hold one. Creating it reads the whole `commit` table.
+ */
+export const createInvocationRefIndex = (database: Database): void => {
+  database.exec(`
+CREATE INDEX IF NOT EXISTS idx_commit_invocation_ref_present
+  ON "commit" (invocation_ref) WHERE invocation_ref IS NOT NULL
+`);
+};
+
+/**
+ * Gives the store its partial `invocation_ref` index, unless it holds the full
+ * one and its store migration is not complete: building the partial index
+ * reads the whole `commit` table, which takes seconds on a large store in
+ * text form, so the migration's `vacuum` phase builds it once the table is
+ * compact.
+ */
+const settleInvocationRefIndex = (database: Database): void => {
+  const holdsFull = database.prepare(
+    `SELECT 1 FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_commit_invocation_ref'`,
+  ).get() !== undefined;
+  const pending = database.prepare(
+    `SELECT 1 FROM mem_store_migration WHERE state != 'done' LIMIT 1`,
+  ).get() !== undefined;
+  if (holdsFull && pending) return;
+  dropFullInvocationRefIndex(database);
+  createInvocationRefIndex(database);
+};
+
+const dropRedundantIndexes = (database: Database): void => {
+  database.exec(
+    REDUNDANT_INDEXES.map((name) => `DROP INDEX IF EXISTS ${name};`).join("\n"),
+  );
+};
+
+/** The columns of each `mem_` table, in order, as the schema declares them. */
+const MEM_TABLE_COLUMNS: ReadonlyArray<readonly [string, readonly string[]]> = [
+  ["mem_value_object", ["vid", "body"]],
+  ["mem_value_hash", ["hash", "vid"]],
+  ["mem_entity", ["eid", "id"]],
+  ["mem_read_shape", ["shid", "shape"]],
+  ["mem_read_chunk", ["cid", "hash", "body"]],
+  ["mem_store_format", ["singleton", "version"]],
+  ["mem_store_migration", ["phase", "state", "cursor", "detail"]],
+];
+
+/**
+ * Throws, naming the table, when a `mem_` table has columns other than the
+ * schema's: `CREATE TABLE IF NOT EXISTS` keeps a table a pattern created
+ * under the same name, and the engine would read it as its own.
+ */
+const checkMemTables = (database: Database): void => {
+  for (const [table, declared] of MEM_TABLE_COLUMNS) {
+    const columns = (database.prepare(`PRAGMA table_info("${table}")`)
+      .all() as Array<{ name: string }>).map((row) => row.name);
+    if (columns.join(",") !== declared.join(",")) {
+      throw new Error(
+        `The table ${table} has the columns (${
+          columns.join(", ")
+        }) where the engine declares (${
+          declared.join(", ")
+        }); something other than the engine created it.`,
+      );
+    }
+  }
+};
+
+/** The store format this engine writes and reads: rows may be compact. */
+export const STORE_FORMAT_VERSION = 1;
+
+/** The phases of the conversion of a store's text rows to the compact form. */
+export const STORE_MIGRATION_PHASES = [
+  "basis",
+  "values",
+  "snapshots",
+  "commits",
+  "vacuum",
+] as const;
+
+/**
+ * Writes the format mark, refusing a store marked with a later format, and,
+ * on the first open by an engine that writes the compact form, one
+ * `mem_store_migration` row per phase: `done` when the store holds no commit,
+ * so nothing is in text form, and `pending` otherwise.
+ *
+ * @throws Error when the store's format is later than this engine's.
+ */
+const markStoreFormat = (database: Database): void => {
+  database.transaction(() => {
+    database.prepare(
+      `INSERT OR IGNORE INTO mem_store_format (singleton, version) VALUES (1, ?)`,
+    ).run(STORE_FORMAT_VERSION);
+    const { version } = database.prepare(
+      `SELECT version FROM mem_store_format WHERE singleton = 1`,
+    ).get() as { version: number };
+    if (version > STORE_FORMAT_VERSION) {
+      throw new Error(
+        `The store is in format ${version}, and this engine reads formats up to ${STORE_FORMAT_VERSION}.`,
+      );
+    }
+    if (
+      database.prepare(`SELECT 1 FROM mem_store_migration LIMIT 1`).get() !==
+        undefined
+    ) {
+      return;
+    }
+    const state =
+      database.prepare(`SELECT 1 FROM "commit" LIMIT 1`).get() === undefined
+        ? "done"
+        : "pending";
+    const insert = database.prepare(
+      `INSERT OR IGNORE INTO mem_store_migration (phase, state) VALUES (?, ?)`,
+    );
+    for (const phase of STORE_MIGRATION_PHASES) insert.run(phase, state);
+  }).immediate();
+};
+
 export const open = async (
   {
     url,
@@ -2364,7 +2585,20 @@ export const open = async (
   migrateExecutionOutboxPayloadEncoding(database);
   migrateSchedulerObservationTablesToBasis(database);
   migrateIntegratedOperationIds(database);
+  migrateCommitDigestColumns(database);
+  dropRedundantIndexes(database);
+  try {
+    checkMemTables(database);
+    markStoreFormat(database);
+    settleInvocationRefIndex(database);
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   const prepared = preparedOnFirstUse(database);
+  const values = new ValueStore(database);
+  const commits = new CommitRecords(database, values);
+  const shared = new SharedValues(values);
   return {
     url,
     database,
@@ -2393,6 +2627,10 @@ export const open = async (
       : { documentCacheCoordinator }),
     ...(commitObserver === undefined ? {} : { commitObserver }),
     branchLineages: new Map(),
+    values,
+    commits,
+    shared,
+    closed: false,
   };
 };
 
@@ -2447,11 +2685,14 @@ const storedByteLength = (text: string | null | undefined): number =>
   text ? utf8Encoder.encode(text).byteLength : 0;
 
 export const close = (engine: Engine): void => {
+  engine.closed = true;
   // The cache goes with the engine, and its coordinator stops counting it.
   engine.documentCacheCoordinator?.removed(engine);
   engine.documentCache.clear();
   engine.documentCacheBytes = 0;
   engine.heldDocuments.clear();
+  engine.commits.close();
+  engine.values.close();
   engine.database.close();
 };
 
@@ -2842,7 +3083,7 @@ const readStateForScopeKey = (
     row.seq,
     row.op_index,
     row.op,
-    row.data?.length ?? -1,
+    cellKey(row.data),
   );
   let document: EntityDocument | null;
   const cached = cachedDocumentForRevision(engine, cacheKey);
@@ -2851,10 +3092,12 @@ const readStateForScopeKey = (
     document = cached.document;
   } else {
     engine.documentCacheStats.misses++;
-    let weight = storedByteLength(row.data);
+    let weight = engine.values.rowByteLength(row.data);
+    let shared: true | undefined;
     switch (row.op) {
       case "set":
-        document = decodeStoredDocument(row.data);
+        document = decodeStoredDocument(engine, row.data);
+        if (typeof row.data === "number") shared = true;
         break;
       case "delete":
         document = null;
@@ -2878,6 +3121,7 @@ const readStateForScopeKey = (
     document = cacheDocumentForRevision(engine, cacheKey, {
       document,
       weight,
+      ...(shared === undefined ? {} : { shared }),
     });
   }
 
@@ -2906,16 +3150,22 @@ export type PendingStreamEventDoc = {
 };
 
 /**
+ * The least string above every string that starts with `prefix`, for a range
+ * `id >= prefix AND id < bound` that the `(branch, id, scope_key)` primary
+ * key serves, which a `LIKE` prefix under the default collation does not.
+ * The range is case-sensitive where `LIKE` is not, which differs only for
+ * ids that no writer produces.
+ */
+const prefixUpperBound = (prefix: string): string =>
+  prefix.slice(0, -1) +
+  String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
+
+/**
  * Scan the space's stream sidecar docs for undelivered events (Phase 3;
- * serving-loop.md §6 step 4). Cost, stated honestly (review 2026-08-11,
- * n1): the head query is a branch-wide scan filtered by the
- * `of:stream-events:` prefix — under SQLite's default collation a LIKE
- * prefix does NOT use the (branch, id, scope_key) primary key — so the
- * scan is bounded by the branch's HEAD COUNT, with a per-sidecar state
- * read on top. And it is not activation-only: the SpaceServer calls it
- * at activation, per drain, at park evaluation, and at wave-close. If
- * head counts make this hot, the fix is an indexed sidecar registry (or
- * `GLOB`/range bounds that can use the PK), not a comment. Entries at
+ * serving-loop.md §6 step 4). The head query is a range over the
+ * `of:stream-events:` prefix on the primary key, with a per-sidecar state
+ * read on top. It is not activation-only: the SpaceServer calls it at
+ * activation, per drain, at park evaluation, and at wave-close. Entries at
  * or below the watermark — and consequenced entries above it, which a
  * budget-exhausted wave left durable but processed — are excluded by
  * the idempotency rule (events.md §4).
@@ -2925,14 +3175,20 @@ export const selectPendingStreamEventDocs = (
   options: { branch?: BranchName } = {},
 ): PendingStreamEventDoc[] => {
   const branch = options.branch ?? DEFAULT_BRANCH;
-  const heads = engine.prepare(`
-SELECT id, scope_key
+  // A deletion is left out here rather than in SQL: `op <> 'delete'` would
+  // let the planner pick the covering `idx_head_live_entity_ids`, which
+  // cannot seek by id and so walks every live head of the branch.
+  const heads = (engine.prepare(`
+SELECT id, scope_key, op
 FROM head
-WHERE branch = :branch AND id LIKE :prefix AND op != 'delete'
+WHERE branch = :branch AND id >= :lo AND id < :hi
 `).all({
       branch,
-      prefix: `${STREAM_ENTRIES_DOC_PREFIX}%`,
-    }) as Array<{ id: string; scope_key: string }>;
+      lo: STREAM_ENTRIES_DOC_PREFIX,
+      hi: prefixUpperBound(STREAM_ENTRIES_DOC_PREFIX),
+    }) as Array<{ id: string; scope_key: string; op: string }>).filter((head) =>
+      head.op !== "delete"
+    );
   const pending: PendingStreamEventDoc[] = [];
   for (const head of heads) {
     const state = readState(engine, {
@@ -3001,14 +3257,18 @@ export const selectRetirableEffectsInstances = (
   options: { branch?: BranchName } = {},
 ): RetirableEffectsInstance[] => {
   const branch = options.branch ?? DEFAULT_BRANCH;
-  const heads = engine.prepare(`
-SELECT id, scope_key
+  // Deletions are left out as in {@link selectPendingStreamEventDocs}, so
+  // the lookup seeks the primary key by id.
+  const heads = (engine.prepare(`
+SELECT id, scope_key, op
 FROM head
-WHERE branch = :branch AND id = :id AND op != 'delete'
+WHERE branch = :branch AND id = :id
 `).all({
       branch,
       id: SERVER_EXECUTION_EFFECTS_DOC_ID,
-    }) as Array<{ id: string; scope_key: string }>;
+    }) as Array<{ id: string; scope_key: string; op: string }>).filter((head) =>
+      head.op !== "delete"
+    );
   const retirable: RetirableEffectsInstance[] = [];
   for (const head of heads) {
     if (scopeOfScopeKey(head.scope_key) !== "session") continue;
@@ -4115,6 +4375,10 @@ export const runAtomicCommit = <T>(
   }
   const staged = new Map<string, DocumentCacheEntry>();
   engine.stagedDocumentCache = staged;
+  // The value and commit stores keep what the transaction teaches them about
+  // ids aside on the same terms.
+  stageStores(engine);
+  let storesSettled = false;
   // Every commit the operation applied, as the observer will be told of it
   // once the transaction has settled: one that threw is rejected either
   // way, and one that applied is accepted only if the transaction then
@@ -4135,6 +4399,8 @@ export const runAtomicCommit = <T>(
           }
         })
       ).immediate();
+      settleStores(engine, true);
+      storesSettled = true;
     } catch (error) {
       for (const decision of decided) {
         observeCommit(engine, { ...decision, accepted: false });
@@ -4156,6 +4422,7 @@ export const runAtomicCommit = <T>(
   } finally {
     // Also the rollback path, where `staged` is dropped unread.
     engine.stagedDocumentCache = undefined;
+    if (!storesSettled) settleStores(engine, false);
     if (previousSync !== undefined) {
       engine.database.exec(`PRAGMA synchronous = ${previousSync}`);
     }
@@ -4379,11 +4646,11 @@ ORDER BY seq, op_index
       id: options.id,
       scope_key: options.scopeKey,
       since_seq: options.sinceSeq,
-    }) as Array<{ op: string; data: string | null }>;
+    }) as Array<{ op: string; data: ValueCell }>;
   const paths: Array<readonly string[]> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
-      const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      const patches = decodeStoredPatchList(engine, row.data);
       for (const patch of patches) {
         paths.push(parsePointer(patch.path));
       }
@@ -4428,11 +4695,11 @@ ORDER BY r.seq, r.op_index
       scope_key: options.scopeKey,
       since_seq: options.sinceSeq,
       session_id: resolveCommitSessionKey(options.sessionId, options.principal),
-    }) as Array<{ op: string; data: string | null }>;
+    }) as Array<{ op: string; data: ValueCell }>;
   const paths: Array<readonly string[]> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
-      const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      const patches = decodeStoredPatchList(engine, row.data);
       for (const patch of patches) {
         if (
           patch.op === "replace" || patch.op === "add" || patch.op === "remove"
@@ -4542,10 +4809,10 @@ ORDER BY r.seq DESC, r.op_index DESC
       scope_key: options.scopeKey,
       after_seq: options.afterSeq,
       holder: options.holder ?? null,
-    }) as Array<{ seq: number; op: string; data: string | null }>;
+    }) as Array<{ seq: number; op: string; data: ValueCell }>;
   for (const row of rows) {
     if (row.op !== "patch") return row.seq;
-    const patches = decodeStoredPatchList(row.data).filter((patch) =>
+    const patches = decodeStoredPatchList(engine, row.data).filter((patch) =>
       options.commutes?.(patch) !== true
     );
     const overlaps = options.nonRecursive === true
@@ -5084,14 +5351,36 @@ export const applyWaveCommit = (
   );
   const decision = decisionOf(options, true);
   let applied: AppliedCommit;
+  stageStores(engine);
   try {
     applied = applyUnderTransaction.immediate(engine, options);
   } catch (error) {
+    settleStores(engine, false);
     observeCommit(engine, { ...decision, accepted: false });
     throw error;
   }
+  settleStores(engine, true);
   observeCommit(engine, decision);
   return applied;
+};
+
+/**
+ * Opens a staging scope on the engine's value and commit stores around a
+ * write transaction, so that what the transaction reads or writes by id is
+ * cached only once it commits (value-store.ts, `stage`). Each call is
+ * closed by one {@link settleStores}.
+ */
+export const stageStores = (engine: Engine): void => {
+  engine.values.stage();
+  engine.commits.stage();
+  engine.shared.stage();
+};
+
+/** Closes the scope {@link stageStores} opened: publishes on commit, drops on rollback. */
+export const settleStores = (engine: Engine, committed: boolean): void => {
+  engine.shared.settle(committed);
+  engine.commits.settle(committed);
+  engine.values.settle(committed);
 };
 
 // Per-version record of stored schema documents whose content verified
@@ -6428,7 +6717,7 @@ const applyCommitTransaction = (
   // NEW derived commits, and a network retry of an already-ACCEPTED one must
   // keep its stored answer after the producing lease was released or
   // succeeded by a new holder. The stored
-  // identity spans the payload bytes (sameStoredOriginal) AND the admission
+  // identity spans the payload bytes (`commits.matchesStored`) AND the admission
   // envelope (class; for derived, the producing holder): a same-key
   // resubmission differing in either is a DIFFERENT submission and is
   // refused, never answered.
@@ -6437,7 +6726,7 @@ const applyCommitTransaction = (
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
   if (existing) {
-    if (!sameStoredOriginal(existing.original, commit)) {
+    if (!engine.commits.matchesStored(existing, encodeMemoryBoundary(commit))) {
       throw new ProtocolError(
         `commit replay mismatch for session ${sessionId} localSeq ${commit.localSeq}`,
       );
@@ -6468,7 +6757,9 @@ const applyCommitTransaction = (
         ? [opIndex]
         : []
     );
-    const storedResolution = decodeTrustedMemoryBoundary(existing.resolution) as
+    const storedResolution = decodeTrustedMemoryBoundary(
+      resolutionText(existing.resolution, existing.seq),
+    ) as
       & FabricValue
       & {
         operationResolutions?: ApplyOpResolution[];
@@ -7464,7 +7755,9 @@ const applyCommitTransaction = (
         if (row === undefined || (row.branch || DEFAULT_BRANCH) !== branch) {
           return { known: false };
         }
-        const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+        const layer = decodeTrustedMemoryBoundary(
+          engine.commits.originalText(row),
+        ) as ClientCommit;
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -7733,6 +8026,13 @@ const applyCommitTransaction = (
       invocation: encodeMemoryBoundary(LEGACY_EMPTY_INVOCATION),
     });
   }
+  // The row's cells in the compact form where it reads back as `original`;
+  // the text itself otherwise. `original` stays the text every check below
+  // reads.
+  const record = engine.commits.encode(original, {
+    seq,
+    sessionId: sessionKey,
+  });
   engine.statement("insertCommit").run({
     seq,
     branch,
@@ -7740,8 +8040,10 @@ const applyCommitTransaction = (
     local_seq: commit.localSeq,
     invocation_ref: invocationRef,
     authorization_ref: authorizationRef,
-    original,
-    resolution,
+    original: record.original,
+    resolution: encodeResolution(resolution, seq),
+    digest: record.digest,
+    reads: record.reads,
     class: commitClass,
     holder: commitClass === "derived" ? holder ?? null : null,
     annotations: commitClass === "derived" && annotations !== undefined &&
@@ -8150,7 +8452,7 @@ const writeOperation = (
         seq,
         op_index: opIndex,
         op: "set",
-        data: encodeMemoryBoundary(operation.value),
+        data: engine.values.storeRowText(encodeMemoryBoundary(operation.value)),
         commit_seq: seq,
       });
       engine.statement("upsertHead").run({
@@ -8180,7 +8482,9 @@ const writeOperation = (
         seq,
         op_index: opIndex,
         op: "patch",
-        data: encodeMemoryBoundary(operation.patches),
+        data: engine.values.storeRowText(
+          encodeMemoryBoundary(operation.patches),
+        ),
         commit_seq: seq,
       });
       engine.statement("upsertHead").run({
@@ -8662,7 +8966,9 @@ const identityLayerBasis = (
     }) as CommitRow | undefined;
     if (row === undefined || row.seq <= identityBasis) continue;
     if ((row.branch || DEFAULT_BRANCH) !== branch) continue;
-    const layer = decodeTrustedMemoryBoundary(row.original) as ClientCommit;
+    const layer = decodeTrustedMemoryBoundary(
+      engine.commits.originalText(row),
+    ) as ClientCommit;
     const opIndexes: number[] = [];
     let replayable = true;
     for (const [opIndex, operation] of layer.operations.entries()) {
@@ -8901,10 +9207,10 @@ const findConflictSeq = (
   for (
     const conflict of patchStatement.iter(params) as Iterable<{
       seq: number;
-      data: string | null;
+      data: ValueCell;
     }>
   ) {
-    for (const patch of decodeStoredPatchList(conflict.data)) {
+    for (const patch of decodeStoredPatchList(engine, conflict.data)) {
       const leaves = touchedLeafPathsForPatch(patch);
       for (const path of leaves) indexes.leaves.add(path, conflict.seq);
       for (const path of touchedPathsForPatch(patch, leaves)) {
@@ -9053,13 +9359,13 @@ const selectCommitRevisions = (
     if (row.op === "set") {
       return {
         ...base,
-        document: decodeStoredDocument(row.data),
+        document: decodeStoredDocument(engine, row.data),
       } satisfies AppliedRevision;
     }
     if (row.op === "patch") {
       return {
         ...base,
-        patches: decodeStoredPatchList(row.data),
+        patches: decodeStoredPatchList(engine, row.data),
       } satisfies AppliedRevision;
     }
     return base as AppliedRevision;
@@ -9284,12 +9590,14 @@ const storedEntitySourcesMayContainRef = (
   if (snapshotRow && (!baseRow || snapshotRow.seq >= baseRow.seq)) {
     baseSeq = snapshotRow.seq;
     baseOpIndex = Number.MAX_SAFE_INTEGER;
-    baseMayContain = containsReservedSchemaRefSubstring(snapshotRow.value);
+    baseMayContain = engine.values.rowMayContainReservedSchemaRef(
+      snapshotRow.value,
+    );
   } else if (baseRow) {
     baseSeq = baseRow.seq;
     baseOpIndex = baseRow.op_index;
-    baseMayContain = baseRow.op === "set" && baseRow.data !== null &&
-      containsReservedSchemaRefSubstring(baseRow.data);
+    baseMayContain = baseRow.op === "set" &&
+      engine.values.rowMayContainReservedSchemaRef(baseRow.data);
   }
   if (baseMayContain) return true;
 
@@ -9301,9 +9609,9 @@ const storedEntitySourcesMayContainRef = (
     base_op_index: baseOpIndex,
     seq,
     op_index: opIndex,
-  }) as Array<{ data: string }>;
+  }) as Array<{ data: ValueCell }>;
   return patches.some((patch) =>
-    containsReservedSchemaRefSubstring(patch.data)
+    engine.values.rowMayContainReservedSchemaRef(patch.data)
   );
 };
 
@@ -9343,7 +9651,7 @@ const maybeMaterializeSnapshot = (
     id,
     scope_key: scopeKey,
     seq: current.seq,
-    value: encodeMemoryBoundary(current.document),
+    value: engine.values.storeRowText(encodeMemoryBoundary(current.document)),
   });
   compactSnapshots(engine, branch, id, scopeKey);
 };
@@ -9424,7 +9732,7 @@ export const readRevision = (
   }
   switch (row.op) {
     case "set":
-      return decodeStoredDocument(row.data);
+      return decodeStoredDocument(engine, row.data);
     case "delete":
       return null;
     case "patch":
@@ -9483,7 +9791,7 @@ const reconstructPatchedDocument = (
     base_op_index: baseOpIndex,
     seq,
     op_index: opIndex,
-  }) as Array<{ data: string; seq: number; op_index: number }>;
+  }) as Array<{ data: ValueCell; seq: number; op_index: number }>;
 
   // A cached revision is an immutable prefix of this exact branch, scope,
   // and operation range. Replaying its suffix preserves frozen subtrees
@@ -9510,7 +9818,7 @@ const reconstructPatchedDocument = (
         patch.seq,
         patch.op_index,
         "patch",
-        patch.data.length,
+        cellKey(patch.data),
       ),
     );
     if (cached?.document !== undefined && cached.document !== null) {
@@ -9533,8 +9841,9 @@ const reconstructPatchedDocument = (
         snapshotRow.seq,
       );
       if (snapshotted !== undefined) engine.documentCacheStats.resumes++;
-      document = snapshotted ?? decodeStoredDocument(snapshotRow.value);
-      encodedBytes = storedByteLength(snapshotRow.value);
+      document = snapshotted ??
+        decodeStoredDocument(engine, snapshotRow.value);
+      encodedBytes = engine.values.rowByteLength(snapshotRow.value);
     } else if (baseRow?.op === "set") {
       const cachedBase = cachedDocumentForRevision(
         engine,
@@ -9545,11 +9854,13 @@ const reconstructPatchedDocument = (
           baseRow.seq,
           baseRow.op_index,
           baseRow.op,
-          baseRow.data?.length ?? -1,
+          cellKey(baseRow.data),
         ),
       );
-      document = cachedBase?.document ?? decodeStoredDocument(baseRow.data);
-      encodedBytes = cachedBase?.weight ?? storedByteLength(baseRow.data);
+      document = cachedBase?.document ??
+        decodeStoredDocument(engine, baseRow.data);
+      encodedBytes = cachedBase?.weight ??
+        engine.values.rowByteLength(baseRow.data);
     } else {
       document = emptyEntityDocument();
       encodedBytes = encodedByteLength(document);
@@ -9565,7 +9876,7 @@ const reconstructPatchedDocument = (
     const previous = document;
     document = applyPatchToDocument(
       document,
-      decodeStoredPatchList(patch.data),
+      decodeStoredPatchList(engine, patch.data),
     );
     const growth = carried ? replayedGrowth(previous, document) : undefined;
     if (growth === undefined) {
@@ -9639,7 +9950,7 @@ const cachedSnapshottedRevision = (
         row.seq,
         row.op_index,
         row.op,
-        row.data?.length ?? -1,
+        cellKey(row.data),
       ),
     )
     : undefined;
@@ -9968,10 +10279,10 @@ const documentCacheKey = (
   seq: number,
   opIndex: number,
   op: string,
-  dataLength: number,
+  cell: number | string,
 ): string =>
   `${branch}\u0000${id}\u0000${scopeKey}\u0000${seq}\u0000${opIndex}` +
-  `\u0000${op}\u0000${dataLength}`;
+  `\u0000${op}\u0000${cell}`;
 
 /** Looks up a revision and records its use without publishing staged entries.
  * The counters stay with the callers: serving a read and finding where a
@@ -10026,8 +10337,8 @@ const cacheDocumentForRevision = (
   if (engine.database.inTransaction) {
     return entry.document;
   }
-  const document = entry.document === null
-    ? null
+  const document = entry.document === null || entry.shared
+    ? entry.document
     : engine.heldDocuments.intern(key, entry.document);
   // A weight of at least one keeps the byte budget a real bound even for
   // rows with no data (a delete).
@@ -10048,18 +10359,23 @@ const cacheDocumentForRevision = (
   return document;
 };
 
-const decodeStoredDocument = (data: string | null): EntityDocument =>
-  decodeStoredDocumentPayload(decodeTrustedMemoryBoundary, data);
+/** The document a stored `set` cell holds: shared by vid, or decoded from text. */
+const decodeStoredDocument = (
+  engine: Engine,
+  cell: ValueCell,
+): EntityDocument => engine.shared.documentOf(cell);
 
-const decodeStoredPatchList = (data: string | null): PatchOp[] =>
-  decodeStoredPatchListPayload(decodeTrustedMemoryBoundary, data);
+/** The patches a stored `patch` cell holds: shared by vid, or decoded from text. */
+const decodeStoredPatchList = (engine: Engine, cell: ValueCell): PatchOp[] =>
+  engine.shared.patchListOf(cell);
 
-const sameStoredOriginal = (
-  stored: string,
-  incoming: ClientCommit,
-): boolean => {
-  return stored === encodeMemoryBoundary(incoming);
-};
+/**
+ * The stored cell's part of {@link documentCacheKey}: a text cell's length, a
+ * vid as `#<vid>`, and `-1` for no payload. A row converted from text to a vid
+ * changes key, and is decoded once more under the new one.
+ */
+const cellKey = (cell: ValueCell): number | string =>
+  cell === null ? -1 : typeof cell === "string" ? cell.length : `#${cell}`;
 
 const revisionKey = (
   branch: BranchName,

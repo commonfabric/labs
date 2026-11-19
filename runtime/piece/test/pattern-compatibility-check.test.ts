@@ -1050,8 +1050,9 @@ describe("setsrc compatibility preflight", () => {
     const engine = await server.engineForSpace(link.space);
     const row = engine.database.prepare(
       `SELECT data FROM revision WHERE id = :id`,
-    ).get({ id: link.id });
-    const stored = decodeMemoryBoundary(row!.data!) as {
+    ).get<{ data: string | number | null }>({ id: link.id });
+    // A stored payload is text or the vid of a value object; read as text.
+    const stored = decodeMemoryBoundary(engine.values.rowText(row!.data)!) as {
       cfc?: Record<string, unknown>;
     };
     const absentHash = internSchemaAsTaggedHashString({

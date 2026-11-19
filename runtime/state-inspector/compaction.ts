@@ -24,7 +24,8 @@ import {
 } from "@commonfabric/memory/v2/compact";
 import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 
-import { openSpace, type SpaceDb } from "./db.ts";
+import { sqlText, textBytes } from "./compact-views.ts";
+import { openSpace, type SpaceDb, tableNames } from "./db.ts";
 import { decodeStored } from "./decode.ts";
 import {
   contentFingerprint,
@@ -79,6 +80,23 @@ const ACL_ID_PATTERN = "of:did:%";
 /** The tables the history checks cover one by one; every other table is
  * held to the backup whole (I7). */
 const HISTORY_TABLES = new Set(["commit", "revision", "snapshot", "head"]);
+
+/**
+ * The compact store's tables (value objects, dictionaries, read chunks, the
+ * format mark and the conversion's progress): stores the history's rows name
+ * by id, which a run adds to as it writes boundaries and audits, so they are
+ * held to nothing beyond what the history checks read through them.
+ */
+const COMPACT_STORE_TABLE = /^mem_/;
+
+/**
+ * SQL that is true when a `commit.original` cell is a hollowing marker in
+ * either form: the marker's text, or the compact form's blob tagged 0x03.
+ */
+const markerSql = (column: string): string =>
+  `(substr(${column}, 1, ${HOLLOWED_MARKER_PREFIX.length}) = '${
+    HOLLOWED_MARKER_PREFIX.replaceAll("'", "''")
+  }' OR (typeof(${column}) = 'blob' AND substr(${column}, 1, 1) = x'03'))`;
 const OP_TABLES = [
   "op_field_epoch",
   "op_submission",
@@ -185,6 +203,16 @@ export function verifyCompaction(
     // row-level comparison is one SQL statement over both files. The
     // connection is read-only, and so is what it attaches.
     main.db.prepare(`ATTACH DATABASE ? AS against`).run(options.against);
+    // A payload cell of the result reads as text through `mem_value_text`,
+    // which `openSpace` registers for a store with value objects; a store
+    // without them holds text already.
+    if (!tableNames(main.db).includes("mem_value_object")) {
+      main.db.function(
+        "mem_value_text",
+        (cell: string | null) => textBytes(cell),
+        { deterministic: true },
+      );
+    }
 
     // 1. The file itself.
     const integrity = main.all<{ integrity_check: string }>(
@@ -496,7 +524,8 @@ export function verifyCompaction(
       op_index: number;
       data: string | null;
     }>(
-      `SELECT r.branch, r.id, r.scope_key, r.seq, r.op_index, r.data
+      `SELECT r.branch, r.id, r.scope_key, r.seq, r.op_index,
+         ${sqlText("mem_value_text(r.data)")} AS data
        FROM main.revision r JOIN against.revision a
          ON a.branch = r.branch AND a.id = r.id AND a.scope_key = r.scope_key
          AND a.seq = r.seq AND a.op_index = r.op_index
@@ -772,7 +801,9 @@ export function verifyCompaction(
           // after its audit left one behind, and a changed owner in it would
           // be history a reader of the log believes.
           const audits = main.all<{ seq: number; data: string | null }>(
-            `SELECT seq, data FROM main.revision
+            `SELECT seq, ${
+              sqlText("mem_value_text(data)")
+            } AS data FROM main.revision
              WHERE id = ? AND scope_key = 'space' AND branch = '' AND op_index = 0 AND op = 'set'
                AND seq IN (${newAudits.join(", ") || "NULL"}) ORDER BY seq`,
             before.id,
@@ -877,7 +908,9 @@ export function verifyCompaction(
     const otherTables = main.all<{ name: string }>(
       `SELECT name FROM against.sqlite_master
        WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
-    ).map((row) => row.name).filter((name) => !HISTORY_TABLES.has(name));
+    ).map((row) => row.name).filter((name) =>
+      !HISTORY_TABLES.has(name) && !COMPACT_STORE_TABLE.test(name)
+    );
     const tableDiffs: string[] = [];
     for (const table of otherTables) {
       const inMain = main.get(
@@ -956,10 +989,13 @@ export function verifyCompaction(
     // 5. Hollowed payloads: exactly the set the runs' windows reach, each
     //    marker naming a compaction commit and the bytes it replaced; every
     //    other commit column and every commit row the backup's.
+    // The unqualified table is the result's, read as text where its rows
+    // are compact.
     const hollowedRows = main.all<{ seq: number; original: string }>(
-      `SELECT seq, original FROM main."commit" WHERE substr(original, 1, ?) = ? ORDER BY seq`,
-      HOLLOWED_MARKER_PREFIX.length,
-      HOLLOWED_MARKER_PREFIX,
+      `SELECT seq, original FROM "commit"
+       WHERE seq IN (SELECT seq FROM main."commit" WHERE ${
+        markerSql("original")
+      }) ORDER BY seq`,
     );
     const hollowedSeqs = new Set(hollowedRows.map((row) => row.seq));
     const cutoffs = records.map((record) => record.report?.payloads.cutoffAt)
@@ -1058,7 +1094,10 @@ export function verifyCompaction(
     );
     const commitColumns = main.all<{ name: string }>(
       `SELECT name FROM pragma_table_info('commit')`,
-    ).map((column) => column.name).filter((name) => name !== "original")
+    ).map((column) => column.name).filter((name) =>
+      // A compact row hollowed in place keeps its digest and drops its reads.
+      name !== "original" && name !== "digest" && name !== "reads"
+    )
       .map((name) => `"${name}"`).join(", ");
     const commitsChanged = count(
       main,
@@ -1074,9 +1113,7 @@ export function verifyCompaction(
     const payloadsChanged = count(
       main,
       `SELECT count(*) AS n FROM main."commit" m JOIN against."commit" a ON a.seq = m.seq
-       WHERE m.original <> a.original AND substr(m.original, 1, ?) <> ?`,
-      HOLLOWED_MARKER_PREFIX.length,
-      HOLLOWED_MARKER_PREFIX,
+       WHERE m.original IS NOT a.original AND NOT ${markerSql("m.original")}`,
     );
     check(
       "every commit row survives; only payloads go",
@@ -1110,11 +1147,7 @@ export function verifyCompaction(
       const newlyHollowed = count(
         main,
         `SELECT count(*) AS n FROM main."commit" m JOIN against."commit" a ON a.seq = m.seq
-         WHERE substr(m.original, 1, ?) = ? AND substr(a.original, 1, ?) <> ?`,
-        HOLLOWED_MARKER_PREFIX.length,
-        HOLLOWED_MARKER_PREFIX,
-        HOLLOWED_MARKER_PREFIX.length,
-        HOLLOWED_MARKER_PREFIX,
+         WHERE ${markerSql("m.original")} AND NOT ${markerSql("a.original")}`,
       );
       const agrees = plan.instances.truncated === newBoundaries &&
         plan.instances.headOpChanges === materializedHeads &&

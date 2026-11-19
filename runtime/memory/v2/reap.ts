@@ -18,6 +18,12 @@ import {
 } from "./offline-store.ts";
 import { storeSchemaRefusals } from "./compact.ts";
 import { cellDatabaseFilePrefix } from "./storage-path.ts";
+import { ValueStore } from "./value-store.ts";
+import {
+  readCommitOriginalText,
+  resolutionText,
+  type StoredCommitCells,
+} from "./commit-record.ts";
 
 /** A store a reap will not take, by name. */
 export class ReapRefused extends Error {
@@ -88,7 +94,48 @@ const KEPT: ReadonlyMap<string, string> = new Map([
   ],
   ["head", `branch = '' AND id = :acl AND scope_key = 'space'`],
   ["branch", `name = ''`],
+  ["mem_store_format", `1`],
+  ["mem_store_migration", `1`],
 ]);
+
+/**
+ * Rewrites the payload cells of the rows {@link KEPT} keeps in `commit` and
+ * `revision` to text, so that they stand without the value objects,
+ * dictionaries and read chunks a reap empties.
+ */
+const inlineKeptRows = (db: Database, parameters: KeptParameters): void => {
+  const values = new ValueStore(db);
+  try {
+    const revisions = db.prepare(
+      `SELECT rowid AS rowid, data FROM revision WHERE ${KEPT.get("revision")}`,
+    ).all<{ rowid: number; data: string | number | null }>(
+      parametersOf(KEPT.get("revision")!, parameters),
+    );
+    const setData = db.prepare(`UPDATE revision SET data = ? WHERE rowid = ?`);
+    for (const row of revisions) {
+      setData.run(values.rowText(row.data), row.rowid);
+    }
+    const commits = db.prepare(
+      `SELECT seq, session_id, original, resolution, digest, reads
+       FROM "commit" WHERE ${KEPT.get("commit")}`,
+    ).all<StoredCommitCells & { resolution: string | Uint8Array }>(
+      parametersOf(KEPT.get("commit")!, parameters),
+    );
+    const setCommit = db.prepare(
+      `UPDATE "commit" SET original = ?, resolution = ?, digest = NULL,
+         reads = NULL WHERE seq = ?`,
+    );
+    for (const row of commits) {
+      setCommit.run(
+        readCommitOriginalText(db, values, row),
+        resolutionText(row.resolution, row.seq),
+        row.seq,
+      );
+    }
+  } finally {
+    values.close();
+  }
+};
 
 /** The quoted name of `table`, for SQL. */
 const quoted = (table: string): string => `"${table.replaceAll('"', '""')}"`;
@@ -283,6 +330,7 @@ export const stageReap = async (
       // the store, so the plan and the rows it keeps are of the same state.
       const planned = planWithParameters(result);
       result.transaction(() => {
+        inlineKeptRows(result, planned.parameters);
         for (const table of tablesOf(result)) {
           const kept = KEPT.get(table);
           if (kept === undefined) {

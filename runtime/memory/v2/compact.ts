@@ -24,10 +24,15 @@ import {
 import {
   close,
   COMPACTION_SESSION_PREFIX,
+  type Engine,
   open,
   read,
   readRevision,
+  settleStores,
+  stageStores,
 } from "./engine.ts";
+import type { StoredCommitCells } from "./commit-record.ts";
+import { referencedVids } from "./value-store.ts";
 import { isACL, isDeletionTombstone } from "../acl.ts";
 import { type AclHead, readAclHeads } from "./acl-heads.ts";
 import {
@@ -248,8 +253,16 @@ const earlierBy = (createdAt: string, ms: number): string => {
 };
 
 // Stored sizes are measured on the BLOB: `length()` of a TEXT column counts
-// characters, and these JSON columns hold whatever the documents hold.
-const BYTES_OF = (column: string): string => `length(CAST(${column} AS BLOB))`;
+// characters, and these JSON columns hold whatever the documents hold. A cell
+// holding a vid (value-store.ts) counts nothing: the bytes are the object's,
+// which other rows may share, so a size here is what the row holds inline.
+const BYTES_OF = (column: string): string =>
+  `CASE WHEN typeof(${column}) = 'integer' THEN 0 ELSE length(CAST(${column} AS BLOB)) END`;
+
+// Whether a `commit.original` cell is a hollowing marker in either form: the
+// marker text, or the compact form's blob tagged 0x03 (commit-record.ts).
+const HOLLOWED_SQL = (column: string): string =>
+  `(substr(${column}, 1, ?) = ? OR (typeof(${column}) = 'blob' AND substr(${column}, 1, 1) = x'03'))`;
 
 /**
  * What a hollowed commit's `original` holds in place of its payload (I6): a
@@ -535,7 +548,7 @@ export const planCompaction = (
          WHEN c.created_at > ? THEN 'inside'
          WHEN c.seq = 1 THEN 'genesis'
          WHEN c.seq IN (SELECT seq FROM opref) THEN 'op'
-         WHEN substr(c.original, 1, ?) = ? THEN 'hollowed'
+         WHEN ${HOLLOWED_SQL("c.original")} THEN 'hollowed'
          WHEN c.seq IN (SELECT seq FROM owners) THEN 'owning'
          ELSE 'headless'
        END AS kind,
@@ -785,6 +798,8 @@ export type CompactionRun = {
   snapshotsDeleted: number;
   hollowed: number;
   hollowedBytes: number;
+  /** Value objects and read chunks no row referenced, deleted. */
+  swept: SweepResult;
   acl: AclOutcome;
   lastCommitSeq: number;
   out: string;
@@ -793,6 +808,98 @@ export type CompactionRun = {
 };
 
 const HOLLOW_BATCH = 10_000;
+
+/** What {@link sweepUnreferencedObjects} deleted. */
+export type SweepResult = { objects: number; chunks: number };
+
+/**
+ * Deletes every value object and read chunk that no row reaches: the run's
+ * hollowing and deletions leave the objects and chunks only they referenced,
+ * and online snapshot retention leaves the objects of the snapshots it
+ * deletes. Marks the vids `revision.data` and `snapshot.value` hold and the
+ * vids and cids compact commit rows reference, follows each marked object's
+ * references, and deletes the rest of `mem_value_object`, `mem_value_hash`
+ * and `mem_read_chunk`. Inside the caller's write transaction.
+ */
+export const sweepUnreferencedObjects = (engine: Engine): SweepResult => {
+  const db = engine.database;
+  const maxOf = (sql: string): number =>
+    db.prepare(sql).value<[number | null]>()![0] ?? 0;
+  const objectMarks = new Uint8Array(
+    maxOf(`SELECT max(vid) FROM mem_value_object`) + 1,
+  );
+  const chunkMarks = new Uint8Array(
+    maxOf(`SELECT max(cid) FROM mem_read_chunk`) + 1,
+  );
+  const markObject = (vid: number) => {
+    if (vid < objectMarks.length) objectMarks[vid] = 1;
+  };
+  for (
+    const [vid] of db.prepare(
+      `SELECT data FROM revision WHERE typeof(data) = 'integer'
+       UNION ALL
+       SELECT value FROM snapshot WHERE typeof(value) = 'integer'`,
+    ).values<[number]>()
+  ) markObject(vid);
+  for (
+    const row of db.prepare(
+      `SELECT seq, session_id, original, digest, reads FROM "commit"
+       WHERE typeof(original) = 'blob'`,
+    ).iter() as Iterable<StoredCommitCells>
+  ) {
+    const { vids, cids } = engine.commits.references(row);
+    for (const vid of vids) markObject(vid);
+    for (const cid of cids) if (cid < chunkMarks.length) chunkMarks[cid] = 1;
+  }
+  // An object's descendants were stored before it, so a pass in descending
+  // vid order reaches each marked object before its children; a reference to
+  // a later vid is followed afterwards by point reads.
+  const later: number[] = [];
+  const references = (vid: number, body: Uint8Array) => {
+    for (const child of referencedVids(body)) {
+      if (child >= objectMarks.length || objectMarks[child] === 1) continue;
+      objectMarks[child] = 1;
+      if (child > vid) later.push(child);
+    }
+  };
+  for (
+    const [vid, body] of db.prepare(
+      `SELECT vid, body FROM mem_value_object ORDER BY vid DESC`,
+    ).values<[number, Uint8Array]>()
+  ) {
+    if (objectMarks[vid] === 1) references(vid, body);
+  }
+  const selectBody = db.prepare(
+    `SELECT body FROM mem_value_object WHERE vid = ?`,
+  );
+  for (let vid = later.pop(); vid !== undefined; vid = later.pop()) {
+    const row = selectBody.value<[Uint8Array]>(vid);
+    if (row !== undefined) {
+      for (const child of referencedVids(row[0])) {
+        if (child >= objectMarks.length || objectMarks[child] === 1) continue;
+        objectMarks[child] = 1;
+        later.push(child);
+      }
+    }
+  }
+  const unmarked = (sql: string, marks: Uint8Array): number[] =>
+    db.prepare(sql).values<[number]>().map(([id]) => id).filter((id) =>
+      marks[id] !== 1
+    );
+  const objects = unmarked(`SELECT vid FROM mem_value_object`, objectMarks);
+  const hashes = db.prepare(`SELECT hash, vid FROM mem_value_hash`)
+    .values<[Uint8Array, number]>().filter(([, vid]) => objectMarks[vid] !== 1);
+  const chunks = unmarked(`SELECT cid FROM mem_read_chunk`, chunkMarks);
+  const deleteObject = db.prepare(`DELETE FROM mem_value_object WHERE vid = ?`);
+  for (const vid of objects) deleteObject.run(vid);
+  const deleteHash = db.prepare(
+    `DELETE FROM mem_value_hash WHERE hash = ? AND vid = ?`,
+  );
+  for (const [hash, vid] of hashes) deleteHash.run(hash, vid);
+  const deleteChunk = db.prepare(`DELETE FROM mem_read_chunk WHERE cid = ?`);
+  for (const cid of chunks) deleteChunk.run(cid);
+  return { objects: objects.length, chunks: chunks.length };
+};
 
 /** A FabricValue of `value`, with every `undefined` member dropped. */
 const storable = (value: unknown): FabricValue =>
@@ -822,7 +929,9 @@ const readSchema = (
     columns.set(
       object.name,
       db.prepare(
-        `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?) ORDER BY cid`,
+        // `main` names the table, not a TEMP VIEW that shadows it on an
+        // inspector's connection.
+        `SELECT name, type, "notnull", dflt_value, pk FROM pragma_table_info(?, 'main') ORDER BY cid`,
       ).all<SchemaColumn>(object.name),
     );
   }
@@ -1090,7 +1199,19 @@ export const compactStore = async (
       );
     }
     db.exec("PRAGMA locking_mode = EXCLUSIVE");
-    const tx = <T>(fn: () => T): T => db.transaction(fn).immediate();
+    // Every write transaction stages the value and commit stores' caches, as
+    // the engine's own do.
+    const tx = <T>(fn: () => T): T => {
+      stageStores(engine);
+      let committed = false;
+      try {
+        const result = db.transaction(fn).immediate();
+        committed = true;
+        return result;
+      } finally {
+        settleStores(engine, committed);
+      }
+    };
 
     // 1. The compaction commit, at the next seq, with the run's plan as its
     //    payload (I4). The branch head advances to it, so the branch's
@@ -1165,7 +1286,9 @@ export const compactStore = async (
             );
           }
           const changed = rewriteBoundary.run(
-            encodeMemoryBoundary(document as FabricValue),
+            engine.values.storeRowText(
+              encodeMemoryBoundary(document as FabricValue),
+            ),
             commitSeq,
             id,
             scopeKey,
@@ -1242,14 +1365,20 @@ export const compactStore = async (
       const opref = opTables.map((table) => `SELECT commit_seq FROM "${table}"`)
         .join(" UNION ");
       const selectBatch = db.prepare(
-        `SELECT seq, original, ${BYTES_OF("original")} AS bytes FROM "commit"
+        `SELECT seq, session_id, original, digest, reads,
+           ${BYTES_OF("original")} AS bytes FROM "commit"
          WHERE seq >= ? AND seq < ? AND seq <> 1 AND created_at <= ?
            AND session_id NOT LIKE ?
            AND seq NOT IN (${opref})
-           AND substr(original, 1, ?) <> ?`,
+           AND NOT ${HOLLOWED_SQL("original")}`,
       );
       const hollow = db.prepare(
         `UPDATE "commit" SET original = ? WHERE seq = ?`,
+      );
+      // A compact row keeps its digest, which is the marker's hash and
+      // length, so it is hollowed without reassembling its text.
+      const hollowCompact = db.prepare(
+        `UPDATE "commit" SET original = ?, digest = ?, reads = ? WHERE seq = ?`,
       );
       const maxSeq = db.prepare(`SELECT MAX(seq) AS seq FROM "commit"`).get<
         { seq: number }
@@ -1257,7 +1386,7 @@ export const compactStore = async (
       for (let from = 1; from <= maxSeq; from += HOLLOW_BATCH) {
         tx(() => {
           const rows = selectBatch.all<
-            { seq: number; original: string; bytes: number }
+            StoredCommitCells & { bytes: number }
           >(
             from,
             from + HOLLOW_BATCH,
@@ -1267,17 +1396,27 @@ export const compactStore = async (
             HOLLOWED_MARKER_PREFIX,
           );
           for (const row of rows) {
-            hollow.run(
-              hollowedPayload({
-                hollowed: {
-                  hash: hashStringOf(row.original),
-                  bytes: row.bytes,
-                  commitSeq,
-                  runId,
-                },
-              }),
-              row.seq,
-            );
+            if (typeof row.original === "string") {
+              hollow.run(
+                hollowedPayload({
+                  hollowed: {
+                    hash: hashStringOf(row.original),
+                    bytes: row.bytes,
+                    commitSeq,
+                    runId,
+                  },
+                }),
+                row.seq,
+              );
+            } else {
+              const cells = engine.commits.hollowCompact(row, commitSeq);
+              hollowCompact.run(
+                cells.original,
+                cells.digest,
+                cells.reads,
+                row.seq,
+              );
+            }
             hollowed++;
             hollowedBytes += row.bytes;
             lastCommitSeq = Math.max(lastCommitSeq, row.seq);
@@ -1330,7 +1469,7 @@ export const compactStore = async (
       ).run(
         id,
         commitSeq,
-        encodeMemoryBoundary(next as FabricValue),
+        engine.values.storeRowText(encodeMemoryBoundary(next as FabricValue)),
         commitSeq,
       );
       db.prepare(
@@ -1340,7 +1479,9 @@ export const compactStore = async (
       return { status: "marked", id };
     });
 
-    // 5. The checks the plan ends a run with, then the fresh file.
+    // 5. The objects and chunks nothing references any more, then the
+    //    checks the plan ends a run with, then the fresh file.
+    const swept = tx(() => sweepUnreferencedObjects(engine));
     checkRewrittenStore(db);
     options.onProgress?.({ phase: "vacuum", out });
     db.prepare(`VACUUM main INTO ?`).run(out);
@@ -1356,6 +1497,7 @@ export const compactStore = async (
       snapshotsDeleted,
       hollowed,
       hollowedBytes,
+      swept,
       acl,
       lastCommitSeq,
       out,
@@ -1379,7 +1521,9 @@ export const formatCompactionRun = (run: CompactionRun): string => {
     } rows deleted`,
     `payloads   ${n(run.hollowed)} commits hollowed, ${
       size(run.hollowedBytes)
-    }`,
+    }; ${n(run.swept.objects)} value objects and ${
+      n(run.swept.chunks)
+    } read chunks unreferenced, deleted`,
     `acl        ${
       run.acl.status === "marked"
         ? `${run.acl.id} marked at seq ${run.commitSeq}`

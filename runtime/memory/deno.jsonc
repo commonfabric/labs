@@ -64,6 +64,8 @@
     "./v2/compact": "./v2/compact.ts",
     "./v2/reap": "./v2/reap.ts",
     "./v2/acl-heads": "./v2/acl-heads.ts",
+    "./v2/value-store": "./v2/value-store.ts",
+    "./v2/commit-record": "./v2/commit-record.ts",
     "./sqlite": "./v2/sqlite/mod.ts",
     "./sqlite/columns": "./v2/sqlite/columns.ts",
     "./sqlite/guard": "./v2/sqlite/guard.ts",

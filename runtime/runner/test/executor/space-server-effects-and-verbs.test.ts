@@ -620,7 +620,7 @@ describe("SpaceServer", () => {
         try {
           using fault = failStatements(
             served.engine,
-            /FROM head\s+WHERE branch = :branch AND id = :id AND op != 'delete'/,
+            /SELECT id, scope_key, op\s+FROM head\s+WHERE branch = :branch AND id = :id\s*$/,
             1,
           );
           const before = warnings("effects-scan-failed");

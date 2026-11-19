@@ -8,17 +8,38 @@ import { Database } from "@db/sqlite";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 import { compactStore } from "@commonfabric/memory/v2/compact";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
+import { readStoredValueText } from "@commonfabric/memory/v2/value-store";
 
 import {
   type CompactionVerification,
   formatCompactionVerification,
   verifyCompaction,
 } from "../compaction.ts";
+import { textBytes } from "../compact-views.ts";
 import { openSpace } from "../db.ts";
 import { decodeStored } from "../decode.ts";
 import { reconstructRevision } from "../reconstruct.ts";
 
 const SPACE = "did:key:z6MkTestSpace";
+
+/**
+ * Registers two functions on `db` for tampering statements:
+ * `stored_text(cell)`, the text a payload cell stands for, so a statement can
+ * edit a row the engine stored by vid; and `wrong_digest(digest)`, a compact
+ * row's digest with its hash zeroed (SQL's `||` would make it text).
+ */
+const withStoredText = (db: Database): Database => {
+  db.function(
+    "stored_text",
+    (cell: string | number | null) => textBytes(readStoredValueText(db, cell)),
+  );
+  db.function("wrong_digest", (digest: Uint8Array) => {
+    const wrong = digest.slice();
+    wrong.fill(0, 1, 33);
+    return wrong;
+  });
+  return db;
+};
 const ACL = `of:${SPACE}`;
 
 const commit = (localSeq: number, operations: unknown[]) =>
@@ -393,8 +414,11 @@ Deno.test("verifyCompaction holds an interrupted attempt's retained audit to the
     ).get<{ seq: number }>()!.seq;
     const row = db.prepare(
       `SELECT data FROM revision WHERE id = ? AND seq = ? AND op_index = 0`,
-    ).get<{ data: string }>(ACL, first)!;
-    const document = decodeStored(row.data) as Record<string, unknown>;
+    ).get<{ data: string | number }>(ACL, first)!;
+    const document = decodeStored(readStoredValueText(db, row.data)!) as Record<
+      string,
+      unknown
+    >;
     db.prepare(
       `UPDATE revision SET data = ? WHERE id = ? AND seq = ? AND op_index = 0`,
     ).run(
@@ -556,12 +580,12 @@ Deno.test("verifyCompaction catches a materialized boundary holding the wrong st
     // boundary holds. Only the exact-row comparison sees it.
     const copy = `${dir}/boundary.sqlite`;
     await Deno.copyFile(result, copy);
-    const db = new Database(copy);
+    const db = withStoredText(new Database(copy));
     const boundary = db.prepare(
       `SELECT seq, op_index FROM revision WHERE id = 'computed:a' AND scope_key = 'space' AND op = 'set' ORDER BY seq LIMIT 1`,
     ).get<{ seq: number; op_index: number }>()!;
     db.prepare(
-      `UPDATE revision SET data = replace(data, '"n":', '"n":99') WHERE id = 'computed:a' AND scope_key = 'space' AND seq = ? AND op_index = ?`,
+      `UPDATE revision SET data = replace(CAST(stored_text(data) AS TEXT), '"n":', '"n":99') WHERE id = 'computed:a' AND scope_key = 'space' AND seq = ? AND op_index = ?`,
     ).run(boundary.seq, boundary.op_index);
     db.close();
     const verification = verifyCompaction({ result: copy, against: backup });
@@ -579,7 +603,7 @@ Deno.test("verifyCompaction names what a tampered result lost", async () => {
     ): Promise<CompactionVerification> => {
       const copy = `${dir}/tampered.sqlite`;
       await Deno.copyFile(result, copy);
-      const db = new Database(copy);
+      const db = withStoredText(new Database(copy));
       db.prepare(`ATTACH DATABASE ? AS against`).run(backup);
       db.exec(sql);
       db.close();
@@ -597,13 +621,13 @@ Deno.test("verifyCompaction names what a tampered result lost", async () => {
 
     // A materialized boundary holding the wrong document.
     await tampered(
-      `UPDATE revision SET data = replace(data, '"n":12', '"n":13') WHERE id = 'computed:a' AND scope_key = 'space' AND op = 'set'`,
+      `UPDATE revision SET data = replace(CAST(stored_text(data) AS TEXT), '"n":12', '"n":13') WHERE id = 'computed:a' AND scope_key = 'space' AND op = 'set'`,
       "every document reads back identical",
       "fingerprint",
     );
     // Every document differs: the list of them is capped at five.
     const many = await tampered(
-      `UPDATE revision SET data = replace(data, '"n":', '"m":') WHERE op = 'set' AND id NOT LIKE 'of:did:%'`,
+      `UPDATE revision SET data = replace(CAST(stored_text(data) AS TEXT), '"n":', '"m":') WHERE op = 'set' AND id NOT LIKE 'of:did:%'`,
       "every document reads back identical",
     );
     const differ = many.checks.find((check) =>
@@ -673,9 +697,10 @@ Deno.test("verifyCompaction names what a tampered result lost", async () => {
       `UPDATE "commit" SET original = (SELECT original FROM against."commit" WHERE seq = 3) WHERE seq = 3`,
       "hollowed payloads",
     );
-    // A marker whose hash is wrong, wherever it sits.
+    // A marker whose hash is wrong, wherever it sits. A compact row's marker
+    // takes its hash from the row's digest.
     await tampered(
-      `UPDATE "commit" SET original = replace(original, '"hash":"', '"hash":"x') WHERE seq = (SELECT MAX(seq) FROM "commit" WHERE original LIKE 'fvj1:{"hollowed":%')`,
+      `UPDATE "commit" SET digest = wrong_digest(digest) WHERE seq = (SELECT MAX(seq) FROM "commit" WHERE typeof(original) = 'blob' AND substr(original, 1, 1) = x'03')`,
       "hollowed payloads",
     );
     // A marker that does not decode.
@@ -704,8 +729,8 @@ Deno.test("verifyCompaction names what a tampered result lost", async () => {
     );
     // A hollowed row the backup never had.
     await tampered(
-      `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
-       SELECT 0, 'ghost', 1, original, resolution FROM "commit" WHERE seq = 3`,
+      `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution, digest)
+       SELECT 0, 'ghost', 1, original, resolution, digest FROM "commit" WHERE seq = 3`,
       "hollowed payloads",
     );
     // A marker with the right prefix and the wrong shape.

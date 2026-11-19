@@ -474,9 +474,21 @@ describe("v2 document cache", () => {
           }),
         } as never);
         const stringify = JSON.stringify;
+        // The commit record's encoding stringifies the commit, whose size
+        // does not depend on the document's; it is left out of the count.
+        let encodingCommit = false;
+        const encode = engine.commits.encode.bind(engine.commits);
+        engine.commits.encode = (...args) => {
+          encodingCommit = true;
+          try {
+            return encode(...args);
+          } finally {
+            encodingCommit = false;
+          }
+        };
         JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
           const text = stringify(...args);
-          characters += text?.length ?? 0;
+          if (!encodingCommit) characters += text?.length ?? 0;
           return text;
         }) as typeof JSON.stringify;
         try {
@@ -530,9 +542,21 @@ describe("v2 document cache", () => {
           }),
         } as never);
         const stringify = JSON.stringify;
+        // The commit record's encoding stringifies the commit, whose size
+        // does not depend on the document's; it is left out of the count.
+        let encodingCommit = false;
+        const encode = engine.commits.encode.bind(engine.commits);
+        engine.commits.encode = (...args) => {
+          encodingCommit = true;
+          try {
+            return encode(...args);
+          } finally {
+            encodingCommit = false;
+          }
+        };
         JSON.stringify = ((...args: Parameters<typeof JSON.stringify>) => {
           const text = stringify(...args);
-          characters += text?.length ?? 0;
+          if (!encodingCommit) characters += text?.length ?? 0;
           return text;
         }) as typeof JSON.stringify;
         try {

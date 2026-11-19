@@ -1175,17 +1175,23 @@ const entitiesFromTracker = (
   return entities;
 };
 
-// Scans for embedded schema refs, by the decoded document scanned and the id
-// it was scanned under, so that a version another session or query already
-// delivered is not scanned again. What a scan finds depends on nothing else,
-// and the readers of one revision share one decoded copy
-// (`Engine.heldDocuments`), so a scan is shared exactly as widely as the
-// document and goes when the document does. A refresh does not depend on
-// it: an unchanged version is answered from the graph state's own record
-// (`TrackedGraphState.schemaRefs`), which this only seeds.
+// Scans for embedded schema refs, by the decoded document scanned, so that a
+// version another session or query already delivered is not scanned again.
+// What a scan finds depends on the document and, for a `cid:` id alone, on the
+// id (the schema-document test), so a scan under any other id is kept once
+// per document and a `cid:` scan per id. The readers of one revision share
+// one decoded copy (`Engine.heldDocuments`), and documents with equal stored
+// values share one copy across ids (`Engine.shared`), so a scan is shared
+// exactly as widely as the document and goes when the document does. A
+// refresh does not depend on it: an unchanged version is answered from the
+// graph state's own record (`TrackedGraphState.schemaRefs`), which this only
+// seeds.
 const schemaRefScansByDocument = new WeakMap<
   object,
-  { id: string; refs: ReadonlySet<string> }
+  {
+    nonCid?: ReadonlySet<string>;
+    byCid?: Map<string, ReadonlySet<string>>;
+  }
 >();
 
 /** The scan of `snapshot` that another reader of the same decoded document
@@ -1196,7 +1202,9 @@ const sharedSchemaRefScan = (
 ): ReadonlySet<string> | undefined => {
   if (snapshot.document === null) return undefined;
   const shared = schemaRefScansByDocument.get(snapshot.document);
-  return shared?.id === fromDocKey(key).id ? shared.refs : undefined;
+  if (shared === undefined) return undefined;
+  const { id } = fromDocKey(key);
+  return id.startsWith("cid:") ? shared.byCid?.get(id) : shared.nonCid;
 };
 
 // Per-version record of schema documents that verified in this engine's
@@ -1306,10 +1314,14 @@ const recordSchemaRefScan = (
 ): void => {
   scans.set(key, { seq: snapshot.seq, refs });
   if (snapshot.document === null) return;
-  schemaRefScansByDocument.set(snapshot.document, {
-    id: fromDocKey(key).id,
-    refs,
-  });
+  let shared = schemaRefScansByDocument.get(snapshot.document);
+  if (shared === undefined) {
+    shared = {};
+    schemaRefScansByDocument.set(snapshot.document, shared);
+  }
+  const { id } = fromDocKey(key);
+  if (id.startsWith("cid:")) (shared.byCid ??= new Map()).set(id, refs);
+  else shared.nonCid = refs;
 };
 
 /**

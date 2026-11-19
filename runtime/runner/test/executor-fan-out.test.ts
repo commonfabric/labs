@@ -127,9 +127,11 @@ const everHeld = (
 ): boolean =>
   (engine.database.prepare(
     `SELECT data FROM revision WHERE scope_key = :scope_key`,
-  ).all({ scope_key: scopeKey }) as Array<{ data: unknown }>).some((row) =>
-    JSON.stringify(row.data ?? null).includes(needle)
-  );
+  ).all({ scope_key: scopeKey }) as Array<{ data: string | number | null }>)
+    .some((row) =>
+      // A stored payload is text or the vid of a value object; read as text.
+      JSON.stringify(engine.values.rowText(row.data)).includes(needle)
+    );
 
 /** A per-user subtree reachable ONLY through a per-user VALUE (design
  * §B4/§G B-f): `view` links to the `guarded` computed only for a user
@@ -281,9 +283,10 @@ const writesOf = (
      WHERE r.id = :id AND r.scope_key = :scope_key
      ORDER BY r.seq, r.op_index`,
   ).all({ id, scope_key: scopeKey }) as Array<
-    { class: string; op: string; data: unknown }
+    { class: string; op: string; data: string | number | null }
   >).map((row) => {
-    const data = JSON.stringify(row.data ?? null);
+    // A stored payload is text or the vid of a value object; read as text.
+    const data = JSON.stringify(engine.values.rowText(row.data));
     return {
       authored: row.class === "authored",
       setsResult: row.op === "set"
