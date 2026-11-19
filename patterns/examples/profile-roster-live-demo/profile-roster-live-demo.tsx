@@ -148,11 +148,9 @@ export default pattern<ProfileRosterLiveInput, ProfileRosterLiveOutput>(
             <cf-vstack gap="1">
               <span style={headerLabel}>You</span>
               {
-                /* `#profile` is a wish RESULT (not the raw profile piece), so a
-                click would route to a non-piece id and fail to load. The self
-                badge is non-navigable (same convention as profile-home's self
-                badge); the participant badges below bind raw profile cells and
-                DO navigate. */
+                /* The self badge stays non-navigable, as in profile-home.
+                Participant badges below use the same live profile capability
+                and enable navigation. */
               }
               <cf-profile-badge
                 $profile={myProfile}

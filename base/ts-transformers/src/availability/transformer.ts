@@ -95,10 +95,9 @@ function resolveCompositeInput(
   const symbol = context.checker.getSymbolAtLocation(current);
   if (!symbol || seen.has(symbol)) return current;
   seen.add(symbol);
-  const declaration = symbol.valueDeclaration ?? symbol.declarations?.[0];
-  return declaration && ts.isVariableDeclaration(declaration) &&
-      declaration.initializer
-    ? resolveCompositeInput(declaration.initializer, context, seen)
+  const initializer = getStableConstAliasInitializer(symbol, context.factory);
+  return initializer
+    ? resolveCompositeInput(initializer, context, seen)
     : current;
 }
 
@@ -361,7 +360,7 @@ export class AvailabilityAnalysisTransformer extends HelpersOnlyTransformer {
             rootReactiveContext?.kind === "compute" &&
             nodeIsWithin(rootDeclaration, functionBody) &&
             (!aliasInitializer ||
-              !parseAvailabilityCaptureExpression(aliasInitializer))
+              !parseAvailabilityCaptureExpression(aliasInitializer, context))
           ) {
             context.reportDiagnosticOnce({
               type: "availability:unsupported-guard-operand",

@@ -16,6 +16,7 @@ import {
 import Note from "../notes/note.tsx";
 import Notebook from "../notes/notebook.tsx";
 import { listMentionable } from "../common-fabric/common-fabric.tsx";
+import { optionalWishText } from "../common-fabric/optional-wish-text.ts";
 import {
   searchPattern as summarySearchPattern,
   type SummaryIndexEntry,
@@ -114,7 +115,10 @@ export default pattern<QuickCaptureInput, QuickCaptureOutput>(
 
     // TODO(#1269): Add wish<{ text: string }>({ query: "#system" }) once #system wish resolution is stable.
     const profileWish = wish<string>({ query: "#learnedSummary" });
-    const profileText = resultOf(profileWish.result);
+    const profileText = optionalWishText({
+      response: profileWish.result,
+      errorCode: profileWish.errorCode,
+    });
 
     const systemPrompt = computed(() => {
       const profile = profileText;

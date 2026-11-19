@@ -1,10 +1,12 @@
 import ts from "typescript";
+import { isCommonFabricDeclaration } from "@commonfabric/schema-generator/common-fabric-symbols";
 
 import { detectCallKind } from "../ast/call-kind.ts";
 import { getStableConstAliasInitializer } from "../ast/stable-const-alias.ts";
 import { getTypeAtLocationWithFallback } from "../ast/utils.ts";
 import type { TransformationContext } from "../core/context.ts";
 import { parseCaptureExpression } from "../utils/capture-tree.ts";
+import { isBrandedCellType } from "../transformers/cell-type.ts";
 import {
   guardOperandExposesAvailability,
   resolveAvailabilityObservation,
@@ -48,8 +50,10 @@ export function availabilityPathKey(path: readonly string[]): string {
 
 export function parseAvailabilityCaptureExpression(
   expression: ts.Expression,
+  context: TransformationContext,
 ): ReturnType<typeof parseCaptureExpression> {
   const target = unwrapAvailabilityExpression(expression);
+  if (!hasCanonicalKeyPath(target, context)) return undefined;
   const parsed = parseCaptureExpression(target);
   if (parsed) return parsed;
 
@@ -58,7 +62,10 @@ export function parseAvailabilityCaptureExpression(
   if (!ts.isStringLiteralLike(argument) && !ts.isNumericLiteral(argument)) {
     return undefined;
   }
-  const receiver = parseAvailabilityCaptureExpression(target.expression);
+  const receiver = parseAvailabilityCaptureExpression(
+    target.expression,
+    context,
+  );
   return receiver
     ? {
       root: receiver.root,
@@ -67,6 +74,49 @@ export function parseAvailabilityCaptureExpression(
       expression,
     }
     : undefined;
+}
+
+function hasCanonicalKeyPath(
+  expression: ts.Expression,
+  context: TransformationContext,
+): boolean {
+  let current = unwrapAvailabilityExpression(expression);
+  while (true) {
+    if (
+      ts.isPropertyAccessExpression(current) ||
+      ts.isElementAccessExpression(current)
+    ) {
+      current = unwrapAvailabilityExpression(current.expression);
+      continue;
+    }
+    if (
+      !ts.isCallExpression(current) ||
+      !ts.isPropertyAccessExpression(current.expression) ||
+      current.expression.name.text !== "key"
+    ) return true;
+    const receiver = current.expression.expression;
+    const type = getTypeAtLocationWithFallback(
+      receiver,
+      context.checker,
+      context.options.state?.typeRegistry,
+    );
+    if (!type || !isBrandedCellType(type, context.checker)) return false;
+    const original = ts.getOriginalNode(current);
+    const signature = context.checker.getResolvedSignature(
+      ts.isCallExpression(original) ? original : current,
+    );
+    if (signature?.declaration) {
+      if (!isCommonFabricDeclaration(signature.declaration)) return false;
+    } else {
+      // A generated projection may have only its registered receiver type.
+      // Every declaration must still name the canonical capability method.
+      const declarations = type.getProperty("key")?.getDeclarations();
+      if (
+        !declarations?.length || !declarations.every(isCommonFabricDeclaration)
+      ) return false;
+    }
+    current = unwrapAvailabilityExpression(receiver);
+  }
 }
 
 function captureRootIdentifier(
@@ -97,7 +147,7 @@ function captureTypeSource(
   boundary?: ts.Node,
 ): ts.Expression {
   const root = captureRootIdentifier(expression);
-  const capture = parseAvailabilityCaptureExpression(expression);
+  const capture = parseAvailabilityCaptureExpression(expression, context);
   if (!root || !capture) return expression;
   const symbol = context.checker.getSymbolAtLocation(root);
   const declaration = symbol?.valueDeclaration ?? symbol?.declarations?.[0];
@@ -165,7 +215,7 @@ function parseExplicitAvailabilityCaptureExpression(
       node: diagnosticNode,
     });
   };
-  const parsed = parseAvailabilityCaptureExpression(expression);
+  const parsed = parseAvailabilityCaptureExpression(expression, context);
   if (!parsed) {
     reportUnsupported();
     return undefined;
@@ -252,12 +302,17 @@ export function collectObservedAvailabilityCaptures(
       captureExpression,
       context,
     );
-    let capture = parseAvailabilityCaptureExpression(captureExpression);
+    let capture = parseAvailabilityCaptureExpression(
+      captureExpression,
+      context,
+    );
     if (!observation) {
       const root = captureRootIdentifier(captureExpression);
       if (root) {
         observation = resolveAvailabilityObservation(root, context);
-        if (observation) capture = parseAvailabilityCaptureExpression(root);
+        if (observation) {
+          capture = parseAvailabilityCaptureExpression(root, context);
+        }
       }
     }
     if (!observation) continue;
@@ -399,7 +454,7 @@ export function collectAvailabilityGuardCaptures(
       if (callKind?.kind === "availability-guard") {
         const operand = node.arguments[0];
         const capture = operand
-          ? parseAvailabilityCaptureExpression(operand)
+          ? parseAvailabilityCaptureExpression(operand, context)
           : undefined;
         if (!capture) {
           context.reportDiagnosticOnce({
@@ -479,6 +534,7 @@ function helperGuardEntryAtCallSite(
   entry: AvailabilityCaptureOverride,
   helper: AvailabilityAnalyzableFunction,
   call: ts.CallExpression,
+  boundary: ts.Expression | ts.Block,
   context: TransformationContext,
 ): AvailabilityCaptureOverride | undefined {
   const [root, ...rest] = entry.path;
@@ -502,9 +558,16 @@ function helperGuardEntryAtCallSite(
         node: call,
       });
     };
-    const capture = parseAvailabilityCaptureExpression(argument);
-    if (!capture) {
+    if (!parseAvailabilityCaptureExpression(argument, context)) {
       reportUnstableCallerPath();
+      return undefined;
+    }
+    const capture = parseExplicitAvailabilityCaptureExpression(
+      argument,
+      boundary,
+      context,
+    );
+    if (!capture) {
       return undefined;
     }
     const relativePath = applyBindingPath(binding, rest);
@@ -668,6 +731,7 @@ function collectExplicitAvailabilityGuardCapturesInternal(
               helperEntry,
               helper,
               node,
+              expression,
               context,
             );
             if (mapped) record(mapped.path, mapped.reasons, mapped.source);

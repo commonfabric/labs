@@ -101,28 +101,37 @@ Deno.test("opaque capture type registration preserves a same-named nested local"
   );
 });
 
-Deno.test("static element captures retain exact key-call paths and reject dynamic indices", () => {
+Deno.test("static element captures retain exact paths and reject dynamic indices", () => {
   withContext(
     `
-    import { type AsyncResult, type Cell, hasError } from "commonfabric";
-    declare const input: Cell<{ requests: AsyncResult<{ name: string }>[] }>;
+    import { type AsyncResult, hasError } from "commonfabric";
+    declare const input: { requests: Record<string, AsyncResult<{ name: string }>> };
     declare const index: number;
-    const first = input.key("requests")[0];
-    const named = input.key("requests")["01"];
-    const dynamic = input.key("requests")[index];
-    const guards = () => hasError(input.key("requests")[0]);
+    const first = input.requests[0];
+    const named = input.requests["01"];
+    const dynamic = input.requests[index];
+    const guards = () => hasError(input.requests[0]);
   `,
     ({ context, sourceFile }) => {
       expect(
-        parseAvailabilityCaptureExpression(initializer(sourceFile, "first")),
+        parseAvailabilityCaptureExpression(
+          initializer(sourceFile, "first"),
+          context,
+        ),
       )
         .toMatchObject({ root: "input", path: ["requests", "0"] });
       expect(
-        parseAvailabilityCaptureExpression(initializer(sourceFile, "named")),
+        parseAvailabilityCaptureExpression(
+          initializer(sourceFile, "named"),
+          context,
+        ),
       )
         .toMatchObject({ root: "input", path: ["requests", "01"] });
       expect(
-        parseAvailabilityCaptureExpression(initializer(sourceFile, "dynamic")),
+        parseAvailabilityCaptureExpression(
+          initializer(sourceFile, "dynamic"),
+          context,
+        ),
       )
         .toBeUndefined();
       const guards = initializer(sourceFile, "guards");
@@ -136,6 +145,48 @@ Deno.test("static element captures retain exact key-call paths and reject dynami
           path: ["input", "requests", "0"],
           reasons: ["error"],
         }]);
+    },
+  );
+});
+
+Deno.test("capture key paths require canonical capability methods along the whole receiver chain", () => {
+  withContext(
+    `
+    import { type AsyncResult, type OpaqueCell, type Cell } from "commonfabric";
+    type Root = { nested: { request: AsyncResult<string> } };
+    declare const input: OpaqueCell<Root>;
+    declare const cell: Cell<Root>;
+    declare const foreign: { key(name: "nested"): OpaqueCell<Root["nested"]> };
+    declare const overridden: OpaqueCell<Root> & { key(name: "request"): AsyncResult<string> };
+    declare const borrowed: Pick<OpaqueCell<Root>, "key">;
+    const multi = input.key("nested", "request");
+    const chained = input.key("nested").key("request");
+    const explicit = cell.key("nested", "request");
+    const wrongParent = foreign.key("nested").key("request");
+    const wrongMethod = overridden.key("request");
+    const wrongReceiver = borrowed.key("nested");
+  `,
+    ({ context, sourceFile }) => {
+      for (const name of ["multi", "chained", "explicit"]) {
+        expect(
+          parseAvailabilityCaptureExpression(
+            initializer(sourceFile, name),
+            context,
+          ),
+        )
+          .toMatchObject({
+            root: name === "explicit" ? "cell" : "input",
+            path: ["nested", "request"],
+          });
+      }
+      for (const name of ["wrongParent", "wrongMethod", "wrongReceiver"]) {
+        expect(
+          parseAvailabilityCaptureExpression(
+            initializer(sourceFile, name),
+            context,
+          ),
+        ).toBeUndefined();
+      }
     },
   );
 });

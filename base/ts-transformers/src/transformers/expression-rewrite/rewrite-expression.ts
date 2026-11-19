@@ -30,6 +30,7 @@ import {
   getOpaqueAccessInfo,
   isLocalOpaqueOriginBindingReference,
 } from "../opaque-roots.ts";
+import { outermostTransparentWrapper } from "../../utils/expression.ts";
 
 const EMITTERS: readonly Emitter[] = [
   emitPropertyAccess,
@@ -78,9 +79,26 @@ function canLowerLocalOpaqueMemberInPlace(
     return false;
   }
   const info = getOpaqueAccessInfo(expression, context);
-  return info.dynamic === false && info.path.length > 0 &&
-    info.rootIdentifier !== undefined &&
-    isLocalOpaqueOriginBindingReference(info.rootIdentifier, context);
+  if (
+    info.dynamic || info.path.length === 0 || !info.rootIdentifier ||
+    !isLocalOpaqueOriginBindingReference(info.rootIdentifier, context)
+  ) return false;
+  const usage = outermostTransparentWrapper(expression);
+  const parent = usage.parent;
+  if (parent && ts.isDeleteExpression(parent)) {
+    return false;
+  }
+  if (
+    parent &&
+    ((ts.isBinaryExpression(parent) && parent.left === usage &&
+      parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment) ||
+      ((ts.isPrefixUnaryExpression(parent) ||
+        ts.isPostfixUnaryExpression(parent)) &&
+        (parent.operator === ts.SyntaxKind.PlusPlusToken ||
+          parent.operator === ts.SyntaxKind.MinusMinusToken)))
+  ) return false;
+  return true;
 }
 
 function rewriteChildExpressions(

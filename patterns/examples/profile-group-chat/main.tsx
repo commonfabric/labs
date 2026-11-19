@@ -139,13 +139,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
       ) return "";
       return resultOf(observedProfileName);
     });
-    const myProfile = computed(() => {
-      if (
-        hasError(observedProfile) || isPending(observedProfile) ||
-        isSyncing(observedProfile) || hasSchemaMismatch(observedProfile)
-      ) return {};
-      return resultOf(observedProfile);
-    });
+    const myProfile = resultOf(observedProfile);
     const profileAvailable = computed(() =>
       !hasError(observedProfile) && !isPending(observedProfile) &&
       !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile) &&

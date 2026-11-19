@@ -399,11 +399,7 @@ export default pattern<Input>(({ enableSearch }) => {
   const searchPiece = wish<SearchOutput>({ query: "#search" });
   const search = resultOf(searchPiece.result);
 
-  // Use computed() to conditionally process the result
-  const searchData = computed(() => {
-    if (!enableSearch) return null;
-    return search.data;
-  });
+  const searchData = enableSearch ? search.data : null;
 
   return { searchData, [UI]: <div>{searchData}</div> };
 });
@@ -411,6 +407,10 @@ export default pattern<Input>(({ enableSearch }) => {
 
 This ensures the wish is established once. Conditional logic belongs in how you
 *use* the result, not in whether you *create* the wish.
+
+The pattern-body conditional selects the result branch, so a disabled search
+does not depend on the Wish result becoming usable. A `computed()` that captures the projected result
+has that availability dependency even if its callback contains a disabled branch.
 
 ## Built-in Targets
 

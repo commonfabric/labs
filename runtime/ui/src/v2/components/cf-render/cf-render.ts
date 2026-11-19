@@ -22,6 +22,7 @@ import "../cf-loader/index.ts";
 import "../cf-drag-source/index.ts";
 import "../cf-piece-menu/index.ts";
 import { targetsTextEntry } from "../text-entry.ts";
+import { watchPendingBoxes } from "./pending-boxes.ts";
 
 import {
   closePieceMenuFor,
@@ -177,20 +178,8 @@ export class CFRender extends BaseElement {
     /* The renderer owns pending semantics; cf-render owns their presentation.
       Ambient custom properties cross the shadow boundary just like the rest of
       the theme, so hosts can tune the treatment without runtime style tags. */
-    .render-container [data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) {
-      opacity: var(--cf-render-pending-opacity, 0.55) !important;
-      filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
-    }
-
-    .render-container :is(cf-fragment, span[style*="display"][style*="contents"])[data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) {
-      opacity: 1 !important;
-      filter: none !important;
-    }
-
-    /* Walk through any number of transparent wrappers, then style only the
-      first box-producing element on each branch so opacity does not stack on
-      its descendants. Bare text has no box or interactive surface to treat. */
-    .render-container :is(cf-fragment, span[style*="display"][style*="contents"])[data-cf-pending="true"]:not([data-cf-pending="true"] [data-cf-pending="true"]) :not(:is(cf-fragment, span[style*="display"][style*="contents"])):not([data-cf-pending="true"] :not(:is(cf-fragment, span[style*="display"][style*="contents"])) *) {
+    .render-container[data-cf-pending-box],
+    .render-container [data-cf-pending-box] {
       opacity: var(--cf-render-pending-opacity, 0.55) !important;
       filter: var(--cf-render-pending-filter, grayscale(0.8)) !important;
     }
@@ -358,6 +347,8 @@ export class CFRender extends BaseElement {
 
   #needsReconnectRender = false;
 
+  #pendingPresentation?: ReturnType<typeof watchPendingBoxes>;
+
   /**
    * The root piece cell after resolving the (possibly link) `cell`. Reset
    * whenever `cell` changes.
@@ -417,6 +408,15 @@ export class CFRender extends BaseElement {
 
   protected override updated(changedProperties: PropertyValues) {
     if (!this.isConnected) return;
+    const container = this._containerRef.value;
+    if (container?.isConnected) {
+      if (this.#pendingPresentation?.container !== container) {
+        this.#pendingPresentation?.dispose();
+        this.#pendingPresentation = watchPendingBoxes(container);
+      } else {
+        this.#pendingPresentation.refresh();
+      }
+    }
     const cellChanged = changedProperties.has("cell");
     const variantChanged = changedProperties.has("variant");
 
@@ -791,6 +791,8 @@ export class CFRender extends BaseElement {
   }
 
   override disconnectedCallback() {
+    this.#pendingPresentation?.dispose();
+    this.#pendingPresentation = undefined;
     closePieceMenuFor(this);
     this.removeEventListener("contextmenu", this._onContextMenu);
     super.disconnectedCallback();

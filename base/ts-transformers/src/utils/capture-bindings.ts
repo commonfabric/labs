@@ -6,6 +6,7 @@ import {
   unwrapOpaqueLikeType,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
+import { isErasedAtEmit } from "../ast/erased-syntax.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import { getCellKind } from "../transformers/cell-type.ts";
 import { parseCaptureExpression } from "./capture-tree.ts";
@@ -127,6 +128,7 @@ export function registerCaptureBindingTypes(
     ).map((entry) => [entry.symbol!, entry.type!]),
   );
   const visit = (node: ts.Node): void => {
+    if (isErasedAtEmit(node)) return;
     if (ts.isIdentifier(node)) {
       const symbol = getIdentifierValueSymbol(node, context.checker);
       const type = symbol && types.get(symbol);
@@ -170,6 +172,7 @@ export function rewriteCaptureBindingReferences<T extends ts.Node>(
     return renamed;
   };
   const visitor = (node: ts.Node): ts.Node => {
+    if (isErasedAtEmit(node)) return node;
     if (context.state.printedFrom(node)) return node;
     if (ts.isShorthandPropertyAssignment(node)) {
       const renamed = replacement(node.name);

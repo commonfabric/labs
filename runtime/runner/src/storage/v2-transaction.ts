@@ -2198,8 +2198,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     // CFC prepare's own reads. In-window reads keep the transaction's
     // ordinary view (they are machinery reads the commit set drops via
     // `ignoreReadForCommit`), value-consuming reads keep their overlay
-    // view and the ruled §6 refusal, and every other transaction is
-    // byte-identical to before. CFC prepare consults the transaction's
+    // view and the ruled §6 refusal. An internal-verifier read explicitly
+    // marked `ignoreReadForCommit` also keeps the ordinary transaction view,
+    // even outside a blind-write transaction. CFC prepare consults the transaction's
     // own writes through its write set (`writeValueForTarget`) before
     // falling back to this read, so serving replica state here loses
     // nothing the verifier needs. Served fresh and cache-bypassed: the

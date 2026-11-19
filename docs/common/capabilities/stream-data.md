@@ -46,8 +46,10 @@ event. A stream which is expected to remain open normally consumes only
 
 A clean close before the first event, an unsuccessful HTTP response, a
 connection failure, malformed event data, or invalid JSON produces an error on
-both channels. An event that does not match `T` produces `schemaMismatch` on
-both. The runtime does not reconnect automatically. Changing `url`, `options`,
+both channels. An event that does not match the active validation schema
+produces `schemaMismatch` on both. An explicit `schema` supplies that contract;
+otherwise the transformer infers it from `T`. The runtime does not reconnect
+automatically. Changing `url`, `options`,
 the explicit `schema`, or the inferred event schema starts a new request and
 resets both channels to pending.
 

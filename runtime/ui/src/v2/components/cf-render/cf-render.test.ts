@@ -104,23 +104,10 @@ describe("CFRender", () => {
 
   it("owns the theme-aware pending presentation", () => {
     const styles = stylesText();
-    expect(styles).toContain('[data-cf-pending="true"]');
+    expect(styles).toContain("[data-cf-pending-box]");
     expect(styles).toContain("--cf-render-pending-opacity");
     expect(styles).toContain("--cf-render-pending-filter");
     expect(styles).toContain("grayscale");
-    expect(styles).toContain(
-      'span[style*="display"][style*="contents"]',
-    );
-  });
-
-  it("dims the first rendered elements through nested transparent wrappers", () => {
-    const styles = stylesText().replace(/\s+/g, " ");
-    expect(styles).toContain(
-      ':not([data-cf-pending="true"] [data-cf-pending="true"]) :not(:is(cf-fragment, span[style*="display"][style*="contents"]))',
-    );
-    expect(styles).toContain(
-      ':not(:is(cf-fragment, span[style*="display"][style*="contents"])):not([data-cf-pending="true"] :not(',
-    );
   });
 });
 

@@ -321,9 +321,11 @@ into what it writes: a row count of a query over labeled columns carries the
 columns' labels, and so does anything computed by mapping over `rows`,
 which reads its membership. A row read through `rows` by its position
 carries the label of the query's statement and parameters and that row's own
-labels, and not the other rows'. `cf cell get-label <cell> <path>/rows/<i>/<col>` follows the links
-the path crosses and reports the
-column's label from the row's own doc. Inside a pattern nothing has to be asked
+labels, and not the other rows'. For a raw query-state document,
+`cf cell get-label <cell> <path>/value/rows/<i>/<col>` follows the links the path
+crosses and reports the column's label from the row's own doc. A public query
+result already links to the value channel, so its relative path is
+`rows/<i>/<col>`. Inside a pattern nothing has to be asked
 for: a consumer inherits the label from the dereferences its read traverses.
 
 ## The rest of the API

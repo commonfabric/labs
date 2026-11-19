@@ -146,8 +146,9 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * Constructs an instance with the given reason, kind of error, and
    * message. A message equal to the kind's default is stored as none. Throws
    * when `reason` is not one of the reasons; when it is `error` and
-   * `errorKind` is not one of the kinds; or when it is a transient reason and
-   * either `errorKind` or `message` is not `null`.
+   * `errorKind` is not one of the kinds; when it is a transient reason and
+   * either `errorKind` or `message` is not `null`; or when it is `obsolete`
+   * and `errorKind` is not `null`. An obsolete reason may carry a message.
    */
   constructor(
     reason: UnavailableReason,
@@ -339,8 +340,9 @@ export class FabricUnavailable extends BaseFabricPrimitive
       /**
        * @inheritDoc
        *
-       * A kind or a message paired with a transient reason, or an `error`
-       * reason without a kind, is a state this class never writes, and is
+       * A kind or a message paired with a transient reason, an `obsolete`
+       * reason with a kind, or an `error` reason without a kind, is a state
+       * this class never writes, and is
        * reported rather than refused by {@link #canDecode}: the constructor
        * is what decides the pairing, and it is asked once.
        */
@@ -475,7 +477,9 @@ export class FabricUnavailable extends BaseFabricPrimitive
    * frozen state the given reason, kind of error, and message make, the
    * message stored as given. Throws when `reason` is not one of the reasons;
    * when it is `error` and `errorKind` is not one of the kinds; or when it is
-   * a transient reason and either `errorKind` or `message` is not `null`.
+   * a transient reason and either `errorKind` or `message` is not `null`; or
+   * when it is `obsolete` and `errorKind` is not `null`. Obsolete messages are
+   * retained as guidance.
    */
   static #validatedState(
     reason: UnavailableReason,

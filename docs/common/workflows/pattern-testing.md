@@ -797,8 +797,9 @@ from a filtered view, so an unresolved wish fails the test instead of passing
 it for the wrong reason.
 
 `resultOf()` is a zero-node projection of the current clock channel, not a
-stored seed. If the channel is unavailable, the action parks before dispatch
-and resumes when its input becomes usable. After dispatch, later clock ticks
+stored seed. A pending or syncing channel parks the action before dispatch;
+the action resumes when that input becomes usable. Terminal error or obsolete
+inputs settle without dispatch and do not resume automatically. After dispatch, later clock ticks
 do not rerun the action or replace the values it wrote into `glazes`. Passing a
 computed clock-derived array directly as writable state has different behavior:
 each recomputation replaces that array.

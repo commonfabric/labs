@@ -5,6 +5,7 @@ import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
+  hasError,
   isObsolete,
   isPending,
   isUnavailable,
@@ -84,6 +85,7 @@ function propOf(
 describe("optional-wish-availability", () => {
   let runtime: Runtime;
   let controlled: Map<string, Cell<unknown>>;
+  let controlledErrorCodes: Map<string, Cell<string | undefined>>;
   let errors: unknown[];
   let observers: (() => void)[];
   let wishQueries: (string | undefined)[];
@@ -105,6 +107,7 @@ describe("optional-wish-availability", () => {
       }],
     });
     controlled = new Map();
+    controlledErrorCodes = new Map();
     for (const ref of ["wish", "fetchJson", "generateText", "generateObject"]) {
       const delegate = runtime.moduleRegistry.getModule(ref).implementation;
       if (typeof delegate !== "function") {
@@ -143,6 +146,8 @@ describe("optional-wish-availability", () => {
               sendResult(tx, {
                 result: isUnavailable(value) ? value : result,
                 $UI: "Profile setup",
+                errorCode: controlledErrorCodes.get(query ?? "")?.withTx(tx)
+                  .get(),
               });
             }
           };
@@ -164,6 +169,7 @@ describe("optional-wish-availability", () => {
     input: Record<string, unknown> = {},
     mainExport?: string,
     sourceOrigin?: string,
+    instanceName = path,
   ) {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
@@ -184,7 +190,7 @@ describe("optional-wish-availability", () => {
       tx,
       pattern,
       input,
-      runtime.getCell(space, path, undefined, tx),
+      runtime.getCell(space, instanceName, undefined, tx),
       sourceOrigin === undefined ? {} : { sourceOrigin },
     );
     runtime.prepareTxForCommit(tx);
@@ -424,6 +430,26 @@ describe("optional-wish-availability", () => {
         .find((button) => textOf(button).trim() === "Send");
       expect(send).toBeDefined();
       expect(propOf(send!, "disabled")).toBe(true);
+      await runtime.editWithRetry((tx) =>
+        chat.key("draft").withTx(tx).set("Fresh draft")
+      );
+      for (
+        const state of [
+          UNAVAILABLE_PENDING,
+          UNAVAILABLE_SYNCING,
+          unavailableError("Profile lookup refused"),
+        ]
+      ) {
+        await runtime.editWithRetry((tx) =>
+          (retired === "profile" ? profile : name).withTx(tx).setRaw(state)
+        );
+        await runtime.idle();
+        const unavailableSend = elementsOf(chat.key("$UI"), "cf-button")
+          .find((button) => textOf(button).trim() === "Send");
+        expect(propOf(unavailableSend!, "disabled")).toBe(true);
+        expect(chat.key("messages").get()).toEqual([]);
+        expect(chat.key("draft").get()).toBe("Fresh draft");
+      }
       sendEvent(note.key("appendLine"), { text: "Sprinkles" });
       await runtime.idle();
       expect(note.key("content").get()).toBe("Glaze\nSprinkles");
@@ -438,8 +464,186 @@ describe("optional-wish-availability", () => {
         .find((button) => textOf(button).trim() === "Send");
       expect(propOf(recoveredSend!, "disabled")).toBe(false);
       expect(chat.key("messages").get()).toEqual([]);
+      sendEvent(chat.key("sendMessage"), undefined);
+      await runtime.settled();
+      expect(chat.key("messages").get()).toHaveLength(1);
+      expect(chat.key("messages").key(0).key("author").get()).toBe("Ada");
+      expect(chat.key("messages").key(0).key("body").get()).toBe("Fresh draft");
     });
   }
+
+  for (const game of ["battleship/multiplayer/lobby", "scrabble/scrabble"]) {
+    it(`shows a name-only failure beside usable ${game} controls and recovers`, async () => {
+      const profile = runtime.getCell(space, "game viewer profile");
+      const name = runtime.getCell(space, "game viewer name");
+      await runtime.editWithRetry((tx) => {
+        profile.withTx(tx).set({ name: "Ada" });
+        name.withTx(tx).setRaw(unavailableError("Name lookup refused"));
+      });
+      controlled.set("#profile", profile);
+      controlled.set("#profileName", name);
+      const gamePiece = await instantiate(`showcase/${game}.tsx`);
+      expect(textOf(gamePiece.key("$UI"))).toContain("Profile setup");
+      expect(textOf(gamePiece.key("$UI"))).toContain("Name lookup refused");
+      const join = elementsOf(gamePiece.key("$UI"), "cf-button")
+        .find((button) =>
+          textOf(button).trim() === "Join" ||
+          textOf(button).trim() === "Create a profile to join"
+        );
+      expect(join).toBeDefined();
+      expect(propOf(join!, "disabled")).toBe(true);
+      for (const hint of ["Use the replacement name.", ""]) {
+        await runtime.editWithRetry((tx) =>
+          name.withTx(tx).setRaw(unavailableObsolete(hint))
+        );
+        await runtime.idle();
+        expect(textOf(gamePiece.key("$UI"))).toContain(
+          hint || "This profile name is no longer served.",
+        );
+        expect(textOf(gamePiece.key("$UI"))).toContain("Reset");
+      }
+      await runtime.editWithRetry((tx) => name.withTx(tx).set("Ada"));
+      await runtime.idle();
+      expect(textOf(gamePiece.key("$UI"))).not.toContain("Name lookup refused");
+      const recovered = elementsOf(gamePiece.key("$UI"), "cf-button")
+        .find((button) => textOf(button).trim() === "Join as Ada");
+      expect(recovered).toBeDefined();
+      expect(propOf(recovered!, "disabled")).toBe(false);
+    });
+  }
+
+  it("shows Ring Loops name failures without removing the sequencer or tempo verb", async () => {
+    const name = runtime.getCell(space, "ring viewer name");
+    await runtime.editWithRetry((tx) =>
+      name.withTx(tx).setRaw(unavailableError("Ring name refused"))
+    );
+    controlled.set("#profileName", name);
+    const rings = await instantiate("showcase/iframe-ring-loops/main.tsx");
+    expect(textOf(rings.key("$UI"))).toContain("Ring name refused");
+    expect(elementsOf(rings.key("$UI"), "cf-iframe")).toHaveLength(1);
+    sendEvent(rings.key("setTempo"), { bpm: 123 });
+    await runtime.settled();
+    expect(rings.key("state").key("tempoBpm").get()).toBe(123);
+    for (const hint of ["Use the replacement name.", ""]) {
+      await runtime.editWithRetry((tx) =>
+        name.withTx(tx).setRaw(unavailableObsolete(hint))
+      );
+      await runtime.idle();
+      expect(textOf(rings.key("$UI"))).toContain(
+        hint || "This profile name is no longer served.",
+      );
+      expect(elementsOf(rings.key("$UI"), "cf-iframe")).toHaveLength(1);
+    }
+    await runtime.editWithRetry((tx) => name.withTx(tx).set("Ada"));
+    await runtime.idle();
+    expect(textOf(rings.key("$UI"))).not.toContain("Ring name refused");
+    expect(elementsOf(rings.key("$UI"), "cf-iframe")).toHaveLength(1);
+  });
+
+  it("preserves a failed room-root lookup but permits confirmed absence and root-room independence", async () => {
+    const root = runtime.getCell(space, "room root");
+    const code = runtime.getCell<string | undefined>(
+      space,
+      "room root error code",
+    );
+    await runtime.editWithRetry((tx) => {
+      root.withTx(tx).setRaw(unavailableError("Room root refused", "network"));
+      code.withTx(tx).set("failed");
+    });
+    controlled.set("#default", root);
+    controlledErrorCodes.set("#default", code);
+    const room = await instantiate(
+      "system/fabrichat/room.tsx",
+      {},
+      "FabriChatRoomCore",
+    );
+    expect(hasError(room.key("participants").get())).toBe(true);
+    const own = await instantiate(
+      "system/fabrichat/room.tsx",
+      {
+        about: { kind: "group", title: "Independent room" },
+      },
+      "FabriChatRoomCore",
+      undefined,
+      "independent room",
+    );
+    expect(own.key("participants").get()).toEqual([]);
+    await runtime.editWithRetry((tx) => code.withTx(tx).set("no-match"));
+    await runtime.idle();
+    expect(room.key("participants").get()).toEqual([]);
+    await runtime.editWithRetry((tx) =>
+      root.withTx(tx).set({ participants: [] })
+    );
+    await runtime.idle();
+    expect(room.key("participants").get()).toEqual([]);
+  });
+
+  it("shows terminal classifier guidance while retaining editing and recovers both model adapters", async () => {
+    const model = runtime.getCell(space, "classifier model results");
+    await runtime.editWithRetry((tx) =>
+      model.withTx(tx).setRaw(UNAVAILABLE_SYNCING)
+    );
+    controlled.set("generateObject", model);
+    const classifier = await instantiate(
+      "apps/self-improving-classifier/self-improving-classifier.tsx",
+      {
+        config: {
+          question: "Is this a bill?",
+          minExamplesForRules: 1,
+          autoClassifyThreshold: 0.85,
+          prefillThreshold: 0.7,
+          suggestionThreshold: 0.5,
+          harmAsymmetry: "equal",
+          enableLLMFallback: true,
+        },
+        currentItem: {
+          id: "current",
+          receivedAt: 0,
+          fields: { subject: "Glaze" },
+        },
+        examples: [{
+          input: { id: "old", receivedAt: 0, fields: { subject: "Invoice" } },
+          label: true,
+          decidedBy: "suggestion-accepted",
+          reasoning: "A bill",
+          confidence: 0.9,
+          labeledAt: 0,
+          wasCorrection: true,
+          isInteresting: false,
+        }],
+      },
+    );
+    expect(textOf(classifier.key("$UI"))).toContain("Classifying...");
+    await runtime.editWithRetry((tx) =>
+      model.withTx(tx).setRaw(
+        unavailableObsolete("Use the new classifier model."),
+      )
+    );
+    await runtime.idle();
+    const text = textOf(classifier.key("$UI"));
+    expect(text).toContain(
+      "Classification failed: Use the new classifier model.",
+    );
+    expect(text).toContain(
+      "Rule suggestions unavailable: Use the new classifier model.",
+    );
+    expect(elementsOf(classifier.key("$UI"), "cf-input").length)
+      .toBeGreaterThan(0);
+    await runtime.editWithRetry((tx) =>
+      model.withTx(tx).set({
+        itemId: "current",
+        classification: true,
+        confidence: 0.9,
+        reasoning: "Recovered model",
+        suggestions: [],
+      })
+    );
+    await runtime.idle();
+    expect(textOf(classifier.key("$UI"))).not.toContain(
+      "Use the new classifier model.",
+    );
+    expect(textOf(classifier.key("$UI"))).toContain("Recovered model");
+  });
 
   it("presents genuine profile lookup failures separately from no-profile absence", async () => {
     const profile = runtime.getCell(space, "failed demo profile");
@@ -630,6 +834,21 @@ describe("optional-wish-availability", () => {
     }, "AislesTab");
     expect(textOf(tab.key("$UI"))).toContain("Analyzing photo...");
     await runtime.editWithRetry((tx) =>
+      extraction.withTx(tx).setRaw(
+        unavailableObsolete("Use the new photo analyzer."),
+      )
+    );
+    await runtime.idle();
+    expect(textOf(tab.key("$UI"))).toContain("Use the new photo analyzer.");
+    expect(textOf(tab.key("$UI"))).not.toContain("Analyzing photo...");
+    await runtime.editWithRetry((tx) =>
+      extraction.withTx(tx).setRaw(unavailableObsolete(""))
+    );
+    await runtime.idle();
+    expect(textOf(tab.key("$UI"))).toContain(
+      "This photo analysis output has been retired.",
+    );
+    await runtime.editWithRetry((tx) =>
       extraction.withTx(tx).set({
         aisles: [{ name: "8", products: ["Bread"] }],
       })
@@ -682,6 +901,10 @@ describe("optional-wish-availability", () => {
 
   it("waits for a pending summary index and renders its entries after recovery", async () => {
     const index = runtime.getCell(space, "summary index result");
+    const code = runtime.getCell<string | undefined>(
+      space,
+      "summary index error code",
+    );
     const piece = runtime.getCell(space, "summary index piece");
     await runtime.editWithRetry((tx) => {
       index.withTx(tx).setRaw(UNAVAILABLE_PENDING);
@@ -691,11 +914,28 @@ describe("optional-wish-availability", () => {
       });
     });
     controlled.set("#summaryIndex", index);
+    controlledErrorCodes.set("#summaryIndex", code);
     const tester = await instantiate(
       "examples/summary-index-tester/summary-index-tester.tsx",
     );
     expect(tester.key("$NAME").get()).toBe("Summary Index Tester");
     expect(hasPendingViewSlot(tester.key("$UI"))).toBe(true);
+    expect(textOf(tester.key("$UI"))).not.toContain("Index: 0 entries");
+    await runtime.editWithRetry((tx) => {
+      index.withTx(tx).setRaw(
+        unavailableError("Summary index refused", "network"),
+      );
+      code.withTx(tx).set("failed");
+    });
+    await runtime.idle();
+    expect(textOf(tester.key("$UI"))).not.toContain("Index: 0 entries");
+    await runtime.editWithRetry((tx) => code.withTx(tx).set("no-match"));
+    await runtime.idle();
+    expect(textOf(tester.key("$UI"))).toContain("Index: 0 entries");
+    await runtime.editWithRetry((tx) =>
+      index.withTx(tx).setRaw(unavailableObsolete("Use the new summary index."))
+    );
+    await runtime.idle();
     expect(textOf(tester.key("$UI"))).not.toContain("Index: 0 entries");
     await runtime.editWithRetry((tx) =>
       index.withTx(tx).set({

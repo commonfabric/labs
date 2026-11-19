@@ -11,7 +11,6 @@ import {
   refuseFabricInstance,
   shallowFabricFromConvertibleJsObjectElseUndefined,
 } from "@commonfabric/data-model";
-import { isUnavailable } from "@commonfabric/data-model/availability";
 import { type AliasBinding, isAliasBinding } from "../alias-binding.ts";
 import {
   type FabricExecFunction,
@@ -196,12 +195,6 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   // to `{}`. It leaves whole, and it leaves FIRST: it is also a record, so an
   // `isObjectOrArray()` test would otherwise claim it.
   if (value instanceof FabricPrimitive) return value;
-
-  // Availability markers are runtime-owned atomic control values. Their codec
-  // state contains the frozen reason, errorKind, and message fields, so
-  // preserve them as leaves instead of treating them as an
-  // arbitrary FabricInstance container.
-  if (isUnavailable(value)) return value;
 
   // A `FabricInstance` is NOT a leaf. It is a container reached by its codec
   // contents rather than by property name, which this walk cannot do, so the

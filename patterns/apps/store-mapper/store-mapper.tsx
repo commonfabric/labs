@@ -15,6 +15,7 @@ import {
   generateObject,
   handler,
   hasError,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -954,6 +955,14 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
             error: extractionRequest.message,
           };
         }
+        if (isObsolete(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: false,
+            error: extractionRequest.message ||
+              "This photo analysis output has been retired.",
+          };
+        }
         return {
           aisles: resultOf(extractionRequest).aisles || [],
           pending: false,
@@ -1163,8 +1172,7 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
                                 fontStyle: "italic",
                               }}
                             >
-                              Error analyzing photo. Please try removing and
-                              re-uploading.
+                              {extraction.error}
                             </div>
                           )
                           : (

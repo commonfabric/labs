@@ -1632,7 +1632,9 @@ export const FabriChatRoomCore = pattern<
   const selectedParticipants = computed((): AsyncResult<ProfileCell[]> => {
     if (ownSpace) return [...joined];
     const root = space.result;
-    if (hasError(root)) return [...joined];
+    if (hasError(root)) {
+      return space.errorCode === "no-match" ? [...joined] : root;
+    }
     if (
       isPending(root) || isSyncing(root) || isObsolete(root)
     ) return root;

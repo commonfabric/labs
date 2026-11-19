@@ -47,6 +47,13 @@
 
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
+import {
+  collectLocalOpaqueRootSymbols,
+  getOpaqueAccessInfo,
+  isLocalOpaqueOriginBindingReference,
+  isOpaqueSourceExpression,
+  isTopmostMemberAccess,
+} from "./opaque-roots.ts";
 import { reportNestedCollectionScans } from "../diagnostics/nested-collection-scan.ts";
 import { COMMONFABRIC_REACTIVE_ORIGIN_BUILDER_NAMES } from "../core/commonfabric-runtime-registry.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
@@ -65,11 +72,6 @@ import {
   isStandaloneFunctionDefinition,
 } from "../ast/mod.ts";
 import { getCallbackBoundarySemantics } from "../policy/callback-boundary.ts";
-import {
-  collectLocalOpaqueRootSymbols,
-  isOpaqueSourceExpression,
-  isTopmostMemberAccess,
-} from "./opaque-roots.ts";
 import {
   classifyRestrictedReactiveComputation,
   classifyUnsupportedExpressionSiteCallRoot,
@@ -215,6 +217,23 @@ export class PatternContextValidationTransformer
     const analyze = context.getDataFlowAnalyzer();
 
     const visit = (node: ts.Node): ts.Node => {
+      if (ts.isDeleteExpression(node)) {
+        const access = getOpaqueAccessInfo(
+          unwrapExpression(node.expression),
+          context,
+        );
+        if (
+          access.rootIdentifier && access.path.length > 0 &&
+          isLocalOpaqueOriginBindingReference(access.rootIdentifier, context)
+        ) {
+          context.reportDiagnosticOnce({
+            type: "pattern-context:assignment",
+            message:
+              "Deleting a property of a reactive value is not supported. Change writable state through a handler instead.",
+            node,
+          });
+        }
+      }
       // Skip JSX element containers; expression-level handling is shared.
       if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
         return ts.visitEachChild(node, visit, context.tsContext);

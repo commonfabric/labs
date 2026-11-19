@@ -401,8 +401,10 @@ function commonPrefixLength(
  * catches a changed value underneath it. It says nothing useful about any
  * other object: a `FabricPrimitive` holds its state in private fields, so
  * comparing key sets reports every two of them as unchanged — and because that
- * state sits behind no enumerable key, no deeper subscriber path reaches it
- * either. The change goes unnoticed at every depth, which is what separates
+ * state sits behind no enumerable key, ordinary deeper subscriber paths do
+ * not reach it. Unavailable markers are the exception: their reason, kind,
+ * and message accessors support deeper subscriptions. Other primitive changes
+ * go unnoticed at every depth, which is what separates
  * this from a plain object's values being skipped by design. Those are leaves,
  * and a leaf is compared by value.
  *

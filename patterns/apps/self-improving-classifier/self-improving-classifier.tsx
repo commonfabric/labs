@@ -19,7 +19,9 @@ import {
   handler,
   hasError,
   ifElse,
+  isObsolete,
   isPending,
+  isSyncing,
   lift,
   NAME,
   pattern,
@@ -997,12 +999,16 @@ Respond with:
 - reasoning: a brief explanation of why you classified it this way`,
     });
     const llmResult = computed(() => ({
-      pending: isPending(classificationRequest),
-      error: hasError(classificationRequest)
-        ? classificationRequest.message
-        : undefined,
+      pending: isPending(classificationRequest) ||
+        isSyncing(classificationRequest),
+      error:
+        hasError(classificationRequest) || isObsolete(classificationRequest)
+          ? classificationRequest.message ||
+            "This classification output has been retired."
+          : undefined,
       result:
-        isPending(classificationRequest) || hasError(classificationRequest)
+        isPending(classificationRequest) || isSyncing(classificationRequest) ||
+          hasError(classificationRequest) || isObsolete(classificationRequest)
           ? undefined
           : resultOf(classificationRequest),
     }));
@@ -1128,14 +1134,18 @@ Each suggestion should have:
 - reasoning: why this pattern indicates the classification`,
     });
     const ruleGenResult = computed(() => ({
-      pending: isPending(ruleSuggestionsRequest),
-      error: hasError(ruleSuggestionsRequest)
-        ? ruleSuggestionsRequest.message
-        : undefined,
-      result:
-        isPending(ruleSuggestionsRequest) || hasError(ruleSuggestionsRequest)
-          ? undefined
-          : resultOf(ruleSuggestionsRequest),
+      pending: isPending(ruleSuggestionsRequest) ||
+        isSyncing(ruleSuggestionsRequest),
+      error:
+        hasError(ruleSuggestionsRequest) || isObsolete(ruleSuggestionsRequest)
+          ? ruleSuggestionsRequest.message ||
+            "This rule suggestion output has been retired."
+          : undefined,
+      result: isPending(ruleSuggestionsRequest) ||
+          isSyncing(ruleSuggestionsRequest) ||
+          hasError(ruleSuggestionsRequest) || isObsolete(ruleSuggestionsRequest)
+        ? undefined
+        : resultOf(ruleSuggestionsRequest),
     }));
 
     // Derive visible suggestions from LLM result, filtered by dismissed indices
@@ -1654,6 +1664,13 @@ Each suggestion should have:
               )}
 
               {/* Suggested Rules */}
+              {ifElse(
+                computed(() => ruleGenResult.error !== undefined),
+                <span role="status" style="color: var(--cf-theme-color-error);">
+                  Rule suggestions unavailable: {ruleGenResult.error}
+                </span>,
+                null,
+              )}
               {ifElse(
                 computed(() => visibleSuggestions.length > 0),
                 <cf-card style="border-left: 4px solid var(--cf-theme-color-success);">

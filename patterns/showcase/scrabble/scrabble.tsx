@@ -17,6 +17,7 @@ import {
   handler,
   hasError,
   ifElse,
+  isObsolete,
   NAME,
   pattern,
   type PerSession,
@@ -1127,11 +1128,18 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const nameStatus = computed(() => {
+      const name = profileNameWish.result;
+      return hasError(name) || isObsolete(name)
+        ? name.message || "This profile name is no longer served."
+        : "";
+    });
     const profile = resultOf(profileWish.result);
 
-    const profileName = hasError(profileNameWish.result)
-      ? ""
-      : resultOf(profileNameWish.result);
+    const profileName =
+      hasError(profileNameWish.result) || isObsolete(profileNameWish.result)
+        ? ""
+        : resultOf(profileNameWish.result);
     const hasProfile = computed(() => profileName.trim() !== "");
     // The button is the JOIN action; the adjacent `#profile` wish UI is the
     // create/pick surface. Label it as such (a disabled "Join" until the viewer
@@ -1259,7 +1267,16 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                       /* Built-in profile UI: create a profile when there is
                         none, pick between existing profiles otherwise. */
                     }
-                    <div style={{ flex: 1 }}>{profileWish[UI]}</div>
+                    <div style={{ flex: 1 }}>
+                      {profileWish[UI]}
+                      {nameStatus
+                        ? (
+                          <span role="status">
+                            {nameStatus}
+                          </span>
+                        )
+                        : null}
+                    </div>
                     <cf-button
                       onClick={joinGame}
                       disabled={computed(() => !hasProfile)}

@@ -5023,7 +5023,11 @@ export function analyzeFunctionCapabilities(
 
         // Passing a tracked root object into an opaque helper can conceal
         // indirect traversal/mutation; conservatively disable shrinking.
-        if (!identityArgumentCall) {
+        if (
+          !identityArgumentCall &&
+          !(checker &&
+            detectCallKind(node, checker)?.kind === "availability-result")
+        ) {
           for (const [index, argument] of node.arguments.entries()) {
             if (capabilityHandledArgs.has(index)) {
               continue;

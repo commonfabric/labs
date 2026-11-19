@@ -14,6 +14,134 @@ const commonfabricTypes = await StaticCache.fromFileSystem().getText(
   "types/commonfabric.d.ts",
 );
 
+for (
+  const operation of ["delete value.field", "value.field = 2", "value.field++"]
+) {
+  Deno.test(`reactive member write is diagnosed: ${operation}`, async () => {
+    const { diagnostics } = await validateSource(
+      `
+      import { computed, pattern } from "commonfabric";
+      export default pattern(() => {
+        const value = computed((): { field${
+        operation.startsWith("delete") ? "?" : ""
+      }: number } => ({ field: 1 }));
+        ${operation};
+        return { value };
+      });
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes } },
+    );
+    expect(
+      diagnosticTypes(diagnostics).some((type) =>
+        type === "pattern-context:assignment" ||
+        type === "pattern-context:computation"
+      ),
+    ).toBe(true);
+  });
+}
+
+Deno.test("ordinary local objects still support deletion inside a computation", async () => {
+  const { diagnostics } = await validateSource(
+    `
+    import { computed, pattern } from "commonfabric";
+    export default pattern(() => ({ value: computed(() => {
+      const local: { field?: number } = { field: 1 };
+      delete local.field;
+      return local;
+    }) }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes } },
+  );
+  expect(diagnostics).toEqual([]);
+});
+
+Deno.test("a helper guard resolves a stable caller-local alias to its captured source", async () => {
+  const output = await transformSource(
+    `
+    import { AsyncResult, computed, hasError, pattern } from "commonfabric";
+    function failed(value: AsyncResult<string>) { return hasError(value); }
+    export default pattern((input: { request: AsyncResult<string> }) => ({
+      failed: computed(() => {
+        const local = input.request;
+        return failed(local);
+      }),
+    }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  expect(output).toContain(
+    'unavailableInputPolicy: [{ path: ["input", "request"], reasons: ["error"] }]',
+  );
+  expect(output).not.toContain('path: ["local"]');
+});
+
+Deno.test("capture collision renaming preserves enum type references", async () => {
+  const output = await transformSource(
+    `
+    import { computed, pattern } from "commonfabric";
+    export default pattern(() => {
+      enum Mode { A = "a" }
+      return { value: computed(() => {
+        const nested = (Mode: string) => Mode;
+        const selected: Mode = Mode.A;
+        return nested(selected);
+      }) };
+    });
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  expect(output).toMatch(/const selected: Mode = Mode_\d+\.A/);
+  expect(output).not.toMatch(/selected: Mode_\d+/);
+});
+
+Deno.test("a reassigned nullable local retains its valid nullish fallback", async () => {
+  const { diagnostics } = await validateSource(
+    `
+    import { AsyncResult, computed, pattern, resultOf } from "commonfabric";
+    export default pattern((input: { request: AsyncResult<string> }) => ({
+      value: computed(() => {
+        let local: string | undefined = resultOf(input.request);
+        local = undefined;
+        return local ?? "fallback";
+      }),
+    }));
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes } },
+  );
+  expect(diagnosticTypes(diagnostics)).not.toContain(
+    "availability:dead-result-fallback",
+  );
+});
+
+for (const whole of [false, true]) {
+  Deno.test(`a result view preserves ${whole ? "whole-value escape" : "exact field"} capability reads`, async () => {
+    const output = await transformSource(
+      `
+      import { lift, pattern, resultOf } from "commonfabric";
+      const pick = lift((request: { field: string; extra: number }) =>
+        ${whole ? "resultOf(request)" : "resultOf(request).field"});
+      export default pattern((input: { request: { field: string; extra: number } }) => ({
+        value: pick(input.request),
+      }));
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    const lift = collect(parseModule(output), ts.isCallExpression).find((
+      call,
+    ) =>
+      (ts.isPropertyAccessExpression(call.expression) &&
+        call.expression.name.text === "lift") ||
+      (ts.isIdentifier(call.expression) && call.expression.text === "lift")
+    );
+    if (!lift?.arguments[1]) throw new Error("Expected a lifted schema");
+    const schema = literalToValue(lift.arguments[1]) as {
+      properties: Record<string, unknown>;
+    };
+    expect(schema.properties).toMatchObject({ field: { type: "string" } });
+    expect(Object.hasOwn(schema.properties, "extra")).toBe(whole);
+  });
+}
+
 for (const localAlias of [false, true]) {
   Deno.test(`resultOf keeps collection methods plain inside a computation with local alias ${localAlias}`, async () => {
     const output = await transformSource(
@@ -567,8 +695,8 @@ Deno.test("a computed-local alias retains its captured availability path", async
   );
 });
 
-Deno.test("a key access through a computed-local const alias keeps the source path", async () => {
-  const output = await transformSource(
+Deno.test("a foreign key method cannot authorize a serialized capture path", async () => {
+  const { diagnostics } = await validateSource(
     `
     import { AsyncResult, computed, hasError, pattern } from "commonfabric";
 
@@ -576,9 +704,7 @@ Deno.test("a key access through a computed-local const alias keeps the source pa
 
     export default pattern((input: { request: AsyncResult<Repo> }) => {
       const failed = computed(() => {
-        const local = input as typeof input & {
-          key(name: "request"): AsyncResult<Repo>;
-        };
+        const local = { request: input.request, key: (_name: "request"): AsyncResult<Repo> => ({ name: "unrelated" }) };
         return hasError(local.key("request"));
       });
       return { failed };
@@ -589,13 +715,8 @@ Deno.test("a key access through a computed-local const alias keeps the source pa
     },
   );
 
-  assertStringIncludes(
-    output,
-    'unavailableInputPolicy: [{ path: ["input", "request"], reasons: ["error"] }]',
-  );
-  assertEquals(
-    output.includes('path: ["local", "request"], reasons: ["error"]'),
-    false,
+  expect(diagnosticTypes(diagnostics)).toContain(
+    "availability:unsupported-guard-operand",
   );
 });
 

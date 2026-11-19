@@ -12,6 +12,7 @@ import {
   type Default,
   handler,
   hasError,
+  isObsolete,
   NAME,
   pattern,
   type PerUser,
@@ -383,8 +384,16 @@ export default pattern<RingLoopsInput, RingLoopsOutput>(({ input, output }) => {
   // The wish resolves to the profile of whoever is running the piece, so each
   // viewer's guest is handed that viewer's own name.
   const profileName = wish<string>({ query: "#profileName" });
+  const nameStatus = computed(() => {
+    const name = profileName.result;
+    return hasError(name) || isObsolete(name)
+      ? name.message || "This profile name is no longer served."
+      : "";
+  });
   const viewerName = computed(() =>
-    hasError(profileName.result) ? "" : resultOf(profileName.result).trim()
+    hasError(profileName.result) || isObsolete(profileName.result)
+      ? ""
+      : resultOf(profileName.result).trim()
   );
   const frame = Frame({ input: { setup, viewerName }, output });
   // Destructuring binds each name to a link into the frame's result. Reading
@@ -398,7 +407,18 @@ export default pattern<RingLoopsInput, RingLoopsOutput>(({ input, output }) => {
 
   return {
     [NAME]: "Ring Loops",
-    [UI]: view,
+    [UI]: (
+      <cf-fragment>
+        {nameStatus
+          ? (
+            <span role="status">
+              {nameStatus}
+            </span>
+          )
+          : null}
+        {view}
+      </cf-fragment>
+    ),
     rings,
     state,
     output,

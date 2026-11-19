@@ -1,6 +1,9 @@
 import ts from "typescript";
 
-import { detectCallKind } from "../ast/mod.ts";
+import {
+  detectCallKind,
+  getEnclosingFunctionLikeDeclaration,
+} from "../ast/mod.ts";
 import {
   isCommonFabricSymbol,
   resolvesToCommonFabricSymbol,
@@ -237,31 +240,116 @@ function hasCallableWrite(
   source: ts.SourceFile,
   checker: ts.TypeChecker,
 ): boolean {
+  return callableWrites(symbol, source, checker).length > 0;
+}
+
+function callableWrites(
+  symbol: ts.Symbol,
+  source: ts.SourceFile,
+  checker: ts.TypeChecker,
+): readonly ts.Node[] {
+  const writes: ts.Node[] = [];
   const containsSymbol = (node: ts.Node): boolean =>
     ts.isIdentifier(node) && checker.getSymbolAtLocation(node) === symbol ||
     ts.isShorthandPropertyAssignment(node) &&
       checker.getShorthandAssignmentValueSymbol(node) === symbol ||
     ts.forEachChild(node, containsSymbol) === true;
-  const visit = (node: ts.Node): boolean => {
+  const visit = (node: ts.Node): void => {
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment &&
       containsSymbol(node.left)
-    ) return true;
+    ) writes.push(node);
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       (node.operator === ts.SyntaxKind.PlusPlusToken ||
         node.operator === ts.SyntaxKind.MinusMinusToken) &&
       containsSymbol(node.operand)
-    ) return true;
+    ) writes.push(node);
     if (
       (ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
       containsSymbol(node.initializer)
-    ) return true;
-    return ts.forEachChild(node, visit) === true;
+    ) writes.push(node);
+    ts.forEachChild(node, visit);
   };
-  return visit(source);
+  visit(source);
+  return writes;
+}
+
+/** Selects only preceding straight-line callable assignments in the same block. */
+function callableValueAtReference(
+  declaration: ts.VariableDeclaration,
+  reference: ts.Expression,
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+):
+  | { kind: "selected"; expression: ts.Expression }
+  | { kind: "ambiguous" }
+  | undefined {
+  const writes = callableWrites(symbol, declaration.getSourceFile(), checker);
+  if (writes.length === 0) return undefined;
+  const owner = getEnclosingFunctionLikeDeclaration(declaration);
+  if (
+    getEnclosingFunctionLikeDeclaration(reference) !== owner ||
+    writes.some((write) => getEnclosingFunctionLikeDeclaration(write) !== owner)
+  ) {
+    return { kind: "ambiguous" };
+  }
+  const statement = declaration.parent.parent;
+  if (!ts.isVariableStatement(statement) || !ts.isBlock(statement.parent)) {
+    return { kind: "ambiguous" };
+  }
+  const block = statement.parent;
+  let use: ts.Node = reference;
+  while (use.parent && use.parent !== block) use = use.parent;
+  if (use.parent !== block) return { kind: "ambiguous" };
+  const start = block.statements.indexOf(statement);
+  const end = block.statements.findIndex((item) => item === use);
+  if (end <= start) return { kind: "ambiguous" };
+  const inside = (node: ts.Node, container: ts.Node): boolean => {
+    for (
+      let current: ts.Node | undefined = node;
+      current;
+      current = current.parent
+    ) {
+      if (current === container) return true;
+    }
+    return false;
+  };
+  if (writes.some((write) => inside(write, statement))) {
+    return { kind: "ambiguous" };
+  }
+  let selected = declaration.initializer;
+  let ambiguous = false;
+  for (const item of block.statements.slice(start + 1, end)) {
+    const changes = writes.filter((write) => inside(write, item));
+    if (changes.length === 0) continue;
+    const assignment = ts.isExpressionStatement(item)
+      ? unwrapExpression(item.expression)
+      : undefined;
+    if (
+      changes.length === 1 && assignment &&
+      ts.isBinaryExpression(assignment) &&
+      assignment.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+      ts.isIdentifier(unwrapExpression(assignment.left)) &&
+      checker.getSymbolAtLocation(unwrapExpression(assignment.left)) === symbol
+    ) {
+      selected = assignment.right;
+      ambiguous = false;
+    } else {
+      ambiguous = true;
+    }
+  }
+  if (writes.some((write) => inside(write, use))) ambiguous = true;
+  const candidate = selected && unwrapExpression(selected);
+  if (
+    candidate && !ts.isIdentifier(candidate) &&
+    !ts.isArrowFunction(candidate) && !ts.isFunctionExpression(candidate)
+  ) ambiguous = true;
+  return ambiguous || !selected
+    ? { kind: "ambiguous" }
+    : { kind: "selected", expression: selected };
 }
 
 function wishFactoryHelperCallee(
@@ -291,10 +379,34 @@ function wishFactoryHelperCallee(
   if (!symbol) return false;
   if (resolvesToCommonFabricSymbol(symbol, checker, "wish")) return true;
   const resolvedSymbol = getAliasedSymbol(symbol, checker);
-  if (seenSymbols.has(resolvedSymbol)) return false;
+  if (seenSymbols.has(resolvedSymbol)) {
+    return hasCallableWrite(resolvedSymbol, target.getSourceFile(), checker);
+  }
   seenSymbols.add(resolvedSymbol);
 
   return (resolvedSymbol.getDeclarations() ?? []).some((declaration) => {
+    if (
+      ts.isBindingElement(declaration) &&
+      hasCallableWrite(resolvedSymbol, declaration.getSourceFile(), checker)
+    ) return true;
+    if (ts.isVariableDeclaration(declaration)) {
+      const current = callableValueAtReference(
+        declaration,
+        target,
+        resolvedSymbol,
+        checker,
+      );
+      if (current?.kind === "ambiguous") return true;
+      if (current?.kind === "selected") {
+        const candidate = unwrapExpression(current.expression);
+        const returned =
+          ts.isArrowFunction(candidate) || ts.isFunctionExpression(candidate)
+            ? getReturnedExpression(candidate)
+            : candidate;
+        return returned !== undefined &&
+          returnedExpressionCreatesWish(returned, checker, seenSymbols);
+      }
+    }
     const returnedExpression = getReturnedExpression(declaration);
     if (returnedExpression) {
       return returnedExpressionCreatesWish(

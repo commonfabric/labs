@@ -51,6 +51,121 @@ function analyzeCall(source: string) {
 
 describe("structural-reactive-factory", () => {
   for (
+    const [name, body, rejected] of [
+      [
+        "factory replaced by an ordinary helper",
+        "let helper = make; helper = ordinary; return helper();",
+        false,
+      ],
+      [
+        "ordinary helper replaced by a factory",
+        "let helper = ordinary; helper = make; return helper();",
+        true,
+      ],
+      [
+        "conditional factory replacement",
+        "let helper = ordinary; if (choose) helper = make; return helper();",
+        true,
+      ],
+      [
+        "closure factory replacement",
+        "let helper = ordinary; const replace = () => { helper = make; }; replace(); return helper();",
+        true,
+      ],
+      [
+        "later factory replacement",
+        "let helper = ordinary; const value = helper(); helper = make; return value;",
+        false,
+      ],
+      [
+        "saved ordinary callable",
+        "let helper = ordinary; const saved = helper; helper = make; return saved();",
+        false,
+      ],
+      [
+        "saved factory callable",
+        "let helper = make; const saved = helper; helper = ordinary; return saved();",
+        true,
+      ],
+      [
+        "dominating ordinary replacement",
+        "let helper = make; if (choose) helper = ordinary; helper = ordinary; return helper();",
+        false,
+      ],
+      [
+        "destructured replacement",
+        "let helper = ordinary; ({ helper } = { helper: make }); return helper();",
+        true,
+      ],
+      [
+        "for-of replacement",
+        "let helper = ordinary; for (helper of [make]) {} return helper();",
+        true,
+      ],
+      [
+        "compound replacement",
+        "let helper = ordinary; helper ||= make; return helper();",
+        true,
+      ],
+      [
+        "same-statement replacement",
+        "let helper = ordinary; return (helper = make, helper());",
+        true,
+      ],
+      [
+        "declaration-statement replacement",
+        "let helper = ordinary, copy = (helper = make); return helper();",
+        true,
+      ],
+      [
+        "a saved factory assigned back to its original binding",
+        "let helper = make; const saved = helper; helper = saved; return helper();",
+        true,
+      ],
+      [
+        "a destructured callable replacement",
+        "let [helper] = [ordinary]; helper = make; return helper();",
+        true,
+      ],
+      [
+        "a conditional replacement value",
+        "let helper = ordinary; helper = choose ? make : ordinary; return helper();",
+        true,
+      ],
+      [
+        "a logical replacement value",
+        "let helper = ordinary; helper = (choose && make) || ordinary; return helper();",
+        true,
+      ],
+      [
+        "an indexed replacement value",
+        "let helper = ordinary; helper = [make][0]!; return helper();",
+        true,
+      ],
+    ] as const
+  ) {
+    it(`${rejected ? "rejects" : "allows"} a compute after ${name}`, async () => {
+      const { diagnostics } = await validateSource(
+        `import { pattern, computed, wish, type AsyncResult } from "commonfabric";
+        export default pattern<{ choose: boolean }>(({ choose }) => ({
+          value: computed(() => {
+            const ordinary = (): AsyncResult<string> => "ordinary";
+            const make = (): AsyncResult<string> => wish<string>({ query: "#inner" }).result;
+            ${body}
+          }),
+        }));`,
+        { types: { "commonfabric.d.ts": commonfabricTypes } },
+      );
+      expect(
+        diagnostics.filter(({ severity }) => severity === "error")
+          .map(({ type }) => type),
+      ).toEqual(
+        rejected ? ["compute-context:local-reactive-use"] : [],
+      );
+    });
+  }
+
+  for (
     const [name, helper, call] of [
       ["identity getter", identity, "identity(request)"],
       [
