@@ -1,3 +1,13 @@
+/**
+ * The assistant that answers a request with a piece. Given a situation, it
+ * searches the space and past suggestions, may ask you a clarifying question,
+ * and then presents an existing piece or one it creates from the pattern index,
+ * with an option to refine the result.
+ *
+ * When handed several ready-made candidates, it instead shows a picker to
+ * choose one.
+ */
+
 import {
   type BuiltInLLMMessage,
   computed,

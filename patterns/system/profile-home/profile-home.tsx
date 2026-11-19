@@ -1,3 +1,14 @@
+/**
+ * A profile page for a person: their name, picture, bio, external links, and
+ * the cards they have pinned. Visiting shows a read-only presentation, and the
+ * owner can switch to an edit form to change the name, picture, and bio, add or
+ * remove external links, and add or remove tagged cards, among them links to
+ * existing pieces.
+ *
+ * Profiles can also carry verified external identities and a pointer to the
+ * owner's inbox for things shared with them.
+ */
+
 import {
   Cell,
   Cfc,
