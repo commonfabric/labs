@@ -164,8 +164,6 @@ export class RuntimeTransactions implements TransactionHooks {
    * given; write records are recorded only then.
    */
   readonly #compiledPattern: string | undefined;
-  /** The observations of slots' chains journaled in the transaction. */
-  readonly #observed = new Set<string>();
   /** The paths the transaction in progress wrote, by document. */
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
@@ -339,7 +337,6 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#read.clear();
     this.#readBeforeWrite.clear();
     this.#readAfterWrite.clear();
-    this.#observed.clear();
     this.#written.clear();
     this.#metadata.clear();
     this.#recorded = [];
@@ -564,52 +561,15 @@ export class RuntimeTransactions implements TransactionHooks {
     ) {
       return { staged: this.#cfcAddress(last) };
     }
+    // A position the transaction did not read, such as the one an element
+    // of a fold's group read in an earlier transaction, is the runtime's to
+    // observe: it observes the label stored there in the committing
+    // transaction and reads no value (ruling (c)).
     const observes = observesOf(binding.observes);
-    this.#observe(binding.chain, observes);
     return {
       chain: binding.chain.map((address) => this.#cfcAddress(address)),
       observes,
     };
-  }
-
-  /**
-   * Journals, in the transaction in progress, the observations a slot's
-   * chain names that it has not journaled: a probe at each link position
-   * and at a position whose reference the slot observes, a read that is
-   * not recursive at the last position of a `shape` slot, and a read of the
-   * value at the last position otherwise. A group of a fold's elements is
-   * bound to the positions one of its elements read, possibly in an
-   * earlier transaction, and every element of the group has labels with
-   * the same identifiers there: the transaction observes the group's label
-   * by observing that element's, which costs one read per group and not
-   * one per element. A path holding `*` is observed where the transaction
-   * read a position it matches.
-   */
-  #observe(chain: readonly Address[], observes: string): void {
-    const tx = this.#open();
-    chain.forEach(({ doc, path }, index) => {
-      if (path.includes("*")) return;
-      const probe = index < chain.length - 1 || observes === "followRef";
-      // A read of the value and a read of the shape are observations of
-      // different classes at one position.
-      const text = JSON.stringify([
-        doc,
-        path,
-        probe ? "probe" : observes === "shape" ? "shape" : "value",
-      ]);
-      if (this.#observed.has(text)) return;
-      this.#observed.add(text);
-      const address = this.#address(doc, path);
-      if (probe) readMaybeLink(tx, address);
-      else if (observes === "shape") {
-        // The runtime journals a read that is not recursive as one of the
-        // shape of the value.
-        tx.readValueOrThrow(address, { nonRecursive: true });
-      } else if (!this.#read.has(JSON.stringify([doc, path]))) {
-        this.#read.add(JSON.stringify([doc, path]));
-        tx.readValueOrThrow(address);
-      }
-    });
   }
 
   /**

@@ -5,11 +5,17 @@
  * transaction wrote takes the label staged there, which a loop over targets
  * cannot give in order.
  *
- * The executor's report narrows a label and cannot invent one: every address
- * a slot is bound to must be one the transaction journaled a read of in the
- * slot's class (or wrote, for a staged label), every target must be a path
- * the transaction wrote, and each instantiated confidentiality must be a
- * subset of the transaction join's. A violation refuses the commit.
+ * A slot is bound to an address the transaction journaled a read of in the
+ * slot's class, to one it wrote, for a staged label, or to one it did not
+ * read: by ruling, a label may rest on labels observed in an earlier
+ * transaction. For an address of the last kind the pre-pass observes the
+ * stored label in the committing transaction (`observeLabel`), which reads
+ * no value, and resolves the slot from that label; the commit then
+ * validates the version of the document it observed, so a concurrent change
+ * of the label conflicts. Every target must be a path the transaction wrote,
+ * and each instantiated confidentiality must be a subset of the transaction
+ * join's together with the labels resolved from those observations. A
+ * violation refuses the commit.
  */
 
 import type { FabricValue } from "@commonfabric/api";
@@ -89,6 +95,18 @@ export interface PlanLabelEnvironment {
     address: CfcAddress,
     observes: ReadObservationShape,
   ): JournaledRead | undefined;
+
+  /**
+   * Observes, in the transaction, the stored label of `address`, which the
+   * transaction did not read in the class `observes`, and returns the read
+   * to resolve its label under. It journals the read of the document's
+   * label metadata alone, so the commit validates that the label is
+   * current, and reads no value.
+   */
+  observeLabel(
+    address: CfcAddress,
+    observes: ReadObservationShape,
+  ): JournaledRead;
 
   /** Whether the transaction wrote `address`, at it or at a path above it. */
   wrote(address: CfcAddress): boolean;
@@ -233,20 +251,22 @@ export const instantiatePlanLabels = (
     address: CfcAddress,
     observes: ReadObservationShape,
   ): { confidentiality: readonly CfcConfClause[]; integrity: CfcAtom[] } => {
-    const read = env.journaled(address, observes);
-    if (read === undefined) {
-      throw new PlanLabelError(
-        `a slot is bound to /${
-          address.path.join("/")
-        } of ${address.id} in class ${observes}, which the transaction did not read`,
-      );
-    }
+    const journaled = env.journaled(address, observes);
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // An address the transaction did not read: the label stored there, from
+    // an observation of the label alone.
+    const read = journaled ?? env.observeLabel(address, observes);
     const label = env.resolver.resolve(
       read.document,
       read.type,
       canonicalizeLogicalPath(address.path),
       read.profile,
     ).label;
+    if (journaled === undefined) {
+      for (const clause of label?.confidentiality ?? []) {
+        joinClauses.add(cfcCanonicalClauseDigest(clause as CfcConfClause));
+      }
+    }
     return {
       confidentiality: (label?.confidentiality ?? []) as CfcConfClause[],
       integrity: observes === "followRef"

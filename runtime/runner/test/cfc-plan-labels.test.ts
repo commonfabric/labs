@@ -287,7 +287,7 @@ describe("cfc-plan-labels", () => {
         tx: IExtendedStorageTransaction,
         identity: string,
         target: CfcAddress,
-      ) => void,
+      ) => void | Promise<void>,
     ): Promise<void> => {
       await withRuntime(true, async (runtime) => {
         const seed = runtime.edit();
@@ -321,7 +321,7 @@ describe("cfc-plan-labels", () => {
           const cell = runtime.getCell(space, "plan-target", undefined, tx);
           cell.set({ a: "x", b: "y" });
           const link = cell.getAsNormalizedFullLink();
-          body(runtime, tx, identity, {
+          await body(runtime, tx, identity, {
             space: link.space,
             id: link.id,
             scope: "space",
@@ -476,20 +476,45 @@ describe("cfc-plan-labels", () => {
       });
     });
 
-    it("refuses a slot bound to an address the transaction did not read", async () => {
-      await withSources((_runtime, tx, identity, target) => {
+    it("resolves a slot bound to an address the transaction did not read from the label stored there, without reading its value", async () => {
+      // Ruling (c): a template label may rest on labels observed in an
+      // earlier transaction. The pre-pass observes the stored label of the
+      // address in the committing transaction and reads no value there.
+      await withSources(async (runtime, tx, identity, target) => {
+        const seed = runtime.edit();
+        seedStoredEnvelope(seed, memoryAddress("of:src-c", []), {
+          value: { text: "c" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: ["secret-c"] } }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).error).toBeUndefined();
         tx.recordCfcWritePolicyInput(
           planWrite(
             identity,
             { ...target, path: ["a"] },
             0,
-            address("of:never-read"),
+            address("of:src-c"),
           ),
           runtimeWritePolicyAuthorization,
         );
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
-        expect(labels.reasons).toHaveLength(1);
-        expect(labels.byTarget.size).toBe(0);
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a")).toEqual(["secret-c"]);
+        // The transaction's value reads are as they were: its join does
+        // not hold the clause. It journaled a read of the label metadata of
+        // `of:src-c`, which the commit validates, and no read of its value.
+        expect(deriveFlowJoin(tx).confidentiality).not.toContain("secret-c");
+        const reads = [...tx.getReadActivities!()].filter((read) =>
+          read.id === "of:src-c"
+        );
+        expect(reads.some((read) => read.path[0] === "cfc")).toBe(true);
+        expect(reads.some((read) => read.path[0] === "value")).toBe(false);
       });
     });
 
@@ -555,6 +580,12 @@ describe("cfc-plan-labels", () => {
         runtime: Runtime,
       ) => void,
       writeRoot: boolean | FabricValue = false,
+      options: {
+        /** Whether the transaction reads `of:src-b`. */
+        readB?: boolean;
+        /** Runs after `record` and before the transaction commits. */
+        beforeCommit?: (runtime: Runtime) => Promise<void>;
+      } = {},
     ) => {
       let outcome:
         | {
@@ -609,7 +640,9 @@ describe("cfc-plan-labels", () => {
         );
         const tx = runtime.edit();
         tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
-        tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
+        if (options.readB !== false) {
+          tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
+        }
         const cell = runtime.getCell(space, "plan-target", undefined, tx);
         if (writeRoot !== false) {
           tx.writeValueOrThrow(
@@ -621,6 +654,7 @@ describe("cfc-plan-labels", () => {
           cell.key("b").set("y");
         }
         record(tx, identity, target, runtime);
+        await options.beforeCommit?.(runtime);
         const { error } = await tx.commit().settled;
         const reader = runtime.edit();
         try {
@@ -781,19 +815,69 @@ describe("cfc-plan-labels", () => {
       expect(value["/b"]).toEqual(["secret-a", "secret-b"]);
     });
 
-    it("refuses the commit for a slot bound to an address the transaction did not read", async () => {
-      const { error } = await commitWrites(true, (tx, identity, target) => {
-        tx.recordCfcWritePolicyInput(
-          planWrite(
-            identity,
-            { ...target, path: ["a"] },
-            0,
-            address("of:never-read"),
-          ),
-          runtimeWritePolicyAuthorization,
-        );
-      });
-      expect(error).toBeDefined();
+    it("commits a slot bound to an address the transaction did not read with the label stored there", async () => {
+      const { error, value } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            planWrite(
+              identity,
+              { ...target, path: ["a"] },
+              0,
+              address("of:src-b"),
+            ),
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        false,
+        { readB: false },
+      );
+      expect(error).toBeUndefined();
+      expect(value["/a"]).toEqual(["secret-b"]);
+    });
+
+    it("stores, for a slot bound to an address the transaction did not read, the label stored there at the commit and not one from before a change of it", async () => {
+      // The label of `of:src-b`, which the transaction does not read here,
+      // changes after the transaction recorded the write and before it
+      // commits. The commit observes the label of the address: it stores
+      // the label after the change, or it conflicts, and never stores the
+      // label from before.
+      const relabel = async (runtime: Runtime) => {
+        const change = runtime.edit();
+        seedStoredEnvelope(change, memoryAddress("of:src-b", []), {
+          value: { text: "b" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: ["secret-d"] } }],
+            },
+          },
+        });
+        expect((await change.commit().settled).error).toBeUndefined();
+      };
+      const { error, value } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            planWrite(
+              identity,
+              { ...target, path: ["a"] },
+              0,
+              address("of:src-b"),
+            ),
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        false,
+        { readB: false, beforeCommit: relabel },
+      );
+      if (error === undefined) {
+        expect(value["/a"]).toEqual(["secret-d"]);
+      } else {
+        expect(value["/a"] ?? []).not.toContain("secret-b");
+      }
     });
 
     it("refuses the commit for a plan-write recorded after preparation", async () => {

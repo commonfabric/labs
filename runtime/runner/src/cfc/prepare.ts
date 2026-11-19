@@ -5116,6 +5116,33 @@ export const planLabelsFor = (
         concretePathHasPrefix(path, writtenPath)
       ) === true;
     },
+    observeLabel: (address, observes) => {
+      const document = {
+        space: address.space,
+        id: address.id as URI,
+        scope: normalizeCellScope(address.scope),
+      };
+      // The verifier read of the document's label metadata: journaled, so
+      // the commit validates the version it read, and adding no flow label.
+      storedMetadataFor(
+        tx,
+        document.space,
+        document.id,
+        document.scope,
+        "application/json",
+      );
+      return {
+        document,
+        type: "application/json",
+        profile: {
+          shape: observes,
+          nonRecursive: observes !== "value",
+          coveredByTrace: false,
+          machinery: false,
+          declaredOnward: undefined,
+        },
+      };
+    },
     journaled: (address, observes) => {
       const entry = journal.get(documentKeyOf(address));
       if (entry === undefined) return undefined;
