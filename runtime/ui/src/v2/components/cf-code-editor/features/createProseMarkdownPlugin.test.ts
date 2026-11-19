@@ -167,6 +167,16 @@ describe("createProseMarkdownPlugin()", () => {
     });
   });
 
+  describe("line break tags", () => {
+    it("renders a line break element in place of a `<br>` tag", () => {
+      const view = openView("one<br>two");
+      const [drawn] = elementsOf(view, ".cm-prose-br");
+      expect(drawn.children).toHaveLength(1);
+      expect(drawn.firstElementChild?.tagName).toBe("BR");
+      expect(view.contentDOM.textContent).toBe("onetwo");
+    });
+  });
+
   describe("task checkboxes", () => {
     it("renders an unchecked checkbox for `[ ]` and a checked one for `[x]`", () => {
       const unchecked = openView("- [ ] open");

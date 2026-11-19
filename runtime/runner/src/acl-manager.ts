@@ -85,9 +85,7 @@ export class ACLManager {
     if (!isDID(user) || (capability !== "READ" && capability !== "WRITE")) {
       throw new Error("A grant must be READ or WRITE.");
     }
-    if (await this.get() === null) {
-      throw new Error("No ACL initialized for space.");
-    }
+    await this.get();
     return await this.#write((current) => {
       if (current === null) throw new Error("No ACL initialized for space.");
       const existing = current[user] ?? current["*"];
@@ -101,9 +99,7 @@ export class ACLManager {
   }
 
   async remove(user: ACLUser): Promise<ACL> {
-    if (await this.get() === null) {
-      throw new Error("No ACL initialized for space.");
-    }
+    await this.get();
     return await this.#write((current) => {
       if (current === null) throw new Error("No ACL initialized for space.");
       const { [user]: _removed, ...rest } = current;
@@ -124,19 +120,7 @@ export class ACLManager {
    */
   async delete(by: DID): Promise<void> {
     await this.get();
-    try {
-      await this.#commit((tx) =>
-        writeDeletionTombstone(tx, this.#spaceDid, by)
-      );
-    } catch (error) {
-      // `editWithRetry` reports what the write throws as the reason of the
-      // abort it wraps it in, so the refusal is rethrown as itself, for a
-      // caller to tell apart.
-      const reason =
-        ((error as Error).cause as { reason?: unknown } | undefined)
-          ?.reason;
-      throw reason instanceof SpaceMembersRemainError ? reason : error;
-    }
+    await this.#commit((tx) => writeDeletionTombstone(tx, this.#spaceDid, by));
   }
 
   async #write(mutate: (current: ACL | null) => ACL): Promise<ACL> {
@@ -150,14 +134,26 @@ export class ACLManager {
 
   /**
    * Helper for {@link #write} and {@link delete}, which commits `write`,
-   * retrying it on a conflict, and returns what it wrote.
+   * retrying it on a conflict, and returns what it wrote. What the last
+   * attempt of `write` throws is rethrown as itself, for a caller to tell
+   * apart.
    */
   async #commit<T>(write: (tx: IExtendedStorageTransaction) => T): Promise<T> {
     // `editWithRetry` reruns `write` after catching up from a conflict, so
     // every attempt re-reads the list and derives the replacement from it,
     // and a retry merges with the winning list instead of replaying a stale,
     // precomputed whole-document value over it.
-    const result = await this.#runtime.editWithRetry(write);
+    let thrown: { error: unknown } | undefined;
+    const result = await this.#runtime.editWithRetry((tx) => {
+      thrown = undefined;
+      try {
+        return write(tx);
+      } catch (error) {
+        thrown = { error };
+        throw error;
+      }
+    });
+    if (thrown !== undefined) throw thrown.error;
     if (result.error) {
       const error = new Error(result.error.message, { cause: result.error });
       error.name = result.error.name;

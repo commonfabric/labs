@@ -920,7 +920,7 @@ Diagnostics emitted in all modes:
   `pattern-context:var-declaration`
   - statement-boundary imperative structure in top-level pattern-owned code —
     assignments, early returns, `let`/`var` declarations, and loops each
-    report a dedicated id (`pattern-context-validation.ts:539-633`). These
+    report a dedicated id (`pattern-context-validation.ts:728-838`). These
     enforce the target-language matrix's "statement-boundary imperative
     constructs" Unsupported row and have been live since the boundary PR
     (#3154).
@@ -1259,7 +1259,7 @@ callback diagnostic would.
 `JsxPropNameValidationTransformer` (stage 10) reports a JSX prop whose name
 can name no property of the element it is written on:
 
-- **Warning** `jsx:misnamed-prop`
+- **Error** `jsx:misnamed-prop`
   (`src/transformers/jsx-prop-name-validation.ts`) — a prop on an intrinsic
   element (a tag starting with a lower-case letter or holding a hyphen) whose
   name holds a hyphen and is neither an event prop (`on…`, such as
@@ -1278,9 +1278,10 @@ are event, attribute and misnamed props is decided by
 too. A component's props are not checked: they are its parameter's fields,
 which may hold any name.
 
-It is a warning rather than an error because a pattern source already stored
-in a space may hold such a prop, and a stored source has to keep compiling; the
-prop does nothing either way.
+Under `TransformationOptions.storedSource` it reports as a **Warning**, as the
+other authoring-shape gates do: a pattern source already stored in a space may
+hold such a prop, and its reload has to keep compiling. The prop does nothing
+either way.
 
 The stage walks every node, including the expression inside a JSX expression
 container, and changes nothing.
@@ -1400,11 +1401,11 @@ report these through the same collector (deduplicated via §2.2's
   `base/schema-generator/test/schema/cfc-authoring.test.ts`, and the
   runner's `test/cfc-labeled-cell-input.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
-  (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
+  (`pattern-body-reactive-root-lowering.ts:197`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
   reactive root at that site
 - **Error** `pattern-context:inline-reactive-root-access`
-  (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
+  (`pattern-body-reactive-root-lowering.ts:1414`) — an inline tracked
   reactive-root read at a position that stage cannot lower
 - **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
   `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
@@ -1415,7 +1416,7 @@ report these through the same collector (deduplicated via §2.2's
   root; demoted to a **Warning** under `TransformationOptions.storedSource`
   (an identity-pinned reload of durable stored source admits nothing new, so
   the report keeps its visibility and loses its veto); see §6.12
-- **Error** `reactive-capture:unknown-type` (`src/ast/type-building.ts:681`) —
+- **Error** `reactive-capture:unknown-type` (`src/ast/type-building.ts:1545`) —
   a captured reactive value's inferred type is `unknown`, so its schema would
   be `{ type: "unknown" }` and the runner would not materialize it, reading it
   back as an opaque reference carrying no properties; the message directs
@@ -2319,7 +2320,7 @@ Injected behaviors:
   - the typed form lowers the `T` type argument to an injected `schema`
     property on the options object (parallel to `generateObject`)
   - an untyped `fetchJson(...)` call is a hard **Error**
-    `fetch-json:missing-type-argument` (`schema-injection.ts:4015`), directing
+    `fetch-json:missing-type-argument` (`schema-injection.ts:5198`), directing
     authors to add a type argument or use `fetchJsonUnchecked` for JSON whose
     shape is not declared as a type. `fetchText` / `fetchBinary` /
     `fetchJsonUnchecked` receive no dedicated injection.
@@ -2769,9 +2770,11 @@ reads/writes so equality and navigation do not force full values into a
 computation's input schema:
 
 - Trusted Common Fabric `equals(...)` / `equalLinks(...)` calls record their
-  arguments as comparable identity paths. Their cell-like receiver-method forms
-  do the same; an arbitrary user object's method merely named `equals` is an
-  ordinary read. `navigateTo(...)` records identity (not comparable) argument
+  arguments as comparable identity paths, and so do `equalsKey(...)` calls,
+  whose key is what `equals` matches by (fixture
+  `handler-schema/identity-key-argument`). The cell-like receiver-method forms
+  of `equals` and `equalLinks` do the same; an arbitrary user object's method
+  merely named `equals` is an ordinary read. `navigateTo(...)` records identity (not comparable) argument
   use. Bare helpers are accepted only when symbol resolution proves Common
   Fabric provenance; receiver methods require a cell-like receiver when a
   checker is available (`policy/capability-analysis.ts`,
@@ -2877,7 +2880,7 @@ defaulting to read. When a cell
 argument reaches an imported parameter whose capability the contract cannot
 classify, the capability would be silently lost, so the transformer reports
 **Error** `capability:unreadable-cell-argument`
-(`schema-injection.ts:269`, via `reportDiagnosticOnce`). The design narrative
+(`schema-injection.ts:286`, via `reportDiagnosticOnce`). The design narrative
 lives in `docs/history/packages/ts-transformers/SCHEMA_INJECTION_NOTES.md`
 (a point-in-time design record; "Imported Cell
 Parameters Are a Capability Contract").
@@ -4397,7 +4400,8 @@ callback bodies" and "…treats compact control flow as line coverage"). Only
 `kind: "runtime"` spans participate.
 
 `writePatternCoverageLcov` / `patternCoverageReportToLcov` emit standard LCOV
-(`TN:pattern-runtime`, `SF`, per-line `DA`, `LF`/`LH`), with `DA` lines in
+(`TN:pattern-runtime`, or `pattern-runtime-` followed by the name of the path
+that collected it, then `SF`, per-line `DA`, `LF`/`LH`), with `DA` lines in
 **authored** coordinates thanks to §16.5 — from "pattern coverage records
 original runtime lines" (`runtime/runner/test/pattern-coverage.test.ts`),
 where `main.choose(1)` skips the authored `return 0;` on line 6:

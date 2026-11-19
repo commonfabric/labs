@@ -1,7 +1,9 @@
 import type {
+  PatternIndexClient,
   PatternIndexEventType,
   PatternIndexPublishRequest,
 } from "@commonfabric/pattern-index/client";
+import { deployedPieceRef } from "@commonfabric/pattern-index/client";
 import type { JSONSchema } from "@commonfabric/api";
 import {
   type Cell,
@@ -87,6 +89,7 @@ import {
   patternIndexDependencies,
 } from "@commonfabric/pattern-index/deploy";
 import type { HarnessToolDefinition } from "./types.ts";
+import { resolvePiece } from "./piece-source.ts";
 import {
   RUN_PATTERN_INPUT_SCHEMA,
   type RunPatternToolInput,
@@ -973,15 +976,6 @@ export const runPatternTool: HarnessToolDefinition<
       );
     }
     const { sourceText, patternId } = input;
-    if (sourceText !== undefined && patternId !== undefined) {
-      return errorOutput(
-        "error",
-        "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
-      );
-    }
-    if (sourceText === undefined && patternId === undefined) {
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
-    }
     // The run's index client and its ledger, held once: which of the index
     // paths below run is decided by the call and by whether the run has an
     // index at all, and both questions are settled here rather than at each of
@@ -990,14 +984,33 @@ export const runPatternTool: HarnessToolDefinition<
     // it had to say.
     const getPatternIndexClient = context.getPatternIndexClient;
     const patternIndexLedger = context.patternIndexLedger;
-    if (
-      patternId !== undefined &&
-      (getPatternIndexClient === undefined || patternIndexLedger === undefined)
+    let named:
+      | { sourceText: string }
+      | { patternId: string; getClient: () => Promise<PatternIndexClient> };
+    if (sourceText !== undefined) {
+      if (patternId !== undefined) {
+        return errorOutput(
+          "error",
+          "run_pattern takes sourceText or patternId, not both; pass your own source or the id of an indexed pattern",
+        );
+      }
+      named = { sourceText };
+    } else if (input.revises !== undefined) {
+      return errorOutput(
+        "error",
+        "run_pattern revises goes with sourceText: it names the piece your source revises, and an indexed pattern's run has no source of yours",
+      );
+    } else if (patternId === undefined) {
+      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
+    } else if (
+      getPatternIndexClient === undefined || patternIndexLedger === undefined
     ) {
       return errorOutput(
         "error",
         "run_pattern patternId requires a pattern index; configure --pattern-index-url, or pass sourceText instead",
       );
+    } else {
+      named = { patternId, getClient: getPatternIndexClient };
     }
     if (sourceText !== undefined) {
       const sourceTextBytes = new TextEncoder().encode(sourceText).length;
@@ -1029,6 +1042,20 @@ export const runPatternTool: HarnessToolDefinition<
     }
     const { pieces } = session;
     const space = pieces.getSpace();
+    // The pattern the revised piece runs, read before anything is created:
+    // a token naming no piece is the caller's mistake, said now rather than
+    // after a piece exists. It matters only to what the index is told, and is
+    // settled there (`PatternIndexStageOptions.revisedFrom`).
+    let revisedFrom: string | undefined;
+    if (input.revises !== undefined) {
+      const revised = await resolvePiece(
+        "run_pattern revises",
+        pieces,
+        input.revises.trim(),
+      );
+      if (!revised.ok) return errorOutput("error", revised.message);
+      revisedFrom = getPatternIdentityRef(revised.cell)?.identity;
+    }
     const signal = context.signal;
     if (signal?.aborted) {
       return cancelledOutput();
@@ -1099,13 +1126,13 @@ export const runPatternTool: HarnessToolDefinition<
     // quote indexed source goes only to the artifact.
     let program: RuntimeProgram;
     let pattern: Pattern;
-    if (patternId !== undefined && getPatternIndexClient !== undefined) {
+    if ("patternId" in named) {
       try {
         ({ program, pattern } = await compileIndexedPattern({
           runtime: pieces.runtime,
           space,
-          patternId,
-          getClient: getPatternIndexClient,
+          patternId: named.patternId,
+          getClient: named.getClient,
         }));
       } catch (error) {
         if (!(error instanceof IndexedPatternError)) throw error;
@@ -1119,10 +1146,10 @@ export const runPatternTool: HarnessToolDefinition<
             : {}),
         };
       }
-    } else if (sourceText !== undefined) {
+    } else {
       program = {
         main: RUN_PATTERN_SOURCE_MAIN,
-        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText }],
+        files: [{ name: RUN_PATTERN_SOURCE_MAIN, contents: named.sourceText }],
       };
       // A `cf:pattern:` import resolves from the space's own source cache, and
       // for a pattern this space has never run there is nothing there to
@@ -1159,12 +1186,6 @@ export const runPatternTool: HarnessToolDefinition<
           withRuntimeModuleCorrection(describeFailure(error)),
         );
       }
-    } else {
-      // Unreachable: a call naming neither was refused above, and one naming
-      // a `patternId` without an index with it. The pair's exclusivity is a
-      // fact about those checks rather than about the input type, so the
-      // branch is written out instead of asserted away.
-      return errorOutput("error", RUN_PATTERN_NO_PROGRAM_MESSAGE);
     }
     // An input's value must match the compiled pattern's argument schema for
     // its key before any piece exists, so a mismatch is a model-correctable
@@ -1975,6 +1996,16 @@ export const runPatternTool: HarnessToolDefinition<
           "run_pattern could not publish the pattern it ran: the compiled pattern carries no durable content-addressed entry identity",
         );
       } else {
+        // A person's own agent (`--pattern-index-origin agent`) says so, and
+        // names the piece it deployed to: the index shares the version under
+        // the person's sharing setting once they use that piece in a loom.
+        // The piece is the lineage, so its iterations are versions of one
+        // pattern. Any other run names neither, and is never shared on its
+        // own. Taken before the gate, whose abort check then covers this
+        // await too.
+        const madeForPerson = context.patternIndexOrigin === "agent"
+          ? await deployedPieceRef(space, piece.id)
+          : undefined;
         const verdict = await renderGateVerdict();
         // A cancelled gate is a cancelled run. Nothing is staged: an index
         // entry is a claim about a run that finished, and this one did not.
@@ -2007,6 +2038,13 @@ export const runPatternTool: HarnessToolDefinition<
         {
           const request: PatternIndexPublishRequest = {
             patternId: entryIdentity,
+            ...(madeForPerson !== undefined
+              ? {
+                origin: "agent" as const,
+                slot: madeForPerson,
+                deployedTo: madeForPerson,
+              }
+              : {}),
             program: {
               main: program.main,
               files: program.files.map((file) => ({
@@ -2035,7 +2073,10 @@ export const runPatternTool: HarnessToolDefinition<
               }
               : { discoverable: true }),
           };
-          patternIndexLedger.stage(request);
+          patternIndexLedger.stage(
+            request,
+            revisedFrom !== undefined ? { revisedFrom } : {},
+          );
         }
       }
     }

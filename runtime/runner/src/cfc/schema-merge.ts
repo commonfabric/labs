@@ -227,6 +227,12 @@ const reconcileWriterClaimStamp = (
   if (!existingStamped && !candidateStamped) {
     return existing;
   }
+  // TODO(danfuzz): Outside a release, a stamped claim, lone or a write
+  // policy's alternative, adopts an unstamped one whose spelling corresponds
+  // whichever writer's write restates it, where the proposal lets only the
+  // writer the stamp names bring it over (§8.15.13, "Release"). Refuse the
+  // adoption unless `adoptsStamp` vouches for the stamp, once callers pass it
+  // for every adoption.
   return existingStamped ? existing : candidate;
 };
 
@@ -237,6 +243,7 @@ const mergeSetLikeIfcArray = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   writePolicyRelease: WritePolicyRelease | undefined,
+  storedSide: StoredSide | undefined,
 ): unknown => {
   if (existing === undefined) {
     return candidate;
@@ -314,11 +321,11 @@ const mergeSetLikeIfcArray = (
           // boundary, never a rotation here). Different bindings still
           // conflict.
           if (key === "writeAuthorizedBy") {
-            const reconciled = reconcileWriterClaimStamp(
-              existing,
-              candidate,
-              adoptsStamp,
-            );
+            // The stored claim goes first, so that its stamp is the one
+            // kept, as a write policy's alternatives keep theirs.
+            const reconciled = storedSide === "candidate"
+              ? reconcileWriterClaimStamp(candidate, existing, adoptsStamp)
+              : reconcileWriterClaimStamp(existing, candidate, adoptsStamp);
             if (reconciled !== undefined) {
               return reconciled;
             }
@@ -339,13 +346,27 @@ const mergeSetLikeIfcArray = (
       return mergeArraySet(candidateArray);
     }
     case "writePolicyAnyOf":
-      return mergeWritePolicyAnyOf(
-        existing,
-        candidate,
-        path,
-        adoptsStamp,
-        writePolicyRelease,
-      );
+      // The stored list goes first. An alternative it holds and the other
+      // side omits is then kept rather than counted as added, and where the
+      // two sides stamp one alternative differently, the stored stamp is the
+      // one kept, since `reconcileWriterClaimStamp()` keeps the first side's.
+      return storedSide === "candidate"
+        ? mergeWritePolicyAnyOf(
+          candidate,
+          existing,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          true,
+        )
+        : mergeWritePolicyAnyOf(
+          existing,
+          candidate,
+          path,
+          adoptsStamp,
+          writePolicyRelease,
+          storedSide === "existing",
+        );
     case "exactCopyOf":
     case "projection":
     case "collection":
@@ -421,12 +442,15 @@ const mergedStoredAlternative = (
 /**
  * Helper for `mergeSetLikeIfcArray()`, which merges two `writePolicyAnyOf`
  * lists, as `mergeWritePolicy` in §8.15.13 states it. The list is a set
- * (§8.15.6.1): every stored alternative is kept, matched to a candidate's
- * alternative by content rather than by its place in the list, and stays as
- * stored, in stored order. A candidate's alternative matching none of them is
- * appended after them, and only in a release, and only where
- * {@link writePolicyAlternativeAdmissible} admits it; anything else refuses
- * the whole merge.
+ * (§8.15.6.1): every alternative of `existing` is kept, matched to a
+ * candidate's alternative by content rather than by its place in the list,
+ * and stays as it was, in its order. Where `existingIsStored`, `existing` is
+ * the policy the document stores, and a stored alternative the candidate does
+ * not list is kept as stored; otherwise neither list is stored, and a
+ * candidate lacking an alternative of `existing` refuses the merge. A
+ * candidate's alternative matching none of them is appended after them, and
+ * only in a release, and only where {@link writePolicyAlternativeAdmissible}
+ * admits it; anything else refuses the whole merge.
  */
 const mergeWritePolicyAnyOf = (
   existing: unknown,
@@ -434,6 +458,7 @@ const mergeWritePolicyAnyOf = (
   path: string,
   adoptsStamp: ((claim: unknown) => boolean) | undefined,
   release: WritePolicyRelease | undefined,
+  existingIsStored: boolean,
 ): unknown => {
   const unstable = (why: string) =>
     new CfcEnvelopeStabilityError(
@@ -442,26 +467,26 @@ const mergeWritePolicyAnyOf = (
   if (!Array.isArray(existing) || !Array.isArray(candidate)) {
     throw unstable("one side is not a list of alternatives");
   }
-  // TODO(danfuzz): A schema omitting a stored alternative is refused, in every
-  // write, though the merged envelope could keep it: here as a drop, and
-  // below as an addition outside a release where the stored claims are the
-  // side merged in (the verification overlay in `prepare.ts`). That refuses a
-  // FabriChat room's deleting or obliterating a message whose stored envelope
-  // lists `commitDelete` and `commitObliterate` among its reactions' writers,
-  // which the room's `SentReaction` does not list, and its `openWindow` over
-  // such messages. Keep the stored alternative instead once a ruling lets a
-  // later schema omit one.
-  //
+  // A write policy is a nonempty list, so an empty one omits nothing: it is
+  // ill-formed, wherever the write puts its values.
+  if (candidate.length === 0) {
+    throw unstable("the candidate lists no alternative");
+  }
   // Each stored alternative is matched by content, wherever the candidate
   // lists it, which accepts a candidate listing them in another order: the
-  // list is a set ("Order carries no meaning", §8.15.6.1).
+  // list is a set ("Order carries no meaning", §8.15.6.1). Where `existing` is
+  // stored, one the candidate omits is kept as stored, so that the merged
+  // policy holds every writer the document stores, as stored, and a program
+  // that retires a writer can still write the documents that list it. Between
+  // two schemas neither of which is stored, an omission refuses the merge.
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/96
   const kept = existing.map((policy) => {
     for (const other of candidate) {
       const merged = mergedStoredAlternative(policy, other, adoptsStamp);
       if (merged !== undefined) return merged;
     }
-    throw unstable("the candidate drops a stored alternative");
+    if (existingIsStored) return policy;
+    throw unstable("the candidate lacks an alternative the other schema lists");
   });
   const added = candidate.filter((other) =>
     !existing.some((policy) =>
@@ -603,6 +628,7 @@ const mergeIfc = (
   path: string,
   adoptsStamp?: (claim: unknown) => boolean,
   writePolicyRelease?: WritePolicyRelease,
+  storedSide?: StoredSide,
 ): JSONSchemaObj["ifc"] => {
   if (existing === undefined) {
     return candidate;
@@ -623,6 +649,7 @@ const mergeIfc = (
       path,
       adoptsStamp,
       writePolicyRelease,
+      storedSide,
     );
     if (value !== undefined) merged[key] = value;
   }
@@ -811,7 +838,23 @@ export interface MergeCfcSchemaEnvelopeOptions {
    * merge is no release's, and appends none.
    */
   writePolicyRelease?: WritePolicyRelease;
+
+  /**
+   * Which side of the merge is the envelope the document stores, where one of
+   * them is. A write policy that the other side lists only in part keeps the
+   * stored alternatives it omits (see `mergeWritePolicyAnyOf()`), and a writer
+   * claim the two sides stamp differently, lone or an alternative, keeps the
+   * stored side's stamp. Absent, neither side is stored, and a write policy
+   * that the candidate lists only in part refuses the merge.
+   */
+  storedSide?: StoredSide;
 }
+
+/**
+ * Which side of a merge is the envelope a document stores: `existing`, the one
+ * the merge starts from, or `candidate`, the one it merges in.
+ */
+export type StoredSide = "existing" | "candidate";
 
 const generatedOutputCovers = (
   options: MergeCfcSchemaEnvelopeOptions,
@@ -1350,6 +1393,7 @@ const mergeSchemaNode = (
       path,
       options.adoptsStamp,
       options.writePolicyRelease,
+      options.storedSide,
     );
   const required = mergeRequired(
     left.required,
@@ -1567,10 +1611,11 @@ function resolveConfidentialSchema(
   const resolved = typeof schema.$ref === "string"
     ? resolveKeepingBodyClaims(schema, root)
     : schema;
-  if (resolved === undefined) {
+  // A reference resolving to a boolean schema reaches no confidentiality, so
+  // the return above took it; only an unresolved reference remains.
+  if (!isObjectNotArray(resolved)) {
     throw new Error("Confidentiality merging requires resolved schemas");
   }
-  if (!isObjectNotArray(resolved)) return resolved;
   const childRoot = resolved !== schema
     ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
     : root;
@@ -1716,7 +1761,10 @@ function resolvedSchemaPolicyGraph(
   if (!isObjectNotArray(schema)) return undefined;
   for (let cursor = active; cursor !== undefined; cursor = cursor.parent) {
     if (cursor.root === root && cursor.schema === schema) {
-      return { ifc: schema.ifc, ref: "#recursive", children: [] };
+      return atPolicyGraphPath(
+        { ifc: schema.ifc, ref: "#recursive", children: [] },
+        path,
+      );
     }
   }
   // A claim beside a reference overlays the referenced body's claims of the
@@ -1754,8 +1802,28 @@ function resolvedSchemaPolicyGraph(
     utf8Compare(left.key ?? "", right.key ?? "") ||
     (left.index ?? -1) - (right.index ?? -1)
   );
-  return { ifc: resolved.ifc, ref, children };
+  return atPolicyGraphPath({ ifc: resolved.ifc, ref, children }, path);
 }
+
+/**
+ * The logical path each position of a policy graph describes, as
+ * `resolvedSchemaPolicyGraph()` walked to it, or `undefined` where the walk
+ * could not tell one. Kept beside the graph rather than in it, so that it
+ * takes no part in a graph's hash.
+ */
+const policyGraphPaths = new WeakMap<
+  SchemaPolicyGraph,
+  readonly string[] | undefined
+>();
+
+/** `node`, recorded as the position at `path` (see `policyGraphPaths`). */
+const atPolicyGraphPath = (
+  node: SchemaPolicyGraph,
+  path: readonly string[] | undefined,
+): SchemaPolicyGraph => {
+  policyGraphPaths.set(node, path);
+  return node;
+};
 
 /**
  * Whether two envelopes declare the same policies at the same positions: the
@@ -1765,23 +1833,100 @@ function resolvedSchemaPolicyGraph(
  * declares nothing. A claim spelled as a member holding `undefined` compares
  * as no claim. Positions at a logical path `omits` names, and everything
  * beneath them, are not compared; a position whose path the walk cannot tell
- * is compared whatever `omits` says.
+ * is compared whatever `omits` says. Given `ifcEqual`, two positions' policies
+ * are the same where it says so, rather than where they are equal; it is told
+ * the logical path the position describes, or `undefined` where the walk could
+ * not tell one, or the two envelopes place the position at different paths.
  */
 export const cfcSchemaPoliciesEqual = (
   left: JSONSchema,
   right: JSONSchema,
   omits: (path: readonly string[]) => boolean = () => false,
-): boolean =>
-  hashStringOf(
-    withoutUndefinedMembers(
-      resolvedSchemaPolicyGraph(left, left, [], omits, undefined),
-    ),
-  ) ===
-    hashStringOf(
-      withoutUndefinedMembers(
-        resolvedSchemaPolicyGraph(right, right, [], omits, undefined),
-      ),
+  ifcEqual?: (
+    left: unknown,
+    right: unknown,
+    path: readonly string[] | undefined,
+  ) => boolean,
+): boolean => {
+  const [leftGraph, rightGraph] = [left, right].map((schema) =>
+    resolvedSchemaPolicyGraph(schema, schema, [], omits, undefined)
+  );
+  return ifcEqual === undefined
+    ? hashStringOf(withoutUndefinedMembers(leftGraph)) ===
+      hashStringOf(withoutUndefinedMembers(rightGraph))
+    : policyGraphsEqual(leftGraph, rightGraph, ifcEqual);
+};
+
+/**
+ * Helper for `cfcSchemaPoliciesEqual()`: whether two policy graphs have the
+ * same shape, each pair of positions declaring policies `ifcEqual` takes for
+ * the same.
+ */
+const policyGraphsEqual = (
+  left: SchemaPolicyGraph | undefined,
+  right: SchemaPolicyGraph | undefined,
+  ifcEqual: (
+    left: unknown,
+    right: unknown,
+    path: readonly string[] | undefined,
+  ) => boolean,
+): boolean => {
+  if (left === undefined || right === undefined) return left === right;
+  const leftPath = policyGraphPaths.get(left);
+  const rightPath = policyGraphPaths.get(right);
+  const path = leftPath !== undefined && rightPath !== undefined &&
+      leftPath.length === rightPath.length &&
+      leftPath.every((segment, i) => segment === rightPath[i])
+    ? leftPath
+    : undefined;
+  return left.ref === right.ref &&
+    ifcEqual(
+      withoutUndefinedMembers(left.ifc),
+      withoutUndefinedMembers(right.ifc),
+      path,
+    ) &&
+    left.children.length === right.children.length &&
+    left.children.every((child, i) => {
+      const other = right.children[i];
+      return child.keyword === other.keyword && child.key === other.key &&
+        child.index === other.index &&
+        policyGraphsEqual(child.policy, other.policy, ifcEqual);
+    });
+};
+
+/**
+ * Whether the policy `merged` declares at a position is the policy `stored`
+ * declares there but for write-policy alternatives `release` appended: the
+ * stored `writePolicyAnyOf` list begins the merged one, alternative for
+ * alternative and in order, each further alternative is one the release may
+ * append (`writePolicyAlternativeAdmissible()`), and every other member is
+ * the same. Equal policies are trivially so.
+ */
+export const ifcDiffersOnlyByReleaseAppend = (
+  stored: unknown,
+  merged: unknown,
+  release: WritePolicyRelease,
+): boolean => {
+  if (deepEqual(stored, merged)) return true;
+  if (!isObjectNotArray(stored) || !isObjectNotArray(merged)) return false;
+  const storedList = stored.writePolicyAnyOf;
+  const mergedList = merged.writePolicyAnyOf;
+  if (
+    !Array.isArray(storedList) || !Array.isArray(mergedList) ||
+    mergedList.length <= storedList.length
+  ) {
+    return false;
+  }
+  const { writePolicyAnyOf: _s, ...storedRest } = stored;
+  const { writePolicyAnyOf: _m, ...mergedRest } = merged;
+  return deepEqual(storedRest, mergedRest) &&
+    storedList.every((alternative, i) =>
+      deepEqual(alternative, mergedList[i])
+    ) &&
+    mergedList.slice(storedList.length).every((added) =>
+      writePolicyAlternativeAdmissible(added, storedList, release)
     );
+};
 
 /**
  * `value` with every object member holding `undefined` removed, recursively.

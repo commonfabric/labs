@@ -960,10 +960,9 @@ export const prepareConsoleLaunch = async (
     "`console:launch`",
   );
   parseConsoleArgs((parsed["--"] ?? []).map(String));
-  // A flag present but empty is a value someone typed that did not survive
-  // parsing — `--port -1` leaves `port` empty, because `-1` reads as a flag of
-  // its own — so it is refused rather than falling through to the default the
-  // person was overriding.
+  // A flag written with an empty or blank value — `--port=`, `--port " "` —
+  // is refused rather than falling through to the default the person was
+  // overriding.
   const flag = (name: string): string | undefined => {
     const value = parsed[name];
     if (typeof value !== "string") {
@@ -971,10 +970,7 @@ export const prepareConsoleLaunch = async (
     }
     const trimmed = nonEmpty(value);
     if (trimmed === undefined) {
-      throw new Error(
-        `\`--${name}\` was given no value; a value starting with \`-\` needs ` +
-          `the \`--${name}=<value>\` spelling`,
-      );
+      throw new Error(`\`--${name}\` was given no value`);
     }
     return trimmed;
   };
@@ -1150,7 +1146,8 @@ export const launchConsole = async (
     health: ConsoleObservedLaunchHealth,
     consoleHost: ConsoleHost,
   ) => Promise<void> = (consoleArgs, health, consoleHost) =>
-    startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost),
+    startConsoleServer(consoleArgs, undefined, undefined, health, consoleHost)
+      .then(() => undefined),
   io: ConsoleLaunchIo = REAL_IO,
   host: SandboxProcess & { platform?: SandboxPlatform } = {},
 ): Promise<void> => {

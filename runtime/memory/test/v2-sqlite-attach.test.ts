@@ -70,6 +70,28 @@ describe("sqlite attach layer", () => {
     detachDatabase(db, "db_b");
   });
 
+  it("throws when attaching inside a transaction, and attaches nothing", () => {
+    db.exec("BEGIN");
+    expect(() => attachDatabase(db, "db_tx", path)).toThrow(
+      "attachDatabase must be called outside a transaction",
+    );
+    db.exec("COMMIT");
+    expect(db.prepare("SELECT name FROM pragma_database_list").values())
+      .toEqual([["main"]]);
+  });
+
+  it("throws when detaching inside a transaction, and leaves the alias attached", () => {
+    attachDatabase(db, "db_tx", path);
+    db.exec("BEGIN");
+    expect(() => detachDatabase(db, "db_tx")).toThrow(
+      "detachDatabase must be called outside a transaction",
+    );
+    db.exec("COMMIT");
+    expect(db.prepare("SELECT name FROM pragma_database_list").values())
+      .toEqual([["main"], ["db_tx"]]);
+    detachDatabase(db, "db_tx");
+  });
+
   it("rejects an unsafe attach alias", () => {
     expect(() => attachDatabase(db, "bad alias;", path)).toThrow();
     expect(() => attachDatabase(db, "main", path)).toThrow();

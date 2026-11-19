@@ -8207,21 +8207,25 @@ supply; OW29/OW32/OW34 closed):
     Both are pinned.
     **Pins, red-first, `executor-session-remount.test.ts`** (a real
     memory server in ACL-enforce mode with the OW31 delegating class,
-    real signed loopback sessions): the reproduction (pre-genesis
-    session, genesis revokes it, 8 reads / 0 successes / all
-    "revoked", then the ACL notice heals it and the durable doc reads
-    through); fail-closed (one trigger, two outcomes, only the ACL
-    chooses); the ownership re-bind; NO CHURN (a live session survives
-    an ACL commit with zero new `session.open`s); and host glue (a real
-    ExecutorHost whose own admission observer carries the genesis —
-    nothing hand-fed); and the SILENT-STALE-READ pin (the Cubic-P1
+    real signed loopback sessions): the genesis (a pre-genesis serving
+    session reads the durable doc as the owner once the genesis lands,
+    with no notice and no new `session.open`: the memory server binds it
+    to the owner in place, `Server.#bindToNewOwner`, because a serving
+    runtime in another process hears of no commit on the owner);
+    fail-closed (one trigger, two outcomes, only the ACL chooses); the
+    ownership re-bind; NO CHURN (a live session survives an ACL commit
+    with zero new `session.open`s); and host glue (a real ExecutorHost
+    whose own admission observer carries an ownership change — nothing
+    hand-fed); and the SILENT-STALE-READ pin (the Cubic-P1
     class: post-remount reads for tracker-covered selectors returned
     SUCCESS carrying the pre-revocation value — reproduced at the
     pre-fix commit, fixed by dropping the dead mount's selectors from
     the watch tracker at both consume sites, pinned both ways).
     Mutations, all red, each reddening its own pin alone: no-op the
-    consume → the reproduction, fail-closed, ownership re-bind,
-    host-glue, and stale-read pins (no-churn stays green);
+    consume → fail-closed, ownership re-bind, host-glue, and stale-read
+    pins (no-churn stays green); remove the memory server's genesis
+    binding → the genesis pin and the ownership re-bind, whose first
+    read follows the genesis (the one mutation that reddens two);
     remove the host fan-out → host glue only; remove the ACL-verdict
     guard → no-churn only; eager instead of latched → host glue only
     (the measured ordering-independence proof); remove the tracker

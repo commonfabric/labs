@@ -5,6 +5,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   abortable,
   githubApi,
+  GitHubRefusal,
   githubToken,
   listedPullRequest,
   pullRequestTarget,
@@ -184,7 +185,9 @@ describe("github", () => {
           "Fix the frobnicator\n\nIt was broken.\n\nNow not.",
         );
         commit("second.txt", "Second");
-        const query = realPushIo({ cwd: root, env, write() {} }).query;
+        const query =
+          realPushIo({ cwd: root, env, write() {}, step: () => () => {} })
+            .query;
 
         expect(pullRequestText(query, TARGET)).toEqual({
           title: "Fix the frobnicator",
@@ -290,7 +293,7 @@ describe("github", () => {
           title: "Title",
           body: "Body",
         },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       );
 
@@ -319,7 +322,7 @@ describe("github", () => {
             title: "Title",
             body: "",
           },
-          () => {},
+          () => () => {},
           new AbortController().signal,
         ),
       ).rejects.toThrow("GitHub did not say which pull request it created");
@@ -331,18 +334,17 @@ describe("github", () => {
         JSON.stringify({ merged: true }),
       );
 
-      const merged = await githubApi(() => "t0k", send).merge(
+      await githubApi(() => "t0k", send).merge(
         {
           repository: "octo/repo",
           number: 12,
           method: "rebase",
           sha: "c0ffee",
         },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       );
 
-      expect(merged).toBe("Merged https://github.com/octo/repo/pull/12");
       expect(requests[0].url).toBe(
         "https://api.github.com/repos/octo/repo/pulls/12/merge",
       );
@@ -351,6 +353,30 @@ describe("github", () => {
         merge_method: "rebase",
         sha: "c0ffee",
       });
+    });
+
+    it("merges a pull request whose successful answer is not JSON, but rejects such an answer to a creation", async () => {
+      const { send } = fakeFetch(200, "Merged.");
+      const api = githubApi(() => "t0k", send);
+
+      await expect(api.merge(
+        { repository: "octo/repo", number: 12, method: "merge", sha: "c0ffee" },
+        () => () => {},
+        new AbortController().signal,
+      )).resolves.toBeUndefined();
+      await expect(
+        api.create(
+          {
+            repository: "octo/repo",
+            head: "feature",
+            base: "main",
+            title: "Title",
+            body: "",
+          },
+          () => () => {},
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("GitHub did not say which pull request it created");
     });
 
     it("asks GitHub's GraphQL API for the method its page would merge by", async () => {
@@ -434,7 +460,7 @@ describe("github", () => {
               method: "squash",
               sha: "c0",
             },
-            () => {},
+            () => () => {},
             new AbortController().signal,
           ),
         ).rejects.toThrow(message);
@@ -447,7 +473,7 @@ describe("github", () => {
       await expect(
         githubApi(() => null, send).merge(
           { repository: "octo/repo", number: 12, method: "squash", sha: "c0" },
-          () => {},
+          () => () => {},
           new AbortController().signal,
         ),
       ).rejects.toThrow("there is no GitHub token");
@@ -502,6 +528,80 @@ describe("github", () => {
     });
   });
 
+  describe("GitHubRefusal", () => {
+    it("says GitHub's status and the message its reply gives, leaving out the rest of the reply", () => {
+      const refusal = new GitHubRefusal(
+        405,
+        JSON.stringify({
+          message: "Merge already in progress",
+          documentation_url: "https://docs.github.com/rest/pulls/pulls",
+          status: "405",
+        }),
+      );
+
+      expect(refusal.message).toBe(
+        "GitHub answered 405: Merge already in progress",
+      );
+      expect(new GitHubRefusal(502, "Bad gateway\n").message).toBe(
+        "GitHub answered 502: Bad gateway",
+      );
+    });
+
+    it("joins GitHub's message and errors as sentences without their full stops, and says only the status when the reply says nothing", () => {
+      expect(
+        new GitHubRefusal(
+          422,
+          JSON.stringify({
+            message: "Validation Failed",
+            errors: [{
+              message: "A pull request already exists for octo:feature.",
+            }],
+          }),
+        ).message,
+      ).toBe(
+        "GitHub answered 422: Validation Failed. A pull request already " +
+          "exists for octo:feature",
+      );
+      expect(new GitHubRefusal(502, "").message).toBe("GitHub answered 502");
+      expect(
+        new GitHubRefusal(
+          422,
+          JSON.stringify({ message: ".", errors: [{ message: "Taken." }] }),
+        ).message,
+      ).toBe("GitHub answered 422: Taken");
+      expect(new GitHubRefusal(502, "{}").message).toBe("GitHub answered 502");
+    });
+
+    it("gives GitHub's status, and the reason its reply gives as GitHub wrote it, a message per line, or an empty reason when the reply says nothing", () => {
+      const refusal = new GitHubRefusal(
+        422,
+        JSON.stringify({
+          message: "Validation Failed.",
+          errors: [{ message: "A pull request already exists." }],
+        }),
+      );
+
+      expect([refusal.status, refusal.reason]).toEqual([
+        422,
+        "Validation Failed.\nA pull request already exists.",
+      ]);
+      expect(new GitHubRefusal(502, "{}").reason).toBe("");
+    });
+
+    it("is retryable unless its status says the request itself cannot succeed", () => {
+      for (const status of [404, 405, 409, 422]) {
+        expect(new GitHubRefusal(status, "{}").retryable).toBe(false);
+      }
+      for (const status of [401, 403, 429, 500, 502]) {
+        expect(new GitHubRefusal(status, "{}").retryable).toBe(true);
+      }
+    });
+
+    it("exposes nothing to enumerate", () => {
+      expect(Object.keys(new GitHubRefusal(405, "{}"))).toEqual([]);
+    });
+  });
+
   describe("githubToken()", () => {
     it("resolves with GH_TOKEN, or else GITHUB_TOKEN, from the environment", async () => {
       expect(
@@ -535,6 +635,21 @@ describe("github", () => {
         Deno.removeSync(root, { recursive: true });
       }
     });
+
+    it("rejects when `gh` cannot be started for a reason other than its absence", async () => {
+      const root = Deno.makeTempDirSync();
+      try {
+        const gh = join(root, "gh");
+        Deno.writeTextFileSync(gh, "#!/bin/sh\necho t0k\n");
+        Deno.chmodSync(gh, 0o644);
+
+        await expect(githubToken({}, gh)).rejects.toThrow(
+          Deno.errors.PermissionDenied,
+        );
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
   });
 
   describe("readPullRequestList()", () => {
@@ -546,6 +661,19 @@ describe("github", () => {
 
         Deno.writeTextFileSync(path, "octo/repo\tfeature\t7\n");
         expect(await readPullRequestList(path)).toBe("octo/repo\tfeature\t7\n");
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+
+    it("rejects when the file cannot be opened for a reason other than its absence", async () => {
+      const root = Deno.makeTempDirSync();
+      try {
+        const file = join(root, "cache");
+        Deno.writeTextFileSync(file, "");
+
+        await expect(readPullRequestList(join(file, "github-prs.tsv")))
+          .rejects.toThrow(Deno.errors.NotADirectory);
       } finally {
         Deno.removeSync(root, { recursive: true });
       }

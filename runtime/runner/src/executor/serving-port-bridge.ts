@@ -143,13 +143,21 @@ export class ServingPortBridge {
         endpoint.notify("observer.commitAdmitted", { notice }),
       sessionOpened: (space) =>
         endpoint.notify("observer.sessionOpened", { space }),
-      demandChanged: (space, reason, principal, sessionId, servingOwn) =>
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        sessionId,
+        servingOwn,
+        notDemand,
+      ) =>
         endpoint.notify("observer.demandChanged", {
           space,
           reason,
           principal,
           sessionId,
           servingOwn,
+          notDemand,
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
@@ -183,7 +191,7 @@ export class ServingPortBridge {
    */
   async init(
     init: ServingWorkerInit,
-  ): Promise<{ lifetimeLock: string | undefined }> {
+  ): Promise<{ lifetimeLock: string | undefined; heapSizeLimit: number }> {
     await this.#workerReady.promise;
     return await this.#endpoint.request("worker.init", init);
   }
@@ -217,6 +225,18 @@ export class ServingPortBridge {
   /** The memory the worker's isolate holds after a full collection. */
   requestCollectedMemory(): Promise<CollectedMemory> {
     return this.#endpoint.request("host.collectedMemory", null);
+  }
+
+  /**
+   * Has the worker write the sampling heap profile of its isolate into
+   * `directory`, and returns the file's path. A request queued behind a
+   * handler that holds the thread waits with it.
+   */
+  async requestHeapProfile(directory: string): Promise<string> {
+    const { path } = await this.#endpoint.request("host.heapProfile", {
+      directory,
+    });
+    return path;
   }
 
   /**

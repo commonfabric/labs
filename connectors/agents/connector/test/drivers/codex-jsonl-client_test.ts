@@ -111,7 +111,12 @@ for line in sys.stdin:
         continue
     method = message.get("method")
     if method == "initialize":
+        print("protocol server started", file=sys.stderr, flush=True)
         print(json.dumps({"id": message["id"], "result": {}}), flush=True)
+    elif method == "unterminated":
+        sys.stdout.write(json.dumps({"method": "event/last", "params": {}}))
+        sys.stdout.flush()
+        break
     elif method == "server-request":
         print(json.dumps({
             "jsonrpc": "2.0",
@@ -224,6 +229,34 @@ Deno.test("Codex client handles server requests and notification pressure", asyn
     });
     await failed.stop();
   } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+Deno.test("Codex client admits one of two concurrent starts and reads an unterminated final frame", async () => {
+  const directory = await Deno.makeTempDir();
+  const server = `${directory}/protocol-server`;
+  await Deno.writeTextFile(server, PROTOCOL_SERVER);
+  await Deno.chmod(server, 0o755);
+  const client = new CodexJsonlClient([server]);
+  try {
+    const starts = await Promise.all([
+      outcome(client.start()),
+      outcome(client.start()),
+    ]);
+    assertEquals(starts, [
+      { ok: true, value: {} },
+      { ok: false, error: "Error: Codex App Server already started" },
+    ]);
+
+    const last = client.waitForNotification((message) =>
+      message.method === "event/last"
+    );
+    const call = outcome(client.call("unterminated"));
+    assertEquals(await last, { method: "event/last", params: {} });
+    assertEquals((await call).ok, false);
+  } finally {
+    await client.stop();
     await Deno.remove(directory, { recursive: true });
   }
 });

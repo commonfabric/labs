@@ -34,8 +34,6 @@ import {
   FabricKeyPair,
   type FabricPrimitiveClassesByName,
   FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_REASONS,
 } from "@/fabric-primitives";
 import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
 import { isFabricArray, isFabricPlainObject } from "@/types";
@@ -587,11 +585,21 @@ export function textWithModsOf(value: FabricValue): TextWithMods {
     })
     .sort(utf8Compare);
   return {
-    text: plainJsonTextOf(replaced) ??
-      textInKeyOrderOf(jsonFromFabricValue(replaced)),
+    text: textOf(replaced),
     ...(unclaimed.length === 0 ? {} : { unclaimed }),
     ...(patches.length === 0 ? {} : { patches }),
   };
+}
+
+/**
+ * Returns the canonical `fvj1:` text of `value`, which holds nothing that no
+ * text carries.
+ *
+ * @throws What this package's JSON encoder throws, refusing `value`.
+ */
+function textOf(value: FabricValue): string {
+  return plainJsonTextOf(value) ??
+    textInKeyOrderOf(jsonFromFabricValue(value));
 }
 
 /**
@@ -1033,9 +1041,6 @@ function replacesHolder(
  * from. That is done in place where the holder lets it be, and otherwise by
  * putting a new holder, made with `value` in it, where the old one was, and
  * so on outward. `index` being `-1` puts `value` in place of `root`.
- *
- * @throws If the step names a field of an error other than `cause`, which no
- *   text holds `null` in.
  */
 function putAt(
   root: FabricValue,
@@ -1054,10 +1059,9 @@ function putAt(
     holder.error.setExtra(String(key), value);
     return root;
   } else if (holder instanceof FabricError) {
-    if (key !== "cause") {
-      // The other fields are strings, which the codec never decodes to `null`.
-      throw new Error(`Shouldn't happen: a patch at an error's \`${key}\``);
-    }
+    // The step is into the error's `cause`: its extras are stepped through
+    // above, and its other fields hold strings, which the codec never decodes
+    // to the `null` a patch is put at.
     holder.cause = value;
     return root;
   } else if (
@@ -1225,25 +1229,11 @@ function walkProbed(
         walkAt(field, held);
       }
     } else {
-      visit({ path, expected: fragmentOf(node), node });
+      visit({ path, expected: textOf(node), node });
     }
   };
 
   walk(value, [], []);
-}
-
-/**
- * Returns the canonical `fvj1:` text of `leaf`, a value that is not an array,
- * a record or an instance, written on its own.
- *
- * @throws What this package's JSON encoder throws, refusing `leaf`.
- */
-function fragmentOf(leaf: FabricValue): string {
-  const { text, unclaimed, patches } = textWithModsOf(leaf);
-  if (unclaimed !== undefined || patches !== undefined) {
-    throw new Error("Shouldn't happen: a leaf whose text needs mods.");
-  }
-  return text;
 }
 
 /** A field of an instance, as probes name it, and the value it holds. */
@@ -1266,7 +1256,9 @@ interface InstanceFields<Class> {
   /**
    * A new instance of this class whose fields are `fields`, each of which
    * `fieldsOf()` gives `like`, given `like` of this class, or `undefined`
-   * given anything else.
+   * given anything else. A field holding a string is taken from `like`
+   * instead, nothing that makes an instance this way changing one: a patch is
+   * put only where a `null` is, and what no text carries is never a string.
    */
   readonly made: (
     like: FabricValue,
@@ -1294,6 +1286,24 @@ function fielded<Class extends abstract new (...args: never) => object>(
     made: (like, fields) =>
       isInstanceOf(cls, like) ? madeOf(like, fields) : undefined,
   };
+}
+
+/**
+ * Returns the fields of instances of `cls`, a class whose codec is a stub, as
+ * {@link fielded} does, but finding an instance's fields, or making one from
+ * fields, throws. `noun` names an instance in the message.
+ */
+function stubbed<Class extends abstract new (...args: never) => object>(
+  cls: Class,
+  noun: string,
+): InstanceFields<Class> {
+  const refused = (value: FabricValue): undefined => {
+    if (isInstanceOf(cls, value)) {
+      throw new Error(`No fields for a ${noun}. ${STUB_CODEC_EXCLUSION}`);
+    }
+    return undefined;
+  };
+  return { cls, fieldsOf: refused, made: refused };
 }
 
 /** Indicates whether `value` is an instance of `cls`. */
@@ -1339,12 +1349,12 @@ const INSTANCE_FIELDS: {
         ["extras", extras],
       ];
     },
-    (_like, fields) =>
+    (like, fields) =>
       new FabricError({
-        type: stringField(fields, "type"),
-        name: stringField(fields, "name"),
-        message: stringField(fields, "message"),
-        stack: fields.has("stack") ? stringField(fields, "stack") : undefined,
+        type: like.type,
+        name: like.name,
+        message: like.message,
+        stack: like.stack,
         cause: fields.get("cause"),
         extras: recordField(fields, "extras"),
       }),
@@ -1366,16 +1376,8 @@ const INSTANCE_FIELDS: {
     (value) => [["payload", value.payload]],
     (_like, fields) => new FabricLink(recordField(fields, "payload")),
   ),
-  FabricMap: fielded(FabricMap, () => {
-    throw new Error(`No fields for a map. ${STUB_CODEC_EXCLUSION}`);
-  }, () => {
-    throw new Error(`No fields for a map. ${STUB_CODEC_EXCLUSION}`);
-  }),
-  FabricSet: fielded(FabricSet, () => {
-    throw new Error(`No fields for a set. ${STUB_CODEC_EXCLUSION}`);
-  }, () => {
-    throw new Error(`No fields for a set. ${STUB_CODEC_EXCLUSION}`);
-  }),
+  FabricMap: stubbed(FabricMap, "map"),
+  FabricSet: stubbed(FabricSet, "set"),
   ProblematicValue: fielded(
     ProblematicValue,
     (value) => [
@@ -1383,24 +1385,17 @@ const INSTANCE_FIELDS: {
       ["state", value.state],
       ["error", value.error],
     ],
-    (_like, fields) =>
-      new ProblematicValue(
-        stringField(fields, "tag"),
-        fields.get("state"),
-        stringField(fields, "error"),
-      ),
+    (like, fields) =>
+      new ProblematicValue(like.wireTypeTag, fields.get("state"), like.error),
   ),
   FabricUnavailable: fielded(
     FabricUnavailable,
     (value) => Object.entries(value.state),
-    (_like, fields) =>
-      new FabricUnavailable(
-        keyField(fields, "reason", UNAVAILABLE_REASONS),
-        fields.has("errorKind")
-          ? keyField(fields, "errorKind", UNAVAILABLE_ERROR_KINDS)
-          : null,
-        fields.has("message") ? stringField(fields, "message") : null,
-      ),
+    // Its fields are strings, which the codec never decodes to `null`, so no
+    // patch replaces one and the instance they make is `like` itself. Making
+    // one afresh through the constructor would drop a message equal to its
+    // kind's default, which the state holds as it arrived.
+    (like) => like,
   ),
   UnknownValue: fielded(
     UnknownValue,
@@ -1439,32 +1434,6 @@ function bytesField(
     throw new Error(`Field \`${name}\` not a byte sequence`);
   }
   return held;
-}
-
-/**
- * Returns the string `fields` holds under `name`, which is one of the keys of
- * `keys`.
- *
- * @throws If it holds anything else there.
- */
-function keyField<Key extends string>(
-  fields: ReadonlyMap<string, FabricValue>,
-  name: string,
-  keys: { readonly [_ in Key]: unknown },
-): Key {
-  const held = stringField(fields, name);
-  if (!isKeyOf(keys, held)) {
-    throw new Error(`Field \`${name}\` not one of its values: ${held}`);
-  }
-  return held;
-}
-
-/** Indicates whether `key` is one of the own keys of `keys`. */
-function isKeyOf<Key extends string>(
-  keys: { readonly [_ in Key]: unknown },
-  key: string,
-): key is Key {
-  return Object.hasOwn(keys, key);
 }
 
 /**

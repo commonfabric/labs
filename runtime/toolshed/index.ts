@@ -1,4 +1,5 @@
 import type { Runtime } from "@commonfabric/runner";
+import { logUnhandledRejections } from "@commonfabric/runner/sandbox/unhandled-rejections";
 import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
@@ -22,9 +23,11 @@ import {
   memoryServer,
 } from "@/routes/storage/memory.ts";
 import {
+  serverExecutionHost,
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
+import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
 import { shutdownOpenTelemetry } from "@/lib/otel.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 import {
@@ -46,6 +49,7 @@ if (import.meta.main) {
   // Read at each call, since a background launch redirects the console.
   const log = (...data: unknown[]) => console.log(...data);
   const error = (...data: unknown[]) => console.error(...data);
+  logUnhandledRejections();
   const ac = new AbortController();
   const shutdown = createShutdown({
     abort: () => ac.abort(),
@@ -59,6 +63,15 @@ if (import.meta.main) {
   });
   Deno.addSignalListener("SIGINT", shutdown.handle);
   Deno.addSignalListener("SIGTERM", shutdown.handle);
+  await listenForHeapProfileSignal({
+    directory: Deno.env.get("HEAP_PROFILE_DIR") ||
+      `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
+    workerHeapProfiles: (directory) =>
+      serverExecutionHost()?.workerHeapProfiles(directory) ??
+        Promise.resolve(undefined),
+    log,
+    error,
+  });
 
   // This process's runtimes: the webhook runtime and, under
   // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host. Both address

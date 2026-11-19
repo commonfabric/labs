@@ -5,6 +5,7 @@ import { stripAnsi } from "../lib/view/ansi.ts";
 import type { MergeRequest } from "../lib/view/github.ts";
 import type { Key } from "../lib/view/keys.ts";
 import { helpOverlay, Session } from "../lib/view/session.ts";
+import { say } from "../lib/view/tasklog.ts";
 import { drawnRows, parseDocument } from "./view-helpers.ts";
 
 /** A session over a line wider than its 80 by 12 screen. */
@@ -50,35 +51,21 @@ describe("view-land", () => {
   });
 
   describe("the land dialog", () => {
-    /** A session whose land dialog asks whether to merge {@link LANDING}. */
+    /** A session whose task dialog, looking for the pull request, asks
+     * whether to merge {@link LANDING}. */
     function asking(): Session {
       const s = session();
-      s.beginLand("Looking.", () => {});
-      expect(s.confirmLand(LANDING)).toBe(true);
+      s.beginTask("Land", () => {});
+      s.beginTaskStep(say`Looking`)();
+      s.confirmLand(LANDING);
       return s;
     }
 
-    it("says what it looks for, with only Cancel, which stops the search, while it looks", () => {
-      const s = session();
-      let cancelled = 0;
+    /** The rows the dialog shows, without the blank rows. */
+    const shown = (s: Session) =>
+      s.view().dialog!.body.filter((row) => row !== "");
 
-      s.beginLand("Looking for the pull request.", () => cancelled++);
-      const dialog = s.view().dialog!;
-      expect(dialog.title).toBe("Land");
-      expect(dialog.body).toEqual(["Looking for the pull request."]);
-      expect(dialog.buttons.map((b) => b.label)).toEqual(["Cancel"]);
-      for (const key of [typed("l"), { name: "enter" }]) s.handleKey(key);
-      expect(s.view().dialog!.title).toBe("Land");
-      expect(cancelled).toBe(0);
-      s.handleKey({ name: "escape" });
-
-      expect(cancelled).toBe(1);
-      expect(s.view().dialog).toBeNull();
-      expect(s.confirmLand(LANDING)).toBe(false);
-      expect(s.view().dialog).toBeNull();
-    });
-
-    it("asks whether to merge the pull request, saying how and at which commit as GitHub's merge button does, with no button as its default", () => {
+    it("asks under what the task found whether to merge the pull request, saying how and at which commit as GitHub's merge button does, with no button as its default", () => {
       const bodies = [
         ["squash", "Squash and merge pull request 7 of octo/repo,"],
         ["merge", "Merge pull request 7 of octo/repo,"],
@@ -86,12 +73,24 @@ describe("view-land", () => {
       ] as const;
       for (const [method, line] of bodies) {
         const s = session();
-        s.beginLand("Looking.", () => {});
+        s.beginTask("Land", () => {});
+        s.beginTaskStep(say`Looking`)();
         s.confirmLand({ ...LANDING, method });
 
         const dialog = s.view().dialog!;
         expect(dialog.title).toBe("Land");
-        expect(dialog.body).toEqual([line, "if its head is still c0ffee?"]);
+        expect(shown(s)).toEqual([
+          "Looking... ✓",
+          line,
+          "if its head is still c0ffee?",
+        ]);
+        const spans = dialog.spans![dialog.body.indexOf(line)];
+        expect(spans.find((span) => span.tone === "name")).toEqual({
+          from: line.indexOf("7"),
+          to: line.indexOf("7") + 1,
+          tone: "name",
+          url: "https://github.com/octo/repo/pull/7",
+        });
         expect(dialog.buttons.map((b) => b.label)).toEqual([
           "Merge",
           "Cancel",
@@ -99,6 +98,20 @@ describe("view-land", () => {
         expect(dialog.buttons.some((b) => b.kind === "default")).toBe(false);
         expect(dialog.focus).toBe(-1);
       }
+    });
+
+    it("asks nothing unless a task is running in the task dialog", () => {
+      const s = session();
+      s.confirmLand(LANDING);
+      expect(s.view().dialog).toBeNull();
+      s.beginTask("Land", () => {});
+      s.finishTask(say`Done.`);
+
+      s.confirmLand(LANDING);
+      expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual([
+        "Close",
+        "Quit",
+      ]);
     });
 
     it("asks for no merge on the `L` that opened it, pressed again", () => {
@@ -111,7 +124,7 @@ describe("view-land", () => {
       expect(s.view().dialog!.title).toBe("Land");
     });
 
-    it("asks for the merge on Merge, and for none on Enter until a button has the focus", () => {
+    it("asks for the merge on Merge, keeping the dialog up for it, and for none on Enter until a button has the focus", () => {
       for (
         const keys of [
           [typed("m")],
@@ -127,43 +140,36 @@ describe("view-land", () => {
         }
 
         expect(s.mergeRequested).toEqual(LANDING);
-        expect(s.view().dialog).toBeNull();
+        expect(s.view().dialog!.title).toBe("Land");
       }
     });
 
-    it("asks for no merge on Cancel or Escape, and stops no search then", () => {
+    it("keeps what it found and what it asked when the merge continues the dialog, which then offers Abort", () => {
+      const s = asking();
+      s.resize(80, 24);
+      s.handleKey(typed("m"));
+
+      s.continueTask(() => {});
+      s.beginTaskStep(say`Merging`);
+
+      expect(shown(s)).toEqual([
+        "Looking... ✓",
+        "Squash and merge pull request 7 of octo/repo,",
+        "if its head is still c0ffee?",
+        "Merging... ◐",
+      ]);
+      expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual(["Abort"]);
+    });
+
+    it("asks for no merge on Cancel or Escape, which take the dialog down", () => {
       for (const key of [typed("c"), { name: "escape" }]) {
-        const s = session();
-        let cancelled = 0;
-        s.beginLand("Looking.", () => cancelled++);
-        s.confirmLand(LANDING);
+        const s = asking();
 
         s.handleKey(key);
 
         expect(s.mergeRequested).toBeNull();
         expect(s.view().dialog).toBeNull();
-        expect(cancelled).toBe(0);
       }
-    });
-
-    it("ends the search with a message in the status line, which also shows when no dialog is up, but not over another dialog", () => {
-      const s = session();
-      s.beginLand("Looking.", () => {});
-
-      s.endLand("Pull request 7: https://github.com/octo/repo/pull/7");
-      expect(s.view().dialog).toBeNull();
-      expect(s.view().message).toBe(
-        "Pull request 7: https://github.com/octo/repo/pull/7",
-      );
-      s.endLand("Cannot land: this checkout is not on a branch");
-      expect(s.view().message).toBe(
-        "Cannot land: this checkout is not on a branch",
-      );
-      const confirming = asking();
-      confirming.endLand("No.");
-
-      expect(confirming.view().dialog!.buttons.length).toBe(2);
-      expect(confirming.view().message).not.toBe("No.");
     });
   });
 
@@ -174,7 +180,7 @@ describe("view-land", () => {
       const s = session();
       s.beginTask(title, () => {});
       for (let i = 1; i <= count; i++) s.appendTaskOutput(`line ${i}\n`);
-      s.finishTask("Done.");
+      s.finishTask(say`Done.`);
       return s;
     }
 
@@ -193,13 +199,13 @@ describe("view-land", () => {
       expect(end.at(-1)).toBe("Done.");
 
       s.handleKey({ name: "up" });
-      expect(shown(s).at(-1)).toBe("line 20");
+      expect(shown(s).at(-1)).toBe("  line 20");
       s.handleKey({ name: "home" });
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "up" });
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "down" });
-      expect(shown(s)[0]).toBe("line 2");
+      expect(shown(s)[0]).toBe("  line 2");
       s.handleKey({ name: "end" });
       expect(shown(s)).toEqual(end);
       s.handleKey({ name: "pageup" });
@@ -228,11 +234,11 @@ describe("view-land", () => {
       s.handleKey({ name: "home" });
 
       s.appendTaskOutput("line 21\n");
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "end" });
       s.appendTaskOutput("line 22\n");
 
-      expect(shown(s).at(-1)).toBe("line 22");
+      expect(shown(s).at(-1)).toBe("  line 22");
     });
 
     it("shows the end of its output again when asked to, however far it was scrolled back", () => {
@@ -249,16 +255,16 @@ describe("view-land", () => {
       const end = shown(s);
 
       s.handleKey({ name: "wheel-up" });
-      expect(shown(s).at(-1)).toBe("line 19");
+      expect(shown(s).at(-1)).toBe("  line 19");
       s.handleKey({ name: "wheel-up" });
       s.handleKey({ name: "wheel-down" });
-      expect(shown(s).at(-1)).toBe("line 19");
+      expect(shown(s).at(-1)).toBe("  line 19");
       s.handleKey({ name: "wheel-down" });
 
       expect(shown(s)).toEqual(end);
     });
 
-    it("draws the lines written emphasized brighter than the rest", () => {
+    it("draws the viewer's own words brighter than the text it quotes, and the names they interpolate in a color of their own", () => {
       const s = new Session(
         parseDocument("const a = 1;\n"),
         { color: true, showLineNumbers: false },
@@ -266,25 +272,24 @@ describe("view-land", () => {
       );
       s.beginTask("Push", () => {});
       s.appendTaskOutput("quoted text\n");
-      s.appendTaskOutput("Touch the key.\n", true);
+      s.beginTaskStep(say`Touching ${"laptop"} now`);
       s.appendTaskOutput("more quoted\n");
 
-      const dialog = s.view().dialog!;
-      const at = (text: string) => dialog.body.indexOf(text);
-      expect(dialog.emphasized).toEqual([at("Touch the key.")]);
       const rows = drawnRows(s);
       const style = (text: string) => {
         const row = rows.find((r) => r.includes(text))!;
         return row.slice(0, row.indexOf(text)).split("\x1b[").at(-1);
       };
-      expect(style("Touch the key.")).not.toBe(style("quoted text"));
+      expect(style("Touching")).not.toBe(style("quoted text"));
+      expect(style("laptop")).not.toBe(style("Touching"));
+      expect(style("laptop")).not.toBe(style("quoted text"));
       expect(style("more quoted")).toBe(style("quoted text"));
     });
 
     it("offers a button that asks to try the task again, when it ended saying so, and none otherwise", () => {
       const s = session();
       s.beginTask("Push", () => {});
-      s.finishTask("Failed. To retry, press Create PR.", "Create PR");
+      s.finishTask(say`Failed. To retry, press ${"Create PR"}.`, "Create PR");
 
       expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual([
         "Close",
@@ -312,7 +317,7 @@ describe("view-land", () => {
       s.beginTask("Push", () => {});
       for (let i = 1; i <= 20; i++) s.appendTaskOutput(`row ${i}\n`);
 
-      expect(shown(s).at(-1)).toBe("row 20");
+      expect(shown(s).at(-1)).toBe("  row 20");
     });
   });
 
@@ -348,6 +353,15 @@ describe("view-land", () => {
       expect(target).toBe(long);
       expect(long.startsWith(text)).toBe(true);
       expect(text.length).toBeLessThan(long.length);
+    });
+
+    it("links no address that starts beyond the part of the message that fits", () => {
+      const s = session(true);
+
+      s.showMessage(`At ${url}, ${"then ".repeat(20)}https://x.test/b`);
+
+      expect(links(status(s))).toEqual([[url, url]]);
+      expect(status(s)).not.toContain("x.test");
     });
 
     it("shows each control character in a message as its picture", () => {

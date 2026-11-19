@@ -6,9 +6,11 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import {
   type BridgeResource,
+  type BridgeResourceSink,
   createFabricBridge,
   FabricBridgeHost,
 } from "../src/bridge.ts";
@@ -116,6 +118,12 @@ async function withGuest(
     client.disconnect();
     host.disconnect();
   }
+}
+
+/** The sink a resource from `presenceResource()` opens a membership with. */
+function sinkOf(resource: BridgeResource): BridgeResourceSink {
+  if (resource.sink === undefined) throw new Error("The resource has no sink.");
+  return resource.sink;
 }
 
 const ada: BridgePresenceRecord = {
@@ -562,6 +570,77 @@ describe("presence", () => {
         expect(calls).toEqual([["leave"]]);
       });
     });
+
+    describe("a sink opened beside another", () => {
+      it("hears a joined room's snapshot at once, and the room is left only once both close", async () => {
+        const { room, calls } = fakeRoom([ada]);
+        const cursors = presenceResource({
+          join: () => Promise.resolve(room),
+          failure: () => ({ code: "unused", message: "unused" }),
+        });
+        const sink = sinkOf(cursors);
+        const first = queue<FabricValue | undefined>();
+        const closeFirst = sink((value) => first.push(value), () => {});
+        await first.next();
+
+        const heard: (FabricValue | undefined)[] = [];
+        const closeSecond = sink((value) => heard.push(value), () => {});
+        expect(heard).toEqual([{
+          kind: "snapshot",
+          participantId: "self",
+          participants: [ada],
+        }]);
+
+        closeFirst();
+        expect(calls).toEqual([]);
+        closeSecond();
+        expect(calls).toEqual([["leave"]]);
+      });
+
+      it("hears the failure of a room that ended at once", async () => {
+        const cursors = presenceResource({
+          join: () => Promise.reject(new Error("no relay")),
+          failure: () => ({
+            code: BRIDGE_PRESENCE_UNSUPPORTED,
+            message: "No relay.",
+          }),
+        });
+        const sink = sinkOf(cursors);
+        const first = queue<unknown>();
+        sink(() => {}, (error) => first.push(error));
+        await first.next();
+
+        const failures: unknown[] = [];
+        sink(() => {}, (error) => failures.push(error));
+        expect(failures).toEqual([{
+          code: BRIDGE_PRESENCE_UNSUPPORTED,
+          message: "No relay.",
+        }]);
+      });
+    });
+
+    it("consults the grant about nothing when a join the guest left fails", async () => {
+      const joining = Promise.withResolvers<BridgePresenceRoom>();
+      const causes: unknown[] = [];
+      const cursors = presenceResource({
+        join: () => joining.promise,
+        failure: (cause) => {
+          causes.push(cause);
+          return { code: BRIDGE_PRESENCE_UNSUPPORTED, message: "No relay." };
+        },
+      });
+      const failures: unknown[] = [];
+      const close = sinkOf(cursors)(() => {}, (error) => failures.push(error));
+
+      close();
+      joining.reject(new Error("no relay"));
+      // The membership took up the join before this did, so its handler of
+      // the rejection has run by the time this one does.
+      await joining.promise.catch(() => {});
+
+      expect(causes).toEqual([]);
+      expect(failures).toEqual([]);
+    });
   });
 
   describe("RemotePresence", () => {
@@ -654,6 +733,143 @@ describe("presence", () => {
         expect(heard).toEqual([snapshot]);
         expect(presence.participants).toEqual([]);
       });
+    });
+
+    it("ignores a malformed snapshot, one holding a malformed participant, and a participant with no name", async () => {
+      let deliver: (value: FabricValue | undefined) => void = () => {};
+      const cursors: BridgeResource = {
+        kind: "presence",
+        sink: (listener) => {
+          deliver = listener;
+          return () => {};
+        },
+      };
+
+      await withGuest({ cursors }, async (client, fence) => {
+        const heard: PresenceRoomEvent[] = [];
+        const presence = client.presence("cursors");
+        presence.join((event) => heard.push(event));
+        await fence();
+
+        deliver({ kind: "snapshot", participantId: 5, participants: [] });
+        deliver({ kind: "snapshot", participantId: "self", participants: {} });
+        deliver({
+          kind: "snapshot",
+          participantId: "self",
+          participants: [{ participantId: "ada", facets: {} }],
+        });
+        deliver({
+          kind: "upsert",
+          participant: { participantId: "ada", facets: {} },
+        });
+        const snapshot: FabricPlainObject = {
+          kind: "snapshot",
+          participantId: "self",
+          participants: [ada],
+        };
+        deliver(snapshot);
+        await fence();
+
+        expect(heard).toEqual([snapshot]);
+        expect(presence.participantId).toBe("self");
+      });
+    });
+
+    it("hands out frozen arrays inside facets, and frozen members of them", async () => {
+      let deliver: (value: FabricValue | undefined) => void = () => {};
+      const cursors: BridgeResource = {
+        kind: "presence",
+        sink: (listener) => {
+          deliver = listener;
+          return () => {};
+        },
+      };
+
+      await withGuest({ cursors }, async (client, fence) => {
+        const presence = client.presence("cursors");
+        presence.join(() => {});
+        await fence();
+
+        deliver({
+          kind: "upsert",
+          participant: {
+            participantId: "ada",
+            name: "Ada",
+            facets: { trail: { points: [{ x: 1, y: 2 }] } },
+          },
+        });
+        await fence();
+
+        const [participant] = presence.participants;
+        const points = participant.facets.trail.points;
+        expect(points).toEqual([{ x: 1, y: 2 }]);
+        expect(Object.isFrozen(points)).toBe(true);
+        expect(Array.isArray(points) && Object.isFrozen(points[0])).toBe(true);
+      });
+    });
+
+    it("tells each listener an event although another throws as it hears it", async () => {
+      const cursors: BridgeResource = {
+        kind: "presence",
+        sink: (listener) => {
+          listener({
+            kind: "snapshot",
+            participantId: "self",
+            participants: [],
+          });
+          return () => {};
+        },
+      };
+
+      await withGuest({ cursors }, async (client) => {
+        const events = queue<PresenceRoomEvent>();
+        const presence = client.presence("cursors");
+        presence.join(() => {
+          throw new Error("listener broke");
+        });
+        presence.join((event) => events.push(event));
+
+        expect(await events.next()).toEqual({
+          kind: "snapshot",
+          participantId: "self",
+          participants: [],
+        });
+      });
+    });
+
+    it("ends the room with `operation-failed` for every listener when its join cannot be sent, although one throws", async () => {
+      const channel = new MessageChannel();
+      const postMessage = stub(channel.port2, "postMessage", () => {
+        throw new DOMException("The port cannot carry this.", "DataCloneError");
+      });
+      const client = connectFabric();
+      globalThis.dispatchEvent(
+        new MessageEvent("message", {
+          data: GUEST_PORT_HANDOFF,
+          ports: [channel.port2],
+        }),
+      );
+      try {
+        const events = queue<PresenceRoomEvent>();
+        const presence = client.presence("cursors");
+        presence.join(() => {
+          throw new Error("listener broke");
+        });
+        presence.join((event) => events.push(event));
+
+        expect(await events.next()).toMatchObject({
+          kind: "failure",
+          error: {
+            name: "FabricBridgeError",
+            code: "operation-failed",
+            resource: "cursors",
+          },
+        });
+      } finally {
+        postMessage.restore();
+        client.disconnect();
+        channel.port1.close();
+      }
     });
   });
 });

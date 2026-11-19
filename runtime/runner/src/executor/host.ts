@@ -378,10 +378,17 @@ export class ExecutorHost {
       // re-traversed on push), not client demand — counting it in
       // `pushGrowthWakes` and waking the loop spins an extra cycle and
       // demand pass that finds no client delta (W1 review MINOR-4).
-      demandChanged: (space, reason, principal, _sessionId, servingOwn) => {
+      demandChanged: (
+        space,
+        reason,
+        principal,
+        _sessionId,
+        servingOwn,
+        notDemand,
+      ) => {
         if (
           isServingSessionOf(
-            { principal, servingOwn },
+            { principal, servingOwn, notDemand },
             this.#options.serviceIdentity,
           )
         ) {
@@ -568,8 +575,13 @@ export class ExecutorHost {
     // input the authorization verdict that revokes a session has. Every
     // serving runtime is told, not just this space's: the session that
     // starves is typically a CROSS-SPACE replica — a served dispatch's
-    // argument link into the viewer's home space, whose pre-genesis
-    // session that space's genesis ACL de-authorized. Latch-only and
+    // argument link into another space, whose session the change revoked,
+    // such as one bound to an owner the list no longer names. (A home
+    // space's genesis ACL revokes no serving session: the memory server
+    // binds a pre-genesis one to the owner it names,
+    // `Server.#bindToNewOwner`. A genesis whose owner the binding cannot
+    // stand for, such as a profile's own DID, binds nothing and can still
+    // revoke it.) Latch-only and
     // no-op unless a runtime actually holds a terminated session for the
     // space, so the fan-out costs one map walk per ACL-doc admission. Only
     // this server's admissions reach here; a list that changes on another

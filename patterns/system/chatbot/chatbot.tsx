@@ -85,14 +85,14 @@ export const TitleGenerator = pattern<
   { model?: string; messages: Array<BuiltInLLMMessage> },
   string
 >(({ model, messages }) => {
+  // The text of the first message.
   const previewMessage = computed(() => {
-    if (!messages || messages.length === 0) return "";
-
-    const firstMessage = messages[0];
-
-    if (!firstMessage) return "";
-
-    return JSON.stringify(firstMessage);
+    const content = messages?.[0]?.content;
+    if (content === undefined || typeof content === "string") {
+      return content ?? "";
+    }
+    return content.flatMap((part) => part.type === "text" ? [part.text] : [])
+      .join("\n");
   });
 
   const { result } = generateObject({

@@ -120,3 +120,11 @@ Deno.test("write_file descriptor includes append support", () => {
     ["replace", "append"],
   );
 });
+
+Deno.test("builtin tool registry registers each tool under its own descriptor's id", () => {
+  for (const [toolId, tool] of BUILTIN_TOOL_REGISTRY) {
+    assertEquals(tool.descriptor.toolId, toolId);
+  }
+  assertEquals(getBuiltinTool("bash")?.descriptor.toolId, "bash");
+  assertEquals(getBuiltinTool("not_a_tool"), undefined);
+});

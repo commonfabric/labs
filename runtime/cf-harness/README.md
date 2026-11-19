@@ -3039,8 +3039,14 @@ service starts. Without that binding the service has no Fabric session.
 The interactive service owns the Fabric runtimes created for its chat sessions.
 Completed turns keep their runtimes until the session closes. Closing an active
 session aborts its turn and releases its runtimes after the turn unwinds;
-`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
-session. Library callers supplying an existing engine retain ownership of it.
+`waitForIdle()` includes that cleanup. `releaseFabricRuntimes()` waits for idle
+and then releases every session's runtimes while leaving the sessions open, so a
+host shutting down frees them without recording the sessions as closed: the
+console does, on SIGINT or SIGTERM, and the stdio host does at the end of its
+input, for a service it created. A runtime that fails to release does not stop
+the others, and the failures are thrown once every release has settled.
+Persisted pieces can reopen in a later session. Library callers supplying an
+existing engine retain ownership of it.
 
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
@@ -3451,6 +3457,18 @@ that reference into `run_pattern` to check the inputs the piece actually uses.
 `revise_piece` applies a compatible revision in place; a successful receipt
 establishes the source update, not the behavior the user asked for.
 
+A binary media file in a piece's source, an image, a font or a sound, is stored
+as a base64 `data:` URL, and neither tool passes one through the model. The read
+leaves each out of `files` and lists it under `omittedFiles` by name, media type
+and size in bytes, with the reason. A revision sends only its `sourceText`, and
+`revise_piece` carries every data file, binary or text, over from the current
+source unchanged, at its own path; code modules other than the entry are not
+carried. It writes `sourceText` as `main.tsx` in the directory of the entry it
+replaces, so a path the source reads relative to itself names the file it named
+before. The read refuses a source whose binary file does not hold a `data:` URL
+of its media type, as `cf piece getsrc` does, and both tools refuse a piece
+whose authored source the space does not hold.
+
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
 The check retains the existing readers, session scope, and filters. Its result
@@ -3723,7 +3741,7 @@ declared it was doing), one per clause family:
 | AUD-9   | the artifacts that would explain why a result was exposed or denied are present; what each holds is not read here. An invocation context is required of a side effect that reached the substrate minting one, read as AUD-2 reads it; a run that recorded no context at all warns, its artifacts being unable to tell a host-side effect from lost evidence                                                                                                                                                        | AH-CFC-16                                  |
 | AUD-13  | the run's recorded fabric-session dial tuple is a point the enforcement matrix admits: `enforce-strict` without persisted flow labels fails, and a dial that is sound anywhere but credits nothing at this flow setting warns                                                                                                                                                                                                                                                                                      | matrix §2, §3                              |
 | AUD-14  | under a claimed enforcement posture, every sink releasing with no confidentiality ceiling is named with its recorded reason; a record publishing no deviation while a sink is ungated fails                                                                                                                                                                                                                                                                                                                        | AH-CFC-14, AH-CFC-15                       |
-| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode                                                                                                                                                                                                                                                                                                                                                                 | AH-CFC-15                                  |
+| AUD-15  | a run whose enforcement **mode** came from a default and landed weaker than the mode its session claims — a silent fallback from an enforcing mode. A snapshot that does not record the mode's source passes only a mode no weaker than the claim, and is `inconclusive` otherwise                                                                                                                                                                                                                                 | AH-CFC-15                                  |
 | AUD-15a | a run whose **flow-label dial** came from a default and landed weaker than the named posture bundle it claims asserts. Ours: no clause names the dial                                                                                                                                                                                                                                                                                                                                                              |                                            |
 | AUD-20  | counts each model-boundary omission by its recorded rule and rejects duplicated or transcript-mismatched results, duplicated rules, and rules with no artifact location. Ours: AH-CFC-16 motivates retained evidence but does not require this accounting artifact                                                                                                                                                                                                                                                 |                                            |
 | AUD-21  | **known defect (CT-2175).** a side effect that produced a result and was admitted by a decision that could not have consulted a label. The predicate is the `release` record, which only a boundary that measured a flow against a sink writes; every `cfc_*` reason code comes from the authority switch instead. A call that produced no result reached no boundary and is not counted, and a run where none did is `not-applicable` rather than `pass`. Ours: no clause states it                               |                                            |

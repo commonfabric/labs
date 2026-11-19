@@ -2,7 +2,9 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope } from "@commonfabric/api";
 import type { DID } from "@commonfabric/identity";
+import { NAME } from "@commonfabric/runner/shared";
 
+import { $onCellUpdate } from "@/cell-handle.ts";
 import { PieceHandle } from "@/piece-handle.ts";
 import { $conn, type RuntimeClient } from "@/runtime-client.ts";
 import { type CellRef, RequestType } from "@/protocol/mod.ts";
@@ -81,6 +83,21 @@ describe("PieceHandle", () => {
           space,
           scope: "session",
         }]);
+      });
+    });
+
+    describe("name()", () => {
+      it("returns the name the piece's value holds", () => {
+        const { handle } = makeHandle("space");
+        handle.cell()[$onCellUpdate]({ [NAME]: "Shopping list" });
+        expect(handle.name()).toBe("Shopping list");
+      });
+
+      it("returns `undefined` for a value without a name, or no value", () => {
+        const { handle } = makeHandle("space");
+        expect(handle.name()).toBeUndefined();
+        handle.cell()[$onCellUpdate]({ title: "Shopping list" });
+        expect(handle.name()).toBeUndefined();
       });
     });
   });

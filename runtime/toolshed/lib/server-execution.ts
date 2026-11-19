@@ -33,7 +33,9 @@ import {
   type ServingLoopHandle,
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
+  type WorkerHeapProfile,
 } from "@commonfabric/runner/executor/serving-worker-host";
+import { garbageCollectorExposed } from "@commonfabric/runner/collected-memory";
 import { ModuleCompilerPool } from "@commonfabric/runner/module-compiler-pool";
 import { openSharedCompileCache } from "@commonfabric/runner/compilation-cache/shared-compile-cache.deno";
 import type { Server as MemoryServer } from "@commonfabric/memory/v2/server";
@@ -56,6 +58,15 @@ export type ServingLoop = ServedLifecycleVerbRunner & ServingLoopHandle & {
    * where the loop runs on this thread, which the caller collects itself.
    */
   collectedWorkerMemory(): Promise<CollectedWorkerMemory[] | undefined>;
+
+  /**
+   * Has each of the loop's serving workers write its sampling heap profile
+   * into `directory`; `undefined` where the loop runs on this thread, whose
+   * profile the caller writes itself.
+   */
+  workerHeapProfiles(
+    directory: string,
+  ): Promise<WorkerHeapProfile[] | undefined>;
 };
 
 let loop: ServingLoop | undefined;
@@ -296,8 +307,8 @@ export const DEFAULT_SPARE_SERVING_WORKERS = 1;
 /**
  * The largest a toolshed's serving worker's heap may grow unless told, in
  * megabytes: well above what a worker serving one space holds, about 80 MB,
- * and far below the 16 GiB each isolate of the toolshed's own process may
- * reach, so a runaway space ends its own worker rather than the process.
+ * and well below the 16 GiB the toolshed's main thread is limited to, so a
+ * runaway space ends its own worker rather than the process.
  */
 export const DEFAULT_SERVING_WORKER_HEAP_LIMIT_MB = 2048;
 
@@ -678,6 +689,8 @@ export function startServerExecutionHost(options: {
       ensureSpaceRoots,
       experimental,
       ...pool,
+      // The toolshed exposes the collector at startup (`startServer()`).
+      collectBeforeEnding: garbageCollectorExposed(),
       ...(memoryUrl === undefined ? {} : { route: memoryUrl }),
       moduleCompiler,
       ...(compile.compileCacheDir === undefined
@@ -689,6 +702,7 @@ export function startServerExecutionHost(options: {
       stats: () => worker.stats(),
       diagnostics: () => worker.diagnostics(),
       collectedWorkerMemory: () => worker.collectedMemory(),
+      workerHeapProfiles: (directory) => worker.heapProfiles(directory),
       host: undefined,
       // The compile workers close first, so a compile a worker still awaits
       // fails at once rather than holding the pool's close.
@@ -752,6 +766,7 @@ export function startServerExecutionHost(options: {
       diagnostics: () =>
         Promise.resolve(servingLoopDiagnostics(moduleCompiler)),
       collectedWorkerMemory: () => Promise.resolve(undefined),
+      workerHeapProfiles: () => Promise.resolve(undefined),
       host,
       // The compile worker closes first, so a compile an activation still
       // awaits fails at once rather than holding the host's close.

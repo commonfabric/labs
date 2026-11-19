@@ -150,8 +150,9 @@ example `fid1`), in the general tag syntax of `1-fabric-values.md` Section 2.5,
 and `hash` is the hash bytes as an unpadded base64url string, per the
 convention above. An encoder does not write a hash whose algorithm tag is
 outside that syntax. On decoding, a state that is not an object, whose fields
-are not strings, or whose `tag` is outside that syntax, produces a
-`ProblematicValue`. See `1-fabric-values.md` Section 1.4.9.
+are not strings, whose `tag` is outside that syntax, or that holds any field
+besides those two, produces a `ProblematicValue`. See `1-fabric-values.md`
+Section 1.4.9.
 
 ### `KeyPair@1` — asymmetric key pairs
 
@@ -171,8 +172,8 @@ own:
 ```
 
 On decoding, a state that is not an object, whose `algorithm` is not a
-non-empty string, or whose keys do not decode as `Bytes@1` values produces a
-`ProblematicValue`.
+non-empty string, whose keys do not decode as `Bytes@1` values, or that holds
+any field besides those three produces a `ProblematicValue`.
 
 **Only a pair that holds key material has a state here.** A `FabricKeyPair`
 that holds `CryptoKey` handles instead is refused: encoding one throws rather
@@ -192,16 +193,17 @@ State is `{ reason: string }` for a transient reason, and for reason `error`
 `schemaMismatch`, `invalidInput`, `network`, `decode`, `compile`, `provider`,
 and `sync`, present exactly when the reason is `error`; and `message` is
 present exactly when a message is stored. A field with nothing to say is
-absent rather than present as `null`. An `error` whose message is its kind's
-default encodes without one, the default being presentation rather than
-state.
+absent rather than present as `null`. Any string is a message, whatever its
+text, and a decoded state holding one keeps it.
 
 On decoding, a state that is not an object, whose `reason` is not one of the
-three, whose `errorKind` is present and not one of the kinds, or whose
-`message` is present and not a string produces a `ProblematicValue`. So does a
-state pairing a kind or a message with a transient reason, or omitting the kind
-from `error`: the class never writes either, and the constructor refuses both. A well-formed state that is a transient reason alone decodes to
-that reason's prefab instance. See `1-fabric-values.md` Section 1.4.12.
+three, whose `errorKind` is present and not one of the kinds, whose `message`
+is present and not a string, or that holds any field besides those three
+produces a `ProblematicValue`. So does a state pairing a kind or a message with
+a transient reason, or omitting the kind from `error`: the class never writes
+either, and the constructor refuses both. A well-formed state that is a
+transient reason alone decodes to that reason's prefab instance. See
+`1-fabric-values.md` Section 1.4.12.
 
 ### `BigInt@1` — arbitrary-precision integers
 
@@ -282,9 +284,11 @@ things this type is for, and such a value could not go back out under it.
 which it can because that tag is known to be a real one.
 
 On decoding, a state that is not an object, a `tag` or `error` that is not a
-string, or an absent `state` property is refused, and settles against `lenient`
-like any other malformation: a lenient decode yields a `ProblematicValue`
-describing that decode, and a strict one raises. A well-formed record is a
+string, an absent `state` property, or any field besides those three is
+refused, and settles against `lenient` like any other malformation: a lenient
+decode yields a `ProblematicValue` describing that decode, recording
+`Problematic@1` as its tag and the record as it arrived as its state, and a
+strict one raises. A well-formed record is a
 record of a *past* failure and reads back as one under either setting, this
 decode having succeeded. `state` is checked for presence rather than for type,
 because every `FabricValue` is a valid state, `undefined` among them; filling in
@@ -294,12 +298,17 @@ See `1-fabric-values.md` Section 3.5.
 
 > **Decoding validation.** Decoding cannot assume type safety from the wire.
 > Each codec must reject a state it did not write, rather than silently
-> producing garbage from one — wrong type, invalid format, or missing fields
-> alike. The rejection has two homes, and which one a check belongs in is
-> settled by what asking costs. `canDecode()` holds what is cheap to ask and not
-> already asked by the decoding: that the state is a `string`, that a record
-> carries the fields the decoding reads and that they are strings, that a
-> literal is one of a fixed set. `decode()` holds a check whose only
+> producing garbage from one — wrong type, invalid format, missing fields, or
+> a field the codec does not read alike. Decoding a record without a field it
+> arrived with would build a value that re-encodes and hashes differently from
+> what was sent. A codec whose state is open-ended by design reads every field
+> it is handed, so this refuses nothing there: `Error@1` reads each field
+> beyond its fixed ones as one of the error's own properties, and `Link@1`'s
+> state is its payload whole. The rejection has two homes, and which one a
+> check belongs in is settled by what asking costs. `canDecode()` holds what
+> is cheap to ask and not already asked by the decoding: that the state is a
+> `string`, that a record carries the fields the decoding reads, no others, and
+> that they are strings, that a literal is one of a fixed set. `decode()` holds a check whose only
 > implementation is the decoding itself — that a base64url string (such as
 > `BigInt@1`, `EpochNsec@1`, `EpochDay@1`, `DurationNsec@1`, `DurationDay@1`,
 > or `Bytes@1`) is valid base64url is answered by decoding it, so asking first

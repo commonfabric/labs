@@ -64,6 +64,8 @@ two anchors are.
   selected is reported as `from === to`, with an empty `value`.
 - The marks need a collaboration that is running. The editor clears them when
   collaboration fails or ends, and draws none while `collaborative` is off.
+- The editor's children sit in a margin beside the text, each one that names an
+  anchor beside the text at that anchor. [`margin.md`](margin.md) describes it.
 
 The handler bound to `cf-selection-change` reads the field and compares it with
 `value`. The field and the editor's document can differ when it runs, in edits

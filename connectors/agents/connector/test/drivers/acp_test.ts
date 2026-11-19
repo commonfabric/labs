@@ -48,6 +48,12 @@ for line in sys.stdin:
     message = json.loads(line)
     method = message.get("method")
     params = message.get("params", {})
+    if method is None and message.get("id") == "permission":
+        outcome = message["result"]["outcome"]["outcome"]
+        stop = "refusal" if outcome == "cancelled" else "end_turn"
+        print(json.dumps({"jsonrpc": "2.0", "id": pending_prompt, "result": {"stopReason": stop}}), flush=True)
+        pending_prompt = None
+        continue
     if method == "session/cancel":
         if pending_prompt is not None:
             print(json.dumps({"jsonrpc": "2.0", "id": pending_prompt, "result": {"stopReason": "cancelled"}}), flush=True)
@@ -81,6 +87,17 @@ for line in sys.stdin:
         }
     elif method == "session/prompt":
         pending_prompt = message["id"]
+        if params["prompt"][0]["text"] == "ask permission":
+            print(json.dumps({
+                "jsonrpc": "2.0",
+                "id": "permission",
+                "method": "session/request_permission",
+                "params": {
+                    "sessionId": params["sessionId"],
+                    "toolCall": {"toolCallId": "tool-1"},
+                    "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}],
+                },
+            }), flush=True)
         continue
     elif method == "session/set_mode":
         result = {}
@@ -666,6 +683,23 @@ Deno.test("ACP select controls accept only advertised values", async () => {
             }],
           },
           {
+            id: "effort",
+            name: "Effort",
+            type: "select" as const,
+            currentValue: "low",
+            options: [
+              { name: "Low", value: "low" },
+              { name: "High", value: "high" },
+            ],
+          },
+          {
+            id: "broken",
+            name: "Broken",
+            type: "select" as const,
+            currentValue: "only",
+            options: "only",
+          },
+          {
             id: "mystery",
             name: "Mystery",
             type: "future-type",
@@ -711,10 +745,26 @@ Deno.test("ACP select controls accept only advertised values", async () => {
     "unsupported",
   );
   assertEquals(
+    (await driver.setConfigOption("session", "broken", "only")).status,
+    "unsupported",
+  );
+  assertEquals(
+    (await driver.setConfigOption("session", "effort", "medium")).status,
+    "unsupported",
+  );
+  assertEquals(
+    (await driver.setConfigOption("session", "effort", "high")).status,
+    "succeeded",
+  );
+  assertEquals(
     (await driver.setConfigOption("session", "model", "careful")).status,
     "succeeded",
   );
   assertEquals(configCalls, [{
+    sessionId: "session",
+    configId: "effort",
+    value: "high",
+  }, {
     sessionId: "session",
     configId: "model",
     value: "careful",
@@ -785,6 +835,13 @@ Deno.test("default ACP transport serves a complete process session", async () =>
     await active.promise;
     assertEquals((await driver.cancel("process-session")).status, "succeeded");
     assertEquals((await prompt).error?.code, "cancelled");
+
+    // The connector declines every permission request, and this adapter
+    // reports a declined request as a refusal.
+    assertEquals(
+      await driver.prompt("process-session", { text: "ask permission" }),
+      { status: "succeeded", result: { stopReason: "refusal" } },
+    );
 
     await assertRejects(
       () => driver.start(),

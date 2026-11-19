@@ -4230,7 +4230,8 @@ export type CellUpdateNotification =
        * The principal the value's own cell represents, read with the value,
        * present only for a subscription that opted in through
        * `includeWrittenPrincipal`. `undefined` when the value is not the
-       * whole of the cell a write to it lands in, or that cell's label names
+       * whole of the cell a write to it lands in, that cell is not in the
+       * space of the document holding the field, or that cell's label names
        * no single principal.
        */
       writtenPrincipal?: DID | undefined;

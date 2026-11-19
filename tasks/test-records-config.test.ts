@@ -73,6 +73,11 @@ describe("test-records-config", () => {
       expect(parsePersonalKeyFile("{nope")).toBeUndefined();
     });
 
+    it("returns undefined for JSON that is not an object", () => {
+      expect(parsePersonalKeyFile('"octocat"')).toBeUndefined();
+      expect(parsePersonalKeyFile("null")).toBeUndefined();
+    });
+
     it("returns undefined for any token endpoint but Google's", () => {
       expect(parsePersonalKeyFile(JSON.stringify({
         ...KEY,

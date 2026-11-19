@@ -1128,14 +1128,15 @@ suite will break.
    `"workspace"` array in the root `deno.jsonc`.
 
 2. **Include a test task.** The package's `deno.jsonc` **must** have a `"tasks"`
-   object with a `"test"` entry. The root test runner (`tasks/test.ts`) iterates
-   all workspace members and runs `deno task test` in each package directory. If
-   a package lacks a test task, Deno resolves the task name against the root
-   workspace instead, which would re-run the entire test suite recursively,
-   spawning processes exponentially. The runner reads every member's manifest
-   before it runs any of their test tasks, and refuses to start when one has no
-   `"test"` entry, naming the member; that check is what keeps a missing entry
-   to a message rather than a CI timeout.
+   object with a `"test"` entry. The root test runner
+   (`tasks/workspace-tests.ts`) iterates all workspace members and runs
+   `deno task test` in each package directory. If a package lacks a test task,
+   Deno resolves the task name against the root workspace instead, which would
+   re-run the entire test suite recursively, spawning processes exponentially.
+   The runner reads every member's manifest before it runs any of their test
+   tasks, and refuses to start when one has no `"test"` entry, naming the
+   member; that check is what keeps a missing entry to a message rather than a
+   CI timeout.
 
    For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
    the package's `"deno-test"` task, which runs the tests themselves — a

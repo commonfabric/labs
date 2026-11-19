@@ -9,10 +9,6 @@ import {
 } from "../../utils/identifiers.ts";
 import { createLiftAppliedCall } from "../../transformers/builtins/lift-applied.ts";
 
-function isBindingPattern(name: ts.BindingName): name is ts.BindingPattern {
-  return ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name);
-}
-
 export interface ComputedAliasInfo {
   readonly symbol: ts.Symbol;
   readonly aliasName: string;
@@ -35,7 +31,7 @@ interface ElementBindingPlan {
 }
 
 function buildElementBindingPlan(
-  elemParam: ts.ParameterDeclaration,
+  pattern: ts.BindingPattern,
   context: TransformationContext,
 ): ElementBindingPlan {
   const { factory, checker } = context;
@@ -44,14 +40,10 @@ function buildElementBindingPlan(
   const keyNames = new Set<string>();
 
   const walk = (
-    node: ts.BindingName,
+    node: ts.BindingPattern,
     path: readonly string[],
     template: ts.Expression | undefined,
-  ): ts.BindingName | undefined => {
-    if (ts.isIdentifier(node)) {
-      return factory.createIdentifier(node.text);
-    }
-
+  ): ts.BindingPattern | undefined => {
     if (ts.isObjectBindingPattern(node)) {
       const elements: ts.BindingElement[] = [];
 
@@ -109,12 +101,9 @@ function buildElementBindingPlan(
           );
         }
 
-        let clonedName: ts.BindingName | undefined;
-        if (ts.isIdentifier(element.name)) {
-          clonedName = factory.createIdentifier(element.name.text);
-        } else if (isBindingPattern(element.name)) {
-          clonedName = walk(element.name, nextPath, nextTemplate);
-        }
+        const clonedName = ts.isIdentifier(element.name)
+          ? factory.createIdentifier(element.name.text)
+          : walk(element.name, nextPath, nextTemplate);
 
         if (!clonedName && !element.dotDotDotToken) {
           continue;
@@ -134,35 +123,38 @@ function buildElementBindingPlan(
       return factory.createObjectBindingPattern(elements);
     }
 
-    if (ts.isArrayBindingPattern(node)) {
-      const newElements = node.elements.map((element) => {
-        if (ts.isOmittedExpression(element)) return element;
-        if (ts.isBindingElement(element)) {
-          let clonedName: ts.BindingName | undefined;
-          if (ts.isIdentifier(element.name)) {
-            clonedName = factory.createIdentifier(element.name.text);
-          } else if (isBindingPattern(element.name)) {
-            clonedName = walk(element.name, path, template);
-          }
-          if (!clonedName && !element.dotDotDotToken) {
-            return element;
-          }
-          return factory.createBindingElement(
-            element.dotDotDotToken,
-            element.propertyName,
-            clonedName ?? element.name,
-            element.initializer as ts.Expression | undefined,
-          );
-        }
-        return element;
-      });
-      return factory.createArrayBindingPattern(newElements);
-    }
-
-    return undefined;
+    const newElements = node.elements.map((element, index) => {
+      if (ts.isOmittedExpression(element)) return element;
+      // A rest element holds the remaining items rather than one of them, so
+      // a pattern nested in it is read from the array itself.
+      const clonedName = ts.isIdentifier(element.name)
+        ? factory.createIdentifier(element.name.text)
+        : element.dotDotDotToken
+        ? walk(element.name, path, template)
+        : walk(
+          element.name,
+          [...path, String(index)],
+          factory.createElementAccessExpression(
+            template ?? factory.createIdentifier("__cf_placeholder"),
+            factory.createNumericLiteral(index),
+          ),
+        );
+      // A nested pattern that binds nothing once its computed keys are lifted
+      // leaves a hole, which keeps the positions of the elements after it.
+      if (!clonedName && !element.dotDotDotToken) {
+        return factory.createOmittedExpression();
+      }
+      return factory.createBindingElement(
+        element.dotDotDotToken,
+        element.propertyName,
+        clonedName ?? element.name,
+        element.initializer as ts.Expression | undefined,
+      );
+    });
+    return factory.createArrayBindingPattern(newElements);
   };
 
-  const residualPattern = walk(elemParam.name, [], undefined);
+  const residualPattern = walk(pattern, [], undefined);
 
   return {
     aliases: aliasBucket,
@@ -199,7 +191,7 @@ export function analyzeElementBinding(
     };
   }
 
-  const plan = buildElementBindingPlan(elemParam, context);
+  const plan = buildElementBindingPlan(elemParam.name, context);
 
   if (plan.aliases.length === 0) {
     const normalized = normalizeBindingName(

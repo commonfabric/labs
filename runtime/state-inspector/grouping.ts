@@ -369,10 +369,6 @@ export function groupDiscoveredSpaces(
     if (homeAnalyzed) {
       for (const cd of homeAnalyzed.sig.crossSpaceDids) members.add(cd);
     }
-    // A group of just an absent principal with nothing attached is noise.
-    const presentMembers = [...members].filter((d) => byDid.has(d));
-    if (presentMembers.length === 0) continue;
-
     const spaces: GroupedSpace[] = [...members].map((did) => {
       const extra: string[] = [];
       if (did === principal) extra.push("group principal (owner home)");

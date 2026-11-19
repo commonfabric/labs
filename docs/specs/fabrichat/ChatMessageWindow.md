@@ -101,5 +101,5 @@ them, which describes the messages they name, their reactions' write policy
 included. Where that policy lists writers the room's does not, as one a room
 program listing `commitDelete` and `commitObliterate` among its reactions'
 writers stores (see [`ChatMessage`](ChatMessage.md#deleted-messages)), the
-runtime refuses the room's rewriting those windows, so an `openWindow` or a
-`closeWindow` changes nothing there.
+stored policy keeps them as stored, and an `openWindow` or a `closeWindow`
+rewrites those windows as it rewrites any other.

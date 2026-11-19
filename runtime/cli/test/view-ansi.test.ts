@@ -7,8 +7,8 @@ import {
   sgr,
   stripAnsi,
   term,
-  visibleWidth,
 } from "../lib/view/ansi.ts";
+import { visibleWidth } from "../lib/view/width.ts";
 
 Deno.test("hex parses #rrggbb", () => {
   assertEquals(hex("#ff8800"), [255, 136, 0]);
@@ -32,6 +32,7 @@ Deno.test("stripAnsi / visibleWidth ignore escapes", () => {
   assertEquals(stripAnsi(colored), "hello");
   assertEquals(visibleWidth(colored), 5);
   assert(colored.length > 5, "the colored form has escapes");
+  assertEquals(visibleWidth(paint("漢字", { bold: true })), 4);
 });
 
 Deno.test("cpLen counts a non-BMP glyph as one display column", () => {
@@ -40,7 +41,7 @@ Deno.test("cpLen counts a non-BMP glyph as one display column", () => {
   assertEquals(cpLen("𝑻"), 1, "one display column");
   assertEquals(cpLen("a𝑻b"), 3);
   assertEquals(cpLen(""), 0);
-  // visibleWidth (cpLen after stripping escapes) agrees
+  // visibleWidth, which counts columns after stripping escapes, agrees
   assertEquals(visibleWidth(paint("𝑻 lift", { bold: true })), 6);
 });
 

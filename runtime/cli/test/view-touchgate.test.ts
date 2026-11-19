@@ -2,10 +2,21 @@ import { join } from "@std/path";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import type { CreateRequest, MergeRequest } from "../lib/view/github.ts";
+import {
+  type CreateRequest,
+  GitHubRefusal,
+  type MergeRequest,
+} from "../lib/view/github.ts";
+import {
+  type BeginStep,
+  plainText,
+  type StepKind,
+  type TaskText,
+} from "../lib/view/tasklog.ts";
 import {
   clientDataHash,
   connectPinned,
+  describeFidoFailure,
   encodeRequest,
   runTool,
   type ToolResult,
@@ -206,28 +217,36 @@ function fakeTools(
   return { tool, calls };
 }
 
-/** Runs `send` with the service for `directory` and `tool`, returning what
- * it wrote and how it settled. */
+/** Runs `send` with the service for `directory` and `tool`, returning the
+ * steps it showed, a line as each began, ending in an ellipsis, and a line
+ * as each was done, ending in a check mark, the kind each step was begun
+ * with, and how it settled. */
 async function attempt(
   directory: string,
   tool: ToolRunner,
   send: (
     service: ReturnType<typeof touchGate>,
-    write: (text: string) => void,
-  ) => Promise<string>,
+    step: BeginStep,
+  ) => Promise<unknown>,
   token = "work",
 ) {
   let written = "";
+  const kinds: Array<StepKind | undefined> = [];
   const service = touchGate(token, {
     directory,
     tool,
     connect: connectPinned,
   });
+  const step: BeginStep = (text, kind) => {
+    kinds.push(kind);
+    written += `${plainText(text)}…\n`;
+    return () => written += `${plainText(text)} ✓\n`;
+  };
   try {
-    const result = await send(service, (text) => written += text);
-    return { written, result };
+    const result = await send(service, step);
+    return { written, kinds, result };
   } catch (error) {
-    return { written, error: String(error) };
+    return { written, kinds, error: String(error) };
   } finally {
     Deno.removeSync(directory, { recursive: true });
   }
@@ -281,6 +300,45 @@ describe("touchgate", () => {
     });
   });
 
+  describe("describeFidoFailure()", () => {
+    it("says what the last error libfido2's tool names means, naming the tool and the error", () => {
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "fido2-assert: fido_dev_get_assert: FIDO_ERR_RX\n",
+        ),
+      ).toBe(
+        "the security key stopped answering. It may have stopped waiting " +
+          "for a touch, been unplugged, or been in use by another program " +
+          "(fido2-assert: FIDO_ERR_RX)",
+      );
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "FIDO_ERR_RX then FIDO_ERR_USER_ACTION_TIMEOUT",
+        ),
+      ).toBe(
+        "the security key was not touched in time " +
+          "(fido2-assert: FIDO_ERR_USER_ACTION_TIMEOUT)",
+      );
+    });
+
+    it("returns what the tool printed when it names no error whose meaning is known", () => {
+      expect(describeFidoFailure("fido2-token", "no access\n")).toBe(
+        "fido2-token failed: no access",
+      );
+      expect(
+        describeFidoFailure(
+          "fido2-assert",
+          "fido2-assert: fido_dev_get_assert: FIDO_ERR_INTERNAL\n",
+        ),
+      ).toBe(
+        "fido2-assert failed: fido2-assert: fido_dev_get_assert: " +
+          "FIDO_ERR_INTERNAL",
+      );
+    });
+  });
+
   describe("touchGate()", () => {
     it("creates a pull request once the key signs the challenge, asking for the touch by the key's name, and resolves with its address", async () => {
       const request = encodeRequest(1, "laptop", [
@@ -301,8 +359,8 @@ describe("touchgate", () => {
       const { written, result } = await attempt(
         configDirectory(server.port),
         tool,
-        (service, write) =>
-          service.create(CREATE, write, new AbortController().signal),
+        (service, step) =>
+          service.create(CREATE, step, new AbortController().signal),
       );
       await server.done;
 
@@ -318,7 +376,10 @@ describe("touchgate", () => {
         `${hash.toBase64()}\ntouch-gate\n${CREDENTIAL.toBase64()}\n`,
       );
       expect(written).toBe(
-        "\nTouch the “laptop” security key to create a PR.\n",
+        "Touch the “laptop” security key to create a PR.…\n" +
+          "Touch the “laptop” security key to create a PR. ✓\n" +
+          "Sending the approval to touch-gate…\n" +
+          "Sending the approval to touch-gate ✓\n",
       );
     });
 
@@ -346,8 +407,8 @@ describe("touchgate", () => {
         const { result } = await attempt(
           configDirectory(server.port),
           fakeTools().tool,
-          (service, write) =>
-            service.create(CREATE, write, new AbortController().signal),
+          (service, step) =>
+            service.create(CREATE, step, new AbortController().signal),
         );
         await server.done;
 
@@ -372,12 +433,57 @@ describe("touchgate", () => {
       const { error } = await attempt(
         configDirectory(server.port),
         fakeTools().tool,
-        (service, write) =>
-          service.create(CREATE, write, new AbortController().signal),
+        (service, step) =>
+          service.create(CREATE, step, new AbortController().signal),
       );
       await server.done;
 
       expect(error).toContain("closed the connection");
+    });
+
+    it("rejects with the abort when its signal aborts while it waits to learn whether the server numbers the pull request", async () => {
+      const request = encodeRequest(1, "laptop", [
+        "work",
+        "octo/repo",
+        "fork:feature",
+        "main",
+        "Fix the frobnicator",
+        "It was broken.\nNow it is not.",
+      ]);
+      const controller = new AbortController();
+      let after: Uint8Array | undefined;
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, ASSERTION.length);
+        await conn.write(reply(0, "created"));
+        after = await readExact(conn, 1);
+      });
+      const directory = configDirectory(server.port);
+      const service = touchGate("work", {
+        directory,
+        tool: fakeTools().tool,
+        connect: async (...args) => {
+          const connection = await connectPinned(...args);
+          return {
+            ...connection,
+            ended: () => {
+              controller.abort();
+              return connection.ended();
+            },
+          };
+        },
+      });
+
+      try {
+        await expect(service.create(CREATE, () => () => {}, controller.signal))
+          .rejects.toThrow("the request was aborted");
+      } finally {
+        Deno.removeSync(directory, { recursive: true });
+      }
+      await server.done;
+
+      expect(after).toEqual(new Uint8Array(0));
     });
 
     it("merges a pull request, asking for the touch by the key's name", async () => {
@@ -394,16 +500,97 @@ describe("touchgate", () => {
       const { written, result } = await attempt(
         configDirectory(server.port),
         tool,
-        (service, write) =>
-          service.merge(MERGE, write, new AbortController().signal),
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
       );
       await server.done;
 
-      expect(result).toBe("merged");
+      expect(result).toBeUndefined();
       expect(server.seen.request).toEqual(concat(SECRET, request));
       expect(written).toBe(
-        "\nTouch the “laptop” security key to merge the PR.\n",
+        "Touch the “laptop” security key to merge the PR.…\n" +
+          "Touch the “laptop” security key to merge the PR. ✓\n" +
+          "Sending the approval to touch-gate…\n" +
+          "Sending the approval to touch-gate ✓\n",
       );
+    });
+
+    it("begins the step asking for the touch as one that waits for a person, and the step sending the approval with the default kind", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = challengingServer(request.length, reply(0, "merged"));
+      const { tool } = fakeTools();
+
+      const { kinds } = await attempt(
+        configDirectory(server.port),
+        tool,
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(kinds).toEqual(["person", undefined]);
+    });
+
+    it("says the security key was touched before it sends the server the approval", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const log: string[] = [];
+      let saidBeforeSending: string | undefined;
+      let saidBeforeTouch: string | undefined;
+      let touchText: TaskText = [];
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, ASSERTION.length);
+        saidBeforeSending = log.join("");
+        await conn.write(reply(0, "merged"));
+      });
+      const { tool } = fakeTools("dev0");
+      const signing: ToolRunner = (program, args, input, signal) => {
+        if (args.includes("-p")) saidBeforeTouch = log.join("");
+        return tool(program, args, input, signal);
+      };
+
+      const { result } = await attempt(
+        configDirectory(server.port),
+        signing,
+        (service, step) =>
+          service.merge(MERGE, (text) => {
+            if (log.length === 0) touchText = text;
+            log.push(`${plainText(text)}…`);
+            const done = step(text);
+            return () => {
+              log.push(`${plainText(text)} ✓`);
+              done();
+            };
+          }, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(result).toBeUndefined();
+      expect(saidBeforeTouch).toBe(
+        "Touch the “laptop” security key to merge the PR.…",
+      );
+      expect(saidBeforeSending).toBe(
+        "Touch the “laptop” security key to merge the PR.…" +
+          "Touch the “laptop” security key to merge the PR. ✓" +
+          "Sending the approval to touch-gate…",
+      );
+      expect(log.at(-1)).toBe("Sending the approval to touch-gate ✓");
+      expect(touchText.filter((span) => span.tone !== "text")).toEqual([
+        { text: "laptop", tone: "name" },
+      ]);
     });
 
     it("rejects with the server's message when it refuses before the challenge, asking for no touch", async () => {
@@ -416,8 +603,8 @@ describe("touchgate", () => {
       const { written, error } = await attempt(
         configDirectory(server.port),
         tool,
-        (service, write) =>
-          service.merge(MERGE, write, new AbortController().signal),
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
       );
       await server.done;
 
@@ -444,14 +631,53 @@ describe("touchgate", () => {
       const { error } = await attempt(
         configDirectory(server.port),
         fakeTools().tool,
-        (service, write) =>
-          service.merge(MERGE, write, new AbortController().signal),
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
       );
       await server.done;
 
       expect(error).toBe(
         "Error: touch-gate refused: GitHub said: Head branch was modified",
       );
+    });
+
+    it("rejects with GitHub's status and message when the server passes on GitHub's refusal", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = challengingServer(
+        request.length,
+        reply(
+          1,
+          'GitHub replied with status 405: {"message":"Merge already in ' +
+            'progress","documentation_url":"https://docs.github.com/rest/' +
+            'pulls/pulls#merge-a-pull-request","status":"405"}',
+        ),
+      );
+
+      let thrown: unknown;
+      const { error } = await attempt(
+        configDirectory(server.port),
+        fakeTools().tool,
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal).catch(
+            (failure) => {
+              thrown = failure;
+              throw failure;
+            },
+          ),
+      );
+      await server.done;
+
+      expect(error).toBe(
+        "Error: GitHub answered 405: Merge already in progress",
+      );
+      expect(thrown).toBeInstanceOf(GitHubRefusal);
+      expect(thrown instanceof GitHubRefusal && thrown.retryable).toBe(false);
     });
 
     it("rejects when the server closes the connection before its message ends, or sends one that is not UTF-8", async () => {
@@ -469,8 +695,8 @@ describe("touchgate", () => {
         const { error } = await attempt(
           configDirectory(server.port),
           fakeTools().tool,
-          (service, write) =>
-            service.merge(MERGE, write, new AbortController().signal),
+          (service, step) =>
+            service.merge(MERGE, step, new AbortController().signal),
         );
         await server.done;
 
@@ -487,8 +713,8 @@ describe("touchgate", () => {
       const { error } = await attempt(
         configDirectory(server.port, OTHER_PEM),
         fakeTools().tool,
-        (service, write) =>
-          service.merge(MERGE, write, new AbortController().signal),
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
       );
       await server.done;
 
@@ -522,12 +748,49 @@ describe("touchgate", () => {
       const { error } = await attempt(
         configDirectory(server.port),
         tool,
-        (service, write) => service.merge(MERGE, write, controller.signal),
+        (service, step) => service.merge(MERGE, step, controller.signal),
       );
       await server.done;
 
       expect(error).toContain("fido2-assert failed");
       expect(after).toEqual(new Uint8Array(0));
+    });
+
+    it("rejects, saying what libfido2's error means, when the security key stops answering while it waits for a touch", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(concat(u32(0), CHALLENGE));
+        await readExact(conn, 1);
+      });
+      const { tool } = fakeTools(
+        "dev0",
+        (args) =>
+          args.includes("-p")
+            ? failed("fido2-assert: fido_dev_get_assert: FIDO_ERR_RX\n")
+            : undefined,
+      );
+
+      const { error, written } = await attempt(
+        configDirectory(server.port),
+        tool,
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(written).toContain("Touch the “laptop” security key");
+      expect(error).toBe(
+        "Error: the security key stopped answering. It may have stopped " +
+          "waiting for a touch, been unplugged, or been in use by another " +
+          "program (fido2-assert: FIDO_ERR_RX)",
+      );
     });
 
     it("rejects with the abort, asking no other security key, when its signal aborts while a key is asked about its credential", async () => {
@@ -541,7 +804,7 @@ describe("touchgate", () => {
       const { error } = await attempt(
         configDirectory(1),
         tool,
-        (service, write) => service.merge(MERGE, write, controller.signal),
+        (service, step) => service.merge(MERGE, step, controller.signal),
       );
 
       expect(error).toBe("Error: stopped by the user");
@@ -555,7 +818,7 @@ describe("touchgate", () => {
       const { error } = await attempt(
         directory,
         fakeTools().tool,
-        (service, write) => service.merge(MERGE, write, AbortSignal.abort()),
+        (service, step) => service.merge(MERGE, step, AbortSignal.abort()),
       );
 
       expect(error).toContain("aborted");
@@ -574,8 +837,8 @@ describe("touchgate", () => {
         const { error } = await attempt(
           configDirectory(1),
           tool,
-          (service, write) =>
-            service.create(CREATE, write, new AbortController().signal),
+          (service, step) =>
+            service.create(CREATE, step, new AbortController().signal),
           token,
         );
 
@@ -597,12 +860,57 @@ describe("touchgate", () => {
         const { error } = await attempt(
           configDirectory(1, SERVER_PEM, files),
           fakeTools().tool,
-          (service, write) =>
-            service.merge(MERGE, write, new AbortController().signal),
+          (service, step) =>
+            service.merge(MERGE, step, new AbortController().signal),
         );
 
         expect(error).toContain(message);
       }
+    });
+
+    it("rejects with the reason when the keys directory cannot be read", async () => {
+      const directory = configDirectory(1);
+      Deno.removeSync(join(directory, "keys"), { recursive: true });
+      Deno.writeTextFileSync(join(directory, "keys"), "not a directory");
+
+      const { error } = await attempt(
+        directory,
+        fakeTools().tool,
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
+      );
+
+      expect(error).toContain("NotADirectory");
+    });
+
+    it("rejects when the server's message is longer than a client accepts", async () => {
+      const request = encodeRequest(2, "laptop", [
+        "work",
+        "octo/repo",
+        12,
+        "squash",
+        "c0ffee",
+      ]);
+      const server = fakeServer(async (conn) => {
+        await readExact(conn, SECRET.length + request.length);
+        await conn.write(u32(1));
+        const chunk = new Uint8Array(1 << 16).fill(0x61);
+        for (let sent = 0; sent <= 1 << 20; sent += chunk.length) {
+          await conn.write(chunk).catch(() => {});
+        }
+      });
+
+      const { error } = await attempt(
+        configDirectory(server.port),
+        fakeTools().tool,
+        (service, step) =>
+          service.merge(MERGE, step, new AbortController().signal),
+      );
+      await server.done;
+
+      expect(error).toBe(
+        "Error: the touch-gate server sent a message too long",
+      );
     });
 
     it("passes over a security key that cannot answer for one that holds the credential, and counts a request for a touch as holding it", async () => {
@@ -629,12 +937,12 @@ describe("touchgate", () => {
         const { result } = await attempt(
           configDirectory(server.port),
           tool,
-          (service, write) =>
-            service.merge(MERGE, write, new AbortController().signal),
+          (service, step) =>
+            service.merge(MERGE, step, new AbortController().signal),
         );
         await server.done;
 
-        expect(result).toBe("merged");
+        expect(result).toBeUndefined();
         expect(calls.at(-1)!.args).toEqual(["-G", "-p", signer]);
       }
     });
@@ -650,7 +958,8 @@ describe("touchgate", () => {
                 ? failed("FIDO_ERR_RX\n")
                 : undefined,
           ).tool,
-          "cannot ask the security key dev1: FIDO_ERR_RX",
+          "cannot ask the security key dev1: the security key stopped " +
+          "answering.",
         ],
         [
           fakeTools(
@@ -664,8 +973,8 @@ describe("touchgate", () => {
         const { error } = await attempt(
           configDirectory(1),
           tool,
-          (service, write) =>
-            service.merge(MERGE, write, new AbortController().signal),
+          (service, step) =>
+            service.merge(MERGE, step, new AbortController().signal),
         );
 
         expect(error).toContain(message);
@@ -698,8 +1007,8 @@ describe("touchgate", () => {
             "dev0",
             (args) => args.includes("-p") ? ok(stdout) : undefined,
           ).tool,
-          (service, write) =>
-            service.merge(MERGE, write, new AbortController().signal),
+          (service, step) =>
+            service.merge(MERGE, step, new AbortController().signal),
         );
         await server.done;
 

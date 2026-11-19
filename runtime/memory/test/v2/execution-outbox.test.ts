@@ -33,6 +33,29 @@ describe("execution-outbox", () => {
     await Deno.remove(path);
   });
 
+  describe("insertExecutionOutboxRows()", () => {
+    it("inserts one pending row per entry, and none for an empty list", () => {
+      insertExecutionOutboxRows(engine, {
+        branch: "",
+        createdSeq: 1,
+        rows: [],
+      });
+      expect(selectPendingExecutionOutboxRows(engine, { branch: "" }))
+        .toEqual([]);
+
+      insertExecutionOutboxRows(engine, {
+        branch: "",
+        createdSeq: 2,
+        rows: [row("first"), row("second")],
+      });
+      expect(
+        selectPendingExecutionOutboxRows(engine, { branch: "" }).map((
+          pending,
+        ) => pending.payload),
+      ).toEqual(["first", "second"]);
+    });
+  });
+
   describe("selectPendingExecutionOutboxRows()", () => {
     it("returns a payload property holding `undefined` as a property", () => {
       insertExecutionOutboxRows(engine, {

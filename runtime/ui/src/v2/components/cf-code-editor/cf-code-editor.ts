@@ -125,6 +125,7 @@ import {
   setHighlightAnchorsEffect,
   setHighlightsEffect,
 } from "./features/highlights.ts";
+import { margin as marginExtension } from "./features/margin.ts";
 import {
   atomicMentionRefRanges,
   createMentionRefDecorationPlugin,
@@ -348,7 +349,18 @@ function readUnlessRefused(cell: { get(): unknown }): unknown {
  *   where Memory says the two are; `id` names the mark and `kind` adds the
  *   class `cm-highlight-<kind>`. See `docs/highlights.md`.
  *
+ * @slot - Element children are shown in a margin beside the text, which wraps
+ *   below it where the two do not fit side by side. A child whose
+ *   `data-anchor` names an anchor of the collaborative field sits beside the
+ *   text at that anchor, and a child naming none sits under the child before
+ *   it. See `docs/margin.md`.
+ *
  * @fires cf-change - Fired when content changes with detail: { value, oldValue, language }
+ * @fires cf-edit - Fired when the viewer edits the document, with detail
+ *   `{ value }`, the whole document after the edit. Never fired for a change
+ *   another collaborator made, one the bound cell pushed, one the editor
+ *   rewrote itself (a renamed mention), or in a read-only editor; `cf-change`
+ *   fires for those too.
  * @fires cf-focus - Fired on focus
  * @fires cf-blur - Fired on blur
  * @fires cf-collaboration-reconcile - Fired when an epoch changes while local
@@ -2063,6 +2075,9 @@ export class CFCodeEditor extends BaseElement {
       } else {
         this.setValue(value);
       }
+      // `cf-change` also tells what the bound cell pushes, another member's
+      // edit among it; this tells only what the viewer typed.
+      this.emit("cf-edit", { value });
     }
     this._updateMentionedFromContent(value);
     this._setupPieceNameSubscriptions();
@@ -3183,16 +3198,19 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Prose mode's Markdown rendering, with formulas once KaTeX has loaded.
-   * Until then, formulas show as their TeX.
+   * Until then, formulas show as their TeX. The formulas come first, so
+   * their decorations take precedence: CodeMirror wraps a widget only in
+   * marks of equal or lower precedence, and a formula belongs inside the
+   * Markdown around it, such as a table cell.
    */
   #proseExtension(): Extension {
     if (this.mode !== "prose") return [];
     const katex = this.#drawsMath ? this.#katex : undefined;
     return [
-      createProseMarkdownPlugin(),
       katex === undefined
         ? []
         : proseMath(this._editorView?.hasFocus ?? false, katex.renderFormula),
+      createProseMarkdownPlugin(),
     ];
   }
 
@@ -3276,6 +3294,8 @@ export class CFCodeEditor extends BaseElement {
     const editorElement = this.shadowRoot?.querySelector(
       ".code-editor",
     ) as HTMLElement;
+    const layout = this.shadowRoot?.querySelector(".layout") as HTMLElement;
+    const margin = this.shadowRoot?.querySelector(".margin") as HTMLElement;
 
     // Create editor extensions
     const extensions: Extension[] = [
@@ -3334,6 +3354,7 @@ export class CFCodeEditor extends BaseElement {
       this._collaborationComp.of([]),
       this._presenceComp.of([]),
       highlightsExtension((id) => this.emit("cf-highlight-click", { id })),
+      marginExtension({ host: this, layout, margin }),
       this._refusalGate(),
       EditorView.updateListener.of((update) =>
         this._handleEditorUpdate(update)
@@ -3468,7 +3489,10 @@ export class CFCodeEditor extends BaseElement {
 
   override render() {
     return html`
-      <div class="code-editor"></div>
+      <div class="layout">
+        <div class="code-editor"></div>
+        <div class="margin"><slot></slot></div>
+      </div>
     `;
   }
 

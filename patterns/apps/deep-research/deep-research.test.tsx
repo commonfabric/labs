@@ -4,9 +4,9 @@
  * Drives the research view's controls: the autostart that asks the question,
  * the refine affordance, and the prompt that sends a follow-up. Each sending
  * control is driven on a research of its own, as the first message that
- * research's dialog receives, so the dialog takes it whether or not a model
- * answers the turn it starts; the test checks only the user's messages, which
- * an answer does not change. It reads the result-free view before anything is
+ * research's dialog receives, and the test states that the model fails the
+ * turn it starts; the test checks only the user's messages, which an answer
+ * would not change. It reads the result-free view before anything is
  * sent. `research-result.test.ts` covers how a result reads.
  */
 import {
@@ -26,6 +26,18 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
+
+// The model fails the turn each sent message starts.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "How do tide pools form?" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "Focus on rocky coasts." },
+    error: "The model is unavailable.",
+  },
+];
 
 const QUESTION = "How do tide pools form?";
 

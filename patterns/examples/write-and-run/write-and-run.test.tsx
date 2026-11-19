@@ -5,10 +5,31 @@ import {
 } from "../../tools/test-support/vnode-helpers.ts";
 import WriteAndRun from "./write-and-run.tsx";
 
+// The model writes a pattern that compiles for the first prompt, and code
+// that does not for the second.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Create a simple counter" },
+    text: [
+      "```typescript",
+      'import { NAME, pattern, UI } from "commonfabric";',
+      "export default pattern(() => ({",
+      '  [NAME]: "Generated counter",',
+      "  [UI]: <div>Generated counter</div>,",
+      "}));",
+      "```",
+    ].join("\n"),
+  },
+  {
+    when: { lastMessageContains: "Create a todo list" },
+    text: "export default pattern(() => {",
+  },
+];
+
 const PROMPT = "Create a todo list";
 
-// A pattern test has no language model to answer `generateText`, so the
-// generation ends without code and nothing reaches the compiler.
+// The first generation compiles and offers to open what it made; the second
+// shows its compile error.
 export default pattern(() => {
   const subject = WriteAndRun({ prompt: "Create a simple counter" });
 
@@ -24,28 +45,33 @@ export default pattern(() => {
     subject.prompt === "Create a simple counter"
   );
   const assert_prompt_is_request = assert(() => subject.prompt === PROMPT);
-  const assert_no_code_view = assert(() =>
-    hasText(subject[UI], "Enter a prompt to generate a pattern") &&
-    !hasText(subject[UI], "Generated Code") &&
-    !hasText(subject[UI], "Generated Pattern") &&
-    !hasText(subject[UI], "Compile error")
+  const assert_ready_to_open = assert(() =>
+    hasText(subject[UI], "Open Generated Pattern") &&
+    !hasText(subject[UI], "Compile error") &&
+    !hasText(subject[UI], "Enter a prompt to generate a pattern")
+  );
+  const assert_compile_error_shown = assert(() =>
+    hasText(subject[UI], "Compile error") &&
+    !hasText(subject[UI], "Open Generated Pattern")
   );
 
   return {
-    // The failed generation logs a warning from the language-model client.
-    allowConsoleWarnings: true,
     [TESTS]: [
       { assertion: assert_named },
       { assertion: assert_reports_initial_prompt },
       { settle: true },
-      { assertion: assert_no_code_view },
+      { assertion: assert_ready_to_open },
+      { press: subject[UI], control: "Open Generated Pattern" },
       { action: action_send_prompt },
       { assertion: assert_prompt_is_request },
       { action: action_send_blank_prompt },
       { assertion: assert_prompt_is_request },
       { settle: true },
-      { assertion: assert_no_code_view },
+      { assertion: assert_compile_error_shown },
     ],
+    // Running the compiled pattern logs the runner's `resume-pre-sync`
+    // warning, since the generated pattern takes no argument.
+    allowConsoleWarnings: true,
     subject,
   };
 });

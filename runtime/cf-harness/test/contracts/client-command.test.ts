@@ -295,6 +295,32 @@ describe("client command contract", () => {
       approval: "automatic",
     };
 
+    it("retains a complete Unicode document in command arguments", () => {
+      const args = {
+        page: "<html><body>" + 'Résumé "🧶"\n'.repeat(24_000) +
+          "</body></html>",
+      };
+      expect(readHarnessCommandInvocation({ ...query, args }))
+        .toEqual({ ...query, args });
+    });
+
+    it("counts the JSON envelope and UTF-8 bytes at the argument boundary", () => {
+      const overhead = new TextEncoder().encode(JSON.stringify({ text: "" }))
+        .length;
+      const available = HARNESS_COMMAND_ARGS_MAX_BYTES - overhead;
+      const text = "é".repeat(Math.floor(available / 2)) +
+        "x".repeat(available % 2);
+      const args = { text };
+      expect(new TextEncoder().encode(JSON.stringify(args)).length)
+        .toBe(HARNESS_COMMAND_ARGS_MAX_BYTES);
+      expect(readHarnessCommandInvocation({ ...query, args }))
+        .toEqual({ ...query, args });
+      expect(readHarnessCommandInvocation({
+        ...query,
+        args: { text: text + "x" },
+      })).toBeUndefined();
+    });
+
     it("refuses args larger than the request limit before delivery", () => {
       const args = { text: "x".repeat(HARNESS_COMMAND_ARGS_MAX_BYTES) };
       expect(readHarnessCommandInvocation({ ...query, args })).toBeUndefined();

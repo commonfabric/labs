@@ -88,7 +88,7 @@ export type LibrarySource =
  *  denied read is swallowed — `NotCapable` on current Deno, `PermissionDenied` on
  *  older ones — and reported as the var being unset; any other failure is
  *  unexpected and propagates. */
-function readEnv(key: string): string | undefined {
+export function readEnv(key: string): string | undefined {
   try {
     return Deno.env.get(key);
   } catch (e) {

@@ -705,12 +705,15 @@ Rules:
   the field would open, or refuse, the session without redeeming anything
 - a session that no one waits on declares `demand: false`: a server-side
   component that reads and writes a space as an ordinary client and keeps its
-  sessions open for as long as it runs, such as a toolshed's webhook runtime.
-  A value other than `false` refuses the message. A client declares it on
-  every open, a resume included. A server running the serving loop counts
-  such a session of its service identity as the loop's own: it neither
-  activates the space, nor keeps it from parking, nor adds to its demand
-  (`server-side-execution/serving-loop.md` §1). A server that does not know the
+  sessions open for as long as it runs, such as a toolshed's webhook runtime,
+  or a client that only copies a space's documents, such as a command-line
+  tool's local mirror. A value other than `false` refuses the message. A
+  client declares it on every open, a resume included. A server running the
+  serving loop leaves such a session out of client demand, whichever identity
+  signed it: it neither activates the space, nor keeps it from parking, nor
+  adds to its demand (`server-side-execution/serving-loop.md` §1). The
+  session still reads and writes as any other; what it gives up is the
+  server deriving anything on its account. A server that does not know the
   field ignores it, and the session counts as it did before;
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses
@@ -1083,9 +1086,14 @@ oldest is dropped past that, and its principal then learns of a grant only by
 opening the session again. A connection whose peer did not advertise
 `admissionNotice` records nothing, and neither does a routed connection
 ([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
-a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
-opens one, and it hears of every access-list commit in process, after which its
-next read of the space opens the session again.
+a session opened `actingAs: "space-owner"`, which only a serving runtime opens.
+An access-list change that gives the session's space an owner the binding can
+stand for, such as the genesis ACL of a home space created after the session
+opened, binds the session to that owner in place rather than revoking it (a
+profile's own DID is not one), because a serving runtime in
+another process hears of no access-list commit on this server. A co-hosted
+serving runtime whose session a change does revoke hears of the commit in
+process, after which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1985,7 +1993,7 @@ side of
 [owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
-session to the owner, open as the deployment's service identity.
+session to the owner, open as the identity of the host's process.
 
 ```typescript
 // Shown at module scope.
@@ -2067,9 +2075,15 @@ Semantics:
   `payload-too-large`. A client refuses before sending a request whose
   encoding takes more than that, or more than its connection takes in one
   request
-- the session's principal must be of the access list's delegating class
-  (`acl.delegatingDids`, the deployment's service identity); any other
-  session is refused with `forbidden`. The crossing then runs under the actor
+- the session's principal must be of the access list's delegating class;
+  any other session is refused with `forbidden`. The class is the identities
+  of the deployment's serving processes: the server's own process identity
+  (`acl.delegatingDids`), which is the whole class where every process shares
+  one identity, and, behind the memory router, where each toolshed has an
+  identity of its own, every toolshed identity the deployment's directory
+  lists (`acl.isDelegatingPeer`; `routed-mode-a.md`, "Toolshed deployment
+  inputs"). The directory is read on each decision, so a toolshed removed
+  from it is refused from the next request. The crossing then runs under the actor
   its body carries, as the delegated carriage does on the host's own server
   (`protocol.md` §2): the deployment's processes trust each other's carried
   actor claims, and admissibility comes from the validated grant

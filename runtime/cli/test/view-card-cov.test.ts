@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseDocument } from "./view-helpers.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
+import { shownCells } from "../lib/view/display.ts";
 import type {
   Document,
   Line,
@@ -114,6 +115,83 @@ const __cfLift_1 = lift({
     `schema label present: ${text}`,
   );
   assert(text.includes("token"), "renders the schema field");
+});
+
+Deno.test("card: a schema goes on one line only when it fits in columns, counting a Han character as two", () => {
+  // Twenty Han characters take forty columns, so the schema no longer fits
+  // its line's fifty-six; five take ten, so it does.
+  const schemaText = (key: string) => {
+    const doc = parseDocument(`// transformed: /app.ts
+const __cfLift_1 = lift({
+    type: "object",
+    properties: { ${key}: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } },
+    required: ["${key}"]
+} as const satisfies __cfHelpers.JSONSchema, {
+    type: "string"
+} as const satisfies __cfHelpers.JSONSchema, (x) => x);
+`);
+    const node = doc.flatStructure.find((n) => n.meta?.kind === "schema");
+    assert(node, "found a schema-meta node");
+    return buildPeekCard(doc, node).info.map((l) => l.text);
+  };
+  const wide = schemaText("漢".repeat(20));
+  const narrow = schemaText("漢".repeat(5));
+
+  assert(wide.includes(`    ${"漢".repeat(20)}: {`), wide.join("\n"));
+  assert(wide.includes("      value: string"), wide.join("\n"));
+  assert(
+    narrow.includes(`schema  { ${"漢".repeat(5)}: { value: string } }`),
+    narrow.join("\n"),
+  );
+});
+
+Deno.test("card: a use's line is cut to fit its columns, keeping whole characters", () => {
+  const src = "// transformed: /app.ts\nconst target = 1;\n" +
+    `const u = target + "${"漢".repeat(40)}";\nconst v = target;\n`;
+  const doc = parseDocument(src);
+  const node = doc.flatStructure.find((n) => n.name === "target");
+  assert(node, "found the target");
+  const contexts = buildPeekCard(doc, node).info.flatMap((line) =>
+    line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+  );
+  const cut = contexts.find((text) => text.startsWith("const u"));
+  assert(cut, contexts.join("\n"));
+
+  assert(cut.endsWith("漢…"), cut);
+  assertEquals(shownCells(cut).length, 55);
+  assert(contexts.includes("const v = target;"), contexts.join("\n"));
+});
+
+Deno.test("card: a use's line is cut after a whole emoji or accented letter, never inside one", () => {
+  // Each emoji with a skin tone is two code points in four UTF-16 code
+  // units, and each accented e two code points.
+  for (const piece of ["👍🏽", "e\u0301"]) {
+    const src = "// transformed: /app.ts\nconst target = 1;\n" +
+      `const u = target + "${piece.repeat(40)}";\n`;
+    const doc = parseDocument(src);
+    const node = doc.flatStructure.find((n) => n.name === "target");
+    assert(node, "found the target");
+    const cut = buildPeekCard(doc, node).info.flatMap((line) =>
+      line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+    ).find((text) => text.startsWith("const u"));
+    assert(cut, "found the use");
+
+    assert(cut.endsWith(`${piece}…`), JSON.stringify(cut));
+    assert(shownCells(cut).length <= 56, JSON.stringify(cut));
+  }
+});
+
+Deno.test("card: a use's line writes each run of whitespace in it as one space", () => {
+  const src = "// transformed: /app.ts\nconst target = 1;\n" +
+    "const u =\t\ttarget  +   1;\n";
+  const doc = parseDocument(src);
+  const node = doc.flatStructure.find((n) => n.name === "target");
+  assert(node, "found the target");
+  const contexts = buildPeekCard(doc, node).info.flatMap((line) =>
+    line.spans.filter((span) => span.cls === "identifier").map((s) => s.text)
+  );
+
+  assert(contexts.includes("const u = target + 1;"), contexts.join("\n"));
 });
 
 Deno.test("card: an import with named bindings lists the imported names", () => {

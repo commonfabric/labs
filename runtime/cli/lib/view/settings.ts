@@ -36,14 +36,15 @@ export interface ViewSettings {
 
   /**
    * Whether the viewer quits, printing the pull request's address, when the
-   * pull request for a branch that `P` pushed is opened while the push dialog
-   * is up.
+   * pull request for a branch that `P` pushed is opened, or the one that `L`
+   * landed is merged, while the dialog of either is up.
    */
   readonly quitOnPullRequest: boolean;
 
   /**
    * The `host:port` of the GitHub webhook relay's subscriber listener, which
-   * tells the viewer when the pull request is opened, or "" for none.
+   * tells the viewer when the pull request is opened or merged, or "" for
+   * none.
    */
   readonly webhookRelay: string;
 }

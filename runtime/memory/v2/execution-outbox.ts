@@ -138,7 +138,6 @@ export const insertExecutionOutboxRows = (
     rows: readonly OutboxAppendRow[];
   },
 ): void => {
-  if (options.rows.length === 0) return;
   const insert = engine.prepare(INSERT_ROW);
   for (const row of options.rows) {
     insert.run({

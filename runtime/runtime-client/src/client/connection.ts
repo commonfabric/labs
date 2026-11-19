@@ -3,7 +3,6 @@ import {
   comparePeerBuilds,
   normalizeBuildMarker,
 } from "@commonfabric/platform/peer-build";
-import { debugStr } from "@commonfabric/data-model";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { getLogger } from "@commonfabric/logger";
 import { unrefTimer } from "@commonfabric/async/sleep";
@@ -27,7 +26,6 @@ import {
   isConsoleNotification,
   isErrorNotification,
   isEventIntentOutcomeNotification,
-  isEventNeedsAttentionNotification,
   isIPCRemoteNotification,
   isIPCRemoteResponse,
   isNavigateRequestNotification,
@@ -65,8 +63,6 @@ import {
 import { cellRefToKey } from "@/shared/utils.ts";
 
 const ipcLogger = getLogger("runtime-client");
-
-const DEBUG_IPC = false;
 
 interface PendingRequest<T = unknown> {
   msgId: number;
@@ -393,12 +389,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       this.#requestTimeline.push(entry);
       this.#timelineByMsgId.set(msgId, entry);
     }
-    if (DEBUG_IPC) {
-      console.log(
-        `[IPC(\x1B[1m${message.msgId}\x1B[0m)\x1B[96m=>\x1B[0m]`,
-        message.data,
-      );
-    }
     // The bookkeeping above -- the abort hook and the pending entry -- is
     // registered on the promise below being returned to someone who will hold
     // it until a reply settles it. A synchronous throw from `send()` means no
@@ -650,11 +640,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       if (dead) return;
       if (isTelemetryNotification(message)) {
         this.emit("telemetry", message);
-        // Do not log telemetry events when DEBUG_IPC is enabled
         return;
-      }
-      if (DEBUG_IPC) {
-        console.log(`[IPC\x1B[92m<=\x1B[0m]`, message);
       }
       if (isCellUpdateNotification(message)) {
         this.#handleCellUpdate(message);
@@ -680,12 +666,9 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("operationupdate", message);
       } else if (isPresenceUpdateNotification(message)) {
         this.emit("presenceupdate", message);
-      } else if (isEventNeedsAttentionNotification(message)) {
-        this.emit("eventneedsattention", message);
       } else {
-        console.warn(
-          debugStr`Unknown notification: $quote,long${message}`,
-        );
+        // Only an `EventNeedsAttentionNotification` is left to reach here.
+        this.emit("eventneedsattention", message);
       }
       return;
     }
@@ -719,12 +702,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
     }
 
     if ("error" in message && message.error) {
-      if (DEBUG_IPC) {
-        console.log(
-          `[IPC(\x1B[1m${msgId}\x1B[0m)\x1B[91m<=\x1B[0m]`,
-          message.error,
-        );
-      }
       const error = new Error(message.error) as Error & { code?: string };
       if (message.code) {
         error.code = message.code;
@@ -743,12 +720,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       pending.deferred.reject(error);
     } else {
       const data = "data" in message ? message.data : undefined;
-      if (DEBUG_IPC) {
-        console.log(
-          `[IPC(\x1B[1m${msgId}\x1B[0m)\x1B[92m<=\x1B[0m]`,
-          data,
-        );
-      }
       pending.deferred.resolve(data);
     }
   };
@@ -882,9 +853,6 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       throw new Error(
         `RuntimeConnection: ${notification.type} sent after disposal`,
       );
-    }
-    if (DEBUG_IPC) {
-      console.log(`[IPC\x1B[96m=>\x1B[0m]`, notification);
     }
     this.#transport.send(notification);
   }

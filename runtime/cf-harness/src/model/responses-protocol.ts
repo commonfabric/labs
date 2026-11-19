@@ -240,23 +240,19 @@ const unchangedSearchOutput = (
 
 export const materializeUserContent = async (
   message: Extract<HarnessTranscriptMessage, { role: "user" }>,
-  label: string,
 ): Promise<ResponsesInputItem[]> => {
   const content: ResponsesInputItem[] = message.content.length > 0
     ? [{ type: "input_text", text: message.content }]
     : [];
   for (const attachment of message.imageAttachments ?? []) {
-    const part = await materializeImageAttachmentContentPart(attachment);
-    const partRecord = part as Record<string, unknown>;
-    const imageUrl = isObjectOrArray(partRecord.image_url)
-      ? (partRecord.image_url as Record<string, unknown>).url
-      : undefined;
-    if (typeof imageUrl !== "string") {
-      throw new Error(
-        `failed to materialize image attachment for ${label}`,
-      );
-    }
-    content.push({ type: "input_image", detail: "auto", image_url: imageUrl });
+    const { image_url } = await materializeImageAttachmentContentPart(
+      attachment,
+    );
+    content.push({
+      type: "input_image",
+      detail: "auto",
+      image_url: image_url.url,
+    });
   }
   return content;
 };
@@ -265,7 +261,6 @@ export const toResponsesInput = async (
   transcript: readonly HarnessTranscriptMessage[],
   model: string,
   providerId: string,
-  label: string,
   // Used only when the transcript carries no system message. Callers that omit
   // it send no `instructions` at all, so a run without a system prompt is not
   // silently given one.
@@ -306,7 +301,7 @@ export const toResponsesInput = async (
       case "system":
         break;
       case "user": {
-        const content = await materializeUserContent(message, label);
+        const content = await materializeUserContent(message);
         if (content.length > 0) input.push({ role: "user", content });
         break;
       }

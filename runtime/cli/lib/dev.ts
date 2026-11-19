@@ -172,15 +172,14 @@ export function serializeMainExport(
 ): string {
   const exportName = mainExportName ?? "default";
   const mainExport = exportName in exports ? exports[exportName] : exports;
+  let value: string | undefined;
   try {
-    const value = JSON.stringify(mainExport, null, 2);
-    if (value === undefined) {
-      throw new Error("Main export not serializable.");
-    }
-    return value;
-  } catch (_) {
-    throw new Error("Main export not serializable.");
+    value = JSON.stringify(mainExport, null, 2);
+  } catch {
+    // Reported below, the same as a value with no JSON form.
   }
+  if (value === undefined) throw new Error("Main export not serializable.");
+  return value;
 }
 
 function formatTransformed(program: Program): string {

@@ -7,6 +7,7 @@ import {
   type ModuleByteCache,
   ProcessModuleByteCache,
   restoreCompileByteCacheForTesting,
+  writeCompileByteCacheAtUnload,
   writeCompileByteCacheForTesting,
 } from "./compile-byte-cache.ts";
 
@@ -270,6 +271,7 @@ describe("createCompileByteCache", () => {
         new Map([["from-env", { js: "ENV" }]]),
       );
       cache.putAll(RT, [{ identity: "from-unload", js: "UNLOAD" }]);
+      expect(flushCompileByteCache(cache)).toBe(2);
 
       globalThis.dispatchEvent(new Event("unload"));
 
@@ -344,6 +346,98 @@ describe("createCompileByteCache", () => {
           ]),
         );
     } finally {
+      Deno.removeSync(dir, { recursive: true });
+    }
+  });
+
+  it("throws a read failure other than a missing file", () => {
+    const dir = Deno.makeTempDirSync({ prefix: "compile-byte-cache-" });
+    try {
+      const file = `${dir}/a-file`;
+      Deno.writeTextFileSync(file, "not a directory");
+
+      expect(() =>
+        restoreCompileByteCacheForTesting(
+          new ProcessModuleByteCache(),
+          `${file}/cache.json`,
+        )
+      ).toThrow(Deno.errors.NotADirectory);
+    } finally {
+      Deno.removeSync(dir, { recursive: true });
+    }
+  });
+
+  it("throws a failed write, leaving neither the file nor a temporary file", () => {
+    // A name long enough to leave room for the lock file's suffix and not
+    // for the temporary file's makes only the write of the temporary file
+    // fail.
+
+    const dir = Deno.makeTempDirSync({ prefix: "compile-byte-cache-" });
+    try {
+      const cacheFile = `${dir}/${"c".repeat(240)}`;
+      const cache = new ProcessModuleByteCache();
+      cache.putAll(RT, [{ identity: "id", js: "JS" }]);
+
+      expect(() => writeCompileByteCacheForTesting(cache, cacheFile)).toThrow();
+      expect([...Deno.readDirSync(dir)].map((entry) => entry.name)).toEqual([
+        `${"c".repeat(240)}.lock`,
+      ]);
+    } finally {
+      Deno.removeSync(dir, { recursive: true });
+    }
+  });
+});
+
+describe("writeCompileByteCacheAtUnload", () => {
+  it("writes the cache and logs how many modules it wrote", () => {
+    const dir = Deno.makeTempDirSync({ prefix: "compile-byte-cache-" });
+    const originalLog = console.log;
+    const messages: string[] = [];
+    console.log = (...args: unknown[]) => {
+      messages.push(args.map(String).join(" "));
+    };
+    try {
+      const cacheFile = `${dir}/cache.json`;
+      const cache = new ProcessModuleByteCache();
+      cache.putAll(RT, [{ identity: "id", js: "JS" }]);
+
+      writeCompileByteCacheAtUnload(cache, cacheFile);
+
+      const restored = new ProcessModuleByteCache();
+      restored.restore(JSON.parse(Deno.readTextFileSync(cacheFile)));
+      expect(restored.getCompleteSet(RT, ["id"])).toEqual(
+        new Map([["id", { js: "JS" }]]),
+      );
+      expect(messages).toEqual([
+        `[compile-byte-cache] wrote 1 modules to ${cacheFile}`,
+      ]);
+    } finally {
+      console.log = originalLog;
+      Deno.removeSync(dir, { recursive: true });
+    }
+  });
+
+  it("logs a failed write rather than throwing it", () => {
+    const dir = Deno.makeTempDirSync({ prefix: "compile-byte-cache-" });
+    const originalError = console.error;
+    const reports: unknown[][] = [];
+    console.error = (...args: unknown[]) => {
+      reports.push(args);
+    };
+    try {
+      const file = `${dir}/a-file`;
+      Deno.writeTextFileSync(file, "not a directory");
+      const cacheFile = `${file}/cache.json`;
+
+      writeCompileByteCacheAtUnload(new ProcessModuleByteCache(), cacheFile);
+
+      expect(reports.length).toBe(1);
+      expect(reports[0]?.[0]).toBe(
+        `[compile-byte-cache] failed to write ${cacheFile}:`,
+      );
+      expect(reports[0]?.[1]).toBeInstanceOf(Error);
+    } finally {
+      console.error = originalError;
       Deno.removeSync(dir, { recursive: true });
     }
   });

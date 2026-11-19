@@ -161,8 +161,10 @@ for line in sys.stdin:
     if method == "initialize":
         result = {}
     elif method == "thread/list":
-        if params.get("archived"):
-            result = {"threads": [{"id": "archived", "title": "Archived", "status": {"type": "notLoaded"}}]}
+        if params.get("archived") and params.get("cursor") == "older":
+            result = {"threads": [{"id": "archived-older", "status": {"type": "notLoaded"}}]}
+        elif params.get("archived"):
+            result = {"threads": [{"id": "archived", "title": "Archived", "status": {"type": "notLoaded"}}], "nextCursor": "older"}
         elif params.get("cursor"):
             result = {"threads": [{"id": "second", "title": "Second", "created_at": 1, "updated_at": 10000000000, "status": {"type": "systemError"}}]}
         else:
@@ -184,6 +186,7 @@ for line in sys.stdin:
             if text == "cancel me":
                 pending_prompt = (params["threadId"], turn_id)
             else:
+                print(json.dumps({"method": "turn/started", "params": {"threadId": params["threadId"], "turn": {"id": turn_id, "status": "inProgress"}}}), flush=True)
                 completion = {"method": "turn/completed", "params": {"threadId": params["threadId"], "turn": {"id": turn_id, "status": "failed" if text == "fail" else "completed"}}}
     elif method == "turn/interrupt":
         result = {}
@@ -635,7 +638,13 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
     assertEquals(second.nextCursor, "archived:");
     const archived = await driver.listSessions(second.nextCursor);
     assertEquals(archived.sessions[0].archived, true);
-    assertEquals(archived.nextCursor, undefined);
+    assertEquals(archived.nextCursor, "archived:older");
+    const older = await driver.listSessions(archived.nextCursor);
+    assertEquals(older.sessions.map((session) => session.nativeSessionId), [
+      "archived-older",
+    ]);
+    assertEquals(older.sessions[0].archived, true);
+    assertEquals(older.nextCursor, undefined);
 
     await assertRejects(
       () => driver.readSession("missing"),
@@ -665,6 +674,12 @@ Deno.test("Codex driver handles provider edge cases and cancellation", async () 
     assertEquals(
       (await driver.prompt("edge", { text: "missing turn" })).error?.code,
       "missing-turn-id",
+    );
+    // The provider announces each turn before completing it; only the
+    // completion decides the outcome.
+    assertEquals(
+      (await driver.prompt("edge", { text: "succeed" })).status,
+      "succeeded",
     );
     assertEquals(
       (await driver.prompt("edge", { text: "fail" })).error?.code,

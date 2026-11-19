@@ -6,8 +6,8 @@
  * prompt input, into its transcript, which its summary counts and its view
  * shows, and the Clear button empties it again.
  *
- * The test environment has no language model, so the dialog answers each
- * message with its error reply, which counts in the transcript like any
+ * The test states that the model fails, so the dialog answers each message
+ * with its error reply, which counts in the transcript like any
  * other.
  */
 import {
@@ -31,6 +31,18 @@ import QuickCapture, {
   createNotebookHandler,
   createNoteHandler,
 } from "./quick-capture.tsx";
+
+// The model fails the reply to each message the test sends.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Call the plumber on Monday." },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "File this: buy more flour" },
+    error: "The model is unavailable.",
+  },
+];
 
 type Message = { role: string; content: unknown };
 
@@ -130,7 +142,7 @@ export default pattern(() => {
       { action: action_clear },
       { assertion: assert_starts_empty },
     ],
-    // The dialog warns that it cannot reach the language model.
+    // The dialog warns that the model failed.
     allowConsoleWarnings: true,
   };
 });

@@ -1013,6 +1013,17 @@ describe("compactStore", () => {
           encodeMemoryBoundary({ value: { n: 15 } } as never)
         }' WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
       )).rejects.toThrow("the planned patch boundary");
+      // The same boundary rewritten as a delete: it reconstructs to nothing.
+      await fresh(standard);
+      await expect(tamper(
+        `UPDATE revision SET op = 'delete', data = NULL WHERE id = '${A}' AND seq = (SELECT seq FROM head WHERE id = '${A}')`,
+      )).rejects.toThrow("reconstructs to no document at its patch boundary");
+      // A column dropped: the engine's migration adds it back on opening,
+      // which the run notices by the schema it then finds.
+      await fresh(standard);
+      await expect(tamper(`ALTER TABLE "commit" DROP COLUMN holder`)).rejects
+        .toThrow("opening the store through the engine changed its schema");
+      expect(await Deno.stat(out).catch(() => undefined)).toBeUndefined();
       // A planned set boundary rewritten as a patch.
       await fresh((e) => {
         standard(e);

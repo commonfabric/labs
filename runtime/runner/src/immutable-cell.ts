@@ -383,13 +383,11 @@ export class ImmutableCellStore {
 
   #watchSchemas(): void {
     if (this.#unsubscribeSchemas !== undefined) return;
-    const owner = new WeakRef(this);
-    const unsubscribe = onSchemaDocumentRegistered(() => {
-      const store = owner.deref();
-      if (store === undefined) unsubscribe();
-      else store.#refreshPending();
-    });
-    this.#unsubscribeSchemas = unsubscribe;
+    this.#unsubscribeSchemas = subscribeWhileHeld(
+      new WeakRef(this),
+      onSchemaDocumentRegistered,
+      (store) => store.#refreshPending(),
+    );
   }
 
   /** Acquires newly visible dependencies before schema registration returns. */
@@ -403,6 +401,24 @@ export class ImmutableCellStore {
       this.#unsubscribeSchemas = undefined;
     }
   }
+}
+
+/**
+ * Subscribes with `subscribe` for as long as `owner` holds its target: each
+ * notification passes the target to `refresh`, and the first one after the
+ * target is gone unsubscribes instead. Returns the function that unsubscribes.
+ */
+export function subscribeWhileHeld<T extends object>(
+  owner: { deref(): T | undefined },
+  subscribe: (listener: () => void) => () => void,
+  refresh: (target: T) => void,
+): () => void {
+  const unsubscribe = subscribe(() => {
+    const target = owner.deref();
+    if (target === undefined) unsubscribe();
+    else refresh(target);
+  });
+  return unsubscribe;
 }
 
 /** Creates or returns the store for an explicitly declared lifetime owner. */

@@ -11,6 +11,7 @@
  * shares, in place of what the entry gives.
  */
 
+import { getHeapStatistics } from "@node/v8";
 import { Identity, keyPairFromRealmValue } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
@@ -18,6 +19,8 @@ import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease"
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
 import { setLLMUrl } from "@commonfabric/llm";
 import { setPatternEnvironment } from "../builder/env.ts";
+import { startHeapSampling, writeThreadHeapProfile } from "../heap-profile.ts";
+import { threadId } from "@node/worker_threads";
 import { collectedMemory } from "../collected-memory.ts";
 import { openSharedCompileCache } from "../compilation-cache/shared-compile-cache.deno.ts";
 import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
@@ -78,9 +81,13 @@ export function serveFromPort(
   port: PortLike,
   options: ServingWorkerMainOptions = {},
 ): void {
+  // From here on, so the profile covers what serving allocates from the
+  // first message; the init waits for it.
+  const sampling = startHeapSampling();
   const endpoint = servingPlaneEndpoint(port);
   endpoint.onRequest("worker.init", async (init) => {
     adoptProcessInstanceId(init.processInstanceId);
+    await sampling;
     // A timer on this thread, so that the watchdog on the server's thread hears
     // nothing once this thread stops (serving-loop.md §2). It also runs once
     // a handler of this thread has ended at the heap limit, which is how the
@@ -174,6 +181,8 @@ export function serveFromPort(
       // server's thread.
       diagnostics: () => servingLoopDiagnostics(ownCompiler),
       collectedMemory,
+      heapProfile: (directory) =>
+        writeThreadHeapProfile(directory, `worker-${threadId}`),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
       runLifecycleVerb: (space, verb) => {
@@ -203,7 +212,10 @@ export function serveFromPort(
         }
       },
     });
-    return { lifetimeLock: await holdWorkerLifetimeLock() };
+    return {
+      lifetimeLock: await holdWorkerLifetimeLock(),
+      heapSizeLimit: getHeapStatistics().heap_size_limit,
+    };
   });
   endpoint.notify("worker.ready", null);
 }

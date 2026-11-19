@@ -19,6 +19,7 @@
   "exports": {
     "./v2/invites": "./v2/invites.ts",
     "./space-invites": "./space-invites.ts",
+    "./space-links": "./space-links.ts",
     "./acl": "./acl.ts",
     "./v2/cfc-atom-classes": "./v2/cfc-atom-classes.ts",
     "./v2/cfc-clause-identity": "./v2/cfc-clause-identity.ts",

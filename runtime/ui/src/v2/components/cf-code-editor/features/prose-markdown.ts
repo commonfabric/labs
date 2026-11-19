@@ -165,7 +165,40 @@ class TaskCheckboxWidget extends WidgetType {
   }
 }
 
+/**
+ * Widget that renders an inline `<br>` tag as a line break. A GFM table cell
+ * cannot hold a newline, so `<br>` is how Markdown breaks a line inside one.
+ */
+class LineBreakWidget extends WidgetType {
+  toDOM() {
+    const span = document.createElement("span");
+    span.className = "cm-prose-br";
+    span.appendChild(document.createElement("br"));
+    return span;
+  }
+
+  /**
+   * The one line break the widget draws, which CodeMirror counts when it
+   * estimates the height of a line it has not drawn.
+   */
+  override get lineBreaks() {
+    return 1;
+  }
+}
+
+// Singleton — safe to reuse because the widget holds no instance state, and
+// CodeMirror keeps the element it drew for a widget identical to the new one.
+const lineBreakWidget = new LineBreakWidget();
+
+/** Matches the `<br>` spellings drawn as a line break: `<br>`, `<br/>`, `<br />`. */
+const LINE_BREAK_TAG = /^<br\s*\/?>$/i;
+
 const hiddenReplace = Decoration.replace({});
+
+const tableCellMark = Decoration.mark({
+  class: "cm-prose-table-cell",
+  inclusive: true,
+});
 
 /**
  * Build prose decorations from an EditorState.
@@ -193,8 +226,11 @@ export function buildProseDecorations(
         if (rCursor.name === "TableDelimiter") {
           decorations.push(hidden.range(rCursor.from, rCursor.to));
         } else if (rCursor.name === "TableCell") {
+          // Inclusive, so the cell opens before and closes after a widget
+          // that replaces text at its edges, such as a formula, and wraps
+          // it. Anything a row holds outside a cell is hidden.
           decorations.push(
-            Decoration.mark({ class: "cm-prose-table-cell" }).range(
+            tableCellMark.range(
               rCursor.from,
               rCursor.to,
             ),
@@ -567,6 +603,31 @@ export function buildProseDecorations(
             node.to,
           ),
         );
+        return;
+      }
+
+      // Inline <br> tags. Other inline HTML stays as written.
+      if (node.name === "HTMLTag") {
+        if (!LINE_BREAK_TAG.test(doc.sliceString(node.from, node.to))) return;
+
+        // Inside a table the tag follows the table, which shows its source
+        // while the cursor is anywhere in it; elsewhere it is range-based.
+        let table = node.node.parent;
+        while (table && table.name !== "Table") table = table.parent;
+        const isActive = hasFocus &&
+          (table
+            ? cursorLine >= doc.lineAt(table.from).number &&
+              cursorLine <= doc.lineAt(table.to).number
+            : cursorPos >= node.from && cursorPos <= node.to);
+
+        if (!isActive) {
+          decorations.push(
+            Decoration.replace({ widget: lineBreakWidget }).range(
+              node.from,
+              node.to,
+            ),
+          );
+        }
         return;
       }
 

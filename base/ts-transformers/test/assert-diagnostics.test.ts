@@ -1,5 +1,11 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
+
+import { TransformationContext } from "../src/core/mod.ts";
+import { transformCfDirective } from "../src/mod.ts";
+import { AssertDiagnosticsTransformer } from "../src/transformers/assert-diagnostics.ts";
 
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -705,4 +711,48 @@ Deno.test("assert leaves a body with no return alone", async () => {
 
   assertEquals(assertCaptures(root), []);
   assertEquals(recordSource(root), undefined);
+});
+
+describe("AssertDiagnosticsTransformer", () => {
+  describe("filter()", () => {
+    /** What `filter()` returns for a module holding `source`. */
+    function filterResult(source: string): boolean | undefined {
+      const fileName = "/module.ts";
+      const sourceFile = ts.createSourceFile(
+        fileName,
+        source,
+        ts.ScriptTarget.ES2020,
+        true,
+      );
+      const options: ts.CompilerOptions = { noLib: true };
+      const host = ts.createCompilerHost(options);
+      host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+      const program = ts.createProgram([fileName], options, host);
+      let result: boolean | undefined;
+      ts.transform(sourceFile, [(tsContext) => (file) => {
+        result = new AssertDiagnosticsTransformer({}).filter(
+          new TransformationContext({ program, sourceFile: file, tsContext }),
+        );
+        return file;
+      }]);
+      return result;
+    }
+
+    const usesAssert = `import { assert } from "commonfabric";
+assert(true);
+`;
+
+    it("returns `true` for a module with helpers that mentions `assert`", () => {
+      expect(filterResult(transformCfDirective(usesAssert))).toBe(true);
+    });
+
+    it("returns `false` for a module with helpers that does not mention `assert`", () => {
+      expect(filterResult(transformCfDirective("export const value = 1;\n")))
+        .toBe(false);
+    });
+
+    it("returns `false` for a module without helpers that mentions `assert`", () => {
+      expect(filterResult(usesAssert)).toBe(false);
+    });
+  });
 });

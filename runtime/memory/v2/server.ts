@@ -11,6 +11,7 @@ import {
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
+import { LRUCache } from "@commonfabric/collections/cache";
 import { StagedMap } from "@commonfabric/collections/staged-map";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { metrics, type Span, SpanStatusCode, trace } from "@opentelemetry/api";
@@ -919,20 +920,14 @@ const isSpaceKeyAclGenesis = (
 /** Extract the table name from a SQLite "no such table: <name>" error, or
  *  undefined if the error is not that shape. SQLite reports the *unquoted* name,
  *  which may itself contain spaces or dots (e.g. `CREATE TABLE "my notes"`), so
- *  we take the whole remainder of the message. Only a real `main.`/`temp.`
- *  schema prefix is stripped — a bare table literally named `a.b` is preserved,
- *  so the result matches a declared-table key exactly. */
+ *  we take the whole remainder of the message. A dotted name is the table's
+ *  whole name, never a schema and a table: the statement guard refuses a
+ *  schema-qualified reference before the read, so `main.notes` here names a
+ *  table literally called `main.notes`, and the result matches a
+ *  declared-table key exactly. */
 function missingTableName(error: unknown): string | undefined {
-  const message = describeFailure(error);
-  const match = /no such table:\s*(.+)$/i.exec(message);
-  if (match === null) return undefined;
-  const ref = match[1].trim();
-  const dot = ref.indexOf(".");
-  if (dot !== -1) {
-    const schema = ref.slice(0, dot).toLowerCase();
-    if (schema === "main" || schema === "temp") return ref.slice(dot + 1);
-  }
-  return ref;
+  const match = /no such table:\s*(.+)$/i.exec(describeFailure(error));
+  return match === null ? undefined : match[1].trim();
 }
 
 /** Whether `name` matches a declared table key, using the SAME case-folding
@@ -1071,7 +1066,6 @@ type PublishFrame<M> = (message: M) => void;
 
 type TransactDecision = {
   response: ResponseMessage<Engine.AppliedCommit>;
-  postCommit?: () => Promise<void>;
 
   /** Whether the engine decided the commit, and so reported it to the
    * server's commit observer; false for one refused before reaching it. */
@@ -1244,13 +1238,16 @@ export type ServerExecutionObserver = {
    * `pushGrowthWakes` (W1 review MINOR-4) — and keep a client's session
    * signed with the service's key. `sessionId` names the changed session
    * where the change is one session's, so a mirror of the demand set can
-   * re-read that session's share alone. */
+   * re-read that session's share alone. `notDemand` says whether the
+   * session declared that it is not demand (`SessionState.notDemand`),
+   * which the host drops as it drops the loop's own. */
   demandChanged?: (
     space: string,
     reason?: DemandChangeReason,
     principal?: string,
     sessionId?: string,
     servingOwn?: true,
+    notDemand?: true,
   ) => void;
 
   /**
@@ -2041,10 +2038,7 @@ class Connection {
   }
 
   consumeSessionOpenChallenge(challenge: SessionOpenChallenge): void {
-    if (this.#sessionOpenChallenge === null) {
-      return;
-    }
-    if (this.#sessionOpenChallenge.value === challenge.value) {
+    if (this.#sessionOpenChallenge?.value === challenge.value) {
       this.#sessionOpenChallenge.consumed = true;
     }
   }
@@ -2113,10 +2107,6 @@ class Connection {
         this.#receiveIdle = null;
       }
     }
-  }
-
-  hasPendingReceives(): boolean {
-    return this.#pendingReceives > 0;
   }
 
   /** Resolves once every frame handed over so far has been handled. */
@@ -2401,9 +2391,8 @@ class Connection {
     for (const [value, state] of this.#challenges) {
       if (state.expiresAt <= now) this.#challenges.delete(value);
     }
-    while (this.#challenges.size >= MAX_CONNECTION_CHALLENGES) {
-      const oldest = this.#challenges.keys().next().value;
-      if (oldest === undefined) break;
+    for (const oldest of this.#challenges.keys()) {
+      if (this.#challenges.size < MAX_CONNECTION_CHALLENGES) break;
       this.#challenges.delete(oldest);
     }
     this.#challenges.set(challenge.value, {
@@ -3010,6 +2999,14 @@ class Connection {
         // a routed host returns the request's credit to the router once this
         // handling returns. The answer goes out when the verb settles.
         const { space, sessionId, requestId } = parsed;
+        // Declared apart from the call, so its lines are its own rather than
+        // shared with the end of the answer's callback.
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
+            error,
+          );
+        };
         void this.#server.runPatternLifecycle(parsed).then((response) => {
           // A connection that closed while the verb ran has no one to tell.
           if (this.#closed) return;
@@ -3036,12 +3033,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`pattern.lifecycle\` ${parsed.verb} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "served": {
@@ -3071,6 +3063,12 @@ class Connection {
         // not awaited, as a lifecycle verb is not: the frames behind it go
         // ahead, and the answer goes out when the crossing settles.
         const { space, sessionId, requestId } = parsed;
+        const reportFailure = (error: unknown) => {
+          console.error(
+            `memory v2: answering a \`served\` ${parsed.kind} failed`,
+            error,
+          );
+        };
         void this.#server.runServedRequest(parsed).then((response) => {
           if (this.#closed) return;
           try {
@@ -3092,12 +3090,7 @@ class Connection {
           } finally {
             this.#answered.delete(requestId);
           }
-        }).catch((error: unknown) => {
-          console.error(
-            `memory v2: answering a \`served\` ${parsed.kind} failed`,
-            error,
-          );
-        });
+        }).catch(reportFailure);
         return;
       }
       case "space.invite": {
@@ -3148,9 +3141,6 @@ class Connection {
     let processed = 0;
     for (const handle of this.#sessions.values()) {
       const { space: sessionSpace, sessionId } = handle;
-      if (this.#closed) {
-        return processed;
-      }
       // A session under a lease that has run out is sent nothing until the
       // lease is renewed, which evaluates it again in full.
       if (this.#leaseExpired(handle)) {
@@ -3215,7 +3205,7 @@ class Connection {
           );
         }
       };
-      let effect: SessionEffectMessage | null;
+      let effect: SessionEffectMessage | null = null;
       try {
         effect = await this.#server.syncSessionForConnection(
           space,
@@ -3241,9 +3231,10 @@ class Connection {
           error,
         );
         this.#server.markSessionForFullResync(space, sessionId);
-        continue;
       }
       if (effect !== null && !delivered) deliver(effect);
+      // Only the evaluation above yields, so this is the one point at which
+      // the connection can have closed since the loop began.
       if (this.#closed) return processed;
     }
     return processed;
@@ -3673,9 +3664,7 @@ export class Server {
    * changed declaration re-ensures (additive migration) with no hash-collision
    * risk.
    */
-  #ensuredSchemas = new Map<string, true>();
-
-  #ensuredSchemasMax = 4096;
+  #ensuredSchemas = new LRUCache<string, true>({ capacity: 4096 });
 
   /** The presence rooms this server relays; in memory only. */
   #presence = new PresenceRooms();
@@ -3861,6 +3850,18 @@ export class Server {
          * empty.
          */
         delegatingDids?: readonly string[];
+
+        /**
+         * Whether `principal` is in the delegating class without being
+         * listed in `delegatingDids`: the part of the class that changes
+         * while the server runs. It is asked on each decision, so its
+         * answer applies from the next one. A toolshed behind the memory
+         * router answers from its directory, which lists the identity of
+         * each toolshed of the deployment: a crossing reaches a space's
+         * owner as a session of the toolshed that sent it
+         * (04-protocol.md §4.3.12).
+         */
+        isDelegatingPeer?: (principal: string) => boolean;
 
         /**
          * Whether a `session.open` may present a UCAN proof chain
@@ -4122,7 +4123,49 @@ export class Server {
   }
 
   #isDelegatingPrincipal(principal: string): boolean {
-    return this.options.acl?.delegatingDids?.includes(principal) ?? false;
+    const acl = this.options.acl;
+    return acl?.delegatingDids?.includes(principal) === true ||
+      acl?.isDelegatingPeer?.(principal) === true;
+  }
+
+  /**
+   * Whether `session` holds a delegated READ binding (OW31) whose principal
+   * is no longer in the delegating class. The class can shrink while the
+   * session is open: `acl.isDelegatingPeer` stops naming a toolshed the
+   * memory router's directory no longer lists. No access-list change follows
+   * that, so the bound session is refused from its next decision instead of
+   * reading on as the space's owner.
+   */
+  #bindingEnded(session: SessionState): boolean {
+    return session.actingPrincipal !== undefined &&
+      (session.principal === undefined ||
+        !this.#isDelegatingPrincipal(session.principal));
+  }
+
+  /**
+   * Binds `session` to the owner `engine`'s copy of its space now names, when
+   * it was opened `actingAs: "space-owner"` by a delegating principal at a
+   * time the space had no owner to bind to, as a space still being created
+   * has none. The binding is the one an open would resolve now. Revoking the
+   * session instead would leave it refused for good when its serving runtime
+   * is in another process: nothing there hears of this access-list commit,
+   * so nothing opens the session again. A session already bound keeps its
+   * owner here, and `#revokeDeauthorizedSessions` revokes it when ownership
+   * moves.
+   */
+  #bindToNewOwner(session: SessionState, engine: Engine.Engine): void {
+    const { principal } = session;
+    if (
+      session.servingBinding !== true ||
+      session.actingPrincipal !== undefined ||
+      session.capabilityPrincipal !== undefined ||
+      principal === undefined || !this.#isDelegatingPrincipal(principal) ||
+      this.#isServicePrincipal(principal)
+    ) {
+      return;
+    }
+    const owner = this.#resolveSpaceOwnerBinding(engine, session.space);
+    if (owner !== undefined) session.actingPrincipal = owner;
   }
 
   /**
@@ -4163,27 +4206,42 @@ export class Server {
   }
 
   /**
-   * Decides the person `session` stands for against `engine`'s copy of its
-   * space, and records it as `session.person`
-   * (`docs/features/active-user-counting.md`). A serving loop's own session,
-   * and a session whose principal is not a person's, stands for nobody. Any
-   * other session stands for the first person's identity among its chain's
-   * issuers, root first, and then its principal. The `*` principal, service
-   * principals, and delegating principals are not people's identities, and
-   * neither is a space's own key unless the space is a Home space or has
-   * history and no access list, which only a space older than access lists
-   * has.
+   * Decides, against `engine`'s copy of `session`'s space, whether the
+   * space's own key is a person's identity there, and records it as
+   * `session.ownKeyIsPerson` for {@link #personOf}. It is when the space is
+   * a Home space, or has history and no access list, which only a space
+   * older than access lists has. Decided only for a session whose principal
+   * or chain names the space's key, since no other session asks.
    */
-  #decidePerson(session: SessionState, engine: Engine.Engine): void {
+  #decideOwnKey(session: SessionState, engine: Engine.Engine): void {
+    const { space } = session;
+    session.ownKeyIsPerson =
+      session.principal === space || session.chainIssuers?.includes(space)
+        ? this.#isHome(engine, space) ||
+          (this.#aclState(engine, space).kind === "missing" &&
+            Engine.serverSeq(engine) > 0)
+        : undefined;
+  }
+
+  /**
+   * The person `session` stands for (`docs/features/active-user-counting.md`),
+   * or `undefined`. A serving loop's own session, and a session whose
+   * principal is not a person's, stands for nobody. Any other session stands
+   * for the first person's identity among its chain's issuers, root first,
+   * and then its principal. The `*` principal, service principals, and
+   * delegating principals are not people's identities, and neither is a
+   * space's own key unless `session.ownKeyIsPerson` says it is. The
+   * delegating class is read as it is at the call, so a toolshed identity the
+   * memory router's directory starts or stops listing is judged anew on a
+   * session that is already open.
+   */
+  #personOf(session: SessionState): string | undefined {
     const { principal, space } = session;
-    let ownKeyIsPerson: boolean | undefined;
     const isPerson = (did: string) =>
       did !== ANYONE_USER && !this.#isServicePrincipal(did) &&
       !this.#isDelegatingPrincipal(did) &&
-      (did !== space || (ownKeyIsPerson ??= this.#isHome(engine, space) ||
-        (this.#aclState(engine, space).kind === "missing" &&
-          Engine.serverSeq(engine) > 0)));
-    session.person = session.servingOwn === true || principal === undefined ||
+      (did !== space || session.ownKeyIsPerson === true);
+    return session.servingOwn === true || principal === undefined ||
         !isPerson(principal)
       ? undefined
       : [...(session.chainIssuers ?? []), principal].find(isPerson);
@@ -4192,17 +4250,19 @@ export class Server {
   /**
    * Sets the attributes that say whom `span`'s work is for, each when
    * `session` has one: `user.did`, the principal that signed the session's
-   * open, and `enduser.id`, the person the session stands for. Attributes
-   * only accumulate on a span, so one set again after the person is decided
-   * afresh keeps an `enduser.id` it already carried.
+   * open, and `enduser.id`, the person the session stands for. A span that
+   * records nothing gets neither, so the person is decided only for spans
+   * that keep it. Attributes only accumulate on a span, so one set again
+   * after the person is decided afresh keeps an `enduser.id` it already
+   * carried.
    */
   #attributeSpan(span: Span, session: SessionState): void {
+    if (!span.isRecording()) return;
     if (session.principal !== undefined && session.principal !== ANYONE_USER) {
       span.setAttribute("user.did", session.principal);
     }
-    if (session.person !== undefined) {
-      span.setAttribute("enduser.id", session.person);
-    }
+    const person = this.#personOf(session);
+    if (person !== undefined) span.setAttribute("enduser.id", person);
   }
 
   /**
@@ -4375,12 +4435,14 @@ export class Server {
   /** Evaluate the ACL policy for a message. Returns `null` when the message
    *  may proceed and a typed error when it must be rejected. In `observe`, an
    *  ordinary capability shortfall is counted and logged; invalid ACL state
-   *  still fails closed. */
+   *  still fails closed. `servingBinding` says the message comes from a
+   *  session opened `actingAs: "space-owner"`, or is that open. */
   #authorizeMessageWithEngine(
     engine: Engine.Engine,
     space: string,
     principal: string | undefined,
     requirement: Capability,
+    servingBinding = false,
   ): V2Error | null {
     if (
       this.options.ownsSpace !== undefined && !this.options.ownsSpace(space)
@@ -4407,7 +4469,15 @@ export class Server {
       // document, so its space has history too.
       const operator = principal !== undefined &&
         this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
-      if (kind !== "valid" && !genesis && !operator) {
+      // Serving: a delegating principal's owner-bound session reads a space
+      // with no history, as every principal may outside Mode A. A serving
+      // runtime can reach a space while its creator is still making it; its
+      // session reads the empty space and binds to the owner the genesis
+      // ACL names (`#bindToNewOwner`). It writes nothing until then.
+      const serving = servingBinding && kind === "missing" &&
+        requirement === "READ" && Engine.serverSeq(engine) === 0 &&
+        principal !== undefined && this.#isDelegatingPrincipal(principal);
+      if (kind !== "valid" && !genesis && !operator && !serving) {
         return toError("AuthorizationError", "Routed memory request denied");
       }
     }
@@ -4451,22 +4521,16 @@ export class Server {
     );
   }
 
-  async #authorizeMessage(
-    space: string,
-    principal: string | undefined,
-    requirement: Capability,
-  ): Promise<V2Error | null> {
-    // Keep off mode's historical async shape: callers await this immediate
-    // return, then independently await their read engine/evaluation. Some
-    // legacy runtime ordering depends on those two yield points.
-    if (this.#aclMode() === "off") return null;
-    const engine = await this.#openEngine(space);
-    return this.#authorizeMessageWithEngine(
-      engine,
-      space,
-      principal,
-      requirement,
-    );
+  /**
+   * The authorization of a message in `off` mode, which admits every one. The
+   * request handlers call it in that mode alone, and authorize through
+   * {@link #authorizeCurrentSessionWithEngine} in every other. It keeps off
+   * mode's historical asynchronous shape: callers await this immediate
+   * return, then independently await their read engine/evaluation. Some
+   * legacy runtime ordering depends on those two yield points.
+   */
+  #offModeAuthorization(): Promise<null> {
+    return Promise.resolve(null);
   }
 
   #assertRoutedAuthority(session: SessionState): void {
@@ -4488,6 +4552,12 @@ export class Server {
     if (this.#sessions.get(space, sessionId) !== session) {
       return toError("SessionError", "Unknown session for space");
     }
+    if (this.#bindingEnded(session)) {
+      return toError(
+        "SessionRevokedError",
+        "The session's principal is no longer a delegating principal",
+      );
+    }
     // The delegated READ binding (OW31, READ side RULED 2026-08-19): a
     // bound session's READ-class decisions resolve as the ACTING user
     // (the space's owner). WRITE and OWNER requirements resolve against
@@ -4507,6 +4577,7 @@ export class Server {
       space,
       principal,
       requirement,
+      session.servingBinding === true,
     );
   }
 
@@ -4617,20 +4688,18 @@ export class Server {
     if (this.#aclMode() === "off") return null;
 
     const aclTouched = commitTouchesAclDoc(commit.operations, space);
-    // Ordinary writes to established spaces need no genesis shape check.
-    // Their current ACL and ownership are enforced by message authorization.
-    if (!aclTouched && Engine.serverSeq(engine) !== 0) return null;
-    const state = this.#aclState(engine, space);
-
     if (!aclTouched) {
-      if (state.kind === "missing" && Engine.serverSeq(engine) === 0) {
-        return toError(
-          "AuthorizationError",
-          `Space ${space} requires an ACL genesis commit before ordinary writes`,
-        );
-      }
-      return null;
+      // Ordinary writes to established spaces need no genesis shape check.
+      // Their current ACL and ownership are enforced by message
+      // authorization.
+      if (Engine.serverSeq(engine) !== 0) return null;
+      // A space with no history has no ACL yet, so its genesis comes first.
+      return toError(
+        "AuthorizationError",
+        `Space ${space} requires an ACL genesis commit before ordinary writes`,
+      );
     }
+    const state = this.#aclState(engine, space);
 
     const shape = aclCommitShapeRefusal(space, commit);
     if (shape !== null) return shape;
@@ -4800,8 +4869,10 @@ export class Server {
 
   /**
    * Brings the sessions on `space` up to date after a change to its access
-   * list: decides again the person each stands for, revokes those the list
-   * no longer admits, and notices the admissions it now allows.
+   * list: decides again whether the space's own key is a person's for each,
+   * binds the owner-bound sessions that had no owner to bind to
+   * ({@link #bindToNewOwner}), revokes those the list no longer admits, and
+   * notices the admissions it now allows.
    * `writerSessionId` names the session whose commit made the change, as
    * {@link #revokeDeauthorizedSessions} takes it.
    */
@@ -4811,7 +4882,8 @@ export class Server {
     writerSessionId?: string,
   ): void {
     for (const session of this.#sessions.sessionsForSpace(space)) {
-      this.#decidePerson(session, engine);
+      this.#decideOwnKey(session, engine);
+      this.#bindToNewOwner(session, engine);
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
@@ -4951,10 +5023,12 @@ export class Server {
    * neither does one whose peer did not advertise `admissionNotice`.
    *
    * The callers in this file record nothing for a session opened
-   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
-   * and it already hears of every access-list commit in process
-   * (`noteSpaceAclChanged()`), after which its next load of the space opens
-   * the session again through ordinary admission.
+   * `actingAs: "space-owner"`. Only a serving runtime opens one. An
+   * access-list change that gives its space an owner binds it in place
+   * ({@link #bindToNewOwner}), so a serving runtime in another process,
+   * which hears of no commit here, reads on. One a change does revoke, a
+   * co-hosted serving runtime opens again through ordinary admission once
+   * its host tells it of the commit (`noteSpaceAclChanged()`).
    */
   #awaitAdmission(
     connectionId: string | null,
@@ -5656,11 +5730,12 @@ export class Server {
       // lets a symlinked store dir produce a `..`-prefixed relative path for a
       // file that actually lives in the store — defeating the jail. With both
       // sides canonical, containment also covers the `<space>.sqlite` store
-      // files (not just `cell-*`).
-      let storeDir = Path.dirname(Path.fromFileUrl(engine.url));
-      try {
-        storeDir = await Deno.realPath(storeDir);
-      } catch { /* dir may not exist yet; fall back to the raw path */ }
+      // files (not just `cell-*`). The directory exists, since opening the
+      // engine created it, and a failure to resolve it refuses the source
+      // rather than comparing against a path that may not be canonical.
+      const storeDir = await Deno.realPath(
+        Path.dirname(Path.fromFileUrl(engine.url)),
+      );
       const rel = Path.relative(storeDir, canonical);
       const insideStore = rel === "" ||
         (!rel.startsWith("..") && !Path.isAbsolute(rel));
@@ -5859,13 +5934,13 @@ export class Server {
           // a distinct file per principal/session, so each needs its own DDL run
           // even though (space, id, schema) match.
           const key = `${space}\0${id}\0${scopeKey}\0${JSON.stringify(tables)}`;
-          if (!this.#ensuredSchemas.has(key)) {
+          if (this.#ensuredSchemas.get(key) === undefined) {
             ensureTables(
               engine.database,
               tables as Record<string, TableSchema>,
               alias,
             );
-            this.#recordSchemaEnsured(key);
+            this.#ensuredSchemas.put(key, true);
           }
         }
       }
@@ -6301,11 +6376,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -6475,11 +6546,7 @@ export class Server {
     {
       // Maps a server filesystem path into the space — operator surface.
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "OWNER",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -6644,15 +6711,22 @@ export class Server {
         connection.consumeSessionOpenChallenge(authContext.challenge);
       }
       // Mode A: a DID with no store here names a space nobody has created
-      // here. Only its own key may create it, and only where `createsSpace`
-      // allows; anyone else is refused before opening the engine would
-      // create the store. `createsSpace` is asked after the existence check,
-      // so a directory change during that wait is seen. The refusal stays
-      // permanent: a retriable one would show which DIDs the directory lists.
+      // here. Its own key may create it, and so may a delegating principal's
+      // owner-bound open: a serving runtime that reaches the space before
+      // its creator does needs a session that will see the space once it is
+      // created, and an empty store is what holds one. Either is admitted
+      // only where `createsSpace` allows; anyone else is refused before
+      // opening the engine would create the store. `createsSpace` is asked
+      // after the existence check, so a directory change during that wait is
+      // seen. The refusal stays permanent: a retriable one would show which
+      // DIDs the directory lists.
       if (
         this.options.requireExplicitAcl === true &&
         !(await this.#spaceStoreExists(message.space)) &&
-        (principal !== message.space ||
+        ((principal !== message.space &&
+          !(message.session.actingAs === "space-owner" &&
+            principal !== undefined &&
+            this.#isDelegatingPrincipal(principal))) ||
           this.options.createsSpace?.(message.space) === false)
       ) {
         throw authorizationError("Routed memory request denied");
@@ -6665,12 +6739,14 @@ export class Server {
       }
       // The delegated READ binding (OW31, READ side RULED 2026-08-19):
       // `actingAs: "space-owner"` is admitted only for a DELEGATING-class
-      // envelope (the co-hosted process identity under the flag — the
-      // LT5 trust footing), and resolves to the space's ACL OWNER, the
-      // user the session's READ-class decisions then run as. Inert in
-      // `off` mode (off preserves historical behavior); refused hard in
-      // observe AND enforce for a non-delegating envelope — the marker
-      // is an admission-validity claim, not a capability shortfall.
+      // envelope (under the flag, the co-hosted process identity and,
+      // behind the memory router, each toolshed identity its directory
+      // lists — the LT5 trust footing), and resolves to the space's ACL
+      // OWNER, the user the session's READ-class decisions then run as.
+      // Inert in `off` mode (off preserves historical behavior); refused
+      // hard in observe AND enforce for a non-delegating envelope — the
+      // marker is an admission-validity claim, not a capability shortfall,
+      // and `#bindingEnded` re-judges it at each later decision.
       let actingPrincipal: string | undefined;
       const actingAs = message.session.actingAs;
       if (actingAs !== undefined && this.#aclMode() !== "off") {
@@ -6693,7 +6769,8 @@ export class Server {
               "AuthorizationError",
               `Principal ${principal ?? "<anonymous>"} may not open a ` +
                 `session acting as the owner of ${message.space}: not a ` +
-                "delegating principal (memory ACL delegatingDids; OW31)",
+                "delegating principal (memory ACL delegatingDids or the memory " +
+                "router's directory; OW31)",
             ),
           );
         }
@@ -6772,6 +6849,7 @@ export class Server {
         message.space,
         capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
+        actingAs === "space-owner",
       );
       if (deny) {
         // No admission wait for a chain, as for the binding: the grant it
@@ -6874,7 +6952,7 @@ export class Server {
         }
         throw error;
       }
-      this.#decidePerson(opened.state, engine);
+      this.#decideOwnKey(opened.state, engine);
       const openSpan = tracer.startSpan("memory.session.open");
       openSpan.setAttribute("space.did", message.space);
       openSpan.setAttribute("session.id", opened.sessionId);
@@ -7139,8 +7217,8 @@ export class Server {
    * Decides a transaction under its space's publication lock.
    *
    * `publishVerdict`, when provided by a live connection, runs while the lock
-   * is held and before any post-commit bookkeeping. Fan-out for the space
-   * begins only after both steps finish and the lock is released.
+   * is held. Fan-out for the space begins only after it returns and the lock
+   * is released.
    */
   async transact(
     message: TransactRequest,
@@ -7156,26 +7234,7 @@ export class Server {
         const decision = await this.#decideTransaction(message, originating);
         engineDecided = decision.engineDecided;
         outcome = decision.response.error?.name ?? "ok";
-        let verdictError: { value: unknown } | undefined;
-        try {
-          publishVerdict?.(decision.response);
-        } catch (error) {
-          verdictError = { value: error };
-        }
-        try {
-          await decision.postCommit?.();
-        } catch (postCommitError) {
-          if (verdictError !== undefined) {
-            throw new AggregateError(
-              [verdictError.value, postCommitError],
-              "Verdict publication and post-commit bookkeeping both failed",
-            );
-          }
-          throw postCommitError;
-        }
-        if (verdictError !== undefined) {
-          throw verdictError.value;
-        }
+        publishVerdict?.(decision.response);
         return decision.response;
       } finally {
         // The elapsed span deliberately starts at the REQUEST, not at lock
@@ -7791,7 +7850,6 @@ export class Server {
     message: TransactRequest,
     originating: SessionState | null,
   ): Promise<TransactDecision> {
-    let postCommit: (() => Promise<void>) | undefined;
     let engineDecided = false;
     const response = await tracer.startActiveSpan(
       "memory.transact",
@@ -8238,7 +8296,7 @@ export class Server {
         }
       },
     );
-    return { response, postCommit, engineDecided };
+    return { response, engineDecided };
   }
 
   async graphQuery(
@@ -8256,11 +8314,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -8570,6 +8624,7 @@ export class Server {
         },
         principal: session.principal,
         ...(session.servingOwn === true ? { servingOwn: true as const } : {}),
+        ...(session.notDemand === true ? { notDemand: true as const } : {}),
         attached: session.ownerConnectionId !== null,
         view,
         selectionGeneration: session.viewSelections.get(view.id)?.generation,
@@ -8842,6 +8897,74 @@ export class Server {
     return selected;
   }
 
+  /**
+   * Replaces the watches and views of a session that already holds view
+   * graphs, by moving its demand graphs to the replacement's ordinary and
+   * rendered roots and its support graphs to the planner's selections for
+   * the replacement's views (`#moveWatchGraphs()`). What it returns is what
+   * `#evaluateViewWatchSet()` returns for the same request, and only the
+   * roots the replacement adds and documents awaiting refresh are walked.
+   */
+  async #replaceViewWatchSet(
+    session: SessionState,
+    watches: readonly WatchSpec[],
+    views: readonly ViewInterest[],
+    engine?: Engine.Engine,
+  ) {
+    this.#assertRoutedAuthority(session);
+    engine ??= await this.#openEngine(session.space);
+    this.#assertRoutedAuthority(session);
+    const dirtyIds = this.#dirtyDocsBySpace.get(session.space);
+    if (this.#dirtySpaces.has(session.space) && dirtyIds === undefined) {
+      return await this.#evaluateViewWatchSet(session, watches, views, engine);
+    }
+    const startedAt = performance.now();
+    const renderWatches = [...watches, ...viewWatches(views)];
+    const selected = this.#viewSupportWatches(session, views);
+    const previousSupport = new Map<string, TrackedGraphState>();
+    for (const [key, graph] of session.graphs) {
+      if (key.startsWith("view-support:")) {
+        previousSupport.set(key.slice("view-support:".length), graph);
+      }
+    }
+    const attribution = createRootAttribution();
+    const demandGraphs = this.#moveWatchGraphs(
+      session,
+      engine,
+      renderWatches,
+      session.viewDemandGraphs,
+      attribution,
+      dirtyIds,
+    );
+    const supportGraphs = this.#moveWatchGraphs(
+      session,
+      engine,
+      selected,
+      previousSupport,
+      attribution,
+      dirtyIds,
+    );
+    recordSlowQueryDuration("session.watch.set", session.space, startedAt, {
+      watches: renderWatches.length + selected.length,
+      ...attribution,
+    });
+    const graphs = new Map<string, TrackedGraphState>();
+    for (const [branch, graph] of demandGraphs) {
+      graphs.set(`view-demand:${branch}`, graph);
+    }
+    for (const [branch, graph] of supportGraphs) {
+      graphs.set(`view-support:${branch}`, graph);
+    }
+    const identity = { principal: session.principal, sessionId: session.id };
+    return {
+      serverSeq: Engine.serverSeq(engine),
+      graphs,
+      entities: this.#entriesFromGraphs(graphs.values(), identity),
+      demandGraphs,
+      demandEntities: this.#entriesFromGraphs(demandGraphs.values(), identity),
+    };
+  }
+
   /** Extends ordinary demand while retaining the view's rendered and support graphs. */
   async #extendViewWatchSet(
     session: SessionState,
@@ -8966,11 +9089,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9048,12 +9167,8 @@ export class Server {
         if (group.length === 0) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
-            try {
-              const { id, scopeKey } = fromDocKey(key as QueryDocKey);
-              changedInterests.add(toDirtyKey(id, scopeKey));
-            } catch {
-              continue;
-            }
+            const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+            changedInterests.add(toDirtyKey(id, scopeKey));
           }
           graphs.delete(branch);
           continue;
@@ -9263,11 +9378,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -9327,6 +9438,10 @@ export class Server {
       // other watch set evaluates them whole.
       const extended = views.length > 0 && incremental &&
         !session.forceFullResync;
+      // A session that already holds view graphs keeps them across a
+      // replacement or a removal, and walks only the roots it adds.
+      const moved = views.length > 0 && !incremental &&
+        session.views.length > 0 && !session.forceFullResync;
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -9342,6 +9457,13 @@ export class Server {
         )
         : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
+        : moved
+        ? await this.#replaceViewWatchSet(
+          session,
+          message.watches,
+          views,
+          aclEngine,
+        )
         : await this.#evaluateViewWatchSet(
           session,
           message.watches,
@@ -9596,6 +9718,91 @@ export class Server {
   }
 
   /**
+   * Moves `previous`, a session's graphs by branch, to the roots of `watches`.
+   * Each branch's graph releases the roots `watches` no longer name
+   * (`releaseTrackedRoots()`) and walks only the roots it adds
+   * (`extendTrackedGraph()`). Roots both sets name keep their coverage,
+   * refreshed by pending dirty documents before the added roots extend it. A
+   * branch `watches` adds is evaluated whole, a branch it leaves drops its
+   * graph, and a clean graph whose roots stay the same is returned as it
+   * stands. A moved graph is a clone, so `previous` is untouched until the
+   * caller installs the result.
+   */
+  #moveWatchGraphs(
+    session: SessionState,
+    engine: Engine.Engine,
+    watches: readonly WatchSpec[],
+    previous: ReadonlyMap<string, TrackedGraphState>,
+    attribution: RootAttribution,
+    dirtyIds?: ReadonlySet<string>,
+  ): Map<string, TrackedGraphState> {
+    const graphs = new Map<string, TrackedGraphState>();
+    const identity = this.#sessionScopeIdentity(session);
+    for (const [branch, group] of graphWatchesByBranch(watches)) {
+      const query = unionQuery(branch, group);
+      const existing = previous.get(branch);
+      if (existing === undefined) {
+        const tracked = trackGraph(session.space, engine, query, undefined, {
+          principal: session.principal,
+          sessionId: session.id,
+          evaluationCache: this.#evaluationCacheFor(session.space),
+        });
+        foldRootAttribution(attribution, tracked.stats);
+        this.#enforceEvaluationCacheBudget();
+        graphs.set(branch, tracked.state);
+        continue;
+      }
+      const referrers = rootReferrersOf(session.space, query.roots, identity);
+      const wanted = new Set(referrers);
+      const released = [...existing.roots.keys()].filter((referrer) =>
+        !wanted.has(referrer)
+      );
+      const added = query.roots.filter((_, index) =>
+        !existing.roots.has(referrers[index])
+      );
+      if (
+        released.length === 0 && added.length === 0 &&
+        (dirtyIds === undefined || dirtyIds.size === 0)
+      ) {
+        graphs.set(branch, existing);
+        continue;
+      }
+      const moved = cloneTrackedGraphState(engine, existing);
+      if (released.length > 0) {
+        const result = releaseTrackedRoots(
+          session.space,
+          engine,
+          moved,
+          released,
+        );
+        foldRootAttribution(attribution, result.stats);
+      }
+      // The replacement publishes current documents even while the shared
+      // fan-out batch is pending. Keep that batch for the other sessions.
+      if (dirtyIds !== undefined && dirtyIds.size > 0) {
+        const refreshed = refreshTrackedGraph(
+          session.space,
+          engine,
+          moved,
+          dirtyIds,
+        );
+        if (refreshed !== null) {
+          foldRootAttribution(attribution, refreshed.stats);
+        }
+      }
+      if (added.length > 0) {
+        const result = extendTrackedGraph(session.space, engine, moved, {
+          branch,
+          roots: added,
+        });
+        foldRootAttribution(attribution, result.stats);
+      }
+      graphs.set(branch, moved);
+    }
+    return graphs;
+  }
+
+  /**
    * Add session watches, timing admission through the handler's completion.
    * `publish`, when given, receives a successful response in the step that
    * records its documents as delivered (`PublishFrame`).
@@ -9643,11 +9850,7 @@ export class Server {
       : await this.#openEngine(message.space);
     {
       const deny = aclEngine === undefined
-        ? await this.#authorizeMessage(
-          message.space,
-          session.principal,
-          "READ",
-        )
+        ? await this.#offModeAuthorization()
         : this.#authorizeCurrentSessionWithEngine(
           aclEngine,
           message.space,
@@ -10197,19 +10400,15 @@ export class Server {
           rootKeys.add(toDirtyKey(root.id, root.entityScopeKey));
           continue;
         }
-        try {
-          rootKeys.add(
-            toDirtyKey(
-              root.id,
-              resolveScopeKey(scope, {
-                principal: session.principal,
-                sessionId: session.id,
-              }),
-            ),
-          );
-        } catch {
-          // unresolvable scope: not demand for that instance
-        }
+        rootKeys.add(
+          toDirtyKey(
+            root.id,
+            resolveScopeKey(scope, {
+              principal: session.principal,
+              sessionId: session.id,
+            }),
+          ),
+        );
       }
     }
     // Operation watches share session dirtiness tracking so their updates
@@ -10233,12 +10432,7 @@ export class Server {
         if (root) existing.root = true;
         return;
       }
-      let parsed: { id: string; scopeKey: ScopeKey; scope: CellScope };
-      try {
-        parsed = fromDirtyKey(dirtyKey);
-      } catch {
-        return;
-      }
+      const parsed = fromDirtyKey(dirtyKey);
       const row: DemandedInstanceRow = {
         id: parsed.id,
         scope: parsed.scope,
@@ -10498,13 +10692,8 @@ export class Server {
   ): void {
     for (const graph of graphs) {
       for (const [key] of graph.missed) {
-        let parsed: { id: string; scopeKey: ScopeKey };
-        try {
-          parsed = fromDocKey(key as QueryDocKey);
-        } catch {
-          continue;
-        }
-        trackedIds.add(toDirtyKey(parsed.id, parsed.scopeKey));
+        const { id, scopeKey } = fromDocKey(key as QueryDocKey);
+        trackedIds.add(toDirtyKey(id, scopeKey));
       }
     }
   }
@@ -10593,6 +10782,19 @@ export class Server {
       return Promise.resolve(null);
     }
     if (session.routedAuthority?.() === false) return Promise.resolve(null);
+    if (this.#bindingEnded(session)) {
+      // No request is waiting on this pass, so the session is revoked here,
+      // as an access-list change revokes one it leaves without READ.
+      this.#sessions.remove(space, sessionId);
+      if (session.ownerConnectionId !== null) {
+        this.#connections.get(session.ownerConnectionId)?.revokeSession(
+          space,
+          sessionId,
+          "unauthorized",
+        );
+      }
+      return Promise.resolve(null);
+    }
     // The catch-up marker is consumed into `session.caughtUpLocalSeq` (and
     // stamped on the frame) DURING evaluation; capture the pre-call values
     // so a throwing evaluation can restore them — the marker is the one
@@ -10885,33 +11087,24 @@ export class Server {
               }
 
               const diffStartedAt = performance.now();
-              const filteredKeys: string[] = [];
               const upserts: SessionCacheEntry[] = [];
               try {
-                // Foreign instances reach a session only through the
-                // admission judged above (protocol.md §2's read row), the
-                // session's for its life.
+                // protocol.md §3's applicable-set filter, as
+                // defense-in-depth: a session's graph evaluates under its
+                // own identity, so an inapplicable instance here is
+                // structurally unreachable — unless the session was admitted
+                // explicit-instance reads (protocol.md §2's read row), the
+                // session's for its life, which is exempt by design (it
+                // legitimately receives every instance it named). A dropped
+                // entry is never cached as delivered: a later re-admission
+                // must still see the client's cache as NOT holding it, or
+                // the withheld update is elided forever.
+                if (!deliversForeignInstances) {
+                  deleteInapplicableEntries(updates, identity);
+                }
                 for (const [key, entry] of updates) {
                   const previous = session.entities.get(key);
                   if (!sameSnapshot(previous, entry)) {
-                    // protocol.md §3's applicable-set filter, as
-                    // defense-in-depth: a session's graph evaluates under
-                    // its own identity, so an inapplicable instance here is
-                    // structurally unreachable — unless the session was
-                    // admitted explicit-instance reads (protocol.md §2's
-                    // read row), which is exempt by design (it legitimately
-                    // receives every instance it named).
-                    if (
-                      !deliversForeignInstances &&
-                      !scopeKeyApplicableTo(entry.scopeKey, identity)
-                    ) {
-                      // Never cache a filtered entry as delivered: a later
-                      // re-admission must still see the client's cache as
-                      // NOT holding it, or the withheld update is elided
-                      // forever.
-                      filteredKeys.push(key);
-                      continue;
-                    }
                     const dirtyKey = toDirtyKey(entry.id, entry.scopeKey);
                     const origin = dirtyOrigins?.get(dirtyKey);
                     // Include the doc unless the writer provably holds it
@@ -10933,9 +11126,6 @@ export class Server {
                       upserts.push(entry);
                     }
                   }
-                }
-                for (const key of filteredKeys) {
-                  updates.delete(key);
                 }
               } finally {
                 timing.time(
@@ -11161,12 +11351,10 @@ export class Server {
           // vocabulary), so the client retracts exactly that instance and
           // its own instance survives.
           if (!deliversForeignInstances) {
-            const identity = this.#sessionScopeIdentity(session);
-            for (const [key, entry] of [...entities]) {
-              if (!scopeKeyApplicableTo(entry.scopeKey, identity)) {
-                entities.delete(key);
-              }
-            }
+            deleteInapplicableEntries(
+              entities,
+              this.#sessionScopeIdentity(session),
+            );
           }
           const delivered = {
             upserts: [] as SessionCacheEntry[],
@@ -11519,8 +11707,8 @@ export class Server {
      * session for that user; two users are two). Absent only for an
      * anonymous session's space-scoped root (it names the root — the
      * structure still loads for it — but owns no instance). A session
-     * that cannot resolve a scoped root's instance (no principal on a
-     * user-scoped root) is not demand for that root. */
+     * never holds a scoped root it cannot resolve (no principal on a
+     * user-scoped root): the watch set that names one is refused. */
     identity?: { principal?: string; sessionId?: string };
   }> {
     const roots = new Map<string, {
@@ -11565,17 +11753,10 @@ export class Server {
               : { principal: session.principal }),
             sessionId: session.id,
           };
-          let instanceKey: string;
-          try {
-            instanceKey = resolveScopeKey(scope, {
-              principal: session.principal,
-              sessionId: session.id,
-            });
-          } catch {
-            // A session that cannot resolve the scope (no principal on a
-            // user-scoped root) is not demand for that instance.
-            continue;
-          }
+          const instanceKey = resolveScopeKey(scope, {
+            principal: session.principal,
+            sessionId: session.id,
+          });
           const key = `${instanceKey}\0${root.id}\0${session.id}`;
           if (!roots.has(key)) {
             roots.set(key, {
@@ -11614,11 +11795,11 @@ export class Server {
    * identity, `root: true` on the rows that are watch ROOTS. The service
    * principal's sessions are excluded (their watches are the serving
    * graph's own reads). Anonymous sessions contribute keys but no
-   * demander (identity without principal); a session that cannot resolve
-   * a scoped root's instance is not demand for it (the tracker never
-   * keyed one for it). Roots are UNIONED in from the watch specs so a
-   * root the tracker has not (yet) keyed still carries what
-   * `watchedRootsForSpace` carried — parity with today's structure load.
+   * demander (identity without principal); a watch naming a scoped root
+   * its session cannot resolve is refused, so no session holds one. Roots
+   * are UNIONED in from the watch specs so a root the tracker has not (yet)
+   * keyed still carries what `watchedRootsForSpace` carried — parity with
+   * today's structure load.
    *
    * The flat form of `demandForSpace()`, holding the same rows in session
    * order as copies a caller may keep. It costs a pass over every row, where
@@ -11901,6 +12082,7 @@ export class Server {
         session.principal,
         sessionId,
         session.servingOwn,
+        session.notDemand,
       );
     } catch (error) {
       console.warn(
@@ -11963,8 +12145,8 @@ export class Server {
    * owner routing R3): a read naming an explicit `entity_scope_key` is
    * admitted for the space's own serving session on this server
    * (`#isServingSession`), which derives every instance and may name any,
-   * and for a session of the deployment's service identity, the
-   * delegating class, wherever it runs: a routed session from the process
+   * and for a session of the delegating class, the identities of the
+   * deployment's serving processes, wherever it runs: a routed session from the process
    * serving another space, or an in-process session reading a space it
    * does not serve. Such a session names an actor's instance under that
    * actor's READ grant on the space (the grant-scoped read, RULED
@@ -11972,7 +12154,10 @@ export class Server {
    * in this process: a sibling process's session carries the same
    * principal over a connection that is not in process. Everyone else
    * naming a key is REJECTED; a read naming none resolves from the session
-   * as today.
+   * as today, and never reaches this method: each caller first checks
+   * `#namesExplicitInstance()` synchronously, so the unnamed path adds no
+   * microtask boundary between the request's authorization and its
+   * evaluation (the ACL revocation-race invariant).
    *
    * The one unnamed-read refusal is the serving session's foreign scoped
    * read (`#denyForeignServingScopedRead`): a session under the serving
@@ -11990,10 +12175,6 @@ export class Server {
     }>,
   ): Promise<V2Error | undefined> {
     this.#assertRoutedAuthority(session);
-    // Synchronous fast path first: a read naming NO instance adds no
-    // microtask boundary — the request's authorization and evaluation
-    // keep sharing one engine turn (the ACL revocation-race invariant).
-    let named = false;
     // The wire collapse guard, for the sessions the row refuses
     // (server-execution v2 stage A, OW17's wire leg): such a session's
     // frames and query results carry scope NAMES, so two instances of one
@@ -12015,15 +12196,14 @@ export class Server {
     let collapse: V2Error | undefined;
     const rows = [...entries];
     for (const { branch, root } of rows) {
-      if (root.entityScopeKey !== undefined) {
-        named = true;
-        if (!isScopeKey(root.entityScopeKey)) {
-          return toError(
-            "ProtocolError",
-            `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
-              `root ${root.id}`,
-          );
-        }
+      if (
+        root.entityScopeKey !== undefined && !isScopeKey(root.entityScopeKey)
+      ) {
+        return toError(
+          "ProtocolError",
+          `malformed entity_scope_key "${root.entityScopeKey}" on read ` +
+            `root ${root.id}`,
+        );
       }
       if (collapse !== undefined) continue;
       const scopeName = root.scope ?? "space";
@@ -12049,7 +12229,6 @@ export class Server {
         );
       }
     }
-    if (!named) return collapse;
     if (!getServerExecutionConfig()) {
       return toError(
         "ProtocolError",
@@ -12255,13 +12434,15 @@ export class Server {
       }
     };
 
-    const queued = this.#refreshing?.then(run, run) ?? run();
-    this.#refreshing = queued.finally(() => {
-      if (this.#refreshing === queued) {
-        this.#refreshing = null;
-      }
-    });
-    await this.#refreshing;
+    const refreshing = (this.#refreshing?.then(run, run) ?? run()).finally(
+      () => {
+        if (this.#refreshing === refreshing) {
+          this.#refreshing = null;
+        }
+      },
+    );
+    this.#refreshing = refreshing;
+    await refreshing;
   }
 
   #scheduleRefresh(): void {
@@ -12306,28 +12487,11 @@ export class Server {
     maxWaitMs: number,
   ): Promise<void> {
     const deadlineMs = Date.now() + maxWaitMs;
-    while (true) {
-      const pending = [...this.#connections.values()].filter((connection) =>
-        connection.hasPendingReceives()
-      );
-      if (pending.length === 0) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-      const drained = await Promise.all(
-        pending.map((connection) =>
-          connection.waitForReceiveQueueToDrain(deadlineMs)
-        ),
-      );
-      if (drained.every(Boolean)) {
-        return;
-      }
-      if (Date.now() >= deadlineMs) {
-        return;
-      }
-    }
+    await Promise.all(
+      [...this.#connections.values()].map((connection) =>
+        connection.waitForReceiveQueueToDrain(deadlineMs)
+      ),
+    );
   }
 
   #cancelScheduledRefresh(): void {
@@ -12588,25 +12752,6 @@ export class Server {
         return;
       }
     }
-  }
-
-  respond(payload: string): Promise<string | null> {
-    const parsed = parseClientMessage(payload);
-    if (parsed?.type === "hello") {
-      const response = respondToHello(parsed, this.memoryProtocolFlags());
-      if (response.type !== "hello.ok") {
-        return Promise.resolve(encodeMemoryBoundary(response));
-      }
-      return Promise.resolve(encodeMemoryBoundary({
-        type: "response",
-        requestId: "handshake",
-        error: toError(
-          "ProtocolError",
-          "memory Server.respond cannot issue session.open authentication metadata",
-        ),
-      }));
-    }
-    return Promise.resolve(null);
   }
 
   /**
@@ -12937,20 +13082,6 @@ export class Server {
     this.#engines.set(space, opened);
     return opened;
   }
-
-  /**
-   * Records `key` in `#ensuredSchemas`, evicting the oldest entry once the
-   * map exceeds `#ensuredSchemasMax`.
-   */
-  #recordSchemaEnsured(key: string): void {
-    this.#ensuredSchemas.set(key, true);
-    if (this.#ensuredSchemas.size > this.#ensuredSchemasMax) {
-      const oldest = this.#ensuredSchemas.keys().next().value as
-        | string
-        | undefined;
-      if (oldest !== undefined) this.#ensuredSchemas.delete(oldest);
-    }
-  }
 }
 
 /**
@@ -13009,6 +13140,20 @@ function isSqliteNamedParamEntries(
 export type RejectedClientMessage = {
   type: "oversized" | "invalid";
   requestId: string;
+};
+
+/**
+ * Deletes from `entries` every entry whose instance is outside the
+ * applicable set of `identity` (protocol.md §3): the push filter a session's
+ * frames pass through unless it was admitted explicit-instance reads.
+ */
+export const deleteInapplicableEntries = (
+  entries: Map<string, { readonly scopeKey: string }>,
+  identity: ScopeKeyIdentity,
+): void => {
+  for (const [key, entry] of entries) {
+    if (!scopeKeyApplicableTo(entry.scopeKey, identity)) entries.delete(key);
+  }
 };
 
 /**

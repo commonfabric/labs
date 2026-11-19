@@ -1532,11 +1532,19 @@ produces a `ProblematicValue` (Section 3.5) rather than an instance.
 **The message has a default, and the default is not state.** `message`
 returns the stored message, or a fixed message for the kind when none is
 stored; `rawMessage` returns the stored message alone, `null` when there is
-none. A message given at construction that equals its kind's default is
-stored as no message at all, so the two ways of arriving at the default are
-one state: they encode alike, hash alike, and are equal by content. The
-default text is presentation, never encoded or hashed, and may change without
-a format change.
+none. The default text is presentation, and may change without a format
+change.
+
+This implementation stores a message given to the constructor that equals its
+kind's default as no message at all, so the two ways a caller can ask for the
+default construct one state: those two instances encode alike, hash alike, and
+are equal by content. That is a fact about how this implementation builds an
+instance from a caller's arguments, not a rule of either wire format or of the
+hash: to a format, a message is a string like any other. Decoding keeps a state
+exactly as it arrived, so a decoded state whose message equals its kind's
+default keeps that message. Such an instance is a different state from one
+constructed with the same text: it re-encodes with the message, hashes with
+it, and is unequal by content to the constructed one.
 
 **Prefab instances.** The two transient reasons each have one exported
 instance, `UNAVAILABLE_PENDING` and `UNAVAILABLE_SYNCING`, and both wire
@@ -2756,8 +2764,10 @@ with nothing before or after:
 (<prefix>.)*<name>(@<version>)?
 ```
 
-- A **prefix** and a **name** are each an ASCII letter followed by ASCII
-  letters and digits, in any case, **at most 100 characters** in all.
+- A **prefix** and a **name** are each an ASCII letter or `_` followed by
+  ASCII letters, digits and `_`, in any case, **at most 100 characters** in
+  all. `_` counts as a letter rather than as a digit, so it may start a
+  component, and may be the whole of one.
 - A tag has **at most ten components**, its prefixes and its name counted
   together, so at most nine prefixes.
 - A **version** is a decimal integer with no leading zero, so the lowest
@@ -2769,12 +2779,12 @@ The three limits are syntax, as much as the alphabet is. They are not
 guarantees of the kind `3-json-encoding.md` Section 12 has an implementation
 state, past which the implementation may refuse a value or may handle it: a
 string past any of them is not a tag, for every implementation alike, as a
-string holding a `_` is not.
+string holding a `-` is not.
 
 As a regular expression, which states the limits with bounded repetitions:
 
 ```
-^(?:[A-Za-z][A-Za-z0-9]{0,99}(?:@[1-9][0-9]{0,9})?|(?:[A-Za-z][A-Za-z0-9]{0,99}\.){1,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9})$
+^(?:[A-Za-z_][A-Za-z0-9_]{0,99}(?:@[1-9][0-9]{0,9})?|(?:[A-Za-z_][A-Za-z0-9_]{0,99}\.){1,9}[A-Za-z_][A-Za-z0-9_]{0,99}@[1-9][0-9]{0,9})$
 ```
 
 A **type tag** is a tag that **always has a version**, whatever its prefixes
@@ -2787,21 +2797,23 @@ and whatever its case:
 As a regular expression:
 
 ```
-^(?:[A-Za-z][A-Za-z0-9]{0,99}\.){0,9}[A-Za-z][A-Za-z0-9]{0,99}@[1-9][0-9]{0,9}$
+^(?:[A-Za-z_][A-Za-z0-9_]{0,99}\.){0,9}[A-Za-z_][A-Za-z0-9_]{0,99}@[1-9][0-9]{0,9}$
 ```
 
 `Bytes@1`, `Abc123@1234`, `sys.beep.Boop@1`, `Sys.Boop@1`, `bytes@1` and
 `quote@1` are type tags. So are `a.b.c.d.e.f.g.h.i.j@1`, with ten components,
 `Abc@1234567890`, whose version has ten digits, and a tag whose prefix or name
-has 100 characters. `Bytes`, `widget`, `fid1` and `sha256` are tags but not
-type tags, having no version, and are valid only where a format calls for a tag
-in the general syntax, as it does for a hash algorithm tag (Section 1.4.9).
-None of these is a tag at all:
+has 100 characters. So are `a_b@1`, `_x@1`, `_@1`, `x__y@1` and `A.b_c.D_@2`,
+which hold `_` at the start, the end, or the middle of a component, twice in a
+row, or as the whole of one. `Bytes`, `widget`, `fid1`, `sha256` and `my_hash`
+are tags but not type tags, having no version, and are valid only where a
+format calls for a tag in the general syntax, as it does for a hash algorithm
+tag (Section 1.4.9). None of these is a tag at all:
 
 - `sys.Boop` and `core.Globals`, which have a prefix and no version.
-- `sys_x.Boop@1` and `By-tes@1`, which hold characters that are neither ASCII
-  letters nor digits.
-- `1Bytes@1`, whose name does not start with a letter.
+- `sys$x.Boop@1` and `By-tes@1`, which hold characters other than ASCII
+  letters, digits and `_`.
+- `1Bytes@1`, whose name starts with a digit.
 - `.Boop@1` and `sys..Boop@1`, which hold an empty prefix.
 - `Bytes@0`, `Bytes@01`, `Bytes@1.0` and `Bytes@`, whose versions are not
   decimal integers without a leading zero, starting at 1.
@@ -2826,7 +2838,7 @@ convention exactly as it treats any other.
 
 - **The name of a type tag starts with a capital letter**, as in `Bytes@1` and
   `sys.beep.Boop@1`. This is convention, not syntax: `bytes@1` is a type tag
-  like any other.
+  like any other. A leading `_` has no conventional meaning of its own.
 - **A tag with no prefix** is reserved by convention for what the interchange
   specifications themselves define: the types they define, whose type tags are
   versioned, such as `Bytes@1` and `Map@1`; and the names they give without a

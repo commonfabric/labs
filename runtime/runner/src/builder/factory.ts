@@ -40,6 +40,7 @@ import { renderCellReference } from "../cell-reference.ts";
 import { getEntityId } from "../create-ref.ts";
 import type { RuntimeProgram } from "../harness/types.ts";
 import { freezeVerifiedPlainData } from "../sandbox/plain-data.ts";
+import { joinSpaceMembers } from "../space-members.ts";
 import {
   registerUnsafeHostTrustedValue,
   type UnsafeHostTrust,
@@ -75,6 +76,7 @@ import {
 import { tagCollectionKey } from "./collection-key.ts";
 import { currentPrincipal } from "./current-principal.ts";
 import { getPatternEnvironment } from "./env.ts";
+import { equalsKey } from "./equals-key.ts";
 import { eventKey } from "./event-key.ts";
 import { h, UiAction, UiDisclosure, UiPromptSlot } from "./h.ts";
 import { nameInstance } from "./instance-name.ts";
@@ -148,6 +150,25 @@ const toSchema: ToSchemaFunction = (_options?) => {
 };
 
 const runtimeSchema = freezeVerifiedPlainData as typeof schemaIdentity;
+
+/**
+ * What the placeholder's `dataFile.urls()` returns: a program whose declared
+ * directories hold no asset attaches no data file, so its graph carries none
+ * and its reads reach the placeholder.
+ */
+const NO_ASSETS: Readonly<Record<string, string>> = Object.freeze({});
+
+/**
+ * Returns the error a `dataFile` read throws when it reaches the builder's
+ * placeholder rather than a module's own reader: the module was loaded in a
+ * graph carrying no data files (see `compileSourcesToRecords`).
+ */
+function noDataFileClosure(path: string): Error {
+  return new Error(
+    `No attached data file "${path}": this pattern was loaded without a ` +
+      `data-file closure.`,
+  );
+}
 
 export interface CreateBuilderOptions {
   unsafeHostTrust?: UnsafeHostTrust;
@@ -262,14 +283,21 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Placeholder for the per-module binding. A graph carrying data files hands
     // each module its own copy of this namespace, whose reader is closed over
     // that load's files and that module's path (see
-    // `compileSourcesToRecords`). Reaching this body means the module is
-    // running outside a graph that carries any.
-    dataFile: (path: string): string => {
-      throw new Error(
-        `No attached data file "${path}": this pattern was loaded without a ` +
-          `data-file closure.`,
-      );
-    },
+    // `compileSourcesToRecords`). Reaching a file read here means the module
+    // is running outside a graph that carries any. A directory read returns
+    // no assets instead: a program whose only declared directory holds none
+    // attaches no data file at all, and no assets is the right answer for it.
+    dataFile: Object.assign(
+      (path: string): string => {
+        throw noDataFileClosure(path);
+      },
+      {
+        url: (path: string): string => {
+          throw noDataFileClosure(path);
+        },
+        urls: (_path: string): Readonly<Record<string, string>> => NO_ASSETS,
+      },
+    ),
     sqliteDatabase,
     sqliteQuery,
     table,
@@ -320,6 +348,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     // Cell creation
     cell: cellConstructorFactory<AsCell>("cell").of,
     equals: cellConstructorFactory<AsCell>("cell").equals,
+    equalsKey,
 
     // Cell constructors with static methods
     Cell: cellConstructorFactory<AsCell>("cell"),
@@ -340,6 +369,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     spaceAccess,
     spaceAccessOf,
     spaceMembers,
+    joinSpaceMembers,
     spaceOf,
     spaceOfLink,
     spaceDeleted,

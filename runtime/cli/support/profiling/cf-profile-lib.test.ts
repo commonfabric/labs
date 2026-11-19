@@ -1,19 +1,18 @@
 import { assert, assertEquals, assertMatch, assertThrows } from "@std/assert";
+import { CAPTURE_TARGET_FINISHED_MESSAGE } from "./capture-deno-inspector-profile-lib.ts";
 import {
-  createProfileOutputRelay,
-  DEBUGGER_WAITING_MESSAGE,
   escapeRegex,
   findInspectorWebSocketUrl,
   inspectWaitFlag,
-  type KillableProcess,
+  mirrorCaptureOutput,
   mirrorOutput,
   parseProfileArgs,
   pickInspectPort,
   profileTimestamp,
   profilingChildEnv,
   slugifyProfileName,
-  stopCaptureOnce,
   waitForCliStatusOrStopOnCaptureFailure,
+  watchOutput,
 } from "./cf-profile-lib.ts";
 
 const encoder = new TextEncoder();
@@ -176,98 +175,69 @@ Deno.test("pickInspectPort closes non-TCP listeners before throwing", () => {
   assertEquals(closed, true);
 });
 
-Deno.test("stopCaptureOnce sends one signal", () => {
-  const state = { sent: false };
-  const signals: Deno.Signal[] = [];
-
-  stopCaptureOnce(state, {
-    kill: (signal) => {
-      signals.push(signal);
-    },
-  });
-  stopCaptureOnce(state, {
-    kill: (signal) => {
-      signals.push(signal);
-    },
-  });
-
-  assertEquals(state.sent, true);
-  assertEquals(signals, ["SIGINT"]);
-});
-
-Deno.test("stopCaptureOnce records a sent signal when kill fails", () => {
-  const state = { sent: false };
-
-  stopCaptureOnce(state, {
-    kill: () => {
-      throw new Error("already exited");
-    },
-  });
-
-  assertEquals(state.sent, true);
-});
-
-Deno.test("createProfileOutputRelay resolves the inspector URL exactly once", () => {
+Deno.test("watchOutput reports the first value found, exactly once", () => {
   const urls: string[] = [];
-  const { onCliOutput } = createProfileOutputRelay({
-    captureRef: {},
-    captureStopState: { sent: false },
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: (url) => urls.push(url),
-  });
+  const onText = watchOutput(
+    findInspectorWebSocketUrl,
+    (url) => urls.push(url),
+  );
 
-  onCliOutput("startup noise\n");
-  onCliOutput("Debugger listening on ws://127.0.0.1:9229/abc\n");
-  // A later inspector line does not resolve a second time.
-  onCliOutput("Debugger listening on ws://127.0.0.1:9229/def\n");
+  onText("startup noise\n");
+  assertEquals(urls, []);
+  // A line split across chunks is found once it is complete.
+  onText("Debugger listening on ws://127.0.0.1:9229/abc");
+  onText("\n");
+  // A later inspector line does not report a second time.
+  onText("Debugger listening on ws://127.0.0.1:9229/def\n");
 
   assertEquals(urls, ["ws://127.0.0.1:9229/abc"]);
 });
 
-Deno.test("createProfileOutputRelay stops the capture on the debugger-waiting message", () => {
-  const signals: Deno.Signal[] = [];
-  const captureStopState = { sent: false };
-  const captureRef: { current?: KillableProcess } = {
-    current: { kill: (signal) => signals.push(signal) },
-  };
-  const { onCliOutput } = createProfileOutputRelay({
-    captureRef,
-    captureStopState,
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: () => {},
+function streamOf(...chunks: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
   });
+}
 
-  onCliOutput(`${DEBUGGER_WAITING_MESSAGE}\n`);
+Deno.test("mirrorCaptureOutput reports a target that finished", async () => {
+  const { chunks, sink } = createSink();
+  const half = CAPTURE_TARGET_FINISHED_MESSAGE.length / 2;
 
-  assertEquals(signals, ["SIGTERM"]);
-  assertEquals(captureStopState.sent, true);
+  const result = await mirrorCaptureOutput(
+    streamOf(
+      "profile: websocket open\n",
+      CAPTURE_TARGET_FINISHED_MESSAGE.slice(0, half),
+      `${CAPTURE_TARGET_FINISHED_MESSAGE.slice(half)}\n`,
+    ),
+    sink,
+  );
+
+  assertEquals(result, { targetFinished: true });
+  assertEquals(
+    chunks.map((chunk) => decoder.decode(chunk)).join(""),
+    `profile: websocket open\n${CAPTURE_TARGET_FINISHED_MESSAGE}\n`,
+  );
 });
 
-Deno.test("createProfileOutputRelay's stopCapture is inert before a capture starts", () => {
-  const captureStopState = { sent: false };
-  const { onCliOutput, stopCapture } = createProfileOutputRelay({
-    captureRef: {}, // the capture process has not spawned yet
-    captureStopState,
-    captureStopSignal: "SIGTERM",
-    onInspectorUrl: () => {},
-  });
+Deno.test("mirrorCaptureOutput reports a target that did not finish", async () => {
+  const { sink } = createSink();
 
-  // The debugger message can arrive before the capture exists; nothing to signal.
-  onCliOutput(`${DEBUGGER_WAITING_MESSAGE}\n`);
-  stopCapture();
-
-  assertEquals(captureStopState.sent, false);
+  assertEquals(
+    await mirrorCaptureOutput(streamOf("profile: websocket open\n"), sink),
+    { targetFinished: false },
+  );
 });
 
 Deno.test("waitForCliStatusOrStopOnCaptureFailure stops the CLI after capture failure", async () => {
   const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
-  const cliStopState = { sent: false };
   const signals: Deno.Signal[] = [];
 
   const result = waitForCliStatusOrStopOnCaptureFailure(
     cliStatus.promise,
-    Promise.resolve(failureStatus),
-    cliStopState,
+    Promise.resolve({ status: failureStatus, targetFinished: false }),
     {
       kill: (signal) => {
         signals.push(signal);
@@ -285,19 +255,33 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure stops the CLI after capture fa
     code: 143,
     signal: "SIGTERM",
   });
-  assertEquals(cliStopState.sent, true);
   assertEquals(signals, ["SIGTERM"]);
 });
 
-Deno.test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after capture success", async () => {
+Deno.test("waitForCliStatusOrStopOnCaptureFailure tolerates a CLI that already exited", async () => {
   const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
-  const cliStopState = { sent: false };
+
+  const result = waitForCliStatusOrStopOnCaptureFailure(
+    cliStatus.promise,
+    Promise.resolve({ status: failureStatus, targetFinished: false }),
+    {
+      kill: () => {
+        cliStatus.resolve(successStatus);
+        throw new TypeError("Child process has already terminated");
+      },
+    },
+  );
+
+  assertEquals(await result, successStatus);
+});
+
+Deno.test("waitForCliStatusOrStopOnCaptureFailure lets a finished CLI exit after capture failure", async () => {
+  const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
   const signals: Deno.Signal[] = [];
 
   const result = waitForCliStatusOrStopOnCaptureFailure(
     cliStatus.promise,
-    Promise.resolve(successStatus),
-    cliStopState,
+    Promise.resolve({ status: failureStatus, targetFinished: true }),
     {
       kill: (signal) => {
         signals.push(signal);
@@ -309,18 +293,36 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after c
   cliStatus.resolve(successStatus);
 
   assertEquals(await result, successStatus);
-  assertEquals(cliStopState.sent, false);
+  assertEquals(signals, []);
+});
+
+Deno.test("waitForCliStatusOrStopOnCaptureFailure leaves the CLI running after capture success", async () => {
+  const cliStatus = Promise.withResolvers<Deno.CommandStatus>();
+  const signals: Deno.Signal[] = [];
+
+  const result = waitForCliStatusOrStopOnCaptureFailure(
+    cliStatus.promise,
+    Promise.resolve({ status: successStatus, targetFinished: false }),
+    {
+      kill: (signal) => {
+        signals.push(signal);
+      },
+    },
+  );
+
+  await Promise.resolve();
+  cliStatus.resolve(successStatus);
+
+  assertEquals(await result, successStatus);
   assertEquals(signals, []);
 });
 
 Deno.test("waitForCliStatusOrStopOnCaptureFailure returns when the CLI exits first", async () => {
-  const cliStopState = { sent: false };
   const signals: Deno.Signal[] = [];
 
   const result = await waitForCliStatusOrStopOnCaptureFailure(
     Promise.resolve(successStatus),
     new Promise(() => {}),
-    cliStopState,
     {
       kill: (signal) => {
         signals.push(signal);
@@ -329,7 +331,6 @@ Deno.test("waitForCliStatusOrStopOnCaptureFailure returns when the CLI exits fir
   );
 
   assertEquals(result, successStatus);
-  assertEquals(cliStopState.sent, false);
   assertEquals(signals, []);
 });
 

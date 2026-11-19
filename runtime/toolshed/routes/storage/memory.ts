@@ -110,8 +110,11 @@ export async function openMemory(
   // `MEMORY_SERVICE_DIDS` list is used verbatim on both arms, and the
   // Phase-7 implicit-OWNER blanket is retired (the serving identity never
   // writes into users' home spaces; served writes ride the wave's §2b
-  // delegated carriage under the acting user). OFF the flag the delegating
-  // list is empty — byte-identical ACL decisions.
+  // delegated carriage under the acting user). Behind the memory router each
+  // toolshed identity the directory lists is a delegating principal too: a
+  // crossing from the toolshed serving another space opens its session, with
+  // the same binding, as that toolshed's identity. OFF the flag the
+  // delegating class is empty — byte-identical ACL decisions.
   const serverExecutionOn = serverExecutionEnabledFromEnv(getEnv);
   const memoryAclPrincipals = memoryAclPrincipalsFor({
     configured: environment.MEMORY_SERVICE_DIDS
@@ -120,6 +123,12 @@ export async function openMemory(
       .filter((did) => did.length > 0),
     processIdentityDid: identity.did(),
     serverExecution: serverExecutionOn,
+    // Behind the memory router each toolshed has an identity of its own, and
+    // the directory lists them: a crossing from another toolshed arrives as
+    // a session of that toolshed's identity.
+    ...(routerPolicy !== undefined
+      ? { listsPeer: (did: string) => routerPolicy.listsToolshed(did) }
+      : {}),
   });
   if (serverExecutionOn) {
     console.log(
@@ -128,6 +137,13 @@ export async function openMemory(
         "other served read runs under the acting user via the " +
         "actingAs binding; docs/specs/server-side-execution/protocol.md §2b)",
     );
+    if (memoryAclPrincipals.isDelegatingPeer !== undefined) {
+      console.log(
+        "Memory: each toolshed the memory router's directory lists is a " +
+          "DELEGATING memory principal too (crossings from the toolshed " +
+          "serving another space; docs/specs/memory-v2/routed-mode-a.md)",
+      );
+    }
     if (memoryAclPrincipals.serviceDids.includes(identity.did())) {
       console.log(
         "Memory: NOTE — the operator's MEMORY_SERVICE_DIDS also lists the " +
@@ -190,6 +206,9 @@ export async function openMemory(
       mode: environment.MEMORY_ACL_MODE,
       serviceDids: memoryAclPrincipals.serviceDids,
       delegatingDids: memoryAclPrincipals.delegatingDids,
+      ...(memoryAclPrincipals.isDelegatingPeer !== undefined
+        ? { isDelegatingPeer: memoryAclPrincipals.isDelegatingPeer }
+        : {}),
       delegations: environment.MEMORY_ACL_DELEGATIONS,
     },
     ...(routerPolicy !== undefined

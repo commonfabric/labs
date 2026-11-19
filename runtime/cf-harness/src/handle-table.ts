@@ -615,7 +615,7 @@ export const resolveHandleRef = (
 const HASH_CHAR = "[A-Za-z0-9_-]";
 const ENTITY_ID_SOURCE = `(?:${
   ENTITY_URI_SCHEMES.join("|")
-}):[A-Za-z0-9]+:${HASH_CHAR}+`;
+}):[A-Za-z0-9_]+:${HASH_CHAR}+`;
 // A path segment ends at whitespace, quotes, backticks, or closing
 // punctuation, so an address at the end of a sentence does not swallow it.
 const PATH_SEGMENT_SOURCE = `[^/\\s"'\`\\)\\]\\}>,;]+`;

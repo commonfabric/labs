@@ -179,7 +179,13 @@ Each of these gates fails CI on its own, and none of them run as part of
   so; a helper module, which exports no pattern on either side, is not one. A
   run that compares no patterns fails, whatever the cause, because it has
   checked nothing, so a change that moves or edits every pattern lands apart
-  from a change to what numbers them. The gate
+  from a change to what numbers them. Continuous integration runs the gate in
+  `CAUSE_ASSIGNMENT_PARTS` parts, each a gate of its own named
+  `check-cause-assignments K of N`, so that each fits in a lane: `--part K/N`
+  compares every Nth pattern of the sorted list starting from the Kth, and
+  judges the accepted moves naming its own patterns, the first part also those
+  naming no pattern the tree holds. The rule about comparing no patterns holds
+  for each part. The gate
   compiles only for a change touching what a pattern's numbering is built by,
   which is `base/js-compiler/`, `runtime/runner/src/builder/`,
   `runtime/runner/src/builtins/`, `runtime/runner/src/harness/`,
@@ -200,6 +206,17 @@ Each of these gates fails CI on its own, and none of them run as part of
   authority, and the marker is what stops the wrong example being copied by
   someone who never found the index. Membership is `tasks/pattern-tiers.ts`, and
   `deno task fix-pattern-tiers` applies or corrects a marker
+
+Three of these gates compare the tree with history:
+`check-baselines-append-only`, `check-cause-assignments`, and
+`check-test-aliases` each read the merge base of `HEAD` with a base revision,
+which an argument names. A pull request's lanes name the pull request's
+base. A run that names none, such as a run on the default branch or a local
+run, uses `upstream/main` where the checkout has it, which is where a fork's
+pull request is based, and `origin/main` otherwise. CI's checkouts have no
+`upstream`, so there it is `origin/main`. `defaultBase` in
+`tasks/repository-files.ts` makes that choice, for these gates, for
+`deno task test-gap`, and for `deno task refresh-fabrichat-rehearsal`.
 
 The detail behind each of these lives in `.claude/rules/`, one file per kind of
 file it governs. Claude Code loads the matching rule on its own when it reads a

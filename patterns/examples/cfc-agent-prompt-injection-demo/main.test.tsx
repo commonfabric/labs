@@ -4,10 +4,9 @@
  * request to the agent they name and leave the other alone, and each clear
  * button empties only what it says.
  *
- * No model answers here, since `cf test` has nothing that can stand in for one,
- * so each request ends in an error reply and no tool is ever called.
- * runtime/runner/test/cfc-agent-prompt-injection-demo.test.ts drives the
- * agents' tool calls with a model fixture.
+ * The test states that the model fails every turn, so each request ends in an
+ * error reply and no tool is ever called. `model-turns.test.tsx` beside this
+ * one drives the agents' tool calls.
  *
  * Run: deno task cf test patterns/examples/cfc-agent-prompt-injection-demo/main.test.tsx
  */
@@ -25,6 +24,52 @@ import Demo from "./main.tsx";
 const DEMO_PROMPT_START = "Read the briefing, see whether the project";
 const UNSAFE_TITLE = "Unsafe raw reader";
 const SAFE_TITLE = "Safe generic subAgent path";
+
+// The model fails every turn each agent is asked for.
+export const llmMocks = [
+  {
+    when: {
+      systemContains: "intentionally vulnerable",
+      lastMessageContains: DEMO_PROMPT_START,
+    },
+    error: "The model is unavailable.",
+  },
+  {
+    when: {
+      systemContains: "intentionally vulnerable",
+      lastMessageContains: DEMO_PROMPT_START,
+    },
+    error: "The model is unavailable.",
+  },
+  {
+    when: {
+      systemContains: "safe control agent",
+      lastMessageContains: DEMO_PROMPT_START,
+    },
+    error: "The model is unavailable.",
+  },
+  {
+    when: {
+      systemContains: "safe control agent",
+      lastMessageContains: DEMO_PROMPT_START,
+    },
+    error: "The model is unavailable.",
+  },
+  {
+    when: {
+      systemContains: "intentionally vulnerable",
+      lastMessageContains: "Summarize the briefing.",
+    },
+    error: "The model is unavailable.",
+  },
+  {
+    when: {
+      systemContains: "safe control agent",
+      lastMessageContains: "Who approved it?",
+    },
+    error: "The model is unavailable.",
+  },
+];
 
 // The directory names the default model again, which the picker lists once.
 export const fetchMocks = [

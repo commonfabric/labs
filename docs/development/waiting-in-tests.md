@@ -417,10 +417,10 @@ A set of edges carries them, and
   counters move inside a cycle and are visible only as numbers afterwards, so
   `awaitEach(log, predicate)` re-reads them when one has run.
 - `SpaceServerOptions.onRootEnsure` reports each space-root ensure attempt's
-  outcome. A skip writes nothing at all, and a deadline failure reports
-  `failed` while the ensure it gave up on runs on detached and may write later,
-  so at the moment either is reported there is no commit for a test to wait
-  on.
+  outcome. A skip writes nothing at all, and a failure (a pattern-source fetch
+  that went past its deadline, or a compile or creation that threw) is
+  reported after the ensure has ended, so at the moment either is reported
+  there is no commit for a test to wait on.
 - `SpaceServerOptions.onEventDrainPass` reports the end of a drain pass, which
   is where `events.processed` moves. A pass ends before the settle that
   follows it, so a wait on that counter at the cycle boundary instead sleeps

@@ -7,11 +7,12 @@
  * checks, on the constructor and on each codec's decoding: a state carrying a
  * kind or a message with a transient reason, or lacking the kind `error`
  * requires, is a state this class never writes, and is reported as a
- * `ProblematicValue` rather than built. The message's default is checked from
- * both sides: `message` supplies it and `rawMessage` does not, and
- * a message given equal to the default is indistinguishable from none. The
- * prefabs are checked by identity where a decode is meant to yield one, and
- * by content where equality is the question.
+ * `ProblematicValue` rather than built, and so is a state holding a key no
+ * field is named for. The message's default is checked from both sides:
+ * `message` supplies it and `rawMessage` does not. A message given to the
+ * constructor equal to the default is stored as none, where a decoded one is
+ * kept as it arrived. The prefabs are checked by identity where a decode is
+ * meant to yield one, and by content where equality is the question.
  */
 
 import { expect } from "@std/expect";
@@ -20,6 +21,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   FabricInstance,
   FabricPrimitive,
+  hashStringOf,
   shallowFabricFromConvertibleJsValue,
   type UnavailableErrorKind,
   type UnavailableReason,
@@ -33,7 +35,15 @@ import {
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
   REALM_CODEC,
+  UnknownValue,
 } from "@/codec-common";
+import {
+  jsonFromFabricValue,
+  newDefaultJsonCodecEngine,
+  newDefaultRealmCodecEngine,
+  realmFromFabricValue,
+} from "@/codecs.ts";
+import type { RealmCodecValue, RealmEncodedValue } from "@/codec-realm";
 import {
   FabricUnavailable,
   UNAVAILABLE_ERROR_KINDS,
@@ -87,6 +97,35 @@ const PREFABS = {
 
 /** The transient reasons, as the keys of `PREFABS`. */
 const TRANSIENT_REASONS = Object.keys(PREFABS) as readonly TransientReason[];
+
+/** The default message of the kind `network`. */
+const NETWORK_DEFAULT_MESSAGE = new FabricUnavailable("error", "network")
+  .message;
+
+/** A state holding a key no field is named for, beside a well-formed error. */
+const STATE_WITH_UNREAD_KEY = Object.freeze({
+  reason: "error",
+  errorKind: "network",
+  errorMessage: "boom",
+});
+
+/** A state whose message is the default of its kind. */
+const STATE_WITH_DEFAULT_MESSAGE = Object.freeze({
+  reason: "error",
+  errorKind: "network",
+  message: NETWORK_DEFAULT_MESSAGE,
+});
+
+/**
+ * Returns the realm form of a value tagged `Unavailable@1` over a copy of
+ * `state`, built by hand so that it can carry a state this class never writes.
+ */
+function realmFormOf(state: object): RealmEncodedValue {
+  const marker = realmFromFabricValue(null)[0];
+  const tagged = [marker, CODEC_TYPE_TAGS.Unavailable, { ...state }];
+
+  return [marker, tagged as RealmCodecValue];
+}
 
 describe("FabricUnavailable", () => {
   describe("class identity", () => {
@@ -525,6 +564,11 @@ describe("FabricUnavailable", () => {
           expect(codec.canDecode({ reason: "pending", message: null }))
             .toBe(false);
         });
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(codec.canDecode(STATE_WITH_UNREAD_KEY)).toBe(false);
+          expect(codec.canDecode({ reason: "pending", extra: "x" }))
+            .toBe(false);
+        });
       });
 
       describe("decode()", () => {
@@ -584,20 +628,15 @@ describe("FabricUnavailable", () => {
           }
         });
 
-        it("ignores a key it does not read, `errorMessage` among them", () => {
-          // A key no field is named for is unread and so ignored, whatever
-          // it holds, and the kind's default message applies.
+        it("keeps a message equal to its kind's default", () => {
           const decoded = codec.decode(
             expectedTag,
-            { reason: "error", errorKind: "network", errorMessage: "x" },
+            STATE_WITH_DEFAULT_MESSAGE,
             env,
           ) as unknown as FabricUnavailable;
 
-          expect(decoded).toBeInstanceOf(FabricUnavailable);
-          expect(decoded.errorKind).toBe("network");
-          expect(decoded.rawMessage).toBe(null);
-          expect(decoded.message)
-            .toBe(new FabricUnavailable("error", "network").message);
+          expect(decoded.state).toStrictEqual(STATE_WITH_DEFAULT_MESSAGE);
+          expect(decoded.rawMessage).toBe(NETWORK_DEFAULT_MESSAGE);
         });
 
         it("decodes reason `error` without a kind to a `ProblematicValue`", () => {
@@ -658,6 +697,48 @@ describe("FabricUnavailable", () => {
             expect(decoded.message).toBe(original.message);
           }
         });
+      });
+    });
+
+    describe("[JSON_CODEC] under an engine", () => {
+      const env = NULL_LIVE_ENVIRONMENT;
+
+      it("decodes a state holding a key it does not read to a `ProblematicValue` preserving the state", () => {
+        const text = jsonFromFabricValue(
+          new UnknownValue(CODEC_TYPE_TAGS.Unavailable, STATE_WITH_UNREAD_KEY),
+        );
+        const decoded = newDefaultJsonCodecEngine({ lenient: true })
+          .decode(text, env);
+
+        expect(decoded).toBeInstanceOf(ProblematicValue);
+        expect((decoded as ProblematicValue).wireTypeTag)
+          .toBe(CODEC_TYPE_TAGS.Unavailable);
+        expect((decoded as ProblematicValue).state)
+          .toStrictEqual(STATE_WITH_UNREAD_KEY);
+        expect(() => newDefaultJsonCodecEngine().decode(text, env)).toThrow();
+      });
+
+      it("decodes a message equal to its kind's default to a value that re-encodes and hashes as it arrived", () => {
+        const arrived = new UnknownValue(
+          CODEC_TYPE_TAGS.Unavailable,
+          STATE_WITH_DEFAULT_MESSAGE,
+        );
+        const text = jsonFromFabricValue(arrived);
+        const decoded = newDefaultJsonCodecEngine().decode(text, env);
+
+        // An instance constructed with the same text stores no message, so
+        // it is a different state: it hashes differently, and is unequal.
+        const constructed = new FabricUnavailable(
+          "error",
+          "network",
+          NETWORK_DEFAULT_MESSAGE,
+        );
+
+        expect(decoded).toBeInstanceOf(FabricUnavailable);
+        expect(jsonFromFabricValue(decoded)).toBe(text);
+        expect(hashStringOf(decoded)).toBe(hashStringOf(arrived));
+        expect(hashStringOf(decoded)).not.toBe(hashStringOf(constructed));
+        expect(valueEqual(decoded, constructed)).toBe(false);
       });
     });
 
@@ -726,6 +807,11 @@ describe("FabricUnavailable", () => {
           expect(codec.canDecode("pending")).toBe(false);
           expect(codec.canDecode(undefined)).toBe(false);
         });
+        it("returns `false` for a record holding a key it does not read", () => {
+          expect(codec.canDecode(STATE_WITH_UNREAD_KEY)).toBe(false);
+          expect(codec.canDecode({ reason: "pending", extra: "x" }))
+            .toBe(false);
+        });
       });
 
       describe("decode()", () => {
@@ -757,20 +843,15 @@ describe("FabricUnavailable", () => {
           ).toBeInstanceOf(ProblematicValue);
         });
 
-        it("ignores a key it does not read, `errorMessage` among them", () => {
-          // A key no field is named for is unread and so ignored, whatever
-          // it holds, and the kind's default message applies.
+        it("keeps a message equal to its kind's default", () => {
           const decoded = codec.decode(
             expectedTag,
-            { reason: "error", errorKind: "network", errorMessage: "x" },
+            STATE_WITH_DEFAULT_MESSAGE,
             env,
           ) as unknown as FabricUnavailable;
 
-          expect(decoded).toBeInstanceOf(FabricUnavailable);
-          expect(decoded.errorKind).toBe("network");
-          expect(decoded.rawMessage).toBe(null);
-          expect(decoded.message)
-            .toBe(new FabricUnavailable("error", "network").message);
+          expect(decoded.state).toStrictEqual(STATE_WITH_DEFAULT_MESSAGE);
+          expect(decoded.rawMessage).toBe(NETWORK_DEFAULT_MESSAGE);
         });
       });
 
@@ -805,6 +886,49 @@ describe("FabricUnavailable", () => {
             expect(decoded.message).toBe(original.message);
           }
         });
+      });
+    });
+
+    describe("[REALM_CODEC] under an engine", () => {
+      const env = NULL_LIVE_ENVIRONMENT;
+
+      it("decodes a state holding a key it does not read to a `ProblematicValue` preserving the state", () => {
+        const decoded = newDefaultRealmCodecEngine({ lenient: true })
+          .decode(realmFormOf(STATE_WITH_UNREAD_KEY), env);
+
+        expect(decoded).toBeInstanceOf(ProblematicValue);
+        expect((decoded as ProblematicValue).wireTypeTag)
+          .toBe(CODEC_TYPE_TAGS.Unavailable);
+        expect((decoded as ProblematicValue).state)
+          .toStrictEqual(STATE_WITH_UNREAD_KEY);
+        expect(() =>
+          newDefaultRealmCodecEngine().decode(
+            realmFormOf(STATE_WITH_UNREAD_KEY),
+            env,
+          )
+        ).toThrow();
+      });
+
+      it("decodes a message equal to its kind's default to a value that re-encodes and hashes as it arrived", () => {
+        const decoded = newDefaultRealmCodecEngine()
+          .decode(realmFormOf(STATE_WITH_DEFAULT_MESSAGE), env);
+
+        expect(decoded).toBeInstanceOf(FabricUnavailable);
+        expect(realmFromFabricValue(decoded)[1])
+          .toStrictEqual(realmFormOf(STATE_WITH_DEFAULT_MESSAGE)[1]);
+        expect(hashStringOf(decoded)).toBe(
+          hashStringOf(
+            new UnknownValue(
+              CODEC_TYPE_TAGS.Unavailable,
+              STATE_WITH_DEFAULT_MESSAGE,
+            ),
+          ),
+        );
+        expect(hashStringOf(decoded)).not.toBe(
+          hashStringOf(
+            new FabricUnavailable("error", "network", NETWORK_DEFAULT_MESSAGE),
+          ),
+        );
       });
     });
   });

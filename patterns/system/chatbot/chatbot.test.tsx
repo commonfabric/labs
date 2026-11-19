@@ -7,9 +7,8 @@
  * chat shows its placeholder title; and the Clear button empties the
  * transcript.
  *
- * The test environment has no language model: the dialog answers each
- * message with its error reply, and the title generator falls back to its
- * placeholder.
+ * The test states that the model fails: the dialog answers each message with
+ * its error reply, and the title generator falls back to its placeholder.
  */
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
@@ -19,6 +18,16 @@ import {
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Chatbot from "./chatbot.tsx";
+
+// The model fails both requests the sent message makes: the dialog's reply,
+// and the title for the untitled chat.
+export const llmMocks = [
+  { when: { systemContains: "Be brief." }, error: "The model is unavailable." },
+  {
+    when: { systemContains: "3-word title" },
+    error: "The model is unavailable.",
+  },
+];
 
 type Message = { role: string; content: unknown };
 type ModelItem = { label: string; value: string };
@@ -99,8 +108,7 @@ export default pattern(() => {
       { assertion: assert_cleared },
     ],
     chat,
-    // The dialog and the title generator warn that they cannot reach the
-    // language model.
+    // The dialog and the title generator warn that the model failed.
     allowConsoleWarnings: true,
   };
 });
