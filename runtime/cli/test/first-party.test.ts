@@ -157,6 +157,22 @@ describe("first-party requests", () => {
       expect(await Deno.readFile(mine.path)).toEqual(mine.pkcs8);
     });
 
+    it("never sends the code on to where a redirect points", async () => {
+      handle = (request) =>
+        new URL(request.url).pathname === "/identity-pairing/redeem"
+          ? Response.redirect(`${base}/elsewhere`, 307)
+          : new Response("followed");
+
+      await expect(
+        pairWithService({
+          service: base,
+          code: "ABCDE12345",
+          keyfile: `${directory}/k`,
+        }),
+      ).rejects.toThrow(/redirected/);
+      expect(hits).toEqual(["/identity-pairing/redeem"]);
+    });
+
     it("refuses what is not a code without spending a try", async () => {
       await expect(
         pairWithService({
@@ -175,7 +191,7 @@ describe("first-party requests", () => {
 
       await expect(
         pairWithService({ service: base, code: "ZZZZZ99999", keyfile: target }),
-      ).rejects.toThrow(/wrong, expired, or already used/);
+      ).rejects.toThrow(/wrong, expired, or\s+already used/);
       await expect(Deno.stat(target)).rejects.toThrow(Deno.errors.NotFound);
     });
   });

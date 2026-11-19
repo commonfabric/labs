@@ -43,6 +43,7 @@
     "./native-ui": "./src/native-ui.ts",
     "./hashtags": "./src/hashtags.ts",
     "./profile-suggestion": "./src/profile-suggestion.ts",
+    "./pairing": "./src/pairing.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",

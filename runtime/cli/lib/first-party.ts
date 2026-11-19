@@ -14,9 +14,9 @@ import { isLoopbackHostname } from "@commonfabric/platform/loopback";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { loadIdentity } from "./identity.ts";
 
-/** A service refused a signed request, or redirected it: its words, never a stack. */
-export class FirstPartyRefusal extends Error {
-  override name = "FirstPartyRefusal";
+/** A signed request a service refused or redirected: its words, never a stack. */
+export class FirstPartyError extends Error {
+  override name = "FirstPartyError";
 }
 
 /** Signs one request: the headers it carries. */
@@ -69,7 +69,7 @@ export async function fetchNoRedirect(
   const response = await fetcher(url, { ...init, redirect: "manual" });
   if (response.status >= 300 && response.status < 400) {
     await response.body?.cancel();
-    throw new FirstPartyRefusal(
+    throw new FirstPartyError(
       `${url.origin} answered with a redirect (${response.status}` +
         `${
           response.headers.get("location")
@@ -115,7 +115,7 @@ export async function signedFetch(
   }, options.fetch);
   const text = await response.text();
   if (!response.ok) {
-    throw new FirstPartyRefusal(
+    throw new FirstPartyError(
       `${response.status} ${response.statusText}: ${text}`,
     );
   }

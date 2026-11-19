@@ -29,7 +29,8 @@
  * the same identity key: a Weaver user's Mac, whose `cf` acts for the
  * membership a Common Fabric Service on a cloud host joined. It needs
  * `--membership-store`; 404 when this machine holds no membership, and 409
- * when the identity is the membership's own root, which presents no chain.
+ * when it holds no live chain to hand over: the identity is the membership's
+ * own root, which presents none, or the chain lapsed with its root elsewhere.
  *
  * `--membership-store <dir>` names the directory `cf index join` keeps
  * memberships under (`~/.local/state/commonfabric/pattern-index` by default
@@ -43,6 +44,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { join as joinPath } from "@std/path";
 import { isPieceRef, PatternIndexClient } from "./src/client.ts";
 import { chainForSigner, openPatternIndexClient } from "./src/access.ts";
+import { checkIndexChain } from "./src/membership.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
   adoptIndexChain,
@@ -165,16 +167,20 @@ const chain = async (context: HelperContext): Promise<CliAnswer> => {
       error: "this identity is its membership's root, which presents no chain",
     };
   }
-  const held = await chainForSigner(
-    store,
-    signer,
-    Math.floor(Date.now() / 1000),
-  );
-  if (held === undefined) {
+  const now = Math.floor(Date.now() / 1000);
+  const held = await chainForSigner(store, signer, now);
+  // Where the root is kept elsewhere a lapsed chain is still "held"; handing
+  // it over would only fail later, on the other machine.
+  const usable = held !== undefined &&
+    await checkIndexChain(held, signer.did(), now).then(
+      () => true,
+      () => false,
+    );
+  if (!usable) {
     return {
       ok: false,
-      status: 404,
-      error: "this machine holds no chain for this identity",
+      status: 409,
+      error: "this machine holds no live chain for this identity",
     };
   }
   return { ok: true, value: { chain: encodeDelegationChains([held]) } };

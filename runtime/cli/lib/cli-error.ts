@@ -9,13 +9,13 @@ import { SlugResolutionError } from "@commonfabric/runner";
 
 import { VerbInputValidationError } from "./callable.ts";
 import { IdentityKeyfileError } from "./identity.ts";
-import { FirstPartyRefusal } from "./first-party.ts";
+import { FirstPartyError } from "./first-party.ts";
 import { PairingError } from "./pairing.ts";
 
 /**
  * The value to print for a top-level CLI failure. Validation, transformer,
  * compiler, verb-input, slug, identity-keyfile, pairing and first-party
- * refusal errors carry user-facing
+ * request errors carry user-facing
  * messages, so print those without a stack trace, and so is an indexed
  * pattern's, which {@link indexedPatternErrorText} renders. Other Errors print their
  * stack, falling back to the message. Anything else prints as-is.
@@ -26,7 +26,7 @@ export function renderCliError(e: unknown): unknown {
     e instanceof CompilerError || e instanceof VerbInputValidationError ||
     e instanceof SlugResolutionError || e instanceof SlugAssignedError ||
     e instanceof IdentityKeyfileError || e instanceof PairingError ||
-    e instanceof FirstPartyRefusal
+    e instanceof FirstPartyError
   ) {
     return e.message;
   }
