@@ -140,6 +140,41 @@ CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 - normalized branch lifecycle payloads for `/memory/branch/create` and
   `/memory/branch/delete`
 
+A `ClientCommit`'s read set decides its own admission. A server stores
+digests unless it is opened with them off (`MEMORY_STORE_READS_DIGEST=false`),
+and keeps a read set only where something reads it afterward. That is the genesis receipt at seq 1, and
+a commit whose `patch` the server accepted as an identity
+([03-commit-model.md](./03-commit-model.md) §3.6.1), whose reads a later
+pending read through that layer consults (§3.6.3). Any other commit that
+carries reads is stored in digest form: every member but `reads`, and a
+`digest` member of the whole submission in their place. A `digest` member
+the client submitted is replaced, and the digest covers it.
+
+```json
+{ "sha256": "<SHA-256 of the whole submitted commit's encoding, unpadded base64url>",
+  "bytes": 7417893, "confirmed": 55570, "pending": 0 }
+```
+
+A replay is matched against either form (§3.7.4 of the commit model). Both
+determine the whole submission, up to a SHA-256 collision. The byte length and
+counts are for the reader of the log; nothing in admission reads them.
+Offline readers cannot replay a read set stored this way, nor one compaction
+hollowed, nor a read at a basis older than what compaction kept of the
+instance it read: the stale-read check (`cf inspect conflicts`, the INV-1
+oracle) counts each, and reports how many commits it could not check rather
+than calling the store consistent. Read sets are kept for admission, not as
+evidence for a verifier: what verification after expiry needs, and does not
+have today, is recorded in
+[verifiable-execution/implementation-plan.md](../verifiable-execution/implementation-plan.md)
+§2.6.
+
+Every server reads both forms whether or not it stores digests. A server from
+before digest-form rows refuses a retry of a commit stored with a digest as a
+replay mismatch, so a deployment rolling back to such a version first turns
+digests off, deploys, and lets the commits already stored with digests settle,
+so that none is still being retried or read as a pending layer when the older
+version starts.
+
 `resolution` stores server-side decisions:
 
 ```json
