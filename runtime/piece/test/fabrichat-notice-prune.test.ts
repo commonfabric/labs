@@ -1,8 +1,8 @@
 /**
- * When a FabriChat manager drops a notice it holds: once the notice's
- * recipient is on the room's roster, the sender's next join of the room drops
- * it, and not before; and a join of a room the sender holds no notice of
- * reads no roster.
+ * When a FabriChat manager drops a notice it holds: an offer that adds the
+ * notice's recipient to the room drops it, and so, once the recipient is on
+ * the room's roster, does the sender's next join of the room, and not before;
+ * and a join of a room the sender holds no notice of reads no roster.
  */
 
 import { expect } from "@std/expect";
@@ -260,6 +260,23 @@ describe("fabrichat-notice-prune", () => {
     expect(await storedNoticesOf(room)).toEqual([recipient.did()]);
 
     await senderJoins(senders.runtime, senders.home, room);
+
+    expect(await storedNoticesOf(room)).toEqual([]);
+  });
+
+  it("drops a notice once an offer adds its recipient to the room", async () => {
+    const room = await createGroup("offered", [recipient.did()]);
+    expect(await storedNoticesOf(room)).toEqual([recipient.did()]);
+    const profile = senders.runtime.getCellFromLink(
+      recipients.home.key("profiles").key(0).resolveAsCell()
+        .getAsNormalizedFullLink(),
+    );
+
+    await send(senders.runtime, senders.home, ["chatManager", "offerRoom"], {
+      requestId: "offer-recipient",
+      room: senders.runtime.getCellFromLink(room.getAsNormalizedFullLink()),
+      profile,
+    });
 
     expect(await storedNoticesOf(room)).toEqual([]);
   });
