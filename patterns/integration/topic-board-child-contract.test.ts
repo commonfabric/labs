@@ -137,10 +137,15 @@ describe("topic-board-child-contract", () => {
     await citing.result.set({ topic: cited.getCell() }, ["mention"]);
 
     // The edge exists only if `addTopic` handed this child the board's
-    // `crossrefs` pivot.
-    const inbound = await cited.result.get(["referencedBy"]) as {
-      title: string;
-    }[];
+    // collection. It is awaited rather than read at once: the collection
+    // follows the mention's commit, and the topic's query follows the
+    // collection.
+    const inbound = await waitForCellValue<{ title: string }[]>(
+      cc.runtime,
+      (await cited.result.getCell()).key("referencedBy"),
+      (value) => ((value ?? []) as unknown[]).length === 1,
+      { stuckLabel: "one backlink on the cited topic" },
+    );
     expect(inbound.length).toBe(1);
     expect(inbound[0].title).toBe("Citing topic");
 
