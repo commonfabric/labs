@@ -170,8 +170,10 @@ have today, is recorded in
 
 Every server reads both forms whether or not it stores digests. A server from
 before digest-form rows refuses a retry of a commit stored with a digest as a
-replay mismatch, so a deployment that may roll back to such a version turns
-digests off first.
+replay mismatch, so a deployment rolling back to such a version first turns
+digests off, deploys, and lets the commits already stored with digests settle,
+so that none is still being retried or read as a pending layer when the older
+version starts.
 
 `resolution` stores server-side decisions:
 
