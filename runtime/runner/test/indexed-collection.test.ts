@@ -186,7 +186,9 @@ describe("indexed-collection", () => {
 
     it("follows a reference added to a member after it joined", async () => {
       await addTopic("a");
-      await commit((tx) => topic("a", tx).key("mentions").push(topic("target")));
+      await commit((tx) =>
+        topic("a", tx).key("mentions").push(topic("target"))
+      );
 
       expect(await rows(mentioning)).toEqual([{ title: "a" }]);
     });

@@ -151,7 +151,11 @@ import {
   portableSnapshotLinks,
   resolveImmutableValueLinks,
 } from "./data-uri.ts";
-import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
+import {
+  actingForEmission,
+  waveRunContextOf,
+  waveSettlementOf,
+} from "./executor/wave.ts";
 import { immutableCellsFor, pinImmutableCell } from "./immutable-cell.ts";
 import { areLinksSame } from "./link-equality.ts";
 import {
@@ -2405,12 +2409,13 @@ export class CellImpl<T extends FabricValue>
     if (cell === undefined) {
       throw new TypeError("an indexed collection holds cells only");
     }
+    const rows = projectMember(this.#tx, descriptor, cell);
     writeMemberRows(
       this as unknown as IndexedCollectionWriter,
       descriptor,
-      projectMember(this.#tx, descriptor, cell),
+      rows,
     );
-    this.#registerIndexedCollection();
+    this.#registerIndexedCollection(rows.deps);
   }
 
   /**
@@ -2424,13 +2429,27 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Helper for the indexed-collection methods, which makes the collection
-   * known to the runtime's maintainer once this transaction commits.
+   * known to the runtime's maintainer once this transaction's writes are
+   * durable, and has it re-read the members read from `written`. A member
+   * added in the transaction that creates it can hold fields this
+   * transaction has not written yet, and the commit carrying them can reach
+   * the maintainer before the member's rows exist to be found.
    */
-  #registerIndexedCollection(): void {
+  #registerIndexedCollection(written: readonly string[] = []): void {
     const handle = this.resolveAsCell().getAsNormalizedFullLink();
     const id = (this.getRaw({ lastNode: "value" }) as { id: string }).id;
-    this.#tx!.addCommitCallback((_tx, result) => {
-      if (!result.error) this.#runtime.indexedCollections.register(handle, id);
+    const maintainer = this.#runtime.indexedCollections;
+    const durable = () => {
+      maintainer.register(handle, id);
+      maintainer.noteWrites(handle.space, written);
+    };
+    this.#tx!.addCommitCallback((settledTx, result) => {
+      if (result.error) return;
+      const settlement = waveSettlementOf(settledTx);
+      if (settlement === undefined) return durable();
+      void settlement.then((verdict) => {
+        if (!verdict.error) durable();
+      });
     });
   }
 

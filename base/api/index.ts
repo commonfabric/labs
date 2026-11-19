@@ -3436,6 +3436,56 @@ export type SqliteDatabaseFunction = {
   asScope(scope: CellScope): SqliteDatabaseFunction;
 };
 
+/**
+ * What an indexed collection mirrors of its members, each of which is a cell
+ * holding a `T` (docs/specs/indexed-collection/README.md).
+ */
+export interface IndexedCollectionOptions<T = unknown> {
+  /**
+   * Member fields mirrored as columns of the `members` table, each with the
+   * SQLite column type it is stored under.
+   */
+  columns?: { [K in keyof T & string]?: string };
+
+  /**
+   * Member fields holding references to other cells. Each becomes a table of
+   * that name holding a `source_cf_link` and a `target_cf_link` column, with
+   * one row per reference.
+   */
+  relations?: ReadonlyArray<keyof T & string>;
+
+  /** Secondary indexes over the `members` table, each a list of columns. */
+  indexes?: ReadonlyArray<ReadonlyArray<keyof T & string>>;
+}
+
+/**
+ * A collection of cells whose membership lives in a SQLite database the
+ * runtime keeps current. It is read with `query()` and with nothing else:
+ * there is no list of members to read. `add()` and `remove()` change
+ * membership inside a handler, and the runtime re-reads a member whenever a
+ * document its mirrored fields were read from is written.
+ */
+export interface IndexedCollection<T = unknown> extends SqliteDb {
+  /**
+   * Adds `member`, mirroring its declared fields in the caller's
+   * transaction. Adding a member the collection holds refreshes its rows.
+   */
+  add(member: T | AnyCell<T>): void;
+
+  /** Removes `member` and every row mirrored from it. */
+  remove(member: T | AnyCell<T>): void;
+}
+
+/** Declares an indexed collection. See {@link IndexedCollection}. */
+export type IndexedCollectionFunction = {
+  <T = unknown>(
+    options?: IndexedCollectionOptions<T>,
+  ): Reactive<IndexedCollection<T>>;
+
+  /** Binds the collection, and so its database file, to a scope. */
+  asScope(scope: CellScope): IndexedCollectionFunction;
+};
+
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;
   sql: string;
@@ -4360,6 +4410,7 @@ export declare const compileAndRun: CompileAndRunFunction;
 export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
+export declare const indexedCollection: IndexedCollectionFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;

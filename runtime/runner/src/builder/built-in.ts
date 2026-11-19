@@ -17,10 +17,12 @@ import type {
   FetchBinaryResult,
   FetchOptions,
   FieldAnchors,
+  IndexedCollectionFunction,
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
   SqliteDatabaseFunction,
+  SqliteDb,
   SqliteQueryFunction,
   UIVariantKind,
   VNode,
@@ -28,6 +30,11 @@ import type {
   WishState,
 } from "commonfabric";
 
+import {
+  defineIndexedCollection,
+  type IndexedCollectionDefinition,
+  type IndexedCollectionOptions,
+} from "../builtins/indexed-collection/definition.ts";
 import { wishStateSchemaForResult } from "../builtins/wish-schema.ts";
 import { LLMDialogResultSchema } from "../builtins/llm-schemas.ts";
 import { sqliteQueryNodeFactory } from "../builtins/sqlite/query-node.ts";
@@ -229,6 +236,32 @@ export const sqliteDatabase = createNodeFactory({
   type: "ref",
   implementation: "sqliteDatabase",
 }) as SqliteDatabaseFunction;
+
+/**
+ * Declares an indexed collection: a database whose tables are derived from
+ * the declaration, and whose handle carries the descriptor the runtime
+ * maintains them by. The declaration is read when the pattern is built.
+ */
+export const indexedCollection = indexedCollectionOver(sqliteDatabase);
+
+/**
+ * Helper for `indexedCollection`, which builds the function declaring a
+ * collection as a node of `database`.
+ */
+function indexedCollectionOver(
+  database: SqliteDatabaseFunction,
+): IndexedCollectionFunction {
+  // The node's input is the database built-in's, which the descriptor rides
+  // beside `tables`.
+  const node = database as (
+    definition: IndexedCollectionDefinition,
+  ) => Reactive<SqliteDb>;
+  const declare =
+    ((options?: IndexedCollectionOptions) =>
+      node(defineIndexedCollection(options))) as IndexedCollectionFunction;
+  declare.asScope = (scope) => indexedCollectionOver(database.asScope(scope));
+  return declare;
+}
 
 // Shares the single `sqliteQuery` node factory with `db.query` (cell.ts) — see
 // builtins/sqlite/query-node.ts — so both construct the same node.

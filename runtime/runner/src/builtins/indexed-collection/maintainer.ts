@@ -22,6 +22,7 @@ import {
   TARGET_COLUMN,
 } from "./definition.ts";
 import {
+  deleteMemberRows,
   type IndexedCollectionWriter,
   type IndexedColumnValue,
   type MemberRows,
@@ -68,10 +69,11 @@ interface SpaceState {
   loaded: Promise<void> | undefined;
 }
 
-/** One maintenance event: members to re-read, with the rows they have now. */
-interface MaintenanceEvent {
-  members: MemberRows[];
-}
+/**
+ * One maintenance event: either members to re-read, with the rows they have
+ * now, or the id of a collection to list in its space's registry.
+ */
+type MaintenanceEvent = { members: MemberRows[] } | { list: string };
 
 /**
  * Keeps the tables of every indexed collection current with the cells they
@@ -123,8 +125,10 @@ export class IndexedCollectionMaintainer {
     if (!this.#enabled || this.#disposed) return;
     const space = this.#spaceState(handle.space);
     if (space.collections.has(id)) return;
-    this.#adopt(space, handle, id);
-    void this.#record(handle, id);
+    const collection = this.#adopt(space, handle, id);
+    // Listing the collection is a write, which a serving runtime commits
+    // only from a scheduler run.
+    this.#runtime.scheduler.queueEvent(collection.stream, { list: id });
   }
 
   /**
@@ -218,29 +222,11 @@ export class IndexedCollectionMaintainer {
     }
   }
 
-  /** Lists `handle` in its space's registry, unless it is listed already. */
-  async #record(handle: NormalizedFullLink, id: string): Promise<void> {
-    const registry = this.#registryCell(handle.space);
-    try {
-      await registry.sync();
-      const result = await this.#runtime.editWithRetry((tx) => {
-        const entry = registry.withTx(tx).key(id);
-        if (entry.getRaw() !== undefined) return;
-        entry.setRaw(
-          JSON.stringify(
-            this.#runtime.getCellFromLink(handle).getAsLink(),
-          ),
-        );
-      });
-      if (result.error) throw result.error;
-    } catch (error) {
-      if (!this.#disposed) {
-        logger.warn("registry-write-failed", () => [handle.id, error]);
-      }
-    }
-  }
-
-  #adopt(space: SpaceState, handle: NormalizedFullLink, id: string): void {
+  #adopt(
+    space: SpaceState,
+    handle: NormalizedFullLink,
+    id: string,
+  ): CollectionState {
     const stream = this.#runtime.getCell(handle.space, {
       indexedCollectionMaintenance: id,
     }).getAsNormalizedFullLink();
@@ -256,6 +242,7 @@ export class IndexedCollectionMaintainer {
       ),
     };
     space.collections.set(id, collection);
+    return collection;
   }
 
   #schedule(collection: CollectionState): void {
@@ -295,9 +282,11 @@ export class IndexedCollectionMaintainer {
     if (this.#disposed) return;
     const members = groupMemberRows(descriptor, rows);
     if (members.length === 0) return;
-    await Promise.all(members.map((rows) =>
-      this.#runtime.getCellFromLink(parseCfLinkToSigil(rows.member)!).sync()
-    ));
+    await Promise.all(
+      members.map((rows) =>
+        this.#runtime.getCellFromLink(parseCfLinkToSigil(rows.member)!).sync()
+      ),
+    );
     for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
       if (this.#disposed) return;
       const event: MaintenanceEvent = {
@@ -314,17 +303,33 @@ export class IndexedCollectionMaintainer {
     }
   }
 
-  /** Re-reads the members `event` names and writes the rows that changed. */
+  /**
+   * Runs one maintenance event: lists the collection in its space's
+   * registry, or re-reads the members the event names and writes the rows
+   * that changed.
+   */
   #maintain(
     tx: IExtendedStorageTransaction,
     handle: NormalizedFullLink,
     event: MaintenanceEvent,
   ): void {
+    if ("list" in event) {
+      const entry = this.#registryCell(handle.space).withTx(tx).key(
+        event.list,
+      );
+      if (entry.getRaw() === undefined) {
+        entry.setRaw(
+          JSON.stringify(this.#runtime.getCellFromLink(handle).getAsLink()),
+        );
+      }
+      return;
+    }
     const db = createCell(this.#runtime, handle, tx, false, "sqlite");
     const descriptor = indexedCollectionDescriptorOf(
       db.getRaw({ lastNode: "value" }),
     );
     if (descriptor === undefined) return;
+    const writer = db as unknown as IndexedCollectionWriter;
     for (const previous of event.members) {
       const member = this.#runtime.getCellFromLink(
         parseCfLinkToSigil(previous.member)!,
@@ -332,15 +337,15 @@ export class IndexedCollectionMaintainer {
         tx,
       );
       const rows = projectMember(tx, descriptor, member);
-      if (sameMemberRows(previous, rows)) continue;
-      writeMemberRows(
-        db as unknown as IndexedCollectionWriter,
-        descriptor,
-        // The member is stored under the reference it was added by, which a
-        // re-read of a retargeted link would otherwise move it off.
-        { ...rows, member: previous.member },
-        previous,
-      );
+      if (rows.member !== previous.member) {
+        // A member added by the transaction that created it was stored
+        // under a reference that has since resolved to another cell. Its
+        // rows move to the reference other members hold to it.
+        deleteMemberRows(writer, descriptor, previous.member);
+        writeMemberRows(writer, descriptor, rows);
+      } else if (!sameMemberRows(previous, rows)) {
+        writeMemberRows(writer, descriptor, rows, previous);
+      }
     }
   }
 }

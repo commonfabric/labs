@@ -799,7 +799,7 @@ export function sqliteDatabase(
       // An indexed collection is a database whose handle also carries the
       // descriptor its tables were derived from.
       const index = indexedCollectionDescriptorOf(
-        snapshotQueryResult(options?.index),
+        snapshotQueryResult(options),
       );
       // `handle` is a builtin RESULT cell (makeResultCell), and result cells
       // are always `of:`-schemed — the computed kind applies only to derived
@@ -905,7 +905,9 @@ export function sqliteDatabase(
           return;
         }
         void waveSettlement.then((waveResult) => {
-          if (!waveResult.error) durable();
+          if (!waveResult.error) {
+            durable();
+          }
         });
       });
     }
@@ -994,6 +996,14 @@ export function sqliteQuery(
 
   /** Resolved request targets with an outstanding RPC. */
   const inFlightIssues = new Set<string>();
+
+  /**
+   * The collection revision each request target last asked under, for a
+   * query over an indexed collection. Held here rather than in the result:
+   * the revision moves on every write to the collection, and a result that
+   * recorded it would change for its readers when its rows did not.
+   */
+  const refreshTokens = new Map<string, string>();
 
   /** Pending publications, partitioned by result and physical binding instance. */
   const stagings = new Map<
@@ -1235,6 +1245,17 @@ export function sqliteQuery(
     // query returns, when the transaction that read them has finished. The
     // row schema's is the typed alternative, `MaxConfidentiality<Row>`.
     const reactOn = snapshotQueryResult(inputs.reactOn);
+    // A query over an indexed collection follows the collection's write
+    // revision without being told to, and keeps that revision out of the
+    // request's identity: the request is the same question asked again.
+    const refreshToken =
+      indexedCollectionDescriptorOf(snapshotQueryResult(inputs.db)) ===
+          undefined
+        ? undefined
+        : computeInputHashFromValue({
+          rev: (inputs.db as { rev?: number }).rev ?? 0,
+          reactOn: reactOn ?? null,
+        });
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);
     const rowSchemaCeiling = snapshotQueryResult(
       (inputs.rowSchema as {
@@ -1250,7 +1271,7 @@ export function sqliteQuery(
       db,
       sql: inputs.sql,
       params: params ?? null,
-      reactOn: reactOn ?? null,
+      reactOn: refreshToken === undefined ? (reactOn ?? null) : null,
       ...correlation,
       // The contract a result's labels are written under is part of the
       // identity, so a result stored under another contract cannot stand as
@@ -1382,7 +1403,24 @@ export function sqliteQuery(
       inFlightHere: inFlightIssues.has(effectKey),
       speculativeRun: speculationRunContextOf(tx) !== undefined,
     });
-    if (decision === "hit") {
+    // A settled result asked under an older revision of its collection is
+    // asked again in place: no claim is written, so the result changes only
+    // if the rows do. A speculative run owns no query, as for any request.
+    const quietRefresh = decision === "hit" && refreshToken !== undefined &&
+      refreshTokens.get(effectKey) !== refreshToken &&
+      speculationRunContextOf(tx) === undefined;
+    if (refreshToken !== undefined && (quietRefresh || decision === "issue")) {
+      refreshTokens.set(effectKey, refreshToken);
+      tx.addCommitCallback((_tx, outcome) => {
+        if (outcome.error && refreshTokens.get(effectKey) === refreshToken) {
+          refreshTokens.delete(effectKey);
+        }
+      });
+    }
+    const superseded = () =>
+      refreshToken !== undefined &&
+      refreshTokens.get(effectKey) !== refreshToken;
+    if (decision === "hit" && !quietRefresh) {
       // The §4 memo hit (server-execution v2): the committed result records
       // this request hash AND carries a settled result — the stored result
       // is the value, no re-issue. A bare pending claim is never a hit.
@@ -1402,9 +1440,11 @@ export function sqliteQuery(
       requestHash: hash,
       ...correlation,
     };
-    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
-      pendingState,
-    );
+    if (!quietRefresh) {
+      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set(
+        pendingState,
+      );
+    }
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1432,6 +1472,13 @@ export function sqliteQuery(
       // going to run here, so returning without releasing would leave this
       // request's entry in the node's map for as long as the map lives.
       if (cancelled.signal.aborted) {
+        releaseStaging();
+        return;
+      }
+      // A refresh that never went out left the settled result standing, and
+      // the next run asks again.
+      if (quietRefresh) {
+        if (!superseded()) refreshTokens.delete(effectKey);
         releaseStaging();
         return;
       }
@@ -1563,7 +1610,9 @@ export function sqliteQuery(
     enqueueSinkRequestPostCommitEffect(
       tx,
       SQLITE_QUERY_SINK,
-      `sqliteQuery:${hash}`,
+      quietRefresh
+        ? `sqliteQuery:${hash}:${refreshToken}`
+        : `sqliteQuery:${hash}`,
       {
         database: { space: databaseSpace, id: db.id },
         sql,
@@ -1646,7 +1695,7 @@ export function sqliteQuery(
               (wtx) => {
                 markEffectCompletion(wtx, effectKey);
                 applyRunIdentity(wtx);
-                if (storedRequestHash(wtx) !== hash) return;
+                if (storedRequestHash(wtx) !== hash || superseded()) return;
                 result.withTx(wtx).set({
                   pending: false,
                   error,
@@ -1878,7 +1927,7 @@ export function sqliteQuery(
                 // Stale-writeback guard: a newer query (different inputs -> different
                 // hash) may have superseded this one while the RPC was in flight.
                 // Only write back if the result cell still records THIS request.
-                if (storedRequestHash(wtx) !== hash) {
+                if (storedRequestHash(wtx) !== hash || superseded()) {
                   return;
                 }
                 const base = result.getAsNormalizedFullLink();
