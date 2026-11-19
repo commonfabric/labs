@@ -113,7 +113,6 @@ export const linkedSchema = <S>(document: S): S => {
   return document;
 };
 
-/** The schema of a member of what a schema describes. */
 /**
  * Whether a schema says nothing of what a position holds, as `unknown`
  * does: a link there is a reference that is not read (LS §7.8).
@@ -137,6 +136,7 @@ const containerOf = (schema: Schema | undefined): Schema | undefined =>
     ) ?? schema
     : schema;
 
+/** The schema of a member of what a schema describes. */
 export const schemaBelow = (
   schema: Schema | undefined,
   segment: string,
@@ -1888,14 +1888,13 @@ export class Store {
    * value below one, is a copy. It carries no address, so what writes
    * it elsewhere stores the value. A member that is a link is the value
    * of its cell and carries that cell's address, as without `copies`.
-   */
-  /**
-   * What is stored at `ref`, with the links in it followed. With `bound`,
-   * the read is made under that schema, as a read through a handle is
-   * (LS §7.8, ES §2.4): a member of a record that the schema does not
-   * declare is left out, and a link at a position the schema types
-   * `unknown` is given as a reference stand-in, an object with no member
-   * that carries the address, and not followed.
+   * A document that two links of one read lead to is given once.
+   *
+   * With `bound`, the read is made under that schema, as a read through a
+   * handle is (LS §7.8, ES §2.4): a member of a record that the schema
+   * does not declare is left out, and a link at a position the schema
+   * types `unknown` is given as a reference stand-in, an object with no
+   * member that carries the address, and not followed.
    */
   read(ref: Ref, reads?: Position[], copies = false, bound?: Schema): unknown {
     const outer = this.#reached;
