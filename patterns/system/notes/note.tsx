@@ -4,7 +4,6 @@
  * link back to it and which notebook it belongs to, and lets you view it
  * rendered, start a new note, or open a notebook from a menu that marks the
  * ones holding it.
- *
  * An assistant can search a note's content or translate it into another
  * language.
  */

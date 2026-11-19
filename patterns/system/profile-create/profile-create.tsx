@@ -2,7 +2,6 @@
  * The form for creating a profile, the identity others see. You type a name,
  * optionally choose or remove a picture, and submit to add a new profile to
  * your list; a name and picture suggested by your host can pre-fill it.
- *
  * It is used in the home space, including inside the profile picker.
  */
 
