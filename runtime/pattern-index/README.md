@@ -89,13 +89,13 @@ Its operations are:
   `note`, are omitted.
 - View: `{"op":"view","piece":"piece:<sha256 hex>"}` or
   `{"op":"view","patternId":"..."}`, exactly one. It records the signer's
-  `viewed_in_loom`: a piece key (`deployedPieceRef`) settles the version of
-  theirs deployed to that piece, which shares it under their sharing setting,
-  and ranks nothing. A pattern id ranks a pattern the person placed from the
-  index. The result is the index's answer,
-  `{"ok":true,"value":{"ok":true,
-  "recorded":false,"settled":{...}}}`; an
-  index answer of `ok:false` returns status 502.
+  `viewed_in_loom`: a piece key (`deployedPieceRef`) counts toward settling the
+  version of theirs deployed to that piece: used for a day with no newer
+  version, it is shared under their sharing setting. It ranks nothing. A pattern
+  id ranks a pattern the person placed from the index. The result is the index's
+  answer, `{"ok":true,"value":{"ok":true,
+  "recorded":false,"settled":{...}}}`;
+  an index answer of `ok:false` returns status 502.
 - Sharing settings: `{"op":"getSharing"}` reads the signer's member's
   give-to-get settings, and `{"op":"setSharing","enabled":false}` changes them,
   sending only the switches given (`enabled`, `selfBuilt`, each a boolean; at
