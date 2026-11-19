@@ -144,7 +144,13 @@ below its stream marker (a newly required event field is rescued by a valid
 default the candidate carries, including a newly introduced one), and a
 durable-link proof whose target declares a default below a cell. The metadata
 itself must still compare equal across an update: a changed `asCell`, `scope`,
-`readOnly`, or `writeOnly` is refused on its own. Value constraints that
+`readOnly`, or `writeOnly` is refused on its own. The one exception is in an
+argument contract or a link proof: a node that declared no cell becoming a
+comparable one (`asCell: ["comparable"]`, with no scope). A comparable handle
+says how a reader receives the value, as a reference it can compare, not what
+is stored there or what the node accepts, and it writes nothing, so every value
+the node held reads under it. A result contract keeps the marker exact either
+way, since its proof reads from the candidate to the previous contract. Value constraints that
 default insertion can invalidate, such as `maxProperties`, continue to require
 equal defaults beneath them.
 
