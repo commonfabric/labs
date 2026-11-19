@@ -510,6 +510,17 @@ export interface ExperimentalOptions {
    * it (`docs/development/EXPERIMENTAL_OPTIONS.md#synccidreferencesv1`).
    */
   syncCidReferences?: boolean | undefined;
+
+  /**
+   * The compiled pattern language integration
+   * (`docs/plans/compiled-pattern-language-integration.md`). On, the commit
+   * preparation stamps a path a compiled pattern's write covers with the
+   * label instantiated from the plan's label template, where the runtime
+   * recorded that write as an authorized `plan-write` input, in place of the
+   * one join over the transaction's reads. Defaults to off, which stores the
+   * join on every path and ignores every `plan-write` input.
+   */
+  compiledPatterns?: boolean | undefined;
 }
 
 /**
@@ -3009,6 +3020,7 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
+    wrapped.setCfcPlanLabels(this.experimental.compiledPatterns === true);
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);

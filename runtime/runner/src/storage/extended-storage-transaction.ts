@@ -748,6 +748,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     policyEvaluationMode: DEFAULT_CFC_POLICY_EVALUATION_MODE,
     labelMetadataProtectionMode: DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
     declaredMonotonicityMode: DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
+    planLabels: false,
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
@@ -1157,6 +1158,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       policyEvaluation: this.#cfcState.policyEvaluationMode,
       labelMetadataProtection: this.#cfcState.labelMetadataProtectionMode,
       declaredMonotonicity: this.#cfcState.declaredMonotonicityMode,
+      ...(this.#cfcState.planLabels ? { planLabels: true } : {}),
     };
   }
 
@@ -1281,6 +1283,19 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     if (mode === "persist") {
       this.#cfcFlowLabelsPinned = true;
     }
+  }
+
+  setCfcPlanLabels(enabled: boolean): void {
+    // Like the flow-labels mode, the dial decides what the preparation stamps
+    // and is not part of PreparedDigestInput, so a change after prepare
+    // invalidates the prepared decision.
+    if (
+      this.#cfcState.planLabels !== enabled &&
+      this.#cfcState.prepare.status === "prepared"
+    ) {
+      this.invalidateCfc("plan-labels-changed");
+    }
+    this.#cfcState.planLabels = enabled;
   }
 
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void {
@@ -5168,6 +5183,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   setCfcFlowLabelsMode(mode: CfcFlowLabelsMode): void {
     this.#wrapped.setCfcFlowLabelsMode(mode);
+  }
+
+  setCfcPlanLabels(enabled: boolean): void {
+    this.#wrapped.setCfcPlanLabels(enabled);
   }
 
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void {

@@ -95,6 +95,9 @@ export const SHELL_FLAG_SOURCES = {
   // the shell takes it from its build, and a host embedding a release shell
   // from the shell's host toggle (`runtime/shell/src/lib/host-toggles.ts`).
   syncCidReferences: "build",
+  // Which labels a compiled pattern's writes store is the deployment's
+  // choice, as for `serverExecution`.
+  compiledPatterns: "deployment",
 } as const satisfies Record<keyof ExperimentalOptions, ShellFlagSource>;
 
 /** The flags {@link SHELL_FLAG_SOURCES} gives the deployment. */

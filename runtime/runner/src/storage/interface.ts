@@ -2666,6 +2666,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcEnforcementMode(mode: CfcEnforcementMode): void;
   setCfcFlowLabelsMode(mode: CfcFlowLabelsMode): void;
 
+  /**
+   * Set whether the preparation stamps the paths authorized `plan-write`
+   * inputs cover with their template labels (the experimental option
+   * `compiledPatterns`).
+   */
+  setCfcPlanLabels(enabled: boolean): void;
+
   /** Set the write-side `requiredIntegrity` floor dial (§8.12.4.1 / SC-18). */
   setCfcWriteFloorMode(mode: CfcWriteFloorMode): void;
 

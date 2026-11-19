@@ -1184,6 +1184,10 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  // Whether the preparation stamps a path an authorized `plan-write` input
+  // covers with the label instantiated from its template (the experimental
+  // option `compiledPatterns`). Off, every `plan-write` input is ignored.
+  planLabels: boolean;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),

@@ -81,6 +81,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // Taking schema documents by reference is default-off; env-reachable so a
   // process can opt in with an explicit "true".
   syncCidReferences: "EXPERIMENTAL_SYNC_CID_REFERENCES",
+  // The compiled pattern language integration is default-off; env-reachable
+  // so a process can opt in with an explicit "true".
+  compiledPatterns: "EXPERIMENTAL_COMPILED_PATTERNS",
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
@@ -206,6 +209,9 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // connections, references and the body fetches they lead to, but not what
   // is stored or what any other client receives.
   syncCidReferences: "client",
+  // Decides the labels a compiled pattern's writes store, so which side
+  // computes what is stored, and with which labels, is the deployment's.
+  compiledPatterns: "server",
 } as const satisfies Record<
   keyof ExperimentalOptions,
   ExperimentalFlagAuthority

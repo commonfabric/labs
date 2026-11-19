@@ -26,4 +26,5 @@ export function applyLocalExperimentalDefaults(
   experimental.instanceNames ??= false;
   experimental.localSessionDocuments ??= false;
   experimental.syncCidReferences ??= false;
+  experimental.compiledPatterns ??= false;
 }

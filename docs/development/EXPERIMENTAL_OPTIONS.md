@@ -43,6 +43,7 @@ was last checked against the code.
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
+| [`compiledPatterns`](#compiledpatterns) | `EXPERIMENTAL_COMPILED_PATTERNS` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-19) | graduate once specs pull request #91 and the decision on how the store accepts template labels are ruled and the integration's milestones 3 to 6 land, or delete | measurement only, off by default |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
 | [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
@@ -1190,6 +1191,43 @@ holds the measurements and the conditions for revisiting.
 - **Path to removal.** Once on everywhere, delete the runtime option, its env,
   authority and shell-source entries, `namesInstances()`,
   `TransformationOptions.instanceNames`, and the cache variant.
+
+### `compiledPatterns`
+
+- **Toggle via.** `EXPERIMENTAL_COMPILED_PATTERNS` env, or
+  `RuntimeOptions.experimental.compiledPatterns`. Server-authoritative in
+  `EXPERIMENTAL_FLAG_AUTHORITY` and `"deployment"` in `SHELL_FLAG_SOURCES`,
+  since which labels a compiled pattern's writes store is the deployment's
+  choice. `Runtime` hands it to each transaction it creates
+  (`setCfcPlanLabels`), which keeps it as `CfcTxState.planLabels` and reports
+  it among the dials of a refused write when it is on.
+- **Added by.** Bernhard Seefeld, 2026-11-19.
+- **Purpose.** The one option for the compiled pattern language integration
+  ([`docs/plans/compiled-pattern-language-integration.md`](../plans/compiled-pattern-language-integration.md)).
+  It gates labels from templates at commit: with it on, the commit
+  preparation stamps a path that a compiled pattern's write covers with the
+  label instantiated from the plan's label template
+  (`runtime/runner/src/cfc/plan-template.ts`,
+  `runtime/runner/src/cfc/plan-labels.ts`), in place of the one join over the
+  transaction's reads, where the runtime recorded that write as a `plan-write`
+  write-policy input with its own authorization and registered the compiled
+  pattern. Every other path keeps the join. With it off, every `plan-write`
+  input is ignored and the preparation and its prepared digest are what they
+  are without the option. The runner path for compiled patterns is to be
+  gated by the same option.
+- **Current default and planned end state.** Off by default. A measurement
+  only: the specification the template labels rest on is specs pull request
+  #91, unmerged, and the deciding sites carry its `SPEC-PENDING` marker. The
+  end state is graduation once that pull request and the decision on whether
+  the store verifies a template label are ruled, and the integration's later
+  milestones land, or deletion.
+- **Status on 2026-11-19.** Default off, pinned by
+  `runtime/runner/test/cfc-runtime-options.test.ts` and
+  `runtime/runner/test/experimental-options.test.ts`; the template labels are
+  pinned by `runtime/runner/test/cfc-plan-labels.test.ts`.
+- **Path to removal.** Delete the runtime option, its env, authority and
+  shell-source entries, `CfcTxState.planLabels`, and either the `plan-write`
+  path or the gate on it.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
