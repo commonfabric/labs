@@ -128,6 +128,17 @@ export default pattern(() => {
   const action_spin_again_at_once = action(() => spinner.spin.send());
   const assert_still_one_spin = assert(() => spinner.spinHistory.length === 1);
 
+  // A fresh session on the same history (a reload) shows the last prize at
+  // rest, so its first tap spins even though that prize landed moments ago.
+  const reloaded = RewardSpinner({ generosity, spinHistory });
+  const action_tap_after_reload = action(() => reloaded.spin.send());
+  const assert_reload_spins = assert(() =>
+    spinner.spinHistory.length === 2 && reloaded.reel.length === REEL_LENGTH
+  );
+  const action_drop_reload_spin = action(() =>
+    spinHistory.set(spinHistory.get().slice(0, 1))
+  );
+
   // Once the last spin has landed (aged here), the next tap spins, and the
   // new strip starts where the reel came to rest.
   const action_age_and_spin = action(() => {
@@ -184,6 +195,9 @@ export default pattern(() => {
       { assertion: assert_spin_recorded },
       { action: action_spin_again_at_once },
       { assertion: assert_still_one_spin },
+      { action: action_tap_after_reload },
+      { assertion: assert_reload_spins },
+      { action: action_drop_reload_spin },
       { action: action_age_and_spin },
       { assertion: assert_second_spin },
       { action: action_future_spin_then_tap },

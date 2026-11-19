@@ -13,8 +13,9 @@
  * the reel is then a pure CSS animation that scrolls to that strip's last
  * cell, so no timers are needed. The reel animates only for spins made in this
  * session (a page load starts a new session), so returning to the page shows
- * the last prize rather than replaying a spin. Taps while a reel is still
- * turning are ignored, so every recorded spin is one the child saw land.
+ * the last prize rather than replaying a spin. Taps while this session's reel
+ * is still turning are ignored, so every recorded spin is one the child saw
+ * land; a reload, whose reel is at rest, spins on the first tap.
  */
 import {
   action,
@@ -483,7 +484,12 @@ const RewardSpinner = pattern<RewardSpinnerInput, RewardSpinnerOutput>(
     const spin = action(() => {
       const history = spinHistory.get();
       const now = Date.now();
-      if (isReelTurning(history[history.length - 1]?.timestamp, now)) return;
+      // Only a reel this session set turning can be turning: a fresh session
+      // (a reload) shows the last prize at rest, so its first tap spins.
+      if (
+        sessionSpin.get().count > 0 &&
+        isReelTurning(history[history.length - 1]?.timestamp, now)
+      ) return;
       const gen = clampGenerosity(generosity.get());
       const prize = PRIZES[pickPrize(gen, Math.random())];
       const fillerRolls = Array.from(
