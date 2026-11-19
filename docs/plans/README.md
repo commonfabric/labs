@@ -335,6 +335,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   specification documents: where the work is, the rulings that are fixed, the
   questions the owner has to answer, and the reconciliation passes to make
   next.
+- [Compiled pattern language: measuring it in the real runtime](compiled-pattern-language-integration.md)
+  runs the prototype's executor inside the runtime, on its storage
+  transactions and CFC preparation and later its scheduler and sandbox, to
+  get costs the prototype alone cannot give: the options weighed, two
+  tracks with Topics as their shared target, six milestones with what each
+  measures, and what stays in the prototype.
 
 ## Concepts not planned for deployment
 

@@ -283,6 +283,10 @@ next.
   one by section and chapter file only, as
   [`../development/cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
   requires.
+- **Integration:** [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  is the strategy for measuring the design inside the real runtime
+  (provisional decision P30), with its milestones and the first figures of
+  milestone 1.
 - **Merged branches:** `claude/pattern-language-subset-spec`,
   `claude/pattern-language-plan-labels-spec`, and
   `claude/pattern-language-builtin-inventory` are fully merged into the branch
@@ -5406,6 +5410,17 @@ is relitigated.
 
 **Architecture**
 
+- The design is validated on two tracks at once (2026-11-18): the
+  prototype is the reference for semantics, and its executor run inside
+  the runtime is the reference for cost. Both work toward one target,
+  Topics (`patterns/apps/topics/`) at 100, 1,000 and 2,000 topics.
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  has the goal of each track and what decides whether the work continues.
+  It settles provisional decision P30.
+- The integration into the runtime is behind one experimental option, off
+  by default (2026-11-18). Labels from templates at commit (its milestone
+  4) assume specs pull request #91 lands as it stands, and need no option
+  of their own.
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no
@@ -6289,6 +6304,10 @@ pointer to its entry.
 6. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
+7. **P30,** settled by the owner on 2026-11-18: both tracks, with Topics
+   as their shared target.
+   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+   has the options, the milestones, and the first figures.
 
 Beside these, question 285 is no provisional decision: the documents said that
 today's runtime commits none of the writes of a node that throws, and it commits
@@ -7134,6 +7153,35 @@ today.
   keys of its rows; and a collection that P22 has a cone place at two
   paths, which has two indexes. *Tests:* none; the prototype builds no
   index. *If decided otherwise:* that paragraph is removed.
+- **P30. The design is validated by running the prototype's executor inside
+  the runtime, and the prototype stays the reference for semantics.** The
+  coordinator's decision, on the owner's request of 2026-11-18 for a strategy.
+  *The case:* the prototype's run times (0.3 s to settle the corpus against
+  14.2 s today, 1.6 s for 541 events against 43.7 s) leave out the CFC
+  preparation at commit, storage transactions, a scheduler across instances, a
+  network and a sandbox, so they say little about a finished runtime.
+  *Decision:* one executor, the prototype's, which reaches the runtime through
+  a small interface: its transactions are the runtime's transactions, with the
+  runtime's commit and CFC preparation, and in later milestones its events
+  come through the scheduler and its value code runs in the sandbox. The
+  in-memory store and the comparison harness stay, and a question of semantics
+  is settled there first. *Alternatives:* building the missing pieces into the
+  prototype, which writes again in `base/` the storage, encoding, labels and
+  commit that `runtime/` has and gives synthetic figures; and a second
+  executor written for the runtime, which is two implementations of one
+  semantics. *How it is written:*
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  with the milestones, what each measures, and what stays in the prototype.
+  *Built:* milestone 1, in the prototype's tree (`exec/executor.ts`
+  `TransactionHooks`, `compare/runtime-transactions.ts`,
+  `compare/integrated.ts`). *First figures:* over 213 corpus modules on the
+  runtime's emulated storage, with the inputs as labeled cells, 1.7 to 2.0 s
+  to settle against 25 to 43 s for today's runtime, and 10.0 to 10.3 s for 536
+  events against 73 to 75 s; 176 commits of 79 modules refused for want of the
+  schema of a write, which the adapter does not yet record. *If decided
+  otherwise:* those three stay as a measurement, and the missing pieces are
+  built into the prototype. *Settled* by the owner on 2026-11-18, with both
+  tracks and Topics as their shared target; see [Decided](#decided).
 
 ## Open, and needing the owner
 
@@ -11727,6 +11775,20 @@ The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
 
+- **The crate does not emit the corpus of the main branch of
+  2026-11-18** (`6e9ff5a381`), found when the integration branch merged it.
+  With `patterns/apps/weekly-calendar/view-walk.ts`, a helper of pattern
+  tests that came in with pull request #9825, or one of the four tests that
+  import it, in the corpus, footprint analysis does not finish: a sample
+  of the process after three minutes has every frame in
+  `footprint::normal_map` under `footprint::analyze_body`. Each file alone
+  analyzes in under 0.2 seconds, and a small recursive helper of the same
+  shape does not reproduce it. Without those five files the crate panics
+  with an index out of bounds in `oxc_index`, on main's changes under
+  `patterns/system/` taken together; no single directory of them
+  reproduces it. The prototype's own corpus at `3d33db2e4d` emits in 2.5
+  seconds, and the figures of milestone 1 of the integration were taken on
+  it.
 - **Neither cross-read covered every section.** Each reader states what
   was not read in full at the end of its section of the record. In the
   second, no reader read `footprint-analysis.md` against the execution or
@@ -12467,6 +12529,12 @@ The open questions each document ends with stay where they are.
       closes, `S` sessions over one list, a cycle that does not settle,
       and `E` pending insertions (questions 271 to 274 and 237), and the
       smaller sizes of question 275 and the rounds of question 253.
+
+8. **In the runtime, the milestones of the integration**
+   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
+   after milestone 1, a compiled piece in the runner behind an experimental
+   option, labels from templates at commit, value code in the sandbox, and
+   server execution with the network.
 
 ### Briefing an author
 
