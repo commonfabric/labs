@@ -350,7 +350,9 @@ describe("view interests", () => {
   });
 
   it("does not publish a watch replacement evaluated across session replacement", async () => {
-    await set([], [view()]);
+    // A session's first view is evaluated whole, which is the evaluation a
+    // resume can land in the middle of.
+    await set([watch("of:ordinary")]);
     const evaluate = server.evaluateWatchSet.bind(server);
     const sync = server.syncSessionForConnection.bind(server);
     const replacing = Promise.withResolvers<void>();
@@ -377,7 +379,7 @@ describe("view interests", () => {
     });
     expect(result.error?.name).toBe("SessionError");
     await resuming;
-    expect(server.viewInterestsForSpace(space)[0].view).toEqual(view());
+    expect(server.viewInterestsForSpace(space)).toEqual([]);
   });
 
   it("evaluates render demand once when adding supporting delivery", async () => {
@@ -1421,6 +1423,87 @@ describe("view interests", () => {
         }),
       ).not.toBeNull();
     }
+  });
+
+  it("replaces a view's revision without walking the demand or support it keeps", async () => {
+    await set([watch("of:ordinary")], [view()]);
+    const [{ handle }] = server.viewInterestsForSpace(space);
+    await server.setViewSelection(space, handle, {
+      generation: 1,
+      delivery: [query("of:support")],
+    });
+    await server.flushSessions();
+    using evaluations = spy(server, "evaluateWatchSet");
+    const sync = await set([watch("of:ordinary")], [view()]);
+    const replaced = await set([watch("of:ordinary")], [view(1)]);
+    expect(evaluations.calls).toHaveLength(0);
+    expect(sync.upserts.map((entry) => entry.id).toSorted()).toEqual([
+      "of:ordinary",
+      "of:render",
+      "of:support",
+    ]);
+    // The new revision has no selection yet, so its support goes, and the
+    // documents its demand keeps stay.
+    expect(replaced.upserts.map((entry) => entry.id).toSorted()).toEqual([
+      "of:ordinary",
+      "of:render",
+    ]);
+    expect(replaced.removes.map((entry) => entry.id)).toEqual(["of:support"]);
+  });
+
+  it("walks the root a replacement view adds, and retracts what the root it drops reached", async () => {
+    await server.writeDocument(space, "of:screen", {
+      child: { "/": { "link@1": { space, id: "of:child", path: [] } } },
+    });
+    await server.writeDocument(space, "of:child", { label: "child" });
+    const reaching = (id: string): ViewInterest => ({
+      ...view(),
+      query: {
+        roots: [{ id, selector: { path: [], schema: true as const } }],
+      },
+    });
+    await set([], [reaching("of:screen")]);
+    using evaluations = spy(server, "evaluateWatchSet");
+    const replaced = await set([], [{ ...reaching("of:render"), revision: 1 }]);
+    expect(evaluations.calls).toHaveLength(0);
+    expect(replaced.upserts.map((entry) => entry.id)).toEqual(["of:render"]);
+    expect(replaced.removes.map((entry) => entry.id).toSorted()).toEqual([
+      "of:child",
+      "of:screen",
+    ]);
+    expect(server.demandedInstancesForSpace(space).map((row) => row.id))
+      .toEqual(["of:render"]);
+    // The moved graph tracks the added root and no longer the dropped one.
+    messages.length = 0;
+    await server.writeDocument(space, "of:child", { label: "updated" });
+    await server.writeDocument(space, "of:render", { label: "updated" });
+    await server.flushSessions();
+    const ids = messages.flatMap((message) =>
+      message.type === "session/effect"
+        ? message.effect.upserts.map((entry) => entry.id)
+        : []
+    );
+    expect(ids).toEqual(["of:render"]);
+  });
+
+  it("removes an ordinary watch from a view session without walking the rendered demand", async () => {
+    await set([watch("of:ordinary")], [view()]);
+    using evaluations = spy(server, "evaluateWatchSet");
+    const removed = await server.watchRemove({
+      type: "session.watch.remove",
+      requestId: "remove-ordinary",
+      space,
+      sessionId,
+      watchIds: ["of:ordinary"],
+    });
+    expect(removed.error).toBeUndefined();
+    expect(evaluations.calls).toHaveLength(0);
+    expect(removed.ok?.sync.removes.map((entry) => entry.id)).toEqual([
+      "of:ordinary",
+    ]);
+    expect(removed.ok?.sync.upserts).toEqual([]);
+    expect(server.demandedInstancesForSpace(space).map((row) => row.id))
+      .toEqual(["of:render"]);
   });
 
   it("reuses an ordinary query under another watch ID while retaining visible demand", async () => {

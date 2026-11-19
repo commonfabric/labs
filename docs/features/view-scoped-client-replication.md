@@ -170,8 +170,15 @@ graph that refresh keeps current. A selection that drops a delivered root
 rebuilds the view's support graphs from the current selections over the demand
 graphs, which the same pass first refreshes by its dirty documents, and diffs
 the session's delivery against the result, so the departed documents are
-removed without the demand being walked again. A full view replacement or
-recovery rebuilds every graph. A selection that changes only what
+removed without the demand being walked again. A view replacement, or a watch
+removal, on a session that already holds view graphs moves those graphs: the
+demand graphs to the request's ordinary and rendered roots, and the support
+graphs to the selections the request's views keep. Each releases the roots the
+request drops and walks only the roots it adds, so a root the old and new sets
+both name is not walked again, and a view whose revision changes loses its
+support until the planner selects for the new revision. A session's first
+views, a replacement on a session marked for a full resync, and recovery
+evaluate every graph whole. A selection that changes only what
 the view may run or adopt leaves the graphs standing: its plans ride the
 session's next frame, a frame of plans alone when nothing dirtied it. A frame carries the plans when they are owed, by
 such a selection or by a rebuilt graph; an incremental frame that owes none

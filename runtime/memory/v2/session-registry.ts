@@ -175,7 +175,8 @@ export type SessionState = {
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
-   * the acting user — the space's ACL owner at open time — this
+   * the acting user — the space's ACL owner at open time, or the owner an
+   * access list first names after an open that found none — this
    * session's READ-class capability decisions resolve as. Never
    * consulted for WRITE/OWNER requirements, the lease-holder read row,
    * or scoped-read identity (those key on `principal`, the envelope).
