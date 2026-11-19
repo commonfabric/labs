@@ -5266,7 +5266,9 @@ export class Instance {
     const id = this.#name("under", collection, around, key);
     const table = this.#groups.get(this.#name("assembly", collection, around));
     if (table?.byKey.has(key)) {
-      this.#leaveGroup(table, key);
+      if (this.#leaveGroup(table, key)) {
+        this.#regroupEnclosing(collection, around);
+      }
       this.counts.groupUpdates += 1;
     }
     for (const entry of this.#underKey.get(id) ?? []) {
@@ -7044,6 +7046,8 @@ export class Instance {
   #foldedCollections: Set<number> | undefined;
   /** The cones of the element body of each collection. */
   readonly #elementConesOf = new Map<number, number[]>();
+  /** The folded collections directly inside each collection. */
+  readonly #innerFoldsOf = new Map<number, number[]>();
 
   /**
    * The records of the write edges of a cone that `matches` selects, each
@@ -7223,43 +7227,117 @@ export class Instance {
   #regroup(collection: number, context: Context): void {
     const element = context.get(collection);
     if (element === undefined) return;
-    const around = this.#keysIn(this.#outerOf(collection), context);
+    const inPlace = element.source instanceof Ref &&
+      element.source.path.some(isKeySegment);
+    this.#regroupKey(
+      collection,
+      this.#keysIn(this.#outerOf(collection), context),
+      element.key,
+      inPlace,
+    );
+  }
+
+  /**
+   * Updates the group of the element of `collection` under `key`, in the
+   * assembly of the keys `around` it. The group is that of the
+   * identifiers of what the element's cone instances consumed and of the
+   * set of groups of each folded collection inside it, so two elements
+   * whose inner folds differ are in two groups. `inPlace` says whether
+   * the element is a plain value in place, where it is known. Where the
+   * set of groups changes, the element of the enclosing collection that
+   * holds this one is updated in turn. The work is the number of groups
+   * of the folded collections inside the element.
+   */
+  #regroupKey(
+    collection: number,
+    around: readonly string[],
+    key: string,
+    inPlace?: boolean,
+  ): void {
     const name = this.#name("assembly", collection, around);
     let table = this.#groups.get(name);
     if (table === undefined) {
       table = { byKey: new Map(), groups: new Map(), notInPlace: new Set() };
       this.#groups.set(name, table);
     }
-    const keys = [...around, element.key];
-    const id = this.#elementCones(collection).map((cone) => {
+    const keys = [...around, key];
+    const own = this.#elementCones(collection).map((cone) => {
       const inputs = this.#inputsOf(cone, keys);
       return inputs === undefined ? "" : this.#idOf(inputs);
-    }).join("|");
+    });
+    const inner = this.#innerFolds(collection).map((folded) => {
+      const ids = [
+        ...this.#groups.get(this.#name("assembly", folded, keys))?.groups
+          .keys() ?? [],
+      ].sort();
+      return `f${folded}<${ids.join("|")}>`;
+    });
+    const id = [...own, ...inner].join("|");
     this.counts.groupUpdates += 1;
-    const { key } = element;
     const was = table.byKey.get(key);
+    let changed = false;
     if (was !== id) {
-      if (was !== undefined) this.#leaveGroup(table, key);
+      const notInPlace = table.notInPlace.has(key);
+      if (was !== undefined) changed = this.#leaveGroup(table, key);
+      if (notInPlace) table.notInPlace.add(key);
       table.byKey.set(key, id);
-      const members = table.groups.get(id) ?? new Set();
+      let members = table.groups.get(id);
+      if (members === undefined) {
+        members = new Set();
+        table.groups.set(id, members);
+        changed = true;
+      }
       members.add(key);
-      table.groups.set(id, members);
     }
-    const inPlace = element.source instanceof Ref &&
-      element.source.path.some(isKeySegment);
-    if (inPlace) table.notInPlace.delete(key);
-    else table.notInPlace.add(key);
+    if (inPlace === true) table.notInPlace.delete(key);
+    else if (inPlace === false) table.notInPlace.add(key);
+    if (changed) this.#regroupEnclosing(collection, around);
   }
 
-  /** Removes an element key from its group. */
-  #leaveGroup(table: Groups, key: string): void {
+  /**
+   * Updates the group of the element of the collection enclosing
+   * `collection` that holds the assembly of the keys `around`, where that
+   * collection is folded and the element has a group already.
+   */
+  #regroupEnclosing(collection: number, around: readonly string[]): void {
+    const outer = this.#outerOf(collection).at(-1);
+    const key = around.at(-1);
+    if (outer === undefined || key === undefined) return;
+    if (!this.#folded().has(outer)) return;
+    const outerAround = around.slice(0, -1);
+    const table = this.#groups.get(
+      this.#name("assembly", outer, outerAround),
+    );
+    if (!table?.byKey.has(key)) return;
+    this.#regroupKey(outer, outerAround, key);
+  }
+
+  /** The folded collections whose innermost enclosing one is `collection`. */
+  #innerFolds(collection: number): number[] {
+    let found = this.#innerFoldsOf.get(collection);
+    if (found === undefined) {
+      found = [...this.#folded()].filter((folded) =>
+        this.#outerOf(folded).at(-1) === collection
+      ).sort((a, b) => a - b);
+      this.#innerFoldsOf.set(collection, found);
+    }
+    return found;
+  }
+
+  /**
+   * Removes an element key from its group, and returns whether that
+   * emptied the group.
+   */
+  #leaveGroup(table: Groups, key: string): boolean {
     const id = table.byKey.get(key);
-    if (id === undefined) return;
+    if (id === undefined) return false;
     table.byKey.delete(key);
     table.notInPlace.delete(key);
     const members = table.groups.get(id);
     members?.delete(key);
-    if (members?.size === 0) table.groups.delete(id);
+    if (members?.size !== 0) return false;
+    table.groups.delete(id);
+    return true;
   }
 
   /**
@@ -7548,7 +7626,6 @@ export class Instance {
       const {
         instance: _instance,
         keys: _keys,
-        elements: _elements,
         ...inputs
       } = this.#inputsFor(body, keysOf(key), sourcesFor(key), depth);
       return { ...inputs, count: members.size };

@@ -588,3 +588,58 @@ describe("the elements of a `fold` in a write record", () => {
     expect(small.updates).toBeGreaterThan(0);
   });
 });
+
+describe("the elements of a `fold` whose body holds another `fold`", () => {
+  /**
+   * `nested-fold.tsx` over two lists in place whose items are references,
+   * the first to a document labeled "plain" and the second to one labeled
+   * "secret": the two lists bind the same labels and differ in their inner
+   * fold alone. Returns the elements of the outer fold that the record of
+   * `busy` reports after `then` ran.
+   */
+  const run = async (then: (instance: Instance) => void = () => {}) => {
+    const recorder = new Recorder((doc) =>
+      doc === "secret" ? "secret" : "plain"
+    );
+    const instance = new Instance(
+      await artifactOf("nested-fold"),
+      {
+        lists: [
+          { name: "a", items: [{ $link: { doc: "plain", path: [] } }] },
+          { name: "b", items: [{ $link: { doc: "secret", path: [] } }] },
+        ],
+      },
+      {
+        transactions: recorder,
+        documents: [
+          { id: "plain", kind: "input", value: "p" },
+          { id: "secret", kind: "input", value: "s" },
+        ],
+      },
+    );
+    const begun = recorder.changed.length;
+    then(instance);
+    const writes = byOutput(
+      recorder.changed.flatMap(({ writes }) => writes ?? []),
+    );
+    return {
+      elements: writes.get(2)?.elements?.[0],
+      changed: recorder.changed.length > begun,
+    };
+  };
+
+  it("puts two elements whose inner folds differ into two groups", async () => {
+    const { elements } = await run();
+    expect(
+      (elements as { groups: { count: number }[] }).groups.map(({ count }) =>
+        count
+      ),
+    ).toEqual([1, 1]);
+    // Each group reports the inner fold of its own element, through the
+    // interim output of the inner `filter` that the outer body names.
+    const inner = (elements as { groups: unknown[] }).groups.map((group) =>
+      JSON.stringify(group).includes('"doc":"secret"')
+    );
+    expect(inner.sort()).toEqual([false, true]);
+  });
+});
