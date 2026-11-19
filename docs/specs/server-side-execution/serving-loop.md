@@ -376,8 +376,10 @@ the ruled flows subscribes to setup docs before activation.
 `SpaceServerPolicy.currencyIndex`, off by default.)* Where the policy keeps
 the currency index (§3b) in its `skip` mode, the demand pass asks the memory
 server, for each root awaiting its first structure load whose piece is not
-running, whether the store can serve it as it stands. It can when the piece
-has a clean record of the current epoch, and every demand row of every
+running, whether the store can serve it as it stands. A root that is no
+result document is judged as the piece its `result` back-links lead to,
+which is the piece a load of it would start. The store can serve a root
+when the piece has a clean record of the current epoch, and every demand row of every
 session whose id the piece writes or owns, or a recorded piece beneath it
 does, has a clean owner that vouches for that instance: a vouch row for a
 written id, and a live document for an owned cell. Such a root is neither
@@ -1188,7 +1190,13 @@ executing:
   it records a source origin (§3e), since a start is where that origin is
   followed. Each row takes its document's head seq where every commit above
   the settle's visible input head is the loop's own, and that head
-  otherwise, which leaves the piece marked. Nothing is recorded while an
+  otherwise, which leaves the piece marked. The serving runtime can hold a
+  frame above that head, so the loop takes such a piece's record again at
+  its next settle that covers more, and a stored record that leaves one
+  owed wakes the loop for it. A write row does not move up to a head a
+  commit other than a derivation put there: the piece's writer reads
+  nothing it writes, so an overwrite does not wake it, and the piece stays
+  marked until it writes the document again. Nothing is recorded while an
   effect is outstanding, because a start is what re-fires an effect whose
   result never landed (§6 step 3). The tables are `currency_piece`,
   `currency_under`, `currency_read`, `currency_write`, `currency_vouch`

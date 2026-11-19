@@ -118,22 +118,27 @@ export type CurrencyStored = {
   marked: CurrencyMarked[];
 
   /**
-   * The pieces that were clean, then wrote a document again with no input of
-   * theirs having changed: what they held was not what they compute.
+   * The pieces that had been clean since their last record, then wrote an
+   * instance they vouched for again with no input of theirs having changed:
+   * what they held was not what they compute.
    */
   falseClean: string[];
 
+  /** The pieces of the batch stored `1`, with every row of theirs current. */
+  blocked: string[];
+
   /**
-   * The marked or unrecorded-input pieces that keep a piece of the batch at
-   * `1`, which a loop that runs them records next.
+   * The marked pieces outside the batch that keep one of `blocked` at `1`.
+   * A loop that runs one records it together with what it blocks, since
+   * pieces that read each other's writes settle only in one batch.
    */
   blockedBy: string[];
 
   /**
-   * The vouched-for pieces of the batch stored marked `2`, because a commit
-   * above `asOf` that the batch does not name as seen wrote a document of
-   * theirs. A record of one taken at a later quiescent point covers that
-   * commit.
+   * The vouched-for pieces of the batch stored marked `2` for no reason but
+   * a commit above `asOf` that the batch does not name as seen. A record of
+   * one taken at a quiescent point that covers that commit is not marked
+   * for it.
    */
   behind: string[];
 };
@@ -159,10 +164,25 @@ WHERE branch = :branch AND piece = :piece
 SELECT COUNT(*) AS count FROM currency_piece WHERE branch = :branch
 `),
   upsertPiece: engine.prepare(`
-INSERT INTO currency_piece (branch, piece, mark, epoch)
-VALUES (:branch, :piece, :mark, :epoch)
+INSERT INTO currency_piece (branch, piece, mark, was_clean, epoch)
+VALUES (:branch, :piece, :mark, 0, :epoch)
 ON CONFLICT (branch, piece)
-DO UPDATE SET mark = excluded.mark, epoch = excluded.epoch
+DO UPDATE SET mark = excluded.mark, was_clean = 0, epoch = excluded.epoch
+`),
+  setWasClean: engine.prepare(`
+UPDATE currency_piece SET was_clean = 1
+WHERE branch = :branch AND piece = :piece
+`),
+  selectWasClean: engine.prepare(`
+SELECT was_clean FROM currency_piece
+WHERE branch = :branch AND piece = :piece
+`),
+  selectCommitClass: engine.prepare(`
+SELECT class FROM "commit" WHERE seq = :seq
+`),
+  selectInstanceHead: engine.prepare(`
+SELECT seq FROM head
+WHERE branch = :branch AND id = :id AND scope_key = :scope_key
 `),
   setMark: engine.prepare(`
 UPDATE currency_piece SET mark = :mark
@@ -223,10 +243,6 @@ GROUP BY id
   selectRevisionSeqsAbove: engine.prepare(`
 SELECT DISTINCT seq FROM revision
 WHERE branch = :branch AND id = :id AND seq > :seq
-`),
-  selectInstanceRevisionSeqsAbove: engine.prepare(`
-SELECT DISTINCT seq FROM revision
-WHERE branch = :branch AND id = :id AND scope_key = :scope_key AND seq > :seq
 `),
   selectVouches: engine.prepare(`
 SELECT id, scope_key FROM currency_vouch
@@ -310,9 +326,15 @@ const markOf = (context: Context, piece: string): CurrencyMark | undefined =>
     | { mark: CurrencyMark }
     | undefined)?.mark;
 
-/** Sets the mark of `piece`, which has a record. */
+/**
+ * Sets the mark of `piece`, which has a record. A piece set clean is
+ * remembered as having been clean since its record was stored, which no
+ * later mark takes back.
+ */
 const setMark = (context: Context, piece: string, mark: CurrencyMark): void => {
-  context.statements.setMark.run({ branch: context.branch, piece, mark });
+  const { branch, statements } = context;
+  statements.setMark.run({ branch, piece, mark });
+  if (mark === 0) statements.setWasClean.run({ branch, piece });
 };
 
 /** The pieces holding `mark` that read a document `piece` writes. */
@@ -496,9 +518,12 @@ export const advanceCurrencyCursor = (
  * A row takes the seq its document's head stands at when every revision
  * above `batch.asOf` is one `batch.seen` names, and `batch.asOf` otherwise,
  * so a commit the recording loop had not seen leaves the piece marked `2`.
- * A piece with every row current is `1` while an input of it is stale and
- * `0` otherwise, and a piece that became clean clears the pieces marked `1`
- * downstream of it that are left with no stale input.
+ * A write row does not move up to a head that a commit other than a
+ * derivation put there: the piece did not write what the store holds, so it
+ * stays marked until it does. A piece with every row current is `1` while an
+ * input of it is stale and `0` otherwise, and a piece that became clean
+ * clears the pieces marked `1` downstream of it that are left with no stale
+ * input.
  */
 export const storeCurrencyRecords = (
   engine: Engine,
@@ -510,93 +535,118 @@ export const storeCurrencyRecords = (
   const result: CurrencyStored = {
     marked: [],
     falseClean: [],
+    blocked: [],
     blockedBy: [],
     behind: [],
   };
 
-  /** The seq a row for `id` takes, and whether that leaves it behind. */
-  const standing = new Map<string, { seq: number; behind: boolean }>();
-  const standingOf = (id: string): { seq: number; behind: boolean } => {
+  /** The highest head seq among the instances of `id`, `0` for none. */
+  const heads = new Map<string, number>();
+  const headOf = (id: string): number => {
+    let head = heads.get(id);
+    if (head === undefined) {
+      head = (statements.selectHighestHead.get({ branch, id }) as
+        | { seq: number | null }
+        | undefined)?.seq ?? 0;
+      heads.set(id, head);
+    }
+    return head;
+  };
+
+  /** The seqs of the revisions of `id` above `seq`. */
+  const revisionsAbove = (id: string, seq: number): number[] =>
+    headOf(id) <= seq
+      ? []
+      : (statements.selectRevisionSeqsAbove.all({ branch, id, seq }) as Array<
+        { seq: number }
+      >).map((row) => row.seq);
+
+  /** Whether the commit at `seq` is a serving loop's derivation. */
+  const isDerivation = (seq: number): boolean =>
+    seen.has(seq) ||
+    (statements.selectCommitClass.get({ seq }) as
+        | { class: string }
+        | undefined)?.class === "derived";
+
+  /**
+   * The seq a row for `id` takes, and whether a commit the batch had not
+   * seen leaves it behind.
+   */
+  const standing = new Map<string, { seq: number; unseen: boolean }>();
+  const standingOf = (id: string): { seq: number; unseen: boolean } => {
     let known = standing.get(id);
     if (known !== undefined) return known;
-    const head = (statements.selectHighestHead.get({ branch, id }) as
-      | { seq: number | null }
-      | undefined)?.seq ?? 0;
-    let unseen = false;
-    if (head > batch.asOf) {
-      const above = statements.selectRevisionSeqsAbove.all({
-        branch,
-        id,
-        seq: batch.asOf,
-      }) as Array<{ seq: number }>;
-      unseen = above.some(({ seq }) => !seen.has(seq));
-    }
+    const unseen = revisionsAbove(id, batch.asOf).some((seq) => !seen.has(seq));
     known = unseen
-      ? { seq: batch.asOf, behind: true }
-      : { seq: head, behind: false };
+      ? { seq: batch.asOf, unseen: true }
+      : { seq: headOf(id), unseen: false };
     standing.set(id, known);
     return known;
   };
 
   /**
-   * Whether `piece`, clean until now, wrote an instance it vouched for again
-   * with nothing it read having changed. Read before its rows are replaced.
+   * Whether `piece`, clean since its last record, wrote an instance it
+   * vouched for again with nothing it read having changed. Read before its
+   * rows are replaced.
    */
   const wroteAgainUnprompted = (piece: string): boolean => {
-    if (hasStaleInput(context, piece)) return false;
     const writes = new Map(
       (statements.selectWrites.all({ branch, piece }) as Array<
         { id: string; owned: number; seq: number }
       >).filter((row) => row.owned === 0).map((row) => [row.id, row.seq]),
     );
-    // A revision the recording loop did not make is a change from outside,
-    // and whatever the piece wrote after it was prompted.
-    const changedFromOutside = (id: string, seq: number): boolean =>
-      (statements.selectRevisionSeqsAbove.all({ branch, id, seq }) as Array<
-        { seq: number }
-      >).some((revision) => !seen.has(revision.seq));
+    // A revision that is no derivation is a change from outside, and
+    // whatever the piece wrote after it was prompted.
     for (const [id, seq] of writes) {
-      if (changedFromOutside(id, seq)) return false;
+      if (revisionsAbove(id, seq).some((above) => !isDerivation(above))) {
+        return false;
+      }
     }
     const reads = statements.selectReads.all({ branch, piece }) as Array<
       { entity_space: string; entity: string; seq: number }
     >;
     for (const row of reads) {
       if (row.entity_space !== batch.space || writes.has(row.entity)) continue;
-      const above = statements.selectRevisionSeqsAbove.all({
-        branch,
-        id: row.entity,
-        seq: row.seq,
-      });
-      if (above.length > 0) return false;
+      if (headOf(row.entity) > row.seq) return false;
     }
     const vouches = statements.selectVouches.all({ branch, piece }) as Array<
       { id: string; scope_key: string }
     >;
     return vouches.some(({ id, scope_key }) =>
-      statements.selectInstanceRevisionSeqsAbove.all({
-        branch,
-        id,
-        scope_key,
-        seq: writes.get(id) ?? 0,
-      }).length > 0
+      instanceHeadOf(id, scope_key) > (writes.get(id) ?? 0)
     );
   };
+
+  /** The head seq of the instance `(id, scopeKey)`, `0` for none. */
+  const instanceHeadOf = (id: string, scopeKey: string): number =>
+    (statements.selectInstanceHead.get({ branch, id, scope_key: scopeKey }) as
+      | { seq: number }
+      | undefined)?.seq ?? 0;
 
   engine.database.transaction(() => {
     const wasClean = batch.records
       .map((record) => record.piece)
-      .filter((piece) => markOf(context, piece) === 0);
+      .filter((piece) =>
+        (statements.selectWasClean.get({ branch, piece }) as
+          | { was_clean: number }
+          | undefined)?.was_clean === 1
+      );
     result.marked = advance(context);
     result.falseClean = wasClean.filter(wroteAgainUnprompted);
 
     for (const record of batch.records) {
       const { piece } = record;
+      const lastWrites = new Map(
+        (statements.selectWrites.all({ branch, piece }) as Array<
+          { id: string; owned: number; seq: number }
+        >).filter((row) => row.owned === 0).map((row) => [row.id, row.seq]),
+      );
       statements.deleteUnder.run({ branch, piece });
       statements.deleteReads.run({ branch, piece });
       statements.deleteWrites.run({ branch, piece });
       statements.deleteVouches.run({ branch, piece });
-      let behind = !record.vouched;
+      let unseen = false;
+      let overwritten = false;
       for (const root of record.under) {
         if (root !== piece) statements.insertUnder.run({ branch, piece, root });
       }
@@ -608,8 +658,8 @@ export const storeCurrencyRecords = (
       ];
       for (const read of reads) {
         const local = read.space === batch.space;
-        const at = local ? standingOf(read.id) : { seq: 0, behind: false };
-        behind ||= at.behind;
+        const at = local ? standingOf(read.id) : { seq: 0, unseen: false };
+        unseen ||= at.unseen;
         statements.insertRead.run({
           branch,
           piece,
@@ -621,26 +671,43 @@ export const storeCurrencyRecords = (
       }
       for (const id of record.writes) {
         const at = standingOf(id);
-        behind ||= at.behind;
+        unseen ||= at.unseen;
+        const last = lastWrites.get(id);
+        // A head above the last record's that no derivation put there is an
+        // overwrite from outside, which the piece's writer did not answer:
+        // it reads nothing it writes, so the change did not wake it.
+        const foreign = !at.unseen && last !== undefined && at.seq > last &&
+          !isDerivation(at.seq);
+        overwritten ||= foreign;
         statements.insertWrite.run({
           branch,
           piece,
           id,
           owned: 0,
-          seq: at.seq,
+          seq: foreign ? last : at.seq,
         });
       }
       for (const id of record.owned) {
         statements.insertWrite.run({ branch, piece, id, owned: 1, seq: 0 });
       }
       for (const { id, scopeKey } of record.vouches) {
+        // An instance can be overwritten below the head of another instance
+        // of its document, which the row for the document does not show.
+        const last = lastWrites.get(id);
+        const head = instanceHeadOf(id, scopeKey);
+        if (
+          last !== undefined && head > last && head <= batch.asOf &&
+          !isDerivation(head)
+        ) {
+          overwritten = true;
+        }
         statements.insertVouch.run({ branch, piece, id, scope_key: scopeKey });
       }
-      if (behind && record.vouched) result.behind.push(piece);
+      if (record.vouched && unseen && !overwritten) result.behind.push(piece);
       statements.upsertPiece.run({
         branch,
         piece,
-        mark: behind ? 2 : 0,
+        mark: record.vouched && !unseen && !overwritten ? 0 : 2,
         epoch: batch.epoch,
       });
     }
@@ -663,11 +730,13 @@ export const storeCurrencyRecords = (
     for (const piece of pieces) {
       const mark = markOf(context, piece);
       if (mark === 0) {
+        statements.setWasClean.run({ branch, piece });
         clean.push(piece);
         continue;
       }
       marked.push(piece);
       if (mark === 1) {
+        result.blocked.push(piece);
         for (const producer of markedProducersOf(context, piece)) {
           if (!pieces.includes(producer)) blockedBy.add(producer);
         }

@@ -227,6 +227,21 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_INDEX");
   });
 
+  it("returns the `record` mode, with a warning, for `skip` with no epoch", () => {
+    const warnings: string[] = [];
+    expect(
+      serverExecutionPolicyFromEnv(
+        envOf({
+          SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+          SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0",
+        }),
+        (m) => warnings.push(m),
+      ),
+    ).toEqual({ currencyIndex: "record", storeReadThrough: true });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_EPOCH");
+  });
+
   it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
     const warnings: string[] = [];
     const cases: [string, number][] = [

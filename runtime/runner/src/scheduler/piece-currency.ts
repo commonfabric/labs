@@ -6,7 +6,12 @@
  * vouch for, and whether the piece can be vouched for at all.
  */
 
-import type { ScopeKey } from "@commonfabric/memory/v2";
+import {
+  identityOfScopeKey,
+  resolveScopeKey,
+  type ScopeKey,
+  scopeOfScopeKey,
+} from "@commonfabric/memory/v2";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type { IMemorySpaceAddress, MemorySpace } from "../storage/interface.ts";
@@ -64,11 +69,13 @@ const identityOf = (action: Action) =>
  * broader slots on its chain, which hold the redirects that lead to it.
  */
 const chainOf = (key: ScopeKey): ScopeKey[] => {
-  if (key === "space") return ["space"];
-  const [kind, principal] = key.split(":");
-  return kind === "session"
-    ? [key, `user:${principal}` as ScopeKey, "space"]
-    : [key, "space"];
+  if (scopeOfScopeKey(key) !== "session") {
+    return key === "space" ? ["space"] : [key, "space"];
+  }
+  const identity = identityOfScopeKey(key);
+  return identity === undefined
+    ? [key, "space"]
+    : [key, resolveScopeKey("user", identity), "space"];
 };
 
 /** Whether `node` is clean in every instance it runs. */

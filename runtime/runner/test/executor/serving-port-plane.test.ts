@@ -244,6 +244,75 @@ describe("serving-port-plane", () => {
       ]);
     });
 
+    it("asks the server's thread to advance, store and judge the currency index, and returns what it reports", async () => {
+      const record = {
+        piece: "of:piece",
+        under: ["of:outer"],
+        vouched: true,
+        reads: [{ space, id: "of:input", derived: false }],
+        writes: ["computed:out"],
+        owned: ["of:state"],
+        vouches: [{ id: "computed:out", scopeKey: "space" }],
+      };
+      const batch = {
+        asOf: 4,
+        seen: [6],
+        epoch: "release-7",
+        records: [record],
+      };
+      const marked = [{ piece: "of:piece", seq: 5, under: ["of:outer"] }];
+      const asked: unknown[] = [];
+      bridge.onRequest("server.advanceCurrency", (params) => {
+        asked.push(params);
+        return marked;
+      });
+      bridge.onRequest("server.storeCurrencyRecords", (params) => {
+        asked.push(params);
+        return {
+          marked,
+          falseClean: ["of:piece"],
+          blocked: [],
+          blockedBy: [],
+          behind: ["of:piece"],
+        };
+      });
+      bridge.onRequest("server.judgeCurrencyRoots", (params) => {
+        asked.push(params);
+        return {
+          servable: [{ root: "of:argument", piece: "of:piece" }],
+          marked: [],
+        };
+      });
+
+      expect(await plane.server.advanceCurrency(space)).toEqual(marked);
+      expect(await plane.server.storeCurrencyRecords(space, batch)).toEqual({
+        marked,
+        falseClean: ["of:piece"],
+        blocked: [],
+        blockedBy: [],
+        behind: ["of:piece"],
+      });
+      expect(
+        await plane.server.judgeCurrencyRoots(space, ["of:argument"], {
+          excludePrincipal: alice,
+          epoch: "release-7",
+        }),
+      ).toEqual({
+        servable: [{ root: "of:argument", piece: "of:piece" }],
+        marked: [],
+      });
+      expect(asked).toEqual([
+        { space },
+        { space, batch },
+        {
+          space,
+          roots: ["of:argument"],
+          excludePrincipal: alice,
+          epoch: "release-7",
+        },
+      ]);
+    });
+
     it("returns whether a session is live for a principal from the sessions the server reported", async () => {
       openSession("alice-session", alice);
       await handled();

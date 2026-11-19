@@ -2260,6 +2260,11 @@ export class SpaceServer implements TransactionSealDestination {
           this.#pendingCurrencyWake = true;
           this.#feedArrived?.resolve();
         },
+        onMarked: (rearm) => {
+          for (const { key, seq } of rearm) this.#noteRearmed(key, seq);
+          this.#pendingStructureRetryWake = true;
+          this.#feedArrived?.resolve();
+        },
       });
     }
 
@@ -5981,7 +5986,10 @@ export class SpaceServer implements TransactionSealDestination {
     // comparison of its rows. The pass does NO per-row engine read (W0
     // obligation (i): a per-row read here lands on the wave-latency
     // critical path — `#loadDemandedStructure` is awaited before
-    // `runtime.idle()`).
+    // `runtime.idle()`). The one exception is the currency judgment below,
+    // where the policy keeps the index: the memory server reads the index
+    // per demand row, and only in a pass with a root awaiting its first
+    // load whose judgment a change of demand or of the marks left owed.
     // MINOR-1: snapshot the demand-note generation at the row read — a
     // note landing after this point is invisible to `demand` and must
     // re-latch a fresh pass (below, in the loadPass `.finally`).
@@ -6160,7 +6168,13 @@ export class SpaceServer implements TransactionSealDestination {
         rootKeys.delete(key);
       }
       if (this.#options.policy?.currencyIndex === "skip") {
-        for (const key of judged.servable) rootKeys.delete(key);
+        for (const key of judged.servable) {
+          rootKeys.delete(key);
+          // A re-arm the judgment did not bear out leaves no retry owed.
+          this.#pendingStructureLoads.delete(key);
+          this.#rearmSeqsUnderRetry.delete(key);
+          this.#rearmSeqsAwaitingFollow.delete(key);
+        }
       }
     }
     // ONE changed-doc collection for the whole pass, opened BEFORE the pull

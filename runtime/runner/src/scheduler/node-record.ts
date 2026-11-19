@@ -393,14 +393,6 @@ export class NodeRegistry {
   }
 
   /**
-   * Records `pieceRootId` as changed, as a write to the status of one of its
-   * nodes does. A no-op unless `trackChangedPieces()` was called.
-   */
-  noteChangedPiece(pieceRootId: string): void {
-    this.#changedPieces?.add(pieceRootId);
-  }
-
-  /**
    * The pieces a node of which joined or left the active set, or had its
    * status written, since this was last called, each named by the
    * `pieceRootId` of the node's action. A run writes its node's status as it
@@ -598,6 +590,11 @@ export class NodeRegistry {
       for (const record of filed) found.add(record);
     }
     return [...found].sort(byJoining);
+  }
+
+  /** Whether any active node names `rootId` as a demand root. */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodesByDemandRoot.has(rootId);
   }
 
   /**

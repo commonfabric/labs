@@ -1625,15 +1625,15 @@ snapshots deleted only at or below a boundary; every document reconstructed on
 both files through the inspector's replay — a second implementation of the
 engine's rule — and compared, with the ACL document's `value` unchanged and a
 valid ACL and `compaction` the only member that differs, or its tombstone
-untouched; every table outside the history — `op_*`, `scheduler_basis`,
-`execution_outbox`, `blob_store`, the tables patterns created — identical in
-schema and contents; the content fingerprint; exactly the payloads the runs'
-windows reach hollowed, every marker's hash and length matching the backup's
-bytes, every commit row and every other commit column surviving; the single
-run's counts against its plan; and commit 1's payload byte-identical.
-`--verify-sample <n>` reconstructs every n-th document and checks every n-th
-marker, and skips the fingerprint: a quick pass during rehearsal, and a weaker
-claim.
+untouched; every table outside the history — `op_*`, `scheduler_basis`, the
+`currency_*` tables, `execution_outbox`, `blob_store`, the tables patterns
+created — identical in schema and contents; the content fingerprint; exactly the
+payloads the runs' windows reach hollowed, every marker's hash and length
+matching the backup's bytes, every commit row and every other commit column
+surviving; the single run's counts against its plan; and commit 1's payload
+byte-identical. `--verify-sample <n>` reconstructs every n-th document and
+checks every n-th marker, and skips the fingerprint: a quick pass during
+rehearsal, and a weaker claim.
 
 The dry-run report counts the instances matched and truncated, the boundaries
 that become a `set`, the revision and snapshot rows and bytes that would go, the

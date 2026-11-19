@@ -4,9 +4,11 @@ import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
+import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
@@ -351,8 +353,63 @@ describe("SpaceServer", () => {
         await awaitEach(cycles, () => serves(root));
         await settled();
 
-        expect(host.stats().currency.servable).toBe(1);
+        // The session's watches make a root of the argument as well as of the
+        // result, and both lead to the piece.
+        expect(host.stats().currency.servable).toBeGreaterThan(0);
         expect(host.stats().currency.falseClean).toBe(0);
+        cancel();
+      });
+
+      it("leaves unstarted a settled piece that a session watches through its result schema, under `skip`", async () => {
+        delete (server as { demandForSpace?: unknown }).demandForSpace;
+        host = newHost("skip");
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: aliceSigner,
+        });
+        const alice = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager: manager,
+          experimental: { serverExecution: true },
+        });
+        opened.push({ runtime: alice, manager });
+        const compiled = await alice.patternManager.compilePattern(
+          TRIPLER_PROGRAM,
+          { space },
+        );
+        const argument = alice.getCell<{ value: number }>(
+          space,
+          "currency skipped argument",
+          compiled.argumentSchema,
+        );
+        const result = alice.getCell<{ out: number }>(
+          space,
+          "currency skipped result",
+          compiled.resultSchema,
+        );
+        await argument.sync();
+        await result.sync();
+        const tx = alice.edit();
+        argument.withTx(tx).set({ value: 2 });
+        alice.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        const cancel = result.sink(() => {});
+        const root = result.getAsNormalizedFullLink();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.recordsStored > 0 && serves(root),
+        );
+        await settled();
+        await host.spaceServer(space)!.park("test-park");
+
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await settled();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.rearmed).toBe(0);
         cancel();
       });
     });
@@ -448,8 +505,18 @@ describe("SpaceServer", () => {
         expect(serves(piece.root)).toBe(false);
 
         await setValue(5);
-        await awaitEach(cycles, () => serves(piece.root));
+        // The watermark, read at the end of each cycle the root is still
+        // unstarted in, never reaches the commit that changed the input.
+        const engine = await server.engineForSpace(space);
+        const changedAt = Engine.serverSeq(engine);
+        const covered: number[] = [];
+        await awaitEach(cycles, () => {
+          if (serves(piece.root)) return true;
+          covered.push(readWatermarkSeq(engine));
+          return false;
+        });
 
+        expect(covered.every((seq) => seq < changedAt)).toBe(true);
         expect(host.stats().currency.rearmed).toBe(1);
         await outIs(15);
       });

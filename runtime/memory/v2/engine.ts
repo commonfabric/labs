@@ -486,13 +486,15 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 --
 -- One row per recorded piece: the raw id of its result document, its mark
 -- (0 clean, 1 a piece that writes one of its inputs is marked, 2 one of its
--- own rows is behind or the piece was not vouched for), and the epoch of the
--- build that recorded it.
+-- own rows is behind or the piece was not vouched for), whether it has been
+-- clean since its record was stored, and the epoch of the build that
+-- recorded it.
 CREATE TABLE IF NOT EXISTS currency_piece (
-  branch TEXT    NOT NULL,
-  piece  TEXT    NOT NULL,
-  mark   INTEGER NOT NULL,
-  epoch  TEXT    NOT NULL,
+  branch    TEXT    NOT NULL,
+  piece     TEXT    NOT NULL,
+  mark      INTEGER NOT NULL,
+  was_clean INTEGER NOT NULL,
+  epoch     TEXT    NOT NULL,
   PRIMARY KEY (branch, piece)
 );
 -- The pieces that enclose a recorded piece: a demand for one of theirs is a
@@ -503,8 +505,6 @@ CREATE TABLE IF NOT EXISTS currency_under (
   root   TEXT NOT NULL,
   PRIMARY KEY (branch, piece, root)
 );
-CREATE INDEX IF NOT EXISTS idx_currency_under_root
-  ON currency_under (branch, root);
 -- What a piece read, by document and not by instance, with the seq the piece
 -- saw the document at. derived = 1 names a document some computation writes,
 -- which a piece is only as current as.
@@ -542,8 +542,6 @@ CREATE TABLE IF NOT EXISTS currency_vouch (
   scope_key TEXT NOT NULL,
   PRIMARY KEY (branch, piece, id, scope_key)
 );
-CREATE INDEX IF NOT EXISTS idx_currency_vouch_instance
-  ON currency_vouch (branch, id, scope_key);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,

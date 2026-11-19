@@ -326,6 +326,7 @@ describe("currency-index", () => {
 
       expect(markOf("of:pieceB")).toBe(2);
       expect(markOf("of:pieceC")).toBe(1);
+      expect(stored.blocked).toEqual(["of:pieceC"]);
       expect(stored.blockedBy).toEqual(["of:pieceB"]);
     });
 
@@ -407,6 +408,56 @@ describe("currency-index", () => {
       expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([0, 0]);
     });
 
+    it("keeps marked a piece whose output a commit that is no derivation overwrote, through a later record of it", () => {
+      const vouching = record("of:piece", {
+        writes: ["computed:out"],
+        vouches: [{ id: "computed:out", scopeKey: "space" }],
+      });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      const overwritten = write("computed:out");
+      expect(advance()).toEqual(["of:piece"]);
+
+      const stored = store(overwritten, [vouching]);
+
+      expect(markOf("of:piece")).toBe(2);
+      expect(stored.behind).toEqual([]);
+    });
+
+    it("clears a piece whose output was overwritten once a commit it names as seen writes it again", () => {
+      const vouching = record("of:piece", {
+        writes: ["computed:out"],
+        vouches: [{ id: "computed:out", scopeKey: "space" }],
+      });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      const overwritten = write("computed:out");
+      store(overwritten, [vouching]);
+      const own = write("computed:out");
+
+      store(overwritten, [vouching], [own]);
+
+      expect(markOf("of:piece")).toBe(0);
+    });
+
+    it("keeps marked a piece whose vouched instance was overwritten below another instance's head", () => {
+      const vouching = record("of:piece", {
+        writes: ["computed:out"],
+        vouches: [
+          { id: "computed:out", scopeKey: "space" },
+          { id: "computed:out", scopeKey: "user:alice" },
+        ],
+      });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      write("computed:out");
+      const own = write({ id: "computed:out", scope: "user" });
+
+      store(own, [vouching], [own]);
+
+      expect(markOf("of:piece")).toBe(2);
+    });
+
     it("replaces a piece's rows as a set", () => {
       const asOf = write("of:a", "of:b");
       store(asOf, [record("of:piece", { reads: [input("of:a")] })]);
@@ -433,6 +484,43 @@ describe("currency-index", () => {
         const stored = store(asOf, [vouching()], [own]);
 
         expect(stored.falseClean).toEqual(["of:piece"]);
+      });
+
+      it("names each piece of a wave stored in separate batches", () => {
+        const second = record("of:second", {
+          writes: ["computed:second"],
+          vouches: [{ id: "computed:second", scopeKey: "space" }],
+        });
+        const asOf = write("of:a", "computed:out", "computed:second");
+        store(asOf, [vouching(), second]);
+        const own = write("computed:out", "computed:second");
+
+        const first = store(asOf, [vouching()], [own]);
+        const rest = store(asOf, [second], [own]);
+
+        expect(first.falseClean).toEqual(["of:piece"]);
+        expect(rest.falseClean).toEqual(["of:second"]);
+      });
+
+      it("names a piece an advance of the cursor marked before its record was stored", () => {
+        const asOf = write("of:a", "computed:out");
+        store(asOf, [vouching()]);
+        const own = write("computed:out");
+        expect(advance()).toEqual(["of:piece"]);
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual(["of:piece"]);
+      });
+
+      it("is empty for a piece that was never clean", () => {
+        const asOf = write("of:a", "computed:out");
+        store(asOf, [{ ...vouching(), vouched: false }]);
+        const own = write("computed:out");
+
+        const stored = store(asOf, [vouching()], [own]);
+
+        expect(stored.falseClean).toEqual([]);
       });
 
       it("is empty when a document the piece read changed first", () => {

@@ -349,8 +349,9 @@ Each is something a reader relies on today, with the code that relies on it.
   the stage-4 test that reopens a compacted store and reads the genesis root
   and space kind is what notices if it does not.
 - **I7 — everything that is not revision history is untouched**: `head`
-  addresses, `op_*` tables, `scheduler_basis`, `execution_outbox`,
-  `blob_store`, `branch`, `execution_lease`, and every table a pattern created
+  addresses, `op_*` tables, `scheduler_basis`, the `currency_*` tables,
+  `execution_outbox`, `blob_store`, `branch`, `execution_lease`, and every
+  table a pattern created
   through the SQLite builtin.
 - **I8 — the default branch is the only branch.** A forked branch reads its
   parent's rows at `min(seq, forkSeq)`; a base materialized at a head past the

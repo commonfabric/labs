@@ -110,6 +110,9 @@ the revision. Each piece that just became marked marks `1` every clean piece
 that reads an id it writes, and so on, so the walk stops wherever it reaches
 a piece that is already marked. A change to a document a piece writes marks
 the piece itself, which covers an authored overwrite of a derived document.
+A later record does not take that back: a write row moves up only to a head
+a derivation put there, since the piece's writer reads nothing it writes and
+so was not woken by the overwrite.
 
 Nothing runs at admission. The serving loop advances the cursor once per
 cycle that drained input and before each judgment below, so a quiet space
@@ -130,7 +133,10 @@ that wrote an equal value clear the pieces below it without starting them.
 The memory server judges, since it holds both the index and the sessions'
 demand rows. For a root awaiting its first structure load whose piece is not
 running, the space server asks whether the root's piece can be served from the
-store. It can when:
+store. A root is not always a result document: a session that watches a
+piece's argument makes a root of it, and a load of that root starts the piece
+its `result` back-links lead to. The judgment follows the same links to the
+piece. The store can serve a root when:
 
 - the piece has a record, is clean, and was recorded under the current
   epoch;
@@ -146,6 +152,14 @@ its piece, the root is re-armed at the marking sequence number through the
 path a parked structure load takes (`#noteRearmed()`), so the watermark stays
 below that input until the piece has started and derived. A root demanded by
 a warm request is always loaded.
+
+Two cases are decided on the cautious side and are worth revisiting with
+measurements. A root is re-armed when a piece beneath it is marked, although
+the judgment that follows passes it again when that piece owns no demanded
+instance. And a root is judged on its own piece and the pieces beneath it,
+not on the pieces that enclose it: a nested piece that reads what an
+enclosing piece writes is marked through that read, and one that reads
+nothing of it is unaffected.
 
 The arrival seed and the arrival re-arm run only for a started piece. A
 session whose demand reaches an owned scoped cell it holds no instance of
@@ -169,7 +183,11 @@ everything. Each root the judgment would have served from the store is
 counted (`currency.servable`), and when a piece the index held clean writes
 an instance it vouched for again with no input of it changed, the judgment
 was wrong: the count of those is `currency.falseClean`, logged with the
-piece. `skip` acts on the judgment. `record` runs on a real
+piece. Whether a piece had been clean is kept with its record, so a mark that
+lands before the next record is stored does not hide it. `skip` acts on the
+judgment, and the toolshed turns it on only with
+`SERVER_EXECUTION_CURRENCY_EPOCH` set: a record is trusted across builds
+only by the epoch it names. `record` runs on a real
 space until `falseClean` stays at zero before `skip` is turned on there.
 
 ## What changes in the specifications
@@ -211,9 +229,9 @@ space until `falseClean` stays at zero before `skip` is turned on there.
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
    (`currency_piece`, `currency_read`, `currency_write`, `currency_vouch`,
-   `currency_cursor`): store a batch of records, advance the cursor, judge
-   roots against demand rows, list the stale producers of a set of pieces.
-   The tables join the SQL guard's core names and the engine's table list.
+   `currency_under`, `currency_cursor`): store a batch of records, advance
+   the cursor, judge roots against demand rows. The tables join the SQL
+   guard's core names and the engine's table list.
 2. **Recording, and judging without acting.** The scheduler reports the
    pieces whose computations changed and snapshots one piece. The space server
    takes snapshots and sends records through the memory server
@@ -228,8 +246,8 @@ space until `falseClean` stays at zero before `skip` is turned on there.
    still worth building.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
-5. **Starting stale producers.** The upstream question and the loop's own
-   demand.
+5. **Starting stale producers.** The index lists the marked producers of a
+   set of pieces, and the loop demands them itself.
 6. **Judging before activation.** The host judges when a session opens a
    parked space and activates only when a root fails or events are pending. A
    commit into a space with live sessions and no serving loop advances the
@@ -267,7 +285,8 @@ For the index, in `runtime/memory/test/`:
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
 runtimes over `EmulatedStorageManager`. Tests 9 to 15 exist in
-`space-server-currency.test.ts`; 16 is still to write:
+`space-server-currency.test.ts`, 7 and 11 with a client's own watches as
+the demand as well; 16 is still to write:
 
 9. With the index off, nothing is recorded and every start happens as today.
 10. In `record` mode a piece that settles is recorded clean, the next

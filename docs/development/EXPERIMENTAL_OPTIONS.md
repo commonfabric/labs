@@ -2457,7 +2457,8 @@ the per-epic implementation notes).
   anything else keeps none, with a warning from the toolshed bootstrap and
   none from the test server. `SERVER_EXECUTION_CURRENCY_EPOCH` names the
   build whose records are trusted (`SpaceServerPolicy.currencyEpoch`), and
-  is read only with a mode set. Meaningful only with the serving loop
+  is read only with a mode set; the toolshed runs `skip` as `record`, with
+  a warning, when it is unset. Meaningful only with the serving loop
   running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that adds the currency index
   of a space's store.

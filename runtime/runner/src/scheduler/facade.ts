@@ -1671,11 +1671,12 @@ export class Scheduler {
   }
 
   /**
-   * Has the next `takeChangedPieces()` name `pieceRootId`, whether or not a
-   * node of it changes meanwhile.
+   * Whether any active node names `rootId`, the raw id of a result document,
+   * as a demand root: the piece rooted there, or one beneath it, is
+   * registered here.
    */
-  noteChangedPiece(pieceRootId: string): void {
-    this.#nodes.noteChangedPiece(pieceRootId);
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodes.hasNodesUnderDemandRoot(rootId);
   }
 
   /**

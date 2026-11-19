@@ -131,7 +131,8 @@ export type ServerExecutionEnvPolicy = {
  *   SERVER_EXECUTION_CURRENCY_INDEX) is kept for the literal `record` or
  *   `skip` and not otherwise; anything else but `off` warns. Its epoch
  *   (`SpaceServerPolicy.currencyEpoch`, SERVER_EXECUTION_CURRENCY_EPOCH) is
- *   taken as written.
+ *   taken as written, and `skip` without one runs as `record`, with a
+ *   warning.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -255,6 +256,16 @@ export function serverExecutionPolicyFromEnv(
     );
   }
   const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH");
+  // A record is trusted across builds only by the epoch it names, so
+  // leaving pieces unstarted on it takes a named epoch.
+  if (currencyIndex === "skip" && currencyEpoch === undefined) {
+    warn(
+      "Server-execution v2: SERVER_EXECUTION_CURRENCY_INDEX=skip needs " +
+        "SERVER_EXECUTION_CURRENCY_EPOCH; the currency index runs as " +
+        '"record"',
+    );
+    currencyIndex = "record";
+  }
   return {
     ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
     ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),

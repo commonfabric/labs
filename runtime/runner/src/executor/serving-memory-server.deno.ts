@@ -202,8 +202,8 @@ const TIMER_DELAY_MAX_MS = 2_147_483_647;
  * (`SERVER_EXECUTION_OVERLAP_COMMIT`) are each on for the literal `true`
  * alone, where a toolshed keeps the read-through on unless the variable is
  * `false`. The currency index (`SERVER_EXECUTION_CURRENCY_INDEX`) is kept
- * for the literal `record` or `skip`. The flush deadline and the cap it grows to come from
- * `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
+ * for the literal `record` or `skip`. The flush deadline and the cap it
+ * grows to come from `SERVER_EXECUTION_FLUSH_DEADLINE_MS` and
  * `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`, positive decimal integers of
  * milliseconds. A lane sets the first two to run every test that leaves them
  * unset under the posture; a benchmark sets the others to measure a cadence.

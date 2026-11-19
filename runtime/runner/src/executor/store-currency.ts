@@ -54,9 +54,25 @@ export class StoreCurrency {
   readonly #serviceIdentity: string;
   readonly #stats: ServingLoopStats;
   readonly #onOwed: () => void;
+  readonly #onMarked: (rearm: CurrencyRearm[]) => void;
 
   /** The pieces a later snapshot covers whether or not they change again. */
   readonly #owed = new Set<string>();
+
+  /**
+   * The owed pieces a record of which was stored behind a commit its settle
+   * had not covered, each with that settle's `asOf`. A snapshot taken at
+   * that seq or below would be stored behind the same commit, so such a
+   * piece waits for a settle that covers more.
+   */
+  readonly #behindAt = new Map<string, number>();
+
+  /**
+   * The pieces a snapshot was owed for because one marked piece kept
+   * another at `1`, until a computation of theirs changes. Each is owed that
+   * once, so two pieces that mark each other are not snapshotted in turns.
+   */
+  readonly #retakenForBlock = new Set<string>();
 
   /** The demand keys left unloaded, each with the piece it is the root of. */
   readonly #served = new Map<string, string>();
@@ -77,7 +93,8 @@ export class StoreCurrency {
    * Constructs an instance for the tenure serving `space`, whose records are
    * stored and whose roots are judged by `server`. `onOwed` is called when a
    * stored record leaves a piece owed another snapshot, which only a further
-   * cycle of the loop takes.
+   * cycle of the loop takes. `onMarked` is called with the keys left
+   * unloaded whose pieces storing a record found marked.
    */
   constructor(options: {
     space: MemorySpace;
@@ -87,6 +104,7 @@ export class StoreCurrency {
     serviceIdentity: string;
     stats: ServingLoopStats;
     onOwed: () => void;
+    onMarked: (rearm: CurrencyRearm[]) => void;
   }) {
     this.#space = options.space;
     this.#server = options.server;
@@ -95,6 +113,7 @@ export class StoreCurrency {
     this.#serviceIdentity = options.serviceIdentity;
     this.#stats = options.stats;
     this.#onOwed = options.onOwed;
+    this.#onMarked = options.onMarked;
   }
 
   /** Settles once every record handed to `store()` so far has been stored. */
@@ -124,13 +143,22 @@ export class StoreCurrency {
     asOf: number,
     ownSeqs: Iterable<number>,
   ): CurrencySnapshot | undefined {
-    const pieces = new Set([
-      ...this.#owed,
-      ...runtime.scheduler.takeChangedPieces(),
-    ]);
-    this.#owed.clear();
+    const changed = runtime.scheduler.takeChangedPieces();
+    for (const piece of changed) {
+      this.#behindAt.delete(piece);
+      this.#retakenForBlock.delete(piece);
+    }
+    const pieces = new Set(changed);
+    for (const piece of this.#owed) {
+      // A settle that covers no more than the last one would be stored
+      // behind the same commit.
+      if ((this.#behindAt.get(piece) ?? -1) >= asOf) continue;
+      pieces.add(piece);
+    }
     const records: CurrencyRecord[] = [];
     for (const piece of pieces) {
+      this.#owed.delete(piece);
+      this.#behindAt.delete(piece);
       if (!isDocumentId(piece)) continue;
       const taken = runtime.scheduler.pieceCurrencySnapshot(this.#space, piece);
       if (taken === undefined) continue;
@@ -190,15 +218,31 @@ export class StoreCurrency {
             "no input changed: " + stored.falseClean.join(", "),
           ]);
         }
-        // A piece that keeps one of these marked is recorded next, so that
-        // a producer running here clears what reads it. So is a piece a
-        // commit this settle had not covered left marked: the serving
-        // runtime can hold a frame above the settle's visible input head,
-        // and the next settle covers it.
-        const owed = [...stored.blockedBy, ...stored.behind];
-        for (const piece of owed) this.#owed.add(piece);
-        if (owed.length > 0) this.#onOwed();
-        if (stored.marked.length > 0) this.#judgmentOwed = true;
+        let owed = false;
+        // A piece a commit this settle had not covered left marked is
+        // recorded again once a settle covers more: the serving runtime can
+        // hold a frame above the settle's visible input head.
+        for (const piece of stored.behind) {
+          this.#owed.add(piece);
+          this.#behindAt.set(piece, snapshot.asOf);
+          owed = true;
+        }
+        // A piece that keeps one of these marked is recorded with it, so
+        // that a producer running here clears what reads it.
+        if (stored.blockedBy.length > 0) {
+          for (const piece of [...stored.blockedBy, ...stored.blocked]) {
+            if (this.#retakenForBlock.has(piece)) continue;
+            this.#retakenForBlock.add(piece);
+            this.#owed.add(piece);
+            owed = true;
+          }
+        }
+        if (owed) this.#onOwed();
+        if (stored.marked.length > 0) {
+          this.#judgmentOwed = true;
+          const rearm = this.#rearmsFor(stored.marked);
+          if (rearm.length > 0) this.#onMarked(rearm);
+        }
       }
     }).catch((error) => {
       logger.warn("currency-store-failed", () => [
@@ -219,9 +263,9 @@ export class StoreCurrency {
   }
 
   /**
-   * Judges the roots of `rootKeys` that await their first structure load,
-   * whose pieces are not running, are not warm demand, and are space-scoped
-   * result documents; `eligible` says which keys are neither. `demandChanged`
+   * Judges the roots of `rootKeys` that are space-scoped and that `eligible`
+   * passes: the ones awaiting their first structure load that are not warm
+   * demand. A root whose piece is running here is not judged. `demandChanged`
    * says whether any session's rows changed since the last call.
    *
    * @returns The keys the store can serve, which the caller leaves unloaded
@@ -235,26 +279,27 @@ export class StoreCurrency {
     eligible: (key: string, root: { id: string; scope: string }) => boolean,
     demandChanged: boolean,
   ): Promise<{ servable: string[]; rearm: CurrencyRearm[] }> {
-    const candidates = new Map<string, string>();
+    const eligibleRoots = new Map<string, string>();
     for (const [key, root] of rootKeys) {
+      if (root.scope === "space" && eligible(key, root)) {
+        eligibleRoots.set(key, root.id);
+      } else {
+        this.#served.delete(key);
+      }
+    }
+    if (eligibleRoots.size === 0) return { servable: [], rearm: [] };
+    // A root left unloaded whose piece has nodes was started some other
+    // way, as an event's auto-start does, and is loaded like any other.
+    const candidates = new Map<string, string>();
+    for (const [key, root] of eligibleRoots) {
+      const piece = this.#served.get(key);
       if (
-        !isDocumentId(root.id) || root.scope !== "space" ||
-        !eligible(key, root)
+        piece !== undefined && runtime.scheduler.hasNodesUnderDemandRoot(piece)
       ) {
         this.#served.delete(key);
-        continue;
+      } else {
+        candidates.set(key, root);
       }
-      const cell = runtime.getCellFromLink({
-        space: this.#space,
-        id: root.id,
-        path: [],
-        scope: "space",
-      });
-      if (runtime.runner.isRunning(cell)) {
-        this.#served.delete(key);
-        continue;
-      }
-      candidates.set(key, root.id);
     }
     if (candidates.size === 0) return { servable: [], rearm: [] };
     const settled = !this.#judgmentOwed && !demandChanged &&
@@ -266,11 +311,19 @@ export class StoreCurrency {
       [...new Set(candidates.values())],
       { excludePrincipal: this.#serviceIdentity, epoch: this.#epoch },
     );
-    const passing = new Set(judged.servable);
+    const pieces = new Map(
+      judged.servable.map(({ root, piece }) => [root, piece]),
+    );
     const servable: string[] = [];
     const rearm: CurrencyRearm[] = [];
-    for (const [key, piece] of candidates) {
-      if (passing.has(piece)) {
+    for (const [key, root] of candidates) {
+      const piece = pieces.get(root);
+      // A piece with nodes here is running, and its root is loaded as one a
+      // start already covers.
+      if (
+        piece !== undefined &&
+        !runtime.scheduler.hasNodesUnderDemandRoot(piece)
+      ) {
         servable.push(key);
         this.#stats.currency.servable += 1;
         if (this.#mode === "skip" && !this.#served.has(key)) {
@@ -279,9 +332,11 @@ export class StoreCurrency {
         }
         continue;
       }
-      if (!this.#served.delete(key)) continue;
+      const left = this.#served.get(key);
+      if (left === undefined) continue;
+      this.#served.delete(key);
       this.#stats.currency.rearmed += 1;
-      const seq = markingSeq(judged.marked, piece);
+      const seq = markingSeq(judged.marked, left);
       if (seq !== undefined) rearm.push({ key, seq });
     }
     return { servable, rearm };
@@ -300,6 +355,20 @@ export class StoreCurrency {
     const marked = await this.#server.advanceCurrency(this.#space);
     if (marked.length === 0) return [];
     this.#judgmentOwed = true;
+    return this.#rearmsFor(marked);
+  }
+
+  /** Forgets the demand key `key`, which no session demands any longer. */
+  forget(key: string): void {
+    this.#served.delete(key);
+  }
+
+  /**
+   * Helper for `advance()` and `store()`, which takes each key left unloaded
+   * whose piece `marked` marks, or a piece beneath it, out of the keys left
+   * unloaded, and returns it with the seq it is re-armed at.
+   */
+  #rearmsFor(marked: readonly CurrencyMarked[]): CurrencyRearm[] {
     const rearm: CurrencyRearm[] = [];
     for (const [key, piece] of this.#served) {
       const seq = markingSeq(marked, piece);
@@ -309,11 +378,6 @@ export class StoreCurrency {
       rearm.push({ key, seq });
     }
     return rearm;
-  }
-
-  /** Forgets the demand key `key`, which no session demands any longer. */
-  forget(key: string): void {
-    this.#served.delete(key);
   }
 }
 
