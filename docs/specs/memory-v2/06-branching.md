@@ -900,6 +900,7 @@ interface CommitSummary {
   class: "authored" | "derived" | "system";
   createdAt: string; // ISO 8601, UTC
   actingPrincipal?: string;
+  principal?: string; // Who made the commit: actingPrincipal, else its session's
   events: number; // Events the commit appended to streams
   consequenceOf?: string[]; // Event ids, on a derived commit
   derivedThrough?: number; // The watermark, on a derived commit

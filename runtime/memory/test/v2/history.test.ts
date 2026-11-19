@@ -151,6 +151,23 @@ describe("history", () => {
       expect(Number.isNaN(Date.parse(commits[0].createdAt))).toBe(false);
     });
 
+    it("returns the principal of the session that made a commit, and none for a session without one", () => {
+      set("of:a", "anonymous");
+      applyCommit(engine, {
+        sessionId,
+        principal,
+        space,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id: "of:a", value: { value: "theirs" } }],
+        },
+      });
+
+      expect(listCommits(engine).map((commit) => commit.principal))
+        .toEqual([principal, undefined]);
+    });
+
     it("returns a fork's own commits, then its parent's up to the fork point", () => {
       const before = set("of:a", "before");
       createBranch(engine, "fork");

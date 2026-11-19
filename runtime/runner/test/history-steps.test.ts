@@ -27,13 +27,48 @@ describe("historySteps()", () => {
       .toEqual([[3, 3, true], [2, 2, true], [1, 1, true]]);
   });
 
-  it("returns a step as not settled when a served space's loop has yet to commit", () => {
+  it("returns a step that sent an event as not settled when a served space's loop has yet to commit", () => {
     const steps = historySteps([commit(2, { events: 1 }), commit(1)], {
       served: true,
     });
 
     expect(steps.map(({ seq, settled }) => [seq, settled]))
-      .toEqual([[2, false], [1, false]]);
+      .toEqual([[2, false], [1, true]]);
+  });
+
+  it("returns a step that sent no event as settled, however far the serving loop had computed", () => {
+    const steps = historySteps([
+      derived(4, 3),
+      commit(3, { events: 1 }),
+      commit(2),
+      commit(1),
+    ]);
+
+    expect(steps.map(({ seq, settled }) => [seq, settled]))
+      .toEqual([[4, true], [2, true], [1, true]]);
+  });
+
+  it("returns a step as not settled while an event of an earlier step is pending", () => {
+    const steps = historySteps([
+      derived(4, 2),
+      commit(3),
+      commit(2, { events: 1 }),
+      derived(1, 0),
+    ]);
+
+    expect(steps.map(({ seq, settled }) => [seq, settled]))
+      .toEqual([[4, true], [2, false]]);
+  });
+
+  it("returns the principal of the commit that began each step", () => {
+    const steps = historySteps([
+      derived(3, 2),
+      commit(2, { events: 1, principal: "did:key:zAlice" }),
+      commit(1),
+    ]);
+
+    expect(steps.map((step) => step.principal))
+      .toEqual(["did:key:zAlice", undefined]);
   });
 
   it("ends a step at the last commit the serving loop made for it", () => {

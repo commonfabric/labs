@@ -36,9 +36,17 @@ export type HistoryStep = {
   writes: number;
 
   /**
-   * Whether the state the step left holds everything its first commit called
-   * for: `false` while the serving loop had yet to compute it when the next
-   * step began, so that a fork of the step starts before that computation.
+   * The principal that made the commit that began the step, absent where
+   * that commit's session had none.
+   */
+  principal?: string;
+
+  /**
+   * Whether every event sent up to the end of the step had its handler run
+   * by then: `false` while the serving loop had yet to reach one, so that a
+   * fork of the step starts before that handler ran. A step that sent no
+   * event is settled when none before it was pending, since a fork computes
+   * for itself what a write alone calls for.
    */
   settled: boolean;
 };
@@ -69,18 +77,32 @@ export function historySteps(
   const served = options.served === true ||
     commits.some((commit) => commit.class === "derived");
   const steps: HistoryStep[] = [];
-  let seq: number | undefined;
-  let writes = 0;
-  let derivedThrough = 0;
-  for (const commit of commits) {
-    seq ??= commit.seq;
-    writes += commit.writes;
+  // Read oldest first, so that each step is judged by what the serving loop
+  // had computed through, and which event was the last sent, when it ended.
+  let open: Omit<HistoryStep, "settled"> | undefined;
+  let through = 0;
+  let lastEvent = 0;
+  const close = () => {
+    if (open !== undefined) {
+      steps.push({ ...open, settled: !served || through >= lastEvent });
+    }
+  };
+  for (let index = commits.length - 1; index >= 0; index--) {
+    const commit = commits[index];
     if (commit.class === "derived") {
-      derivedThrough = Math.max(derivedThrough, commit.derivedThrough ?? 0);
+      through = Math.max(through, commit.derivedThrough ?? 0);
+      // A serving loop's commit with no step open belongs to a step the
+      // listing cut off.
+      if (open !== undefined) {
+        open.seq = commit.seq;
+        open.writes += commit.writes;
+      }
       continue;
     }
-    steps.push({
-      seq,
+    close();
+    if (commit.events > 0) lastEvent = commit.seq;
+    open = {
+      seq: commit.seq,
       startSeq: commit.seq,
       at: commit.createdAt,
       kind: commit.restored !== undefined
@@ -92,12 +114,12 @@ export function historySteps(
       ...(commit.restored !== undefined
         ? { restoredSeq: commit.restored.seq }
         : {}),
-      writes,
-      settled: !served || derivedThrough >= commit.seq,
-    });
-    seq = undefined;
-    writes = 0;
-    derivedThrough = 0;
+      writes: commit.writes,
+      ...(commit.principal !== undefined
+        ? { principal: commit.principal }
+        : {}),
+    };
   }
-  return steps;
+  close();
+  return steps.reverse();
 }

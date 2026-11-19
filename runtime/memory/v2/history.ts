@@ -18,6 +18,7 @@ import {
   DEFAULT_BRANCH,
   type EntityId,
   type Operation,
+  principalOfSessionKey,
   scopeOfScopeKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
   SERVER_EXECUTION_EFFECTS_DOC_ID,
@@ -76,6 +77,7 @@ type CommitRow = {
   class: CommitClass;
   created_at: string;
   acting_principal: string | null;
+  session_id: string;
   consequence_of: string | null;
   derived_through: number | null;
   original: string;
@@ -84,6 +86,7 @@ type CommitRow = {
 
 const SELECT_COMMITS = `
 SELECT c.seq, c.branch, c.class, c.created_at, c.acting_principal,
+       c.session_id,
        c.consequence_of, c.derived_through, c.original,
        (SELECT COUNT(*) FROM (
           SELECT DISTINCT r.id, r.scope_key FROM revision r
@@ -122,27 +125,32 @@ const payloadSummary = (
   };
 };
 
-const toCommitSummary = (row: CommitRow): CommitSummary => ({
-  seq: row.seq,
-  branch: row.branch,
-  class: row.class,
-  createdAt: `${row.created_at.replace(" ", "T")}Z`,
-  ...(row.acting_principal !== null
-    ? { actingPrincipal: row.acting_principal }
-    : {}),
-  ...(row.consequence_of !== null
-    ? {
-      consequenceOf: decodeTrustedMemoryBoundary<string[]>(
-        row.consequence_of,
-      ),
-    }
-    : {}),
-  ...(row.derived_through !== null
-    ? { derivedThrough: row.derived_through }
-    : {}),
-  ...payloadSummary(row.original, row.class),
-  writes: row.writes,
-});
+const toCommitSummary = (row: CommitRow): CommitSummary => {
+  const principal = row.acting_principal ??
+    principalOfSessionKey(row.session_id);
+  return {
+    seq: row.seq,
+    branch: row.branch,
+    class: row.class,
+    createdAt: `${row.created_at.replace(" ", "T")}Z`,
+    ...(row.acting_principal !== null
+      ? { actingPrincipal: row.acting_principal }
+      : {}),
+    ...(principal !== undefined ? { principal } : {}),
+    ...(row.consequence_of !== null
+      ? {
+        consequenceOf: decodeTrustedMemoryBoundary<string[]>(
+          row.consequence_of,
+        ),
+      }
+      : {}),
+    ...(row.derived_through !== null
+      ? { derivedThrough: row.derived_through }
+      : {}),
+    ...payloadSummary(row.original, row.class),
+    writes: row.writes,
+  };
+};
 
 /**
  * Returns the commits of a branch's history, newest first: the branch's own,

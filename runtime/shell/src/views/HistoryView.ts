@@ -29,6 +29,14 @@ function stepLabel(step: HistoryStep): string {
 }
 
 /**
+ * Returns `did` short enough for a line of the step list: its method and
+ * the start and end of its identifier.
+ */
+function shortDid(did: string): string {
+  return did.length <= 24 ? did : `${did.slice(0, 14)}…${did.slice(-6)}`;
+}
+
+/**
  * The panel listing the steps of the viewed space's history. Choosing a step
  * asks the root for a fork of the space as that step left it, which the rest
  * of the shell then shows, and the panel offers the way back and the way to
@@ -131,6 +139,10 @@ export class XHistoryView extends BaseView {
     .detail {
       opacity: 0.65;
       font-size: 0.75rem;
+    }
+
+    .by {
+      grid-column: 1 / -1;
     }
 
     .note {
@@ -263,6 +275,11 @@ export class XHistoryView extends BaseView {
           <span class="detail">#${step.seq}</span>
           <span class="detail">${new Date(step.at).toLocaleString()}</span>
           <span class="detail">${step.settled ? "" : "in progress"}</span>
+          ${step.principal === undefined ? nothing : html`
+            <span class="detail by" title="${step.principal}">
+              by ${shortDid(step.principal)}
+            </span>
+          `}
         </button>
       </li>
     `;

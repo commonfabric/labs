@@ -30,12 +30,15 @@ the compaction: compaction deletes revisions, so a point of history below it
 can hold a document as absent that the space held then, and the server
 neither lists such a point nor forks or restores from it.
 
-A step is **settled** when the serving loop had computed everything its first
-commit called for before the next step began. The loop records the seq it has
-computed through on each commit it makes (`derivedThrough`), so a step is
-settled when one of its commits carries a `derivedThrough` at or past the
-step's first commit. Where no serving loop commits, each client stores what it
-computes with its own commits, and every step is settled.
+A step is **settled** when every event sent up to its end had its handler run
+by then. The serving loop records the seq it has computed through on each
+commit it makes (`derivedThrough`), so a step is settled when the loop had
+computed through the last commit that sent an event, at the step's end. A step
+that sent no event is settled when none before it was pending: what a write
+alone calls for is derived state, which a fork computes for itself. Where no
+serving loop commits, each client stores what it computes with its own commits,
+and every step is settled. A listing judges this from the stretch of history
+it read, so an event pending from before that stretch is not counted.
 
 **A fork.** Showing an earlier state is not a read-only operation. A running
 piece writes: an interaction as small as switching a tab is state, and a state
@@ -149,8 +152,9 @@ believing it is the space's.
 
 "Toggle history" in the header menu opens the history panel for the viewed
 space (`showHistoryView` in the shell's display toggles). The panel lists the
-space's steps, newest first, each with what began it, its `seq` and its time,
-and marks a step that is not settled as in progress. The list is read when the
+space's steps, newest first, each with what began it, its `seq`, its time and
+the principal that made it, and marks a step that is not settled as in
+progress. The list is read when the
 panel opens and again after returning from a fork; it does not follow the
 space live.
 

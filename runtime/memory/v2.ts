@@ -2237,6 +2237,13 @@ export type CommitSummary = {
   /** The user a server-produced authored commit acted for. */
   actingPrincipal?: string;
 
+  /**
+   * Who made the commit: the user a server-produced commit acted for, and
+   * otherwise the principal of the session that committed. Absent for a
+   * commit of a session with no principal.
+   */
+  principal?: string;
+
   /** How many events the commit appended to streams. */
   events: number;
 
