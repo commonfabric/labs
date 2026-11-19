@@ -1,7 +1,8 @@
 /**
  * When a FabriChat manager drops a notice it holds: once the notice's
  * recipient is on the room's roster, the sender's next join of the room drops
- * it, and not before, an offer that adds them included; and a join of a room
+ * it, and not before, an offer that adds them included; the sender's next act
+ * drops a notice of a room the catalog says is deleted; and a join of a room
  * the sender holds no notice of reads no roster.
  */
 
@@ -286,6 +287,55 @@ describe("fabrichat-notice-prune", () => {
     await senderJoins(senders.runtime, senders.home, room);
 
     expect(await storedNoticesOf(room)).toEqual([]);
+  });
+
+  describe("when the catalog says a room is deleted", () => {
+    // The catalog's word is written as Home's `markDeleted` writes it, once
+    // the memory server has said so: the entry moves to the `deleted` state.
+
+    let doomed: Cell<unknown>;
+    let live: Cell<unknown>;
+
+    beforeAll(async () => {
+      doomed = await createGroup("doomed", [recipient.did()]);
+      live = await createGroup("live", [recipient.did()]);
+      const tx = senders.runtime.edit();
+      senders.home.withTx(tx).key("sharedSpaceCatalogStorage").key("entries")
+        .key(doomed.space).key("state").set("deleted");
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await senders.runtime.idle();
+    });
+
+    it("drops the room's notice at the sender's manager's next act, and not before", async () => {
+      expect(await storedNoticesOf(doomed)).toEqual([recipient.did()]);
+
+      await senderJoins(senders.runtime, senders.home, live);
+
+      expect(await storedNoticesOf(doomed)).toEqual([]);
+      expect(await storedNoticesOf(live)).toEqual([recipient.did()]);
+    });
+
+    it("opens no session in the room's space on a client listing the notices once the sender's manager has acted", async () => {
+      await senderJoins(senders.runtime, senders.home, live);
+      await senders.storage.synced();
+      const client = await homeOf(server, apiUrl, sender, {
+        serverExecution: false,
+      });
+      try {
+        const listed = await client.home.key("chatManager")
+          .key("outgoingNotices").asSchema(noticesSchema).pull() as {
+            room?: Cell<unknown>;
+          }[];
+        await client.runtime.idle();
+
+        expect(listed.some((notice) => notice.room?.space === live.space))
+          .toBe(true);
+        expect(client.storage.openedSpaces()).not.toContain(doomed.space);
+      } finally {
+        await client.runtime.dispose();
+        await client.storage.close();
+      }
+    });
   });
 
   describe("on a client of the sender's that has not loaded the room", () => {

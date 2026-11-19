@@ -577,6 +577,23 @@ const withoutNoticesOf = (
 };
 
 /**
+ * Drops from `state`'s notices each notice of a room `entries`, the catalog's,
+ * says is deleted, which has nothing left to tell anyone. The derivation that
+ * finds the notices told reads no catalog, so a notice it is handed it asks
+ * the memory server about, which opens the room's space; dropping the notice
+ * is what spares every client that open. It reads no room, and writes the
+ * notices only when one of them is dropped.
+ */
+const dropDeletedNotices = (
+  state: ManagerActState,
+  entries: Record<string, RoomCatalogEntry>,
+): void => {
+  const notices = (state.outgoingNotices.get() ?? []) as ChatManagerNotice[];
+  const kept = notices.filter((notice) => !roomDeleted(entries, notice.room));
+  if (kept.length !== notices.length) state.outgoingNotices.set(kept);
+};
+
+/**
  * Drops from `state`'s notices each notice of `room` whose recipient the
  * room's roster lists, by a profile attesting them: they have joined the
  * room, by an offer of this user's, an offer or a visit of their own, or
@@ -1377,6 +1394,7 @@ const performManagerAct = (
   }
 
   const catalogEntries = readSharedSpaceCatalog(catalog).entries;
+  dropDeletedNotices(state, catalogEntries);
   const memberships = effectiveMemberships(
     state.roomMembership.get() ?? [],
     catalogEntries,
