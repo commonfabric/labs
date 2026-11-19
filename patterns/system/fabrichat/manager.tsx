@@ -560,6 +560,63 @@ const noticeFor = (
   recipient,
 });
 
+/**
+ * `notices` without each notice of `room` whose recipient is one of
+ * `recipients`: a notice that has nothing left to tell, since its recipient
+ * is in the room. `undefined` when none of them is there.
+ */
+const withoutNoticesOf = (
+  notices: readonly ChatManagerNotice[],
+  room: object,
+  recipients: ReadonlySet<string>,
+): ChatManagerNotice[] | undefined => {
+  const kept = notices.filter((notice) =>
+    !(recipients.has(notice.recipient) && sameRoom(notice.room, room))
+  );
+  return kept.length === notices.length ? undefined : kept;
+};
+
+/**
+ * Drops from `state`'s notices each notice of a room `entries`, the catalog's,
+ * says is deleted, which has nothing left to tell anyone. The derivation that
+ * finds the notices told reads no catalog, so a notice it is handed it asks
+ * the memory server about, which opens the room's space; dropping the notice
+ * is what spares every client that open. It reads no room, and writes the
+ * notices only when one of them is dropped.
+ */
+const dropDeletedNotices = (
+  state: ManagerActState,
+  entries: Record<string, RoomCatalogEntry>,
+): void => {
+  const notices = (state.outgoingNotices.get() ?? []) as ChatManagerNotice[];
+  const kept = notices.filter((notice) => !roomDeleted(entries, notice.room));
+  if (kept.length !== notices.length) state.outgoingNotices.set(kept);
+};
+
+/**
+ * Drops from `state`'s notices each notice of `room` whose recipient the
+ * room's roster lists, by a profile attesting them: they have joined the
+ * room, by an offer of this user's, an offer or a visit of their own, or
+ * another member's adding them. The roster is read only when a notice of the
+ * room is there, so a join of a room with no notice reads nothing more of it,
+ * and the notices are written only when one of them is dropped.
+ */
+const dropJoinedNotices = (
+  state: ManagerActState,
+  room: Cell<ChatRoomLink>,
+): void => {
+  const notices = (state.outgoingNotices.get() ?? []) as ChatManagerNotice[];
+  if (!notices.some((notice) => sameRoom(notice.room, room))) return;
+  const joined = new Set(
+    (room.key("roster").get() ?? []).flatMap((profile) => {
+      const principal = profileOwnerOf(profile);
+      return isPrincipalDID(principal) ? [principal] : [];
+    }),
+  );
+  const kept = withoutNoticesOf(notices, room, joined);
+  if (kept !== undefined) state.outgoingNotices.set(kept);
+};
+
 /** A member a room is offered to. */
 export interface OfferedMember {
   /** The member's DID. */
@@ -717,7 +774,10 @@ const offerEnvelope = (
  * admit, and a transaction's writes are held to the labels of everything it
  * reads, so nothing written here or in this user's records depends on where a
  * profile points. A re-offer, one whose `noticeWaiting` is set, offers nothing
- * to a member the room's roster already lists.
+ * to a member the room's roster already lists, and drops their notice of the
+ * room, which has nothing left to tell them. A member it adds to the
+ * participants keeps theirs, since the add is an event of its own that can
+ * fail; `joinRoom` drops it once the roster lists them.
  *
  * It runs as an event of its own, queued by the act that creates or offers
  * the room, so that it reads the room's space once the room's creation has
@@ -732,8 +792,12 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       ? event.room.key("roster").get() ?? []
       : [];
     const profiles: Cell<ChatManagerProfile>[] = [];
+    // The members a re-offer finds on the room's roster, whose notices of the
+    // room have nothing left to tell them.
+    const joined = new Set<string>();
     for (const { recipient, profiles: named } of event.members ?? []) {
       if (roster.some((profile) => profileOwnerOf(profile) === recipient)) {
+        joined.add(recipient);
         continue;
       }
       if ((named ?? []).length === 0) {
@@ -747,6 +811,14 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       state.joinRooms.send({ room: event.room, profile: named[0] });
       for (const profile of named) profiles.push(profile);
     }
+    // Only a re-offer reads the roster, and it queues no notice, so the
+    // notices are read only when one is found there.
+    const kept = joined.size === 0 ? undefined : withoutNoticesOf(
+      (state.outgoingNotices.get() ?? []) as ChatManagerNotice[],
+      event.room,
+      joined,
+    );
+    if (kept !== undefined) state.outgoingNotices.set(kept);
     if (profiles.length === 0) return;
     state.deliverOffers.send({
       offer: offerEnvelope(event.id, space, event.title ?? "", from),
@@ -1037,14 +1109,14 @@ const createRoom = (
  * `counterpart` through the share inbox `profile` points at, by `offerRooms`
  * as a new one is offered, when the room was offered them nothing: a notice
  * for them of the room is still waiting. `offerRooms` adds `profile` to the
- * room's roster, and `outgoingNotices` then leaves the notice out, wherever
- * the profile points. A counterpart the room's roster lists has
- * joined the room already, and `offerRooms` offers them nothing, and nothing
- * is offered to one named by no profile. Nothing is offered either when
- * `requestId`, which keys the offer, is longer than a share inbox keeps an
- * offer's `id`, since the inbox would cut it short and could take it for
- * another's. It reads none of the room, which `offerRooms` reads, as the one
- * room its event names.
+ * room's roster, wherever the profile points, and `joinRoom` drops the notice
+ * once the roster lists them. A counterpart the room's roster lists has joined
+ * the room already, and `offerRooms` offers them nothing and drops the
+ * notice, and nothing is offered to one named by no profile. Nothing is
+ * offered either when `requestId`, which keys the offer, is longer than a
+ * share inbox keeps an offer's `id`, since the inbox would cut it short and
+ * could take it for another's. It reads none of the room, which `offerRooms`
+ * reads, as the one room its event names.
  */
 const reofferDirect = (
   state: ManagerActState,
@@ -1322,6 +1394,7 @@ const performManagerAct = (
   }
 
   const catalogEntries = readSharedSpaceCatalog(catalog).entries;
+  dropDeletedNotices(state, catalogEntries);
   const memberships = effectiveMemberships(
     state.roomMembership.get() ?? [],
     catalogEntries,
@@ -1354,7 +1427,9 @@ const performManagerAct = (
     // follow, and writes the catalog and the membership only where their
     // titles differ from the room's, which a retitle makes them. A room
     // listed only through a container has no catalog entry, and gets no
-    // write there.
+    // write there. A room this user holds a notice of has its roster read
+    // too, so that a notice whose recipient has joined since is dropped.
+    dropJoinedNotices(state, room);
     if (isWellFormedDID(joinedSpace) && event?.messageAct !== true) {
       const title = room.key("about").get()?.title;
       refreshListedTitle(catalog, joinedSpace, title);
@@ -1745,6 +1820,7 @@ const performManagerAct = (
   if (state.myProfile !== undefined) {
     state.joinRooms.send({ room, profile: state.myProfile });
   }
+  dropJoinedNotices(state, room);
   // A held direct room whose space is deleted does not keep a received one
   // out, as it does not for `openDirect`: the first replacement offered to
   // either side is the one both hold.
@@ -2193,22 +2269,20 @@ const linkedNoticeOf = (notice: ChatManagerNotice): LinkedNotice => ({
 });
 
 /**
- * The notices of `notices` with something left to tell: a notice whose
- * room's roster lists a profile attesting its recipient has none, since they
- * are in the room, and neither does a notice of a room the catalog or the
- * memory server says is deleted. It reads each notice's room, so it is handed
- * notices whose links declare their rosters.
+ * The ids of the notices of `notices` with nothing left to tell: a notice
+ * whose room's roster lists a profile attesting its recipient, since they are
+ * in the room, or whose room the memory server says is deleted. It reads each
+ * notice's room, so it is handed notices whose links declare their rosters,
+ * and nothing else, so that what changes only the catalog reads no room.
  */
-const noticesToDeliver = (
-  notices: readonly LinkedNotice[],
-  catalog: Record<string, RoomCatalogEntry>,
-): ChatManagerNotice[] =>
-  notices.filter((notice) =>
-    !roomDeleted(catalog, notice.room) &&
-    spaceDeleted(notice.room) !== true &&
-    !(notice.room.key("roster").get() ?? []).some((member) =>
-      profileOwnerOf(member) === notice.recipient
-    )
+const noticesTold = (notices: readonly LinkedNotice[]): string[] =>
+  notices.flatMap((notice) =>
+    spaceDeleted(notice.room) === true ||
+      (notice.room.key("roster").get() ?? []).some((member) =>
+        profileOwnerOf(member) === notice.recipient
+      )
+      ? [notice.id]
+      : []
   );
 
 /** What a manager's core needs: what it stores, and whose it is. */
@@ -2401,17 +2475,27 @@ export const FabriChatManagerCore = pattern<
     // A notice whose room's roster lists a profile attesting its recipient
     // has nothing left to tell them: they are in the room. A notice of a
     // deleted room has nothing to tell them either: no one can open the room,
-    // and its roster can't be read. Per user, as `roomsForUser` is: the roster
-    // is read under the reader's access, and a profile attests no one to a
-    // reader its space refuses. Its binding's name is its cause, as
-    // `roomsForUser`'s is.
+    // and its roster can't be read. `toldNotices` reads the rooms, and
+    // `noticesForUser`, which also reads the catalog, reads none, so that a
+    // change to the catalog reads no notice's room; a room act drops a notice
+    // of a room the catalog says is deleted (`dropDeletedNotices()`), so
+    // `toldNotices` asks after a deleted room's space only until then. Per
+    // user, as `roomsForUser` is: the roster is read under the reader's
+    // access, and a profile attests no one to a reader its space refuses.
+    // Each binding's name is its cause, as `roomsForUser`'s is.
     const linkedNotices = computed((): PerUser<LinkedNotice[]> =>
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).map(
         linkedNoticeOf,
       )
     );
+    const toldNotices = computed((): PerUser<string[]> =>
+      noticesTold(linkedNotices)
+    );
     const noticesForUser = computed((): PerUser<ChatManagerNotice[]> =>
-      noticesToDeliver(linkedNotices, catalogEntries)
+      ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
+        !roomDeleted(catalogEntries, notice.room) &&
+        !toldNotices.includes(notice.id)
+      )
     );
     // Whether this reader can start a chat, and their address, are each
     // session's own, as the profile they are derived from is. A session
