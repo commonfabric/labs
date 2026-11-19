@@ -645,6 +645,11 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(JSON.stringify(label?.integrity ?? [])).toContain(
       '"kind":"compiled"',
     );
+    // The selected branch passes the scalar on as its `value` (PL §3.5),
+    // and `toUpperCase()` reads it: its clause is in the stored label.
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:name"',
+    );
   });
 
   it("journals the shape of a position whose value a slot of the same template observes too, and commits", async () => {
