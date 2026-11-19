@@ -83,7 +83,9 @@ step checks before it changes anything.
   runs on.
 - **checkpoint** right after the save that finishes something they asked for:
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a private version,
-  the point undo goes back to: one per request, never one per save.
+  the point undo goes back to: one per request, never one per save. Like any
+  version, their sharing setting may share it once it has gone a day in use
+  unchanged.
 - **undo**: `cf pattern history <entry>` lists the checkpoints;
   `cf pattern rollback <entry> <version>` writes one back, then save. It refuses
   when there are edits no version keeps; ask before forcing it, since forcing
