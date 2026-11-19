@@ -377,9 +377,10 @@ export function createRuntimeClientOptions({
     spaceDid: session.space,
     // No serving loop runs a branch, so the runtime that opens one computes
     // what it stores.
-    ...(onBranches
-      ? { branches, experimental: { ...experimental, serverExecution: false } }
-      : { experimental }),
+    branches: onBranches ? branches : undefined,
+    experimental: onBranches
+      ? { ...experimental, serverExecution: false }
+      : experimental,
     cfcEnforcementMode,
     cfcFlowLabels,
     ...(cfcRenderCeiling
