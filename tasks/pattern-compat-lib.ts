@@ -216,7 +216,8 @@ export function checkPattern(
   // validated, so validating it again here would be pure waste, and it is not
   // cheap: the definition validator blows up combinatorially on some real
   // schemas (validating lobby/main.tsx's schemas alone takes ~55s). The subset
-  // proof below still runs against every other baseline.
+  // proof below still runs against every other baseline, and it validates both
+  // contracts it compares, so that cost recurs once per baseline.
   if (!recorded) {
     findings.push({ kind: "missing-baseline", pattern, hash });
     for (
