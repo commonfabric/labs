@@ -4474,12 +4474,14 @@ ORDER BY r.seq, r.op_index
             { fromIndex: Infinity, shrinkBound: 0 };
           // As the store applied it (`spliceAll()`): `Array.prototype.splice`
           // takes the index and the count as whole numbers, truncating any
-          // fraction a row stored before such commits were refused.
+          // fraction and reading `NaN` as 0, in a row an older server stored
+          // before such commits were refused.
           spliced.fromIndex = Math.min(
             spliced.fromIndex,
-            Math.trunc(patch.index),
+            Math.trunc(patch.index) || 0,
           );
-          spliced.shrinkBound += Math.trunc(patch.remove) - patch.add.length;
+          spliced.shrinkBound += (Math.trunc(patch.remove) || 0) -
+            patch.add.length;
           splicedArrays.set(patch.path, spliced);
         }
       }
