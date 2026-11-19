@@ -14,6 +14,8 @@ import { hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import type { CompiledPlan } from "../src/cfc/compiled-plans.ts";
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { observedDocumentKey } from "../src/cfc/observation-label.ts";
 import {
   deriveFlowJoin,
   planLabelsFor,
@@ -21,6 +23,7 @@ import {
 } from "../src/cfc/prepare.ts";
 import {
   type CfcAddress,
+  type PlanElements,
   runtimeWritePolicyAuthorization,
   type WritePolicyInput,
 } from "../src/cfc/types.ts";
@@ -41,8 +44,8 @@ const space = signer.did();
 
 /**
  * A plan with one body whose write edges take slot 0, slot 1, slot 2 (bound
- * to a staged label in the cases that use it), and a selection between
- * slots 0 and 1 on slot 2.
+ * to a staged label in the cases that use it), a selection between slots 0
+ * and 1 on slot 2, and a fold of slot 3 over the elements of collection 0.
  */
 const plan: CompiledPlan = {
   outputs: [],
@@ -59,11 +62,18 @@ const plan: CompiledPlan = {
           branches: [{ op: "slot", slot: 0 }, { op: "slot", slot: 1 }],
         },
       },
+      {
+        template: {
+          op: "fold",
+          collection: 0,
+          body: { op: "slot", slot: 3 },
+        },
+      },
     ],
   }],
   cones: [],
   templates: [],
-  collections: [],
+  collections: [{ membership: { op: "const" } }],
   stateCells: [],
 };
 
@@ -304,10 +314,10 @@ describe("cfc-plan-labels", () => {
       labels: ReturnType<typeof planLabelsFor>,
       target: CfcAddress,
       name: string,
-    ) =>
-      [...labels.byTarget.values()].flatMap((paths) => [
-        ...(paths.get(`/${name}`)?.confidentiality ?? []),
-      ]);
+    ) => [
+      ...(labels.byTarget.get(observedDocumentKey(target))?.get(`/${name}`)
+        ?.confidentiality ?? []),
+    ];
 
     it("returns for each path the label of the slot its write is bound to", async () => {
       await withSources((_runtime, tx, identity, target) => {
@@ -454,6 +464,342 @@ describe("cfc-plan-labels", () => {
         expect(planLabelsFor(tx, deriveFlowJoin(tx)).reasons.length)
           .toBeGreaterThan(0);
       });
+    });
+  });
+
+  describe("commit", () => {
+    /**
+     * Seeds two sources labeled `secret-a` and `secret-b` and a target
+     * holding `{ a, b }`, enrolled as a store the runtime owns, then runs a
+     * transaction that reads both sources, writes `a` and `b`, and lets
+     * `record` record its inputs. Returns the commit's error and the
+     * confidentiality of the target's `value` and `shape` entries by path.
+     */
+    const commitWrites = async (
+      enabled: boolean,
+      record: (
+        tx: IExtendedStorageTransaction,
+        identity: string,
+        target: CfcAddress,
+        runtime: Runtime,
+      ) => void,
+    ) => {
+      let outcome:
+        | {
+          error: unknown;
+          value: Record<string, unknown[]>;
+          shape: Record<string, unknown[]>;
+        }
+        | undefined;
+      await withRuntime(enabled, async (runtime) => {
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, space);
+        for (const name of ["a", "b"]) {
+          seedStoredEnvelope(seed, memoryAddress(`of:src-${name}`, []), {
+            value: { text: name },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: { confidentiality: [`secret-${name}`] },
+                }],
+              },
+            },
+          });
+        }
+        const targetCell = runtime.getCell(
+          space,
+          "plan-target",
+          undefined,
+          seed,
+        );
+        targetCell.set({ a: "", b: "" });
+        const link = targetCell.getAsNormalizedFullLink();
+        const target: CfcAddress = {
+          space: link.space,
+          id: link.id,
+          scope: "space",
+          path: [],
+        };
+        seed.enrollRuntimeOwnedStore(
+          target,
+          "plan-labels-test",
+          runtimeWritePolicyAuthorization,
+        );
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const identity = runtime.compiledPlans.register(
+          plan,
+          "code",
+          runtimeWritePolicyAuthorization,
+        );
+        const tx = runtime.edit();
+        tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+        tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
+        const cell = runtime.getCell(space, "plan-target", undefined, tx);
+        cell.key("a").set("x");
+        cell.key("b").set("y");
+        record(tx, identity, target, runtime);
+        const { error } = await tx.commit().settled;
+        const reader = runtime.edit();
+        try {
+          const metadata = readStoredCfcMetadata(reader, {
+            space,
+            id: target.id,
+            scope: "space",
+            type: "application/json",
+          });
+          const at = (observes: string) =>
+            Object.fromEntries(
+              (metadata?.labelMap.entries ?? [])
+                .filter((entry) =>
+                  entry.origin === "derived" && entry.observes === observes
+                )
+                .map((entry) => [
+                  `/${entry.path.join("/")}`,
+                  [...(entry.label.confidentiality ?? [])].sort(),
+                ]),
+            );
+          outcome = { error, value: at("value"), shape: at("shape") };
+        } finally {
+          reader.abort();
+        }
+      });
+      return outcome!;
+    };
+
+    /** Records the two authorized writes, each bound to its own source. */
+    const recordBoth = (
+      tx: IExtendedStorageTransaction,
+      identity: string,
+      target: CfcAddress,
+    ) => {
+      for (const [write, name] of [[0, "a"], [1, "b"]] as const) {
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: [name] },
+            write,
+            address(`of:src-${name}`),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+      }
+    };
+
+    it("stores each path's own source's label with the option on", async () => {
+      const { error, value, shape } = await commitWrites(true, recordBoth);
+      expect(error).toBeUndefined();
+      expect(value["/a"]).toEqual(["secret-a"]);
+      expect(value["/b"]).toEqual(["secret-b"]);
+      expect(shape["/a"]).toEqual(["secret-a"]);
+      expect(shape["/b"]).toEqual(["secret-b"]);
+    });
+
+    it("stores the transaction's join on both paths with the option off", async () => {
+      const { error, value } = await commitWrites(false, recordBoth);
+      expect(error).toBeUndefined();
+      expect(value["/a"]).toEqual(["secret-a", "secret-b"]);
+      expect(value["/b"]).toEqual(["secret-a", "secret-b"]);
+    });
+
+    it("stores the join for writes recorded without the runtime's authorization", async () => {
+      const { error, value } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          for (const [write, name] of [[0, "a"], [1, "b"]] as const) {
+            tx.recordCfcWritePolicyInput(
+              planWrite(
+                identity,
+                { ...target, path: [name] },
+                write,
+                address(`of:src-${name}`),
+              ),
+            );
+          }
+        },
+      );
+      expect(error).toBeUndefined();
+      expect(value["/a"]).toEqual(["secret-a", "secret-b"]);
+      expect(value["/b"]).toEqual(["secret-a", "secret-b"]);
+    });
+
+    it("refuses the commit for a slot bound to an address the transaction did not read", async () => {
+      const { error } = await commitWrites(true, (tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: ["a"] },
+            0,
+            address("of:never-read"),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+      });
+      expect(error).toBeDefined();
+    });
+
+    it("refuses the commit for a plan-write recorded after preparation", async () => {
+      const { error } = await commitWrites(
+        true,
+        (tx, identity, target, runtime) => {
+          runtime.prepareTxForCommit(tx);
+          expect(tx.getCfcState().prepare.status).toBe("prepared");
+          recordBoth(tx, identity, target);
+          expect(tx.getCfcState().prepare.status).toBe("invalidated");
+        },
+      );
+      expect(error).toBeDefined();
+    });
+  });
+
+  describe("fold", () => {
+    /**
+     * Seeds a list of `size` items under `secret-a`, its last item also
+     * under `secret-b`, reads the last item (the one changed element) and
+     * `of:src-a`, writes the target, records a fold write whose elements are
+     * given by `elements`, and returns the plan counters the pre-pass added.
+     */
+    const foldCounters = async (
+      size: number,
+      elements: (list: string, last: string) => PlanElements,
+    ) => {
+      let counters: Record<string, number> = {};
+      await withRuntime(true, async (runtime) => {
+        const list = `of:list-${size}`;
+        const last = String(size - 1);
+        const seed = runtime.edit();
+        writeSeedEnvelopeDoc(seed, space);
+        seedStoredEnvelope(seed, memoryAddress("of:src-a", []), {
+          value: { text: "a" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{ path: [], label: { confidentiality: ["secret-a"] } }],
+            },
+          },
+        });
+        seedStoredEnvelope(seed, memoryAddress(list, []), {
+          value: { items: Array.from({ length: size }, (_, n) => `item ${n}`) },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [
+                {
+                  path: ["items", "*"],
+                  label: { confidentiality: ["secret-a"] },
+                },
+                {
+                  path: ["items", last],
+                  label: { confidentiality: ["secret-b"] },
+                },
+              ],
+            },
+          },
+        });
+        expect((await seed.commit().settled).error).toBeUndefined();
+        const identity = runtime.compiledPlans.register(
+          plan,
+          "code",
+          runtimeWritePolicyAuthorization,
+        );
+        const tx = runtime.edit();
+        try {
+          tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+          tx.readOrThrow(memoryAddress(list, ["value", "items", last]));
+          const cell = runtime.getCell(space, "plan-target", undefined, tx);
+          cell.set({ total: size });
+          const link = cell.getAsNormalizedFullLink();
+          tx.recordCfcWritePolicyInput(
+            {
+              kind: "plan-write",
+              target: { space, id: link.id, scope: "space", path: ["total"] },
+              compiledPattern: identity,
+              record: { body: 0, write: 4 },
+              instance: link.id,
+              keys: [],
+              slots: {},
+              elements: { 0: elements(list, last) },
+            },
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats();
+          const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+          expect(labels.reasons).toEqual([]);
+          const label = [...labels.byTarget.values()][0].get("/total")!;
+          expect([...label.confidentiality].sort()).toEqual([
+            "secret-a",
+            "secret-b",
+          ]);
+          const after = runtime.getCfcStats();
+          counters = Object.fromEntries(
+            (
+              [
+                "planTemplatesInstantiated",
+                "planTemplateNodes",
+                "planSlotLabels",
+                "planLabelMemoHits",
+                "planLabelBounds",
+              ] as const
+            ).map((kind) => [kind, after[kind] - before[kind]]),
+          );
+        } finally {
+          tx.abort();
+        }
+      });
+      return counters;
+    };
+
+    it("counts the same work for one changed element among 10 and among 1,000 in the uniform form", async () => {
+      // An array of plain values in place: one set of bindings at `*`.
+      const uniform = (list: string): PlanElements => ({
+        uniform: {
+          slots: {
+            3: {
+              chain: [address(list, ["items", "*"])],
+              observes: "value",
+            },
+          },
+        },
+      });
+      const small = await foldCounters(10, uniform);
+      expect(small.planTemplatesInstantiated).toBeGreaterThan(0);
+      expect(await foldCounters(1000, uniform)).toEqual(small);
+    });
+
+    it("counts the same work for one changed element among 10 and among 1,000 in the groups form", async () => {
+      // An array of references: one group per distinct label, with counts.
+      const groups = (size: number) => (list: string, last: string) => ({
+        groups: [
+          {
+            slots: {
+              3: {
+                chain: [address("of:src-a")],
+                observes: "value" as const,
+              },
+            },
+            count: size - 1,
+          },
+          {
+            slots: {
+              3: {
+                chain: [address(list, ["items", last])],
+                observes: "value" as const,
+              },
+            },
+            count: 1,
+          },
+        ],
+      });
+      const small = await foldCounters(10, groups(10));
+      expect(small.planTemplatesInstantiated).toBeGreaterThan(0);
+      expect(await foldCounters(1000, groups(1000))).toEqual(small);
     });
   });
 });

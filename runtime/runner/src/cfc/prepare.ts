@@ -208,6 +208,7 @@ import {
 import {
   instantiatePlanLabels,
   type JournaledRead,
+  planLabelPathKey,
   type PlanLabels,
 } from "./plan-labels.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
@@ -3128,7 +3129,11 @@ const nonBuiltinWritePathsByTarget = (
   return result;
 };
 
-const targetKey = observedDocumentKey;
+// A call rather than an alias: `prepare.ts` sits on an import cycle with the
+// modules `observation-label.ts` imports, so the binding is read at call time.
+const targetKey = (
+  target: Parameters<typeof observedDocumentKey>[0],
+): string => observedDocumentKey(target);
 
 /** The key `deriveFlowJoin` answers a read declared onward under. */
 const declaredOnwardKey = (target: DeclaredOnwardTarget): string =>
@@ -4955,6 +4960,9 @@ export const planLabelsFor = (
     document: ObservedDocument;
     type: MediaType;
     reads: { path: readonly string[]; profile: ObservationProfile }[];
+    // The first read of each class at each path, a probe at the slot it
+    // probed, by class and path.
+    exact: Map<string, ObservationProfile>;
   }>();
   forEachFlowObservation(
     tx,
@@ -4963,10 +4971,20 @@ export const planLabelsFor = (
       const key = targetKey({ space, id, scope });
       let entry = journal.get(key);
       if (entry === undefined) {
-        entry = { document: { space, id, scope }, type, reads: [] };
+        entry = {
+          document: { space, id, scope },
+          type,
+          reads: [],
+          exact: new Map(),
+        };
         journal.set(key, entry);
       }
       entry.reads.push({ path: logicalPath, profile: observation });
+      const at = observation.shape === "followRef"
+        ? probedSlotPath(logicalPath)
+        : logicalPath;
+      const exactKey = stringTupleKey([observation.shape, pathKey(at)]);
+      if (!entry.exact.has(exactKey)) entry.exact.set(exactKey, observation);
       return false;
     },
   );
@@ -5003,10 +5021,8 @@ export const planLabelsFor = (
         profile,
       });
       // A read of the address itself, in the class the slot observes.
-      const exact = entry.reads.find((read) =>
-        read.profile.shape === observes && pathKey(at(read)) === pathKey(path)
-      );
-      if (exact !== undefined) return found(exact.profile);
+      const exact = entry.exact.get(stringTupleKey([observes, pathKey(path)]));
+      if (exact !== undefined) return found(exact);
       // For an address holding `*`, a read at a position the `*` matches.
       if (path.includes("*")) {
         const matched = entry.reads.find((read) =>
@@ -12328,6 +12344,27 @@ export function* prepareBoundaryCommitSteps(
   // persist loop runs and lands it on the target even when the join itself
   // is empty. The value stamps below mint from the join alone (`flowHasJoin`).
   const flowHasLabels = flowHasJoin || flowJoin.declaredOnward.length > 0;
+  // The labels of the paths a compiled pattern's authorized writes cover,
+  // instantiated from the plan's templates (`planLabelsFor`). Empty, and
+  // computed from nothing, with the experimental option `compiledPatterns`
+  // off.
+  const planLabels = flowPersist
+    ? planLabelsFor(tx, flowJoin)
+    : { byTarget: new Map(), reasons: [] };
+  for (const reason of planLabels.reasons) reasons.push(reason);
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // The label stamped at a path a compiled pattern's write covers is the
+  // label instantiated from its template, a subset of the join; every other
+  // path keeps the join. Behind `compiledPatterns`, which defaults off.
+  const flowLabelAt = (
+    key: string,
+    path: readonly string[],
+  ): {
+    readonly confidentiality: readonly CfcConfClause[];
+    readonly integrity: readonly CfcAtom[];
+  } =>
+    planLabels.byTarget.get(key)?.get(planLabelPathKey(path)) ??
+      { confidentiality: flowConfidentiality, integrity: flowIntegrity };
   // A build-decided result wiring's membership is stamped from what the
   // transaction had read when its setup began, the trigger reads among it
   // (§8.9.1.3): the program, chosen by that, and the piece's identity fixed
@@ -13785,10 +13822,14 @@ export function* prepareBoundaryCommitSteps(
         uniqueCfcAtoms(
           atoms.map((atom) => normalizeClause(atom as CfcConfClause)),
         );
+      // Whether a compiled pattern's write covers a path of this document.
+      const planCovered = planLabels.byTarget.has(key);
       const frozenConfidentialityFor = (
         path: readonly string[],
       ): CfcConfClause[] => {
-        const atoms: CfcConfClause[] = [...flowConfidentiality];
+        const atoms: CfcConfClause[] = [
+          ...flowLabelAt(key, path).confidentiality,
+        ];
         clearedExistence.forEach((cleared, index) => {
           if (isPrefix(path, cleared.path)) {
             attachedExistence.add(index);
@@ -13943,9 +13984,11 @@ export function* prepareBoundaryCommitSteps(
           }
         };
         for (const path of measuredPaths) {
-          // Deeper paths are covered by the write at a measured ancestor.
+          // Deeper paths are covered by the write at a measured ancestor,
+          // except in a document holding paths with labels of their own.
           if (
-            path.length > 0 && measuredPrefixes.hasPrefixOf(path.slice(0, -1))
+            !planCovered && path.length > 0 &&
+            measuredPrefixes.hasPrefixOf(path.slice(0, -1))
           ) {
             continue;
           }
@@ -13964,7 +14007,7 @@ export function* prepareBoundaryCommitSteps(
             labelForEntriesAtPath(declaredPolicyEntries, path)
               ?.confidentiality ?? [];
           const offending = atomsOutsideCeiling(
-            flowConfidentiality,
+            flowLabelAt(key, path).confidentiality,
             [
               ...declaredCeiling as readonly CfcConfClause[],
               ...residencyCeiling,
@@ -14068,9 +14111,12 @@ export function* prepareBoundaryCommitSteps(
       );
       for (const path of derivedStampPaths) {
         // Deeper stamped paths are redundant with a stamped ancestor; only
-        // collapse against paths that actually receive a covering entry.
+        // collapse against paths that actually receive a covering entry. In
+        // a document holding paths with labels of their own, a deeper path
+        // can carry another label than its ancestor, so none collapses.
         if (
-          path.length > 0 && derivedPrefixes.hasPrefixOf(path.slice(0, -1))
+          !planCovered && path.length > 0 &&
+          derivedPrefixes.hasPrefixOf(path.slice(0, -1))
         ) {
           continue;
         }
@@ -14084,15 +14130,19 @@ export function* prepareBoundaryCommitSteps(
         // over-claim (integrity meets, never joins). A class-unaware
         // reader consuming both as covering entries sees today's label or
         // a wider one — additively safe, no dial (C0 §9).
-        if (flowHasJoin) {
+        const pathLabel = flowLabelAt(key, path);
+        if (
+          pathLabel.confidentiality.length > 0 ||
+          pathLabel.integrity.length > 0
+        ) {
           const stamp = markFlowStampEntry({
             path,
             label: {
-              ...(flowConfidentiality.length > 0
-                ? { confidentiality: [...flowConfidentiality] }
+              ...(pathLabel.confidentiality.length > 0
+                ? { confidentiality: [...pathLabel.confidentiality] }
                 : {}),
-              ...(flowIntegrity.length > 0
-                ? { integrity: [...flowIntegrity] }
+              ...(pathLabel.integrity.length > 0
+                ? { integrity: [...pathLabel.integrity] }
                 : {}),
             },
             origin: "derived",
