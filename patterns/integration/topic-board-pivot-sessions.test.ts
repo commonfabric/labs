@@ -222,7 +222,7 @@ async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
       "referencedBy",
     ),
     BOARD_PATH,
-    /\n\s*boardCrossrefIndex: crossrefIndex,(?=\n\s*\}\)\);)/,
+    /\n\s*boardCrossrefIndex: crossrefIndex,(?=\n\s*\}\);)/,
   );
 }
 
