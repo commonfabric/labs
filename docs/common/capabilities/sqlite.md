@@ -390,8 +390,14 @@ export default pattern<{ favorite: Cell<Donut> }, {
   a document its mirrored fields were read from is written.
 - A query over a collection needs no `reactOn`. It re-runs when the collection
   changes, and its result changes only when its rows do.
-- Decide what a collection mirrors before it holds members. Adding a column to
-  a collection that already has members is not supported.
+- A collection can gain columns, relations and indexes later. The runtime
+  re-reads every member once to fill them in.
+- To join two kinds of cell in one statement, declare them as kinds of one
+  collection with `indexedCollections({ donuts: { … }, orders: { … } })`, and
+  pass the kind to `add()`: `shop.add("orders", order)`.
+- A field stored per user or per session cannot be mirrored, and `add()`
+  throws on one. A field whose value carries a label needs a column that
+  declares it: `name: { type: "text", ifc: { confidentiality: […] } }`.
 
 Mirror the fields your queries filter, order, or join on, and read the rest
 from the member cell. A column holds a string, a number, or a boolean; any

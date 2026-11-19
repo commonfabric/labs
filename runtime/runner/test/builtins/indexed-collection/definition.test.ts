@@ -2,17 +2,34 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   defineIndexedCollection,
+  defineIndexedCollections,
   indexedCollectionDescriptorOf,
   indexedFieldPath,
+  indexedKindOf,
 } from "../../../src/builtins/indexed-collection/definition.ts";
 
 describe("definition", () => {
   describe("defineIndexedCollection()", () => {
-    it("returns a `members` and a `member_deps` table for an empty declaration", () => {
+    it("returns one kind named `members`, and the two tables the runtime keeps", () => {
       const { tables, index } = defineIndexedCollection();
 
-      expect(Object.keys(tables).sort()).toEqual(["member_deps", "members"]);
-      expect(index).toEqual({ columns: [], relations: [], paths: {} });
+      expect(Object.keys(tables).sort()).toEqual([
+        "collection_meta",
+        "member_deps",
+        "members",
+      ]);
+      expect(index).toEqual({
+        kinds: {
+          members: {
+            table: "members",
+            columns: [],
+            relations: [],
+            relationTables: {},
+            paths: {},
+            labels: {},
+          },
+        },
+      });
     });
 
     it("gives the `members` table a column per mirrored field, after the member reference", () => {
@@ -37,7 +54,7 @@ describe("definition", () => {
       expect(tables.members.indexes).toEqual([["price"], ["name", "price"]]);
     });
 
-    it("returns a table per relation, indexed on both of its columns", () => {
+    it("names a relation's table for the relation, indexed on both of its columns", () => {
       const { tables, index } = defineIndexedCollection({
         relations: ["pairsWith"],
       });
@@ -50,7 +67,9 @@ describe("definition", () => {
         ["source_cf_link"],
         ["target_cf_link"],
       ]);
-      expect(index.relations).toEqual(["pairsWith"]);
+      expect(index.kinds.members.relationTables).toEqual({
+        pairsWith: "pairsWith",
+      });
     });
 
     it("records the path of a column or relation read from a nested value", () => {
@@ -63,13 +82,10 @@ describe("definition", () => {
       });
 
       expect(tables.members.properties.bakerName.sqlType).toBe("text");
-      expect(index).toEqual({
-        columns: ["name", "bakerName"],
-        relations: ["pairsWith"],
-        paths: {
-          bakerName: ["baker", "name"],
-          pairsWith: ["menu", "pairsWith"],
-        },
+      expect(index.kinds.members.columns).toEqual(["name", "bakerName"]);
+      expect(index.kinds.members.paths).toEqual({
+        bakerName: ["baker", "name"],
+        pairsWith: ["menu", "pairsWith"],
       });
     });
 
@@ -92,9 +108,11 @@ describe("definition", () => {
 
     it("throws on a relation named for one of the collection's own tables", () => {
       expect(() => defineIndexedCollection({ relations: ["members"] }))
-        .toThrow("reserved table");
+        .toThrow("twice");
       expect(() => defineIndexedCollection({ relations: ["member_deps"] }))
-        .toThrow("reserved table");
+        .toThrow("twice");
+      expect(() => defineIndexedCollection({ relations: ["collection_meta"] }))
+        .toThrow("twice");
     });
 
     it("throws on a column named for the member reference", () => {
@@ -109,7 +127,7 @@ describe("definition", () => {
           columns: { pairsWith: "text" },
           relations: ["pairsWith"],
         })
-      ).toThrow("declared twice");
+      ).toThrow("twice");
     });
 
     it("throws on an index naming a column that is not mirrored", () => {
@@ -122,6 +140,69 @@ describe("definition", () => {
     });
   });
 
+  describe("defineIndexedCollections()", () => {
+    it("names a kind's table for the kind, and a relation's for the kind and the relation", () => {
+      const { tables, index } = defineIndexedCollections({
+        donuts: { columns: { name: "text" } },
+        orders: { columns: { placedAt: "integer" }, relations: ["donut"] },
+      });
+
+      expect(Object.keys(tables).sort()).toEqual([
+        "collection_meta",
+        "donuts",
+        "member_deps",
+        "orders",
+        "orders_donut",
+      ]);
+      expect(index.kinds.orders).toEqual({
+        table: "orders",
+        columns: ["placedAt"],
+        relations: ["donut"],
+        relationTables: { donut: "orders_donut" },
+        paths: {},
+        labels: {},
+      });
+    });
+
+    it("throws on two tables that would share a name", () => {
+      expect(() =>
+        defineIndexedCollections({
+          orders: { relations: ["donut"] },
+          orders_donut: {},
+        })
+      ).toThrow("twice");
+    });
+
+    it("throws on a declaration with no kind", () => {
+      expect(() => defineIndexedCollections({})).toThrow(
+        "a declaration per kind",
+      );
+    });
+  });
+
+  describe("indexedKindOf()", () => {
+    const { index } = defineIndexedCollections({ donuts: {}, orders: {} });
+
+    it("returns the kind named", () => {
+      expect(indexedKindOf(index, "orders").descriptor.table).toBe("orders");
+    });
+
+    it("returns the one kind of a collection declared without kinds", () => {
+      expect(indexedKindOf(defineIndexedCollection().index, undefined).kind)
+        .toBe("members");
+    });
+
+    it("throws when several kinds are declared and none is named", () => {
+      expect(() => indexedKindOf(index, undefined)).toThrow("several kinds");
+    });
+
+    it("throws on a kind that is not declared", () => {
+      expect(() => indexedKindOf(index, "bakers")).toThrow(
+        "no kind of member",
+      );
+    });
+  });
+
   describe("indexedFieldPath()", () => {
     it("returns the field of the same name unless a path was declared", () => {
       const { index } = defineIndexedCollection({
@@ -131,8 +212,11 @@ describe("definition", () => {
         },
       });
 
-      expect(indexedFieldPath(index, "name")).toEqual(["name"]);
-      expect(indexedFieldPath(index, "bakerName")).toEqual(["baker", "name"]);
+      expect(indexedFieldPath(index.kinds.members, "name")).toEqual(["name"]);
+      expect(indexedFieldPath(index.kinds.members, "bakerName")).toEqual([
+        "baker",
+        "name",
+      ]);
     });
   });
 
@@ -143,26 +227,38 @@ describe("definition", () => {
         relations: ["pairsWith"],
       });
 
-      expect(indexedCollectionDescriptorOf({ id: "x", index })).toEqual({
-        columns: ["name"],
-        relations: ["pairsWith"],
-        paths: {},
-      });
+      expect(indexedCollectionDescriptorOf({ id: "x", index })).toEqual(index);
     });
 
     it("returns `undefined` for the handle of an ordinary database", () => {
       expect(indexedCollectionDescriptorOf({ id: "x", tables: {} }))
         .toBeUndefined();
+      expect(indexedCollectionDescriptorOf(undefined)).toBeUndefined();
     });
 
-    it("returns `undefined` for a descriptor whose lists are not lists of names", () => {
+    it("returns `undefined` for a descriptor naming anything but identifiers", () => {
+      const { index } = defineIndexedCollection({ columns: { name: "text" } });
+
       expect(
         indexedCollectionDescriptorOf({
           id: "x",
-          index: { columns: [1], relations: [] },
+          index: {
+            kinds: {
+              members: { ...index.kinds.members, columns: ["a b"] },
+            },
+          },
         }),
       ).toBeUndefined();
-      expect(indexedCollectionDescriptorOf(undefined)).toBeUndefined();
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: {
+            kinds: {
+              members: { ...index.kinds.members, table: "x; drop" },
+            },
+          },
+        }),
+      ).toBeUndefined();
     });
   });
 });

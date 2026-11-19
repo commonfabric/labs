@@ -79,6 +79,64 @@ the same way.
 A collection lives at the scope of its space, and holds cells of that space.
 `add()` refuses a cell of another space.
 
+### Several kinds of member
+
+`indexedCollections(kinds)` declares one database holding several kinds of
+member, so that one statement can join them. Each kind is declared as a
+single collection is, and `add()` and `remove()` take the kind first.
+
+```tsx
+import {
+  handler,
+  indexedCollections,
+  type IndexedCollections,
+  pattern,
+  type Stream,
+} from "commonfabric";
+
+interface Donut {
+  name: string;
+}
+
+interface Order {
+  placedAt: number;
+  donut: Donut;
+}
+
+type Shop = IndexedCollections<{ donuts: Donut; orders: Order }>;
+
+const place = handler<{ order: Order }, { shop: Shop }>(
+  ({ order }, { shop }) => shop.add("orders", order),
+);
+
+export default pattern<Record<string, never>, {
+  lastOrdered: {
+    pending: boolean;
+    result?: { name: string; last: number | null }[];
+  };
+  place: Stream<{ order: Order }>;
+}>(() => {
+  const shop = indexedCollections<{ donuts: Donut; orders: Order }>({
+    donuts: { columns: { name: "text" } },
+    orders: { columns: { placedAt: "integer" }, relations: ["donut"] },
+  });
+  return {
+    lastOrdered: shop.query<{ name: string; last: number | null }>(
+      "SELECT d.name AS name, max(o.placedAt) AS last FROM donuts d " +
+        "LEFT JOIN orders_donut e ON e.target_cf_link = d.member_cf_link " +
+        "LEFT JOIN orders o ON o.member_cf_link = e.source_cf_link " +
+        "GROUP BY d.member_cf_link ORDER BY last DESC LIMIT 50",
+    ),
+    place: place({ shop }),
+  };
+});
+```
+
+A kind's table is named for the kind, and a relation's table for the kind and
+the relation joined by an underscore, here `orders_donut`. A collection
+declared with `indexedCollection()` has one kind, named `members`, whose
+relation tables are named for the relation alone.
+
 ## The tables
 
 `defineIndexedCollection()` in
@@ -87,9 +145,10 @@ tables from the declaration:
 
 | Table | Columns | Holds |
 | --- | --- | --- |
-| `members` | `member_cf_link` as primary key, then one column per mirrored field | one row per member |
-| one per relation, named for the field | `source_cf_link`, `target_cf_link`, each indexed | one row per distinct reference a member holds |
-| `member_deps` | `member_cf_link`, `doc`, each indexed | the documents each member's rows were read from |
+| one per kind | `member_cf_link` as primary key, then one column per mirrored field | one row per member |
+| one per relation | `source_cf_link`, `target_cf_link`, each indexed | one row per distinct reference a member holds |
+| `member_deps` | `kind`, `member_cf_link`, `doc`, indexed by `doc` and by member | the documents each member's rows were read from |
+| `collection_meta` | `key`, `value` | the declaration the tables were last brought up to |
 
 A member is stored under its cell reference, in the encoding every `_cf_link`
 column uses, taken from the cell the reference resolves to. Two links to one
@@ -105,7 +164,8 @@ is trusted to name fields that hold references.
 
 A table schema can declare secondary indexes, which is what the relation
 tables and `indexes` use. The memory server creates them with the table,
-additively, in `ensureTables()`.
+additively, in `ensureTables()`, which also adds to an existing table the
+columns its declaration has gained.
 
 ## Keeping the tables current
 
@@ -158,6 +218,10 @@ These properties follow from the design, and each is a thing to preserve:
   other parts, which differ with where the link came from, stay out of it, so
   a reference read out of a query row finds the same member as the cell
   itself.
+- **A value stored per user or per session is refused.** The database is
+  shared by every reader of the space, and such a value differs by who reads
+  it. `add()` throws when a mirrored field is read through one, and a re-read
+  that reaches one leaves the member's rows as they were and logs it.
 - **Only a runtime that executes what it stores maintains.** A client under
   server execution maintains nothing. A serving runtime commits writes only
   from scheduler runs, which is why maintenance is an event handler and not a
@@ -212,24 +276,37 @@ declares, is marked optional.
 
 ## Contextual flow control
 
-The feature adds no rule and changes no decision. What existing rules do with
-it:
+The feature adds no rule and changes no decision. It applies the ones the
+SQLite built-in already has, and refuses what they cannot express.
 
 - **Reads are ordinary reads.** `add()` and the maintenance handler read
   member fields through their transaction, so the transaction's flow join
   covers what the rows were derived from.
-- **Rows carry no label of their own.** A collection's columns declare no
-  `ifc`, and a mirrored value is bound as a bare scalar, so the write ceiling
-  `exec()` applies to a labeled column has nothing to act on here. This is
-  what a pattern mirroring a field by hand with `exec()` gets as well; the
-  difference is that the runtime does it for every member, and for up to
-  fifty members in one transaction.
+- **A column declares its label.** A column declared with `ifc` passes it to
+  the table the database is created with, so a query that reads the column
+  carries the label, as for any database:
+  `title: { type: "text", ifc: { confidentiality: ["secret"] } }`.
+- **A labeled value is mirrored only where its label is kept.** A mirrored
+  value is bound as a bare scalar, which carries no label into the database,
+  and the write ceiling `exec()` applies sees labels only on cells. So the
+  label a field's value carries is measured when the field is read: the
+  column's declared `confidentiality` has to cover it, and it has to fit the
+  column's `maxConfidentiality` where one is declared. A value that fails
+  either is not written. `add()` throws, and a re-read leaves the member's
+  rows as they were and logs it. A relation declares no label, so a relation
+  field that carries one is refused.
 - **The handle carries the join.** Every write to the database advances the
   handle's revision in the same commit, so the handle is written under the
   maintenance transaction's flow join.
 - **A result's shape carries the request's label.** A re-run reads the handle,
   so the label of what triggered it joins the result's membership label, as
   the SQLite read rules already require of any request.
+
+A column's label is static: every row of the column carries the same one. A
+label that differs per member needs a per-row rule, which the collection's
+tables do not declare. The statements a collection writes, an upsert and an
+`INSERT … SELECT` among them, are ones the row-label gate cannot attribute,
+so a rule would refuse every labeled write.
 
 The quiet re-run narrows what a reader can observe: a write that leaves a
 result's rows as they were produces no write to that result. It does not make
@@ -247,40 +324,49 @@ requires.
 
 ## Changing a declaration
 
-A database's tables are created additively: a table or an index the
-declaration gains is created the next time the database is written. Nothing
-else about a changed declaration is carried over, so today:
+A collection's database records the declaration its tables were last brought
+up to, in `collection_meta`. When a runtime first learns of a collection, by
+declaring it, writing it, or reading it from the registry, it compares that
+record with the collection's declaration, and where they differ it brings the
+tables up to date:
 
-- **A relation added** gets its table, and each member's rows the next time
-  that member is re-read. Members that are not written afterward have none.
-- **A column added** is not added to the existing `members` table, so every
-  later write to the collection fails, and with it the handler that made it.
+1. A first write creates whatever table or index the declaration has gained,
+   and adds the columns an existing table has gained.
+2. Every member is re-read, a batch per transaction, so a column or a
+   relation the declaration gained is filled in for members that are never
+   written again. A member whose rows do not change is not written.
+3. The declaration is recorded. An interrupted pass leaves the old record, so
+   the next runtime to learn of the collection makes the pass again.
+
+What this covers:
+
+- **A column, a relation, an index, or a kind added.**
+- **A path changed.** The re-read takes the value from the new path.
+
+What it does not:
+
 - **A column or relation removed** stops being written. Its column or table
   stays, holding what it held.
-- **A path or a type changed** takes effect for a member when it is next
-  re-read; a changed type does not alter the existing column.
+- **A column's type changed** does not alter the existing column.
+- **A column that cannot be added to a table holding rows**, one declared
+  `not null` with no default, is refused, and writes to the collection fail
+  until the declaration is corrected.
 
-Changing what an existing collection mirrors therefore means declaring a new
-collection and adding the members to it. Carrying a declaration change over
-needs two things the feature does not have: adding a column to an existing
-table, and re-reading every member when the stored declaration differs from
-the one the tables were written under.
+A query that names a column the declaration has just gained returns an error
+until the first step has run, and then re-runs.
 
 ## Limits
 
 - A collection's database is one file in one space, and a commit carries
   writes to at most one database. Two collections are two databases, and a
-  statement reads one database, so no statement joins two collections.
+  statement reads one database, so members that are to be joined are declared
+  as kinds of one collection.
 - Every commit to a space costs one `member_deps` lookup per collection in
   that space, coalesced while a lookup is in flight. The registry of
   collections only grows, so a collection whose declaring piece is gone still
   costs that lookup.
 - Adding a member costs several database writes, each of which pays the
   per-statement cost of `exec()`.
-- A field read at a narrower scope than the collection's, such as a `PerUser`
-  field of a member, is mirrored as whichever instance the maintaining
-  runtime reads, into a database every reader of the space shares. Mirror
-  only fields stored at the scope of the space.
 - A document in another space that a member's field is read through is not
   followed: writes are heard per space.
 - Result rows are stored as documents, as for any query, so a query bounds its
@@ -288,6 +374,7 @@ the one the tables were written under.
 - Removing a member deletes the rows it is the source of. Relation rows that
   point at it from other members stay until those members stop referring to
   it, and a query that wants only current members joins against `members`.
-- Nothing rebuilds a collection whose database was lost, or re-reads members
-  written while no runtime was serving their space and whose commits the
-  serving runtime never saw.
+- Nothing rebuilds a collection whose database was lost: the database is the
+  only record of which cells are members. Nothing re-reads members written
+  while no runtime was serving their space and whose commits the serving
+  runtime never saw, short of a change to the declaration.

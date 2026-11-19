@@ -60,6 +60,7 @@ import {
   generateText,
   ifElse,
   indexedCollection,
+  indexedCollections,
   inspectConfLabel,
   llm,
   llmDialog,
@@ -302,6 +303,7 @@ export const createBuilder = (options: CreateBuilderOptions = {}): {
     sqliteDatabase,
     sqliteQuery,
     indexedCollection,
+    indexedCollections,
     table,
     cfLink,
     // The SQLite helper namespace — one import for the growing vocabulary:

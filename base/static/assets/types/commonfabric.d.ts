@@ -4295,10 +4295,11 @@ export interface IndexedCollectionOptions<T = unknown> {
   /**
    * Values mirrored as columns of the `members` table. A column is named for
    * the member field it mirrors and given the SQLite type it is stored
-   * under, or is given a type and the path of a value nested in the member.
-   * A value that is absent is stored as `NULL`.
+   * under, or is declared with a type and, as needed, the path of a value
+   * nested in the member and the column's label. A value that is absent is
+   * stored as `NULL`.
    */
-  columns?: Record<string, string | IndexedColumnAtPath>;
+  columns?: Record<string, string | IndexedColumnSpec>;
 
   /**
    * Member fields holding one reference to another cell, or a list of them.
@@ -4314,13 +4315,23 @@ export interface IndexedCollectionOptions<T = unknown> {
   indexes?: ReadonlyArray<ReadonlyArray<string>>;
 }
 
-/** A column of an indexed collection mirroring a value nested in a member. */
-export interface IndexedColumnAtPath {
+/** A column of an indexed collection declared with more than its type. */
+export interface IndexedColumnSpec {
   /** SQLite column type the value is stored under. */
   type: string;
 
-  /** Keys leading from the member to the value. */
-  path: readonly string[];
+  /** Keys leading from the member to the value, when it is nested. */
+  path?: readonly string[];
+
+  /**
+   * The column's label. A member's value that carries confidentiality is
+   * mirrored only into a column whose `confidentiality` covers it, and a
+   * query reading the column carries that label.
+   */
+  ifc?: {
+    confidentiality?: readonly FabricValue[];
+    maxConfidentiality?: readonly FabricValue[];
+  };
 }
 
 /**
@@ -4348,6 +4359,32 @@ export interface IndexedCollection<T = unknown> extends SqliteDb {
 export type IndexedCollectionFunction = <T = unknown>(
   options?: IndexedCollectionOptions<T>,
 ) => Reactive<IndexedCollection<T>>;
+
+/**
+ * An indexed collection with several kinds of member, all mirrored into one
+ * database. Each kind has a table named for it, and each of its relations a
+ * table named for the kind and the relation, joined by an underscore, so a
+ * statement can join one kind's members to another's.
+ */
+export interface IndexedCollections<Kinds = Record<string, unknown>>
+  extends SqliteDb {
+  /** Adds `member` as one of `kind`, mirroring its declared fields. */
+  add<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+
+  /** Removes `member` of `kind` and every row mirrored from it. */
+  remove<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+}
+
+/** Declares an {@link IndexedCollections}, with a declaration per kind. */
+export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
+  kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+) => Reactive<IndexedCollections<Kinds>>;
 
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;
@@ -5274,6 +5311,7 @@ export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
 export declare const indexedCollection: IndexedCollectionFunction;
+export declare const indexedCollections: IndexedCollectionsFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;

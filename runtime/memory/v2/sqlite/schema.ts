@@ -70,8 +70,8 @@ export function assertSafeColumn(name: string, sqlType: string): void {
   }
 }
 
-// Map the leading SQL type word to a JSON Schema `type`.
-function jsonTypeForSql(sqlType: string): JSONSchemaTypes {
+/** Maps the leading word of a SQL column type to a JSON Schema `type`. */
+export function jsonTypeForSql(sqlType: string): JSONSchemaTypes {
   const head = sqlType.trim().toLowerCase().split(/\s+/)[0] ?? "";
   switch (head) {
     case "integer":
@@ -273,4 +273,41 @@ export function createIndexSQL(
       columns.map(quoteIdent).join(", ")
     })`;
   });
+}
+
+/**
+ * Additive DDL bringing an existing table up to the columns `t` declares:
+ * one `ALTER TABLE … ADD COLUMN` per declared column that `existing` lacks.
+ * With `schema` (an attach alias) the table is the one in that attached
+ * database. Throws on a column SQLite cannot add to a table that holds rows:
+ * a primary key, a unique column, or one declared `not null` with no default.
+ */
+export function addColumnSQL(
+  name: string,
+  t: TableSchema,
+  existing: ReadonlySet<string>,
+  schema?: string,
+): string[] {
+  const target = schema
+    ? `${quoteIdent(schema)}.${quoteIdent(name)}`
+    : quoteIdent(name);
+  const statements: string[] = [];
+  for (const [column, columnSchema] of Object.entries(t.properties ?? {})) {
+    if (existing.has(column)) continue;
+    const sqlType = columnSchema.sqlType ?? "text";
+    assertSafeColumn(column, sqlType);
+    if (
+      /\b(primary\s+key|unique)\b/i.test(sqlType) ||
+      (/\bnot\s+null\b/i.test(sqlType) && !/\bdefault\b/i.test(sqlType))
+    ) {
+      throw new TypeError(
+        `column "${column}" cannot be added to the existing table "${name}": ` +
+          `its type is \`${sqlType}\``,
+      );
+    }
+    statements.push(
+      `ALTER TABLE ${target} ADD COLUMN ${quoteIdent(column)} ${sqlType}`,
+    );
+  }
+  return statements;
 }

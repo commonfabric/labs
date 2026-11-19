@@ -13,11 +13,11 @@ import type {
 } from "../../storage/interface.ts";
 import { parseCfLinkToSigil } from "../sqlite/cf-link-codec.ts";
 import {
+  COLLECTION_META_TABLE,
   type IndexedCollectionDescriptor,
   indexedCollectionDescriptorOf,
   MEMBER_COLUMN,
   MEMBER_DEPS_TABLE,
-  MEMBERS_TABLE,
   SOURCE_COLUMN,
   TARGET_COLUMN,
 } from "./definition.ts";
@@ -52,6 +52,12 @@ interface CollectionState {
   /** The drain in flight, if any. */
   draining: Promise<void> | undefined;
 
+  /**
+   * Settles once the tables have been brought up to the collection's
+   * declaration, which every drain waits for.
+   */
+  reconciled: Promise<void>;
+
   /** Removes the maintenance event handler. */
   readonly cancel: () => void;
 }
@@ -69,10 +75,14 @@ interface SpaceState {
 }
 
 /**
- * One maintenance event: either members to re-read, with the rows they have
- * now, or the id of a collection to list in its space's registry.
+ * One maintenance event: members to re-read, with the rows they have now;
+ * the id of a collection to list in its space's registry; or a declaration
+ * to record in the collection's own database, under the key given.
  */
-type MaintenanceEvent = { members: MemberRows[] } | { list: string };
+type MaintenanceEvent =
+  | { members: MemberRows[] }
+  | { list: string }
+  | { record: "migrating" | "declaration"; declaration: string };
 
 /**
  * Keeps the tables of every indexed collection current with the cells they
@@ -81,6 +91,11 @@ type MaintenanceEvent = { members: MemberRows[] } | { list: string };
  * re-reads those members in a scheduler-run transaction that writes their
  * rows. A member none of whose rows changed is written nowhere, so such a
  * write leaves the database, and every query over it, untouched.
+ *
+ * When a collection's declaration differs from the one its tables were last
+ * brought up to, every member is re-read once, which is what carries a
+ * column or a relation added to the declaration into the rows of members
+ * that are never written again.
  *
  * The mirror follows stored state: a member field computed by a derivation
  * is re-read when that derivation's result is written, not when its inputs
@@ -238,6 +253,7 @@ export class IndexedCollectionMaintainer {
       stream,
       pending: new Set(),
       draining: undefined,
+      reconciled: Promise.resolve(),
       cancel: this.#runtime.scheduler.addEventHandler(
         (tx: IExtendedStorageTransaction, event: MaintenanceEvent) =>
           this.#maintain(tx, handle, event),
@@ -245,7 +261,85 @@ export class IndexedCollectionMaintainer {
       ),
     };
     space.collections.set(id, collection);
+    collection.reconciled = this.#reconcile(collection).catch((error) => {
+      if (!this.#disposed) {
+        logger.warn("reconcile-failed", () => [handle.id, error]);
+      }
+    });
+    this.#runtime.trackAsyncWork(collection.reconciled);
     return collection;
+  }
+
+  /** Reads the handle of `collection`, as a database and as a declaration. */
+  async #open(collection: CollectionState): Promise<
+    | { db: SqliteDbRef; descriptor: IndexedCollectionDescriptor }
+    | undefined
+  > {
+    const handle = this.#runtime.getCellFromLink(collection.handle);
+    await handle.sync();
+    const value: unknown = handle.getRaw({ lastNode: "value" });
+    const descriptor = indexedCollectionDescriptorOf(value);
+    if (descriptor === undefined || !isSqliteDbRef(value)) return undefined;
+    return { db: toDbRef(value), descriptor };
+  }
+
+  /** Queues `event` for `collection` and waits for its transaction to end. */
+  async #dispatch(
+    collection: CollectionState,
+    event: MaintenanceEvent,
+  ): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.#runtime.scheduler.queueEvent(
+      collection.stream,
+      event,
+      true,
+      () => resolve(),
+    );
+    await promise;
+  }
+
+  /** Re-reads `members` of `collection`, a batch per transaction. */
+  async #reread(
+    collection: CollectionState,
+    members: readonly MemberRows[],
+  ): Promise<void> {
+    await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
+    for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
+      if (this.#disposed) return;
+      await this.#dispatch(collection, {
+        members: members.slice(start, start + MEMBERS_PER_EVENT),
+      });
+    }
+  }
+
+  /**
+   * Brings the tables of `collection` up to its declaration, when the
+   * database records another one or none. The first write creates whatever
+   * table, column or index the declaration has gained, and every member is
+   * then re-read. The declaration is recorded last, so an interrupted pass is
+   * made again by the next runtime that adopts the collection.
+   */
+  async #reconcile(collection: CollectionState): Promise<void> {
+    const opened = await this.#open(collection);
+    const provider = this.#runtime.storageManager.open(
+      collection.handle.space,
+    );
+    if (opened === undefined || provider.sqliteQuery === undefined) return;
+    const declaration = JSON.stringify(opened.descriptor);
+    const recorded = await provider.sqliteQuery(
+      opened.db,
+      `SELECT value FROM ${COLLECTION_META_TABLE} WHERE key = 'declaration'`,
+    );
+    const [row] = recorded.rows as { value?: unknown }[];
+    if (this.#disposed || row?.value === declaration) return;
+    await this.#dispatch(collection, { record: "migrating", declaration });
+    const { rows } = await provider.sqliteQuery(
+      opened.db,
+      memberRowsSql(opened.descriptor, allMembersSql(opened.descriptor)),
+    );
+    await this.#reread(collection, groupMemberRows(opened.descriptor, rows));
+    if (this.#disposed) return;
+    await this.#dispatch(collection, { record: "declaration", declaration });
   }
 
   /** Returns the member cell `rows` is stored under. */
@@ -287,51 +381,33 @@ export class IndexedCollectionMaintainer {
    * drain of this collection asks about them again.
    */
   async #drain(collection: CollectionState): Promise<void> {
+    await collection.reconciled;
     const docs = [...collection.pending];
     collection.pending.clear();
-    let descriptor: IndexedCollectionDescriptor | undefined;
     let members: MemberRows[];
     try {
-      const handle = this.#runtime.getCellFromLink(collection.handle);
-      await handle.sync();
-      const value: unknown = handle.getRaw({ lastNode: "value" });
-      descriptor = indexedCollectionDescriptorOf(value);
-      if (descriptor === undefined || !isSqliteDbRef(value)) return;
+      const opened = await this.#open(collection);
       const provider = this.#runtime.storageManager.open(
         collection.handle.space,
       );
-      if (provider.sqliteQuery === undefined) return;
+      if (opened === undefined || provider.sqliteQuery === undefined) return;
       const { rows } = await provider.sqliteQuery(
-        toDbRef(value),
-        affectedRowsSql(descriptor),
+        opened.db,
+        memberRowsSql(opened.descriptor, AFFECTED_MEMBERS_SQL),
         { docs: JSON.stringify(docs) },
       );
-      members = groupMemberRows(descriptor, rows);
-      await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
+      members = groupMemberRows(opened.descriptor, rows);
     } catch (error) {
       for (const doc of docs) collection.pending.add(doc);
       throw error;
     }
-    for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
-      if (this.#disposed) return;
-      const event: MaintenanceEvent = {
-        members: members.slice(start, start + MEMBERS_PER_EVENT),
-      };
-      const { promise, resolve } = Promise.withResolvers<void>();
-      this.#runtime.scheduler.queueEvent(
-        collection.stream,
-        event,
-        true,
-        () => resolve(),
-      );
-      await promise;
-    }
+    await this.#reread(collection, members);
   }
 
   /**
    * Runs one maintenance event: lists the collection in its space's
-   * registry, or re-reads the members the event names and writes the rows
-   * that changed.
+   * registry, records a declaration in the collection's database, or
+   * re-reads the members the event names and writes the rows that changed.
    */
   #maintain(
     tx: IExtendedStorageTransaction,
@@ -349,29 +425,40 @@ export class IndexedCollectionMaintainer {
       }
       return;
     }
+    const writer = createSqliteWriter(this.#runtime, handle, tx);
+    if ("record" in event) {
+      writer.exec(
+        `INSERT INTO ${COLLECTION_META_TABLE} (key, value) VALUES (?, ?) ` +
+          "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [event.record, event.declaration],
+      );
+      return;
+    }
     const descriptor = indexedCollectionDescriptorOf(
       this.#runtime.getCellFromLink(handle, undefined, tx).getRaw({
         lastNode: "value",
       }),
     );
     if (descriptor === undefined) return;
-    const writer = createSqliteWriter(this.#runtime, handle, tx);
     for (const previous of event.members) {
       // One member that cannot be read leaves the others of its batch to be
       // written.
       try {
+        if (!Object.hasOwn(descriptor.kinds, previous.kind)) continue;
+        const kind = descriptor.kinds[previous.kind];
         const rows = projectMember(
           tx,
-          descriptor,
+          previous.kind,
+          kind,
           this.#memberCell(previous, tx),
         );
         if (rows.member !== previous.member) {
           // A member added by the transaction that created it was stored
           // under a reference that has since resolved to another cell. Its
           // rows move to the reference other members hold to it.
-          moveMemberRows(writer, descriptor, previous.member, rows);
+          moveMemberRows(writer, kind, previous.member, rows);
         } else if (!sameMemberRows(previous, rows)) {
-          refreshMemberRows(writer, descriptor, rows, previous);
+          refreshMemberRows(writer, kind, rows, previous);
         }
       } catch (error) {
         logger.warn("member-unreadable", () => [previous.member, error]);
@@ -391,64 +478,89 @@ function toDbRef(handle: SqliteDbRef): SqliteDbRef {
   };
 }
 
-/**
- * Returns the query that selects, for the members read from any document in
- * the `:docs` JSON list, every row the collection holds: part `0` carries a
- * member's column values as a JSON list, part `n` a reference of the
- * relation at position `n - 1`, and part `-1` a document the member was read
- * from.
- */
-function affectedRowsSql(descriptor: IndexedCollectionDescriptor): string {
-  const q = (name: string) => `"${name}"`;
-  const affected = `SELECT k FROM affected`;
-  const arms = [
-    `SELECT 0 AS part, k AS member, json_array(${
-      descriptor.columns.map(q).join(", ")
-    }) AS value FROM affected LEFT JOIN ${q(MEMBERS_TABLE)} ON ${
-      q(MEMBER_COLUMN)
-    } = k`,
-    ...descriptor.relations.map((name, at) =>
-      `SELECT ${at + 1}, ${q(SOURCE_COLUMN)}, ${q(TARGET_COLUMN)} FROM ${
-        q(name)
-      } WHERE ${q(SOURCE_COLUMN)} IN (${affected})`
-    ),
-    `SELECT -1, ${q(MEMBER_COLUMN)}, doc FROM ${q(MEMBER_DEPS_TABLE)} WHERE ${
-      q(MEMBER_COLUMN)
-    } IN (${affected})`,
-  ];
-  return `WITH affected AS (SELECT DISTINCT ${q(MEMBER_COLUMN)} AS k FROM ${
-    q(MEMBER_DEPS_TABLE)
-  } WHERE doc IN (SELECT value FROM json_each(:docs))) ${
-    arms.join(" UNION ALL ")
-  }`;
+/** Quotes an identifier the collection's declaration already validated. */
+function q(name: string): string {
+  return `"${name}"`;
 }
 
-/** Helper for `#drain()`, which gathers the rows of `affectedRowsSql()`. */
+/**
+ * Subquery returning the `kind` and reference `k` of every member read from
+ * a document in the `:docs` JSON list.
+ */
+const AFFECTED_MEMBERS_SQL = `SELECT DISTINCT kind, ${
+  q(MEMBER_COLUMN)
+} AS k FROM ${
+  q(MEMBER_DEPS_TABLE)
+} WHERE doc IN (SELECT value FROM json_each(:docs))`;
+
+/**
+ * Returns the subquery returning the `kind` and reference `k` of every
+ * member the collection holds.
+ */
+function allMembersSql(descriptor: IndexedCollectionDescriptor): string {
+  return Object.entries(descriptor.kinds).map(([kind, { table }]) =>
+    `SELECT '${kind}' AS kind, ${q(MEMBER_COLUMN)} AS k FROM ${q(table)}`
+  ).join(" UNION ALL ");
+}
+
+/**
+ * Returns the query that selects every row the collection holds for the
+ * members `selection` returns: part `0` carries a member's column values as a
+ * JSON list, part `n` a reference of the relation at position `n - 1`, and
+ * part `-1` a document the member was read from.
+ */
+function memberRowsSql(
+  descriptor: IndexedCollectionDescriptor,
+  selection: string,
+): string {
+  const arms = Object.entries(descriptor.kinds).flatMap(([kind, own]) => {
+    const selected = `SELECT k FROM selected WHERE kind = '${kind}'`;
+    return [
+      `SELECT '${kind}' AS kind, 0 AS part, k AS member, json_array(${
+        own.columns.map(q).join(", ")
+      }) AS value FROM selected JOIN ${q(own.table)} ON ${
+        q(MEMBER_COLUMN)
+      } = k WHERE kind = '${kind}'`,
+      ...own.relations.map((name, at) =>
+        `SELECT '${kind}', ${at + 1}, ${q(SOURCE_COLUMN)}, ${
+          q(TARGET_COLUMN)
+        } FROM ${q(own.relationTables[name])} WHERE ${
+          q(SOURCE_COLUMN)
+        } IN (${selected})`
+      ),
+      `SELECT kind, -1, ${q(MEMBER_COLUMN)}, doc FROM ${
+        q(MEMBER_DEPS_TABLE)
+      } WHERE kind = '${kind}' AND ${q(MEMBER_COLUMN)} IN (${selected})`,
+    ];
+  });
+  return `WITH selected AS (${selection}) ${arms.join(" UNION ALL ")}`;
+}
+
+/** Helper for the maintainer, which gathers the rows of `memberRowsSql()`. */
 function groupMemberRows(
   descriptor: IndexedCollectionDescriptor,
   rows: readonly unknown[],
 ): MemberRows[] {
   const members = new Map<string, MemberRows>();
-  const of = (member: string): MemberRows => {
-    let entry = members.get(member);
-    if (entry === undefined) {
-      entry = {
-        member,
-        values: descriptor.columns.map(() => null),
-        relations: descriptor.relations.map(() => []),
-        deps: [],
-      };
-      members.set(member, entry);
-    }
-    return entry;
-  };
   for (const row of rows) {
-    const { part, member, value } = row as {
+    const { kind, part, member, value } = row as {
+      kind: string;
       part: number;
       member: string;
       value: string;
     };
-    const entry = of(member);
+    const key = `${kind}\n${member}`;
+    let entry = members.get(key);
+    if (entry === undefined) {
+      entry = {
+        kind,
+        member,
+        values: descriptor.kinds[kind].columns.map(() => null),
+        relations: descriptor.kinds[kind].relations.map(() => []),
+        deps: [],
+      };
+      members.set(key, entry);
+    }
     if (part === 0) {
       entry.values = JSON.parse(value) as IndexedColumnValue[];
     } else if (part === -1) {

@@ -101,6 +101,7 @@ import { listResultSchema } from "./builtins/list-result-schema.ts";
 import {
   type IndexedCollectionDescriptor,
   indexedCollectionDescriptorOf,
+  indexedKindOf,
 } from "./builtins/indexed-collection/definition.ts";
 import {
   addMemberRows,
@@ -2404,21 +2405,29 @@ export class CellImpl<T extends FabricValue>
   }
 
   /**
-   * Adds `member` to this indexed collection: mirrors its declared fields
-   * into the collection's tables, in this cell's transaction. Adding a member
-   * the collection already holds refreshes its rows. Throws outside a
-   * transaction, on a receiver that is not an indexed collection, and on a
-   * member that is not a cell.
+   * Adds a member to this indexed collection: mirrors its declared fields
+   * into the collection's tables, in this cell's transaction. A collection
+   * with one kind of member takes the member; one with several takes the
+   * kind and then the member. Adding a member the collection already holds
+   * refreshes its rows. Throws outside a transaction, on a receiver that is
+   * not an indexed collection, on a kind it does not declare, and on a
+   * member that is not a cell of the collection's own space.
    */
-  add(member: unknown): void {
-    const descriptor = this.#indexedCollectionDescriptor();
-    if (descriptor === undefined || !this.#tx) {
+  add(kindOrMember: unknown, memberOfKind?: unknown): void {
+    const collection = this.#indexedCollectionDescriptor();
+    if (collection === undefined || !this.#tx) {
       throw new TypeError(
         "`.add()` is only available on an indexed collection, within a " +
           "transaction (e.g. inside a handler)",
       );
     }
-    const cell = asBoundCell(member);
+    const { kind, descriptor } = indexedKindOf(
+      collection,
+      memberOfKind === undefined ? undefined : String(kindOrMember),
+    );
+    const cell = asBoundCell(
+      memberOfKind === undefined ? kindOrMember : memberOfKind,
+    );
     if (cell === undefined) {
       throw new TypeError("an indexed collection holds cells only");
     }
@@ -2429,7 +2438,7 @@ export class CellImpl<T extends FabricValue>
         "an indexed collection holds cells of its own space only",
       );
     }
-    const rows = projectMember(this.#tx, descriptor, cell);
+    const rows = projectMember(this.#tx, kind, descriptor, cell);
     addMemberRows(this, descriptor, rows);
     // A piece the calling handler has just made is set up only if something
     // the handler writes refers to it, and a row is not such a write. The
@@ -3903,16 +3912,24 @@ export class CellImpl<T extends FabricValue>
 
   remove(
     ref: T extends (infer U)[] ? (U | AnyCell<U>) : never,
+    memberOfKind?: unknown,
   ): void {
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
-      // On an indexed collection, `remove()` takes a member out of it.
-      const descriptor = this.#indexedCollectionDescriptor();
-      const member = asBoundCell(ref);
-      if (descriptor !== undefined && member !== undefined && this.#tx) {
+      // On an indexed collection, `remove()` takes a member out of it, named
+      // as `add()` names one.
+      const collection = this.#indexedCollectionDescriptor();
+      const member = asBoundCell(
+        memberOfKind === undefined ? ref : memberOfKind,
+      );
+      if (collection !== undefined && member !== undefined && this.#tx) {
+        const { kind, descriptor } = indexedKindOf(
+          collection,
+          memberOfKind === undefined ? undefined : String(ref),
+        );
         for (const key of memberKeysOf(member.withTx(this.#tx))) {
-          deleteMemberRows(this, descriptor, key);
+          deleteMemberRows(this, kind, descriptor, key);
         }
         this.#registerIndexedCollection();
         return;

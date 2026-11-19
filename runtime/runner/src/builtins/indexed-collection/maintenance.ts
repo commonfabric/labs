@@ -6,17 +6,25 @@
  * with it.
  */
 
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+
 import type { Cell } from "../../cell.ts";
 import { portableSnapshotId } from "../../data-uri.ts";
 import type { JSONSchema } from "../../builder/types.ts";
+import { cfcLabelViewForCellFailClosed } from "../../cfc/label-view.ts";
+import {
+  cfcConfidentialityForObservationNode,
+  cfcObservationFitsCeiling,
+} from "../../cfc/observation.ts";
+
 import { createSigilLinkFromParsedLink } from "../../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../../storage/interface.ts";
 import {
-  type IndexedCollectionDescriptor,
+  type IndexedColumnLabel,
   indexedFieldPath,
+  type IndexedKindDescriptor,
   MEMBER_COLUMN,
   MEMBER_DEPS_TABLE,
-  MEMBERS_TABLE,
   SOURCE_COLUMN,
   TARGET_COLUMN,
 } from "./definition.ts";
@@ -26,13 +34,16 @@ export type IndexedColumnValue = string | number | null;
 
 /** What a collection's tables hold, or should hold, for one member. */
 export interface MemberRows {
+  /** The kind the member is one of. */
+  kind: string;
+
   /** The member's reference, as its `member_cf_link` column stores it. */
   member: string;
 
-  /** Column values, in the descriptor's column order. */
+  /** Column values, in the kind's column order. */
   values: IndexedColumnValue[];
 
-  /** Referenced cells per relation, in the descriptor's relation order. */
+  /** Referenced cells per relation, in the kind's relation order. */
   relations: string[][];
 
   /** Ids of the documents the values and references were read from. */
@@ -82,32 +93,49 @@ function keyOfLink(cell: Cell<unknown>): string {
 }
 
 /**
- * Reads `member`'s mirrored fields through `tx` and returns the rows they
- * amount to. A column field holding anything but a string, a finite number,
- * or a boolean reads as `null`; a boolean reads as `0` or `1`. A relation
- * field holds a list of cell references, in which a repeated one counts
- * once, or a single reference, or nothing. A field that is absent, on a
- * member or anywhere along a nested path, reads as `null` or as empty. `deps` names every document the reads
- * touched, the member's own included.
+ * Reads the fields of `member` that `descriptor` mirrors through `tx`, and
+ * returns the rows they amount to for a member of `kind`. A column field
+ * holding anything but a string, a finite number, or a boolean reads as
+ * `null`; a boolean reads as `0` or `1`. A relation field holds a list of
+ * cell references, in which a repeated one counts once, or a single
+ * reference, or nothing. A field that is absent, on a member or anywhere
+ * along a nested path, reads as `null` or as empty. `deps` names every
+ * document the reads touched, the member's own included.
+ *
+ * Throws when a read reaches a value stored per user or per session: the
+ * collection's database is shared by every reader of its space, and such a
+ * value differs by who reads it. Throws as well when a mirrored value carries
+ * confidentiality that its column's declared label does not cover, or that
+ * exceeds the column's declared ceiling: a row holds no label but the one its
+ * column declares, so storing the value would drop what it carries. A
+ * relation declares no label, so a relation field carrying any is refused.
  */
 export function projectMember(
   tx: IExtendedStorageTransaction,
-  descriptor: IndexedCollectionDescriptor,
+  kind: string,
+  descriptor: IndexedKindDescriptor,
   member: Cell<unknown>,
 ): MemberRows {
   const firstRead = countReads(tx);
   const bound = member.withTx(tx);
   const resolved = bound.resolveAsCell();
-  const key = memberKeyOf(resolved);
   const field = (name: string): Cell<unknown> =>
     indexedFieldPath(descriptor, name).reduce<Cell<unknown>>(
       (cell, key) => (cell as Cell<Record<string, unknown>>).key(key),
       resolved,
     );
-  const values = descriptor.columns.map((name) =>
-    toColumnValue(field(name).get())
-  );
+  // A mirrored value is bound as a bare scalar, which carries no label of
+  // its own into the database, so what it carries is measured here against
+  // the label its column declares. Nothing is measured where no gate could
+  // act on the result.
+  const labeled = tx.getCfcState().enforcementMode !== "disabled";
+  const values = descriptor.columns.map((name) => {
+    const cell = field(name);
+    if (labeled) assertLabelKept(name, cell, descriptor.labels[name]);
+    return toColumnValue(cell.get());
+  });
   const relations = descriptor.relations.map((name) => {
+    if (labeled) assertLabelKept(name, field(name), undefined);
     const targets = field(name).asSchema(RELATION_SCHEMA).get() as unknown;
     if (Array.isArray(targets)) {
       const keys = new Set<string>();
@@ -127,9 +155,21 @@ export function projectMember(
   ]);
   let position = 0;
   for (const read of tx.tx.getReadActivities?.() ?? []) {
-    if (position++ >= firstRead) deps.add(read.id);
+    if (position++ < firstRead) continue;
+    if (read.scope === "user" || read.scope === "session") {
+      throw new TypeError(
+        `an indexed collection cannot mirror a value stored per ${read.scope}`,
+      );
+    }
+    deps.add(read.id);
   }
-  return { member: key, values, relations, deps: [...deps] };
+  return {
+    kind,
+    member: memberKeyOf(resolved),
+    values,
+    relations,
+    deps: [...deps],
+  };
 }
 
 /**
@@ -155,12 +195,12 @@ export function sameMemberRows(
  */
 export function addMemberRows(
   db: IndexedCollectionWriter,
-  descriptor: IndexedCollectionDescriptor,
+  descriptor: IndexedKindDescriptor,
   rows: MemberRows,
 ): void {
   const columns = [MEMBER_COLUMN, ...descriptor.columns].map(quote);
   db.exec(
-    `INSERT INTO ${quote(MEMBERS_TABLE)} (${columns.join(", ")}) VALUES (${
+    `INSERT INTO ${quote(descriptor.table)} (${columns.join(", ")}) VALUES (${
       columns.map(() => "?").join(", ")
     }) ON CONFLICT (${quote(MEMBER_COLUMN)}) ${onConflict(descriptor)}`,
     [rows.member, ...rows.values],
@@ -176,7 +216,7 @@ export function addMemberRows(
  */
 export function refreshMemberRows(
   db: IndexedCollectionWriter,
-  descriptor: IndexedCollectionDescriptor,
+  descriptor: IndexedKindDescriptor,
   rows: MemberRows,
   previous: MemberRows,
 ): void {
@@ -184,7 +224,7 @@ export function refreshMemberRows(
     descriptor.columns.length > 0 && !sameList(previous.values, rows.values)
   ) {
     db.exec(
-      `UPDATE ${quote(MEMBERS_TABLE)} SET ${
+      `UPDATE ${quote(descriptor.table)} SET ${
         descriptor.columns.map((name) => `${quote(name)} = ?`).join(", ")
       } WHERE ${quote(MEMBER_COLUMN)} = ?`,
       [...rows.values, rows.member],
@@ -200,52 +240,62 @@ export function refreshMemberRows(
  */
 export function moveMemberRows(
   db: IndexedCollectionWriter,
-  descriptor: IndexedCollectionDescriptor,
+  descriptor: IndexedKindDescriptor,
   from: string,
   rows: MemberRows,
 ): void {
   const columns = [MEMBER_COLUMN, ...descriptor.columns].map(quote);
   db.exec(
-    `INSERT INTO ${quote(MEMBERS_TABLE)} (${columns.join(", ")}) SELECT ${
+    `INSERT INTO ${quote(descriptor.table)} (${columns.join(", ")}) SELECT ${
       columns.map(() => "?").join(", ")
-    } WHERE EXISTS (${MEMBER_EXISTS}) ON CONFLICT (${quote(MEMBER_COLUMN)}) ${
-      onConflict(descriptor)
-    }`,
+    } WHERE EXISTS (${memberExists(descriptor)}) ON CONFLICT (${
+      quote(MEMBER_COLUMN)
+    }) ${onConflict(descriptor)}`,
     [rows.member, ...rows.values, from],
   );
   writeOwnedRows(db, descriptor, rows);
-  deleteMemberRows(db, descriptor, from);
+  deleteMemberRows(db, rows.kind, descriptor, from);
 }
 
-/** Deletes every row `db` holds for the member stored under `member`. */
+/**
+ * Deletes every row `db` holds for the member of `kind` stored under
+ * `member`.
+ */
 export function deleteMemberRows(
   db: IndexedCollectionWriter,
-  descriptor: IndexedCollectionDescriptor,
+  kind: string,
+  descriptor: IndexedKindDescriptor,
   member: string,
 ): void {
   db.exec(
-    `DELETE FROM ${quote(MEMBERS_TABLE)} WHERE ${quote(MEMBER_COLUMN)} = ?`,
+    `DELETE FROM ${quote(descriptor.table)} WHERE ${quote(MEMBER_COLUMN)} = ?`,
     [member],
   );
   for (const name of descriptor.relations) {
     db.exec(
-      `DELETE FROM ${quote(name)} WHERE ${quote(SOURCE_COLUMN)} = ?`,
+      `DELETE FROM ${quote(descriptor.relationTables[name])} WHERE ${
+        quote(SOURCE_COLUMN)
+      } = ?`,
       [member],
     );
   }
   db.exec(
-    `DELETE FROM ${quote(MEMBER_DEPS_TABLE)} WHERE ${quote(MEMBER_COLUMN)} = ?`,
-    [member],
+    `DELETE FROM ${quote(MEMBER_DEPS_TABLE)} WHERE kind = ? AND ${
+      quote(MEMBER_COLUMN)
+    } = ?`,
+    [kind, member],
   );
 }
 
 /** Subquery selecting the row of the member bound as its one parameter. */
-const MEMBER_EXISTS = `SELECT 1 FROM ${quote(MEMBERS_TABLE)} WHERE ${
-  quote(MEMBER_COLUMN)
-} = ?`;
+function memberExists(descriptor: IndexedKindDescriptor): string {
+  return `SELECT 1 FROM ${quote(descriptor.table)} WHERE ${
+    quote(MEMBER_COLUMN)
+  } = ?`;
+}
 
 /** Helper for the row writers, which returns a member row's conflict clause. */
-function onConflict(descriptor: IndexedCollectionDescriptor): string {
+function onConflict(descriptor: IndexedKindDescriptor): string {
   return descriptor.columns.length === 0
     ? "DO NOTHING"
     : `DO UPDATE SET ${
@@ -259,57 +309,82 @@ function onConflict(descriptor: IndexedCollectionDescriptor): string {
  * Helper for the row writers, which replaces the relation and dependency
  * rows of `rows.member`, leaving alone each table whose part of `previous` is
  * unchanged. The rows are inserted only while the member's own row exists.
+ * The values travel as one JSON list, so a statement's size does not grow
+ * with their number.
  */
 function writeOwnedRows(
   db: IndexedCollectionWriter,
-  descriptor: IndexedCollectionDescriptor,
+  descriptor: IndexedKindDescriptor,
   rows: MemberRows,
   previous?: MemberRows,
 ): void {
+  const exists = memberExists(descriptor);
   descriptor.relations.forEach((name, at) => {
     if (
-      previous === undefined ||
-      !sameSet(previous.relations[at] ?? [], rows.relations[at])
+      previous !== undefined &&
+      sameSet(previous.relations[at] ?? [], rows.relations[at])
     ) {
-      replaceRows(
-        db,
-        name,
-        SOURCE_COLUMN,
-        TARGET_COLUMN,
-        rows,
-        rows.relations[at],
-      );
+      return;
     }
+    const relation = quote(descriptor.relationTables[name]);
+    db.exec(
+      `DELETE FROM ${relation} WHERE ${quote(SOURCE_COLUMN)} = ?`,
+      [rows.member],
+    );
+    if (rows.relations[at].length === 0) return;
+    db.exec(
+      `INSERT INTO ${relation} (${quote(SOURCE_COLUMN)}, ${
+        quote(TARGET_COLUMN)
+      }) SELECT ?, value FROM json_each(?) WHERE EXISTS (${exists})`,
+      [rows.member, JSON.stringify(rows.relations[at]), rows.member],
+    );
   });
-  if (previous === undefined || !sameSet(previous.deps, rows.deps)) {
-    replaceRows(db, MEMBER_DEPS_TABLE, MEMBER_COLUMN, "doc", rows, rows.deps);
-  }
+  if (previous !== undefined && sameSet(previous.deps, rows.deps)) return;
+  db.exec(
+    `DELETE FROM ${quote(MEMBER_DEPS_TABLE)} WHERE kind = ? AND ${
+      quote(MEMBER_COLUMN)
+    } = ?`,
+    [rows.kind, rows.member],
+  );
+  db.exec(
+    `INSERT INTO ${quote(MEMBER_DEPS_TABLE)} (kind, ${
+      quote(MEMBER_COLUMN)
+    }, doc) SELECT ?, ?, value FROM json_each(?) WHERE EXISTS (${exists})`,
+    [rows.kind, rows.member, JSON.stringify(rows.deps), rows.member],
+  );
 }
 
 /**
- * Helper for `writeOwnedRows()`, which replaces the rows of `table` owned by
- * `rows.member` with one row per entry of `values`. The values travel as one
- * JSON list, so a statement's size does not grow with their number.
+ * Helper for `projectMember()`, which throws unless the confidentiality the
+ * value of `cell` carries is covered by `label`, the label its column
+ * declares.
  */
-function replaceRows(
-  db: IndexedCollectionWriter,
-  table: string,
-  ownerColumn: string,
-  valueColumn: string,
-  rows: MemberRows,
-  values: readonly string[],
+function assertLabelKept(
+  name: string,
+  cell: Cell<unknown>,
+  label: IndexedColumnLabel | undefined,
 ): void {
-  db.exec(
-    `DELETE FROM ${quote(table)} WHERE ${quote(ownerColumn)} = ?`,
-    [rows.member],
-  );
-  if (values.length === 0) return;
-  db.exec(
-    `INSERT INTO ${quote(table)} (${quote(ownerColumn)}, ${
-      quote(valueColumn)
-    }) SELECT ?, value FROM json_each(?) WHERE EXISTS (${MEMBER_EXISTS})`,
-    [rows.member, JSON.stringify(values), rows.member],
-  );
+  const view = cfcLabelViewForCellFailClosed(cell);
+  const carried = view === undefined
+    ? []
+    : cfcConfidentialityForObservationNode({ labelView: view });
+  if (carried.length === 0) return;
+  const declared = label?.confidentiality as
+    | readonly CfcConfClause[]
+    | undefined;
+  const ceiling = label?.maxConfidentiality as
+    | readonly CfcConfClause[]
+    | undefined;
+  if (
+    declared === undefined || declared.length === 0 ||
+    !cfcObservationFitsCeiling(carried, declared) ||
+    !cfcObservationFitsCeiling(carried, ceiling)
+  ) {
+    throw new TypeError(
+      `an indexed collection cannot mirror \`${name}\`: its value carries ` +
+        "confidentiality that the column's declared `ifc` does not cover",
+    );
+  }
 }
 
 /** Helper for `projectMember()`, which maps a field value to a column value. */

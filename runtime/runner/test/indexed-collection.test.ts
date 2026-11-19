@@ -12,18 +12,26 @@ import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   defineIndexedCollection,
+  defineIndexedCollections,
+  type IndexedCollectionDefinition,
   type IndexedCollectionOptions,
 } from "../src/builtins/indexed-collection/definition.ts";
 import { memberKeyOf } from "../src/builtins/indexed-collection/maintenance.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
+import { toMemorySpaceAddress } from "../src/link-types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 type Topic = { title: string; body: string; rank: number; mentions: unknown[] };
 
 type Collection = {
-  add(member: unknown): void;
-  remove(member: unknown): void;
+  add(kindOrMember: unknown, member?: unknown): void;
+  remove(kindOrMember: unknown, member?: unknown): void;
 };
 
 describe("indexed-collection", () => {
@@ -59,13 +67,21 @@ describe("indexed-collection", () => {
   }
 
   /** Mints the handle of a collection declared by `options`. */
-  async function declare(options: IndexedCollectionOptions): Promise<void> {
-    const { tables, index } = defineIndexedCollection(options);
+  function declare(options: IndexedCollectionOptions): Promise<void> {
+    return declareAs(defineIndexedCollection(options));
+  }
+
+  /** Mints, or declares again, the handle of the collection `definition`. */
+  async function declareAs(
+    { tables, index }: IndexedCollectionDefinition,
+  ): Promise<void> {
     await commit((tx) => {
       const handle = runtime.getCell(space, "collection", undefined, tx);
       const id = handle.getAsNormalizedFullLink().id.replace(/^of:/, "");
       db = { id, tables };
-      handle.setRaw({ ...db, index });
+      // A handle declared again keeps the write revision it had.
+      const { rev } = (handle.getRaw() ?? {}) as { rev?: number };
+      handle.setRawUntyped({ ...db, index, ...(rev !== undefined && { rev }) });
     });
   }
 
@@ -286,6 +302,252 @@ describe("indexed-collection", () => {
     });
   });
 
+  describe("a collection with several kinds of member", () => {
+    const latest = "SELECT t.title AS title, max(c.rank) AS last " +
+      "FROM topics t LEFT JOIN comments_topic e " +
+      "ON e.target_cf_link = t.member_cf_link " +
+      "LEFT JOIN comments c ON c.member_cf_link = e.source_cf_link " +
+      "GROUP BY t.member_cf_link ORDER BY t.title";
+
+    beforeEach(async () => {
+      await declareAs(defineIndexedCollections({
+        topics: { columns: { title: "text" } },
+        comments: { columns: { rank: "integer" }, relations: ["topic"] },
+      }));
+      await commit((tx) => {
+        for (const name of ["a", "b"]) {
+          const cell = topic(name, tx);
+          cell.set({ title: name, body: "", rank: 0, mentions: [] });
+          collection(tx).add("topics", cell);
+        }
+      });
+    });
+
+    async function comment(
+      name: string,
+      on: string,
+      rank: number,
+    ): Promise<void> {
+      await commit((tx) => {
+        const cell = topic(name, tx);
+        cell.setRawUntyped({ rank, topic: topic(on).getAsLink() });
+        collection(tx).add("comments", cell);
+      });
+    }
+
+    it("joins the members of one kind to those of another in one statement", async () => {
+      await comment("first", "a", 3);
+      await comment("second", "a", 7);
+
+      expect(await rows(latest)).toEqual([
+        { title: "a", last: 7 },
+        { title: "b", last: null },
+      ]);
+    });
+
+    it("follows a write to a member of either kind", async () => {
+      await comment("first", "a", 3);
+      await commit((tx) => topic("first", tx).key("rank").set(9));
+      await commit((tx) => topic("a", tx).key("title").set("renamed"));
+
+      expect(await rows(latest)).toEqual([
+        { title: "b", last: null },
+        { title: "renamed", last: 9 },
+      ]);
+    });
+
+    it("removes a member of the kind named", async () => {
+      await comment("first", "a", 3);
+      await commit((tx) =>
+        collection(tx).remove("comments", topic("first", tx))
+      );
+
+      expect(await rows(latest)).toEqual([
+        { title: "a", last: null },
+        { title: "b", last: null },
+      ]);
+    });
+
+    it("throws when no kind is named", async () => {
+      const tx = runtime.edit();
+
+      expect(() => collection(tx).add(topic("a", tx))).toThrow(
+        "several kinds",
+      );
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("throws on a kind the collection does not declare", async () => {
+      const tx = runtime.edit();
+
+      expect(() => collection(tx).add("authors", topic("a", tx))).toThrow(
+        "no kind of member",
+      );
+      tx.abort();
+      await runtime.idle();
+    });
+  });
+
+  describe("a declaration that changes", () => {
+    // A collection is brought up to its declaration when a runtime first
+    // learns of it, so each case declares again and then starts a second
+    // runtime over the same storage.
+
+    async function redeclare(options: IndexedCollectionOptions): Promise<void> {
+      await declareAs(defineIndexedCollection(options));
+      await runtime.dispose({ closeStorage: false });
+      runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const handle = runtime.getCell(space, "collection");
+      await handle.sync();
+      runtime.indexedCollections.register(
+        handle.getAsNormalizedFullLink(),
+        db.id,
+      );
+      await runtime.settled();
+    }
+
+    it("fills a column the declaration gains, for members never written again", async () => {
+      await declare({ columns: { title: "text" } });
+      await addTopic("a", { rank: 4 });
+      await addTopic("b", { rank: 6 });
+      await redeclare({ columns: { title: "text", rank: "integer" } });
+
+      expect(await rows("SELECT title, rank FROM members ORDER BY title"))
+        .toEqual([{ title: "a", rank: 4 }, { title: "b", rank: 6 }]);
+    });
+
+    it("fills a relation the declaration gains", async () => {
+      await declare({ columns: { title: "text" } });
+      await addTopic("target");
+      await addTopic("a", { mentions: [topic("target")] });
+      await redeclare({ columns: { title: "text" }, relations: ["mentions"] });
+
+      expect(
+        await rows(
+          "SELECT m.title AS title FROM mentions e JOIN members m " +
+            "ON m.member_cf_link = e.source_cf_link",
+        ),
+      ).toEqual([{ title: "a" }]);
+    });
+
+    it("writes nothing once the tables are up to the declaration", async () => {
+      await declare({ columns: { title: "text" } });
+      await addTopic("a");
+      await redeclare({ columns: { title: "text", rank: "integer" } });
+      const before = await rev();
+      await redeclare({ columns: { title: "text", rank: "integer" } });
+
+      expect(await rev()).toBe(before);
+    });
+  });
+
+  describe("a field carrying a label", () => {
+    /** Commits a topic whose title is read through a document labeled `secret`. */
+    async function labeledTopic(name: string): Promise<void> {
+      const tx = runtime.edit();
+      const held = runtime.getCell(space, `${name}-title`, undefined, tx)
+        .getAsNormalizedFullLink();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, { ...toMemorySpaceAddress(held), path: [] }, {
+        value: "classified",
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: ["secret"] } }],
+          },
+        },
+      });
+      topic(name, tx).setRawUntyped({
+        title: runtime.getCellFromLink(held).getAsLink(),
+        body: "",
+        rank: 0,
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+
+    it("throws from `add()` into a column declaring no label", async () => {
+      await declare({ columns: { title: "text" } });
+      await labeledTopic("a");
+      const tx = runtime.edit();
+
+      expect(() => collection(tx).add(topic("a", tx))).toThrow(
+        "does not cover",
+      );
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("throws from `add()` into a column whose label does not cover it", async () => {
+      await declare({
+        columns: {
+          title: { type: "text", ifc: { confidentiality: ["other"] } },
+        },
+      });
+      await labeledTopic("a");
+      const tx = runtime.edit();
+
+      expect(() => collection(tx).add(topic("a", tx))).toThrow(
+        "does not cover",
+      );
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("mirrors the value into a column whose label covers it", async () => {
+      await declare({
+        columns: {
+          title: { type: "text", ifc: { confidentiality: ["secret"] } },
+        },
+      });
+      await labeledTopic("a");
+      const tx = runtime.edit();
+
+      expect(() => collection(tx).add(topic("a", tx))).not.toThrow();
+      tx.abort();
+      await runtime.idle();
+    });
+
+    it("declares the column's label on the table the database is created with", () => {
+      const { tables } = defineIndexedCollection({
+        columns: {
+          title: { type: "text", ifc: { confidentiality: ["secret"] } },
+        },
+      });
+
+      expect(tables.members.properties.title.ifc).toEqual({
+        confidentiality: ["secret"],
+      });
+    });
+  });
+
+  describe("a field stored per user", () => {
+    it("throws from `add()`", async () => {
+      await declare({ columns: { title: "text" } });
+      const tx = runtime.edit();
+      const own = createCell<string>(
+        runtime,
+        {
+          ...runtime.getCell(space, "own-title").getAsNormalizedFullLink(),
+          scope: "user",
+        },
+        tx,
+      );
+      own.set("mine");
+      const cell = topic("a", tx);
+      cell.setRawUntyped({ title: own.getAsLink(), body: "", rank: 0 });
+
+      expect(() => collection(tx).add(cell)).toThrow("stored per user");
+      tx.abort();
+      await runtime.idle();
+    });
+  });
+
   describe("a write to a member", () => {
     beforeEach(async () => {
       await declare({ columns: { title: "text", rank: "integer" } });
@@ -375,7 +637,7 @@ describe("indexed-collection", () => {
       const release = Promise.withResolvers<void>();
       provider.sqliteQuery = async (handle, sql, ...rest) => {
         const reply = await query(handle, sql, ...rest);
-        if (sql.startsWith("WITH affected") && reply.rows.length > 0) {
+        if (sql.includes(":docs") && reply.rows.length > 0) {
           lookedUp.resolve();
           await release.promise;
         }

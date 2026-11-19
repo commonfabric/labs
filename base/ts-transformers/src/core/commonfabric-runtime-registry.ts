@@ -367,6 +367,12 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
+  {
+    exportName: "indexedCollections",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
   // uiVariant(piece, kind) returns a static `cf-render` VNode (it just calls
   // `h`); cf-render owns all reactivity at render time. The transformer needs no
   // special handling — it is not a reactive-origin call and gets no dedicated

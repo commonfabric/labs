@@ -18,6 +18,7 @@ import type {
   FetchOptions,
   FieldAnchors,
   IndexedCollectionFunction,
+  IndexedCollectionsFunction,
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
@@ -32,6 +33,7 @@ import type {
 
 import {
   defineIndexedCollection,
+  defineIndexedCollections,
   type IndexedCollectionDefinition,
   type IndexedCollectionOptions,
 } from "../builtins/indexed-collection/definition.ts";
@@ -251,6 +253,21 @@ export const indexedCollection: IndexedCollectionFunction = (options) => {
   return node(
     defineIndexedCollection(options as IndexedCollectionOptions),
   ) as ReturnType<IndexedCollectionFunction>;
+};
+
+/**
+ * Declares an indexed collection with several kinds of member, all mirrored
+ * into one database so that one statement can join them.
+ */
+export const indexedCollections: IndexedCollectionsFunction = (kinds) => {
+  const node = sqliteDatabase as (
+    definition: IndexedCollectionDefinition,
+  ) => Reactive<SqliteDb>;
+  return node(
+    defineIndexedCollections(
+      kinds as Record<string, IndexedCollectionOptions>,
+    ),
+  ) as ReturnType<IndexedCollectionsFunction>;
 };
 
 // Shares the single `sqliteQuery` node factory with `db.query` (cell.ts) — see
