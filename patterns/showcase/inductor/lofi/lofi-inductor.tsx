@@ -356,8 +356,9 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
 
     // One cached model call per item. `asked` lets grading ignore an answer
     // the call still holds for the previous goal.
-    // TODO: remove `asked` once a `generateObject` whose prompt
-    // changes reads as pending until it answers the new one (top/TBD)
+    // TODO(pending-generate-object): remove `asked` once a `generateObject`
+    // whose prompt changes reads as pending until it answers the new one
+    // (top/TBD)
     const hifi = items.map((item) => {
       const prompt = computed(() => buildHifiPrompt(goal.get(), item));
       return {
