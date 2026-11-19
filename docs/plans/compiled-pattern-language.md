@@ -5417,6 +5417,10 @@ is relitigated.
   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
   has the goal of each track and what decides whether the work continues.
   It settles provisional decision P30.
+- The integration into the runtime is behind one experimental option, off
+  by default (2026-11-18). Labels from templates at commit (its milestone
+  4) assume specs pull request #91 lands as it stands, and need no option
+  of their own.
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no

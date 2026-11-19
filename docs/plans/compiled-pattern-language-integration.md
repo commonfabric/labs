@@ -188,21 +188,24 @@ How each part of the question is answered:
   milestone 4 instantiates templates with the runtime's label operations in
   `runtime/runner/src/cfc/`, and the prototype's template evaluator
   (`compare/template.ts`) stays a test oracle only.
-- **The flag.** Milestone 1 needs none, because nothing in the runtime
-  reaches the adapter. Milestone 3 adds one experimental option, off by
-  default, that lets the runner run a piece from a plan, registered in
-  `docs/development/EXPERIMENTAL_OPTIONS.md` in the same change. The ruling
-  that a space runs one path or the other becomes a mark of the space that
-  the option permits.
+- **The flag.** The whole effort is behind one experimental option, off by
+  default. Milestones 1 and 2 need none, because nothing in the runtime
+  reaches the adapter. Milestone 3 adds the option, which lets the runner
+  run a piece from a plan, registered in
+  `docs/development/EXPERIMENTAL_OPTIONS.md` in the same change, and every
+  later milestone runs under it with no option of its own. The ruling that
+  a space runs one path or the other becomes a mark of the space that the
+  option permits.
 - **The CFC specification process.** Milestones 1 to 3 are a host
   arrangement: the reads and writes go through
   `ExtendedStorageTransaction.commit()` and `prepareCfc()` unchanged, and
   what differs is how work is grouped into transactions. Milestone 4, labels
-  from templates in place of the join, is a semantic gap: the rule is in
-  specs pull request #91, which is a draft. Code lands behind the
-  milestone 3 option with a `SPEC-PENDING` marker at the deciding site, or
-  after that pull request merges; it changes what is stored, so it never
-  runs at the default.
+  from templates in place of the join, changes what Contextual Flow Control
+  decides. Its rules are those of specs pull request #91, and the work
+  assumes that pull request lands as it stands. It runs under the option of
+  milestone 3, which is never on by default, and needs no further option.
+  Where code reaches the main branch before that pull request merges, its
+  deciding sites carry the `SPEC-PENDING` marker the procedure requires.
 
 ## Two tracks, one target
 
@@ -317,11 +320,11 @@ and reports what it measures beside the figures before it.
    comparison of `compare/corpus.ts`, which today evaluates templates in
    TypeScript beside the runtime (`compare/template.ts`), then compares
    what the runtime stores on the integrated path with what today's
-   runtime stores. It is a change to what Contextual Flow Control decides,
-   so it follows "The CFC specification process" above. *Measures:* the
-   cost of instantiating a template per written path against one join per
-   transaction, and the labels the design stores, compared with today's
-   from the same runtime.
+   runtime stores. It assumes specs pull request #91 lands, and runs under
+   the option of milestone 3 ("The CFC specification process" above).
+   *Measures:* the cost of instantiating a template per written path
+   against one join per transaction, and the labels the design stores,
+   compared with today's from the same runtime.
 5. **Value code in the sandbox.** The module texts of value code are
    evaluated in an SES compartment under the runtime's module policy, and
    the runtime compiles on load with the crate in the compile worker.
@@ -417,9 +420,10 @@ back to back, and both pairs are given; today's time to settle differs by
 two thirds between the two.
 
 **The corpus.** 215 modules run on today's runtime in the comparison, the
-executor runs 214, and 213 run in all three ways: one more fails in the
-runs in storage at the creation of its argument
-(`examples/cfc-exchange-rules/witnessed-chain.tsx`), not examined. In this
+executor runs 214. Until the fifth pair below, 213 ran in all three ways:
+`examples/cfc-exchange-rules/witnessed-chain.tsx` failed in storage at the
+creation of its argument, and runs since the adapter takes the inputs as
+documents the executor did not make. In this
 session's values run 6,013 of 6,107 compared values equal today's, the
 figure of the design's plan, so the hooks change no value of the executor.
 
@@ -480,10 +484,10 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   modules; each of the other 7 reads the wall clock or calls
   `crypto.randomUUID()`, which the comparison does not make equal between
   two runs.
-- **What remains refused, after three fixes to the adapter and the
+- **What remains refused, after four fixes to the adapter and the
   driver.** A third pair of runs recorded the schema of each write, and 13
-  commits were refused in 5 modules. Two causes were then found and fixed,
-  and a fourth pair has 4 refused commits in 4 modules.
+  commits were refused in 5 modules. Three causes were then found and
+  fixed, and a fifth pair has 4 refused commits in 2 modules.
   - *A document the replica dropped.* The replica drops a watched document
     that nothing holds or reads at its next release pass
     (`releaseUnreadDocuments`), and a read through a transaction then sees
@@ -507,20 +511,20 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
     property (`schemaEnvelopeForTargetPath` in
     `runtime/runner/src/cfc/prepare.ts`), and merging that with the stored
     array schema fails (`schema-merge.ts`). `Cell.set` avoids it only by
-    splitting records into documents of their own. The fix belongs on the
-    main branch.
-  - *2 writer-fit misfits remain,* both in the transaction that settles the
-    instance (`examples/cfc-input-cell-demo/briefing.tsx` and
-    `apps/budget-tracker/confidential.tsx`), where today's runtime settles
-    both modules with no refusal. The cause, examined on `briefing.tsx`:
-    the result document is not a store the runtime owns. Today's runner
+    splitting records into documents of their own. The fix is pull request
+    #10012, against the main branch, not merged.
+  - *A result document the runtime does not own.* The settles of
+    `examples/cfc-input-cell-demo/briefing.tsx` and
+    `apps/budget-tracker/confidential.tsx` were refused for writer-fit,
+    where today's runtime settles both with no refusal. Today's runner
     enrolls the stores of a piece when it sets the piece up
     (`enrollPieceOwnedStores` in `runtime/runner/src/runner.ts`), and a
     clause that does not fit a store the runtime owns is declared onto the
-    store rather than refused (§8.12.5); the adapter enrolls nothing. A
-    variant of the pattern that writes `briefing` alone, whose value rightly
-    carries "demo-secret", is refused the same way, and with the result
-    document enrolled the settle commits.
+    store rather than refused (§8.12.5); the adapter enrolled nothing. A
+    variant of `briefing.tsx` that writes `briefing` alone, whose value
+    rightly carries "demo-secret", was refused the same way. The adapter
+    now enrolls each document the executor makes, under the instance's
+    result document, and both settles commit.
   - *Labels too wide, as "Labels" above predicts.* With the result document
     enrolled, the settle of `briefing.tsx` stores one label at the root of
     the result: "demo-secret" with the clause of `city`, for the value and
@@ -532,17 +536,22 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
     transaction, applied to the design's one transaction for the whole
     settle, and milestone 4 is what removes it.
 
+  - *What is left.* The 2 refusals of the runtime's bug above, and 2
+    writer-fit misfits in `examples/cfc-exchange-rules/witnessed-chain.tsx`,
+    which runs in storage since the inputs are taken as documents the
+    executor did not make, and which were not examined.
+
   With the fixes, the labeled runs store the values of the run in memory in
   every module but the 7 that read the clock and the 2 with a refused
   write, and the runs with the argument in place have no refused commit.
-  The fourth pair, on a quiet machine:
+  The fifth pair, over 214 modules:
 
-  | Over 213 modules | In memory | Argument in place | Labeled inputs | Today's runtime |
+  | Over 214 modules | In memory | Argument in place | Labeled inputs | Today's runtime |
   | --- | ---: | ---: | ---: | ---: |
-  | To a settled result | 789 ms | 2,394 ms | 1,885 ms | 33,997 ms |
-  | 536 events | 4,593 ms | 12,116 ms | 11,971 ms | 89,231 ms |
-  | Commits for the events | | 1,959 | 1,957 | 1,448 |
-  | CFC preparations (settle / events) | | 0 / 1 | 95 / 430 | 2,743 / 2,067 |
+  | To a settled result | 962 ms | 3,071 ms | 2,828 ms | 38,911 ms |
+  | 541 events | 3,946 ms | 12,889 ms | 14,529 ms | 117,885 ms |
+  | Commits for the events | | 1,977 | 1,973 | 1,462 |
+  | CFC preparations (settle / events) | | 0 / 9 | 96 / 442 | 2,753 / 2,089 |
 
 - **`showcase/battleship/pass-and-play/main.tsx` is slower than today's
   runtime per event by the executor's own work:** 13.5 ms in memory
@@ -556,9 +565,7 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   harness reading labels between events. They are an upper bound on the
   gain until milestones 3 to 6.
 
-**Not examined.** The failure of `witnessed-chain.tsx` in storage, which
-the change to the covering path did not fix; whether
-`budget-tracker/confidential.tsx` has the cause of `briefing.tsx`; the
+**Not examined.** The two writer-fit misfits of `witnessed-chain.tsx`; the
 outlier of the labeled battleship run; how much of the wait for a commit to
 settle is idle; and why the driver's own comparison with today's values,
 made in the same process after the runs, finds 5,637 of 6,053 equal where
