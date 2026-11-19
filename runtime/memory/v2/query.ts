@@ -688,11 +688,12 @@ export type QueryEvaluationCacheDiagnostics = {
  *
  * Only whole, current-state evaluations consult the cache: an eligible
  * `graph.query` (without `atSeq` or keyed snapshots), a whole watch-set
- * establishment, and `session.watch.add` when the session has no tracked graph
- * for that branch. A subsequent `session.watch.add` for an already tracked
- * branch extends the session's graph through `extendTrackedGraph()`. An
- * extension depends on the graph's existing coverage, so it neither serves nor
- * records a cache entry.
+ * establishment, and a `session.watch.add` or view replacement for a branch
+ * the session has no tracked graph for. A `session.watch.add` for an already
+ * tracked branch extends the session's graph through `extendTrackedGraph()`,
+ * and a view replacement moves it, releasing the roots the replacement drops
+ * and extending it by the roots it adds. Either depends on the graph's
+ * existing coverage, so it neither serves nor records a cache entry.
  *
  * Scope purity decides who may share an entry. An evaluation whose whole
  * reach — tracked, missed, and loaded — resolved under the `space` scope is

@@ -1782,9 +1782,10 @@ export type SessionDescriptor = {
    * resolving against the ENVELOPE principal: the binding grants no
    * write path (served writes ride the wave's §2b delegated carriage).
    * A non-delegating principal sending the marker is refused, and a
-   * bound session whose principal leaves the class is revoked. Spaces
-   * with no valid concrete-owner ACL bind nothing (today's rules
-   * apply). Signed into the session.open invocation with the rest of
+   * bound session whose principal leaves the class is revoked. A space
+   * with no valid concrete-owner ACL binds nothing at open (today's rules
+   * apply), and the session binds to the owner an access list later
+   * names. Signed into the session.open invocation with the rest of
    * this descriptor.
    */
   actingAs?: "space-owner";
