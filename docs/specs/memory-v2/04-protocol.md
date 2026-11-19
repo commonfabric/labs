@@ -1221,7 +1221,12 @@ with it, as it loses any frame in flight.
 The routed host splits a sync that one message could not carry, past the
 routed frame cap or the bytes a message may take, into parts of at most 1 MiB
 ([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
-sending whole. A direct server sends every sync whole.
+sending whole. The toolshed's direct memory socket splits a sync larger than
+the largest message it still sends compressed (256 MiB), or one too long for
+the server to encode whole, into parts of at most 32 MiB
+(`MEMORY_SOCKET_SYNC_PARTS`); an entry larger than that goes alone, in a part
+of its own, as above. A direct connection given no part bounds sends every
+sync whole.
 
 #### Negotiated schema-table encoding
 
