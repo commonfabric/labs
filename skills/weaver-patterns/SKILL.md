@@ -51,11 +51,13 @@ step checks before it changes anything.
    missing, stop and say so; never guess a host or a space.
 3. **The person is in the index.** If a `cf pattern` command says this machine
    has not joined, ask them to copy their invite link (not paste it here, which
-   would keep it in the transcript) and run `pbpaste | deno task cf index join`.
-   A Mac whose loom already joined needs nothing.
+   would keep it in the transcript) and run
+   `pbpaste | deno task cf index join --identity <key>` with the key from
+   step 2. A Mac whose loom already joined needs nothing.
 4. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
-   `my-patterns/.claude/settings.json` from `templates/`, keeping any other
-   settings already there.
+   `my-patterns/.claude/settings.json` from `templates/`, replacing every `<…>`
+   placeholder with the value steps 2 and 3 found and the labs root's absolute
+   path, and keeping any other settings already there.
 5. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
    accepts Claude Code's prompt to trust that folder.
 
@@ -77,11 +79,12 @@ step checks before it changes anything.
   when there are edits no version keeps; ask before forcing it, since forcing
   loses them.
 - **share**: `cf pattern share <entry>`, anonymous. The privacy check may
-  rewrite it into a general version; tell them what changed.
-  `cf pattern
-  unshare` stops it, though a version already shared stays
-  readable by anyone who has it. Putting their name on it is
-  `cf pattern publish`, only when they ask for that.
+  rewrite the files into a general version; tell them what changed, then save,
+  so their Weaver runs what was shared. `cf pattern unshare <entry>` stops
+  sharing, though a version already shared stays readable by anyone who has it.
+  Putting their name on it is
+  `cf pattern publish <entry> --as "<profile name>"`, only when they ask for
+  that and confirm the name it shows.
 - **list**: `cf pattern history` (all of theirs) and `cf pattern mine` (what
   they share, and how many people use it).
 
