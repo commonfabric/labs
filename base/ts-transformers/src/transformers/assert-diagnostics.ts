@@ -530,7 +530,9 @@ function captureCallReceiver(
   context: TransformationContext,
 ): ts.Expression {
   if (!ts.isPropertyAccessExpression(callee)) return callee;
-  if (callee.questionDotToken) return callee;
+  // The short-circuit can begin earlier in the chain: wrapping `x?.value`
+  // in `x?.value.method()` would make the method read unconditional.
+  if (ts.isOptionalChain(callee)) return callee;
   const receiver = callee.expression;
   if (
     ts.isIdentifier(receiver) || receiver.kind === ts.SyntaxKind.SuperKeyword ||
