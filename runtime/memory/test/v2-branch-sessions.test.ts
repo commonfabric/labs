@@ -545,6 +545,21 @@ describe("v2-branch-sessions", () => {
           .toEqual([""]);
       });
 
+      it("rejects for an open that names no branch, and the space gains none", async () => {
+        await expect(
+          client.mount(
+            SPACE,
+            { forkBranch: true },
+            testSessionOpenAuthFactory,
+          ),
+        ).rejects.toThrow(
+          "a session that asks for its branch to be forked names the branch",
+        );
+
+        expect((await main.listBranches()).map((branch) => branch.name))
+          .toEqual([""]);
+      });
+
       it("rejects for a name of 129 characters, and the space gains no branch", async () => {
         await expect(mountForking("n".repeat(129))).rejects.toThrow(
           "branch name is too long",

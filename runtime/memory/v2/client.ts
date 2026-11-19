@@ -33,6 +33,7 @@ import {
   type ConnectionAuthResult,
   type ConnectionChallengeResult,
   decodeTrustedMemoryBoundary,
+  DEFAULT_BRANCH,
   encodeMemoryBoundary,
   type EntityId,
   type EntityIdListOptions,
@@ -1696,6 +1697,16 @@ export class Client {
       }
       // A server that does not know the field would open the session on
       // the default branch, and the session would write there.
+      // The server forks only a branch the open names, so an open asking
+      // for a fork of none would be of the default branch, and write there.
+      if (
+        session.forkBranch === true &&
+        (session.branch === undefined || session.branch === DEFAULT_BRANCH)
+      ) {
+        throw protocolError(
+          "a session that asks for its branch to be forked names the branch",
+        );
+      }
       if (session.branch !== undefined && this.serverFlags?.branches !== true) {
         throw protocolError(
           "memory server does not open a session on a branch (`branches` " +

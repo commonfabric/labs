@@ -145,7 +145,10 @@ A storage manager given `Options.forkBranch` opens every space `branches`
 does not list on that branch, with `SessionDescriptor.forkBranch` set. The
 server forks the branch from the space's default branch the first time a
 session asks, for a principal that may write to the space, and opens a
-session of the default branch for one that may not. A worker runtime passes
+session of the default branch for one that may not. A branch of that name
+the space already holds is used as it is, whoever asks, so a fork's name is
+one no other branch has: `forkSpace()` makes it from a fresh UUID. A worker
+runtime passes
 the branch as `forkBranch` when every space its `InitializationData.branches`
 lists names the same one. Closing the storage manager deletes the branch in
 each space it opened that way.

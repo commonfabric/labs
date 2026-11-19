@@ -3335,6 +3335,8 @@ export class StorageManager implements IStorageManager {
    * Helper for `close()`, which deletes the branch `Options.forkBranch` had
    * the server fork in each space this manager opened. A space the server
    * forked nothing in refuses the deletion, which is not reported.
+   * `closeNow()` sends the deletions through this as well and does not wait
+   * for their answers.
    */
   async #deleteForkBranches(): Promise<void> {
     const branch = this.#forkBranch;
@@ -3356,6 +3358,7 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
+      void this.#deleteForkBranches();
       const outcomes = await Promise.allSettled(
         [...this.#providers.values()].map((provider) => provider.destroyNow()),
       );
@@ -3818,6 +3821,13 @@ export class StorageManager implements IStorageManager {
     if (this.#multiSpaceCommitsApplying.size > 0) return;
     for (const [space, provider] of [...this.#providers]) {
       if (held.has(space) || !this.#isUnusedSpace(space, provider)) continue;
+      // A space opened on the fork branch keeps its provider, which is what
+      // deletes that branch when this manager closes.
+      if (
+        this.#forkBranch !== undefined && this.#branches[space] === undefined
+      ) {
+        continue;
+      }
       this.#providers.delete(space);
       this.#forgetSpace(space);
       const released = provider.replica.releasedSession();

@@ -6938,6 +6938,7 @@ export class Server {
       // of its branches.
       const sessionBranch = message.session.branch;
       let descriptor = message.session;
+      let forkToMake: BranchName | undefined;
       if (sessionBranch !== undefined && sessionBranch !== DEFAULT_BRANCH) {
         const state = Engine.branchState(engine, sessionBranch);
         if (state === null && message.session.forkBranch === true) {
@@ -6955,16 +6956,17 @@ export class Server {
           const resumed = message.session.sessionId === undefined
             ? undefined
             : this.#sessions.peek(message.space, message.session.sessionId);
+          // The session writes as its own principal, whatever it reads as,
+          // so that is whose write access decides.
           const mayWrite = resumed === undefined &&
             this.#authorizeMessageWithEngine(
                 engine,
                 message.space,
-                capabilityPrincipal ?? actingPrincipal ?? principal,
+                capabilityPrincipal ?? principal,
                 "WRITE",
-                actingAs === "space-owner",
               ) === null;
           if (mayWrite) {
-            Engine.createBranch(engine, sessionBranch);
+            forkToMake = sessionBranch;
           } else {
             const { branch: _branch, ...onDefault } = message.session;
             descriptor = onDefault;
@@ -7013,6 +7015,9 @@ export class Server {
         : this.#sessions.get(message.space, message.session.sessionId)
           ?.ownerConnectionId;
       try {
+        // Made here, past every refusal above, so that an open the server
+        // refuses leaves no branch behind.
+        if (forkToMake !== undefined) Engine.createBranch(engine, forkToMake);
         opened = this.#sessions.open(
           message.space,
           descriptor,
