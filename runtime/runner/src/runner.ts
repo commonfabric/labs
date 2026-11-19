@@ -14720,6 +14720,21 @@ export class Runner {
   }
 
   /**
+   * Whether any of `writes`, the documents a node writes, holds a value, read
+   * through `tx` as a presence probe.
+   */
+  #holdsResult(
+    tx: IExtendedStorageTransaction,
+    writes: readonly NormalizedFullLink[],
+  ): boolean {
+    return writes.some((link) =>
+      tx.readOrThrow(toMemorySpaceAddress(link), {
+        meta: PRESENCE_PROBE_READ,
+      }) !== undefined
+    );
+  }
+
+  /**
    * On a serving runtime, writes the `result` back-link to `resultCell`, the
    * result of the piece `pattern` sets up, onto each instance this run writes
    * of one of `pattern`'s derived internal cells scoped narrower than
@@ -15479,11 +15494,14 @@ export class Runner {
             // body that caught it — its own `try`/`catch`, a discarded
             // rejection — does not get to hand back a result built on data the
             // schema does not describe. Either way the run is disposed of as an
-            // argument that did not resolve: an undefined result through the
-            // ordinary path, not an error. The reads it took are registered,
-            // including the one that failed, so it runs again when the data
-            // changes and may then find it valid.
+            // argument that did not resolve, not an error: an undefined result
+            // through the ordinary path, or, where the node already holds a
+            // result, no write at all, so that a result read from data that
+            // has not arrived never replaces one read from data that had. The
+            // reads it took are registered, including the one that failed, so
+            // it runs again when the data changes and may then find it valid.
             const refusal = tx.takeSchemaRefusal();
+            let keepsResult = false;
             if (refusal !== undefined) {
               logger.info(
                 "action",
@@ -15493,10 +15511,12 @@ export class Runner {
                 ],
               );
               result = undefined;
+              keepsResult = this.#holdsResult(tx, writes);
             }
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
+            if (keepsResult) return undefined;
             const normalized = normalizeSandboxResult(result, name);
             const written = this.#writeJavaScriptActionResult(
               tx,
