@@ -1,8 +1,9 @@
 /**
  * Requests `cf` signs as the person (`CF1`,
  * `@commonfabric/runner/toolshed-http-auth`), in one place. `firstPartySigner`
- * only signs, as `cf inspect --remote` always has. `signedFetch` (`cf fetch`)
- * and `cf id pair` add two rules:
+ * only signs; `cf inspect --remote` uses it when an identity is configured and
+ * otherwise sends its request unsigned, as it always has. `signedFetch`
+ * (`cf fetch`) and `cf id pair` add two rules:
  *
  * - **Cleartext only on this machine.** A signed request, or a redeem that
  *   answers with a key, goes over `https:`, or `http:` to a loopback host.
