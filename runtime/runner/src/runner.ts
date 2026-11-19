@@ -14756,7 +14756,9 @@ export class Runner {
     const keys = absences.map((absence) => entityKey(absence, identity));
     // Not a task the scheduler waits on to be idle: the run has finished, and
     // what follows is a new run, as a change arriving on the change channel
-    // would start, which document readiness's re-arm works the same way.
+    // would start. Document readiness's re-arm is not one either
+    // (`createDocumentReadiness()`), though it registers its load with
+    // `trackUntilSettled()`, which `synced()` and `Cell.pull()` wait on.
     void Promise.allSettled([
       ...loads,
       manager.loadsSettled?.(keys) ?? Promise.resolve(),
