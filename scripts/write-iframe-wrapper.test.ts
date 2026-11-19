@@ -199,6 +199,9 @@ export const IFRAME_PATTERN = {
         "const iframeInput = input ?? DEFAULT_INPUT;",
       );
       expect(generated).toContain("input: iframeInput,");
+      expect(generated).toContain(
+        " * ScopedState, run as an iframe guest: the guest's\n",
+      );
       expect(generated).not.toContain("new Writable.perUser");
       expect(generated).not.toContain("new Writable.perSession");
     } finally {

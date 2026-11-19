@@ -1,3 +1,12 @@
+/**
+ * A chooser for switching between your profiles. It lists them with buttons to
+ * use one, make it your default, or remove it (after a confirmation, and not
+ * the active one), shows removed and deleted profiles apart with a Restore for
+ * removed ones, and has an "Add another profile" form at the bottom.
+ * It appears when you have two or more profiles and no valid default, and as
+ * the Profile tab of the home space.
+ */
+
 import {
   type Cell,
   computed,
