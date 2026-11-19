@@ -2,6 +2,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
+  type PatternChange,
   resolveSpaceDid,
   RuntimeInternals,
   type SpaceFork,
@@ -67,7 +68,7 @@ import {
   SHELL_COMMAND,
 } from "./BaseView.ts";
 import type { LoadError } from "./BodyView.ts";
-import type { OpenHistory } from "./HistoryView.ts";
+import type { OpenHistory, PatternRestore } from "./HistoryView.ts";
 
 function getCommonfabricGlobal(): typeof globalThis & {
   commonfabric?: CommonfabricDebugState;
@@ -270,6 +271,17 @@ export class XRootView extends BaseView implements ShellApp {
    * promise that resolves once it has.
    */
   #restoring: { fork: SpaceFork; ended: Promise<void> } | undefined = undefined;
+
+  /** What the history panel is told of a pattern restore under way. */
+  @state()
+  private accessor _patternRestore: PatternRestore | undefined = undefined;
+
+  /**
+   * How many changes this view has made that add to the space's history,
+   * which tells the history panel to list it again.
+   */
+  @state()
+  private accessor _historyChanges = 0;
 
   /** What the history panel is told of the fork. */
   @state()
@@ -784,6 +796,8 @@ export class XRootView extends BaseView implements ShellApp {
         return this.closeHistory();
       case "restore-history":
         return this.restoreHistory();
+      case "restore-pattern":
+        return this.restorePattern(command);
     }
     throw new Error(
       debugStr`Received a non-command: $quote,long${command}`,
@@ -939,6 +953,63 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   /**
+   * Restores a piece's pattern code to the source revision `change` names,
+   * and leaves the piece's data as it is. Where the earlier source does not
+   * fit the data, the history panel is given the runtime's warning and the
+   * token that confirms the restore, which a second call carries.
+   */
+  async restorePattern(
+    change: {
+      pieceId: string;
+      revisionId: string;
+      scope?: PatternChange["scope"];
+      confirmationToken?: string;
+    },
+  ): Promise<void> {
+    const rt = this.#rt.value;
+    const space = this.space;
+    if (
+      rt === undefined || space === undefined ||
+      this._patternRestore?.busy === true || this.#fork !== undefined
+    ) return;
+    const { pieceId, revisionId } = change;
+    const restoring: PatternRestore = { pieceId, revisionId, busy: true };
+    this._patternRestore = restoring;
+    try {
+      const response = await rt.restorePiecePattern(
+        space,
+        change,
+        change.confirmationToken,
+      );
+      if (this._patternRestore !== restoring) return;
+      if (response.compatibilityWarning !== undefined) {
+        this._patternRestore = {
+          pieceId,
+          revisionId,
+          busy: false,
+          ...(change.scope !== undefined ? { scope: change.scope } : {}),
+          warning: response.compatibilityWarning,
+          ...(response.confirmationToken !== undefined
+            ? { confirmationToken: response.confirmationToken }
+            : {}),
+        };
+        return;
+      }
+      this._patternRestore = undefined;
+      this._historyChanges++;
+    } catch (error) {
+      console.error("[RootView] Failed to restore a pattern:", error);
+      if (this._patternRestore !== restoring) return;
+      this._patternRestore = {
+        pieceId,
+        revisionId,
+        busy: false,
+        error: describeFailure(error),
+      };
+    }
+  }
+
+  /**
    * Lets go of the open fork, where there is one, and deletes it. Resolves
    * once the deletion has been answered, and rejects never.
    */
@@ -946,6 +1017,7 @@ export class XRootView extends BaseView implements ShellApp {
     const fork = this.#fork;
     this._historyError = undefined;
     this._openHistory = undefined;
+    this._patternRestore = undefined;
     this.#viewBeforeFork = undefined;
     if (fork === undefined) return Promise.resolve();
     this.#fork = undefined;
@@ -1026,6 +1098,8 @@ export class XRootView extends BaseView implements ShellApp {
               .space="${this.space}"
               .open="${this._openHistory}"
               .error="${this._historyError}"
+              .patternRestore="${this._patternRestore}"
+              .changes="${this._historyChanges}"
             ></x-history-view>
           `
           : undefined}
