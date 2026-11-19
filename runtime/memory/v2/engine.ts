@@ -4666,9 +4666,11 @@ const refuseFractionalSplices = (
  * the indices it overwrote be read back exactly (`overwrittenArrayElements()`):
  *
  * - The commit must carry a recursive read of the array or of a path above
- *   it, confirmed or pending, on the branch the commit writes, so that the
- *   store refuses the commit where the array moved since the read, and the
- *   splice lands on the array it was diffed from.
+ *   it, on the branch the commit writes, so that the store refuses the
+ *   commit where the array moved since the read, and the splice lands on the
+ *   array it was diffed from. The read is confirmed, or pending and naming
+ *   its confirmed basis (`PendingRead`'s `basisSeq`), from which the store
+ *   checks it over the whole interval since.
  * - Its document instance must have no other operation in the commit, where
  *   a second one could change the array around it.
  * - Every splice of its array must be marked, and nothing else in its patch
@@ -4724,10 +4726,16 @@ const refuseUnfoundedMarkedSplices = (
       );
     }
   });
-  // Only a read of the branch the commit writes pins what it writes.
-  const reads = [...commit.reads.confirmed, ...commit.reads.pending].filter(
-    (read) =>
-      (("branch" in read ? read.branch : undefined) ?? branch) === branch,
+  // Only a read of the branch the commit writes pins what it writes, and a
+  // pending read only where it names its confirmed basis (`basisSeq`): one
+  // that does not is checked for staleness from its highest dependency's
+  // resolution on, which misses a peer's write landing before that (INV-1's
+  // CT-1910 deviation, docs/specs/memory-v2/09-invariants.md).
+  const reads = [
+    ...commit.reads.confirmed,
+    ...commit.reads.pending.filter((read) => read.basisSeq !== undefined),
+  ].filter((read) =>
+    (("branch" in read ? read.branch : undefined) ?? branch) === branch
   );
   const structural = (patch: PatchOp): boolean =>
     patch.op === "add" || patch.op === "remove" || patch.op === "move";

@@ -324,6 +324,58 @@ describe("applyCommit()", () => {
     }
   });
 
+  describe("under a pending read of a path above it", () => {
+    /**
+     * Commits a write of the session's own to the document, then a marked
+     * splice under a pending read naming that write, with `basisSeq` where
+     * one is given.
+     */
+    const commitUnderPendingRead = (basisSeq?: number) => {
+      commitOperations([{
+        op: "patch",
+        id,
+        patches: [{ op: "replace", path: "/value/extra", value: { own: 1 } }],
+      }]);
+      const own = localSeq;
+      applyCommit(engine, {
+        sessionId: "session-under-test",
+        principal: "did:key:alice",
+        space,
+        commit: {
+          localSeq: ++localSeq,
+          reads: {
+            confirmed: [],
+            pending: [{
+              id,
+              path: toDocumentPath(["value"]),
+              localSeq: own,
+              ...(basisSeq === undefined ? {} : { basisSeq }),
+            }],
+          },
+          operations: [{
+            op: "patch",
+            id,
+            patches: [marked("/value/tags", 0, 0, ["x"])],
+          }],
+        },
+      });
+    };
+
+    it("refuses it where the read names no confirmed basis", () => {
+      expect(() => commitUnderPendingRead()).toThrow(/marks a splice/);
+      expect(stored()).toEqual({ ...seeded, extra: { own: 1 } });
+    });
+
+    it("accepts it where the read names its confirmed basis", () => {
+      commitUnderPendingRead(seededSeq);
+      expect(stored()).toEqual({
+        ...seeded,
+        tags: ["x", "a", "b", "c", "d"],
+        extra: { own: 1 },
+      });
+    });
+  });
+
   describe("accepts a marked splice", () => {
     it("under a recursive read of its array", () => {
       commit([marked("/value/tags", 0, 0, ["x"])], [
