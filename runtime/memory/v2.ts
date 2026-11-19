@@ -2231,6 +2231,14 @@ export type CommitSummary = {
   /** The ids of the events whose handler consequences the commit carries. */
   consequenceOf?: string[];
 
+  /**
+   * On a serving loop's commit, the seq through which the loop had then
+   * computed everything the branch's authored commits called for: the state
+   * as of this commit is settled when no authored commit lies between
+   * `derivedThrough` and it.
+   */
+  derivedThrough?: number;
+
   /** The point of history the commit restored its branch to. */
   restored?: { branch: BranchName; seq: number };
 

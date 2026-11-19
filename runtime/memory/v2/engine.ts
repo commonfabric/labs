@@ -2468,8 +2468,8 @@ export const MAX_BRANCH_NAME_LENGTH = 128;
  * first own commit. Creating a branch that already exists with the same
  * parent and fork point returns it unchanged.
  *
- * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH} or holds
- * a control character, when the parent does not exist or is deleted, when
+ * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH}, when
+ * the parent does not exist or is deleted, when
  * the fork point lies outside the parent's history, or when `name` is taken
  * by a branch with another parent or fork point, a deleted one included.
  */
@@ -2500,9 +2500,8 @@ export const createBranch = (
       }
       return existing;
     }
-    // deno-lint-ignore no-control-regex
-    if (name.length > MAX_BRANCH_NAME_LENGTH || /[\u0000-\u001f]/.test(name)) {
-      throw new Error("branch name is malformed");
+    if (name.length > MAX_BRANCH_NAME_LENGTH) {
+      throw new Error("branch name is too long");
     }
     if (parent.status !== "active") {
       throw new Error(`branch is not active: ${parentBranch}`);

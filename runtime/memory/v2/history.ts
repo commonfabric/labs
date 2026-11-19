@@ -19,7 +19,11 @@ import {
   type EntityId,
   type Operation,
   scopeOfScopeKey,
+  SERVER_EXECUTION_ATTENTION_DOC_ID,
+  SERVER_EXECUTION_EFFECTS_DOC_ID,
+  SERVER_EXECUTION_WATERMARK_DOC_ID,
   type SessionId,
+  STREAM_ENTRIES_DOC_PREFIX,
 } from "../v2.ts";
 
 /** Which commits {@link listCommits} returns. */
@@ -73,13 +77,14 @@ type CommitRow = {
   created_at: string;
   acting_principal: string | null;
   consequence_of: string | null;
+  derived_through: number | null;
   original: string;
   writes: number;
 };
 
 const SELECT_COMMITS = `
 SELECT c.seq, c.branch, c.class, c.created_at, c.acting_principal,
-       c.consequence_of, c.original,
+       c.consequence_of, c.derived_through, c.original,
        (SELECT COUNT(*) FROM (
           SELECT DISTINCT r.id, r.scope_key FROM revision r
           WHERE r.commit_seq = c.seq
@@ -120,6 +125,9 @@ const toCommitSummary = (row: CommitRow): CommitSummary => ({
     : {}),
   ...(row.consequence_of !== null
     ? { consequenceOf: decodeMemoryBoundary<string[]>(row.consequence_of) }
+    : {}),
+  ...(row.derived_through !== null
+    ? { derivedThrough: row.derived_through }
     : {}),
   ...payloadSummary(row.original),
   writes: row.writes,
@@ -227,12 +235,28 @@ const divergedInstances = (
 };
 
 /**
+ * Helper for {@link restoreBranch}, which returns whether a restore rewrites
+ * the document `id`. It leaves alone the space's access list, and the
+ * records a serving loop keeps of its own progress through the branch's
+ * commits: the event logs, the watermark, and the effect and attention
+ * indexes. Those describe what has happened on the branch, which a restore
+ * adds to and does not undo.
+ */
+const isRestored = (id: EntityId, space: string): boolean =>
+  id !== aclDocId(space) &&
+  !id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  id !== SERVER_EXECUTION_WATERMARK_DOC_ID &&
+  id !== SERVER_EXECUTION_ATTENTION_DOC_ID &&
+  id !== SERVER_EXECUTION_EFFECTS_DOC_ID;
+
+/**
  * Restores `target` to the state `source` held as of `sourceSeq`, as one
  * commit on `target` that sets every document the two differ in to what
  * `source` holds and deletes each one `source` lacks. The commit records
  * where it restored from, so the history of `target` keeps every state it
- * went through, the one the restore replaced included. A space's access
- * list and its session-scoped documents stay as they are. Returns
+ * went through, the one the restore replaced included. Session-scoped
+ * documents stay as they are, as do the space's access list and its serving
+ * loop's records. Returns
  * `undefined`, writing nothing, when the two hold the same documents.
  *
  * @throws When either branch does not exist, when `sourceSeq` lies outside
@@ -265,7 +289,7 @@ export const restoreBranch = (
     const scopeKeys = new Map<number, string>();
     for (const { id, scopeKey } of instances) {
       const scope = scopeOfScopeKey(scopeKey);
-      if (scope === "session" || id === aclDocId(options.space)) continue;
+      if (scope === "session" || !isRestored(id, options.space)) continue;
       const held = Engine.readState(engine, { id, scopeKey, branch: target })
         ?.document ?? null;
       const wanted = Engine.readState(engine, {

@@ -7,7 +7,10 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { Server } from "@commonfabric/memory/v2/server";
+import { ExecutorHost } from "../src/executor/host.ts";
+import { waitForSettledThroughHead } from "../src/executor/watermark.ts";
 import { Runtime } from "../src/index.ts";
 import {
   EmulatedStorageManager,
@@ -89,6 +92,117 @@ describe("branch-runtime", () => {
     }
     for (const manager of managers) await manager.close();
     await server.close();
+  });
+
+  describe("of a space a serving loop runs", () => {
+    let host: ExecutorHost;
+    let client: Runtime;
+
+    beforeEach(() => {
+      const service = signer;
+      host = new ExecutorHost({
+        server,
+        serviceIdentity: service.did(),
+        // The host factory contract is asynchronous.
+        // deno-lint-ignore require-await
+        createRuntime: async () => {
+          const manager = EmulatedStorageManager.connectTo(server, {
+            as: service,
+          });
+          const runtime = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: manager,
+            servingPosture: true,
+            experimental: { serverExecution: true },
+          });
+          return {
+            runtime,
+            dispose: async () => {
+              await runtime.dispose();
+              await manager.close();
+            },
+          };
+        },
+        policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+      });
+      const manager = EmulatedStorageManager.connectTo(server, { as: signer });
+      managers.push(manager);
+      client = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { serverExecution: true },
+      });
+      runtimes.push(client);
+    });
+
+    afterEach(async () => {
+      await host.close();
+    });
+
+    it("runs a piece as it stood after an earlier event", async () => {
+      const pattern = await client.patternManager.compilePattern({
+        main: counterPath,
+        files: [{ name: counterPath, contents: counterSource }],
+      }, { space });
+      const result = client.getCell<{ count: number; doubled: number }>(
+        space,
+        "counter",
+        pattern.resultSchema,
+      );
+      await result.sync();
+      const tx = client.edit();
+      client.run(tx, pattern, { count: 1 }, result);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const cancel = result.sink(() => {});
+      const doubled = result.key("doubled");
+      await waitForCellValue(client, doubled, (value) => value === 2, {
+        stuckLabel: "the counter's first derivation",
+      });
+      result.key("add").send({ by: 10 });
+      await waitForCellValue(client, doubled, (value) => value === 22, {
+        stuckLabel: "the first event's consequences",
+      });
+      const provider = client.storageManager.open(space);
+      await client.idle();
+      await client.storageManager.synced();
+      await waitForSettledThroughHead(
+        client,
+        space,
+        await provider.serverHeadSeq!(),
+      );
+      const forkSeq = (await provider.listHistory!())[0].seq;
+      result.key("add").send({ by: 100 });
+      await waitForCellValue(client, doubled, (value) => value === 222, {
+        stuckLabel: "the second event's consequences",
+      });
+      await client.patternManager.flushCompileCacheWrites();
+      await provider.createBranch!("fork", { forkSeq });
+
+      const fork = makeRuntime("fork");
+      const forked = fork.getCellFromLink(result.getAsNormalizedFullLink());
+      await fork.runner.start(forked);
+      await forked.pull();
+      await fork.scheduler.idleWithPendingCommits();
+      expect(forked.key("count").get()).toBe(11);
+      expect(forked.key("doubled").get()).toBe(22);
+
+      await add(fork, forked, 1000);
+      expect(forked.key("count").get()).toBe(1011);
+      expect(forked.key("doubled").get()).toBe(2022);
+      expect(doubled.get()).toBe(222);
+
+      await provider.restoreBranch!({ source: "fork" });
+      await waitForCellValue(client, doubled, (value) => value === 2022, {
+        stuckLabel: "the restored state",
+      });
+      expect(result.key("count").get()).toBe(1011);
+
+      result.key("add").send({ by: 1 });
+      await waitForCellValue(client, doubled, (value) => value === 2024, {
+        stuckLabel: "an event after the restore",
+      });
+      cancel();
+    });
   });
 
   it("runs a piece as a fork holds it, and leaves the default branch alone", async () => {
