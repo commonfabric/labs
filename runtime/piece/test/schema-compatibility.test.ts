@@ -3565,7 +3565,11 @@ describe("piece schema compatibility", () => {
 
     it("accepts a comparable handle added where the node declared no cell", () => {
       for (
-        const comparable of [["comparable"], [{ kind: "comparable" }]]
+        const comparable of [
+          ["comparable"],
+          [{ kind: "comparable" }],
+          [{ kind: "comparable", scope: undefined }],
+        ]
       ) {
         expect(() =>
           assertSchemaSubset(
@@ -3608,6 +3612,32 @@ describe("piece schema compatibility", () => {
             { type: "unknown", ...after } as JSONSchema,
           )
         ).toThrow(/asCell changed/);
+      }
+    });
+
+    it("keeps a result's marker exact, whichever way it changes", () => {
+      // A result proof reads from the candidate to the previous contract, the
+      // other way from an argument's, so neither a result gaining a
+      // comparable handle nor one losing it rides the argument's exception.
+      const result = (field: JSONSchema): JSONSchema => ({
+        type: "object",
+        properties: { field },
+        required: ["field"],
+      });
+      const plain: JSONSchema = { type: "string" };
+      const comparable: JSONSchema = { type: "string", asCell: ["comparable"] };
+      for (
+        const [previous, candidate] of [
+          [plain, comparable],
+          [comparable, plain],
+        ]
+      ) {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, result(previous)),
+            pattern(true, result(candidate)),
+          )
+        ).toThrow(/result\.field: asCell changed/);
       }
     });
 

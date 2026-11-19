@@ -7,16 +7,19 @@ reason: "Decision record for declaring the Topic pivot rows' references as compa
 
 # Topic pivot rows as comparable cells
 
-`TopicCrossrefRow` in `patterns/apps/topics/topic.tsx` declares its two
-references, `topic` and `mentionedBy`, as `ComparableCell<unknown>`, and
-`TopicCrossrefIndex` declares its `source` the same way. All three were
-`unknown`. The `backlinksOf` lift declares the rows it reads the same way. The
-stored rows are unchanged: the board writes the same links it wrote before.
+`TopicCrossrefRow` in `patterns/apps/topics/topic.tsx` declares its `topic` as
+`ComparableCell<unknown>`, where it was `unknown`, and its `mentionedBy` as
+`ComparableCell<unknown>[]`, a list of comparable cells, where it was
+`unknown[]`. `TopicCrossrefIndex` declares its `source` a comparable cell, where
+it was `unknown`. The `backlinksOf` lift declares the rows it reads the same
+way. The stored rows are unchanged: the board writes the same links it wrote
+before.
 
 The update proof (`schemaSubsetIssue` in `runtime/piece/src/schema-compatibility.ts`)
-accepts the change. A node that declared no cell may become a comparable one,
-`asCell: ["comparable"]` with no scope; every other `asCell` change is still
-compared exactly.
+accepts the change. In an argument contract or a link proof, a node that
+declared no cell may become a comparable one, `asCell: ["comparable"]` with no
+scope. Every other `asCell` change is still compared exactly, and so is every
+change to a result's marker.
 
 ## Why the rows
 
@@ -43,14 +46,13 @@ The lift's own declaration matters as well. With only the argument changed, the
 Topic's input sync fell to 4 MB, but `backlinksOf` still read `mentionedBy` as
 `unknown[]`, and the watches that loaded the pivot for it brought the mentioning
 Topics' piece documents instead: 1,798 and 2,187 documents, two 35 MB responses.
-That share is measured, not tested: in the in-process test setup, starting a
-Topic in a fresh session loads the other Topics' pieces by another route before
-the lift runs, so a test cannot isolate it there.
 
-`topic-board-pivot-sessions.test.ts` holds the argument read to it: a fresh
-session that reads one of four Topics' input under its piece's argument link
-holds none of the other three pieces. With the rows declared `unknown`, it held
-all four.
+`topic-board-pivot-sessions.test.ts` holds both reads to it. A fresh session
+that reads one of four Topics' input under its piece's argument link holds none
+of the other three pieces; with the rows declared `unknown`, it held all four.
+And a fresh session that reads the pivot through the schema the compiled
+`backlinksOf` declares holds none of the four; with the lift's `mentionedBy`
+declared `unknown[]` again, it held the two Topics that mention another.
 
 ## Why the proof
 
@@ -78,7 +80,11 @@ in `runtime/piece/src/ops/piece-controller.ts` already treats nested cell
 wrappers this way on the rebuilt-link path: "a plain source may serve a
 wrapper-declaring slot". The exception is narrower than that path, which
 ignores every nested non-stream wrapper: it admits only `comparable`, only where
-the node declared no cell, and only without a scope. A writable `cell` adds a
+the node declared no cell, only without a scope, and only in an argument proof.
+An argument proof reads from the previous contract, or a link's producer, to the
+candidate, or the reader. A result proof reads the other way, from the candidate
+to the previous contract, so there the same test would admit a result losing
+its handle; a result's marker stays exact. A writable `cell` adds a
 write-back the proof holds the source to, `readonly` and `opaque` change what a
 reader can do with the value, and a scope changes which instance it reads, so
 those stay compared exactly. The tests in `schema-compatibility.test.ts` hold

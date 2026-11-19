@@ -523,12 +523,12 @@ describe("topic-board-pivot-sessions", () => {
 });
 
 /**
- * What a session that reads one topic's input loads of the other topics. The
- * pivot's rows reach every topic, so a read that followed a row's references
- * would load every topic's piece: with the rows declared `unknown`, a fresh
- * session reading one topic's input held all four. `cf piece call` and
- * `cf piece step` read a topic's input this way, under the argument schema
- * its piece links it with.
+ * What a session that reads a topic loads of the other topics. The pivot's
+ * rows reach every topic, so a read that followed a row's references would
+ * load every topic's piece. Two reads are held to it: a topic's input under
+ * the argument schema its piece links it with, which is how `cf piece call`
+ * and `cf piece step` read it, and the pivot under the schema the backlinks
+ * lookup declares, which is what loading the pivot for the lookup costs.
  */
 describe("topic-board-pivot-reads", () => {
   let server: ReturnType<typeof newLoopbackServer>;
@@ -594,6 +594,37 @@ describe("topic-board-pivot-reads", () => {
     ).map((topic) => (topic.get() as Titled).title);
   };
 
+  /**
+   * The schema the backlinks lookup (`backlinksOf`) reads the pivot under,
+   * taken from the current topic source as compiled: the lift whose
+   * parameters are `table`, `index` and `self`.
+   */
+  const backlinksTableSchema = async (session: Session) => {
+    const topic = await session.runtime.patternManager.compilePattern(
+      await currentSource(session.runtime, TOPIC_PATH),
+      { space },
+    );
+    const lookups = topic.nodes.flatMap((node) => {
+      const schema = (node.module as { argumentSchema?: JSONSchema })
+        .argumentSchema;
+      const properties = typeof schema === "object"
+        ? schema.properties
+        : undefined;
+      return properties?.table !== undefined &&
+          properties.index !== undefined && properties.self !== undefined
+        ? [schema as Exclude<JSONSchema, boolean>]
+        : [];
+    });
+    if (lookups.length !== 1) {
+      throw new Error(`the topic has ${lookups.length} backlinks lookups`);
+    }
+    const [lookup] = lookups;
+    return {
+      ...(lookup.properties!.table as Exclude<JSONSchema, boolean>),
+      ...(lookup.$defs === undefined ? {} : { $defs: lookup.$defs }),
+    } as JSONSchema;
+  };
+
   it("reads a topic's input without loading another topic's piece", async () => {
     const { alpha, beta, gamma, delta } = await boardOfFour();
     const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
@@ -605,5 +636,25 @@ describe("topic-board-pivot-reads", () => {
     await reader.runtime.storageManager.synced();
 
     expect(piecesHeld(reader, [beta, gamma, delta])).toEqual([]);
+  });
+
+  it("reads the pivot for a topic's backlinks without loading a topic's piece", async () => {
+    // What the lookup's declaration of the rows costs a session that loads
+    // the pivot for it. Declared `unknown`, the `mentionedBy` entries loaded
+    // Beta and Delta, the two topics that mention another.
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const table = reader.runtime.getCellFromLink<unknown>({
+      ...argument,
+      path: [...argument.path, "boardCrossrefs"],
+      schema: await backlinksTableSchema(reader),
+    });
+    await table.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [alpha, beta, gamma, delta])).toEqual([]);
   });
 });

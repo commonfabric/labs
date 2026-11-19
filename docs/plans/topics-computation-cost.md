@@ -142,8 +142,9 @@ implementation and prototypes can begin earlier.
       requirement under
       [compatibility requirements](#compatibility-requirements) depends on.
       `TopicCrossrefRow.topic` is declared a `ComparableCell`, so that reading
-      the table expands no topic, and a lookup compares it as a cell (declared
-      `unknown`, a query walk follows it into the piece). Second, the
+      the table expands no topic, and a lookup compares it as a cell; a query
+      walk follows a reference it reaches under `unknown` into the piece
+      behind it. Second, the
       resulting handle reaches topics without broadening demand. Topics that
       `addTopic` and the board's composer create hold `boardCrossrefs` as a
       link to the board's cross-reference table; older topics may not, which
