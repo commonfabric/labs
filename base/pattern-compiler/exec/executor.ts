@@ -7558,6 +7558,44 @@ export class Instance {
   }
 
   /**
+   * What a slot below the elements of a collection, whose path holds `*`,
+   * is bound to where no element was read for it, as where the collection
+   * is empty: the position the read would have read, `*` below the
+   * collection where a slot that reads the collection itself through to
+   * its stored array was bound. The runtime takes there the join of the
+   * element entries `*` covers, none for an empty collection, with the
+   * entries above it, so an absent element has the label of the nearest
+   * stored entry above it.
+   */
+  #elementsBound(
+    slot: number,
+    boundOf: (slot: number) => Bound | undefined,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    const star = record.path.indexOf("*");
+    if (star < 0) return undefined;
+    const above = canonical([record.root, record.path.slice(0, star)]);
+    for (const [other, { root, path, observes }] of this.plan.slots.entries()) {
+      // An `identity` slot stops at the link to the collection's cell, and
+      // its last position is not the array's.
+      if (other === slot || observes === "identity") continue;
+      if (canonical([root, path]) !== above) continue;
+      const bound = boundOf(other);
+      if (bound === undefined || !("at" in bound)) continue;
+      const last = bound.at[bound.at.length - 1];
+      if (last === undefined || last instanceof Ref) continue;
+      return {
+        observes: record.observes,
+        at: [
+          ...bound.at.slice(0, -1),
+          { doc: last.doc, path: [...last.path, ...record.path.slice(star)] },
+        ],
+      };
+    }
+    return undefined;
+  }
+
+  /**
    * What the source slot of a collection is bound to where no cone read it:
    * the stored array the collection's assembly found, for the element keys
    * of the collections around it. The template of the result of a `map`, an
@@ -7805,6 +7843,10 @@ export class Instance {
           const bound = first((source) => source.slots.get(slot)) ??
             this.#elementBound(slot, byCollection) ??
             this.#samePositionBound(
+              slot,
+              (other) => first((source) => source.slots.get(other)),
+            ) ??
+            this.#elementsBound(
               slot,
               (other) => first((source) => source.slots.get(other)),
             );

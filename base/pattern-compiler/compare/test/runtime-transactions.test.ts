@@ -667,6 +667,19 @@ describe("write records the runtime instantiates with the option on", () => {
     );
   });
 
+  it("binds the element slot of an empty collection to the position of its elements, and commits", async () => {
+    // The `identity` slot of `list/*` reads no element of the empty list.
+    // It is bound to `*` below the list, which covers no element entry and
+    // has the label of the list above it.
+    const { refused, label } = await commitWithOptionOn(
+      "spread-empty",
+      { trigger: 1 },
+      ["appended"],
+    );
+    expect(refused).toEqual([]);
+    expect(label).toBeDefined();
+  });
+
   it("journals the shape of a position whose value a slot of the same template observes too, and commits", async () => {
     const { refused, label } = await commitWithOptionOn(
       "shape-and-keys",
