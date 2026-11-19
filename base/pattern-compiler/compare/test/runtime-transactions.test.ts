@@ -15,6 +15,7 @@ import { type Artifact, Instance } from "../../exec/executor.ts";
 import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
 import { inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
+import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
@@ -180,6 +181,69 @@ describe("RuntimeTransactions", () => {
         scope: "space",
       });
       expect(JSON.stringify(metadata ?? {})).toContain("alice");
+    } finally {
+      read.abort();
+    }
+  });
+
+  it("keeps every document of the executor loaded through the release passes of the replica", async () => {
+    // A document the replica drops reads as absent at seq 0 through a
+    // transaction, and a commit that read it is refused as a stale read.
+    // A pass releases only a watched document, and keeps one read since
+    // the previous pass, so each document is watched and two passes run.
+    const { hooks, instance } = await started({ secret: "s", note: "n" });
+    instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
+    expect(await hooks.settled()).toEqual([]);
+    const provider = runtime.storageManager.open(space);
+    for (const doc of instance.store.docs.keys()) {
+      expect((await provider.sync(hooks.entityOf(doc))).error).toBeUndefined();
+    }
+    await runtime.storageManager.releaseUnreadDocuments?.();
+    await runtime.storageManager.releaseUnreadDocuments?.();
+
+    const { replica } = runtime.storageManager.open(space);
+    for (const doc of instance.store.docs.keys()) {
+      const view = replica.speculationRetirementView?.(
+        hooks.entityOf(doc),
+        "space",
+      );
+      expect({ doc, confirmed: (view?.confirmedSeq ?? 0) > 0 }).toEqual({
+        doc,
+        confirmed: true,
+      });
+      expect(view?.pendingLocalSeqs).toEqual([]);
+    }
+  });
+
+  it("writes a labeled input with the records of its array in place, as a lift's result is written", async () => {
+    const schema = {
+      type: "array",
+      items: { type: "object", properties: { count: { type: "number" } } },
+      ifc: {
+        confidentiality: [inputClause("items", await scenarioAudience())],
+      },
+    } as JSONSchema;
+    const value = [{ count: 1 }, { count: 2 }];
+    const { given, documents } = await labeledInputs(
+      runtime,
+      space,
+      { items: { schema } },
+      { items: value },
+      new RuntimeTransactions(runtime, space),
+    );
+
+    expect(documents.map(({ value }) => value)).toEqual([value]);
+    expect(given.items).toEqual({ $link: { doc: documents[0].id, path: [] } });
+    const read = runtime.edit();
+    try {
+      const address = {
+        space,
+        id: documents[0].id as `of:${string}`,
+        path: [],
+        scope: "space" as const,
+      };
+      expect(read.readValueOrThrow(address)).toEqual(value);
+      expect(readStoredCfcMetadata(read, address)).toBeDefined();
     } finally {
       read.abort();
     }

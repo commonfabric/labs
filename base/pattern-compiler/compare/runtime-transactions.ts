@@ -72,6 +72,8 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The positions the transaction in progress read, as text. */
   readonly #read = new Set<string>();
   readonly #receipts: TransactionCommitReceipt[] = [];
+  /** Removes this adapter from the readers of the storage manager. */
+  readonly #stopReading: (() => void) | undefined;
   readonly #counts: RuntimeCounts = {
     committed: 0,
     byCause: {},
@@ -91,11 +93,25 @@ export class RuntimeTransactions implements TransactionHooks {
   constructor(runtime: Runtime, space: MemorySpace) {
     this.#runtime = runtime;
     this.#space = space;
+    // The replica drops a document that nothing holds or reads at its next
+    // release pass (`releaseUnreadDocuments()`), and a read through a
+    // transaction does not load it again: it reads the document as absent
+    // at seq 0, and the commit is refused as a stale read. The executor
+    // holds its documents in memory and reads them through transactions, so
+    // it reads, as the replica counts it, every document it has named.
+    this.#stopReading = runtime.storageManager.addDocumentReader?.((
+      address,
+    ) => address.space === space && this.#byEntity.has(address.id));
   }
 
   /** What the transactions were given so far. */
   get counts(): Readonly<RuntimeCounts> {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
+  }
+
+  /** Stops keeping the documents of the executor loaded. */
+  close(): void {
+    this.#stopReading?.();
   }
 
   /** @inheritDoc */
@@ -221,7 +237,8 @@ export class RuntimeTransactions implements TransactionHooks {
   /**
    * The entity of the space that holds a document of the executor: the
    * identifier itself where it is an entity's, as that of a document the
-   * runtime made is, and `of:` before it otherwise.
+   * runtime made is, and `of:` before it otherwise. The replica keeps every
+   * entity named here loaded until `close()`.
    */
   entityOf(doc: string): URI {
     const entity: URI = doc.startsWith("of:") ? doc as URI : `of:${doc}`;
