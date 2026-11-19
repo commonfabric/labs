@@ -463,7 +463,7 @@ describe("repo-sync", () => {
       });
     });
 
-    it("returns a refused publish as failed and still publishes the other entries", async () => {
+    it("returns a publish refused as too large as oversize, not failed, and still publishes the other entries", async () => {
       const { client, published } = fakeIndex();
       const publishPattern = client.publishPattern;
       client.publishPattern = (request) =>
@@ -484,17 +484,63 @@ describe("repo-sync", () => {
         PUBLISH_OPTIONS,
         client,
       );
-      expect(report.entries.map((entry) => entry.status)).toEqual([
-        "failed",
-        "published",
+      expect(report.entries).toEqual([
+        { path: "p/a.tsx", status: "oversize", limit: "819200" },
+        { path: "p/b.tsx", status: "published", patternId: "id:p/b.tsx" },
       ]);
       expect(published.map((request) => request.source?.path)).toEqual([
         "p/b.tsx",
       ]);
-      expect(syncFailed(report)).toBe(true);
-      expect(reportMarkdown(report)).toContain(
-        "| `p/a.tsx` | pattern index publishPattern failed (400): program exceeds 819200 bytes of source |",
+      expect(syncFailed(report)).toBe(false);
+      const markdown = reportMarkdown(report);
+      expect(markdown).toContain("1 too large for the index, 0 failed.");
+      expect(markdown).toContain(
+        "### Not published: too large for the index",
       );
+      expect(markdown).toContain("over 819200 bytes of source");
+      expect(markdown).toContain("- `p/a.tsx`");
+      expect(markdown).not.toContain("### Failed");
+    });
+
+    it("returns any other refused publish as failed and still publishes the other entries", async () => {
+      for (
+        const error of [
+          new PatternIndexError("publishPattern", 400, "bad request"),
+          new PatternIndexError(
+            "publishPattern",
+            500,
+            "program exceeds 819200 bytes of source",
+          ),
+          new PatternIndexError("publishPattern", 401),
+          new TypeError("error sending request"),
+        ]
+      ) {
+        const { client, published } = fakeIndex();
+        const publishPattern = client.publishPattern;
+        client.publishPattern = (request) =>
+          request.patternId === "id:p/a.tsx"
+            ? Promise.reject(error)
+            : publishPattern(request);
+        const report = await publishPlan(
+          {
+            entries: [compiled("p/a.tsx"), compiled("p/b.tsx")],
+            selected: ["p/a.tsx", "p/b.tsx"],
+          },
+          PUBLISH_OPTIONS,
+          client,
+        );
+        expect(report.entries.map((entry) => entry.status)).toEqual([
+          "failed",
+          "published",
+        ]);
+        expect(published.map((request) => request.source?.path)).toEqual([
+          "p/b.tsx",
+        ]);
+        expect(syncFailed(report)).toBe(true);
+        expect(reportMarkdown(report)).toContain(
+          `| \`p/a.tsx\` | ${error.message} |`,
+        );
+      }
     });
 
     it("carries the plan's failed and undescribed entries into the report, publishing neither", async () => {
@@ -672,6 +718,7 @@ describe("repo-sync", () => {
           { path: "p/b.tsx", status: "unchanged", patternId: "B" },
           { path: "p/c.tsx", status: "undescribed" },
           { path: "p/d.tsx", status: "failed", reason: "bad | thing\nhere" },
+          { path: "p/g.tsx", status: "oversize", limit: "819200" },
         ],
         withdrawn: ["p/e.tsx"],
         dormant: ["p/f.tsx"],
@@ -683,7 +730,7 @@ describe("repo-sync", () => {
         }],
       });
       expect(markdown).toContain(
-        "At `0123456789ab`: 4 entries, 1 published, 1 unchanged, 1 without a description, 1 failed.",
+        "At `0123456789ab`: 5 entries, 1 published, 1 unchanged, 1 without a description, 1 too large for the index, 1 failed.",
       );
       expect(markdown).toContain("| `p/d.tsx` | bad \\| thing here |");
       expect(markdown).toContain("| `p/a.tsx` | `A` |");
@@ -693,6 +740,7 @@ describe("repo-sync", () => {
       expect(markdown).toContain("- `p/c.tsx`");
       expect(markdown).toContain("- `p/e.tsx`");
       expect(markdown).toContain("- `p/f.tsx`");
+      expect(markdown).toContain("- `p/g.tsx`");
     });
   });
 });

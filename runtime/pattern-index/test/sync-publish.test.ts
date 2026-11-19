@@ -179,6 +179,38 @@ describe("sync-publish", () => {
     );
   });
 
+  it("exits 0 after reporting when the index refuses an entry as too large", async () => {
+    reply = (call) =>
+      call.fn === "listRepoHeads"
+        ? Response.json({ heads: [] })
+        : Response.json(
+          { error: "program exceeds 819200 bytes of source" },
+          { status: 400 },
+        );
+
+    const output = await runPublish(await publishArgs(PLAN));
+
+    expect(output.code).toBe(0);
+    const summary = await Deno.readTextFile(`${directory}/summary.md`);
+    expect(summary).toContain("### Not published: too large for the index");
+    expect(summary).toContain("- `patterns/a/main.tsx`");
+    expect(summary).not.toContain("### Failed");
+  });
+
+  it("exits 1 after reporting when the index refuses an entry for another reason", async () => {
+    reply = (call) =>
+      call.fn === "listRepoHeads"
+        ? Response.json({ heads: [] })
+        : Response.json({ error: "malformed request" }, { status: 400 });
+
+    const output = await runPublish(await publishArgs(PLAN));
+
+    expect(output.code).toBe(1);
+    expect(await Deno.readTextFile(`${directory}/summary.md`)).toContain(
+      "### Failed",
+    );
+  });
+
   it("exits 1, contacting no index, for a plan of the wrong shape", async () => {
     const output = await runPublish(await publishArgs({ entries: "none" }));
 

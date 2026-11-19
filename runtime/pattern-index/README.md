@@ -54,8 +54,10 @@ variable `PATTERN_INDEX_SYNC` is `on`.
 
 An oversized program's publish refusal reports the server's byte limit in the
 sync summary. The report recognizes only the server's fixed size-error wording
-with a bounded decimal limit; other index response details remain withheld. The
-entry stays failed, and the sync continues with the remaining entries.
+with a bounded decimal limit; other index response details remain withheld. Such
+an entry is listed as too large for the index rather than failed, so, like an
+entry with no description, it does not fail the job, and the sync continues with
+the remaining entries.
 
 ## Loom helper contract
 
