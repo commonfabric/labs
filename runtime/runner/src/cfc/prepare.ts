@@ -35,7 +35,6 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
-import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
@@ -107,7 +106,6 @@ import {
   type PrimitiveCellLink,
 } from "../link-utils.ts";
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
-import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
@@ -165,10 +163,7 @@ import {
   labelForConsumedEntries,
   labelForEntriesAtPath,
 } from "./consumed-label.ts";
-import {
-  ConsumedLabelIndex,
-  type ConsumedLabelSelection,
-} from "./consumed-label-index.ts";
+import { ConsumedLabelIndex } from "./consumed-label-index.ts";
 import { collectDeclaredMonotonicityViolations } from "./declared-monotonicity.ts";
 import {
   CfcEnvelopeStabilityError,
@@ -203,6 +198,11 @@ import {
   mintedEntryReached,
   reconcileMintedEntries,
 } from "./minted-integrity.ts";
+import {
+  ObservationLabelResolver,
+  observedDocumentKey,
+  probedSlotPath,
+} from "./observation-label.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
@@ -3121,12 +3121,7 @@ const nonBuiltinWritePathsByTarget = (
   return result;
 };
 
-const targetKey = (target: {
-  space: MemorySpace;
-  id: string;
-  scope?: ReturnType<typeof normalizeCellScope>;
-}): string =>
-  `${target.space}\u0000${normalizeCellScope(target.scope)}\u0000${target.id}`;
+const targetKey = observedDocumentKey;
 
 /** The key `deriveFlowJoin` answers a read declared onward under. */
 const declaredOnwardKey = (target: DeclaredOnwardTarget): string =>
@@ -4240,43 +4235,6 @@ const pureLinkContainerPaths = (
   }
 };
 
-/**
- * The slot a link-resolution probe asked about: its path without the sub-path
- * at which a link exposes its recognizable form (`linkProbeSubPath`, the
- * sigil's `["/", "link@1"]` in the legacy layout, nothing in the atomic one).
- */
-const probedSlotPath = (path: readonly string[]): readonly string[] => {
-  const sigil = linkProbeSubPath();
-  const slotLength = path.length - sigil.length;
-  if (sigil.length === 0 || slotLength < 0) return path;
-  return sigil.every((segment, index) => path[slotLength + index] === segment)
-    ? path.slice(0, slotLength)
-    : path;
-};
-
-/**
- * The entries a read of `shape` consumes, as the selection an index shares
- * across transactions: one predicate per shape, under the shape's name.
- */
-const consumedByShape = (
-  shape: ReadObservationShape,
-): ConsumedLabelSelection => {
-  let selection = consumedByShapeSelections.get(shape);
-  if (selection === undefined) {
-    selection = {
-      key: shape,
-      keeps: (entry) => readConsumesEntry(shape, entry),
-    };
-    consumedByShapeSelections.set(shape, selection);
-  }
-  return selection;
-};
-
-const consumedByShapeSelections = new Map<
-  ReadObservationShape,
-  ConsumedLabelSelection
->();
-
 const forEachFlowObservation = (
   tx: IExtendedStorageTransaction,
   consume: (
@@ -4801,54 +4759,6 @@ const ownRestampContainerPaths = (
   return result;
 };
 
-// Whether `entry` is one of the membership entries a re-stamp of the given
-// container paths replaces: the container-anchored enumerate stamp, or a
-// `*`-child class template of one of the containers.
-const isReplacedMembershipEntry = (
-  entry: LabelMapEntry,
-  containers: ReadonlySet<string>,
-): boolean => {
-  if (entry.origin !== "structure") {
-    return false;
-  }
-  const entryPath = canonicalizeLogicalPath(entry.path);
-  if (entry.observes === "enumerate") {
-    return containers.has(pathKey(entryPath));
-  }
-  return entryPath.length > 0 &&
-    entryPath[entryPath.length - 1] === "*" &&
-    containers.has(pathKey(entryPath.slice(0, -1)));
-};
-
-/**
- * Whether `entry` is a runtime-minted `*`-child template strictly beneath
- * `slot`: one labeling which reference sits at a child of the slot, or deeper.
- * `*` matches on either side, as it does wherever an entry is resolved.
- */
-const isRuntimeTemplateBeneath = (
-  entry: LabelMapEntry,
-  slot: readonly string[],
-): boolean => {
-  const path = canonicalizeLogicalPath(entry.path);
-  return path.length > slot.length &&
-    isRuntimeMintedTemplate({ origin: entry.origin, path }) &&
-    isPrefix(slot, path);
-};
-
-/**
- * Whether `entry` is a link entry strictly beneath `slot`. Beneath a slot
- * that holds a reference, the document has no position of its own, so such
- * an entry labels a position of the reference's target.
- */
-const isLinkEntryBeneath = (
-  entry: LabelMapEntry,
-  slot: readonly string[],
-): boolean => {
-  if (entry.origin !== "link") return false;
-  const path = canonicalizeLogicalPath(entry.path);
-  return path.length > slot.length && concretePathHasPrefix(path, slot);
-};
-
 /**
  * Whether `entry` is a writer's stamp as a followed reference's witness takes
  * one: a stamp the flow stage minted that a value read consumes, naming the
@@ -4950,6 +4860,33 @@ const consumedAtomSources = (): {
       else bucket.push(source);
     },
   };
+};
+
+/**
+ * Returns a resolver of the label each flow observation of `tx` consumes,
+ * with the exclusions `deriveFlowJoin` applies: the one `deriveFlowJoin`
+ * joins from, and the one a compiled pattern's slot labels are resolved by.
+ */
+export const observationLabelResolverFor = (
+  tx: IExtendedStorageTransaction,
+): ObservationLabelResolver => {
+  let written: Map<string, readonly (readonly string[])[]> | undefined;
+  return new ObservationLabelResolver(tx, {
+    storedMetadata: (document, type) =>
+      storedMetadataFor(tx, document.space, document.id, document.scope, type),
+    // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
+    ownRestamps: ownRestampContainerPaths(tx),
+    writtenPaths: () => {
+      if (written === undefined) {
+        written = new Map();
+        for (const [document, target] of valueWriteTargets(tx)) {
+          written.set(document, target.paths);
+        }
+      }
+      return written;
+    },
+    valuesBefore: (document) => storedValuesAt(tx, document),
+  });
 };
 
 /** Helper for `deriveFlowJoin`, which computes labels from transaction reads. */
@@ -5073,9 +5010,12 @@ const deriveFlowJoinImpl = (
     });
   };
   // Each pass owns its snapshots: prepare can run again after metadata writes.
-  const metadataByDoc = new Map<string, {
-    metadata: CfcMetadata | undefined;
-    indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
+  const resolver = observationLabelResolverFor(tx);
+  // What the join keeps per document beside the labels the resolver
+  // resolves, by the resolver's label keys.
+  const extrasByDoc = new Map<string, {
+    // A read declared onward's label at its own path (`#node`) and below
+    // it (`#below`).
     labels: Map<string, IFCLabel | undefined>;
     witnesses: Map<string, () => CfcAtom[] | undefined>;
 
@@ -5086,8 +5026,6 @@ const deriveFlowJoinImpl = (
     joined: Map<string, readonly LabelMapEntry[]>;
     sourced: Set<string>;
   }>();
-  // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
-  const ownRestamps = ownRestampContainerPaths(tx);
   // Where each document was read with confidential content, and each
   // location a content read observed, for the references followed into it
   // (`followedReferenceWitnesses`).
@@ -5105,98 +5043,6 @@ const deriveFlowJoinImpl = (
   // The followed slots whose own label is confidential, by document and
   // path: references that count as followed whatever their target carries.
   const confidentialFollowedSlots = new Set<string>();
-  // The paths this transaction wrote, by document, indexed and listed; built
-  // on first use.
-  let writtenPaths: Map<string, PathPrefixIndex> | undefined;
-  let writtenPathLists:
-    | Map<string, readonly (readonly string[])[]>
-    | undefined;
-  const valuesAsRead = new Map<string, { value: unknown } | undefined>();
-  /**
-   * Returns the value at `path` of the document `target` names as this
-   * transaction read it, or `undefined` when that is not known: the
-   * transaction wrote at, above or beneath `path`, so what it holds now is
-   * not what was read, or the document is a runtime secret, whose value only
-   * its own module reads. The stored label metadata is the state the reads
-   * consumed, so a value compared against it has to be that state too.
-   *
-   * A read records no value, so outside those two cases this returns the
-   * value at prepare. The writes it checks are `valueWriteTargets`', which
-   * leaves out content-addressed and reserved documents and the runtime's own
-   * link plumbing; none of those puts a value where a probe found a
-   * reference. A replica change after the read fails the commit's read-set
-   * validation instead, except for a read the commit does not validate
-   * (`ignoreReadForCommit`).
-   */
-  const valueAsRead = (
-    target: {
-      space: MemorySpace;
-      id: URI;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-    path: readonly string[],
-  ): { value: unknown } | undefined => {
-    const key = stringTupleKey([targetKey(target), pathKey(path)]);
-    if (valuesAsRead.has(key)) return valuesAsRead.get(key);
-    if (writtenPaths === undefined) {
-      writtenPaths = new Map();
-      writtenPathLists = new Map();
-      for (const [document, written] of valueWriteTargets(tx)) {
-        const index = new PathPrefixIndex();
-        for (const writtenPath of written.paths) index.add(writtenPath);
-        writtenPaths.set(document, index);
-        writtenPathLists.set(document, written.paths);
-      }
-    }
-    const read = isRuntimeSecretId(target.id) ||
-        writtenPaths.get(targetKey(target))?.overlaps(path)
-      ? undefined
-      : {
-        value: tx.readValueOrThrow({ ...target, path }, {
-          meta: INTERNAL_VERIFIER_META,
-          nonRecursive: true,
-        }),
-      };
-    valuesAsRead.set(key, read);
-    return read;
-  };
-  // What each written document held before this transaction, by document;
-  // built on first use.
-  const valuesBefore = new Map<string, ReturnType<typeof storedValuesAt>>();
-  /**
-   * Returns whether the slot at `path` of the document `target` names held a
-   * reference in the state its stored label metadata describes, which is the
-   * state before this transaction. Where the transaction left the slot alone,
-   * that is the value as read. Where it wrote at or above the slot, what the
-   * slot held before is recovered from the transaction's writes
-   * (`storedValuesAt`). A slot the transaction wrote only beneath, whose
-   * earlier state can't be told, or of a runtime secret, is taken to hold
-   * none, so everything stored beneath it stays consumed.
-   */
-  const heldReferenceBefore = (
-    target: {
-      space: MemorySpace;
-      id: URI;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-    path: readonly string[],
-  ): boolean => {
-    const read = valueAsRead(target, path);
-    if (read !== undefined) return isPrimitiveCellLink(read.value);
-    if (isRuntimeSecretId(target.id)) return false;
-    const key = targetKey(target);
-    const coveredByWrite = writtenPathLists?.get(key)?.some((written) =>
-      concretePathHasPrefix(path, written)
-    );
-    if (coveredByWrite !== true) return false;
-    let before = valuesBefore.get(key);
-    if (before === undefined) {
-      before = storedValuesAt(tx, target);
-      valuesBefore.set(key, before);
-    }
-    const held = before(path);
-    return held?.length === 1 && isPrimitiveCellLink(held[0]);
-  };
   forEachFlowObservation(
     tx,
     (space, id, scope, type, logicalPath, observation) => {
@@ -5225,147 +5071,31 @@ const deriveFlowJoinImpl = (
           });
         }
       }
-      let document = metadataByDoc.get(key);
+      const resolved = resolver.resolve(
+        { space, id, scope },
+        type,
+        logicalPath,
+        observation,
+      );
+      if (resolved.firstOfDocument) noteLabelSource({ space, id, scope }, type);
+      let document = extrasByDoc.get(key);
       if (document === undefined) {
-        noteLabelSource({ space, id, scope }, type);
         document = {
-          metadata: storedMetadataFor(tx, space, id, scope, type),
-          indexes: new Map(),
           labels: new Map(),
           witnesses: new Map(),
           joined: new Map(),
           sourced: new Set(),
         };
-        metadataByDoc.set(key, document);
+        extrasByDoc.set(key, document);
       }
-      const indexFor = (
-        shape: ReadObservationShape,
-      ): ConsumedLabelIndex | undefined => {
-        let index = document.indexes.get(shape);
-        if (index === undefined && document.metadata !== undefined) {
-          index = new ConsumedLabelIndex(document.metadata.labelMap.entries, {
-            onQuery: (wildcard) =>
-              tx.noteCfcPreparationWork?.(
-                wildcard ? "overlapWildcardQueries" : "overlapConcreteQueries",
-              ),
-            select: consumedByShape(shape),
-          });
-          document.indexes.set(shape, index);
-        }
-        return index;
-      };
-      const index = indexFor(observation.shape);
-      const ownedContainers = ownRestamps.get(key);
-      // `*`-template consumption keeps the C0 §6.1 row-3/row-4 boundary the
-      // probe channel already has, extended to PLAIN reads: resolution
-      // machinery journals ordinary reads at followed slots (the slot
-      // scalar, the sigil interior) on its way to the target, and those
-      // must not consume the slot templates — the follow's taint arrives
-      // via the target's own reads (row 4) and via the probe of the followed
-      // slot, which consumes the slot's `followRef` template once, while
-      // STANDALONE slot observations (no covering trace) consume in full
-      // (row 3, the SC-8 closures). Without this, every traversal hop through a stamped
-      // container smears the container's J onto whatever the transaction
-      // writes — re-importing the pointwise smear the S16 substrate
-      // removed (measured: the phase-B pointwise map suite). The
-      // `machinery` arm is the same boundary for the wiring reads no trace
-      // covers: op instantiation, dependency seeding, result plumbing and
-      // coordinator scaffolding read plumbing containers' child paths
-      // (slot scalars, `length`, alias shells) as scaffolding, and letting
-      // those standalone-shaped reads consume templates smeared one
-      // reconcile's J into the next op's action chain — what kept the
-      // generic mint route off in Stage A (the SC-8 remainder). Marked
-      // reads keep every OTHER consumption (link entries, concrete
-      // structure/derived) — byte-identical to their pre-template
-      // behavior, so the exclusion cannot under-taint relative to main.
-      //
-      // The `probedSlot` arm is of another kind: it says what a pointer
-      // observation is about. A probe keeps the templates at its slot and
-      // drops the runtime-minted ones beneath it. It asks which reference
-      // sits at ONE slot, and a template beneath labels which reference sits
-      // at a child. Read at the sigil's path, a probe of a container matches
-      // the container's own child template through the sigil key, as though
-      // "/" were a child, and in the atomic layout, where the probe reads the
-      // slot itself, recursion reaches it too. `Cell.set` probes the root of
-      // the store it writes, so without this arm a writer of a store created
-      // under a label carries that label onto every document it writes.
-      //
-      // The arm takes nothing from a reader of the children. Following a
-      // child's slot consumes the template there through the probe of that
-      // slot, reading a child's content or existence consumes the
-      // `value`/`shape` twins, and a probe of a child's own slot consumes the
-      // template there. Declared entries are the schema's policy and stay
-      // consumed: a declared `observes:"followRef"` entry has no twin, and
-      // this probe is what reaches it when a reader takes a whole
-      // container's references.
-      //
-      // A probe of a slot that holds a reference drops the link entries
-      // beneath the slot as well. The document has no position there, so
-      // such an entry labels a position of the target, which the target
-      // labels itself and a dereference consumes there: a reference-identity
-      // read consumes no observation of the target (§4.6.3), and a copy of
-      // the target's labels is no part of the reference's own (§8.2.5). A
-      // link write persists none, but a stored envelope can hold them, as
-      // copies of the target's labels. The link entry at the slot, which
-      // carries such an envelope's restrictions on the reference itself,
-      // stays consumed (§18.7).
-      //
-      // Whether the slot holds a reference is asked of the state the stored
-      // envelope describes, the one before this transaction, so a
-      // transaction that takes the reference and then writes the slot, as a
-      // conditional re-pointing does, drops them too.
+      const metadata = resolved.document.metadata;
+      const indexFor = resolved.document.indexFor;
       const probedSlot = observation.shape === "followRef"
         ? probedSlotPath(logicalPath)
         : undefined;
-      let holdsReferenceMemo: boolean | undefined;
-      const holdsReference = (slot: readonly string[]): boolean =>
-        holdsReferenceMemo ??= heldReferenceBefore({ space, id, scope }, slot);
-      const excludesTemplates = observation.coveredByTrace ||
-        observation.machinery ||
-        ownedContainers !== undefined || probedSlot !== undefined;
-      const labelKey = stringTupleKey([
-        observation.shape,
-        String(observation.nonRecursive === true),
-        String(observation.coveredByTrace || observation.machinery),
-        String(observation.declaredOnward !== undefined),
-        encodePointer(logicalPath),
-      ]);
-      let label = document.labels.get(labelKey);
-      if (!document.labels.has(labelKey)) {
-        const exclusion = excludesTemplates
-          ? {
-            excludeEntry: (entry: LabelMapEntry) =>
-              ((observation.coveredByTrace || observation.machinery) &&
-                isRuntimeMintedTemplate({
-                  origin: entry.origin,
-                  path: canonicalizeLogicalPath(entry.path),
-                })) ||
-              (ownedContainers !== undefined &&
-                isReplacedMembershipEntry(entry, ownedContainers)) ||
-              (probedSlot !== undefined &&
-                (isRuntimeTemplateBeneath(entry, probedSlot) ||
-                  (isLinkEntryBeneath(entry, probedSlot) &&
-                    holdsReference(probedSlot)))),
-          }
-          : {};
-        const entries = document.metadata === undefined
-          ? undefined
-          : consumedEntriesForRead(
-            document.metadata,
-            logicalPath,
-            {
-              nonRecursive: observation.nonRecursive,
-              consumes: observation.shape,
-              ...exclusion,
-            },
-            index,
-          );
-        label = entries === undefined ? undefined : labelForConsumedEntries(
-          entries,
-          logicalPath,
-          observation.nonRecursive,
-        );
-        document.labels.set(labelKey, label);
+      const { labelKey, label } = resolved;
+      if (resolved.fresh !== undefined) {
+        const { entries, exclusion } = resolved.fresh;
         if (sourceSteps !== undefined && entries !== undefined) {
           document.joined.set(labelKey, entries);
         }
@@ -5415,14 +5145,14 @@ const deriveFlowJoinImpl = (
         const observationEvidence = () => {
           const read = probedSlot === undefined
             ? undefined
-            : valueAsRead({ space, id, scope }, probedSlot);
+            : resolver.valueAsRead({ space, id, scope }, probedSlot);
           const at = observation.shape === "shape"
             ? logicalPath
             : read !== undefined && !isPrimitiveCellLink(read.value)
             ? probedSlot
             : undefined;
           return at === undefined ? undefined : consumedEntriesForRead(
-            document.metadata!,
+            metadata!,
             at,
             { nonRecursive: true, consumes: "value", ...exclusion },
             indexFor("value"),
@@ -5457,7 +5187,7 @@ const deriveFlowJoinImpl = (
         // every surviving member's witness. Its value stamps are a location
         // of the read. A record's key named `length` is read the same way,
         // which can only withhold a witness.
-        const lengthWitnesses = document.metadata === undefined ||
+        const lengthWitnesses = metadata === undefined ||
             observation.nonRecursive !== true ||
             observation.shape === "followRef" || identity === undefined ||
             inputWitnesses?.length === 0
@@ -5465,7 +5195,7 @@ const deriveFlowJoinImpl = (
           : (() => {
             const lengthPath = [...logicalPath, "length"];
             const lengthEntries = consumedEntriesForRead(
-              document.metadata!,
+              metadata!,
               lengthPath,
               { nonRecursive: true, consumes: "value", ...exclusion },
               indexFor("value"),
@@ -5722,16 +5452,10 @@ const deriveFlowJoinImpl = (
       );
     }
     const metadataOf = (location: ObservedLocation) => {
-      const key = docKey(location);
-      if (metadataByDoc.has(key)) return metadataByDoc.get(key)!.metadata;
-      noteLabelSource(location, "application/json");
-      return storedMetadataFor(
-        tx,
-        location.space,
-        location.id,
-        location.scope,
-        "application/json",
-      );
+      if (!extrasByDoc.has(docKey(location))) {
+        noteLabelSource(location, "application/json");
+      }
+      return resolver.documentLabels(location, "application/json").metadata;
     };
     // A slot whose stamp the envelope does not place witnesses nothing,
     // whether its reference is followed or only observed: the stamp does
