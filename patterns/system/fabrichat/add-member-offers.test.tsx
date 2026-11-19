@@ -394,6 +394,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       offerRoom: manager.offerRoom,
       requests: manager.requests,
       people: manager.people,
+      askedPeople: manager.askedPeople,
     } as RoomManager,
   });
   // The same room, to a viewer known to have no manager.

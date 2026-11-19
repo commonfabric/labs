@@ -345,11 +345,17 @@ export interface RoomManager extends JoiningManager {
 
   /**
    * The people the viewer's rooms list, other than the viewer: by principal,
-   * the profiles attesting it; empty until the session asks for them.
+   * the profiles attesting it. Reading it reads every listed room's roster.
    */
-  people: PerSession<Record<string, ProfileCell[]>>;
+  people: PerUser<Record<string, ProfileCell[]>>;
 
-  /** Asks for `people`, for the session, as a picker of them is opened. */
+  /**
+   * `people`, for a session that has asked for them, and no one before; what
+   * the room's picker reads.
+   */
+  askedPeople?: PerSession<Record<string, ProfileCell[]>>;
+
+  /** Asks for `askedPeople`, for the session, as a picker of them opens. */
   askForPeople?: Stream<unknown>;
 }
 
@@ -767,13 +773,13 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     // the first profile attesting them, with what tells them apart from
     // another of them under the same name, per session, as the manager's
     // people are, and no one while the space's members aren't known. The
-    // manager lists no one until the session asks it to (`askForPeople`), as
-    // the panel's control below does, so the room reads no other room until
-    // then. The binding's name is the value's cause, the identity of the
+    // manager's `askedPeople` lists no one until the session asks it to
+    // (`askForPeople`), as the panel's control below does, so the room reads
+    // no other room until then. The binding's name is the value's cause, the identity of the
     // document that stores it, so renaming it moves its data.
     const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
       if (members === undefined) return [];
-      const listed = Object.entries(manager?.people ?? {}).flatMap(
+      const listed = Object.entries(manager?.askedPeople ?? {}).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
           return members.some((member) => member.principal === principal) ||

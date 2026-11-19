@@ -672,12 +672,6 @@ describe("fabrichat-room-list", () => {
       rooms = made.rooms;
       reader = await bootClient({ person: made.person });
       try {
-        // The people are read once the session asks for them, as opening a
-        // picker of them does.
-        const tx = reader.controller.runtime.edit();
-        reader.home.withTx(tx).key("chatManager").key("askForPeople").send({});
-        reader.controller.runtime.prepareTxForCommit(tx);
-        expect((await tx.commit().settled).error).toBeUndefined();
         const people = reader.home.key("chatManager").key("people").asSchema({
           type: "object",
           additionalProperties: { type: "array", items: HANDLE },
