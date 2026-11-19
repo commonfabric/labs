@@ -214,7 +214,7 @@ describe("pattern-versions", () => {
       expect(versionLine(second)).toBeUndefined();
     });
 
-    it("says the index shares the version once it is opened in a loom, when it answers so", async () => {
+    it("says the index shares the version once it has settled in a loom, when it answers so", async () => {
       await joinIndex();
       const { client } = stubClient({
         publish: () =>
@@ -225,7 +225,7 @@ describe("pattern-versions", () => {
       const outcome = await recordDeployedVersion(deployed(), deps);
 
       expect(versionLine(outcome)).toContain(
-        "shares it anonymously once you open it in a loom",
+        "shares it anonymously once you have used it in a loom for a day with no newer version",
       );
     });
 

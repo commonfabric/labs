@@ -5,8 +5,9 @@
  * and without ever running a save command.
  *
  * A deploy never shares. Drafts land many times an hour; the index shares a
- * version once it settles, when its owner opens it in a loom, and only
- * while their sharing setting says to. The deploy's line says which.
+ * version once it settles, when its owner has used it in a loom for a day
+ * with no newer version and it passes the privacy check, and only while
+ * their sharing setting says to. The deploy's line says which.
  * `cf pattern share` shares one at once.
  *
  * The index is never in the deploy's way. The version is recorded after the
@@ -412,7 +413,7 @@ export function versionLine(outcome: VersionOutcome): string | undefined {
         }; cf pattern history lists them.`
         : "No new version: your newest one already has this source.";
       return response.autoShare === "when_used"
-        ? `${kept} Your sharing setting shares it anonymously once you open it in a loom.`
+        ? `${kept} Your sharing setting shares it anonymously once you have used it in a loom for a day with no newer version.`
         : kept;
     }
   }

@@ -1,3 +1,11 @@
+/**
+ * Asks a language model for one clarifying question about a topic, with
+ * multiple-choice options when the answer space is bounded, and shows it in a
+ * `cf-question` whose chosen answer is stored in a cell. It uses
+ * `generateObject` with a schema and makes no request until a topic is
+ * given.
+ */
+
 import {
   computed,
   Default,

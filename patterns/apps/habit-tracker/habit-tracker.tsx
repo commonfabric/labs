@@ -1,3 +1,9 @@
+/**
+ * A habit tracker with one card per habit showing its icon, current streak, a
+ * button that toggles whether today is done, and a seven-day strip of recent
+ * completions. You add habits with a name and icon and delete ones you no
+ * longer want.
+ */
 import {
   action,
   computed,

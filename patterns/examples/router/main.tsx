@@ -1,3 +1,10 @@
+/**
+ * A small site with Home, Books, and Book pages joined by a `Router` pattern,
+ * which picks the page matching the current path. Pages navigate with
+ * `cf-link`, and the book page reads its id from a route parameter
+ * (`/books/{id}`) and an `edition` query string.
+ */
+
 import {
   computed,
   NAME,

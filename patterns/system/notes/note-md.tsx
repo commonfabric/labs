@@ -1,3 +1,9 @@
+/**
+ * A rendered view of a note. It shows the note's markdown with
+ * wiki-links turned into links, clickable task checkboxes, the notes that link
+ * back to it, and an Edit button that returns to the editable note.
+ */
+
 import {
   action,
   computed,

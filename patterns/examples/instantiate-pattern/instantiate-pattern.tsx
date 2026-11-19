@@ -1,3 +1,9 @@
+/**
+ * A counter factory: pressing Add creates a new counter piece with a random
+ * starting value and navigates to it (the text typed beside it is unused). It
+ * demonstrates instantiating another pattern from a handler and opening the
+ * result with `navigateTo`.
+ */
 import {
   computed,
   Default,

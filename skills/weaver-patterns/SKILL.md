@@ -82,8 +82,10 @@ step checks before it changes anything.
   it in place. Tell them it is on their Making loom, on any device their Weaver
   runs on.
 - **checkpoint** right after the save that finishes something they asked for:
-  `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a private version,
-  the point undo goes back to: one per request, never one per save.
+  `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a version, the
+  point undo goes back to: one per request, never one per save. Like any
+  version, their sharing setting may share it once it has been in use for a day
+  with no newer version and passes the privacy check.
 - **undo**: `cf pattern history <entry>` lists the checkpoints;
   `cf pattern rollback <entry> <version>` writes one back, then save. It refuses
   when there are edits no version keeps; ask before forcing it, since forcing
