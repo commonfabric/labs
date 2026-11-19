@@ -15,6 +15,7 @@ import {
 import {
   type PlannedEntry,
   planProblem,
+  programSizeLimit,
   programSourceHash,
   type PublishClient,
   publishPlan,
@@ -543,6 +544,33 @@ describe("repo-sync", () => {
       }
     });
 
+    it("returns a sync with an oversize entry and a failed one as failed", async () => {
+      const { client } = fakeIndex();
+      client.publishPattern = (request) =>
+        Promise.reject(
+          request.patternId === "id:p/a.tsx"
+            ? new PatternIndexError(
+              "publishPattern",
+              400,
+              "program exceeds 819200 bytes of source",
+            )
+            : new PatternIndexError("publishPattern", 503),
+        );
+      const report = await publishPlan(
+        {
+          entries: [compiled("p/a.tsx"), compiled("p/b.tsx")],
+          selected: ["p/a.tsx", "p/b.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries.map((entry) => entry.status)).toEqual([
+        "oversize",
+        "failed",
+      ]);
+      expect(syncFailed(report)).toBe(true);
+    });
+
     it("carries the plan's failed and undescribed entries into the report, publishing neither", async () => {
       const failed: PlannedEntry = {
         path: "p/a.tsx",
@@ -655,19 +683,17 @@ describe("repo-sync", () => {
     });
   });
 
-  describe("reasonOf()", () => {
-    it("reports the limit in a recognized program-size refusal", () => {
+  describe("programSizeLimit()", () => {
+    it("returns the limit of a recognized program-size refusal", () => {
       const error = new PatternIndexError(
         "publishPattern",
         400,
         "program exceeds 123456 bytes of source",
       );
-      expect(reasonOf(error)).toBe(
-        "pattern index publishPattern failed (400): program exceeds 123456 bytes of source",
-      );
+      expect(programSizeLimit(error)).toBe("123456");
     });
 
-    it("withholds unrecognized details and size wording from other refusals", () => {
+    it("returns `undefined` for every other refusal, near misses included", () => {
       const sizeRefusal = "program exceeds 819200 bytes of source";
       for (
         const error of [
@@ -703,6 +729,7 @@ describe("repo-sync", () => {
           new PatternIndexError("listRepoHeads", 400, sizeRefusal),
         ]
       ) {
+        expect(programSizeLimit(error)).toBeUndefined();
         expect(reasonOf(error)).toBe(error.message);
       }
     });

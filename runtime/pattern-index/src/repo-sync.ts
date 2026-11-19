@@ -155,16 +155,11 @@ export const programSizeLimit = (error: unknown): string | undefined => {
 };
 
 /**
- * Returns a failure's message for a report. A program-size refusal adds its
- * limit ({@link programSizeLimit}); other index details stay withheld.
+ * Returns a failure's message for a report. A `PatternIndexError`'s message
+ * leaves out the index's detail, so index details stay withheld.
  */
-export const reasonOf = (error: unknown): string => {
-  const message = error instanceof Error ? error.message : String(error);
-  const limit = programSizeLimit(error);
-  return limit === undefined
-    ? message
-    : `${message}: program exceeds ${limit} bytes of source`;
-};
+export const reasonOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * What keeps `plan` from being a {@link RepoSyncPlan}, or `undefined` when
@@ -284,8 +279,8 @@ const gardenerReports = (
  * withdrawal is recorded beside them; the caller fails the job when
  * {@link syncFailed} says so. A publish refused only for its program's size
  * is recorded as oversize, which, like an entry with no description, is
- * reported and does not fail the job: the fix is in the pattern, and nothing
- * the next sync does would change the answer.
+ * reported and does not fail the job: the fix is in the pattern. The next
+ * sync tries the entry again, since nothing of it was published.
  *
  * @throws PatternIndexError when the index refuses `listRepoHeads`, before
  *   anything is published.

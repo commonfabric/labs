@@ -119,5 +119,6 @@ The publish job fails if any entry failed to compile or publish, or the
 withdrawals were refused, after publishing the others. An entry with no
 description, one the index refuses as larger than its size limit, and a privacy
 finding are reported in the summary and do not fail it: each is fixed in the
-pattern, and rerunning the job would not change the answer. Nothing about past
-runs is kept outside the index, so the next run after a failure catches up.
+pattern. Until then the index keeps listing the path's earlier version, if it
+has one. Nothing about past runs is kept outside the index, so the next run
+after a failure catches up.
