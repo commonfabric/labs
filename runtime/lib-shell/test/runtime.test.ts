@@ -2272,6 +2272,96 @@ describe("RuntimeInternals", () => {
       }
     });
 
+    describe("from a runtime that spawned its own worker", () => {
+      // `create()` with no `transport` is what hands a runtime the means to
+      // stand a fork up, so these cases go through it, over a worker that
+      // acks every request.
+
+      type InitializeRequest = {
+        type: string;
+        data: {
+          apiUrl?: string;
+          memoryUrl?: string;
+          branches?: Record<DID, string>;
+          forwardWorkerConsole?: boolean;
+        };
+      };
+
+      /**
+       * A worker that reports ready and acks every request, and the
+       * Initialize request each instance of it was sent, in spawn order.
+       */
+      function ackingWorker() {
+        const initialized: InitializeRequest[] = [];
+        class StubWorker extends EventTarget {
+          constructor(_url: URL | string) {
+            super();
+            this.#post({ type: TransportNotificationType.WorkerReady });
+          }
+          #post(message: Record<string, unknown>): void {
+            queueMicrotask(() =>
+              this.dispatchEvent(
+                new MessageEvent("message", {
+                  data: realmFromFabricValue(message as never),
+                }),
+              )
+            );
+          }
+          postMessage(encoded: unknown): void {
+            const message = fabricFromRealmValue(encoded as never) as {
+              msgId?: number;
+              data?: InitializeRequest;
+            };
+            if (typeof message?.msgId !== "number") return;
+            if (message.data?.type === "initialize") {
+              initialized.push(message.data);
+            }
+            this.#post({ msgId: message.msgId });
+          }
+          terminate(): void {}
+        }
+        return { StubWorker, initialized };
+      }
+
+      it("initializes a second worker with the host's options and the space on the fork's branch", async () => {
+        const { StubWorker, initialized } = ackingWorker();
+        const OriginalWorker = (globalThis as { Worker: unknown }).Worker;
+        (globalThis as { Worker: unknown }).Worker = StubWorker;
+        try {
+          const runtime = await RuntimeInternals.create({
+            identity: await Identity.generate({ implementation: "noble" }),
+            apiUrl: new URL("http://shell.test/"),
+            memoryUrl: new URL("http://router.shell.test/"),
+            workerUrl: new URL("http://shell.test/scripts/worker-runtime.js"),
+            getBuildHash: () => Promise.resolve(undefined),
+            forwardWorkerConsole: true,
+          });
+          try {
+            const fork = await runtime.forkSpace(space, 7);
+            try {
+              expect(initialized).toHaveLength(2);
+              expect(initialized[0].data.branches).toBeUndefined();
+              expect(initialized[1].data.branches).toEqual({
+                [space]: fork.branch,
+              });
+              expect(initialized[1].data.apiUrl).toBe("http://shell.test/");
+              expect(initialized[1].data.memoryUrl).toBe(
+                "http://router.shell.test/",
+              );
+              expect(initialized[1].data.forwardWorkerConsole).toBe(true);
+              expect(fork.runtime).not.toBe(runtime);
+            } finally {
+              await fork.runtime.dispose();
+            }
+          } finally {
+            await runtime.dispose();
+          }
+        } finally {
+          (globalThis as { Worker: unknown }).Worker = OriginalWorker;
+        }
+      });
+    });
+
     describe("when the fork's runtime fails to start", () => {
       const failingToStart = (origin: ReturnType<typeof originClient>) =>
         new RuntimeInternals(
@@ -2357,6 +2447,14 @@ describe("RuntimeInternals", () => {
     const restoration = `restore fork-branch into ${space}`;
 
     describe("instance members", () => {
+      describe("runtime", () => {
+        it("is the runtime the fork was constructed over", () => {
+          const { fork, runtime } = forked();
+
+          expect(fork.runtime).toBe(runtime);
+        });
+      });
+
       describe("discard()", () => {
         it("sends the branch's deletion before it disposes of the fork's runtime", async () => {
           const { fork, log } = forked();

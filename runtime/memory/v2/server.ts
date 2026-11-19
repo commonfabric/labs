@@ -1116,6 +1116,23 @@ type SessionOpenChallengeState = SessionOpenChallenge & {
   consumed: boolean;
 };
 
+/**
+ * A request the server serves on a space's default branch alone: listing or
+ * probing entity ids, a pattern-lifecycle verb, resolving an event's
+ * attention, and a crossing to the space's owner.
+ */
+type DefaultBranchRequest = Extract<
+  ClientMessage,
+  {
+    type:
+      | "entity-id.list"
+      | "entity-id.exists"
+      | "pattern.lifecycle"
+      | "event.attention.resolve"
+      | "served";
+  }
+>;
+
 type SessionHandle = {
   space: string;
   sessionId: string;
@@ -2300,17 +2317,7 @@ class Connection {
    * is found on this connection first, so only its holder learns its branch.
    */
   async #requireDefaultBranchSession(
-    message: Extract<
-      ClientMessage,
-      {
-        type:
-          | "entity-id.list"
-          | "entity-id.exists"
-          | "pattern.lifecycle"
-          | "event.attention.resolve"
-          | "served";
-      }
-    >,
+    message: DefaultBranchRequest,
   ): Promise<boolean> {
     if (
       !await this.#requireSession(
@@ -8687,25 +8694,16 @@ export class Server {
   }
 
   /**
-   * Returns the refusal of `message` where its session is of a branch other
-   * than the default and the request is one the server serves on the default
-   * branch alone: listing or probing entity ids, a pattern-lifecycle verb,
-   * resolving an event's attention, and a crossing to the space's owner.
-   * Served for such a session, each would read or change the space itself
-   * rather than the branch. Returns `undefined` for every other message.
-   * A SQLite query is served: it reads the space's database as it stands,
-   * no branch holding a copy of one.
+   * Returns the refusal of `message`, a request the server serves on the
+   * default branch alone, where its session is of another branch. Served for
+   * such a session, the request would read or change the space itself rather
+   * than the branch. Returns `undefined` for a session of the default
+   * branch. A SQLite query is not such a request: it reads the space's
+   * database as it stands, no branch holding a copy of one.
    */
   branchSessionRefusal(
-    message: ClientMessage | RejectedClientMessage,
+    message: DefaultBranchRequest,
   ): ResponseMessage<never> | undefined {
-    if (
-      message.type !== "entity-id.list" &&
-      message.type !== "entity-id.exists" &&
-      message.type !== "pattern.lifecycle" &&
-      message.type !== "event.attention.resolve" &&
-      message.type !== "served"
-    ) return undefined;
     const branch = this.#sessions.get(message.space, message.sessionId)
       ?.branch;
     return branch === undefined ? undefined : respondTypedError<never>(

@@ -9785,12 +9785,13 @@ const reconstructPatchedDocument = (
       // document the branch inherits, which its parent holds as of the fork
       // point.
       const lineage = requireLineage(engine, branch);
+      const forkSeq = lineage.forkSeq ?? 0;
       const inherited = baseRow === undefined && lineage.parentBranch !== null
         ? readStateForScopeKey(engine, {
           id,
           scopeKey,
           branch: lineage.parentBranch,
-          seq: lineage.forkSeq ?? 0,
+          seq: forkSeq,
         })?.document
         : undefined;
       document = inherited ?? emptyEntityDocument();

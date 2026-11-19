@@ -484,6 +484,15 @@ describe("history", () => {
       expect(listCommits(engine).map((c) => c.seq)).toEqual([head]);
     });
 
+    it("returns `undefined` and writes nothing when a document written since holds the restored value again", () => {
+      const then = set("of:a", "old");
+      set("of:a", "new");
+      const head = set("of:a", "old");
+
+      expect(restore({ sourceSeq: then })).toBeUndefined();
+      expect(serverSeq(engine)).toBe(head);
+    });
+
     it("restores the default branch to a fork's head", () => {
       set("of:a", "before");
       set("of:b", "before");
@@ -709,6 +718,15 @@ describe("history", () => {
 
       expect(() => restore({ sourceSeq: then })).toThrow("was compacted");
       expect(valueOf("of:a")).toBe("new");
+    });
+
+    it("throws for a source branch that does not exist, and writes nothing", () => {
+      const head = set("of:a", "value");
+
+      expect(() => restore({ source: "missing" })).toThrow(
+        "unknown branch: missing",
+      );
+      expect(serverSeq(engine)).toBe(head);
     });
 
     it("throws for a seq outside the source's history", () => {

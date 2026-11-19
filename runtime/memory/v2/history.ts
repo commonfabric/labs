@@ -221,9 +221,8 @@ const divergedInstances = (
   source: LineageSegment[],
 ): { instances: Instance[]; base: LineageSegment } => {
   const sourceByBranch = new Map(source.map((s) => [s.branch, s]));
-  const shared = target.find((s) => sourceByBranch.has(s.branch));
   // Every lineage ends at the default branch, so the two always share one.
-  if (shared === undefined) throw new Error("branches share no history");
+  const shared = target.find((s) => sourceByBranch.has(s.branch))!;
   const base = {
     branch: shared.branch,
     through: Math.min(

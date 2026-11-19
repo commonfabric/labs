@@ -3,7 +3,14 @@ import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
-import { type BranchName, toDocumentPath } from "../../v2.ts";
+import { LINK_V1_TAG } from "@commonfabric/data-model/cell-rep";
+
+import {
+  type BranchName,
+  type Operation,
+  resolveScopeKey,
+  toDocumentPath,
+} from "../../v2.ts";
 import {
   applyCommit,
   close,
@@ -14,6 +21,7 @@ import {
   headSeq,
   open,
   PreconditionFailedError,
+  ProtocolError,
   read,
   runAtomicCommit,
 } from "../../v2/engine.ts";
@@ -298,6 +306,201 @@ describe("engine", () => {
           },
         })
       ).toThrow("cannot write a SQLite database");
+    });
+
+    it("returns a patch applied over an empty document for one neither the fork nor its parent holds", () => {
+      setValue("parent");
+      createBranch(engine, "fork");
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "patch",
+            id: "of:fork-only",
+            patches: [{ op: "add", path: "/value", value: "fork" }],
+          }],
+          branch: "fork",
+        },
+      });
+
+      expect(read(engine, { id: "of:fork-only", branch: "fork" })).toEqual({
+        value: "fork",
+      });
+      expect(read(engine, { id: "of:fork-only" })).toBeNull();
+    });
+
+    describe("with a move over a document the fork only inherits", () => {
+      // The moving commit carries no reserved string of its own, so what it
+      // may land in a schema position is decided by the document the fork
+      // inherits, of which the fork holds no row.
+
+      const reservedRef = "schema-ref@2:sha256:inherited";
+
+      const move = (path: string) =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "patch",
+              id,
+              patches: [{ op: "move", from: "/value/harmless", path }],
+            }],
+            branch: "fork",
+          },
+        });
+
+      beforeEach(() => {
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id,
+              value: {
+                value: {
+                  harmless: reservedRef,
+                  ref: {
+                    "/": {
+                      [LINK_V1_TAG]: {
+                        id: "of:target",
+                        path: [],
+                        schema: "opaque-schema-name",
+                      },
+                    },
+                  },
+                },
+              },
+            }],
+          },
+        });
+        createBranch(engine, "fork");
+      });
+
+      it("throws `ProtocolError` for a move of an inherited reserved schema reference into a link's schema, and leaves the fork's document", () => {
+        const landing = `/value/ref/~1/${LINK_V1_TAG}/schema`;
+
+        expect(() => move(landing)).toThrow(ProtocolError);
+        expect(() => move(landing)).toThrow(
+          `may not persist reserved wire schema reference: ${reservedRef}`,
+        );
+        expect(valueAt({ branch: "fork" })).toEqual(valueAt());
+      });
+
+      it("writes a move of the same string to a position that is no schema", () => {
+        move("/value/relocated");
+
+        expect(valueAt({ branch: "fork" })).toMatchObject({
+          relocated: reservedRef,
+        });
+      });
+    });
+  });
+
+  describe("applyCommit() with the options of a restore", () => {
+    // `scopeKeys` and `releasesOperationFields` are what a restore of a
+    // branch writes with, and only a `system` commit may carry either.
+
+    const userKey = resolveScopeKey("user", {
+      principal: "did:key:z6Mk-branch-state-user",
+      sessionId,
+    });
+
+    const commitWith = (
+      options: {
+        commitClass?: "system";
+        scopeKeys?: Map<number, string>;
+        releasesOperationFields?: boolean;
+      },
+      operation: Operation = { op: "set", id, value: { value: "written" } },
+    ) =>
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [operation],
+        },
+        ...options,
+      });
+
+    const userScopedSet: Operation = {
+      op: "set",
+      id,
+      scope: "user",
+      value: { value: "written" },
+    };
+
+    it("throws `ProtocolError` for `releasesOperationFields` on a commit that is not `system`, and writes nothing", () => {
+      expect(() => commitWith({ releasesOperationFields: true })).toThrow(
+        "releasing a written document's operation fields is system-commit " +
+          "admission only",
+      );
+      expect(() => commitWith({ releasesOperationFields: true })).toThrow(
+        ProtocolError,
+      );
+      expect(headSeq(engine)).toBe(0);
+    });
+
+    it("throws `ProtocolError` for `scopeKeys` on a commit that is not `system`, and writes nothing", () => {
+      const scopeKeys = new Map([[0, userKey]]);
+
+      expect(() => commitWith({ scopeKeys }, userScopedSet)).toThrow(
+        "explicit scope keys are system-commit admission only",
+      );
+      expect(() => commitWith({ scopeKeys }, userScopedSet)).toThrow(
+        ProtocolError,
+      );
+      expect(headSeq(engine)).toBe(0);
+    });
+
+    it("writes a `system` commit's user-scoped operation to the instance `scopeKeys` names", () => {
+      commitWith(
+        { commitClass: "system", scopeKeys: new Map([[0, userKey]]) },
+        userScopedSet,
+      );
+
+      expect(read(engine, { id, scopeKey: userKey })?.value).toBe("written");
+      expect(valueAt()).toBeUndefined();
+    });
+
+    describe("given a `scopeKeys` entry that names no instance of its operation's scope", () => {
+      const refusal = (scopeKey: string) =>
+        `system commit rejected: scope_key "${scopeKey}" does not name an ` +
+        "instance of the scope operation";
+
+      it("throws `ProtocolError` for a user instance given to a space-scoped operation", () => {
+        const scopeKeys = new Map([[0, userKey]]);
+
+        expect(() => commitWith({ commitClass: "system", scopeKeys })).toThrow(
+          `${refusal(userKey)} 0 writes`,
+        );
+        expect(() => commitWith({ commitClass: "system", scopeKeys })).toThrow(
+          ProtocolError,
+        );
+        expect(headSeq(engine)).toBe(0);
+      });
+
+      it("throws for an entry past the commit's last operation", () => {
+        const scopeKeys = new Map([[1, userKey]]);
+
+        expect(() =>
+          commitWith({ commitClass: "system", scopeKeys }, userScopedSet)
+        ).toThrow(`${refusal(userKey)} 1 writes`);
+      });
+
+      it("throws for a key outside the scope key grammar", () => {
+        const scopeKeys = new Map([[0, "user:"]]);
+
+        expect(() =>
+          commitWith({ commitClass: "system", scopeKeys }, userScopedSet)
+        ).toThrow(`${refusal("user:")} 0 writes`);
+      });
     });
   });
 

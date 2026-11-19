@@ -11,7 +11,11 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   type BranchName,
+  encodeMemoryBoundary,
+  getMemoryProtocolFlags,
+  MEMORY_PROTOCOL,
   resetServerExecutionConfig,
+  type ServerMessage,
   setServerExecutionConfig,
 } from "../v2.ts";
 import {
@@ -570,6 +574,58 @@ describe("v2-branch-sessions", () => {
       const { seq } = await set(main, "value");
 
       expect(await main.restoreBranch({ sourceSeq: seq })).toBeUndefined();
+    });
+  });
+
+  describe("a branch request naming a session its sender does not hold", () => {
+    it("is answered `SessionError` on a connection other than the session's, and creates no branch", async () => {
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      try {
+        await connection.receive(encodeMemoryBoundary({
+          type: "hello",
+          protocol: MEMORY_PROTOCOL,
+          flags: getMemoryProtocolFlags(),
+        }));
+        await connection.receive(encodeMemoryBoundary({
+          type: "branch.create",
+          requestId: "create-1",
+          space: SPACE,
+          sessionId: main.sessionId,
+          name: "fork",
+        }));
+
+        expect(messages.at(-1)).toEqual({
+          type: "response",
+          requestId: "create-1",
+          error: {
+            name: "SessionError",
+            message: "Session is not open on this connection",
+          },
+        });
+        expect((await main.listBranches()).map((branch) => branch.name))
+          .toEqual([""]);
+      } finally {
+        connection.close();
+      }
+    });
+
+    it("returns a `SessionError` response from `Server.branchRequest()` for a session the server does not have", async () => {
+      expect(
+        await server.branchRequest({
+          type: "branch.list",
+          requestId: "list-1",
+          space: SPACE,
+          sessionId: "session:unknown",
+        }),
+      ).toEqual({
+        type: "response",
+        requestId: "list-1",
+        error: {
+          name: "SessionError",
+          message: "Unknown session for space",
+        },
+      });
     });
   });
 });
