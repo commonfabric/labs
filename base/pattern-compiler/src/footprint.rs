@@ -14,7 +14,7 @@
 //! readings it chose.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use oxc_ast::ast::*;
@@ -447,7 +447,7 @@ pub enum Seg {
 type PathKey = (String, Vec<Seg>);
 
 /// A projection: a path of a formal input (FA §2.1).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Proj {
     input: String,
     path: Vec<Seg>,
@@ -618,6 +618,16 @@ impl Val {
     }
 
     fn alts(members: Vec<Val>) -> Val {
+        /// What tells two alternatives apart: the members of `Val` that
+        /// `alts` merges where they are equal.
+        #[derive(PartialEq, Eq, Hash)]
+        enum Seen<'v> {
+            Proj(&'v Proj),
+            Built(usize),
+            Func(usize, u32),
+            Created,
+            Site(usize, u32),
+        }
         let mut flat: Vec<Val> = Vec::new();
         for member in members {
             match member {
@@ -626,20 +636,29 @@ impl Val {
                 other => flat.push(other),
             }
         }
-        let mut kept: Vec<Val> = Vec::new();
-        for member in flat {
-            let seen = kept.iter().any(|other| match (other, &member) {
-                (Val::Proj(a), Val::Proj(b)) => a == b,
-                (Val::Built(a), Val::Built(b)) => Rc::ptr_eq(a, b),
-                (Val::Func(a, b), Val::Func(c, d)) => a == c && b == d,
-                (Val::Created, Val::Created) => true,
-                (Val::Site(a, b), Val::Site(c, d)) => a == c && b == d,
-                _ => false,
-            });
-            if !seen {
-                kept.push(member);
+        // One pass over the members with a set of those kept, so that the
+        // work is linear in the number of members (`FootprintWork`).
+        let mut first: Vec<bool> = Vec::with_capacity(flat.len());
+        {
+            let mut seen: HashSet<Seen<'_>> = HashSet::with_capacity(flat.len());
+            for member in &flat {
+                WORK.with(|work| work.borrow_mut().alternatives += 1);
+                let key = match member {
+                    Val::Proj(proj) => Some(Seen::Proj(proj)),
+                    Val::Built(built) => Some(Seen::Built(Rc::as_ptr(built) as usize)),
+                    Val::Func(module, start) => Some(Seen::Func(*module, *start)),
+                    Val::Created => Some(Seen::Created),
+                    Val::Site(module, start) => Some(Seen::Site(*module, *start)),
+                    _ => None,
+                };
+                first.push(key.is_none_or(|key| seen.insert(key)));
             }
         }
+        let mut kept: Vec<Val> = flat
+            .into_iter()
+            .zip(first)
+            .filter_map(|(member, first)| first.then_some(member))
+            .collect();
         match kept.len() {
             0 => Val::Computed,
             1 => kept.pop().unwrap_or(Val::Computed),
@@ -4492,23 +4511,28 @@ fn normal_map(
 ) -> BTreeMap<PathKey, BTreeSet<Class>> {
     let mut kept = entries.clone();
     // A `value` entry removes the `value`, `shape`, and `enumeration`
-    // entries at or below it in the same cell.
+    // entries at or below it in the same cell. The entries at or below a
+    // path of one input are the ones from that key on in the map's order
+    // whose path starts with it, so each `value` entry visits those alone.
     let values: Vec<PathKey> = entries
         .iter()
         .filter(|(_, classes)| classes.contains(&Class::Value))
         .map(|(key, _)| key.clone())
         .collect();
-    for (input, path) in &values {
-        for ((other_input, other_path), classes) in kept.iter_mut() {
-            let below = other_input == input
-                && other_path.starts_with(path)
-                && !other_path[path.len()..].contains(&Seg::Hop);
-            if below {
-                classes.remove(&Class::Shape);
-                classes.remove(&Class::Enumeration);
-                if other_path.len() > path.len() {
-                    classes.remove(&Class::Value);
-                }
+    for key in &values {
+        let (input, path) = key;
+        for ((other_input, other_path), classes) in kept.range_mut(key.clone()..) {
+            WORK.with(|work| work.borrow_mut().entries += 1);
+            if other_input != input || !other_path.starts_with(path) {
+                break;
+            }
+            if other_path[path.len()..].contains(&Seg::Hop) {
+                continue;
+            }
+            classes.remove(&Class::Shape);
+            classes.remove(&Class::Enumeration);
+            if other_path.len() > path.len() {
+                classes.remove(&Class::Value);
             }
         }
     }
@@ -4519,14 +4543,20 @@ fn normal_map(
             continue;
         }
         let other = [&store.entries, &store.envelope].iter().any(|entries| {
-            entries.iter().any(|((input, path), classes)| {
-                *input == key.0
-                    && path.starts_with(&key.1)
-                    && (path.len() > key.1.len()
-                        || classes
-                            .iter()
-                            .any(|class| !matches!(class, Class::Shape | Class::LabelMetadata)))
-            })
+            for ((input, path), classes) in entries.range(key.clone()..) {
+                WORK.with(|work| work.borrow_mut().entries += 1);
+                if *input != key.0 || !path.starts_with(&key.1) {
+                    break;
+                }
+                if path.len() > key.1.len()
+                    || classes
+                        .iter()
+                        .any(|class| !matches!(class, Class::Shape | Class::LabelMetadata))
+                {
+                    return true;
+                }
+            }
+            false
         });
         if other {
             if let Some(classes) = kept.get_mut(key) {
@@ -4535,6 +4565,26 @@ fn normal_map(
         }
     }
     kept
+}
+
+/// Counts of the steps of the analysis whose number could grow faster than
+/// the program: the alternatives `Val::alts` merges, and the entries the
+/// normal form visits (`normal_map`). A test bounds them by the size of its
+/// input, in the place of a bound on wall time.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct FootprintWork {
+    pub alternatives: u64,
+    pub entries: u64,
+}
+
+thread_local! {
+    static WORK: RefCell<FootprintWork> = RefCell::new(FootprintWork::default());
+}
+
+/// The work the analysis did on this thread since the last call, which
+/// resets it.
+pub fn take_footprint_work() -> FootprintWork {
+    WORK.with(|work| std::mem::take(&mut *work.borrow_mut()))
 }
 
 /// The formal-input name of each parameter of a body (FA §1.2).
