@@ -704,6 +704,35 @@ describe("cli", () => {
     );
     expect(JSON.parse(own.stdout)).toMatchObject({ ok: false, status: 409 });
 
+    // A chain held from some other root is never handed over as this member's.
+    const elsewhere = new PatternIndexStore(
+      join(`${directory}/other`, new URL(baseUrl).host),
+    );
+    await elsewhere.recordMembership({
+      handle: "p-2",
+      role: "user",
+      root: (await Identity.fromPassphrase("member root")).did(),
+    });
+    await elsewhere.recordChain(
+      did as `did:key:${string}`,
+      await issueIndexChain({
+        issuer: await Identity.fromPassphrase("another root"),
+        to: did as `did:key:${string}`,
+        held: [],
+      }),
+    );
+    const foreign = await callHelper(
+      directory,
+      baseUrl,
+      { op: "chain" },
+      `${directory}/identity.key`,
+      `${directory}/other`,
+    );
+    expect(JSON.parse(foreign.stdout)).toMatchObject({
+      ok: false,
+      status: 409,
+    });
+
     const unstored = await callHelper(directory, baseUrl, { op: "chain" });
     expect(JSON.parse(unstored.stdout)).toMatchObject({
       ok: false,

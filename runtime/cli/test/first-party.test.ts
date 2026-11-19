@@ -157,6 +157,18 @@ describe("first-party requests", () => {
       expect(await Deno.readFile(mine.path)).toEqual(mine.pkcs8);
     });
 
+    it("keeps no key whose identity is not the one the service names", async () => {
+      const served = await keyfile("served.key");
+      const other = await keyfile("other.key");
+      answering(served.pkcs8, other.did);
+      const target = `${directory}/k`;
+
+      await expect(
+        pairWithService({ service: base, code: "ABCDE12345", keyfile: target }),
+      ).rejects.toThrow(/keeps neither/);
+      await expect(Deno.stat(target)).rejects.toThrow(Deno.errors.NotFound);
+    });
+
     it("never sends the code on to where a redirect points", async () => {
       handle = (request) =>
         new URL(request.url).pathname === "/identity-pairing/redeem"

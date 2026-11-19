@@ -171,12 +171,12 @@ const chain = async (context: HelperContext): Promise<CliAnswer> => {
   const held = await chainForSigner(store, signer, now);
   // Where the root is kept elsewhere a lapsed chain is still "held"; handing
   // it over would only fail later, on the other machine.
-  const usable = held !== undefined &&
-    await checkIndexChain(held, signer.did(), now).then(
-      () => true,
-      () => false,
-    );
-  if (!usable) {
+  const checked = held === undefined
+    ? undefined
+    : await checkIndexChain(held, signer.did(), now).catch(() => undefined);
+  // A chain from another root would join the other machine as someone else.
+  const usable = checked !== undefined && checked.root === membership.root;
+  if (held === undefined || !usable) {
     return {
       ok: false,
       status: 409,

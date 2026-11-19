@@ -10,6 +10,8 @@
  * service named.
  */
 
+import { isObjectNotArray } from "@commonfabric/js-values/types";
+
 /** Crockford's base32, which has no I, L, O or U. */
 const CODE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
@@ -149,7 +151,12 @@ export async function redeemPairingCode(
     );
   }
 
-  if (response.status >= 300 && response.status < 400) {
+  // A browser reports a redirect it did not follow as `opaqueredirect`, with
+  // status 0; a server-side fetch reports its 3xx.
+  if (
+    response.type === "opaqueredirect" ||
+    (response.status >= 300 && response.status < 400)
+  ) {
     await response.body?.cancel();
     throw new LoomPairingError(
       "unreachable",
@@ -200,10 +207,8 @@ async function readJson(
   response: Response,
 ): Promise<Record<string, unknown> | null> {
   try {
-    const value = await response.json();
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? value
-      : null;
+    const value: unknown = await response.json();
+    return isObjectNotArray(value) ? value : null;
   } catch {
     return null;
   }

@@ -68,8 +68,9 @@ export async function pairWithService(options: PairOptions): Promise<Paired> {
   const held = await existingIdentity(options.keyfile);
   if (held === undefined) await preparePlace(options.keyfile);
   let pkcs8: Uint8Array;
+  let named: string | null;
   try {
-    ({ pkcs8 } = await redeemPairingCode(
+    ({ pkcs8, did: named } = await redeemPairingCode(
       { code, loomUrl },
       { name: "cf", platform: Deno.build.os },
       options.fetch,
@@ -85,6 +86,12 @@ export async function pairWithService(options: PairOptions): Promise<Paired> {
     throw new PairingError("The service answered without a key cf can use.");
   }
   const did = identity.did();
+  if (named !== null && named !== did) {
+    throw new PairingError(
+      `The service named ${named} but handed over the key of ${did}; cf ` +
+        "keeps neither.",
+    );
+  }
   if (held !== undefined) {
     if (held === did) return { did, wrote: false };
     throw new PairingError(
@@ -127,7 +134,9 @@ async function preparePlace(keyfile: string): Promise<void> {
     await Deno.lstat(keyfile);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return;
-    throw error;
+    throw new PairingError(
+      `cf cannot check ${keyfile}: ${(error as Error).message}`,
+    );
   }
   throw new PairingError(
     `${keyfile} is a link or a file cf cannot read as a key; cf will not ` +
@@ -144,7 +153,9 @@ async function existingIdentity(
     bytes = await Deno.readFile(keyfile);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return undefined;
-    throw error;
+    throw new PairingError(
+      `cf cannot read ${keyfile}: ${(error as Error).message}`,
+    );
   }
   try {
     return (await Identity.fromPkcs8(bytes)).did();
