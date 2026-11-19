@@ -38,6 +38,7 @@ import {
   type DietaryCompatibility,
   type DietarySource,
   type Difficulty,
+  DIFFICULTY_ITEMS,
   type Ingredient,
   type OvenRequirements,
   type RecipeCategory,
@@ -78,7 +79,11 @@ import {
   wordDiff,
 } from "./recipe-logic.ts";
 import RecipeAnalyzer from "./recipe-analyzer.tsx";
-import Viewer from "./viewer.tsx";
+import Viewer, {
+  progressAfterMove,
+  progressAfterRemove,
+  progressWithoutGroup,
+} from "./viewer.tsx";
 
 /**
  * Named rather than left to the default: the default generateObject model
@@ -207,12 +212,6 @@ const syncImages = handler<
 >(({ detail }, { images }) => {
   images.set(detail?.allImages ?? detail?.images ?? []);
 });
-
-const DIFFICULTY_ITEMS = [
-  { label: "Easy", value: "easy" },
-  { label: "Medium", value: "medium" },
-  { label: "Hard", value: "hard" },
-];
 
 const styles = {
   page: "padding: 12px; max-width: 820px;",
@@ -510,6 +509,11 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
 
     // --- Editing ------------------------------------------------------------
 
+    // The cooking view's checked steps, "groupId#index". They live here, so
+    // progress survives going back to edit and cooking again, and the step
+    // edits below keep them on the same steps.
+    const cookProgress = new Writable.perSpace<string[]>([]);
+
     const scale = action(({ factor }: { factor: number }) => {
       if (!(factor > 0)) return;
       servings.set(scaleServings(servings.get(), factor));
@@ -534,6 +538,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
     });
     const removeStepGroup = action(({ id }: { id: string }) => {
       stepGroups.set(stepGroups.get().filter((g) => g.id !== id));
+      cookProgress.set(progressWithoutGroup(cookProgress.get(), id));
     });
     const moveStepGroup = action(
       ({ id, delta }: { id: string; delta: number }) => {
@@ -552,15 +557,21 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
         ...g,
         steps: g.steps.filter((_, i) => i !== step),
       })));
+      cookProgress.set(progressAfterRemove(cookProgress.get(), id, step));
     });
     const moveStep = action(
       ({ id, step, delta }: { id: string; step: number; delta: number }) => {
+        const count = stepGroups.get().find((g) => g.id === id)?.steps.length ??
+          0;
         stepGroups.set(
           updatedGroup(
             stepGroups.get(),
             id,
             (g) => ({ ...g, steps: moved(g.steps, step, delta) }),
           ),
+        );
+        cookProgress.set(
+          progressAfterMove(cookProgress.get(), id, step, delta, count),
         );
       },
     );
@@ -596,8 +607,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
     // The cooking view is made when Cook is pressed, as navigateTo expects
     // (docs/common/patterns/navigation.md): a view made in the pattern body
     // and navigated to from an action did nothing live. Its checked steps
-    // live here, so progress survives going back to edit and cooking again.
-    const cookProgress = new Writable.perSpace<string[]>([]);
+    // are `cookProgress`, above.
     const cook = action(() =>
       navigateTo(
         Viewer({
