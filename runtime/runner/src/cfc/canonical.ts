@@ -331,6 +331,7 @@ export const canonicalizeWritePolicyInput = (
     case "result-wiring":
     case "owner-adoption":
     case "initialization":
+    case "plan-write":
       return {
         ...input,
         target: {

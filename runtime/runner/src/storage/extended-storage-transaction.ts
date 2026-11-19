@@ -127,6 +127,7 @@ import {
   writeStoredCfcEnvelope,
 } from "../cfc/prepare.ts";
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "../cfc/policy.ts";
+import type { CompiledPlanRegistry } from "../cfc/compiled-plans.ts";
 import {
   runtimeOwnedStoreKey,
   type RuntimeOwnedStores,
@@ -896,6 +897,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
    * configure, which leaves only this transaction's own markers.
    */
   #runtimeOwnedStores: RuntimeOwnedStores | undefined;
+
+  /**
+   * The compiled patterns the runtime registered, shared with every other
+   * transaction of the same runtime. Absent on a transaction the runtime did
+   * not configure, where no `plan-write` input is honored.
+   */
+  #compiledPlans: CompiledPlanRegistry | undefined;
 
   /**
    * Per-transaction cache of `Cell.get()` results, keyed by stable cell view
@@ -2646,6 +2654,26 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
       );
     }
     this.#runtimeOwnedStores = stores;
+  }
+
+  /**
+   * One-shot handover of the runtime's compiled-plan registry, called by
+   * `Runtime.edit` for every transaction it creates.
+   */
+  configureCompiledPlans(registry: CompiledPlanRegistry): void {
+    if (this.#compiledPlans !== undefined) {
+      throw new Error(
+        "Compiled plans are already configured for this transaction",
+      );
+    }
+    this.#compiledPlans = registry;
+  }
+
+  compiledPlans(
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlanRegistry | undefined {
+    if (!runtimeWritePolicyAuthorized(authorization)) return undefined;
+    return this.#compiledPlans;
   }
 
   enrollRuntimeOwnedStore(
@@ -5388,6 +5416,12 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   isRuntimeWritePolicyInput(input: WritePolicyInput): boolean {
     return this.#wrapped.isRuntimeWritePolicyInput(input);
+  }
+
+  compiledPlans(
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlanRegistry | undefined {
+    return this.#wrapped.compiledPlans(authorization);
   }
 
   enrollRuntimeOwnedStore(

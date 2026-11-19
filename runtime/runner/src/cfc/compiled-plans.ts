@@ -1,0 +1,92 @@
+/**
+ * The compiled patterns a runtime registered, by the identity it computed for
+ * each: the content hash of the plan and the value code together. A
+ * `plan-write` write-policy input names a compiled pattern by that identity,
+ * and the commit preparation honors it only for a pattern registered here, so
+ * a caller never names an identity it did not get from `register`.
+ */
+
+import type { FabricValue } from "@commonfabric/api";
+import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
+
+import { LabelTable, type Template } from "./plan-template.ts";
+import {
+  type RuntimeWritePolicyAuthorization,
+  runtimeWritePolicyAuthorized,
+} from "./types.ts";
+
+/**
+ * The part of a compiled pattern's plan the commit preparation reads: the
+ * label templates of its outputs and write edges, its template table, and
+ * the membership template of each collection. The plan carries more; the
+ * whole plan is what its identity hashes.
+ */
+export interface CompiledPlan {
+  readonly outputs: readonly {
+    readonly template: Template;
+    readonly kept?: boolean;
+  }[];
+  readonly bodies: readonly {
+    readonly writes: readonly { readonly template: Template }[];
+  }[];
+  readonly cones: readonly {
+    readonly writes: readonly { readonly template: Template }[];
+  }[];
+  readonly templates: readonly Template[];
+  readonly collections: readonly { readonly membership: Template }[];
+  readonly stateCells: readonly {
+    readonly first?: { readonly cone: number; readonly write: number };
+  }[];
+}
+
+/**
+ * The compiled patterns one runtime registered, and the table its template
+ * labels are interned in. `Runtime` holds one and hands it to every
+ * transaction it creates.
+ */
+export class CompiledPlanRegistry {
+  readonly #plans = new Map<string, CompiledPlan>();
+  readonly #labels = new LabelTable();
+
+  /** The table the runtime's template labels are interned in. */
+  get labels(): LabelTable {
+    return this.#labels;
+  }
+
+  /**
+   * Registers a compiled pattern and returns its identity, the content hash
+   * of `plan` and `code` together: the plan and the value code are addressed
+   * together, so neither can be swapped under the other's identity. Throws
+   * without the runtime's mark.
+   */
+  register(
+    plan: CompiledPlan,
+    code: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): string {
+    if (!runtimeWritePolicyAuthorized(authorization)) {
+      throw new Error(
+        "Registering a compiled pattern takes the runtime's authorization",
+      );
+    }
+    const frozen = deepFreeze(structuredClone(plan));
+    const identity = hashStringOf({
+      plan: frozen as unknown as FabricValue,
+      code,
+    });
+    if (!this.#plans.has(identity)) this.#plans.set(identity, frozen);
+    return identity;
+  }
+
+  /**
+   * Returns the plan registered under `identity`, or `undefined` where none
+   * is or the runtime's mark is missing.
+   */
+  plan(
+    identity: string,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): CompiledPlan | undefined {
+    if (!runtimeWritePolicyAuthorized(authorization)) return undefined;
+    return this.#plans.get(identity);
+  }
+}

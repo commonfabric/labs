@@ -4596,6 +4596,43 @@ const forEachFlowObservation = (
  * runtime-started where any setup is. Only a wiring at the document's root is
  * taken.
  */
+/** A `plan-write` write-policy input. */
+export type PlanWriteInput = Extract<WritePolicyInput, { kind: "plan-write" }>;
+
+/**
+ * The `plan-write` inputs the preparation honors, by the document each
+ * targets: those recorded with the runtime's mark, for a compiled pattern the
+ * runtime registered, on a transaction with the experimental option
+ * `compiledPatterns` on. With the option off it reads nothing.
+ */
+export const planWritesByTarget = (
+  tx: IExtendedStorageTransaction,
+): Map<string, PlanWriteInput[]> => {
+  const result = new Map<string, PlanWriteInput[]>();
+  const state = tx.getCfcState();
+  if (!state.planLabels) return result;
+  const registry = tx.compiledPlans(runtimeWritePolicyAuthorization);
+  if (registry === undefined) return result;
+  for (const input of state.writePolicyInputs) {
+    if (
+      input.kind !== "plan-write" || !tx.isRuntimeWritePolicyInput(input) ||
+      registry.plan(input.compiledPattern, runtimeWritePolicyAuthorization) ===
+        undefined
+    ) {
+      continue;
+    }
+    const key = targetKey({
+      space: input.target.space,
+      id: input.target.id as URI,
+      scope: normalizeCellScope(input.target.scope),
+    });
+    const known = result.get(key);
+    if (known === undefined) result.set(key, [input]);
+    else known.push(input);
+  }
+  return result;
+};
+
 const resultWiringsByTarget = (
   tx: IExtendedStorageTransaction,
 ): Map<

@@ -663,7 +663,13 @@ export type ImplementationIdentity =
     bindingPath?: string[];
     codeHash?: string;
   }
-  | { kind: "unsupported"; className: string; reason: string };
+  | { kind: "unsupported"; className: string; reason: string }
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // A compiled pattern the runtime registered, by the identity
+  // `CompiledPlanRegistry.register` computed over its plan and value code,
+  // and, for a sandboxed body of it, the body's index in the plan. The
+  // `TransformedBy` a template's derivation mints names it.
+  | { kind: "compiled"; pattern: string; body?: number };
 
 export type TrustSnapshot = {
   id: string;
@@ -833,7 +839,94 @@ export type WritePolicyInput =
     readonly target?: CfcAddress;
     readonly name: string;
     readonly value: FabricValue;
+  }
+  /**
+   * One path a compiled pattern's write staged, with what its label template
+   * is instantiated from. Honored only when recorded with the runtime's mark,
+   * with the experimental option `compiledPatterns` on, and for a compiled
+   * pattern the runtime registered (`CompiledPlanRegistry`).
+   */
+  | ({ readonly kind: "plan-write" } & PlanWrite);
+
+/**
+ * Where a compiled pattern's slot is bound: the chain of addresses its
+ * observation followed, link positions first and the observed position
+ * last, with the observation class it read the last one in; or an address
+ * this transaction wrote, whose staged label the slot takes. An address path
+ * may hold the segment `*` at an element position, which resolves to the
+ * join over the entries it covers.
+ */
+export type SlotBinding =
+  | {
+    readonly chain: readonly CfcAddress[];
+    readonly observes: "value" | "shape" | "followRef";
+  }
+  | { readonly staged: CfcAddress };
+
+/** The bindings of a template's slots, by index into the plan's slots. */
+export type SlotBindings = { readonly [slot: number]: SlotBinding };
+
+/** The inputs of one place a template is instantiated at. */
+export type PlanInputs = {
+  /** Every slot the template reaches. */
+  readonly slots: SlotBindings;
+
+  /** The branch taken at each selector; an absent one is not reported. */
+  readonly selections?: { readonly [selector: number]: number };
+
+  /**
+   * The child chosen at each choice point, with its own bindings, or `null`
+   * where none was chosen; an absent one is not reported.
+   */
+  readonly picks?: {
+    readonly [pick: number]: { readonly slots: SlotBindings } | null;
   };
+
+  /** The elements of each collection a `fold` names. */
+  readonly elements?: { readonly [collection: number]: PlanElements };
+
+  /** The addresses the reads of each `Plan.dynamicReads` entry read. */
+  readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+};
+
+/**
+ * The elements of a collection, in one of two forms. `uniform` is one set of
+ * bindings whose addresses hold `*` at the element position, for a body with
+ * no node whose label depends on a value: an array of plain values in place.
+ * `groups` is one entry per distinct set of element inputs with the number of
+ * elements that have it: an array of references, or the result of another
+ * per-element construct.
+ */
+export type PlanElements =
+  | { readonly uniform: PlanInputs }
+  | {
+    readonly groups: readonly (PlanInputs & { readonly count: number })[];
+  };
+
+/** One write of a compiled pattern, as the executor reports it. */
+export type PlanWrite = PlanInputs & {
+  /** The written document and path. */
+  readonly target: CfcAddress;
+
+  /** The identity `CompiledPlanRegistry.register` returned. */
+  readonly compiledPattern: string;
+
+  /** The record of the plan whose template labels the write. */
+  readonly record:
+    | { readonly output: number }
+    | { readonly body: number; readonly write: number }
+    | { readonly cone: number; readonly write: number }
+    | { readonly stateFirst: number };
+
+  /** The result-document id of the instance. */
+  readonly instance: string;
+
+  /** The element keys of the writing cone instance, outermost first. */
+  readonly keys: readonly (readonly [collection: number, key: string])[];
+
+  /** The inputs of the cone instances of the named outputs. */
+  readonly outputs?: { readonly [output: number]: PlanInputs };
+};
 
 /**
  * One grant document a boundary evaluation consulted (§8.12.7 route 2a):
@@ -1383,4 +1476,9 @@ export type CfcPreparationWork =
   | "flowTemplateEntriesMinted"
   | "flowTemplateContainers"
   | "inputReadViewsBuilt"
-  | "inputReadViewsReused";
+  | "inputReadViewsReused"
+  | "planTemplatesInstantiated"
+  | "planTemplateNodes"
+  | "planSlotLabels"
+  | "planLabelMemoHits"
+  | "planLabelBounds";
