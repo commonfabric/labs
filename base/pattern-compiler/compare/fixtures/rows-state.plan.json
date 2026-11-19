@@ -75,7 +75,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+            "sha256:16dd81f4465f571e17bcda7aaecdf92f64c38a962ec806fda177150de049c61b"
           ],
           "picks": [],
           "selectors": [],
@@ -356,7 +356,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+                "compiled": "sha256:16dd81f4465f571e17bcda7aaecdf92f64c38a962ec806fda177150de049c61b"
               },
               "name": "Detail",
               "within": [
@@ -504,7 +504,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Plain"
+            "sha256:195bfdbdacee688de9ab31c6f5dd98c620dc16f29fdd966319323874b3925555"
           ],
           "picks": [],
           "selectors": [],
@@ -964,7 +964,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/rows-state.tsx#Detail"
+                "compiled": "sha256:16dd81f4465f571e17bcda7aaecdf92f64c38a962ec806fda177150de049c61b"
               },
               "name": "Detail",
               "within": [
@@ -1118,7 +1118,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rows-state.tsx#Keyed"
+            "sha256:bac0f1cb15c905bcb6c14231538b32ba7ca12a0929dfa70e38c03dad531d6b89"
           ],
           "picks": [],
           "selectors": [],

@@ -153,7 +153,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/as-instance.tsx#Row"
+            "sha256:4a6466ed2667186906c42b1035f87b4d177d4f7ec2e1f782085a23cfc9b5d130"
           ],
           "picks": [],
           "selectors": [],
@@ -423,7 +423,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/as-instance.tsx#Word"
+            "sha256:e06436e81703456f7aeddeefbd5c226df8acff92e9f2d86de1e3f3d94c0b8c6c"
           ],
           "picks": [],
           "selectors": [],
@@ -629,7 +629,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/as-instance.tsx#Row"
+                "compiled": "sha256:4a6466ed2667186906c42b1035f87b4d177d4f7ec2e1f782085a23cfc9b5d130"
               },
               "name": "map",
               "within": [
@@ -641,7 +641,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/as-instance.tsx#Word"
+                "compiled": "sha256:e06436e81703456f7aeddeefbd5c226df8acff92e9f2d86de1e3f3d94c0b8c6c"
               },
               "name": "map",
               "within": [
@@ -653,7 +653,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/as-instance.tsx#Row"
+                "compiled": "sha256:4a6466ed2667186906c42b1035f87b4d177d4f7ec2e1f782085a23cfc9b5d130"
               },
               "name": "map",
               "within": [
@@ -665,7 +665,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/as-instance.tsx#Row"
+                "compiled": "sha256:4a6466ed2667186906c42b1035f87b4d177d4f7ec2e1f782085a23cfc9b5d130"
               },
               "name": "Row",
               "within": []
@@ -1114,8 +1114,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/as-instance.tsx#default",
-            "unhashed:pattern/compare/fixtures/as-instance.tsx#Row"
+            "sha256:922463165482cfc429f8f4a1ac47765f6e7c4c09406205a819bb063c94867596",
+            "sha256:4a6466ed2667186906c42b1035f87b4d177d4f7ec2e1f782085a23cfc9b5d130"
           ],
           "picks": [],
           "selectors": [],

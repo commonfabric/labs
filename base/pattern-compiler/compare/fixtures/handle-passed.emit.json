@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-passed.tsx",
-              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#Child\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ mine: $h.slot(0), other: $h.slot(1) })));\n});"
+              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"sha256:c3027a5b467ff99048d3276c1142a126e7b72c7325ad2d3701d2498d25d984e7\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"sha256:3ed78296318186c655cd157595d8cfb76b9409319a326c1135008cb5f1279877\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ mine: $h.slot(0), other: $h.slot(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -95,7 +95,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handle-passed.tsx#Child"
+            "sha256:c3027a5b467ff99048d3276c1142a126e7b72c7325ad2d3701d2498d25d984e7"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -185,7 +185,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-passed.tsx",
-              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#Child\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/handle-passed.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ join: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst Child = pattern(\"sha256:c3027a5b467ff99048d3276c1142a126e7b72c7325ad2d3701d2498d25d984e7\");\nconst join = handler((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n});\n\n\nconst $default = (pattern(\"sha256:3ed78296318186c655cd157595d8cfb76b9409319a326c1135008cb5f1279877\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ join: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine, other }) => {\n  mine.set(\"joined\");\n  return navigateTo(Child({ mine, other }));\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -369,7 +369,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handle-passed.tsx#default"
+            "sha256:3ed78296318186c655cd157595d8cfb76b9409319a326c1135008cb5f1279877"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

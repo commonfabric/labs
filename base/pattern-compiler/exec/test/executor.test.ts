@@ -4451,17 +4451,26 @@ describe("a pattern called through `asInstance()` in an element body", () => {
   it("is a child of the plan with the mark, and no code of the callee is compiled in for it", async () => {
     const instance = await start(references());
 
+    // Each callee is named by the identity of its own source, one for
+    // `Row` at its three sites and another for `Word`.
+    const [row, word] = [
+      instance.plan.children?.[0].callee.compiled,
+      instance.plan.children?.[1].callee.compiled,
+    ];
+    expect(row).toMatch(/^sha256:/);
+    expect(word).toMatch(/^sha256:/);
+    expect(row).not.toBe(word);
     expect(
       instance.plan.children?.map((child) => [
         child.asInstance,
-        child.callee.compiled?.split("#")[1],
+        child.callee.compiled,
         child.within,
       ]),
     ).toEqual([
-      [true, "Row", [{ element: 0 }]],
-      [true, "Word", [{ element: 1 }]],
-      [true, "Row", [{ element: 3 }]],
-      [true, "Row", []],
+      [true, row, [{ element: 0 }]],
+      [true, word, [{ element: 1 }]],
+      [true, row, [{ element: 3 }]],
+      [true, row, []],
     ]);
     // The one binding of the plan is that of `plain`, which is compiled
     // in under a `site` step.

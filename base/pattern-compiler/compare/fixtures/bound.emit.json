@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/bound.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst setTo = handler(\n  (event, { cell }) => {\n    cell.set(event.to);\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/bound.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { a, b } = $a; return (() => {\n    b.set(a.get() + 1);\n  })(); });\n$rt.body(1, ($a) => { const { a, b } = $a; return (() => {\n    a.set(b.get() + 1);\n  })(); });\n$rt.body(2, ($a) => { const { capped, raw } = $a; return (() => {\n    capped.set(Math.min(raw.get(), 10));\n  })(); });\n$rt.body(3, ($a) => { const { capped, raw } = $a; return (() => {\n    raw.set(capped.get());\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\n$rt.value(1, ($h) => ($h.invoke(1, {  })));\n$rt.value(3, ($h) => (($h.v($h.slot(1)) + $h.v($h.slot(3)))));\n$rt.value(4, ($h) => ($h.invoke(2, {  })));\n$rt.value(5, ($h) => ($h.invoke(3, {  })));\n$rt.value(7, ($h) => (($h.v($h.slot(8)) * (2))));\nreturn $rt.thunk(($h) => (({ a: $h.slot(0), b: $h.slot(2), sum: $h.output(0), raw: $h.slot(5), capped: $h.slot(4), double: $h.output(1), setA: $h.stream(0), setRaw: $h.stream(1), setOther: $h.stream(2) })));\n});\n$rt.body(4, ($e, $s) => ((event, { cell }) => {\n    cell.set(event.to);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst setTo = handler(\n  (event, { cell }) => {\n    cell.set(event.to);\n  },\n);\nconst $default = (pattern(\"sha256:da07940e857c0a546b99230380b8bf04b11343921cf5ce4a2da1b0934736734b\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { a, b } = $a; return (() => {\n    b.set(a.get() + 1);\n  })(); });\n$rt.body(1, ($a) => { const { a, b } = $a; return (() => {\n    a.set(b.get() + 1);\n  })(); });\n$rt.body(2, ($a) => { const { capped, raw } = $a; return (() => {\n    capped.set(Math.min(raw.get(), 10));\n  })(); });\n$rt.body(3, ($a) => { const { capped, raw } = $a; return (() => {\n    raw.set(capped.get());\n  })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, {  })));\n$rt.value(1, ($h) => ($h.invoke(1, {  })));\n$rt.value(3, ($h) => (($h.v($h.slot(1)) + $h.v($h.slot(3)))));\n$rt.value(4, ($h) => ($h.invoke(2, {  })));\n$rt.value(5, ($h) => ($h.invoke(3, {  })));\n$rt.value(7, ($h) => (($h.v($h.slot(8)) * (2))));\nreturn $rt.thunk(($h) => (({ a: $h.slot(0), b: $h.slot(2), sum: $h.output(0), raw: $h.slot(5), capped: $h.slot(4), double: $h.output(1), setA: $h.stream(0), setRaw: $h.stream(1), setOther: $h.stream(2) })));\n});\n$rt.body(4, ($e, $s) => ((event, { cell }) => {\n    cell.set(event.to);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -781,7 +781,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/bound.tsx#default"
+            "sha256:da07940e857c0a546b99230380b8bf04b11343921cf5ce4a2da1b0934736734b"
           ],
           "picks": [],
           "selectors": [],

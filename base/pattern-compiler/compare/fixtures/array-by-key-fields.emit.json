@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/array-by-key-fields.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ owner: $h.slot(4), name: $h.slot(3), stars: $h.slot(5), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"sha256:479c8dae1a099a6be2bb66e33c66e4e9f983a42c86d2fa254a78ca0ba324a867\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ owner: $h.slot(4), name: $h.slot(3), stars: $h.slot(5), noted: $h.slot(2), note: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -232,7 +232,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+            "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
           ],
           "picks": [],
           "selectors": [],
@@ -401,7 +401,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/array-by-key-fields.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0), reversed: $h.slot(3) }))));\n{\n$rt.element(0, ($h) => (($h.v($h.slot(4)) >= $h.v($h.slot(5)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(7) })));\n$rt.element(1, ($h) => ($h.slot(8)));\n}\n{\n$rt.child(1, ($h) => (({ repo: $h.slot(10) })));\n$rt.element(2, ($h) => ($h.slot(11)));\n}\nreturn $rt.thunk(($h) => (({ starred: $h.output(3), kept: $h.output(5) })));\n});"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst RepoRow = pattern(\"sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9\");\nconst fetched = lift(\n  (\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  },\n);\n\nconst $default = (pattern(\n  \"sha256:479c8dae1a099a6be2bb66e33c66e4e9f983a42c86d2fa254a78ca0ba324a867\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((\n    input,\n  ) => {\n    const repos = input.names.map((name, index) => ({\n      owner: index % 2 === 0 ? \"cf\" : \"x\",\n      name,\n      stars: name.length + input.bonus,\n    }));\n    return input.reversed ? repos.toReversed() : repos;\n  })($a));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0), reversed: $h.slot(3) }))));\n{\n$rt.element(0, ($h) => (($h.v($h.slot(4)) >= $h.v($h.slot(5)))));\n}\n{\n$rt.child(0, ($h) => (({ repo: $h.slot(7) })));\n$rt.element(1, ($h) => ($h.slot(8)));\n}\n{\n$rt.child(1, ($h) => (({ repo: $h.slot(10) })));\n$rt.element(2, ($h) => ($h.slot(11)));\n}\nreturn $rt.thunk(($h) => (({ starred: $h.output(3), kept: $h.output(5) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -486,7 +486,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+                "compiled": "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
               },
               "name": "map",
               "within": [
@@ -498,7 +498,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+                "compiled": "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
               },
               "name": "map",
               "within": [
@@ -806,7 +806,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default"
+            "sha256:479c8dae1a099a6be2bb66e33c66e4e9f983a42c86d2fa254a78ca0ba324a867"
           ],
           "picks": [],
           "selectors": [],

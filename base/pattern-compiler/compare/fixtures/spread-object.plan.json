@@ -60,7 +60,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/spread-object.tsx#default"
+            "sha256:af4a7570bec14708df77e187ff29dd28a134bddc73ac9dee1b346c8061f50a7b"
           ],
           "picks": [],
           "selectors": [],

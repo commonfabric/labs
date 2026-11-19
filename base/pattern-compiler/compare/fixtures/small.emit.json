@@ -15,7 +15,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/small.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/small.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + (\"?\"))));\n$rt.value(5, ($h) => (((\"hi \") + $h.v($h.slot(1)))));\n$rt.value(7, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(8, ($h) => (($h.select(1, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\n$rt.value(11, ($h) => ($h.v($h.slot(3)).length));\n{\n$rt.element(0, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(5)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ shout: $h.output(0), echo: $h.output(1), greeting: $h.output(2), chosen: $h.output(3), direct: $h.output(4), both: $h.output(5), count: $h.output(6), titles: $h.output(7), loud: $h.output(9), note: $h.slot(6), secret: $h.slot(7) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:ea22356baff54fb9cdadb8cae3784c171c66f571edef6621d43f48754c869152\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + (\"?\"))));\n$rt.value(5, ($h) => (((\"hi \") + $h.v($h.slot(1)))));\n$rt.value(7, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(8, ($h) => (($h.select(1, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\n$rt.value(11, ($h) => ($h.v($h.slot(3)).length));\n{\n$rt.element(0, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(5)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ shout: $h.output(0), echo: $h.output(1), greeting: $h.output(2), chosen: $h.output(3), direct: $h.output(4), both: $h.output(5), count: $h.output(6), titles: $h.output(7), loud: $h.output(9), note: $h.slot(6), secret: $h.slot(7) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -566,7 +566,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/small.tsx#default"
+            "sha256:ea22356baff54fb9cdadb8cae3784c171c66f571edef6621d43f48754c869152"
           ],
           "picks": [],
           "selectors": [

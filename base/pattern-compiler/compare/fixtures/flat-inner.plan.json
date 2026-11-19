@@ -685,7 +685,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/flat-inner.tsx#default"
+            "sha256:e75d6842415c017397c883786bf187229e804561f1f3f39103f68ec8c685f736"
           ],
           "picks": [],
           "selectors": [],

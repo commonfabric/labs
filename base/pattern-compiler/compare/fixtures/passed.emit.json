@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/passed.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/passed.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.slot(0)));\n$rt.value(1, ($h) => ($h.v($h.slot(1)).length));\n$rt.value(2, ($h) => (({ who: $h.slot(0), n: (1) })));\nreturn $rt.thunk(($h) => (({ same: $h.output(0), count: $h.output(1), tagged: $h.output(2) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:7483419d841bb87a4aae1cf06be1b1506e9b4c298dcd3b6ab99e1f412b2fbcdd\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.slot(0)));\n$rt.value(1, ($h) => ($h.v($h.slot(1)).length));\n$rt.value(2, ($h) => (({ who: $h.slot(0), n: (1) })));\nreturn $rt.thunk(($h) => (({ same: $h.output(0), count: $h.output(1), tagged: $h.output(2) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -150,7 +150,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/passed.tsx#default"
+            "sha256:7483419d841bb87a4aae1cf06be1b1506e9b4c298dcd3b6ab99e1f412b2fbcdd"
           ],
           "picks": [],
           "selectors": [],

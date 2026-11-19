@@ -207,7 +207,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+            "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
           ],
           "picks": [],
           "selectors": [],
@@ -413,7 +413,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+                "compiled": "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
               },
               "name": "map",
               "within": [
@@ -425,7 +425,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#RepoRow"
+                "compiled": "sha256:7ba7274965e019c53358ac026dce0328372ef92c2e11e86fb06a1cf0cf5349d9"
               },
               "name": "map",
               "within": [
@@ -733,7 +733,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-fields.tsx#default"
+            "sha256:479c8dae1a099a6be2bb66e33c66e4e9f983a42c86d2fa254a78ca0ba324a867"
           ],
           "picks": [],
           "selectors": [],

@@ -384,7 +384,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/wishes.tsx#default"
+            "sha256:d3eec80b2c0e47175da01f7d3aa9caafb3ab6dbed85659bfb9bb2c78d8e9ae30"
           ],
           "picks": [],
           "selectors": [

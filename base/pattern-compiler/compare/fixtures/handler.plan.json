@@ -222,7 +222,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handler.tsx#default"
+            "sha256:4dae135d7ece235f7f03cba1d49edf843a4c9c72e4a150ce24f98558561cfee3"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

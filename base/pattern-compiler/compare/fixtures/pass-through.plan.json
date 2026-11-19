@@ -316,7 +316,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/pass-through.tsx#default"
+            "sha256:8f583ff56d75112a61714dbde0ba270d707338bf8c963166252af7ae3871d89a"
           ],
           "picks": [],
           "selectors": [

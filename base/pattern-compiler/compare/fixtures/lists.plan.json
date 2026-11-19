@@ -105,7 +105,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/lists.tsx#Plain"
+            "sha256:090510c7666794bc373371963f602b9658979cdc28d47d7006c67c06989d7ad9"
           ],
           "picks": [],
           "selectors": [],
@@ -330,7 +330,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/lists.tsx#Keyed"
+            "sha256:b67dbc909d9076ca1e0ad8b0a722f9cf468ff143c454da481d44d70425b67f10"
           ],
           "picks": [],
           "selectors": [],
@@ -613,7 +613,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/lists.tsx#Chained"
+            "sha256:df8feddb8b6a7adffe07ddcd89c281aa82cfa79bcafd7e415091340853c27951"
           ],
           "picks": [],
           "selectors": [],

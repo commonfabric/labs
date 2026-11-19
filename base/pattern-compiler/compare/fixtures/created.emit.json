@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/created.tsx",
-              "source": "const { \"Cell\": Cell, \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst make = lift((input) =>\n  Cell.for(input.id).set(input.content)\n);\nfunction Card({ value }) {\n  return ($rt.hf(\"cf-cfc-label\", { \"$value\": (value) }, []));\n}\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/created.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n  Cell.for(input.id).set(input.content))($a));\n$rt.body(1, ($a) => (function Card({ value }) {\n  return ($rt.hf(\"cf-cfc-label\", { \"$value\": (value) }, []));\n})($a[\"arg0\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ id: (\"created-fixture\"), content: (\"text\") }))));\n$rt.value(2, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"cf-cfc-label\", { \"$value\": $h.output(0) }, []), $h.invoke(1, { \"arg0\": ({ value: $h.output(0) }) })])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
+              "source": "const { \"Cell\": Cell, \"lift\": lift, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst make = lift((input) =>\n  Cell.for(input.id).set(input.content)\n);\nfunction Card({ value }) {\n  return ($rt.hf(\"cf-cfc-label\", { \"$value\": (value) }, []));\n}\n\nconst $default = (pattern(\"sha256:70f965deb4bb1476a6433483a69ca9d0894698d40ddca92107db15ab5966c29e\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n  Cell.for(input.id).set(input.content))($a));\n$rt.body(1, ($a) => (function Card({ value }) {\n  return ($rt.hf(\"cf-cfc-label\", { \"$value\": (value) }, []));\n})($a[\"arg0\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ id: (\"created-fixture\"), content: (\"text\") }))));\n$rt.value(2, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"cf-cfc-label\", { \"$value\": $h.output(0) }, []), $h.invoke(1, { \"arg0\": ({ value: $h.output(0) }) })])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -226,7 +226,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/created.tsx#default"
+            "sha256:70f965deb4bb1476a6433483a69ca9d0894698d40ddca92107db15ab5966c29e"
           ],
           "picks": [],
           "selectors": [],

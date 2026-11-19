@@ -152,7 +152,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/nested-fold.tsx#default"
+            "sha256:cd9a63d7105b9715d1c5535d02c71b0ff682574b44760555027f9503915b34b0"
           ],
           "picks": [],
           "selectors": [],

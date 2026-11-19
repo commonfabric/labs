@@ -199,7 +199,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/collection-output.tsx#default"
+            "sha256:89d4fd7cff914943afed33836636fef432557792e0d3f74ab97ea657dbda37c4"
           ],
           "picks": [],
           "selectors": [

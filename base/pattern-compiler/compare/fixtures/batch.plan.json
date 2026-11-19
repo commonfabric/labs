@@ -768,7 +768,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/batch.tsx#default"
+            "sha256:5e7cd517ee35f16c8130dbac940f7f492ab79e1312a6be77d8cb41a2030fa6cf"
           ],
           "picks": [],
           "selectors": [],

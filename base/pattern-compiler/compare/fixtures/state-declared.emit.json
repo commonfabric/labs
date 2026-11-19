@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/state-declared.tsx",
-              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/state-declared.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ pinned: $h.slot(0) })));\n});"
+              "source": "const { \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst $default = (pattern(\"sha256:948773e4bda4d0b68cf88247bcbae6ef958dcd027659385e69c0b7e933b3ee78\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ pinned: $h.slot(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -74,7 +74,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/state-declared.tsx#default"
+            "sha256:948773e4bda4d0b68cf88247bcbae6ef958dcd027659385e69c0b7e933b3ee78"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

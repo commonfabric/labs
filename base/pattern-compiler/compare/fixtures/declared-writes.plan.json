@@ -159,7 +159,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/declared-writes.tsx#default"
+            "sha256:567f168a55cdfbb82fe31803e879ee491cc2c3a033c0b39b493b123c7f407bdb"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

@@ -472,7 +472,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/reduce.tsx#default"
+            "sha256:d8009ad73d0028682effb350d5e4a83557b84fd5e2fa06858a03a6bc544b9658"
           ],
           "picks": [],
           "selectors": [],

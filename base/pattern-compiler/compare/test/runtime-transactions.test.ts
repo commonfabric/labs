@@ -32,13 +32,16 @@ import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
 import { CASES, type Figures, measure } from "../template-cost.ts";
 
-const artifactOf = async (name: string): Promise<Artifact> => {
+const artifactOf = async (
+  name: string,
+  pattern = "default",
+): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
     await Deno.readTextFile(
       new URL(`../fixtures/${name}.emit.json`, import.meta.url),
     ),
   ) as { patterns: Artifact[] }[];
-  return patterns.find((pattern) => pattern.name === "default") ??
+  return patterns.find((artifact) => artifact.name === pattern) ??
     patterns[patterns.length - 1];
 };
 
@@ -565,6 +568,8 @@ describe("write records the runtime instantiates with the option on", () => {
     binding?: number,
     /** Changes the artifact before it is run. */
     edit?: (artifact: Artifact) => void,
+    /** The pattern of the fixture to run. */
+    pattern = "default",
   ) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
@@ -577,7 +582,7 @@ describe("write records the runtime instantiates with the option on", () => {
       servingPosture: true,
     });
     const id = identifierOf({ test: name });
-    const artifact = await artifactOf(name);
+    const artifact = await artifactOf(name, pattern);
     edit?.(artifact);
     const hooks = new RuntimeTransactions(runtime, space, {
       owner: id,
@@ -776,6 +781,39 @@ describe("write records the runtime instantiates with the option on", () => {
       '"input:names"',
     );
   });
+  it("stores the atom of a pattern's expression code, equal whether the pattern runs alone or compiled into another", async () => {
+    /** The pattern identities of the `TransformedBy` atoms of a label. */
+    const minted = (label: { integrity?: readonly unknown[] } | undefined) =>
+      (label?.integrity ?? []).flatMap((atom) => {
+        const identity =
+          (atom as { identity?: { kind?: string; pattern?: string } })
+            .identity;
+        return identity?.kind === "compiled" ? [identity.pattern] : [];
+      });
+    const alone = await commitWithOptionOn(
+      "compiled-in",
+      { title: "t" },
+      ["shout"],
+      undefined,
+      undefined,
+      "Row",
+    );
+    const within = await commitWithOptionOn(
+      "compiled-in",
+      { title: "t" },
+      ["row", "shout"],
+    );
+    expect(alone.refused).toEqual([]);
+    expect(within.refused).toEqual([]);
+    const row = minted(alone.label);
+    // Alone, the kept output and the expression code both name `Row`.
+    expect(new Set(row).size).toBe(1);
+    // Compiled in, the expression code names `Row` and the kept output
+    // names the pattern of the instance.
+    expect(minted(within.label)).toContain(row[0]);
+    expect(new Set(minted(within.label)).size).toBe(2);
+  });
+
   for (
     const [fixture, argument, path, source] of [
       ["pass-through", { secret: "s", flag: true }, ["whole"], "secret"],

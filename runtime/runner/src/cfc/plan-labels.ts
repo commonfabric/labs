@@ -330,20 +330,26 @@ export const instantiatePlanLabels = (
   };
 
   /**
-   * The pattern a derivation by expression code mints the atom of (PL §3.2,
-   * "The atom of the pattern"): the registered pattern for entry 0 of
-   * `Plan.patterns`, and for code of a pattern compiled in, that pattern's
-   * entry, so the atom is the same in every plan that holds the code.
+   * The pattern a derivation mints the atom of (PL §3.2, "The atom of the
+   * pattern"). A derivation by expression code, a fold and a kept output
+   * name the entry of `Plan.patterns` of the pattern whose source holds
+   * the code, entry 0 where `pattern` is absent. An entry is the identity
+   * of that pattern's own source, so the atom is the same whether the
+   * pattern is registered alone or compiled into another. A derivation by
+   * a body names the registered plan, whose bodies its index numbers, as
+   * does a plan that lists no patterns.
    */
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
   const mintedPattern = (compiledPattern: string, by: DerivedBy): string => {
-    if ("body" in by || by.pattern === undefined || by.pattern === 0) {
-      return compiledPattern;
-    }
-    const entry = env.registry.plan(
+    if ("body" in by) return compiledPattern;
+    const patterns = env.registry.plan(
       compiledPattern,
       runtimeWritePolicyAuthorization,
-    )?.patterns?.[by.pattern];
+    )?.patterns;
+    if (patterns === undefined || patterns.length === 0) {
+      return compiledPattern;
+    }
+    const entry = patterns[by.pattern ?? 0];
     if (entry === undefined) {
       throw new PlanLabelError(
         `a derivation names entry ${by.pattern} of the plan's patterns, which the plan does not list`,

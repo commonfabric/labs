@@ -323,7 +323,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/pass-through-containers.tsx#default"
+            "sha256:7049e92516ecffdc06f3bc52ebbadf9504951316be88cedc77060cf4a1dc164e"
           ],
           "picks": [],
           "selectors": [

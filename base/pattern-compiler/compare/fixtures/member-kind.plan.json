@@ -374,7 +374,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/member-kind.tsx#default"
+            "sha256:c6fb19789720d57689533d184f6fed4fc76d8f14479fffa93fadcdaab97f27dd"
           ],
           "picks": [],
           "selectors": [],

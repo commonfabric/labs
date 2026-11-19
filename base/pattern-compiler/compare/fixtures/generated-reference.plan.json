@@ -48,7 +48,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/generated-reference.tsx#Row"
+            "sha256:49aa48e8bbf6d9648507ff9889fd734a10e4a5be4577fb0812ce2f43a7a94f1d"
           ],
           "picks": [],
           "selectors": [],
@@ -247,7 +247,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "unhashed:pattern/compare/fixtures/generated-reference.tsx#Row"
+                "compiled": "sha256:49aa48e8bbf6d9648507ff9889fd734a10e4a5be4577fb0812ce2f43a7a94f1d"
               },
               "name": "map",
               "within": [
@@ -518,7 +518,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/generated-reference.tsx#default"
+            "sha256:91271d56852c13fb183fb63d091834efc23c974ab45d298314bcf0b0bd9101e7"
           ],
           "picks": [],
           "selectors": [],

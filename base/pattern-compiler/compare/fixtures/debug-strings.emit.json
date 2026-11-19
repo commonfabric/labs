@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/debug-strings.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"toCompactDebugString\": toCompactDebugString, \"toIndentedDebugString\": toIndentedDebugString } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/debug-strings.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { entry } = $a; return (() => {\n      let text = \"entry: \";\n      text += toIndentedDebugString(entry);\n      return text;\n    })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (toCompactDebugString($h.v($h.slot(0)))));\n$rt.value(1, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ compact: $h.output(0), indented: $h.output(1) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"toCompactDebugString\": toCompactDebugString, \"toIndentedDebugString\": toIndentedDebugString } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:39eba4bf832b612901c7a6e5dc3a571db1e57bb05a44a8e7c0f3c5cffa4af540\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => { const { entry } = $a; return (() => {\n      let text = \"entry: \";\n      text += toIndentedDebugString(entry);\n      return text;\n    })(); });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => (toCompactDebugString($h.v($h.slot(0)))));\n$rt.value(1, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ compact: $h.output(0), indented: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -145,7 +145,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/debug-strings.tsx#default"
+            "sha256:39eba4bf832b612901c7a6e5dc3a571db1e57bb05a44a8e7c0f3c5cffa4af540"
           ],
           "picks": [],
           "selectors": [],

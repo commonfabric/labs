@@ -893,7 +893,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/array-by-key-form.tsx#default"
+            "sha256:0bc90c7252701df5b78d0e213b95d0787648e3f2f5bf8c24d01a1d8cc5105502"
           ],
           "picks": [],
           "selectors": [],

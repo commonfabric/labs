@@ -379,7 +379,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handler-effect.tsx#default"
+            "sha256:2acff5dcd3033496dc5ff414190ef0a074bb9d5749d074eeccea3c76136153bd"
           ],
           "picks": [],
           "selectors": [],

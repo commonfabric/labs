@@ -46,7 +46,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+            "sha256:928ee107bbf8ba162d85b4c3d92c3d855a755e635ec379437b50e051b251f2e1"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/0",
@@ -215,8 +215,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#default",
-            "unhashed:pattern/compare/fixtures/whole-argument.tsx#Context"
+            "sha256:0dee14857d296f21ec2d6d1d7c784eb82cce38bf2205d94413bd68ce928b3943",
+            "sha256:928ee107bbf8ba162d85b4c3d92c3d855a755e635ec379437b50e051b251f2e1"
           ],
           "picks": [],
           "selectors": [],

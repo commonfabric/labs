@@ -97,7 +97,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/increment.tsx#default"
+            "sha256:0e008f02557cf7167ae98319570185d77c0ffabd66a2bf50e3c8594e8bea89fb"
           ],
           "picks": [],
           "selectors": [],

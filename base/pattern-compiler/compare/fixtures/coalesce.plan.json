@@ -72,7 +72,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/coalesce.tsx#default"
+            "sha256:69bf552e7156dd4302f3c8fc275be4cbd8015f049ac3e8e45ad284794c413c99"
           ],
           "picks": [],
           "selectors": [

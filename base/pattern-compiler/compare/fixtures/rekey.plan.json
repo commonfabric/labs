@@ -706,7 +706,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/rekey.tsx#default"
+            "sha256:e01c746572a5f4e8d10f7a9ab843cd7965500b9d6cb801655e2e2026010e96b6"
           ],
           "picks": [],
           "selectors": [],

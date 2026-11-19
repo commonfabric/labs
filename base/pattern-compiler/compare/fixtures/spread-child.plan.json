@@ -201,7 +201,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/spread-child.tsx#default"
+            "sha256:d03f64b558aef9e2d1f684519c567d82a5dddc6e18eb1322f784fdfabb14bfc8"
           ],
           "picks": [],
           "selectors": [],

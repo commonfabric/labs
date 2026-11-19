@@ -639,7 +639,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/key-returns.tsx#default"
+            "sha256:f33a7639206919b8c48a9ca57d71161caa1f41c7f751ce35302869cfa024abfe"
           ],
           "picks": [],
           "selectors": [],

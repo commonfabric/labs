@@ -21,7 +21,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/spread-stream.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"unhashed:pattern/compare/fixtures/spread-stream.tsx#default\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n$rt.value(2, ($h) => ([({ title: (\"first\") }), ...$h.spread($h.output(0)), ({ pick: $h.stream(0) })]));\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\n$rt.value(5, ($h) => ([...$h.spread($h.output(5)), ({ pick: $h.stream(1) })]));\n{\n$rt.element(2, ($h) => ($rt.h(\"li\", {  }, [$h.slot(9)])));\n}\n$rt.value(9, ($h) => ($rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.spread($h.slot(8)), $h.spread($h.output(10)), $rt.h(\"cf-button\", { \"onClick\": $h.stream(0) }, [\"after\"])])));\nreturn $rt.thunk(($h) => (({ rows: $h.output(3), words: $h.output(8), count: $h.slot(3), [(UI)]: $h.output(13) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"sha256:0037e62feab55dde9db77dc2b57e8dc59578a303c0239df80ec536d2ef215467\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n$rt.value(2, ($h) => ([({ title: (\"first\") }), ...$h.spread($h.output(0)), ({ pick: $h.stream(0) })]));\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\n$rt.value(5, ($h) => ([...$h.spread($h.output(5)), ({ pick: $h.stream(1) })]));\n{\n$rt.element(2, ($h) => ($rt.h(\"li\", {  }, [$h.slot(9)])));\n}\n$rt.value(9, ($h) => ($rt.h(\"ul\", {  }, [$rt.h(\"li\", {  }, [\"first\"]), $h.spread($h.slot(8)), $h.spread($h.output(10)), $rt.h(\"cf-button\", { \"onClick\": $h.stream(0) }, [\"after\"])])));\nreturn $rt.thunk(($h) => (({ rows: $h.output(3), words: $h.output(8), count: $h.slot(3), [(UI)]: $h.output(13) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -605,7 +605,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/spread-stream.tsx#default"
+            "sha256:0037e62feab55dde9db77dc2b57e8dc59578a303c0239df80ec536d2ef215467"
           ],
           "picks": [],
           "selectors": [],

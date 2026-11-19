@@ -105,7 +105,7 @@ export const P = pattern<{ secret: string }>(({ secret }) => {
 
 #[test]
 fn types_are_removed_and_the_function_of_a_pattern_is_left_out() {
-    let (_, code) = emitted(
+    let (plan, code) = emitted(
         r#"import { handler, pattern, Writable } from "commonfabric";
 interface Entry { text: string }
 type Tag = string;
@@ -134,7 +134,7 @@ export const P = pattern<{ tag: Tag }>(({ tag }) => {
     // entry of `Plan.patterns` of its own plan: a function body that
     // calls the pattern names the callee's artifact with it.
     assert!(
-        text.contains(r#"pattern("unhashed:pattern/case.tsx#P")"#),
+        text.contains(&format!("pattern({})", plan["patterns"][0])),
         "{text}"
     );
     // The handler's body is one function, called with the event and the
@@ -842,17 +842,13 @@ export default pattern<{ note: string }>(({ note }) => {
     let (plan, code) = emitted(text, "default");
     let (row, _) = emitted(text, "Row");
     let written = source(&code);
-    assert_eq!(row["patterns"][0], json!("unhashed:pattern/case.tsx#Row"));
-    assert_eq!(
-        plan["patterns"][0],
-        json!("unhashed:pattern/case.tsx#default")
-    );
+    assert_ne!(row["patterns"][0], plan["patterns"][0]);
     assert!(
-        written.contains(r#"const Row = pattern("unhashed:pattern/case.tsx#Row");"#),
+        written.contains(&format!("const Row = pattern({});", row["patterns"][0])),
         "{written}"
     );
     assert!(
-        written.contains(r#"pattern("unhashed:pattern/case.tsx#default")"#),
+        written.contains(&format!("pattern({})", plan["patterns"][0])),
         "{written}"
     );
     // The body calls the factory value by its name.

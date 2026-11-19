@@ -115,7 +115,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/reference-written.tsx#default"
+            "sha256:35ece52c77a901a3015d14f845b8cb1947a614b80a5223aebd5924400e06895d"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

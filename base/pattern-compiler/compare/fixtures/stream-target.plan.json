@@ -240,7 +240,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/stream-target.tsx#default"
+            "sha256:acbb644e55979028da6f35017fbea51e24948da6de93a2800f6549c31bde6e56"
           ],
           "picks": [],
           "selectors": [],

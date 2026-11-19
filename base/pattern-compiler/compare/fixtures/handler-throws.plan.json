@@ -150,7 +150,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/handler-throws.tsx#default"
+            "sha256:fea8ba7e57e9e3e299e83803d6cb967ed197114b81f1de31b6f5c23abe8cf530"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

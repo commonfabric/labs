@@ -54,7 +54,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/state-declared.tsx#default"
+            "sha256:948773e4bda4d0b68cf88247bcbae6ef958dcd027659385e69c0b7e933b3ee78"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

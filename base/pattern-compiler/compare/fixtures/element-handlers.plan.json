@@ -153,7 +153,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#Row"
+            "sha256:6f2e04480e4f79f8797ebddee785da96187a0bab2fc08c2241d5d657693f13da"
           ],
           "picks": [],
           "selectors": [],
@@ -835,8 +835,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#default",
-            "unhashed:pattern/compare/fixtures/element-handlers.tsx#Row"
+            "sha256:14b31d0120556e33629c51e6e7abb803905047bded025685aee059b78e50ece7",
+            "sha256:6f2e04480e4f79f8797ebddee785da96187a0bab2fc08c2241d5d657693f13da"
           ],
           "picks": [],
           "selectors": [],

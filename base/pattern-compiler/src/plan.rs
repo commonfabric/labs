@@ -20,6 +20,15 @@ use oxc_ast::AstKind;
 use oxc_span::GetSpan;
 use serde_json::{json, Map, Value};
 
+/// The content hash of a JSON value: SHA-256 over its text, keys in the
+/// order `serde_json` keeps them (sorted), written `sha256:` and hex.
+fn content_hash(value: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(value.to_string().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
 use crate::footprint::{
     bind_use, body_functions, parameter_names, BindRec, Class, HandleAt, Record, RefName, Seg,
     UseRecord, WriteRec, WriteTarget,
@@ -571,6 +580,8 @@ struct Emitter<'r, 'm, 'a> {
     pending_entries: Option<Entries>,
     /// What the value-code emitter reads of this walk (`crate::emit`).
     facts: crate::emit::Facts,
+    /// The identity of each module `module_identity` formed, by module.
+    module_identities: std::cell::RefCell<HashMap<usize, String>>,
 }
 
 /// What a host element of the rendered tree says of its surface (PL
@@ -2200,20 +2211,16 @@ impl<'a> Emitter<'_, '_, 'a> {
         self.inline_argument(home, start, name, argument, at)
     }
 
-    /// The identity of a pattern (PL §1.5): the record `{ module,
-    /// binding }`, where `binding` is the name of the `const` the
-    /// `pattern(...)` call initializes, `default` for the operand of
-    /// `export default`, and for an inline pattern the binding of the
-    /// enclosing pattern and its own position. PL has the hash of the
-    /// record there, and the module's identity in it. The crate has
-    /// neither, so the entry is a placeholder, `unhashed:pattern/`, the
-    /// path of the module, `#`, and the binding.
+    /// The identity of a pattern (PL §1.5): the hash of the record
+    /// `{ module, binding }`, where `module` is the identity of the module
+    /// the `pattern(...)` call is written in (`module_identity`) and
+    /// `binding` the path of the pattern's binding in it: the name of the
+    /// `const` the call initializes, `default` for the operand of `export
+    /// default`, and for an inline pattern the binding of the enclosing
+    /// pattern followed by its own position. It is formed from the
+    /// pattern's own module and what that module imports, so one pattern
+    /// has one identity whether it is compiled alone or into another.
     fn pattern_identity(&self, home: usize, start: u32) -> String {
-        let path = self
-            .resolver
-            .parsed(home)
-            .map(|parsed| parsed.path.clone())
-            .unwrap_or_default();
         let bodies = &self.bodies[home];
         let found = body_functions(self.resolver, home, bodies)
             .into_iter()
@@ -2239,7 +2246,60 @@ impl<'a> Emitter<'_, '_, 'a> {
         if binding.is_empty() {
             binding = "default".to_string();
         }
-        format!("unhashed:pattern/{path}#{binding}")
+        let steps: Vec<&str> = binding.split('/').collect();
+        let module = self.module_identity(home, &mut Vec::new());
+        content_hash(&json!({ "module": module, "binding": steps }))
+    }
+
+    /// The content-addressed identity of a module (PL §1.5, the `module`
+    /// of `Body.code`): the hash of its path, its source text, and the
+    /// identities of the modules of the program it imports, in the order
+    /// of its imports. A module that an import cycle reaches again while
+    /// its identity is formed contributes its path alone.
+    fn module_identity(&self, module: usize, forming: &mut Vec<usize>) -> String {
+        if let Some(known) = self.module_identities.borrow().get(&module) {
+            return known.clone();
+        }
+        let Some(parsed) = self.resolver.parsed(module) else {
+            return String::new();
+        };
+        forming.push(module);
+        let mut imports = Vec::new();
+        for import in self
+            .resolver
+            .model(module)
+            .map(|model| &model.imports[..])
+            .unwrap_or(&[])
+        {
+            let Some(target) = self.resolver.module_of(module, &import.specifier) else {
+                imports.push(json!({ "specifier": import.specifier }));
+                continue;
+            };
+            if forming.contains(&target) {
+                let path = self
+                    .resolver
+                    .parsed(target)
+                    .map(|p| p.path.clone())
+                    .unwrap_or_default();
+                imports.push(json!({ "cycle": path }));
+                continue;
+            }
+            imports.push(json!(self.module_identity(target, forming)));
+        }
+        forming.pop();
+        let identity = content_hash(&json!({
+            "path": parsed.path,
+            "source": parsed.source,
+            "imports": imports,
+        }));
+        // A module formed inside a cycle depends on where the cycle was
+        // entered, so only an identity formed outside every cycle is kept.
+        if forming.is_empty() {
+            self.module_identities
+                .borrow_mut()
+                .insert(module, identity.clone());
+        }
+        identity
     }
 
     /// The same, with the argument as the place it is bound to.
@@ -8365,6 +8425,7 @@ pub fn emit_module<'a>(
             ui_bound: Vec::new(),
             pending_entries: None,
             facts: crate::emit::Facts::new(module, *start),
+            module_identities: std::cell::RefCell::new(HashMap::new()),
         };
         // The type the pattern declares for its result: the second type
         // argument of the call that defines it.

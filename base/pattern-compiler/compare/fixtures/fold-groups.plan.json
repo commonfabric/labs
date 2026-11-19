@@ -270,7 +270,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/fold-groups.tsx#default"
+            "sha256:0878c8f5248bc91b39d114e941c12aa62df4de18ca1db012858ab407a515e789"
           ],
           "picks": [],
           "selectors": [],

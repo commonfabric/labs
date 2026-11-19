@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/cost-filter.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/cost-filter.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ((!$h.v($h.slot(1)))));\n}\nreturn $rt.thunk(($h) => (({ open: $h.output(0) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\"sha256:8bfa476ce244dd13122074983ecb8c26deff53b41c419a417808e13d4175c172\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ((!$h.v($h.slot(1)))));\n}\nreturn $rt.thunk(($h) => (({ open: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -111,7 +111,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/cost-filter.tsx#default"
+            "sha256:8bfa476ce244dd13122074983ecb8c26deff53b41c419a417808e13d4175c172"
           ],
           "picks": [],
           "selectors": [],

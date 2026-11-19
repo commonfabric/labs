@@ -3344,47 +3344,55 @@ fn a_plan_lists_the_pattern_it_is_compiled_from_and_each_pattern_compiled_in() {
     // others are the patterns compiled into it under a `site` step, each
     // once". §1.5: the record `{ module, binding }`, with `binding` "the
     // name of the `const` the call initializes; `default` for a call that
-    // is the operand of `export default`". The crate has no hash, so an
-    // entry is a placeholder that holds the two members.
-    let plan = plan_of(&program(COMPILED_IN), "Outer");
-    assert_eq!(
-        plan["patterns"],
-        json!([
-            "unhashed:pattern/case.tsx#Outer",
-            "unhashed:pattern/case.tsx#Row"
-        ])
-    );
-    let analysis = analyze(&[
-        SourceFile {
-            path: "row.tsx".to_string(),
-            text: r#"import { pattern } from "commonfabric";
+    // is the operand of `export default`", hashed, with the identity of
+    // the module in it. A pattern has one identity in every plan that
+    // holds its code: the entry of a pattern compiled in is the entry 0 of
+    // that pattern's own plan.
+    let analysis = program(COMPILED_IN);
+    let plan = plan_of(&analysis, "Outer");
+    let patterns = plan["patterns"].as_array().expect("patterns");
+    assert_eq!(patterns.len(), 2, "{plan}");
+    assert!(patterns
+        .iter()
+        .all(|entry| entry.as_str().is_some_and(|e| e.starts_with("sha256:"))));
+    assert_ne!(patterns[0], patterns[1]);
+    assert_eq!(patterns[1], plan_of(&analysis, "Row")["patterns"][0]);
+    let row = r#"import { pattern } from "commonfabric";
 export default pattern<{ title: string }>(({ title }) => {
   return { shout: title + "!" };
 });
-"#
-            .to_string(),
-        },
-        SourceFile {
-            path: "outer.tsx".to_string(),
-            text: r#"import { pattern } from "commonfabric";
+"#;
+    let outer = r#"import { pattern } from "commonfabric";
 import Row from "./row.tsx";
 export const Outer = pattern<{ title: string }>(({ title }) => {
   const first = Row({ title });
   const second = Row({ title });
   return { first, second };
 });
-"#
-            .to_string(),
-        },
-    ]);
-    let plan = plan_of(&analysis, "Outer");
-    assert_eq!(
-        plan["patterns"],
-        json!([
-            "unhashed:pattern/outer.tsx#Outer",
-            "unhashed:pattern/row.tsx#default"
+"#;
+    let files = |row: &str| {
+        analyze(&[
+            SourceFile {
+                path: "row.tsx".to_string(),
+                text: row.to_string(),
+            },
+            SourceFile {
+                path: "outer.tsx".to_string(),
+                text: outer.to_string(),
+            },
         ])
-    );
+    };
+    let analysis = files(row);
+    let plan = plan_of(&analysis, "Outer");
+    let alone = plan_of(&analysis, "default");
+    assert_eq!(plan["patterns"][1], alone["patterns"][0]);
+    assert_ne!(plan["patterns"][0], plan["patterns"][1]);
+    // A change of the callee's module changes the callee's identity and
+    // that of every module that imports it.
+    let changed = files(&row.replace("\"!\"", "\"?\""));
+    let replan = plan_of(&changed, "Outer");
+    assert_ne!(replan["patterns"][1], plan["patterns"][1]);
+    assert_ne!(replan["patterns"][0], plan["patterns"][0]);
 }
 
 #[test]
@@ -3988,7 +3996,13 @@ export const P = pattern<{ items: Item[]; first: Item }>(({ items, first }) => {
             )
         })
         .collect();
-    let callee = r#"{"compiled":"unhashed:pattern/case.tsx#Row"}"#.to_string();
+    let row = analysis
+        .modules
+        .iter()
+        .flat_map(|module| &module.plans)
+        .find(|plan| plan.name.as_deref() == Some("Row"))
+        .expect("the plan of `Row`");
+    let callee = json!({ "compiled": row.plan["patterns"][0] }).to_string();
     assert_eq!(
         children,
         [

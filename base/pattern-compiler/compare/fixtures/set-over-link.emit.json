@@ -25,7 +25,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/set-over-link.tsx",
-              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { first, picked }) => {\n  picked.set(first);\n});\nconst star = handler((_, { picked }) => {\n  picked.key(\"stars\").set(9);\n});\nconst replace = handler(\n  (_, { picked }) => {\n    picked.set({ title: \"plain\", stars: 0 });\n  },\n);\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/set-over-link.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.slot(0)));\n$rt.value(1, ($h) => ($h.slot(1)));\nreturn $rt.thunk(($h) => (({ firstTitle: $h.slot(9), firstStars: $h.slot(8), pickedTitle: $h.output(0), pickedStars: $h.output(1), pick: $h.stream(0), star: $h.stream(1), replace: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { first, picked }) => {\n  picked.set(first);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { picked }) => {\n  picked.key(\"stars\").set(9);\n})($e, $s));\n$rt.body(2, ($e, $s) => ((_, { picked }) => {\n    picked.set({ title: \"plain\", stars: 0 });\n  })($e, $s));"
+              "source": "const { \"computed\": computed, \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst pick = handler((_, { first, picked }) => {\n  picked.set(first);\n});\nconst star = handler((_, { picked }) => {\n  picked.key(\"stars\").set(9);\n});\nconst replace = handler(\n  (_, { picked }) => {\n    picked.set({ title: \"plain\", stars: 0 });\n  },\n);\nconst $default = (pattern(\"sha256:bd27654a97f591c5caadeb6abe8ea1f498a33d7be19799c44e32cf384030eb39\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.slot(0)));\n$rt.value(1, ($h) => ($h.slot(1)));\nreturn $rt.thunk(($h) => (({ firstTitle: $h.slot(9), firstStars: $h.slot(8), pickedTitle: $h.output(0), pickedStars: $h.output(1), pick: $h.stream(0), star: $h.stream(1), replace: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { first, picked }) => {\n  picked.set(first);\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_, { picked }) => {\n  picked.key(\"stars\").set(9);\n})($e, $s));\n$rt.body(2, ($e, $s) => ((_, { picked }) => {\n    picked.set({ title: \"plain\", stars: 0 });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -399,7 +399,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/set-over-link.tsx#default"
+            "sha256:bd27654a97f591c5caadeb6abe8ea1f498a33d7be19799c44e32cf384030eb39"
           ],
           "picks": [],
           "selectors": [],

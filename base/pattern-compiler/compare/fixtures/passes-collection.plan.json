@@ -345,7 +345,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/passes-collection.tsx#default"
+            "sha256:3adc108c30acdfa70fbd06d7ba6aba8641dd0352c9f1095040bc3497955bc447"
           ],
           "picks": [],
           "selectors": [],

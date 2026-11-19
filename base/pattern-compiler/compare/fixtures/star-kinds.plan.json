@@ -177,7 +177,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/star-kinds.tsx#Story"
+            "sha256:7eeaeebc6081d5a61ecae1555ff91f189cbb0e9fcc8874fa90eac1a0b504b74c"
           ],
           "picks": [],
           "selectors": [],
@@ -1639,8 +1639,8 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/star-kinds.tsx#default",
-            "unhashed:pattern/compare/fixtures/star-kinds.tsx#Story"
+            "sha256:bbf2387005101bd751f6173ee07f49bbdcb6d81c59cfc7eb63e3f0ebdd558da1",
+            "sha256:7eeaeebc6081d5a61ecae1555ff91f189cbb0e9fcc8874fa90eac1a0b504b74c"
           ],
           "picks": [],
           "selectors": [],

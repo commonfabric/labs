@@ -21,7 +21,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/link-cycle.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst keep = handler((_event, { center, area }) => {\n  area.set({ center: center.get() });\n});\nconst go = handler(\n  (_event, { center, area }) => {\n    center.set(area.center);\n  },\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/link-cycle.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ center: $h.slot(3), area: $h.slot(2), keep: $h.stream(0), go: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { center, area }) => {\n  area.set({ center: center.get() });\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_event, { center, area }) => {\n    center.set(area.center);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst keep = handler((_event, { center, area }) => {\n  area.set({ center: center.get() });\n});\nconst go = handler(\n  (_event, { center, area }) => {\n    center.set(area.center);\n  },\n);\n\nconst $default = (pattern(\"sha256:91a2578672a26b25974554e8e138ff422b307da3e613623832b0c6e5007135f9\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ center: $h.slot(3), area: $h.slot(2), keep: $h.stream(0), go: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { center, area }) => {\n  area.set({ center: center.get() });\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_event, { center, area }) => {\n    center.set(area.center);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -293,7 +293,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/link-cycle.tsx#default"
+            "sha256:91a2578672a26b25974554e8e138ff422b307da3e613623832b0c6e5007135f9"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

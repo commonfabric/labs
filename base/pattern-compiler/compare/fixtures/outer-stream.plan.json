@@ -287,7 +287,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/outer-stream.tsx#default"
+            "sha256:2d67c06ca8eebbc908d0e3fcc26a0b14ba455bad872a047ce53126a78ac9e104"
           ],
           "picks": [],
           "selectors": [

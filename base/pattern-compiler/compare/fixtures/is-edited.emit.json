@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/is-edited.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/is-edited.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => (((() => {\n    const record = $h.v($h.slot(0));\n    return $h.v(($h.select(0, ($h.v($h.slot(1)) !== (undefined))) && ((typeof $h.v($h.slot(2))) === (\"string\"))));\n  })())));\nreturn $rt.thunk(($h) => (({ isEdited: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:94ee4fe31216016574a2cb24b1148052280a011f122f8b12ec190a9e73f0bac7\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(3, ($h) => (((() => {\n    const record = $h.v($h.slot(0));\n    return $h.v(($h.select(0, ($h.v($h.slot(1)) !== (undefined))) && ((typeof $h.v($h.slot(2))) === (\"string\"))));\n  })())));\nreturn $rt.thunk(($h) => (({ isEdited: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -109,7 +109,7 @@
             }
           ],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/is-edited.tsx#default"
+            "sha256:94ee4fe31216016574a2cb24b1148052280a011f122f8b12ec190a9e73f0bac7"
           ],
           "picks": [],
           "selectors": [

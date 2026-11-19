@@ -21,7 +21,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/declared-writes.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst { \"exchangeRules\": exchangeRules } = $rt.external(\"commonfabric/cfc\");\nconst rules = exchangeRules([]);\n\n\n\nconst overwrite = handler((_event, { mine }) => {\n  mine.set(\"written\");\n});\nconst seal = handler(\n  (_event, { sealed }) => {\n    sealed.push({ text: \"sealed\" });\n  },\n);\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/declared-writes.tsx#default\"));\nObject.defineProperty($exports, \"rules\", { enumerable: true, get: () => rules });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ overwrite: $h.stream(0), seal: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine }) => {\n  mine.set(\"written\");\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_event, { sealed }) => {\n    sealed.push({ text: \"sealed\" });\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst { \"exchangeRules\": exchangeRules } = $rt.external(\"commonfabric/cfc\");\nconst rules = exchangeRules([]);\n\n\n\nconst overwrite = handler((_event, { mine }) => {\n  mine.set(\"written\");\n});\nconst seal = handler(\n  (_event, { sealed }) => {\n    sealed.push({ text: \"sealed\" });\n  },\n);\n\nconst $default = (pattern(\"sha256:567f168a55cdfbb82fe31803e879ee491cc2c3a033c0b39b493b123c7f407bdb\"));\nObject.defineProperty($exports, \"rules\", { enumerable: true, get: () => rules });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ overwrite: $h.stream(0), seal: $h.stream(1) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { mine }) => {\n  mine.set(\"written\");\n})($e, $s));\n$rt.body(1, ($e, $s) => ((_event, { sealed }) => {\n    sealed.push({ text: \"sealed\" });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -188,7 +188,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "unhashed:pattern/compare/fixtures/declared-writes.tsx#default"
+            "sha256:567f168a55cdfbb82fe31803e879ee491cc2c3a033c0b39b493b123c7f407bdb"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
