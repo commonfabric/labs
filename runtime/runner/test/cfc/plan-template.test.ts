@@ -428,6 +428,24 @@ describe("instantiateTemplate()", () => {
 
 describe("LabelTable", () => {
   describe("instance members", () => {
+    describe("trim()", () => {
+      it("empties a table over its limit, keeping `empty` and the identifiers of labels interned again", () => {
+        const table = new LabelTable();
+        const a = table.intern({ confidentiality: ["a"] });
+        table.intern({ confidentiality: ["b"] });
+        table.trim(10);
+        expect(table.size).toBe(3);
+        table.trim(2);
+        expect(table.size).toBe(1);
+        expect(table.intern({}).id).toBe(table.empty.id);
+        expect(table.intern({ confidentiality: ["a"] }).id).toBe(a.id);
+        expect(
+          table.combine([table.intern({ confidentiality: ["a"] })]).label.id,
+        )
+          .toBe(a.id);
+      });
+    });
+
     describe("intern()", () => {
       it("returns one object for labels equal up to order and repetition", () => {
         const table = new LabelTable();

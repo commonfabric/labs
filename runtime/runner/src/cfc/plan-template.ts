@@ -238,7 +238,7 @@ export class TemplateInstantiationError extends Error {
  */
 export class LabelTable {
   readonly #byId = new Map<string, InternedLabel>();
-  readonly #byObject = new WeakMap<object, InternedLabel>();
+  #byObject = new WeakMap<object, InternedLabel>();
   readonly #memo = new Map<string, unknown>();
   #work: TemplateWork | undefined;
 
@@ -252,6 +252,22 @@ export class LabelTable {
   /** The number of distinct labels interned. */
   get size(): number {
     return this.#byId.size;
+  }
+
+  /**
+   * Empties the table where it holds more than `limit` labels and memoized
+   * results together, keeping `empty`. Labels interned before stay valid
+   * objects and keep their identifiers, but a label interned again is
+   * another object, so a caller trims only where it holds no interned label
+   * it will pass back: at the start of a pass.
+   */
+  trim(limit: number): void {
+    if (this.#byId.size + this.#memo.size <= limit) return;
+    this.#byId.clear();
+    this.#byObject = new WeakMap();
+    this.#memo.clear();
+    this.#atoms.clear();
+    this.#byId.set(this.empty.id, this.empty);
   }
 
   /**

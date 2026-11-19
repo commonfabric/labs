@@ -211,6 +211,7 @@ import {
   planLabelPathKey,
   type PlanLabels,
 } from "./plan-labels.ts";
+import type { InternedLabel, LabelTable } from "./plan-template.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
@@ -4612,6 +4613,108 @@ const forEachFlowObservation = (
 export type PlanWriteInput = Extract<WritePolicyInput, { kind: "plan-write" }>;
 
 /**
+ * `paths`, covered paths below a path written whole, with the elements of
+ * an array collapsed into its `*` path where every element of the array is
+ * among them and all have one label: the stored labels then hold one entry
+ * for the array's elements and not one per element. `labelOf` gives a
+ * covered path's label, `valueAt` the value written at a path, and
+ * `collapsed` hears of each `*` path and its label.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+// Equal labels of a kept per-element output's elements are stored as one
+// entry at the output's `*` path, behind `compiledPatterns`.
+export const collapseEqualElements = (
+  paths: readonly (readonly string[])[],
+  labelOf: (path: readonly string[]) => InternedLabel | undefined,
+  valueAt: (path: readonly string[]) => unknown,
+  collapsed: (path: readonly string[], label: InternedLabel) => void,
+): (readonly string[])[] => {
+  const result: (readonly string[])[] = [];
+  const byParent = new Map<
+    string,
+    { parent: readonly string[]; elements: (readonly string[])[] }
+  >();
+  for (const path of paths) {
+    const last = path[path.length - 1];
+    if (!/^(0|[1-9][0-9]*)$/.test(last)) {
+      result.push(path);
+      continue;
+    }
+    const parent = path.slice(0, -1);
+    const key = pathKey(parent);
+    const group = byParent.get(key) ?? { parent, elements: [] };
+    group.elements.push(path);
+    byParent.set(key, group);
+  }
+  for (const { parent, elements } of byParent.values()) {
+    const value = valueAt(parent);
+    const ids = new Set(elements.map((path) => labelOf(path)?.id));
+    const label = labelOf(elements[0]);
+    if (
+      elements.length > 1 && Array.isArray(value) &&
+      value.length === elements.length && ids.size === 1 &&
+      label !== undefined
+    ) {
+      const star = [...parent, "*"];
+      collapsed(star, label);
+      result.push(star);
+    } else {
+      for (const path of elements) result.push(path);
+    }
+  }
+  return result;
+};
+
+/**
+ * Whether the stored labels hold, at the `*` path of the array an element
+ * at `path` is in, a derived value entry equal to `label`.
+ */
+const starEntryHolds = (
+  existing: CfcMetadata | undefined,
+  path: readonly string[],
+  label: {
+    readonly confidentiality: readonly CfcConfClause[];
+    readonly integrity: readonly CfcAtom[];
+  },
+  table: LabelTable,
+): boolean => {
+  const last = path[path.length - 1];
+  if (existing === undefined || !/^(0|[1-9][0-9]*)$/.test(last ?? "")) {
+    return false;
+  }
+  const star = pathKey([...path.slice(0, -1), "*"]);
+  const id = table.intern({
+    confidentiality: [...label.confidentiality],
+    integrity: [...label.integrity],
+  }).id;
+  return existing.labelMap.entries.some((entry) =>
+    entry.origin === "derived" && entry.observes === "value" &&
+    pathKey(entry.path) === star && table.intern(entry.label).id === id
+  );
+};
+
+/**
+ * The value at `path` of what a transaction wrote, from the values it wrote
+ * at each path (`valuesByPath`, by path key), or `undefined` where no
+ * written path is at or above it.
+ */
+const writtenValueAt = (
+  valuesByPath: ReadonlyMap<string, unknown> | undefined,
+  path: readonly string[],
+): unknown => {
+  for (let length = path.length; length >= 0; length--) {
+    if (valuesByPath?.has(pathKey(path.slice(0, length))) !== true) continue;
+    let value = valuesByPath.get(pathKey(path.slice(0, length)));
+    for (const segment of path.slice(length)) {
+      if (typeof value !== "object" || value === null) return undefined;
+      value = (value as Record<string, unknown>)[segment];
+    }
+    return value;
+  }
+  return undefined;
+};
+
+/**
  * The `plan-write` inputs the preparation honors, by the document each
  * targets: those recorded with the runtime's mark, for a compiled pattern the
  * runtime registered, on a transaction with the experimental option
@@ -4941,8 +5044,9 @@ export const observationLabelResolverFor = (
 /**
  * Instantiates the labels of the paths the honored `plan-write` inputs of
  * `tx` cover (`instantiatePlanLabels`), against `join`, the transaction's
- * flow join. Returns no labels and no reasons when no input is honored, which
- * is always the case with the experimental option `compiledPatterns` off.
+ * flow join, with `resolver`, the join's own where the caller has it. Returns
+ * no labels and no reasons when no input is honored, which is always the case
+ * with the experimental option `compiledPatterns` off.
  */
 export const planLabelsFor = (
   tx: IExtendedStorageTransaction,
@@ -4950,6 +5054,7 @@ export const planLabelsFor = (
     readonly confidentiality: readonly CfcConfClause[];
     readonly integrity: readonly CfcAtom[];
   },
+  resolver?: ObservationLabelResolver,
 ): PlanLabels => {
   const writes = planWritesByTarget(tx);
   if (writes.size === 0) {
@@ -5002,7 +5107,7 @@ export const planLabelsFor = (
     });
   return instantiatePlanLabels(writes, {
     registry,
-    resolver: observationLabelResolverFor(tx),
+    resolver: resolver ?? observationLabelResolverFor(tx),
     join,
     noteWork: (kind, count) => tx.noteCfcPreparationWork?.(kind, count),
     wrote: (address) => {
@@ -5089,6 +5194,13 @@ const deriveFlowJoinImpl = (
      * whenever they happened, which over-taints.
      */
     journalBefore?: number;
+
+    /**
+     * The resolver to resolve the label of each observation with, where the
+     * caller resolves more labels of the same transaction in the same pass;
+     * a new one otherwise.
+     */
+    resolver?: ObservationLabelResolver;
   },
 ): {
   confidentiality: CfcConfClause[];
@@ -5176,7 +5288,7 @@ const deriveFlowJoinImpl = (
     });
   };
   // Each pass owns its snapshots: prepare can run again after metadata writes.
-  const resolver = observationLabelResolverFor(tx);
+  const resolver = options?.resolver ?? observationLabelResolverFor(tx);
   // What the join keeps per document beside the labels the resolver
   // resolves, by the resolver's label keys.
   const extrasByDoc = new Map<string, {
@@ -12308,6 +12420,11 @@ export function* prepareBoundaryCommitSteps(
   // write ceiling (§8.12.4, enforcement-matrix §4).
   const writerFitRejects = cfcEnforcementStrictness(state.enforcementMode) >=
     cfcEnforcementStrictness("enforce-strict");
+  // One resolver serves the join and the labels of covered paths, which read
+  // the same observations of the same state.
+  const flowResolver = flowMode === "off"
+    ? undefined
+    : observationLabelResolverFor(tx);
   const flowJoin: ReturnType<typeof deriveFlowJoin> = flowMode === "off"
     ? {
       confidentiality: [],
@@ -12324,6 +12441,7 @@ export function* prepareBoundaryCommitSteps(
       // when a write is refused; persist-and-flag diagnostics need only the
       // atoms.
       collectSources: writerFitRejects,
+      resolver: flowResolver,
     });
   const flowConfidentiality = flowJoin.confidentiality;
   // The join's own sources, and not the egress collector's: that one counts
@@ -12350,14 +12468,20 @@ export function* prepareBoundaryCommitSteps(
   // instantiated from the plan's templates (`planLabelsFor`). Empty, and
   // computed from nothing, with the experimental option `compiledPatterns`
   // off.
-  const planLabels = flowPersist
-    ? planLabelsFor(tx, flowJoin)
+  const planLabels: PlanLabels = flowPersist
+    ? planLabelsFor(tx, flowJoin, flowResolver)
     : { byTarget: new Map(), paths: new Map(), reasons: [] };
   for (const reason of planLabels.reasons) reasons.push(reason);
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
   // The label stamped at a path a compiled pattern's write covers is the
   // label instantiated from its template, a subset of the join; every other
   // path keeps the join. Behind `compiledPatterns`, which defaults off.
+  // The label of the `*` path of an array whose elements' covered labels
+  // were all one (`collapseEqualElements`), by document key and path key.
+  const collapsedLabels = new Map<string, Map<string, InternedLabel>>();
+  const planLabelTable = planLabels.byTarget.size === 0
+    ? undefined
+    : tx.compiledPlans(runtimeWritePolicyAuthorization)?.labels;
   const flowLabelAt = (
     key: string,
     path: readonly string[],
@@ -12366,6 +12490,7 @@ export function* prepareBoundaryCommitSteps(
     readonly integrity: readonly CfcAtom[];
   } =>
     planLabels.byTarget.get(key)?.get(planLabelPathKey(path)) ??
+      collapsedLabels.get(key)?.get(planLabelPathKey(path)) ??
       { confidentiality: flowConfidentiality, integrity: flowIntegrity };
   // A build-decided result wiring's membership is stamped from what the
   // transaction had read when its setup began, the trigger reads among it
@@ -13744,14 +13869,28 @@ export function* prepareBoundaryCommitSteps(
         const stamped = new PathPrefixIndex();
         for (const path of derivedStampPaths) stamped.add(path);
         const seen = new Set(derivedStampPaths.map(pathKey));
-        for (const path of planLabels.paths.get(key) ?? []) {
-          if (
-            path.length > 0 && !seen.has(pathKey(path)) &&
-            stamped.hasPrefixOf(path.slice(0, -1))
-          ) {
-            seen.add(pathKey(path));
-            derivedStampPaths.push(path);
-          }
+        const below = (planLabels.paths.get(key) ?? []).filter((path) =>
+          path.length > 0 && !seen.has(pathKey(path)) &&
+          stamped.hasPrefixOf(path.slice(0, -1))
+        );
+        for (
+          const path of collapseEqualElements(
+            below,
+            (path) => planLabels.byTarget.get(key)?.get(planLabelPathKey(path)),
+            (path) => writtenValueAt(flowWrittenValues, path),
+            (path, label) => {
+              let labels = collapsedLabels.get(key);
+              if (labels === undefined) {
+                labels = new Map();
+                collapsedLabels.set(key, labels);
+              }
+              labels.set(planLabelPathKey(path), label);
+            },
+          )
+        ) {
+          if (seen.has(pathKey(path))) continue;
+          seen.add(pathKey(path));
+          derivedStampPaths.push(path);
         }
       }
       // H4 writer-fit (SC-18b, §8.12.4 `canWrite`): the per-tx join landing
@@ -14154,8 +14293,17 @@ export function* prepareBoundaryCommitSteps(
         // A covered path stores its entries even where its label is empty,
         // so that they replace a written ancestor's join down there.
         const coveredPath = planLabels.byTarget.get(key)?.has(
-          planLabelPathKey(path),
-        ) === true;
+              planLabelPathKey(path),
+            ) === true ||
+          collapsedLabels.get(key)?.has(planLabelPathKey(path)) === true;
+        // An element whose label equals the stored entry at its array's
+        // `*` path keeps that one entry.
+        if (
+          coveredPath && planLabelTable !== undefined &&
+          starEntryHolds(existing, path, pathLabel, planLabelTable)
+        ) {
+          continue;
+        }
         if (
           pathLabel.confidentiality.length > 0 ||
           pathLabel.integrity.length > 0 || coveredPath

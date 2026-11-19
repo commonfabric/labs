@@ -18,7 +18,7 @@ import {
 /**
  * The part of a compiled pattern's plan the commit preparation reads: the
  * label templates of its outputs and write edges, its template table, and
- * the membership template of each collection. The plan carries more; the
+ * the membership template and source of each collection. The plan carries more; the
  * whole plan is what its identity hashes.
  */
 export interface CompiledPlan {
@@ -33,7 +33,14 @@ export interface CompiledPlan {
     readonly writes: readonly { readonly template: Template }[];
   }[];
   readonly templates: readonly Template[];
-  readonly collections: readonly { readonly membership: Template }[];
+  readonly collections: readonly {
+    readonly membership: Template;
+    /** What the collection iterates: a slot, or another collection. */
+    readonly source?: {
+      readonly slot?: number;
+      readonly collection?: number;
+    };
+  }[];
   readonly stateCells: readonly {
     readonly first?: { readonly cone: number; readonly write: number };
   }[];

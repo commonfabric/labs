@@ -25,6 +25,7 @@ import {
   type CfcAddress,
   type PlanElements,
   runtimeWritePolicyAuthorization,
+  type SlotBindings,
   type WritePolicyInput,
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -45,8 +46,10 @@ const space = signer.did();
 /**
  * A plan with one body whose write edges take slot 0, slot 1, slot 2 (bound
  * to a staged label in the cases that use it), a selection between slots 0
- * and 1 on slot 2, a fold of slot 3 over the elements of collection 0, and
- * a constant; and one output, of slot 0.
+ * and 1 on slot 2, a fold of slot 3 over the elements of collection 0, a
+ * constant, and a fold of slot 3 over the elements of collection 1, a
+ * `filter` over slot 0 whose membership template is that fold; and one
+ * output, of slot 0.
  */
 const plan: CompiledPlan = {
   outputs: [{ template: { op: "slot", slot: 0 } }],
@@ -71,11 +74,28 @@ const plan: CompiledPlan = {
         },
       },
       { template: { op: "const" } },
+      {
+        template: {
+          op: "fold",
+          collection: 1,
+          body: { op: "slot", slot: 3 },
+        },
+      },
     ],
   }],
   cones: [],
   templates: [],
-  collections: [{ membership: { op: "const" } }],
+  collections: [
+    { membership: { op: "const" } },
+    {
+      membership: {
+        op: "fold",
+        collection: 1,
+        body: { op: "slot", slot: 3 },
+      },
+      source: { slot: 0 },
+    },
+  ],
   stateCells: [],
 };
 
@@ -486,7 +506,7 @@ describe("cfc-plan-labels", () => {
         target: CfcAddress,
         runtime: Runtime,
       ) => void,
-      writeRoot = false,
+      writeRoot: boolean | FabricValue = false,
     ) => {
       let outcome:
         | {
@@ -543,12 +563,11 @@ describe("cfc-plan-labels", () => {
         tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
         tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
         const cell = runtime.getCell(space, "plan-target", undefined, tx);
-        if (writeRoot) {
-          tx.writeValueOrThrow({ ...link, path: [] }, {
-            a: "x",
-            b: "y",
-            c: "z",
-          });
+        if (writeRoot !== false) {
+          tx.writeValueOrThrow(
+            { ...link, path: [] },
+            writeRoot === true ? { a: "x", b: "y", c: "z" } : writeRoot,
+          );
         } else {
           cell.key("a").set("x");
           cell.key("b").set("y");
@@ -642,6 +661,50 @@ describe("cfc-plan-labels", () => {
       expect(shape["/b"]).toEqual(["secret-b"]);
     });
 
+    /** Records body 0's write `write` at `items/<index>` for each source. */
+    const recordItems = (sources: readonly string[]) =>
+    (
+      tx: IExtendedStorageTransaction,
+      identity: string,
+      target: CfcAddress,
+    ) => {
+      sources.forEach((name, index) => {
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: ["items", String(index)] },
+            0,
+            address(`of:src-${name}`),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+      });
+    };
+
+    it("stores one entry at `*` for the elements of an array written whole whose covered labels are equal", async () => {
+      const { error, value, shape } = await commitWrites(
+        true,
+        recordItems(["a", "a", "a"]),
+        { items: ["x", "y", "z"] },
+      );
+      expect(error).toBeUndefined();
+      expect(value["/items/*"]).toEqual(["secret-a"]);
+      expect(shape["/items/*"]).toEqual(["secret-a"]);
+      expect(Object.keys(value).filter((path) => /\/\d+$/.test(path)))
+        .toEqual([]);
+    });
+
+    it("stores an entry per element where the covered labels of the elements differ", async () => {
+      const { error, value } = await commitWrites(
+        true,
+        recordItems(["a", "b", "a"]),
+        { items: ["x", "y", "z"] },
+      );
+      expect(error).toBeUndefined();
+      expect(value["/items/*"]).toBeUndefined();
+      expect(value["/items/1"]).toEqual(["secret-b"]);
+    });
+
     it("stores the transaction's join on both paths with the option off", async () => {
       const { error, value } = await commitWrites(false, recordBoth);
       expect(error).toBeUndefined();
@@ -709,6 +772,10 @@ describe("cfc-plan-labels", () => {
     const foldCounters = async (
       size: number,
       elements: (list: string, last: string) => PlanElements,
+      over: { write: number; collection: number; slots?: SlotBindings } = {
+        write: 4,
+        collection: 0,
+      },
     ) => {
       let counters: Record<string, number> = {};
       await withRuntime(true, async (runtime) => {
@@ -765,11 +832,11 @@ describe("cfc-plan-labels", () => {
               kind: "plan-write",
               target: { space, id: link.id, scope: "space", path: ["total"] },
               compiledPattern: identity,
-              record: { body: 0, write: 4 },
+              record: { body: 0, write: over.write },
               instance: link.id,
               keys: [],
-              slots: {},
-              elements: { 0: elements(list, last) },
+              slots: over.slots ?? {},
+              elements: { [over.collection]: elements(list, last) },
             },
             runtimeWritePolicyAuthorization,
           );
@@ -844,6 +911,32 @@ describe("cfc-plan-labels", () => {
       const small = await foldCounters(10, groups(10));
       expect(small.planTemplatesInstantiated).toBeGreaterThan(0);
       expect(await foldCounters(1000, groups(1000))).toEqual(small);
+    });
+
+    it("takes as the membership of a filter, whose membership template is its own fold, the label of its source", async () => {
+      // The membership a `filter` iterates is its source's, slot 0 here,
+      // bound to `of:src-a`.
+      const counters = await foldCounters(
+        10,
+        (list) => ({
+          uniform: {
+            slots: {
+              3: {
+                chain: [address(list, ["items", "*"])],
+                observes: "value",
+              },
+            },
+          },
+        }),
+        {
+          write: 6,
+          collection: 1,
+          slots: {
+            0: { chain: [address("of:src-a")], observes: "value" },
+          },
+        },
+      );
+      expect(counters.planTemplatesInstantiated).toBeGreaterThan(0);
     });
 
     it("takes for a slot bound to an output the label of that output, from the inputs its group reports", async () => {

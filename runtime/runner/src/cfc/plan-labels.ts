@@ -58,6 +58,12 @@ import {
 } from "./types.ts";
 import { verdictReason } from "./verdict-reason.ts";
 
+/**
+ * The number of labels and memoized results the runtime's label table holds
+ * at most at the start of a pre-pass.
+ */
+export const LABEL_TABLE_LIMIT = 100_000;
+
 /** A `plan-write` write-policy input. */
 type PlanWriteInput = Extract<WritePolicyInput, { kind: "plan-write" }>;
 
@@ -153,6 +159,9 @@ export const instantiatePlanLabels = (
   env: PlanLabelEnvironment,
 ): PlanLabels => {
   const table = env.registry.labels;
+  // The table keeps what it interned across transactions; a pass holds none
+  // of it before it starts, so it bounds the table there.
+  table.trim(LABEL_TABLE_LIMIT);
   const work = emptyTemplateWork();
   let bounds = 0;
   const reasons: string[] = [];
@@ -384,13 +393,28 @@ export const instantiatePlanLabels = (
       membership: (collection) => {
         let label = memberships.get(collection);
         if (label === undefined) {
-          const template = plan.collections[collection]?.membership;
-          if (template === undefined) {
+          const record = plan.collections[collection];
+          if (record === undefined) {
             throw new TemplateInstantiationError(
               `collection ${collection} is not in the plan`,
             );
           }
-          const result = instantiateTemplate(template, self, table, work);
+          // The membership template of a `filter` is the fold that decides
+          // which elements it keeps, over its own elements; the membership
+          // it iterates is that of its source.
+          const source = record.source;
+          const result = !isFoldOver(record.membership, collection, plan)
+            ? instantiateTemplate(record.membership, self, table, work)
+            : source?.collection !== undefined
+            ? self.membership(source.collection)
+            : source?.slot !== undefined
+            ? self.slotLabel(source.slot)
+            : undefined;
+          if (result === undefined) {
+            throw new TemplateInstantiationError(
+              `collection ${collection} iterates no source`,
+            );
+          }
           label = result === NEUTRAL ? table.empty : result;
           memberships.set(collection, label);
         }
@@ -591,6 +615,18 @@ const templateOf = (
     throw new PlanLabelError("a plan-write names a record the plan lacks");
   }
   return found;
+};
+
+/** Whether `template`, with `shared` expanded, is a fold over `collection`. */
+const isFoldOver = (
+  template: Template,
+  collection: number,
+  plan: CompiledPlan,
+): boolean => {
+  const expanded = template.op === "shared"
+    ? plan.templates[template.template]
+    : template;
+  return expanded?.op === "fold" && expanded.collection === collection;
 };
 
 /** The content key of a place's inputs. */
