@@ -356,8 +356,7 @@ const EDGES_SQL = `
   JOIN topics s ON s.member_cf_link = e.source_cf_link
   JOIN topics t ON t.member_cf_link = e.target_cf_link
   WHERE e.source_cf_link <> e.target_cf_link
-  ORDER BY s.shortName IS NOT NULL, CAST(s.shortName AS INTEGER), s.createdAt,
-    s.member_cf_link`;
+  ORDER BY s.shortName IS NULL, CAST(s.shortName AS INTEGER), s.rowid`;
 
 /** A row of `EDGES_SQL`. */
 interface EdgeRow {
@@ -404,16 +403,18 @@ export function crossrefIndexOf(
 }
 
 /**
- * Every topic of the board, in filing order: unnumbered topics by when they
- * were filed, then numbered topics by number. A number is allocated densely
- * at filing, so it is the filing order of every topic that has one.
+ * Every topic of the board, in filing order: numbered topics by number, then
+ * unnumbered topics in the order they joined the collection. A number is
+ * allocated densely at filing, so it is the filing order of every topic that
+ * has one. A topic `addTopic` has just created has no mirrored number until
+ * it has been set up, and for that moment it sorts last, where its number
+ * will put it.
  */
 const MEMBERS_SQL = `
   SELECT member_cf_link AS topic, member_cf_link AS key,
     COALESCE(title, '') AS title, COALESCE(shortName, '') AS shortName
   FROM topics
-  ORDER BY shortName IS NOT NULL, CAST(shortName AS INTEGER), createdAt,
-    member_cf_link`;
+  ORDER BY shortName IS NULL, CAST(shortName AS INTEGER), rowid`;
 
 /** A row of `CARDS_SQL`: one topic's mirrored scalars and its reference. */
 export interface CardSource {
