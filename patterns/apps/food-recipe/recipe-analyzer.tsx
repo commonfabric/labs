@@ -33,8 +33,8 @@ import {
 
 /**
  * Named rather than left to the default: the default generateObject model
- * rejects the schemas the runtime derives with HTTP 400 (top/3114). Haiku
- * 4.5 reads images, which extraction needs. Drop this once top/3114 is fixed.
+ * rejects the schemas the runtime derives with HTTP 400 (top/3114). Drop
+ * this once top/3114 is fixed.
  */
 const STRUCTURED_MODEL = "anthropic:claude-haiku-4-5";
 
@@ -127,17 +127,17 @@ const styles = {
   chips: { display: "flex", flexWrap: "wrap", gap: "4px" },
   good: {
     padding: "2px 8px",
-    background: "#d1fae5",
+    background: "var(--cf-theme-color-success-light, #d1fae5)",
     borderRadius: "12px",
     fontSize: "12px",
-    color: "#065f46",
+    color: "var(--cf-theme-color-success, #065f46)",
   },
   bad: {
     padding: "2px 8px",
-    background: "#fee2e2",
+    background: "var(--cf-theme-color-error-light, #fee2e2)",
     borderRadius: "12px",
     fontSize: "12px",
-    color: "#991b1b",
+    color: "var(--cf-theme-color-error, #991b1b)",
   },
   warnings: { margin: "0", paddingLeft: "20px", fontSize: "13px" },
   stale: {
