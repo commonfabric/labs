@@ -772,14 +772,17 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     // Each person the manager lists who isn't a member of the room's space, by
     // the first profile attesting them, with what tells them apart from
     // another of them under the same name, per session, as the manager's
-    // people are, and no one while the space's members aren't known. The
-    // manager's `askedPeople` lists no one until the session asks it to
+    // `askedPeople` are, and no one while the space's members aren't known.
+    // `askedPeople` lists no one until the session asks for them
     // (`askForPeople`), as the panel's control below does, so the room reads
-    // no other room until then. The binding's name is the value's cause, the identity of the
-    // document that stores it, so renaming it moves its data.
+    // no other room until then. A manager with no `askedPeople`, one from
+    // before it had them, is read through its `people` instead, which it
+    // lists without being asked. The binding's name is the value's cause, the
+    // identity of the document that stores it, so renaming it moves its data.
     const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
       if (members === undefined) return [];
-      const listed = Object.entries(manager?.askedPeople ?? {}).flatMap(
+      const people = manager?.askedPeople ?? manager?.people ?? {};
+      const listed = Object.entries(people).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
           return members.some((member) => member.principal === principal) ||
@@ -800,9 +803,14 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const candidatesDisplay = computed((): ChatDisplay =>
       candidatesForSession.length === 0 ? "none" : "block"
     );
-    // The control asking for the people shows while the picker offers no one.
+    // The control asking for the people shows while the picker offers no one,
+    // to a reader whose manager can be asked: one with `askedPeople`, which
+    // `askForPeople` comes with. A declared stream reads as present whether
+    // or not the manager holds one, so it is the people that say so.
     const askDisplay = computed((): ChatDisplay =>
-      candidatesForSession.length === 0 ? "block" : "none"
+      manager?.askedPeople !== undefined && candidatesForSession.length === 0
+        ? "block"
+        : "none"
     );
 
     return {

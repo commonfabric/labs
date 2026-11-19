@@ -1,8 +1,9 @@
 /**
  * When a FabriChat manager reads its rooms' rosters for the people it lists:
- * a client rendering Home's view, which shows the manager, runs no reader of
- * a room's roster until the session asks for the people, as opening a picker
- * of them does, and runs one per listed room once it has.
+ * a client rendering Home's view, which shows the manager, or a room's view,
+ * which shows its add panel's picker, runs no reader of another room's roster
+ * until the session asks for the people, as opening a picker of them does,
+ * and Home's runs one per listed room once it has.
  */
 
 import { expect } from "@std/expect";
@@ -192,15 +193,18 @@ describe("fabrichat-lazy-people", () => {
   });
 
   /**
-   * How many of the client's actions read a room's roster, and how many
-   * times they have run, by the scheduler's own record of each action's
-   * reads.
+   * How many of `runtime`'s actions read the roster of a room of `rooms`,
+   * and how many times they have run, by the scheduler's own record of each
+   * action's reads.
    */
-  const rosterReaders = (): { readers: number; runs: number } => {
-    const readers = client.runtime.scheduler.getGraphSnapshot().nodes.filter(
+  const rosterReadersOf = (
+    runtime: Runtime,
+    of: readonly Cell<unknown>[],
+  ): { readers: number; runs: number } => {
+    const readers = runtime.scheduler.getGraphSnapshot().nodes.filter(
       (node) =>
         (node.reads ?? []).some((read) =>
-          rooms.some((room) => read.startsWith(`${room.space}/`)) &&
+          of.some((room) => read.startsWith(`${room.space}/`)) &&
           read.includes("/roster")
         ),
     );
@@ -210,21 +214,61 @@ describe("fabrichat-lazy-people", () => {
     };
   };
 
-  it("runs no reader of a room's roster before the session asks for the people", () => {
-    expect(rosterReaders()).toEqual({ readers: 0, runs: 0 });
+  describe("a rendered Home", () => {
+    it("runs no reader of a room's roster before the session asks for the people", () => {
+      expect(rosterReadersOf(client.runtime, rooms)).toEqual({
+        readers: 0,
+        runs: 0,
+      });
+    });
+
+    it("runs one reader of each listed room's roster, twice, once the session asks for the people", async () => {
+      // Each reader runs as the session asks, and once more as its roster's
+      // document arrives; that is all a picker waits on before it lists anyone.
+
+      await send(
+        client.runtime,
+        client.home,
+        ["chatManager", "askForPeople"],
+        {},
+      );
+
+      expect(rosterReadersOf(client.runtime, rooms)).toEqual({
+        readers: GROUPS,
+        runs: 2 * GROUPS,
+      });
+    });
   });
 
-  it("runs one reader of each listed room's roster, twice, once the session asks for the people", async () => {
-    // Each reader runs as the session asks, and once more as its roster's
-    // document arrives; that is all a picker waits on before it lists anyone.
+  describe("a rendered room", () => {
+    it("runs no reader of another room's roster before the session asks for the people", async () => {
+      // The room is started and its view rendered on a client of the owner's
+      // of its own, as a page opening the room does; the owner can add
+      // people to it, so its view holds the add panel's picker.
 
-    await send(
-      client.runtime,
-      client.home,
-      ["chatManager", "askForPeople"],
-      {},
-    );
+      const viewer = await homeOf(server, apiUrl, owner, {
+        serverExecution: false,
+      });
+      const room = viewer.runtime.getCellFromLink(
+        rooms[1].getAsNormalizedFullLink(),
+      );
+      await viewer.runtime.start(room);
+      const cancel = new WorkerReconciler({ onOps: () => {} }).mount(
+        room.key(UI).asSchema(rendererVDOMSchema),
+      );
+      try {
+        await viewer.runtime.idle();
+        await viewer.storage.synced();
+        await viewer.runtime.idle();
 
-    expect(rosterReaders()).toEqual({ readers: GROUPS, runs: 2 * GROUPS });
+        expect(
+          rosterReadersOf(viewer.runtime, [rooms[0], rooms[2]]),
+        ).toEqual({ readers: 0, runs: 0 });
+      } finally {
+        cancel();
+        await viewer.runtime.dispose();
+        await viewer.storage.close();
+      }
+    });
   });
 });
