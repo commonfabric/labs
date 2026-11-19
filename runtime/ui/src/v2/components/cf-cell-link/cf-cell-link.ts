@@ -604,17 +604,24 @@ export class CFCellLink extends BaseElement {
       }
       // Otherwise where the link points at the click: what that press is
       // resolving, or, for a click with no press of its own (the keyboard's,
-      // or one after a press was let go), a resolution now. A link taken off
-      // the page before its target arrived was cancelled, not left
-      // unfollowable, so it neither opens nor warns.
+      // or one after a press was let go), a resolution now. A press survives
+      // only while the link's input is unchanged, so its resolution started
+      // in the generation the click sees.
+      const generation = this._resolveCellGeneration;
       const resolving = press?.resolution ?? this.resolveTarget();
+      // A link taken off the page, or whose input changed, before its target
+      // arrived was cancelled, not left unfollowable, so it neither opens nor
+      // warns. A target that did arrive for the link as clicked still opens.
+      const cancelled = (target: CellHandle | undefined) =>
+        !this.isConnected ||
+        (target === undefined && generation !== this._resolveCellGeneration);
       if (newTab) {
         // A browser opens a tab only close to the gesture that asked for it.
         // A target found soon opens as usual; a slow one gets a tab reserved
         // for it while the gesture still allows one.
         void openInNewTabWhenReady(
           resolving.then((target) => {
-            if (!this.isConnected) return undefined;
+            if (cancelled(target)) return undefined;
             if (!target) this._warnUnfollowed();
             return target && this._viewOf(target);
           }),
@@ -623,7 +630,7 @@ export class CFCellLink extends BaseElement {
         return;
       }
       void resolving.then((target) => {
-        if (!this.isConnected) return;
+        if (cancelled(target)) return;
         this._open(target, false);
       });
       return;

@@ -1525,6 +1525,36 @@ describe("CFCellLink in a document", () => {
         expect(warnings).toEqual([]);
       });
 
+      it("closes the reserved tab, without a warning, when the link changes before its target arrives", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const tab = fakeTab();
+        const warnings: unknown[][] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        try {
+          await withOpen(tab, async () => {
+            commandClick(element);
+            await nextTask();
+            element.cell = linkTo(pieceCell("of:fid1:topic-222222"));
+            await element.updateComplete;
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+          });
+        } finally {
+          console.warn = originalWarn;
+        }
+
+        expect(tab.closed).toBe(true);
+        expect(warnings).toEqual([]);
+      });
+
       it("closes the reserved tab, and warns, when the click resolves nothing", async () => {
         CFCellLink.newTabReserveAfterMs = 0;
         const pending = deferred<CellHandle>();
@@ -1698,6 +1728,35 @@ describe("CFCellLink in a document", () => {
       });
 
       expect(opened).toEqual([]);
+    });
+
+    it("opens nothing, and warns nothing, for a click whose link changes before its target arrives", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      let opened: string[] = [];
+      try {
+        opened = await navigatedToOnceSettled(() => {
+          chip(element).click();
+          element.cell = linkTo(pieceCell("of:fid1:topic-222222"));
+          // The input change lands in the element's next update; the click's
+          // target arrives after it.
+          void element.updateComplete.then(() =>
+            pending.resolve(pieceCell("of:fid1:topic-111111"))
+          );
+        });
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(opened).toEqual([]);
+      expect(warnings).toEqual([]);
     });
   });
 
