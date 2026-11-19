@@ -8479,7 +8479,7 @@ const requireReadPath = (
  * that position. Negative zero is not one: it compares equal to `0`, but the
  * SQLite binding throws on it rather than binding it as `0`.
  */
-const isLogSeq = (seq: unknown): boolean =>
+export const isLogSeq = (seq: unknown): boolean =>
   Number.isSafeInteger(seq) && ((seq as number) > 0 || Object.is(seq, 0));
 
 /**

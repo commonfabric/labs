@@ -323,7 +323,7 @@ Deno.test("oracle: parses read sets once per report, whatever the values hold", 
     let parses = 0;
     const prepare = space.db.prepare.bind(space.db);
     space.db.prepare = ((sql: string) => {
-      if (sql.includes("json_each(")) parses++;
+      if (sql.includes(`'$.reads.confirmed'`)) parses++;
       return prepare(sql);
     }) as typeof space.db.prepare;
 
@@ -572,6 +572,37 @@ Deno.test("oracle: finds a stale read whose entity id the JSON spells with an es
   }
 });
 
+Deno.test("oracle: reads a history of escaped reads longer than SQLite binds parameters for", async () => {
+  // 32,767 commits each read entity:doc at seq 2, its current revision, by
+  // the spelling `entity:doc`: one more than the 32,766 parameters a
+  // statement may bind.
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  const db = new Database(path);
+  try {
+    db.exec(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 32767)
+      INSERT INTO "commit"
+        (seq, branch, session_id, local_seq, original, resolution, created_at)
+      SELECT 10 + i, '', 'session:many', i,
+        '{"localSeq":' || i || ',"reads":{"confirmed":[{"id":"entity:\\u0064oc","path":["value","title"],"seq":2}],"pending":[]},"operations":[]}',
+        '{"seq":' || (10 + i) || '}', datetime('now')
+      FROM n`);
+  } finally {
+    db.close();
+  }
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
+    const entity = entityConflicts(space, "entity:doc");
+    assertEquals([entity.staleReads.length, entity.readSetsNotKept], [0, 0]);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
 Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the report", async () => {
   // A read of entity:doc with a basis that is not a seq, one with a scope
   // that is none, two with no path (at seq 2, current, and at seq 1, below
@@ -583,6 +614,9 @@ Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the
   for (
     const original of [
       reading([{ ...read, seq: "x" }]),
+      // JSON text can hold a negative zero, which `JSON.stringify` never
+      // writes.
+      reading([read]).replace(`"seq":1`, `"seq":-0`),
       reading([{ ...read, scope: "elsewhere" }]),
       reading([{ id: "entity:doc", seq: 2 }]),
       reading([{ id: "entity:doc", seq: 1 }]),

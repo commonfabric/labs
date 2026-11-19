@@ -31,6 +31,7 @@ import {
 import {
   COMPACTION_SESSION_PREFIX,
   historyCompactedBelowRow,
+  isLogSeq,
   type OldestRevisionAttribution,
   patchOverlapsNonRecursiveRead,
   patchOverlapsRead,
@@ -280,9 +281,10 @@ export interface ReadCoverage {
   branches: string[];
 
   /**
-   * For each entity a read names only by an escaped spelling, which a
-   * search of the payload text for the id would not find, the seqs,
-   * ascending, of the commits holding such a read.
+   * For each entity some read names with a backslash in its own text (so
+   * every read that names it only by an escaped spelling, which a search of
+   * the payload text for the id would not find), the seqs, ascending, of the
+   * commits holding such a read.
    */
   escapedReaders: Map<string, number[]>;
 
@@ -403,9 +405,13 @@ export function readCoverage(
     .all<{ branch: string }>()
     .map(({ branch }) => branch);
   // JSON spells a string otherwise than as written only with a backslash
-  // escape, so only a payload holding a backslash can hold a read whose id
-  // its text does not show. Those reads are collected here, in one pass
-  // over such payloads, for every entity's candidate search.
+  // escape, so only a read whose own text holds a backslash can name an id
+  // the payload's text does not show. SQLite keeps each read's text as
+  // stored, escapes included, so the test looks at that read alone, never
+  // the whole payload again. Those reads are collected here, in one pass
+  // over the payloads holding a backslash, for every entity's candidate
+  // search; one whose backslash is elsewhere than its id only adds a
+  // candidate the decode then sets aside.
   const escapedReaders = new Map<string, number[]>();
   const escaped = space.db
     .prepare(
@@ -425,7 +431,7 @@ export function readCoverage(
        ) AS r
        WHERE CASE WHEN r.type = 'object'
          THEN json_type(r.value, '$.id') = 'text'
-           AND instr(c.original, json_extract(r.value, '$.id')) = 0
+           AND instr(r.value, char(92)) > 0
          ELSE 0 END
        ORDER BY c.seq ASC`,
     )
@@ -554,13 +560,14 @@ const CELL_SCOPES: ReadonlySet<unknown> = new Set<CellScope>([
 
 /**
  * Whether a stored read naming the entity has each field the scan replays
- * it by, of its type: a basis seq and a path, which admission requires (an
- * empty one reads the whole document), and any branch, scope or shallow
- * flag. The log holds what was stored, not what admission accepted, and a
- * read without them cannot be checked.
+ * it by, of its type: a basis seq, as the engine's `isLogSeq()` decides (not
+ * negative zero, which the SQLite binding throws on), and a path, which
+ * admission requires (an empty one reads the whole document), and any
+ * branch, scope or shallow flag. The log holds what was stored, not what
+ * admission accepted, and a read without them cannot be checked.
  */
 function isReplayableRead(read: ConfirmedReadRef): boolean {
-  return Number.isSafeInteger(read.seq) && read.seq >= 0 &&
+  return isLogSeq(read.seq) &&
     Array.isArray(read.path) &&
     read.path.every((part) => typeof part === "string") &&
     (read.branch === undefined || typeof read.branch === "string") &&
@@ -675,22 +682,19 @@ export function entityConflicts(
   // Candidate reader commits: those whose stored ClientCommit mentions this id.
   // (Pre-filter by LIKE to avoid decoding every commit in the space.) The
   // commits whose read names it only by an escaped spelling come from the
-  // coverage pass. The commit's own `branch` is the default for any read that
-  // omits one.
-  const escapedReaders = coverage.escapedReaders.get(id) ?? [];
+  // coverage pass, bound as one JSON array, so however long the history no
+  // statement runs past SQLite's limit on bound parameters. The commit's own
+  // `branch` is the default for any read that omits one.
   const candidates = space.db
     .prepare(
       `SELECT seq, branch, session_id, original FROM "commit"
-       WHERE original LIKE '%' || ? || '%'${
-        escapedReaders.length === 0
-          ? ""
-          : ` OR seq IN (${escapedReaders.map(() => "?").join(", ")})`
-      }
+       WHERE original LIKE '%' || ? || '%'
+          OR seq IN (SELECT value FROM json_each(?))
        ORDER BY seq ASC`,
     )
     .all<
       { seq: number; branch: string; session_id: string; original: string }
-    >([id, ...escapedReaders]);
+    >([id, JSON.stringify(coverage.escapedReaders.get(id) ?? [])]);
 
   const staleReads: StaleRead[] = [];
   for (const c of candidates) {
