@@ -3723,7 +3723,10 @@ export class Server {
        * is). It bounds the work one message can cost the server, so a
        * higher one is for a bounded operation that needs it, such as moving
        * the source of a holder with thousands of members, whose update
-       * sends one watch per member document. */
+       * sends one watch per member document. It may only raise the default,
+       * and construction throws for one below it: a direct client sizes the
+       * parts it stages a watch set in by the default, and nothing tells it
+       * of a lower limit, so a set it would send in parts would be refused. */
       untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
@@ -3872,6 +3875,16 @@ export class Server {
     ) {
       throw new RangeError(
         "Client retirement is disabled; `minimumClientGeneration` must be `0`",
+      );
+    }
+    if (
+      options.untrustedMessageSlots !== undefined &&
+      !(Number.isSafeInteger(options.untrustedMessageSlots) &&
+        options.untrustedMessageSlots >= MAX_UNTRUSTED_MESSAGE_SLOTS)
+    ) {
+      throw new RangeError(
+        "`untrustedMessageSlots` may only raise the limit: it must be an " +
+          `integer of at least ${MAX_UNTRUSTED_MESSAGE_SLOTS}`,
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();

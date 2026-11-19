@@ -12,6 +12,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { MAX_UNTRUSTED_MESSAGE_SLOTS } from "@commonfabric/memory/v2";
 import { EnvSchema, loadEnv } from "@/env.ts";
 import { Exited } from "@/test/support/exited.ts";
 
@@ -434,13 +435,24 @@ describe("PLAID_ENV", () => {
   });
 });
 
-Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and takes only a positive integer", () => {
+Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
   expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
-  expect(
-    EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: "10000000" })
-      .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
-  ).toBe(10_000_000);
-  for (const refused of ["0", "-1", "1.5", "lots"]) {
+  for (const accepted of [MAX_UNTRUSTED_MESSAGE_SLOTS, 10_000_000]) {
+    expect(
+      EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: String(accepted) })
+        .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
+    ).toBe(accepted);
+  }
+  for (
+    const refused of [
+      String(MAX_UNTRUSTED_MESSAGE_SLOTS - 1),
+      "1000",
+      "0",
+      "-1",
+      "1500000.5",
+      "lots",
+    ]
+  ) {
     expect(() => EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: refused }))
       .toThrow();
   }

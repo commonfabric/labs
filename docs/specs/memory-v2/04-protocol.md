@@ -941,9 +941,12 @@ and a compressed envelope can expand a small frame into millions of elements.
 The size of the text itself, including one long string, is bounded separately
 by the 256 MiB limit on an expanded envelope.
 
-A message standing for more than 1,000,000 slots is refused before it is
-parsed: its elements and members are counted by scanning its text, and its
-holes before any of the parsed message is walked. When the message's root
+A message standing for more than the server's slot limit is refused before it
+is parsed: its elements and members are counted by scanning its text, and its
+holes before any of the parsed message is walked. The limit is 1,000,000 slots
+unless the deployment raises it, which it may do for a bounded operation that
+needs more but never below that default, since a client sizes the parts it
+stages a watch set in by the default. When the message's root
 record names a string `requestId`, the refusal is a `response` on that
 request, with error name `MessageTooLargeError`, so the request fails rather
 than waiting forever. Otherwise the refusal is the one any unreadable message
@@ -951,8 +954,9 @@ gets: a `response` with `requestId: "invalid"` and error name
 `InvalidMessageError`.
 
 The limit applies to every message a client sends. A `session.open` declaring
-holdings costs three slots or more per holding, so a replica declaring more
-than about 330,000 holdings in one space cannot resume. The limit does not
+holdings costs three slots or more per holding, so under the default limit a
+replica declaring more than about 330,000 holdings in one space cannot
+resume. The limit does not
 apply to what a server reads from its own storage, or to what a client reads
 from a server, since a stored document may stand for more slots than one
 message may.

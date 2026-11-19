@@ -379,8 +379,10 @@ export const EnvSchema = z.object({
   // and a record its members. It bounds the work one message can cost the
   // server. Raise it only for a bounded operation that needs more, such as
   // moving the source of a holder with thousands of members, and unset it
-  // afterwards.
-  MEMORY_UNTRUSTED_MESSAGE_SLOTS: z.coerce.number().int().positive()
+  // afterwards. It can only raise the default (env.test.ts holds the minimum
+  // to the constant): a direct client sizes its staged watch-set parts by the
+  // default, so a lower limit would refuse a set it sends in parts.
+  MEMORY_UNTRUSTED_MESSAGE_SLOTS: z.coerce.number().int().min(1_000_000)
     .optional(),
 
   // Set ONLY when a trusted reverse proxy sits in front of this process and

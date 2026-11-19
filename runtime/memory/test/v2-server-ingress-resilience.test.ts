@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricValue } from "@commonfabric/api";
@@ -142,57 +142,75 @@ Deno.test("memory v2 server answers a message past the slot limit on its own req
 });
 
 Deno.test("memory v2 server holds a client message to the slot limit it was given", async () => {
-  for (
-    const limit of [MAX_UNTRUSTED_MESSAGE_SLOTS * 2, 1_000]
-  ) {
-    const messages: ServerMessage[] = [];
-    const server = new Server({
-      authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
-      sessionOpenAuth: testSessionOpenAuth,
-      untrustedMessageSlots: limit,
+  const limit = MAX_UNTRUSTED_MESSAGE_SLOTS * 2;
+  const messages: ServerMessage[] = [];
+  const server = new Server({
+    authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
+    sessionOpenAuth: testSessionOpenAuth,
+    untrustedMessageSlots: limit,
+  });
+  const connection = server.connect((message) => messages.push(message));
+
+  try {
+    await connection.receive(encodeMemoryBoundary({
+      type: "hello",
+      protocol: MEMORY_PROTOCOL,
+      flags: getMemoryProtocolFlags(),
+    }));
+    assertEquals(messages.shift()?.type, "hello.ok");
+
+    // One slot past the default is read: it reaches the command, which
+    // refuses it for another reason, on its own request id.
+    await connection.receive(transactOf("tx-past-default", oversizedArray()));
+    const pastDefault = messages.shift() as {
+      requestId?: string;
+      error?: { name?: string };
+    };
+    assertEquals(pastDefault.requestId, "tx-past-default");
+    expect(pastDefault.error?.name).not.toBe("MessageTooLargeError");
+
+    // One slot past the limit given is refused, and the refusal names it.
+    await connection.receive(
+      transactOf("tx-past-limit", oversizedArray(limit)),
+    );
+    assertEquals(messages.shift(), {
+      type: "response",
+      requestId: "tx-past-limit",
+      error: {
+        name: "MessageTooLargeError",
+        message: "Memory message stands for more than " +
+          `${limit} array slots and record members`,
+      },
     });
-    const connection = server.connect((message) => messages.push(message));
-
-    try {
-      await connection.receive(encodeMemoryBoundary({
-        type: "hello",
-        protocol: MEMORY_PROTOCOL,
-        flags: getMemoryProtocolFlags(),
-      }));
-      assertEquals(messages.shift()?.type, "hello.ok");
-
-      // One slot past the default: read under a higher limit, refused under
-      // a lower one.
-      await connection.receive(transactOf("tx-past-default", oversizedArray()));
-      const pastDefault = messages.shift() as {
-        requestId?: string;
-        error?: { name?: string; message?: string };
-      };
-      assertEquals(pastDefault.requestId, "tx-past-default");
-      if (limit > MAX_UNTRUSTED_MESSAGE_SLOTS) {
-        expect(pastDefault.error?.name).not.toBe("MessageTooLargeError");
-      } else {
-        assertEquals(pastDefault.error?.name, "MessageTooLargeError");
-      }
-
-      // One slot past the limit given is refused, and the refusal names it.
-      await connection.receive(
-        transactOf("tx-past-limit", oversizedArray(limit)),
-      );
-      assertEquals(messages.shift(), {
-        type: "response",
-        requestId: "tx-past-limit",
-        error: {
-          name: "MessageTooLargeError",
-          message: "Memory message stands for more than " +
-            `${limit} array slots and record members`,
-        },
-      });
-    } finally {
-      connection.close();
-      await server.close();
-    }
+  } finally {
+    connection.close();
+    await server.close();
   }
+});
+
+Deno.test("memory v2 server takes a slot limit only at or above the default", async () => {
+  // A direct client sizes the parts it stages a watch set in by the
+  // default, and nothing tells it of a lower limit.
+  for (
+    const refused of [MAX_UNTRUSTED_MESSAGE_SLOTS - 1, 1_000, 0, 1.5e6 + 0.5]
+  ) {
+    assertThrows(
+      () =>
+        new Server({
+          authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
+          sessionOpenAuth: testSessionOpenAuth,
+          untrustedMessageSlots: refused,
+        }),
+      RangeError,
+      "may only raise the limit",
+    );
+  }
+  const server = new Server({
+    authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
+    sessionOpenAuth: testSessionOpenAuth,
+    untrustedMessageSlots: MAX_UNTRUSTED_MESSAGE_SLOTS,
+  });
+  await server.close();
 });
 
 Deno.test("memory v2 client commit past the slot limit fails, and the session still commits", async () => {
