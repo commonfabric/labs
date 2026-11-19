@@ -142,7 +142,6 @@ export interface PatternIndexAggregate {
   lastSeenDay?: string;
 }
 
-/** One hit from `searchPatterns`. Carries metadata and never source. */
 /**
  * One original along a remix's chain, as the index shows it to the reader:
  * the pattern and its name, or `unavailable` for an original the reader may
@@ -152,6 +151,7 @@ export type PatternIndexRemixLink =
   | { patternId: string; name?: string }
   | { unavailable: true };
 
+/** One hit from `searchPatterns`. Carries metadata and never source. */
 export interface PatternIndexSearchResult {
   patternId: string;
 
