@@ -30,6 +30,17 @@ export default pattern<{ count: number }>(({ count }) => ({
   add: add({ count }),
 }));`;
 
+const fetcherPath = "/api/patterns/system/fetcher.tsx";
+const fetcherSource =
+  `import { fetchText, handler, pattern, Writable } from 'commonfabric';
+const setUrl = handler<{ url: string }, { url: Writable<string> }>(
+  (event, { url }) => { url.set(event.url); },
+);
+export default pattern<{ url: string }>(({ url }) => {
+  const fetched = fetchText({ url });
+  return { text: fetched.result, setUrl: setUrl({ url }) };
+});`;
+
 describe("branch-runtime", () => {
   let signer: Identity;
   let space: MemorySpace;
@@ -204,6 +215,67 @@ describe("branch-runtime", () => {
       });
       cancel();
     });
+  });
+
+  it("fetches again in a fork only once the fork's request differs", async () => {
+    const fetched: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (input: string | URL | Request) => {
+      const url = input instanceof Request ? input.url : String(input);
+      fetched.push(url);
+      return Promise.resolve(new Response(`body of ${url}`, { status: 200 }));
+    };
+    try {
+      const main = makeRuntime();
+      const pattern = await main.patternManager.compilePattern({
+        main: fetcherPath,
+        files: [{ name: fetcherPath, contents: fetcherSource }],
+      }, { space });
+      const result = main.getCell<{ text: string | undefined }>(
+        space,
+        "fetcher",
+        pattern.resultSchema,
+      );
+      const tx = main.edit();
+      main.runner.run(tx, pattern, { url: "http://fork.test/one" }, result);
+      main.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const text = result.key("text");
+      await waitForCellValue(
+        main,
+        text,
+        (value) => value === "body of http://fork.test/one",
+        { stuckLabel: "the first fetch" },
+      );
+      await main.patternManager.flushCompileCacheWrites();
+      await main.storageManager.synced();
+      expect(fetched).toEqual(["http://fork.test/one"]);
+      await main.storageManager.open(space).createBranch!("fork");
+
+      const fork = makeRuntime("fork");
+      const forked = fork.getCellFromLink(result.getAsNormalizedFullLink());
+      await fork.runner.start(forked);
+      await waitForCellValue(
+        fork,
+        forked.key("text"),
+        (value) => value === "body of http://fork.test/one",
+        { stuckLabel: "the fork's inherited fetch result" },
+      );
+      await fork.scheduler.idleWithPendingCommits();
+      await fork.storageManager.synced();
+      expect(fetched).toEqual(["http://fork.test/one"]);
+
+      forked.key("setUrl").send({ url: "http://fork.test/two" });
+      await waitForCellValue(
+        fork,
+        forked.key("text"),
+        (value) => value === "body of http://fork.test/two",
+        { stuckLabel: "the fork's own fetch" },
+      );
+      expect(fetched).toEqual(["http://fork.test/one", "http://fork.test/two"]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("runs a piece as a fork holds it, and leaves the default branch alone", async () => {

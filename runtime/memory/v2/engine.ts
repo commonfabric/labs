@@ -882,6 +882,7 @@ SELECT
      AND id = :id
      AND scope_key = :scope_key
      AND seq > :after_seq
+     AND seq <= :through_seq
      AND op IN ('set', 'delete')
    ORDER BY seq DESC, op_index DESC
    LIMIT 1) AS seq,
@@ -891,6 +892,7 @@ SELECT
             AND id = :id
             AND scope_key = :scope_key
             AND seq > :after_seq
+            AND seq <= :through_seq
             AND op = 'patch') AS patched
 `;
 
@@ -901,6 +903,7 @@ WHERE branch = :branch
   AND id = :id
   AND scope_key = :scope_key
   AND seq > :after_seq
+  AND seq <= :through_seq
   AND op = 'patch'
 ORDER BY seq DESC, op_index DESC
 `;
@@ -940,6 +943,7 @@ SELECT
      AND r.id = :id
      AND r.scope_key = :scope_key
      AND r.seq > :after_seq
+     AND r.seq <= :through_seq
      AND r.op IN ('set', 'delete')
      AND (c.session_id <> :exclude_session
           OR c.local_seq NOT IN
@@ -953,6 +957,7 @@ SELECT
             AND r.id = :id
             AND r.scope_key = :scope_key
             AND r.seq > :after_seq
+            AND r.seq <= :through_seq
             AND r.op = 'patch'
             AND (c.session_id <> :exclude_session
                  OR c.local_seq NOT IN
@@ -967,6 +972,7 @@ WHERE r.branch = :branch
   AND r.id = :id
   AND r.scope_key = :scope_key
   AND r.seq > :after_seq
+  AND r.seq <= :through_seq
   AND r.op = 'patch'
   AND (c.session_id <> :exclude_session
        OR c.local_seq NOT IN (SELECT value FROM json_each(:named_local_seqs)))
@@ -8357,14 +8363,7 @@ const validateCommitPreconditions = (
       }
       case "entity-absent": {
         const scopeKey = resolveScopeKey(precondition.scope, scopeContext);
-        const existingSetOrDelete = engine.statement("selectSetDeleteConflict")
-          .get({
-            branch,
-            id: precondition.id,
-            scope_key: scopeKey,
-            after_seq: 0,
-          }) as SetDeleteConflictRow;
-        if (existingSetOrDelete.seq !== null) {
+        if (hasSetOrDelete(engine, branch, precondition.id, scopeKey)) {
           throw new PreconditionFailedError(
             "receipt-exists",
             `entity-absent precondition target already exists: ${precondition.id}`,
@@ -8920,6 +8919,92 @@ const findConflictSeq = (
   // statements.
   exclude?: ConflictExclusion,
 ): number | null => {
+  const own = findConflictSeqOnBranch(
+    engine,
+    scans,
+    branch,
+    id,
+    scopeKey,
+    afterSeq,
+    Number.MAX_SAFE_INTEGER,
+    readPath,
+    nonRecursive,
+    exclude,
+  );
+  if (own !== null || typeof branch !== "string") return own;
+  // A fork holds what its ancestors wrote up to each fork point, so a write
+  // there after the basis conflicts as one of the fork's own does. An
+  // unknown branch has no lineage, and is refused where the commit's branch
+  // is resolved.
+  let lineage = getLineage(engine, branch);
+  while (lineage !== null && lineage.parentBranch !== null) {
+    const forkSeq = lineage.forkSeq ?? 0;
+    if (afterSeq >= forkSeq) return null;
+    const inherited = findConflictSeqOnBranch(
+      engine,
+      // What a bounded scan learns is not what a scan of the whole branch
+      // would, so it is kept apart from those.
+      new Map(),
+      lineage.parentBranch,
+      id,
+      scopeKey,
+      afterSeq,
+      forkSeq,
+      readPath,
+      nonRecursive,
+      exclude,
+    );
+    if (inherited !== null) return inherited;
+    lineage = getLineage(engine, lineage.parentBranch);
+  }
+  return null;
+};
+
+/**
+ * Returns whether the history `branch` holds, its own and what it inherits
+ * from each ancestor up to the fork point, has a `set` or a `delete` of the
+ * instance `scopeKey` of the document `id`.
+ */
+const hasSetOrDelete = (
+  engine: Engine,
+  branch: BranchName,
+  id: EntityId,
+  scopeKey: string,
+): boolean => {
+  let from: BranchName | null = branch;
+  let throughSeq = Number.MAX_SAFE_INTEGER;
+  while (from !== null) {
+    const row = engine.statement("selectSetDeleteConflict").get({
+      branch: from,
+      id,
+      scope_key: scopeKey,
+      after_seq: 0,
+      through_seq: throughSeq,
+    }) as SetDeleteConflictRow;
+    if (row.seq !== null) return true;
+    const lineage = requireLineage(engine, from);
+    throughSeq = Math.min(throughSeq, lineage.forkSeq ?? 0);
+    from = lineage.parentBranch;
+  }
+  return false;
+};
+
+/**
+ * Helper for `findConflictSeq()`, which decides a read against the writes
+ * `branch` itself holds after `afterSeq` and through `throughSeq`.
+ */
+const findConflictSeqOnBranch = (
+  engine: Engine,
+  scans: ConflictScans,
+  branch: BranchName,
+  id: EntityId,
+  scopeKey: string,
+  afterSeq: number,
+  throughSeq: number,
+  readPath: readonly string[],
+  nonRecursive: boolean,
+  exclude: ConflictExclusion | undefined,
+): number | null => {
   const key = conflictScanKey(branch, id, scopeKey, exclude);
   let document = key === undefined ? undefined : scans.get(key);
   if (key !== undefined && document === undefined) {
@@ -8938,6 +9023,7 @@ const findConflictSeq = (
     id,
     scope_key: scopeKey,
     after_seq: afterSeq,
+    through_seq: throughSeq,
     ...(exclude === undefined ? {} : {
       exclude_session: exclude.sessionKey,
       named_local_seqs: JSON.stringify(exclude.namedLocalSeqs),
@@ -8982,7 +9068,11 @@ const findConflictSeq = (
       // so closing its generator can leave a cursor alive after rollback.
       // `get()` resets before querying; this bound matches no valid seq,
       // releasing the cursor with one index probe and no older row copies.
-      patchStatement.get({ ...params, after_seq: Number.MAX_SAFE_INTEGER });
+      patchStatement.get({
+        ...params,
+        after_seq: Number.MAX_SAFE_INTEGER,
+        through_seq: Number.MAX_SAFE_INTEGER,
+      });
     }
   });
   for (

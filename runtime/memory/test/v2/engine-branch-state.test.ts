@@ -7,6 +7,7 @@ import type { BranchName } from "../../v2.ts";
 import {
   applyCommit,
   close,
+  ConflictError,
   createBranch,
   deleteBranch,
   type Engine,
@@ -119,6 +120,43 @@ describe("engine", () => {
         first: "fork",
       });
       expect(valueAt()).toEqual({ kept: "parent" });
+    });
+
+    it("refuses a fork's commit that read an inherited document before its parent's last write to it", () => {
+      const first = setValue("first");
+      setValue("second");
+      createBranch(engine, "fork");
+      const commitOnFork = (seq: number) =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [{ id, path: [], seq }], pending: [] },
+            operations: [{ op: "set", id, value: { value: "fork" } }],
+            branch: "fork",
+          },
+        });
+
+      expect(() => commitOnFork(first)).toThrow(ConflictError);
+      expect(valueAt({ branch: "fork" })).toBe("second");
+    });
+
+    it("accepts a fork's commit that read an inherited document as of the fork point, whatever its parent wrote since", () => {
+      const atFork = setValue("at fork");
+      createBranch(engine, "fork");
+      setValue("parent, later");
+
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [{ id, path: [], seq: atFork }], pending: [] },
+          operations: [{ op: "set", id, value: { value: "fork" } }],
+          branch: "fork",
+        },
+      });
+
+      expect(valueAt({ branch: "fork" })).toBe("fork");
     });
 
     it("throws for an unknown branch, and reads the branch once it exists", () => {
