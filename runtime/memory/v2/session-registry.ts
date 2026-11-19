@@ -158,6 +158,13 @@ export type SessionState = {
    * mode. */
   servingOwn?: true;
 
+  /** Whether the session's latest open declared that it is not demand
+   * (`SessionDescriptor.demand`). Such a session is not client demand on
+   * any server, whoever signed it, where a serving loop's own session of
+   * another kind is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
+  notDemand?: true;
+
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
 
@@ -168,7 +175,8 @@ export type SessionState = {
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
-   * the acting user — the space's ACL owner at open time — this
+   * the acting user — the space's ACL owner at open time, or the owner an
+   * access list first names after an open that found none — this
    * session's READ-class capability decisions resolve as. Never
    * consulted for WRITE/OWNER requirements, the lease-holder read row,
    * or scoped-read identity (those key on `principal`, the envelope).
@@ -191,12 +199,13 @@ export type SessionState = {
   chainIssuers?: readonly string[];
 
   /**
-   * The person this session's activity is attributed to, which its spans
-   * record as `enduser.id`, or `undefined` for a session that stands for no
-   * person. The server decides it when the session opens, and again when a
-   * commit changes the space's access list.
+   * Whether the space's own key is a person's identity on this session's
+   * space, which the person its spans record as `enduser.id` depends on.
+   * The server decides it when the session opens, and again when a commit
+   * changes the space's access list; `undefined` when neither the session's
+   * principal nor its chain names the space's key.
    */
-  person?: string;
+  ownKeyIsPerson?: boolean;
 
   /**
    * Set when the opening connection's client advertised `elidedVerdicts`:
@@ -225,6 +234,8 @@ export type SessionLifecycleEvent =
     readonly readCeiling?: SessionReadCeiling;
     /** See `SessionState.servingOwn`. */
     readonly servingOwn?: true;
+    /** See `SessionState.notDemand`. */
+    readonly notDemand?: true;
   }
   | {
     readonly kind: "detached";
@@ -271,20 +282,28 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
     ? {}
     : { readCeiling: session.readCeiling }),
   ...(session.servingOwn === true ? { servingOwn: true } : {}),
+  ...(session.notDemand === true ? { notDemand: true } : {}),
 });
 
 /**
- * Whether `session` is one of `principal`'s serving loop's own sessions
- * (`SessionState.servingOwn`), which are not client demand. A session of
- * that principal from a client, and any session when `principal` is
- * `undefined`, is not.
+ * Whether the serving loop of `principal` leaves `session` out of client
+ * demand: the session is one of that loop's own
+ * (`SessionState.servingOwn`, signed by `principal`), or it declared that it
+ * is not demand (`SessionState.notDemand`), whoever signed it. A session of
+ * that principal from a client that made no such declaration, and any
+ * session when `principal` is `undefined`, is not left out.
  */
 export const isServingSessionOf = (
-  session: { readonly principal?: string; readonly servingOwn?: true },
+  session: {
+    readonly principal?: string;
+    readonly servingOwn?: true;
+    readonly notDemand?: true;
+  },
   principal: string | undefined,
 ): boolean =>
-  principal !== undefined && session.servingOwn === true &&
-  session.principal === principal;
+  principal !== undefined &&
+  (session.notDemand === true ||
+    (session.servingOwn === true && session.principal === principal));
 
 export class SessionRegistry {
   readonly #ttlMs: number;
@@ -487,6 +506,7 @@ export class SessionRegistry {
           session.demand === false
         ? { servingOwn: true as const }
         : {}),
+      ...(session.demand === false ? { notDemand: true as const } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(chainIssuers !== undefined ? { chainIssuers } : {}),
@@ -516,22 +536,6 @@ export class SessionRegistry {
    */
   peek(space: string, sessionId: string): SessionState | undefined {
     return this.#sessions.get(sessionKey(space, sessionId));
-  }
-
-  hasOpenSessionForPrincipal(
-    space: string,
-    principal: string | undefined,
-  ): boolean {
-    this.#prune();
-    for (const session of this.#sessions.values()) {
-      if (
-        session.space === space &&
-        session.principal === principal
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   sessionsForSpace(space: string): SessionState[] {

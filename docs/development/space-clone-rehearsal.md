@@ -131,9 +131,11 @@ and one `--datafile` flag for every attached data file. Run `setsrc` once per
 piece with the complete flag set: a rehearsal that omits part of the source
 package does not rehearse the update you mean to make against real data.
 Deployment packages and type-checks the tests but does not run them. It reads
-each data file to store it, and refuses one that is not valid UTF-8 text, but
-never parses or executes it — a data file's bytes are stored exactly as
-authored.
+each data file to store it: a binary image, font, or sound as a base64
+`data:` URL, and any other file, an SVG image among them, as its text, refusing
+one that is not valid UTF-8. It
+never parses or executes a data file, and `cf piece getsrc` returns each one
+byte for byte.
 
 ### Stop the server before resetting
 

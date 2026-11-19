@@ -1328,6 +1328,7 @@ type RuntimeSetupOptions = {
   initialPieceSourceOrigin?: string;
   reapplyStoredSetup?: boolean;
   prepareForResume?: boolean;
+  runtimeStarted?: boolean;
 };
 
 /**
@@ -1458,6 +1459,25 @@ export type CommitRetryPullFailure = {
   scope?: CellScope;
   error: unknown;
 };
+
+/**
+ * Writes `banner` as a line to `stderr`, the process's standard error in
+ * Deno, or to the console where there is none, as in a browser realm, which
+ * has no stdout contract. Never stdout in Deno: the cf CLI's machine-readable
+ * output (`cf piece ls` and the like) is consumed by scripts. Not
+ * `console.error()` or `console.warn()` either: the cf test console
+ * enforcement fails tests on those.
+ */
+export function writeOverrideBanner(
+  banner: string,
+  stderr: { writeSync(bytes: Uint8Array): number } | undefined,
+): void {
+  if (stderr === undefined) {
+    console.log(banner);
+    return;
+  }
+  stderr.writeSync(new TextEncoder().encode(banner + "\n"));
+}
 
 /**
  * Main Runtime class that orchestrates all services in the runner package.
@@ -1790,7 +1810,9 @@ export class Runtime {
 
   /**
    * The writer-authority delegations this runtime has learned from verified
-   * source closures and integrity-valid compiled closures, by attesting
+   * source closures and integrity-valid compiled closures, from the source
+   * updates it committed, and from the pieces' `pieceSourceDelegations`
+   * members (`PatternManager.readInheritedAuthority()`), by attesting
    * space. `edit()` hands every transaction the registry's published
    * transitive snapshot, so an in-flight authorization decision cannot
    * change when another module loads, and authorization in one space can
@@ -1922,8 +1944,8 @@ export class Runtime {
     }
     let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
-    const log = tx.getReactivityLog?.();
-    for (const address of [...(log?.writes ?? []), ...(log?.reads ?? [])]) {
+    const log = tx.getReactivityLog();
+    for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
@@ -2052,10 +2074,10 @@ export class Runtime {
         type: "application/json",
         path: ["value"],
       });
-      const alreadyWritten = tx.getReactivityLog?.().writes.some((address) =>
+      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
         address.space === link.space && address.id === link.id &&
         address.scope === link.scope
-      ) ?? false;
+      );
       if (!alreadyWritten) {
         if (!tx.addCommitPrecondition) {
           throw new Error(
@@ -2125,12 +2147,7 @@ export class Runtime {
       ...options.experimental,
     };
 
-    // Log any overridden experimental flags. Never on stdout: the cf CLI's
-    // machine-readable output (`cf piece ls` etc.) is consumed by scripts, and
-    // this banner made every command's stdout non-empty under a flag override.
-    // Not console.error/warn either: the cf test console enforcement fails
-    // tests on those. Direct process stderr in Deno; plain console in browser
-    // realms (no stdout contract there).
+    // Log any overridden experimental flags (`writeOverrideBanner()`).
     // `serverExecution` at the first-party default is no override: a deployed
     // entry point and every serving runtime state it explicitly, and only
     // the other arm, selected per deployment, is worth announcing.
@@ -2141,12 +2158,10 @@ export class Runtime {
       )
       .map(([k, v]) => `${k}=${v}`);
     if (overrideFlags.length > 0) {
-      const banner = `Experimental flag overrides: ${overrideFlags.join(", ")}`;
-      if (typeof Deno !== "undefined" && Deno.stderr) {
-        Deno.stderr.writeSync(new TextEncoder().encode(banner + "\n"));
-      } else {
-        console.log(banner);
-      }
+      writeOverrideBanner(
+        `Experimental flag overrides: ${overrideFlags.join(", ")}`,
+        globalThis.Deno?.stderr,
+      );
     }
 
     // Some flags are consumed from this Runtime instance. Normalize their
@@ -3457,6 +3472,16 @@ export class Runtime {
             }\0${address.id}`,
           );
         }
+      }),
+      // A released space opens again on its next use, as a first open does:
+      // its loads are kicked again, and the effects channel subscribes to
+      // it again.
+      manager.subscribeSpacesReleased?.((space) => {
+        const prefix = `${space}\0`;
+        for (const key of this.#missingDocLoadKicks) {
+          if (key.startsWith(prefix)) this.#missingDocLoadKicks.delete(key);
+        }
+        this.#effectsChannel?.forgetSpace(space);
       }),
     ];
     for (const cancel of cancels) {
@@ -5152,7 +5177,6 @@ export class Runtime {
     const links = profiles.get();
     if (!Array.isArray(links)) return 0;
     const spaces = links.flatMap((link) => {
-      if (!isCell(link)) return [];
       const space = link.getAsNormalizedFullLink().space;
       return space === home.space ? [] : [space];
     });

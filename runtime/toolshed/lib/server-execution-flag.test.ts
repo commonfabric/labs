@@ -117,6 +117,31 @@ describe("memoryAclPrincipalsFor", () => {
     ).not.toContain(me);
   });
 
+  it("returns the caller's `listsPeer` as `isDelegatingPeer` under the flag, and none off it", () => {
+    const listsPeer = (did: string) => did === "did:key:z6MkPeerToolshed";
+
+    expect(
+      memoryAclPrincipalsFor({
+        configured: [],
+        processIdentityDid: me,
+        serverExecution: true,
+        listsPeer,
+      }),
+    ).toEqual({
+      serviceDids: [],
+      delegatingDids: [me],
+      isDelegatingPeer: listsPeer,
+    });
+    expect(
+      memoryAclPrincipalsFor({
+        configured: [],
+        processIdentityDid: me,
+        serverExecution: false,
+        listsPeer,
+      }),
+    ).toEqual({ serviceDids: [], delegatingDids: [] });
+  });
+
   it("operator-configured OWNER-class listing of the process identity is kept VERBATIM (scope report flag F1: explicit configuration wins; the route logs the combination)", () => {
     expect(
       memoryAclPrincipalsFor({

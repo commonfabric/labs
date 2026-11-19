@@ -12,6 +12,7 @@ import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import {
   acquireServerExecutionEnabler,
   encodeMemoryBoundary,
@@ -438,6 +439,194 @@ describe("serving-worker-recovery", () => {
         on.worker.port === worker ? [placed] : []
       );
 
+    /** How many times the pool has warned that a worker's limit was replaced. */
+    const overriddenWarnings = (): number => {
+      const breakdown = getLoggerCountsBreakdown() as Record<
+        string,
+        Record<string, { warn?: number } | number | undefined> | undefined
+      >;
+      const entry = breakdown["serving-worker-host"]?.["heap-limit-overridden"];
+      return typeof entry === "object" ? entry.warn ?? 0 : 0;
+    };
+
+    it("warns when V8 limits a worker's heap to far more than it was started with, as a process-wide flag does", async () => {
+      fakes[Symbol.dispose]();
+      // The 16 GB a `--max-old-space-size=16384` gives every isolate.
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before + 1);
+    });
+
+    it("does not warn for the young generation V8 adds to the limit a worker was started with", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(196 * MB));
+      const before = overriddenWarnings();
+      startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      expect(workers()).toHaveLength(1);
+      expect(overriddenWarnings()).toBe(before);
+    });
+
+    it("ends a worker whose limit a process-wide flag replaced, at two heartbeats in a row past its limit", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [grown] = workers();
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(false);
+      grown.beat(150 * MB);
+      await clock.settle();
+      expect(grown.terminated).toBe(true);
+      expect(started.stats().workers).toMatchObject({
+        failed: 1,
+        heapLimited: 1,
+        heapStopped: 1,
+      });
+    });
+
+    it("does not end a worker whose limit a flag replaced for heartbeats past its limit that are not in a row", async () => {
+      fakes[Symbol.dispose]();
+      fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(50 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
+
+    describe("with collectBeforeEnding", () => {
+      /**
+       * Starts the pool to collect before ending, over workers whose limit a
+       * process-wide flag replaced, and returns the one a session placed.
+       */
+      const startCollecting = async (): Promise<
+        { started: ServingWorkerPool; worker: FakeServingWorker }
+      > => {
+        fakes[Symbol.dispose]();
+        fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+        const started = startLimited({ collectBeforeEnding: true });
+        server.openSession(space, "session-1");
+        await clock.settle();
+        const [worker] = workers();
+        return { started, worker };
+      };
+
+      /**
+       * Has `worker` answer each collection with the next of `heaps`, and
+       * returns how many it has been asked for.
+       */
+      const collectTo = (
+        worker: FakeServingWorker,
+        heaps: number[],
+      ): () => number => {
+        let asked = 0;
+        worker.host.onRequest("host.collectedMemory", () => {
+          const heapUsed = heaps[Math.min(asked, heaps.length - 1)];
+          asked += 1;
+          return { heapUsed, external: 0 };
+        });
+        return () => asked;
+      };
+
+      it("keeps a worker past its limit whose heap a collection brings under it, and asks again at the next heartbeat past it", async () => {
+        const { started, worker } = await startCollecting();
+        const asked = collectTo(worker, [40 * MB]);
+        worker.beat(150 * MB);
+        await clock.settle();
+        expect(asked()).toBe(1);
+        worker.beat(150 * MB);
+        await clock.settle();
+        worker.beat(150 * MB);
+        await clock.settle();
+        expect(worker.terminated).toBe(false);
+        expect(asked()).toBe(3);
+        expect(started.stats().workers.heapLimited).toBe(0);
+        expect(spacesOn(started, worker)).toEqual([space]);
+      });
+
+      it("ends a worker whose heap is still past its limit once collected, at the first heartbeat past it", async () => {
+        const { started, worker } = await startCollecting();
+        collectTo(worker, [120 * MB]);
+        worker.beat(150 * MB);
+        await clock.settle();
+        expect(worker.terminated).toBe(true);
+        expect(started.stats().workers).toMatchObject({
+          failed: 1,
+          heapLimited: 1,
+          heapStopped: 1,
+        });
+      });
+
+      it("asks no collection of a worker under its limit", async () => {
+        const { worker } = await startCollecting();
+        const asked = collectTo(worker, [40 * MB]);
+        worker.beat(90 * MB);
+        await clock.settle();
+        expect(asked()).toBe(0);
+        expect(worker.terminated).toBe(false);
+      });
+
+      it("asks one collection at a time, and ends a worker that does not answer at six heartbeats in a row past its limit", async () => {
+        const { started, worker } = await startCollecting();
+        let asked = 0;
+        worker.host.onRequest("host.collectedMemory", () => {
+          asked += 1;
+          return new Promise<never>(() => {});
+        });
+        for (let beat = 0; beat < 5; beat += 1) worker.beat(150 * MB);
+        await clock.settle();
+        expect(worker.terminated).toBe(false);
+        expect(asked).toBe(1);
+        worker.beat(150 * MB);
+        await clock.settle();
+        expect(worker.terminated).toBe(true);
+        expect(started.stats().workers.heapLimited).toBe(1);
+      });
+
+      it("ends a worker that refuses the collection at six heartbeats in a row past its limit", async () => {
+        const { worker } = await startCollecting();
+        worker.host.onRequest("host.collectedMemory", () => {
+          throw new Error("no collector exposed");
+        });
+        for (let beat = 0; beat < 5; beat += 1) {
+          worker.beat(150 * MB);
+          await clock.settle();
+        }
+        expect(worker.terminated).toBe(false);
+        worker.beat(150 * MB);
+        await clock.settle();
+        expect(worker.terminated).toBe(true);
+      });
+    });
+
+    it("leaves a worker under its own V8 limit to V8, whatever its heartbeats report", async () => {
+      // V8 collects such a worker's garbage before it fails it, and the heap
+      // a heartbeat reports includes garbage.
+      const started = startLimited();
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      worker.beat(150 * MB);
+      await clock.settle();
+      expect(worker.terminated).toBe(false);
+      expect(started.stats().workers.heapLimited).toBe(0);
+    });
+
     it("leaves a worker serving whose heap is larger than the limit and has not reached it", async () => {
       // The limit bounds the heap's old generation, and the heap a worker
       // reports is all of it, so the size alone ends no worker.
@@ -771,6 +960,48 @@ describe("serving-worker-recovery", () => {
       });
       await clock.settle();
       expect(started.stats().lease.lost).toBe(1);
+    });
+
+    it("kills a worker only once it has been silent for `watchdogLimitMs`, however long that is", async () => {
+      start({ watchdogLimitMs: 300_000 });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [silent] = workers();
+
+      // The first check reads the messages; 29 silent ones are 290 s.
+      await pass(30);
+      expect(silent.terminated).toBe(false);
+
+      await pass(1);
+      await clock.settle();
+      expect(silent.terminated).toBe(true);
+    });
+
+    it("counts only silence in a row toward `watchdogLimitMs`: a message restarts it", async () => {
+      start({ watchdogLimitMs: 300_000 });
+      server.openSession(space, "session-1");
+      await clock.settle();
+      const [worker] = workers();
+
+      // 240 s of silence, then a heartbeat, which the next check reads.
+      await pass(25);
+      worker.beat(1);
+      await clock.settle();
+      await pass(1);
+
+      // 290 s more: 530 s silent in all, but never 300 s in a row.
+      await pass(29);
+      expect(worker.terminated).toBe(false);
+
+      await pass(1);
+      await clock.settle();
+      expect(worker.terminated).toBe(true);
+    });
+
+    it("throws for a `watchdogLimitMs` shorter than an interval or not a whole number of milliseconds", () => {
+      for (const watchdogLimitMs of [0, 9_999, 60_000.5]) {
+        expect(() => start({ watchdogLimitMs })).toThrow("watchdogLimitMs");
+      }
     });
 
     it("restarts its count at a message of any kind", async () => {

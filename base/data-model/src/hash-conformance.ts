@@ -67,7 +67,6 @@ import {
   type FixtureJson,
   fixtureTextOf,
   hexOf,
-  type JsonCodecClassName,
   requirementsOf,
   sparseArrayOf,
   STUB_CODEC_EXCLUSION,
@@ -554,6 +553,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     make: () => new FabricHash(new Uint8Array(32).fill(0xab), "sha256"),
   },
   {
+    name: "hash under the algorithm tag my_hash",
+    section: SECTION_HASH,
+    make: () => new FabricHash(new Uint8Array([1]), "my_hash"),
+  },
+  {
     name: "hash under an algorithm tag of 65 UTF-8 bytes",
     section: SECTION_HASH,
     make: () => new FabricHash(new Uint8Array([1]), "t".repeat(65)),
@@ -563,7 +567,10 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
   {
     name: "key pair",
     section: SECTION_KEY_PAIR,
-    spec: "2C  24 07 45 64 32 35 35 31 39  25 02 DE AD  25 03 BE EF 01",
+    spec: "12  24 09 4B 65 79 50 61 69 72 40 31  11  " +
+      "24 09 61 6C 67 6F 72 69 74 68 6D  24 07 45 64 32 35 35 31 39  " +
+      "24 0A 70 72 69 76 61 74 65 4B 65 79  25 03 BE EF 01  " +
+      "24 09 70 75 62 6C 69 63 4B 65 79  25 02 DE AD  00",
     make: () =>
       new FabricKeyPair(
         "Ed25519",
@@ -586,14 +593,17 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
   {
     name: "unavailable with an error kind and a message",
     section: SECTION_UNAVAILABLE,
-    spec: "2D  24 05 65 72 72 6F 72  24 07 6E 65 74 77 6F 72 6B  " +
-      "24 04 62 6F 6F 6D",
+    spec: "12  24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31  11  " +
+      "24 09 65 72 72 6F 72 4B 69 6E 64  24 07 6E 65 74 77 6F 72 6B  " +
+      "24 07 6D 65 73 73 61 67 65  24 04 62 6F 6F 6D  " +
+      "24 06 72 65 61 73 6F 6E  24 05 65 72 72 6F 72  00",
     make: () => new FabricUnavailable("error", "network", "boom"),
   },
   {
     name: "unavailable and pending",
     section: SECTION_UNAVAILABLE,
-    spec: "2D  24 07 70 65 6E 64 69 6E 67  20  20",
+    spec: "12  24 0D 55 6E 61 76 61 69 6C 61 62 6C 65 40 31  11  " +
+      "24 06 72 65 61 73 6F 6E  24 07 70 65 6E 64 69 6E 67  00",
     make: () => new FabricUnavailable("pending"),
   },
   {
@@ -609,7 +619,7 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
       new FabricUnavailable(
         "error",
         "network",
-        new FabricUnavailable("error", "network").errorMessage,
+        new FabricUnavailable("error", "network").message,
       ),
   },
 
@@ -839,6 +849,11 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
     section: SECTION_INSTANCE,
     make: () => new UnknownValue("sys.beep.Boop@1", null),
   },
+  {
+    name: "unknown value under a tag holding underscores",
+    section: SECTION_INSTANCE,
+    make: () => new UnknownValue("_sys.beep_x.Boop_@1", null),
+  },
 
   // Cycles, and sharing.
   {
@@ -986,8 +1001,7 @@ const FIXED_CASES: readonly HashConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
-    ClassCaseNotes;
+  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
 } = {
   FabricBytes: { section: SECTION_BYTES },
   FabricDurationDay: { section: SECTION_DURATION_DAY },

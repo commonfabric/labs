@@ -49,7 +49,6 @@ import {
   fabricValueOfTextWithMods,
   type FixtureJson,
   fixtureTextOf,
-  type JsonCodecClassName,
   plainJsonTextOf,
   probedPathsOf,
   probesOf,
@@ -598,6 +597,13 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     make: () => new FabricUnavailable("error", "network"),
   },
   {
+    name: "unavailable error whose message is this package's default for " +
+      "its kind, kept as it arrived",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"message":"A network request failed.","reason":"error"}}',
+  },
+  {
     name: "problematic value whose tag is not a tag",
     section: "3-json-encoding.md section 3, `Problematic@1`",
     text: 'fvj1:{"/Problematic@1":{"error":"e","state":{"/Undefined@1":null},' +
@@ -646,6 +652,14 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify([{ [`/${tag}`]: 1 }])}`,
   })),
+  // Type tags holding `_`, which a component treats as a letter.
+  ...["a_b@1", "_x@1", "_@1", "x__y@1", "A.b_c.D_@2"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
+    name: `unknown tag ${JSON.stringify(tag)}`,
+    section: SECTION_TAG_SYNTAX,
+    text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
+  })),
   ...TYPE_TAGS_AT_THE_LIMITS.map(([has, tag]): Fvj1ConformanceCase => ({
     name: `unknown tag with ${has}`,
     section: SECTION_TAG_SYNTAX,
@@ -673,7 +687,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     "sys..Boop@1",
     ".Boop@1",
     "sys.Boop.@1",
-    "sys_x.Boop@1",
+    "sys$x.Boop@1",
     "sys.Boop",
     "core.Globals",
     "sys.Boop@01",
@@ -688,7 +702,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
   })),
   // Tags in the general syntax that, having no version, are not type tags.
-  ...["Bytes", "widget", "fid1"].map((tag): Fvj1ConformanceCase => ({
+  ...["Bytes", "widget", "fid1", "my_hash"].map((tag): Fvj1ConformanceCase => ({
     name: `key that is a tag but not a type tag ${JSON.stringify(tag)}`,
     section: SECTION_TAG_SYNTAX,
     text: `fvj1:${JSON.stringify({ [`/${tag}`]: 1 })}`,
@@ -758,7 +772,9 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     section: "3-json-encoding.md section 3, `Hash@1`",
     text: 'fvj1:{"/Hash@1":{"hash":7,"tag":"fid1"}}',
   },
-  ...["sha256", "SHA256", "sys.sha@2"].map((tag): Fvj1ConformanceCase => ({
+  ...["sha256", "SHA256", "sys.sha@2", "my_hash", "_"].map((
+    tag,
+  ): Fvj1ConformanceCase => ({
     name: `hash under the algorithm tag ${JSON.stringify(tag)}`,
     section: SECTION_HASH_TAG,
     make: () => new FabricHash(new Uint8Array([1]), tag),
@@ -783,10 +799,10 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
     text: `fvj1:${JSON.stringify({ "/Hash@1": { hash: "AQ", tag } })}`,
   })),
   {
-    name: "key pair with a key outside base64url",
+    name: "key pair whose keys are strings rather than `Bytes@1` values",
     section: "3-json-encoding.md section 3, `KeyPair@1`",
     text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","privateKey":"AA",' +
-      '"publicKey":"+"}}',
+      '"publicKey":"AQ"}}',
   },
   {
     name: "unavailable pairing an error kind with a transient reason",
@@ -1037,19 +1053,42 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
   {
     name: "unavailable error with a numeric message",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","errorMessage":5,' +
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network","message":5,' +
       '"reason":"error"}}',
   },
   {
     name: "unavailable error with a null message",
     section: SECTION_UNAVAILABLE,
     text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
-      '"errorMessage":null,"reason":"error"}}',
+      '"message":null,"reason":"error"}}',
   },
   {
     name: "unavailable pairing a message with a transient reason",
     section: SECTION_UNAVAILABLE,
-    text: 'fvj1:{"/Unavailable@1":{"errorMessage":"m","reason":"pending"}}',
+    text: 'fvj1:{"/Unavailable@1":{"message":"m","reason":"pending"}}',
+  },
+  {
+    name: "unavailable error holding a field its codec does not read",
+    section: SECTION_UNAVAILABLE,
+    text: 'fvj1:{"/Unavailable@1":{"errorKind":"network",' +
+      '"errorMessage":"boom","reason":"error"}}',
+  },
+  {
+    name: "hash holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Hash@1`",
+    text: 'fvj1:{"/Hash@1":{"extra":1,"hash":"AQ","tag":"fid1"}}',
+  },
+  {
+    name: "problematic value holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `Problematic@1`",
+    text: 'fvj1:{"/Problematic@1":{"error":"e","extra":1,"state":null,' +
+      '"tag":"x"}}',
+  },
+  {
+    name: "key pair holding a field its codec does not read",
+    section: "3-json-encoding.md section 3, `KeyPair@1`",
+    text: 'fvj1:{"/KeyPair@1":{"algorithm":"A","extra":1,' +
+      '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AQ"}}}',
   },
   {
     name: "tag with no version",
@@ -1065,8 +1104,7 @@ const FIXED_CASES: readonly Fvj1ConformanceCase[] = [
 
 /** What the primitive classes' examples need beyond their makers. */
 const PRIMITIVE_CLASS_NOTES: {
-  readonly [Name in JsonCodecClassName<FabricPrimitiveClassesByName>]:
-    ClassCaseNotes;
+  readonly [Name in keyof FabricPrimitiveClassesByName]: ClassCaseNotes;
 } = {
   FabricBytes: { section: "3-json-encoding.md section 3, `Bytes@1`" },
   FabricDurationDay: {

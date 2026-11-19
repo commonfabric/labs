@@ -10,8 +10,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { JSON_FORMAT } from "@/codec-json/interface.ts";
-import { codecClassesFor } from "@/codecs.ts";
+import { fabricInstanceClassesByName } from "@/fabric-instances";
+import { fabricPrimitiveClassesByName } from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
@@ -253,8 +253,11 @@ describe("fvj1-conformance", () => {
     const values = FVJ1_CONFORMANCE_CASES_FOR_TESTING_ONLY.flatMap((c) =>
       "make" in c ? [c.make()] : []
     );
-    for (const cls of codecClassesFor(JSON_FORMAT)) {
-      const { name } = cls;
+    const classes = {
+      ...fabricPrimitiveClassesByName(),
+      ...fabricInstanceClassesByName(),
+    };
+    for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
         .toEqual({ name, covered: !STUB_CODEC_CLASSES.has(name) });
     }
@@ -466,6 +469,32 @@ describe("fvj1-conformance", () => {
       ]);
       const { divergence } = JSON.parse(text).cases[0];
       expect(Object.keys(divergence)).toEqual(["note", "decode", "encode"]);
+    });
+
+    it("throws given a value that encodes unlike what its text decodes to", () => {
+      // The getter returns 1 to the first two reads, which take the text and
+      // the probes, and 2 to the third, which encodes the value itself. The
+      // text then decodes to a value with the probes taken, which encodes
+      // unlike the value.
+
+      let reads = 0;
+      expect(() =>
+        fvj1ConformanceFixtureTextForTestingOnly([
+          {
+            name: "drifting",
+            section: "s",
+            make: () => ({
+              get a() {
+                reads++;
+                return (reads <= 2) ? 1 : 2;
+              },
+            }),
+          },
+        ])
+      ).toThrow(
+        'drifting: encodes to {"text":"fvj1:{\\"a\\":2}"}, but what its text ' +
+          'decodes to encodes to {"text":"fvj1:{\\"a\\":1}"}.',
+      );
     });
 
     it("throws given a refused text whose lenient decode yields more than one problematic value", () => {

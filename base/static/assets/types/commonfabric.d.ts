@@ -65,9 +65,6 @@ type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
  * the one name its class reports, and the interface is a member of
  * `ConcreteFabricPrimitive`.
  *
- * TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: its
- * interface narrows `.schemaType` to `object`, and is not a member.
- *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
  * sandbox is served inlines this text rather than following a specifier out of
@@ -305,9 +302,7 @@ export interface FabricPrimitive {
    * a schema names to admit this value by its class. Every instance of a class
    * reports the same name, which need not be the name of the class.
    */
-  // TODO(danfuzz): Once `FabricRegExp` is deleted, narrow this to
-  // `FabricPrimitiveSchemaType`.
-  readonly schemaType: FabricPrimitiveSchemaType | "object";
+  readonly schemaType: FabricPrimitiveSchemaType;
 }
 
 export interface FabricPrimitiveConstructor {
@@ -484,6 +479,16 @@ export interface FabricHashConstructor {
 export declare const FabricHash: FabricHashConstructor;
 
 /**
+ * The state of a `FabricKeyPair` that holds material, which is also its
+ * encoded form: the algorithm name, and the two keys' bytes.
+ */
+export type KeyPairState = {
+  readonly algorithm: string;
+  readonly publicKey: FabricBytes;
+  readonly privateKey: FabricBytes;
+};
+
+/**
  * An immutable asymmetric key pair.
  *
  * An instance either holds handles -- two `CryptoKey`s, whose material this
@@ -497,6 +502,12 @@ export interface FabricKeyPair extends FabricPrimitive {
 
   readonly algorithm: string;
   readonly hasMaterial: boolean;
+
+  /**
+   * The state, a frozen record of the algorithm name and the two keys' bytes.
+   * Throws when this instance holds handles.
+   */
+  readonly state: KeyPairState;
 
   /**
    * A `CryptoKeyPair` holding this instance's two keys. The record is a new
@@ -532,37 +543,6 @@ export interface FabricKeyPairConstructor {
 export declare const FabricKeyPair: FabricKeyPairConstructor;
 
 /**
- * An immutable regular expression.
- *
- * The pattern is held as a flavor / source / flags triple rather than as a
- * JS `RegExp`, so that flavors with no JS representation can still be
- * carried. `value` reconstitutes a JS `RegExp` where one exists.
- */
-export interface FabricRegExp extends FabricPrimitive {
-  /** @inheritDoc */
-  readonly schemaType: "object";
-
-  readonly source: string;
-  readonly flags: string;
-  readonly flavor: string;
-
-  /**
-   * A fresh JS `RegExp` equivalent to this value, returned anew on each
-   * call so the internal instance is never aliased out. Throws for a flavor
-   * with no JS `RegExp` representation.
-   */
-  readonly value: RegExp;
-}
-
-export interface FabricRegExpConstructor {
-  new (regex: RegExp): FabricRegExp;
-  new (flavor: string, source: string, flags: string): FabricRegExp;
-  prototype: FabricRegExp;
-}
-
-export declare const FabricRegExp: FabricRegExpConstructor;
-
-/**
  * Why a `FabricUnavailable` stands where data would otherwise be. The two
  * transient reasons say the data is on its way; `error` says producing it
  * failed, and is the one reason that carries a kind and a message.
@@ -584,16 +564,41 @@ export type UnavailableErrorKind =
   | "sync";
 
 /**
+ * The state of a `FabricUnavailable`, which is also its encoded form: the
+ * reason; for the `error` reason the kind; and the message when one is
+ * stored. A field that has nothing to say is absent rather than `null`, so
+ * that the state of a transient reason is exactly the reason.
+ */
+export type UnavailableState =
+  /** A transient reason, which carries nothing else. */
+  | { readonly reason: "pending" | "syncing" }
+  /**
+   * The `error` reason, with its kind, and its message when one is stored,
+   * which a message equal to the kind's default never is.
+   */
+  | {
+    readonly reason: "error";
+    readonly errorKind: UnavailableErrorKind;
+    readonly message?: string;
+  };
+
+/**
  * A marker standing in for data that is not available, saying why. It holds
  * no data of its own: the reason, and for the `error` reason the kind of
  * error and a message, are the whole of what it says. Only the `error` reason
  * carries a kind, and it always does; only the `error` reason may carry a
- * message, and `errorMessage` supplies one for its kind when none was given.
- * For the other two reasons every error member is `null`.
+ * message, and `message` supplies one for its kind when none was given. For
+ * the other two reasons every error member is `null`.
  */
 export interface FabricUnavailable extends FabricPrimitive {
   /** @inheritDoc */
   readonly schemaType: "FabricUnavailable";
+
+  /**
+   * The state, a frozen record: the reason, the kind when there is one, and
+   * the message when one is stored.
+   */
+  readonly state: UnavailableState;
 
   /** Why the data is unavailable. */
   readonly reason: UnavailableReason;
@@ -605,14 +610,14 @@ export interface FabricUnavailable extends FabricPrimitive {
    * The message, when the reason is `error`: the one given at construction,
    * or the kind's default when none was. `null` for a transient reason.
    */
-  readonly errorMessage: string | null;
+  readonly message: string | null;
 
   /**
    * The message as given at construction, with no default supplied: `null`
    * for a transient reason, and for an `error` whose message is its kind's
    * default or was never given.
    */
-  readonly rawErrorMessage: string | null;
+  readonly rawMessage: string | null;
 
   /** Whether the reason is `pending`. */
   isPending(): boolean;
@@ -621,12 +626,12 @@ export interface FabricUnavailable extends FabricPrimitive {
   isSyncing(): boolean;
 
   /**
-   * Whether the reason is `error`, narrowing `errorKind` and `errorMessage`
-   * to the non-`null` values the `error` reason always carries.
+   * Whether the reason is `error`, narrowing `errorKind` and `message` to the
+   * non-`null` values the `error` reason always carries.
    */
   isError(): this is {
     readonly errorKind: UnavailableErrorKind;
-    readonly errorMessage: string;
+    readonly message: string;
   };
 
   /**
@@ -640,7 +645,7 @@ export interface FabricUnavailableConstructor {
   new (
     reason: UnavailableReason,
     errorKind?: UnavailableErrorKind | null,
-    errorMessage?: string | null,
+    message?: string | null,
   ): FabricUnavailable;
   prototype: FabricUnavailable;
 }
@@ -655,8 +660,6 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
  * Union of the concrete `FabricPrimitive` classes this module declares. Every
  * type that ranges over those classes is derived from this one.
  */
-// TODO(danfuzz): Once `FabricRegExp` is deleted, drop this caveat: it is the
-// one class declared here that this union leaves out.
 export type ConcreteFabricPrimitive =
   | FabricBytes
   | FabricDurationDay
@@ -1858,7 +1861,19 @@ export interface ICreatable<C extends AnyBrandedCell<any>> {
  * Note: Schema-typed overload available via "commonfabric/schema"
  */
 export interface IResolvable<T, C extends AnyBrandedCell<T>> {
+  /**
+   * The cell this one's links lead to. The returned cell takes the nearest
+   * schema a crossed link stores that constrains, whatever this cell's own
+   * schema declares. This cell's schema stays only where it declares a stream
+   * and the stored schema declares nothing but one, and a `default` this cell
+   * declares carries over where the stored schema declares none.
+   *
+   * So a read of the returned cell can return `undefined` where a read of this
+   * cell returns the target. For this cell's own projection, read by key, or
+   * re-type the returned cell with `asSchema()`.
+   */
   resolveAsCell(): C;
+
   getArgumentCell<U>(schema?: JSONSchema): Cell<U> | undefined;
 }
 
@@ -3432,7 +3447,9 @@ export interface BuiltInCompileAndRunParams<T> {
 
   /**
    * Names of entries in `files` that carry data rather than code. A pattern
-   * reads one with `dataFile()`; nothing compiles, imports, or transforms it.
+   * reads a text file with `dataFile()`, and an image, a font, or a sound with
+   * `dataFile.url()` or `dataFile.urls()`; nothing compiles, imports, or
+   * transforms one.
    */
   dataFiles?: string[];
 
@@ -3846,7 +3863,8 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  *   trimmed, is `control`, and dispatches a click on it, so the handler bound
  *   there receives the event with the provenance its rendered markers give.
  *   `within` names text an element around the control shows, for a view that
- *   shows `control` more than once, such as a row of a list.
+ *   shows `control` more than once, such as a row of a list. `modifiers` names
+ *   the keys held during the click, such as `["meta"]` for a Cmd-click.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3866,7 +3884,12 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
-  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
+  | OnlyTestStep<"press", {
+    press: unknown;
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
@@ -4081,8 +4104,42 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * closure, so this reads memory rather than storage: it is synchronous, it
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
+ *
+ * A binary media file (an image other than SVG, a font, or a sound, by its
+ * extension) has no text, and reading one this way throws; read it with
+ * `dataFile.url()`. An SVG is text, and this returns its markup.
  */
-export type DataFileFunction = (path: string) => string;
+export interface DataFileFunction {
+  /** Reads the text of the attached data file `path` names. */
+  (path: string): string;
+
+  /**
+   * Reads an attached data file as a base64 `data:` URL carrying its media
+   * type, such as `data:image/png;base64,…`: the form an image, a font, or a
+   * sound takes in an iframe guest, since `data:` URLs are the one image source
+   * every embedding's Content Security Policy admits (see `cf-iframe`'s
+   * `assets`). `path` resolves as for `dataFile()`.
+   *
+   * The media type comes from the file's extension: `.png`, `.jpg`, `.jpeg`,
+   * `.gif`, `.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`,
+   * `.mp3`, `.ogg`, and `.wav`. Any other extension throws.
+   */
+  url(path: string): string;
+
+  /**
+   * Reads every asset in an attached directory as a `data:` URL, keyed by its
+   * file name without the extension, so `assets/glaze.png` is `glaze` in
+   * `dataFile.urls("./assets")`. An asset is a file directly inside the
+   * directory whose extension `dataFile.url()` reads; other files and
+   * subdirectories are left out. `path` resolves as for `dataFile()`.
+   *
+   * Building the program attaches the directory's assets by listing it, which
+   * a program read over HTTP cannot do. A file whose name without the
+   * extension holds characters other than letters, digits, `_`, and `-`, or
+   * two files that would share a name, throw.
+   */
+  urls(path: string): Readonly<Record<string, string>>;
+}
 
 //
 // SQLite builtins (docs/specs/sqlite-builtin)
@@ -4531,23 +4588,28 @@ export declare function principalsOf(
  * principal that the label of the cell a write to `target` lands in names as
  * the one the value represents, in the form the runtime writes, at that
  * label's root, and only when no claim anywhere in the label names anyone
- * else. The value's own cell is that cell when the value is the whole of it
- * and the cell holds no link to a value elsewhere: a value at a path within a
- * document reads with that document's label, and a link stored in the cell
- * leads to a value it does not hold. `undefined` in every other case, for a
- * value stored without a label, and for a `target` of `undefined`.
+ * else. The value's own cell is that cell when the value is the whole of it,
+ * the cell is in the space of the document holding `target`'s field, and the
+ * cell holds no link to a value elsewhere: a value at a path within a document
+ * reads with that document's label, and a link stored in the cell leads to a
+ * value it does not hold. `undefined` in every other case, for a value stored
+ * without a label, and for a `target` of `undefined`.
  *
- * The label says whom the cell's value represents, not who pointed `target`
- * at that cell: the links on the way, write redirects among them, are
- * followed. A write declared `RepresentsCurrentUser`, as a profile's
- * `setPicture` is, labels the value with the principal it acts for, and a
- * profile's owner-protected fields keep their write redirects from being
- * repointed. So comparing this with `profileOwnerOf()` says whether a
- * profile's `picture` is one its owner set. It can be called where
- * `principalOf()` can: in a reactive computation the result updates when the
- * label or the links change, and in a handler a document still loading has
- * the handler run again once it arrives. Calling it in a pattern body throws,
- * and so does a label stored in a form the runtime cannot interpret.
+ * The label says whom the cell's value represents, not who pointed `target` at
+ * that cell: the links on the way, write redirects among them, are followed. A
+ * cell in another space is refused, since its label says who wrote the value
+ * there, not that anyone put it at this field. Name the field through the
+ * document holding it, as `profile.key("picture")` does: a write redirect of
+ * your own to the field, stored in another space, is refused like any other. A
+ * write declared `RepresentsCurrentUser`, as a profile's `setPicture` is,
+ * labels the value with the principal it acts for, so comparing this with
+ * `profileOwnerOf()` says whether a profile's `picture` is one its owner set.
+ * Within the profile's space, a visitor can still point a face field at another
+ * cell the owner wrote there. It can be called where `principalOf()` can: in a
+ * reactive computation the result updates when the label or the links change,
+ * and in a handler a document still loading has the handler run again once it
+ * arrives. Calling it in a pattern body throws, and so does a label stored in a
+ * form the runtime cannot interpret.
  */
 export declare function writtenPrincipalOf<T>(
   target: AnyCell<T> | undefined,
@@ -5053,6 +5115,24 @@ export type EqualsFunction = (
 ) => boolean;
 
 /**
+ * Returns a string that two values share exactly when `equals` returns `true`
+ * for them in the same run, so that a `Set` or a `Map` keyed by it finds the
+ * distinct references in a list, or joins one list to another, in one pass
+ * where `equals` compares them in pairs. Inside a handler or a reactive
+ * computation it follows links first, as `equals` does, so an alias and the
+ * document it names share a key; elsewhere it compares links as given.
+ *
+ * Returns `undefined` for a value with no place in the graph — a fresh object
+ * literal, a primitive, `undefined` — which `equals` matches to nothing but
+ * itself. A key holds for the run that made it, as `equals` does: compare it
+ * with keys from the same run, and do not store it. Its form is not part of
+ * the contract.
+ */
+export type EqualsKeyFunction = (
+  value: AnyCell<any> | object | undefined,
+) => string | undefined;
+
+/**
  * Deep structural equality for two values, intended for `FabricValue`-shaped
  * data. Compares primitives with `Object.is` (so `NaN` equals `NaN` and `-0`
  * is distinct from `0`). Unlike `equals`, it compares values directly and does
@@ -5147,6 +5227,7 @@ export declare const multiUserTest: <T extends MultiUserTestDescriptor>(
 export declare const cell: CellTypeConstructor<AsCell>["of"];
 
 export declare const equals: EqualsFunction;
+export declare const equalsKey: EqualsKeyFunction;
 export declare const valueEqual: ValueEqualFunction;
 export declare const byRef: ByRefFunction;
 export function getPatternEnvironment(): PatternEnvironment {
@@ -5289,6 +5370,50 @@ export type SpaceMembersFunction = (
 ) => SpaceMemberList | undefined;
 
 export declare const spaceMembers: SpaceMembersFunction;
+
+/**
+ * One member of a social space, as `joinSpaceMembers()` returns it, with the
+ * profiles of type `P` that are their own.
+ */
+export interface SpaceMemberOf<P> {
+  /** The principal's DID, as the space's access list names it. */
+  principal: DID;
+
+  /** The level the access list's entry for `principal` grants. */
+  level: SpaceGrantLevel;
+
+  /**
+   * The roster's profiles that are `principal`'s own, each once, in the order
+   * the roster first lists them, and empty for a member with none there. A
+   * reader that shows one face for the member shows the first.
+   */
+  profiles: P[];
+}
+
+/**
+ * Returns the members of a social space whose access list is `list` and whose
+ * roster is `roster`: one for each principal `list` names, sorted by DID,
+ * each with the profiles on `roster` whose owner, as `ownerOf` returns it, is
+ * that principal. `list`'s `anyone` names no one, so it adds no member, and a
+ * profile `ownerOf` returns no owner for, or an owner `list` does not name,
+ * is left out. `undefined` while `list` is, so a reader can tell "not known
+ * yet" from "nobody".
+ *
+ * Two profiles `keyOf` returns the same key for are one profile, counted
+ * once; a profile it returns no key for is the same as nothing but itself.
+ * In pattern code, `ownerOf` is `profileOwnerOf` and `keyOf` is `equalsKey`,
+ * so a profile counts toward a member exactly when it counts as theirs
+ * anywhere else; it can then be called where those can. It reads nothing
+ * itself, so it does no more than `ownerOf` and `keyOf` do.
+ */
+export type JoinSpaceMembersFunction = <P>(
+  roster: readonly P[],
+  list: SpaceMemberList | undefined,
+  ownerOf: (profile: P) => DID | undefined,
+  keyOf: (profile: P) => string | undefined,
+) => SpaceMemberOf<P>[] | undefined;
+
+export declare const joinSpaceMembers: JoinSpaceMembersFunction;
 
 /**
  * Returns the DID of the space `target`'s value lives in, after following any

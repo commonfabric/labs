@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
+import type { Cell } from "../src/cell.ts";
 
 import {
   ensurePieceRunningVerdict,
   type OwningRootAddress,
+  startWithInputSources,
+  type StartWithInputSourcesOptions,
 } from "../src/ensure-piece-running.ts";
+import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
-import { getMetaLink } from "../src/link-utils.ts";
+import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
+import { systemPatternSource } from "../src/pattern-source-scheme.ts";
+import { getPatternIdentityRef, setPatternSource } from "../src/runner.ts";
 import { setResultCell } from "../src/result-utils.ts";
 import { type ExperimentalOptions, Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -84,6 +92,158 @@ const NESTED_PROGRAM: RuntimeProgram = {
       "  const doubled = computed(() => value * 2);",
       "  const nested = recorder({ inputs: { doubled, seen: seen! } });",
       "  return { doubled, record: nested.record };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// `PROGRAM` with an instance between the enclosing one and the recorder: the
+// recorder's input is what the middle instance derives from what the
+// enclosing one derives, so a run with `value` 5 records 11.
+const THREE_LEVEL: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, Default, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "type Seen = Writable<number | Default<0>>;",
+      "",
+      "const record = handler<unknown, { bumped?: number; seen: Seen }>(",
+      "  (_event, { bumped, seen }) => {",
+      "    seen.set(bumped ?? -1);",
+      "  },",
+      ");",
+      "",
+      "const recorder = pattern<",
+      "  { bumped?: number; seen: Seen },",
+      "  { record: Stream<unknown> }",
+      ">(({ bumped, seen }) => ({ record: record({ bumped, seen }) }));",
+      "",
+      "const middle = pattern<",
+      "  { doubled?: number; seen: Seen },",
+      "  { record: Stream<unknown> }",
+      ">(({ doubled, seen }) => {",
+      "  const bumped = computed(() => (doubled ?? 0) + 1);",
+      "  const inner = recorder({ bumped, seen });",
+      "  return { record: inner.record };",
+      "});",
+      "",
+      "export default pattern<",
+      "  { value: number; seen?: Seen },",
+      "  { doubled: number; record: Stream<unknown> }",
+      ">(({ value, seen }) => {",
+      "  const doubled = computed(() => value * 2);",
+      "  const between = middle({ doubled, seen: seen! });",
+      "  return { doubled, record: between.record };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// A creator that sets `Child` up as a nested node of its own graph, and makes
+// another `Child` from a handler, each from the creator's `label`.
+const CREATOR_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, pattern, Writable } from 'commonfabric';",
+      "",
+      "const Child = pattern<{ label: string }, { shown: string }>(",
+      "  ({ label }) => ({ shown: computed(() => label + '!') }),",
+      ");",
+      "",
+      "const spawn = handler<",
+      "  unknown,",
+      "  { label: string; spawned: Writable<unknown[]> }",
+      ">((_event, { label, spawned }) => {",
+      "  spawned.push(Child({ label }));",
+      "});",
+      "",
+      "export default pattern<{ name: string }>(({ name }) => {",
+      "  const label = computed(() => name + ' label');",
+      "  const spawned = new Writable<unknown[]>([]).for('spawned');",
+      "  const nested = Child({ label });",
+      "  return { nested, spawned, spawn: spawn({ label, spawned }) };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// A recorder whose only input is a sibling nested instance's output, keeping
+// what it records in a writable of its own, so its argument links into the
+// instance enclosing them both only through the record of the sibling's
+// output.
+const SIBLING_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "const producer = pattern<{ value: number }, { doubled: number }>(",
+      "  ({ value }) => ({ doubled: computed(() => value * 2) }),",
+      ");",
+      "",
+      "const record = handler<",
+      "  unknown,",
+      "  { doubled?: number; seen: Writable<number> }",
+      ">((_event, { doubled, seen }) => {",
+      "  seen.set(doubled ?? -1);",
+      "});",
+      "",
+      "const recorder = pattern<",
+      "  { doubled?: number },",
+      "  { record: Stream<unknown>; seen: number }",
+      ">(({ doubled }) => {",
+      "  const seen = new Writable<number>(0);",
+      "  return { record: record({ doubled, seen }), seen };",
+      "});",
+      "",
+      "export default pattern<",
+      "  { value: number },",
+      "  { doubled: number; record: Stream<unknown>; seen: number }",
+      ">(({ value }) => {",
+      "  const sibling = producer({ value });",
+      "  const nested = recorder({ doubled: sibling.doubled });",
+      "  return { doubled: sibling.doubled, record: nested.record, seen: nested.seen };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+// The same recorder as each row `map` builds from what the enclosing
+// instance derives.
+const MAP_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, handler, pattern, Stream, Writable } from 'commonfabric';",
+      "",
+      "const record = handler<",
+      "  unknown,",
+      "  { doubled?: number; seen: Writable<number> }",
+      ">((_event, { doubled, seen }) => {",
+      "  seen.set(doubled ?? -1);",
+      "});",
+      "",
+      "const recorder = pattern<",
+      "  { doubled?: number },",
+      "  { record: Stream<unknown>; seen: number }",
+      ">(({ doubled }) => {",
+      "  const seen = new Writable<number>(0);",
+      "  return { record: record({ doubled, seen }), seen };",
+      "});",
+      "",
+      "export default pattern<",
+      "  { value: number },",
+      "  { rows: { record: Stream<unknown>; seen: number }[] }",
+      ">(({ value }) => {",
+      "  const doubled = computed(() => [value * 2]);",
+      "  const rows = doubled.map((each) => recorder({ doubled: each }));",
+      "  return { rows };",
       "});",
     ].join("\n"),
   }],
@@ -273,6 +433,721 @@ describe("ensure-piece-running", () => {
     });
 
     expect(verdict.started).toBe(false);
+  });
+
+  describe("startWithInputSources()", () => {
+    /** The synced nested instance behind `stream`, as `runtime` holds it. */
+    const nestedOwner = async (
+      runtime: Runtime,
+      stream: NormalizedFullLink,
+    ) => {
+      const owner = runtime.getCellFromLink({
+        ...getMetaLink(runtime.getCellFromLink(stream), "result")!,
+        path: [],
+      });
+      await owner.sync();
+      return owner;
+    };
+
+    /** What the nested handler last recorded, as `runtime` reads it. */
+    const seenIn = async (runtime: Runtime) => {
+      const seen = runtime.getCell<{ seen?: number }>(
+        space,
+        ARGUMENT_CAUSE,
+        { type: "object", properties: { seen: { type: "number" } } },
+      );
+      await seen.sync();
+      return seen.get().seen;
+    };
+
+    /**
+     * Opens the nested instance that owns `stream` in `opener` through
+     * `startWithInputSources()` with `options`, then takes an event on
+     * `stream` there, and returns what the open returned, the nested
+     * instance, and what the handler recorded.
+     */
+    const openThenEvent = async (
+      opener: Runtime,
+      stream: NormalizedFullLink,
+      options?: StartWithInputSourcesOptions,
+    ) => {
+      const owner = await nestedOwner(opener, stream);
+      const started = await startWithInputSources(
+        opener,
+        owner,
+        () => opener.start(owner),
+        options,
+      );
+      opener.scheduler.queueEvent(stream, {});
+      await opener.idle();
+      return { owner, started, seen: await seenIn(opener) };
+    };
+
+    /** How many input-source warnings an open has logged so far. */
+    const openWarnings = () =>
+      getLogger("ensure-piece-running.open").countsByKey["input-sources"]
+        ?.warn ?? 0;
+
+    it("starts the enclosing piece before a nested piece opened on its own, so a later event's handler reads what the enclosing piece derives now", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+
+      const { started, seen } = await openThenEvent(opener, stream);
+
+      expect(seen).toBe(10);
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        true,
+      );
+    });
+
+    it("leaves the opened nested piece running when its enclosing piece stops", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const { owner } = await openThenEvent(opener, stream);
+
+      opener.runner.stop(opener.getCellFromLink(enclosing));
+      await opener.idle();
+
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(opener.runner.isRunning(owner)).toBe(true);
+    });
+
+    it("starts only the opened piece for a client under server execution, whose run of a handler is an echo", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime({ serverExecution: true });
+
+      const { owner, started } = await openThenEvent(opener, stream);
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+    });
+
+    it("starts the opened piece on its own, and warns, where its argument's links cannot be read", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell =
+        ((cell, options) =>
+          cell.getAsNormalizedFullLink().id === enclosing.id
+            ? Promise.reject(new Error("the store refused the read"))
+            : sync(cell, options)) as typeof storageManager.syncCell;
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const warned = openWarnings();
+
+      const started = await startWithInputSources(
+        opener,
+        owner,
+        () => opener.start(owner),
+      );
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(owner)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(openWarnings()).toBe(warned + 1);
+    });
+
+    it("warns where a piece enclosing it two levels up cannot start", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(THREE_LEVEL);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const load = opener.patternManager.loadPatternByIdentity.bind(
+        opener.patternManager,
+      );
+      const enclosingRef = getPatternIdentityRef(
+        opener.getCellFromLink(enclosing),
+      );
+      opener.patternManager.loadPatternByIdentity =
+        ((identity, symbol, ...rest) =>
+          symbol === enclosingRef?.symbol
+            ? Promise.resolve(undefined)
+            : load(identity, symbol, ...rest)) as typeof load;
+      const warned = openWarnings();
+
+      await startWithInputSources(opener, owner, () => opener.start(owner));
+
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(openWarnings()).toBe(warned + 1);
+    });
+
+    it("warns where a piece that encloses it cannot start", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      const load = opener.patternManager.loadPatternByIdentity.bind(
+        opener.patternManager,
+      );
+      const enclosingRef = getPatternIdentityRef(
+        opener.getCellFromLink(enclosing),
+      );
+      opener.patternManager.loadPatternByIdentity =
+        ((identity, symbol, ...rest) =>
+          symbol === enclosingRef?.symbol
+            ? Promise.resolve(undefined)
+            : load(identity, symbol, ...rest)) as typeof load;
+      const warned = openWarnings();
+
+      const started = await startWithInputSources(
+        opener,
+        owner,
+        () => opener.start(owner),
+      );
+
+      expect(started).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing))).toBe(
+        false,
+      );
+      expect(openWarnings()).toBe(warned + 1);
+    });
+
+    it("calls only `start` for a piece that runs already", async () => {
+      const { stream } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+      await opener.start(owner);
+      const walked: string[] = [];
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        walked.push(cell.getAsNormalizedFullLink().id);
+        return sync(cell, options);
+      }) as typeof storageManager.syncCell;
+
+      let calledStart = false;
+      const started = await startWithInputSources(opener, owner, () => {
+        calledStart = true;
+        return Promise.resolve(true);
+      });
+
+      expect(started).toBe(true);
+      expect(calledStart).toBe(true);
+      expect(walked).toEqual([]);
+    });
+
+    it("starts the enclosing piece once for two opens of a nested piece at the same time", async () => {
+      const { stream, enclosing } = await stopAfterInputChanges(PROGRAM);
+      const opener = newRuntime();
+      const owner = await nestedOwner(opener, stream);
+
+      const opened = await Promise.all(
+        [0, 1].map(() =>
+          startWithInputSources(opener, owner, () => opener.start(owner))
+        ),
+      );
+      opener.scheduler.queueEvent(stream, {});
+      await opener.idle();
+
+      expect(opened).toEqual([true, true]);
+      expect(await seenIn(opener)).toBe(10);
+      expect(
+        [...opener.runner.cancels.keys()].filter((key) =>
+          key.endsWith(`/${enclosing.id}`)
+        ),
+      ).toHaveLength(1);
+    });
+
+    /**
+     * Runs a piece of `PROGRAM` for each of `names`, with `value` 1, and
+     * returns the runtime and their results.
+     */
+    const stoppedProducers = async (names: string[]) => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(PROGRAM, {
+        space,
+      });
+      const producers = names.map((name) =>
+        first.getCell<{ doubled: number }>(
+          space,
+          `input sources ${name} result`,
+          compiled.resultSchema,
+        )
+      );
+      {
+        const tx = first.edit();
+        for (const producer of producers) {
+          first.run(tx, compiled, { value: 1 }, producer);
+        }
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      return { first, producers };
+    };
+
+    /**
+     * Runs a piece of `CREATOR_PROGRAM`, has its handler make a child, and
+     * stops it, and returns the creator, the child its graph sets up, and the
+     * child its handler made.
+     */
+    const stoppedCreator = async () => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(
+        CREATOR_PROGRAM,
+        { space },
+      );
+      const creator = first.getCell<Record<string, unknown>>(
+        space,
+        "input sources creator",
+        undefined,
+      );
+      {
+        const tx = first.edit();
+        first.run(tx, compiled, { name: "n" }, creator);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await creator.pull();
+      await first.idle();
+      {
+        const tx = first.edit();
+        creator.withTx(tx).key("spawn").send({});
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await first.idle();
+      await creator.pull();
+      const nestedLink = creator.key("nested").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const [spawned] = creator.key("spawned").asSchema({
+        type: "array",
+        items: { type: "unknown", asCell: ["cell"] },
+      }).get() as Cell<unknown>[];
+      const spawnedLink = spawned.resolveAsCell().getAsNormalizedFullLink();
+      // Both children's stored arguments link the creator's `label`.
+      expect(spawnedLink.id).not.toBe(nestedLink.id);
+      first.runner.stop(creator);
+      await first.idle();
+      await first.storageManager.synced();
+      return { creator, nestedLink, spawnedLink };
+    };
+
+    /**
+     * The most loads of the documents `ids` names that were under way at
+     * once while `run` ran.
+     */
+    const mostLoadsAtOnce = async (
+      ids: readonly string[],
+      run: () => Promise<unknown>,
+    ) => {
+      let loading = 0;
+      let most = 0;
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        if (!ids.includes(cell.getAsNormalizedFullLink().id)) {
+          return sync(cell, options);
+        }
+        most = Math.max(most, ++loading);
+        return sync(cell, options).finally(() => loading--);
+      }) as typeof storageManager.syncCell;
+      await run();
+      return most;
+    };
+
+    it("starts the creator of a nested child opened on its own, and not the creator of a child a handler made", async () => {
+      const { creator, nestedLink, spawnedLink } = await stoppedCreator();
+
+      for (
+        const [child, startsCreator] of [[spawnedLink, false], [
+          nestedLink,
+          true,
+        ]] as const
+      ) {
+        const opener = newRuntime();
+        const opened = opener.getCellFromLink({ ...child, path: [] });
+        await opened.sync();
+
+        await startWithInputSources(opener, opened, () => opener.start(opened));
+
+        expect(opener.runner.isRunning(opened)).toBe(true);
+        expect(
+          opener.runner.isRunning(
+            opener.getCellFromLink(creator.getAsNormalizedFullLink()),
+          ),
+        ).toBe(startsCreator);
+      }
+    });
+
+    it("loads every internal document of a piece the opened piece's inputs come from at once, finding it encloses nothing", async () => {
+      // A piece's internal documents hold whatever its graph derives, so a
+      // walk that loaded them one after another would wait for each in turn
+      // before finding that none of them records the opened piece.
+      const { creator, spawnedLink } = await stoppedCreator();
+      const manifest = creator.getMetaRaw("internal");
+      const internal = (Array.isArray(manifest) ? manifest : []).flatMap(
+        (entry) => {
+          const link = parseLink(
+            (entry as { link?: unknown }).link,
+            creator,
+          );
+          return link === undefined ? [] : [link.id];
+        },
+      );
+      expect(internal.length).toBeGreaterThan(1);
+      const opener = newRuntime();
+      const opened = opener.getCellFromLink({ ...spawnedLink, path: [] });
+      await opened.sync();
+
+      const most = await mostLoadsAtOnce(
+        internal,
+        () =>
+          startWithInputSources(opener, opened, () => Promise.resolve(true)),
+      );
+
+      expect(most).toBe(internal.length);
+      expect(
+        opener.runner.isRunning(
+          opener.getCellFromLink(creator.getAsNormalizedFullLink()),
+        ),
+      ).toBe(false);
+    });
+
+    /**
+     * Runs `program` with `value` 1, then stops it and moves `value` to 5
+     * with nothing running, and returns the stream `streamPath` names in its
+     * result and the enclosing instance's result.
+     */
+    const stopProgramAfterInputChanges = async (
+      program: RuntimeProgram,
+      streamPath: (string | number)[],
+    ) => {
+      const first = newRuntime();
+      const compiled = await first.patternManager.compilePattern(program, {
+        space,
+      });
+      const argument = first.getCell<{ value: number }>(
+        space,
+        ARGUMENT_CAUSE,
+        compiled.argumentSchema,
+      );
+      const result = first.getCell<Record<string, unknown>>(
+        space,
+        RESULT_CAUSE,
+        compiled.resultSchema,
+      );
+      {
+        const tx = first.edit();
+        argument.withTx(tx).set({ value: 1 });
+        first.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await result.pull();
+      let streamCell: Cell<unknown> = result;
+      for (const segment of streamPath) {
+        streamCell = streamCell.key(segment as never);
+      }
+      const stream = streamCell.resolveAsCell().getAsNormalizedFullLink();
+      first.runner.stop(result);
+      {
+        const tx = first.edit();
+        argument.withTx(tx).key("value").set(5);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await first.idle();
+      await first.storageManager.synced();
+      return { stream, enclosing: result.getAsNormalizedFullLink() };
+    };
+
+    for (
+      const [shape, program, streamPath] of [
+        [
+          "whose argument links only a sibling's output",
+          SIBLING_PROGRAM,
+          ["record"],
+        ],
+        ["that `map` builds as a row", MAP_PROGRAM, ["rows", 0, "record"]],
+      ] as const
+    ) {
+      it(`starts the piece enclosing a nested piece ${shape}`, async () => {
+        const { stream, enclosing } = await stopProgramAfterInputChanges(
+          program,
+          [...streamPath],
+        );
+        const opener = newRuntime();
+        const owner = await nestedOwner(opener, stream);
+
+        await startWithInputSources(opener, owner, () => opener.start(owner));
+        opener.scheduler.queueEvent(stream, {});
+        await opener.idle();
+
+        expect(await owner.key("seen" as never).pull()).toBe(10);
+        expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+          .toBe(true);
+      });
+    }
+
+    it("starts the piece that built a row with `map` when the row itself is opened", async () => {
+      const { stream, enclosing } = await stopProgramAfterInputChanges(
+        MAP_PROGRAM,
+        ["rows", 0, "record"],
+      );
+      const opener = newRuntime();
+      const recorder = await nestedOwner(opener, stream);
+      // The row is the instance `map` built, whose graph sets the recorder up
+      // as a nested node; the recorder's argument belongs to it.
+      const recorderArgument = opener.getCellFromLink(
+        getMetaLink(recorder, "argument")!,
+      );
+      await recorderArgument.sync();
+      const row = opener.getCellFromLink({
+        ...getMetaLink(recorderArgument, "result")!,
+        path: [],
+      });
+      await row.sync();
+
+      await startWithInputSources(opener, row, () => opener.start(row));
+
+      expect(opener.runner.isRunning(row)).toBe(true);
+      expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+        .toBe(true);
+    });
+
+    /**
+     * Runs a hub piece and `count` more of `PROGRAM`, links the others from
+     * the hub's argument, and stops them all, and returns the hub, the
+     * others, and all of them.
+     */
+    const stoppedHub = async (count: number) => {
+      const others = Array.from({ length: count }, (_, n) => `p${n}`);
+      const { first, producers } = await stoppedProducers(["hub", ...others]);
+      const [hub, ...linked] = producers;
+      {
+        const tx = first.edit();
+        first.getCellFromLink(getMetaLink(hub, "argument")!).withTx(tx)
+          .key("others").set(linked);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      for (const producer of producers) first.runner.stop(producer);
+      await first.idle();
+      await first.storageManager.synced();
+      return { hub, linked, producers };
+    };
+
+    it("starts none of the pieces whose results a hub's argument links to", async () => {
+      const { producers } = await stoppedHub(8);
+
+      const opener = newRuntime();
+      const [openedHub, ...openedLinked] = producers.map((producer) =>
+        opener.getCellFromLink(producer.getAsNormalizedFullLink())
+      );
+      await openedHub.sync();
+      await startWithInputSources(
+        opener,
+        openedHub,
+        () => opener.start(openedHub),
+      );
+
+      expect(opener.runner.isRunning(openedHub)).toBe(true);
+      expect(openedLinked.map((piece) => opener.runner.isRunning(piece)))
+        .toEqual(openedLinked.map(() => false));
+    });
+
+    it("loads every document a hub's argument links to at once", async () => {
+      // Each linked document is a load, so a walk that loaded them one after
+      // another would wait for each in turn.
+      const { hub, linked } = await stoppedHub(4);
+      const opener = newRuntime();
+      const openedHub = opener.getCellFromLink(hub.getAsNormalizedFullLink());
+      await openedHub.sync();
+
+      const most = await mostLoadsAtOnce(
+        linked.map((producer) => producer.getAsNormalizedFullLink().id),
+        () =>
+          startWithInputSources(opener, openedHub, () => Promise.resolve(true)),
+      );
+
+      expect(most).toBe(linked.length);
+    });
+
+    it("reports the failed load of the document a hub's argument names first, even when a later one fails sooner", async () => {
+      // The first document's refusal lands a few steps after the second's,
+      // so a search that reported whichever failed first would name the
+      // second.
+
+      const { hub, linked } = await stoppedHub(2);
+      const [first, second] = linked.map((producer) =>
+        producer.getAsNormalizedFullLink().id
+      );
+      const sync = storageManager.syncCell.bind(storageManager);
+      storageManager.syncCell = ((cell, options) => {
+        const id = cell.getAsNormalizedFullLink().id;
+        if (id === second) return Promise.reject(new Error("second refused"));
+        if (id !== first) return sync(cell, options);
+        let later = Promise.resolve();
+        for (let step = 0; step < 10; step++) later = later.then(() => {});
+        return later.then(() => {
+          throw new Error("first refused");
+        });
+      }) as typeof storageManager.syncCell;
+
+      const opener = newRuntime();
+      const verdict = ensurePieceRunningVerdict(
+        opener,
+        hub.getAsNormalizedFullLink(),
+        { startInputSources: true, propagateErrors: true },
+      );
+
+      await expect(verdict).rejects.toThrow("first refused");
+    });
+
+    for (const recordsOrigin of [false, true]) {
+      it(
+        `starts both pieces enclosing a piece nested two deep${
+          recordsOrigin ? ", following the outermost one's origin" : ""
+        }`,
+        async () => {
+          const { stream, enclosing } = await stopAfterInputChanges(
+            THREE_LEVEL,
+            { recordsOrigin },
+          );
+          const opener = newRuntime();
+          const reconciled: string[] = [];
+          opener.sourceReconciler.reconcile = (cell) => {
+            reconciled.push(cell.getAsNormalizedFullLink().id);
+            return Promise.resolve("current");
+          };
+          const warned = openWarnings();
+
+          const { seen } = await openThenEvent(opener, stream, {
+            followOrigins: true,
+          });
+
+          expect(seen).toBe(11);
+          expect(opener.runner.isRunning(opener.getCellFromLink(enclosing)))
+            .toBe(true);
+          expect(reconciled).toEqual(recordsOrigin ? [enclosing.id] : []);
+          expect(openWarnings()).toBe(warned);
+        },
+      );
+    }
+
+    // The outermost enclosing pattern's module, as the patterns route serves
+    // it: the stored one doubles, and the one its origin offers triples. A
+    // piece nested two deep records one more than its enclosing piece derives.
+    for (
+      const { where, program, followed, stored } of [
+        { where: "", program: PROGRAM, followed: 15, stored: 10 },
+        {
+          where: " two levels up",
+          program: THREE_LEVEL,
+          followed: 16,
+          stored: 11,
+        },
+      ]
+    ) {
+      describe(`with an enclosing piece${where} whose origin offers another source`, () => {
+        const ROUTE_PATH = "/api/patterns/system/input-sources-outer.tsx";
+        const outerSource = (factor: number) =>
+          program.files[0].contents.replace("value * 2", `value * ${factor}`);
+        let root: string;
+
+        beforeEach(async () => {
+          root = await Deno.makeTempDir({ prefix: "input-sources-origin-" });
+          await Deno.mkdir(`${root}/system`);
+          await Deno.writeTextFile(
+            `${root}/system/input-sources-outer.tsx`,
+            outerSource(3),
+          );
+        });
+
+        afterEach(async () => {
+          for (const runtime of runtimes) {
+            await runtime.sourceReconciler.idle();
+            await runtime.patternManager.flushCompileCacheWrites();
+          }
+          await Deno.remove(root, { recursive: true });
+        });
+
+        /** A runtime whose patterns route serves `root`. */
+        const routedRuntime = (): Runtime => {
+          const route = new PatternsRoute(root);
+          const runtime = new Runtime({
+            apiUrl: new URL("http://toolshed.test"),
+            storageManager,
+            fetch: async (input, init) =>
+              await route.serve(
+                new Request(
+                  input instanceof Request ? input.url : input.toString(),
+                  init,
+                ),
+              ) ?? new Response("not found", { status: 404 }),
+          });
+          runtimes.push(runtime);
+          return runtime;
+        };
+
+        /**
+         * `stopAfterInputChanges()` for the stored enclosing source, whose
+         * piece records the `system:` origin the route serves.
+         */
+        const stopAfterInputChangesWithOrigin = async () => {
+          const first = routedRuntime();
+          const compiled = await first.patternManager.compilePattern({
+            main: ROUTE_PATH,
+            files: [{ name: ROUTE_PATH, contents: outerSource(2) }],
+          }, { space });
+          const argument = first.getCell<{ value: number; seen?: number }>(
+            space,
+            ARGUMENT_CAUSE,
+            compiled.argumentSchema,
+          );
+          const result = first.getCell<{ doubled: number }>(
+            space,
+            RESULT_CAUSE,
+            compiled.resultSchema,
+          );
+          {
+            const tx = first.edit();
+            argument.withTx(tx).set({ value: 1 });
+            first.run(tx, compiled, argument, result);
+            expect((await tx.commit().settled).error).toBeUndefined();
+          }
+          expect(
+            (await first.editWithRetry((tx) => {
+              setPatternSource(
+                result,
+                tx,
+                systemPatternSource("system/input-sources-outer.tsx"),
+              );
+            })).error,
+          ).toBeUndefined();
+          await result.pull();
+          expect(result.get().doubled).toBe(2);
+          const stream = result.key("record").resolveAsCell()
+            .getAsNormalizedFullLink();
+          first.runner.stop(result);
+          {
+            const tx = first.edit();
+            argument.withTx(tx).key("value").set(5);
+            expect((await tx.commit().settled).error).toBeUndefined();
+          }
+          await first.idle();
+          await first.storageManager.synced();
+          return stream;
+        };
+
+        it("follows the enclosing piece's origin before starting it, for an open that follows origins", async () => {
+          const stream = await stopAfterInputChangesWithOrigin();
+
+          const { seen } = await openThenEvent(routedRuntime(), stream, {
+            followOrigins: true,
+          });
+
+          expect(seen).toBe(followed);
+        });
+
+        it("starts the enclosing piece on its stored source for an open that does not follow origins", async () => {
+          const stream = await stopAfterInputChangesWithOrigin();
+
+          const { seen } = await openThenEvent(routedRuntime(), stream);
+
+          expect(seen).toBe(stored);
+        });
+      });
+    }
   });
 
   it("starts a source behind a document of the owner's own id in another scope", async () => {

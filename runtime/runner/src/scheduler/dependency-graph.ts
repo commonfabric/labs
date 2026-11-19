@@ -124,7 +124,11 @@ export function assertLivenessEquivalence(
   if (!enabled) return;
   const records = [...state.nodes.nodes()];
   const incremental = records.map((record) => record.liveRefs);
+  // The rebuild is a check on maintenance rather than part of it, so the work
+  // counters read the same with the check on as off.
+  const work = { ...livenessWork };
   recomputeLiveRefs(state);
+  Object.assign(livenessWork, work);
   const drift: string[] = [];
   records.forEach((record, i) => {
     if (record.liveRefs !== incremental[i]) {
@@ -168,9 +172,12 @@ function notifyNodeLivenessChangeImpl(
   livenessWork.operations++;
   const node = state.nodes.get(action);
   if (!node) return;
+  // The node's root status or registration changed, which can make it live
+  // with no reference granted.
+  state.nodes.noteMayBeLive(action);
 
   if (wasLive) {
-    withdrawDemandFrom(state, action);
+    withdrawDemandFrom(state, action, true);
     return;
   }
 
@@ -214,6 +221,7 @@ function setNodeProvisionalDemandImpl(
   node.provisionalDemand = provisionalDemand;
   if (provisionalDemand) {
     node.provisionalDemandPass = passId;
+    state.nodes.noteMayBeLive(node.action);
   } else {
     node.provisionalDemandPass = undefined;
   }
@@ -223,7 +231,7 @@ function setNodeProvisionalDemandImpl(
   if (provisionalDemand) {
     if (!wasLive && isLive(state, node)) grantDemandFrom(state, node.action);
   } else {
-    withdrawDemandFrom(state, node.action);
+    withdrawDemandFrom(state, node.action, wasLive);
   }
 }
 
@@ -252,7 +260,10 @@ function propagateDemand(
       const wasLive = isLive(state, record);
       livenessWork.nodeWrites++;
       record.liveRefs++;
-      if (!wasLive) stack.push(writer);
+      if (!wasLive) {
+        state.nodes.noteMayBeLive(writer);
+        stack.push(writer);
+      }
     }
   }
 }
@@ -270,27 +281,58 @@ function grantDemandFrom(
 
 /**
  * Re-derive demand for `origin` and everything that could reach a root only
- * through it, after `origin` lost a reference or a root status.
+ * through it, after `origin` lost a reference or a root status. `originWasLive`
+ * is whether it was live before, and so whether the writers it reads count a
+ * reference from it.
  *
- * The region is `origin`'s transitive upstream, which is closed under the
- * writer edge: any node whose support routes through `origin` must be upstream
- * of it. So a live reader *outside* the region cannot owe its own liveness to
- * anything inside, and its support can be taken at face value. Clearing the
- * region and re-seeding from roots inside it plus live readers outside is
+ * The region is the part of `origin`'s transitive upstream that may die with
+ * it. A writer that a root still reaches without passing through the region
+ * ({@link reachedBypassing}) stays live, and so does everything upstream of it
+ * that the region does not otherwise reach, so the walk stops there and keeps
+ * the writer as the region's boundary. Any other node whose support routes
+ * through `origin` is upstream of it, and every writer of a region node is in
+ * the region or on its boundary. So a live reader *outside* the region cannot
+ * owe its own liveness to anything inside, and its support can be taken at face
+ * value. Clearing the region and re-seeding from the live readers outside it is
  * therefore both diamond-accurate and cycle-safe — a rootless cycle finds no
- * seed and settles dormant — while touching only the affected region.
+ * seed and settles dormant. A boundary node first gives back the references
+ * the region's live nodes held on it, and the re-seeding hands back those of
+ * the survivors, so its count stays the number of its live readers.
+ *
+ * Where a root still reaches `origin` itself, the region is empty: `origin`
+ * stays live and contributes upstream exactly what it did. For a writer
+ * shared by many rows, that keeps the departure of one row from paying for the
+ * writer's whole upstream.
  */
 function withdrawDemandFrom(
   state: SchedulerDemandState,
   origin: Action,
+  originWasLive: boolean,
 ): void {
   const originRecord = state.nodes.get(origin);
   if (!originRecord || !isRegisteredNode(state, originRecord)) return;
   // A root holds its own demand, so it neither dies nor changes what it
   // contributes upstream.
   if (isDemandRoot(state, originRecord)) return;
+  // A node that was not live held no reference on its writers, so losing one
+  // of its own changes nothing upstream.
+  if (!originWasLive) return;
 
-  const region = new Set<Action>([origin]);
+  const search: BypassSearch = {
+    region: new Set([origin]),
+    boundary: new Set(),
+    stranded: new Set(),
+  };
+  // With no writer to keep live, re-deriving `origin` alone costs only its
+  // readers, which is less than a search for a root that may lie far below.
+  if (
+    hasRegisteredWriter(state, origin) &&
+    reachedBypassing(state, origin, search)
+  ) {
+    return;
+  }
+
+  const { region, boundary } = search;
   const pending: Action[] = [origin];
   while (pending.length > 0) {
     const reader = pending.pop()!;
@@ -298,11 +340,32 @@ function withdrawDemandFrom(
     if (!writers) continue;
     for (const writer of writers) {
       livenessWork.edgeVisits++;
-      if (region.has(writer)) continue;
+      if (region.has(writer) || boundary.has(writer)) continue;
       const record = state.nodes.get(writer);
       if (!record || !isRegisteredNode(state, record)) continue;
+      if (
+        isDemandRoot(state, record) ||
+        (!search.stranded.has(writer) &&
+          reachedBypassing(state, writer, search))
+      ) {
+        boundary.add(writer);
+        continue;
+      }
       region.add(writer);
       pending.push(writer);
+    }
+  }
+
+  for (const action of region) {
+    const wasLive = action === origin
+      ? originWasLive
+      : isLive(state, state.nodes.get(action)!);
+    if (!wasLive) continue;
+    for (const writer of state.reverseDependencies.get(action) ?? NO_ACTIONS) {
+      livenessWork.edgeVisits++;
+      if (!boundary.has(writer)) continue;
+      livenessWork.nodeWrites++;
+      state.nodes.get(writer)!.liveRefs--;
     }
   }
 
@@ -314,7 +377,9 @@ function withdrawDemandFrom(
   const seeds: Action[] = [];
   for (const action of region) {
     const record = state.nodes.get(action)!;
-    let supported = isDemandRoot(state, record);
+    // The region holds no root: a root origin returns above, and a root
+    // writer joins the boundary.
+    let supported = false;
     const readers = state.dependents.get(action);
     if (readers) {
       for (const reader of readers) {
@@ -332,6 +397,122 @@ function withdrawDemandFrom(
   }
 
   propagateDemand(state, seeds);
+}
+
+/** Whether any writer `action` reads is registered. */
+function hasRegisteredWriter(
+  state: SchedulerDemandState,
+  action: Action,
+): boolean {
+  for (const writer of state.reverseDependencies.get(action) ?? NO_ACTIONS) {
+    livenessWork.edgeVisits++;
+    const record = state.nodes.get(writer);
+    if (record && isRegisteredNode(state, record)) return true;
+  }
+  return false;
+}
+
+/** The readers of a node that has none. */
+const NO_ACTIONS: ReadonlySet<Action> = new Set();
+
+/** What one {@link withdrawDemandFrom} has learned so far about its region. */
+interface BypassSearch {
+  /** The nodes that may die with the origin. */
+  readonly region: Set<Action>;
+
+  /**
+   * Nodes that a root reaches bypassing the region, among them every writer
+   * of a region node that is not itself in the region.
+   */
+  readonly boundary: Set<Action>;
+
+  /** Nodes from which no root is reachable bypassing the region. */
+  readonly stranded: Set<Action>;
+}
+
+/**
+ * Helper for {@link withdrawDemandFrom}, which says whether a demand root
+ * reaches `start` along reader edges that pass through no node of the
+ * region, and so keeps it live whatever the region loses.
+ *
+ * The search walks downstream from `start`'s readers and skips nodes that are
+ * not live. That pruning loses no path: a change that withdraws demand only
+ * removes reachability, so a node not live before it is not live after it.
+ * And a root it finds is a real support even where counts on the way still
+ * reflect the old graph: a node a root reaches without passing through the
+ * region does not owe its liveness to the region. No node on such a path ever
+ * joins the region, since the one nearest the root would have found that root
+ * itself, so a boundary node it reaches ends the search too.
+ *
+ * The walk is depth-first and descends into a live reader as soon as it
+ * finds one, so a node with many readers costs only those it tries before a
+ * root turns up; for a UI node that is usually a few readers away. Which
+ * root it reaches first depends on the order the readers were added in, and
+ * a dead end tried first is walked before a root read later, but at most
+ * once per withdrawal, as follows. Where the walk finds a root, that root
+ * and every node on the path to it past `start` reach a root bypassing the
+ * region, and join the boundary, where a later walk stops: a node on the
+ * boundary that reads no region node only ends walks, and one that does is
+ * one the caller's recount covers. Every other node the walk entered is
+ * recorded as stranded, and so is every node a walk that found nothing
+ * entered; later walks treat stranded nodes as dead ends, and the caller
+ * puts a stranded writer in the region without starting a walk from it. A
+ * node a successful walk backed out of may reach a root after all, through
+ * the path it found, and a failed walk can stop at such a node, so stranding
+ * is sound rather than exact: it can only make a later walk fail and put
+ * more nodes in the region, which the caller's re-seeding gives back
+ * whatever support they have. The counts come out right whatever is
+ * stranded, so long as every boundary node really reaches a root bypassing
+ * the region, every registered writer of a region node is in the region or
+ * on the boundary, and the region holds no root. Putting the nodes of a
+ * found path on the boundary is what bounds the work: no later walk enters
+ * them, and a stranded node is never the start of a walk. So each node is
+ * entered by at most one walk in a withdrawal, and the walks together cost
+ * at most the readers of the nodes they enter.
+ */
+function reachedBypassing(
+  state: SchedulerDemandState,
+  start: Action,
+  search: BypassSearch,
+): boolean {
+  const readersOf = (action: Action): Iterator<Action> =>
+    (state.dependents.get(action) ?? NO_ACTIONS).values();
+  const entered = new Set<Action>([start]);
+  // `path[i]` is the node whose readers `stack[i]` iterates.
+  const path = [start];
+  const stack = [readersOf(start)];
+  const settle = (found: boolean): boolean => {
+    const onPath = new Set(path);
+    for (const action of path.slice(1)) search.boundary.add(action);
+    for (const action of entered) {
+      if (!onPath.has(action)) search.stranded.add(action);
+    }
+    return found;
+  };
+  while (stack.length > 0) {
+    const next = stack[stack.length - 1]!.next();
+    if (next.done) {
+      stack.pop();
+      path.pop();
+      continue;
+    }
+    const reader = next.value;
+    livenessWork.edgeVisits++;
+    if (search.boundary.has(reader)) return settle(true);
+    if (
+      entered.has(reader) || search.region.has(reader) ||
+      search.stranded.has(reader)
+    ) {
+      continue;
+    }
+    entered.add(reader);
+    const record = state.nodes.get(reader);
+    if (!record || !isLive(state, record)) continue;
+    path.push(reader);
+    if (isDemandRoot(state, record)) return settle(true);
+    stack.push(readersOf(reader));
+  }
+  return settle(false);
 }
 
 /**
@@ -498,7 +679,10 @@ function registerDependentEdgeImpl(
     const wasLive = isLive(state, writerRecord);
     livenessWork.nodeWrites++;
     writerRecord.liveRefs++;
-    if (!wasLive) grantDemandFrom(state, writer);
+    if (!wasLive) {
+      state.nodes.noteMayBeLive(writer);
+      grantDemandFrom(state, writer);
+    }
   }
   return true;
 }
@@ -551,19 +735,22 @@ function unregisterDependentEdgeImpl(
 
   if (hadDependent) {
     // The departing reader takes its reference with it. `withdrawDemandFrom`
-    // recounts the region when the writer is not a root, but a root short-
-    // circuits that walk, so drop the reference here to keep the count equal
+    // recounts the region when the writer may have died, but returns at once
+    // where it has not, so drop the reference here to keep the count equal
     // to the number of live direct readers either way.
+    // A reader that was not live held no reference, so its departure
+    // leaves the writer's count, and its liveness, as they were.
     const writerRecord = state.nodes.get(writer);
     const dependentRecord = state.nodes.get(dependent);
-    if (
-      writerRecord && isRegisteredNode(state, writerRecord) &&
-      dependentRecord && isLive(state, dependentRecord)
-    ) {
-      livenessWork.nodeWrites++;
-      writerRecord.liveRefs--;
+    if (dependentRecord && isLive(state, dependentRecord)) {
+      const writerWasLive = writerRecord !== undefined &&
+        isLive(state, writerRecord);
+      if (writerRecord && isRegisteredNode(state, writerRecord)) {
+        livenessWork.nodeWrites++;
+        writerRecord.liveRefs--;
+      }
+      withdrawDemandFrom(state, writer, writerWasLive);
     }
-    withdrawDemandFrom(state, writer);
   }
   return hadDependent;
 }
@@ -579,6 +766,9 @@ function unregisterDependentEdgeImpl(
  * reference those updates are checked against.
  */
 export function recomputeLiveRefs(state: SchedulerLivenessState): void {
+  // The rebuild stands whatever the counts were, so it can find a node live
+  // that the counts it replaces called dormant.
+  state.nodes.noteAllMayBeLive();
   const records = [...state.nodes.nodes()];
   const reachable = new Set<Action>();
   const stack: Action[] = [];

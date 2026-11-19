@@ -609,33 +609,27 @@ const _filterAsCellCache = new WeakMap<
   JSONSchema | "<undefined>"
 >();
 
+/**
+ * `schema` without its `asCell`, or `undefined` where nothing else is left.
+ * `schema` is interned, as every schema `validateAndTransform()` resolves or
+ * combines is, so the answer is cached by its identity.
+ */
 function filterAsCell(schema: JSONSchema | undefined): JSONSchema | undefined {
   if (!isNontrivialSchema(schema)) {
     return schema;
   }
-
-  const makeRawResult = () => {
-    const { asCell: _asCell, ...restSchema } = schema;
-    return isNontrivialSchema(restSchema) ? restSchema : undefined;
-  };
-
-  if (isDeepFrozen(schema)) {
-    // Note: We cache literal `<undefined>` when we are to return `undefined`,
-    // to disambiguate with no-entry.
-    const cached = _filterAsCellCache.get(schema);
-    if (cached) return (cached === "<undefined>") ? undefined : cached;
-    const rawResult = makeRawResult();
-    if (rawResult) {
-      const result = internSchema(rawResult);
-      _filterAsCellCache.set(schema, result);
-      return result;
-    } else {
-      _filterAsCellCache.set(schema, "<undefined>");
-      return undefined;
-    }
-  } else {
-    return makeRawResult();
+  // Note: We cache literal `<undefined>` when we are to return `undefined`,
+  // to disambiguate with no-entry.
+  const cached = _filterAsCellCache.get(schema);
+  if (cached) return (cached === "<undefined>") ? undefined : cached;
+  const { asCell: _asCell, ...restSchema } = schema;
+  if (isNontrivialSchema(restSchema)) {
+    const result = internSchema(restSchema);
+    _filterAsCellCache.set(schema, result);
+    return result;
   }
+  _filterAsCellCache.set(schema, "<undefined>");
+  return undefined;
 }
 
 /**

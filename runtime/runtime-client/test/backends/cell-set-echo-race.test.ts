@@ -134,10 +134,14 @@ class InProcessWorkerTransport extends EventEmitter<RuntimeTransportEvents>
       throw new Error("This test sends no one-way client notifications");
     }
     const { msgId, data } = message;
-    // Initialize/Dispose are worker-entry concerns (backends/web-worker), not
-    // RuntimeProcessor handlers; the harness acks them directly.
+    // Initialize, Attach, SetForwardWorkerConsole and Dispose are answered by
+    // the worker entry and client registry, not RuntimeProcessor handlers; the
+    // harness acks them directly.
     if (
-      data.type === RequestType.Initialize || data.type === RequestType.Dispose
+      data.type === RequestType.Initialize ||
+      data.type === RequestType.Attach ||
+      data.type === RequestType.SetForwardWorkerConsole ||
+      data.type === RequestType.Dispose
     ) {
       this.outbox.push({ msgId } as IPCRemoteMessage);
       return;

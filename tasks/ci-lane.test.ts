@@ -73,7 +73,9 @@ import {
   runLane,
   runLanes,
   spoolRecords,
+  stopOnSignals,
   unitsForRun,
+  unsettled,
 } from "./ci-lane.ts";
 import {
   batchMeasurement,
@@ -3295,6 +3297,24 @@ describe("the lane's own housekeeping", () => {
     await Deno.remove(repo, { recursive: true });
   });
 
+  it("takes both paths of a file the change moved", async () => {
+    // A declaration naming the directory a file left reaches the change,
+    // so the path it left is one the change touched.
+    const { repo, git } = await scratchRepository();
+    await Deno.mkdir(`${repo}/declared`);
+    await Deno.writeTextFile(`${repo}/declared/kept.jsonl`, "a line\n");
+    await git("add", ".");
+    await git("commit", "-q", "-m", "first");
+    await git("branch", "base");
+    await git("mv", "declared/kept.jsonl", "moved.jsonl");
+    await git("commit", "-q", "-m", "second");
+    expect([...await changedFiles(repo, "base")].sort()).toEqual([
+      "declared/kept.jsonl",
+      "moved.jsonl",
+    ]);
+    await Deno.remove(repo, { recursive: true });
+  });
+
   it("takes the files the default branch gained since the manifest's commit", async () => {
     // A pull request is tested as its merge into the default branch, so
     // the tree holds what the default branch gained since the branch was
@@ -3680,6 +3700,145 @@ describe("the lane's own housekeeping", () => {
     } finally {
       await Deno.remove(root, { recursive: true });
     }
+  });
+
+  describe("a lane closing what it opened", () => {
+    /**
+     * Runs a lane over one suite needing `cf`, which records a passing test,
+     * with `cf` closing as `close` says, given the lane's stop. Returns the
+     * lane's verdict and what it printed.
+     */
+    async function closingLane(
+      close: (stop: LaneStop) => Promise<void>,
+      coverageDir?: string,
+    ): Promise<{ ok: boolean; printed: string }> {
+      const root = await Deno.makeTempDir({ prefix: "lane-closing-" });
+      const unit = "runtime/bakery/glaze.test.ts";
+      const stop = new LaneStop();
+      const lines: string[] = [];
+      const log = console.log;
+      const restore = setEnv({
+        RUNNER_TEMP: undefined,
+        GITHUB_ACTIONS: undefined,
+        GITHUB_OUTPUT: undefined,
+        GITHUB_STEP_SUMMARY: undefined,
+      });
+      console.log = (line: string) => lines.push(line);
+      try {
+        const ok = await runLane({
+          lane: 1,
+          of: 1,
+          full: false,
+          dryRun: false,
+          laneCount: false,
+          root,
+          at: "2026-09-01T00:00:00Z",
+          ...(coverageDir === undefined ? {} : { coverageDir }),
+        }, {
+          topology: () =>
+            Promise.resolve([suite({
+              id: "workspace-unit",
+              needs: ["cf"],
+              units: [unit],
+              locate: () => ({ level: "unit" as const, unit }),
+              command: (_units, context) => {
+                const record = JSON.stringify({
+                  line: "record",
+                  test: { k: "unit", s: "bakery", n: "glaze > sets" },
+                  outcome: "pass",
+                  durationMs: 1,
+                });
+                return Promise.resolve([{
+                  command: [
+                    Deno.execPath(),
+                    "eval",
+                    `Deno.writeTextFileSync(
+                      Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
+                      ${JSON.stringify(record + "\n")},
+                    )`,
+                  ],
+                  cwd: context.root,
+                }]);
+              },
+            })]),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          capabilities: new Map<CapabilityId, Capability>([["cf", {
+            id: "cf",
+            description: "a capability that closes as a case says",
+            open: () => Promise.resolve({ env: {}, close: () => close(stop) }),
+          }]]),
+          spool: () => undefined,
+          stop: () => stop,
+        });
+        return { ok, printed: lines.join("\n") };
+      } finally {
+        console.log = log;
+        restore();
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    it("passes where every capability closes", async () => {
+      const { ok, printed } = await closingLane(() => Promise.resolve());
+      expect(ok).toBe(true);
+      expect(printed).not.toContain("Stopped by");
+    });
+
+    it("fails, and its summary says what did not close", async () => {
+      const { ok, printed } = await closingLane(() =>
+        Promise.reject(new Error("still running"))
+      );
+      expect(ok).toBe(false);
+      expect(printed).toContain("ci-lane: cf failed to close: still running");
+      expect(printed).toMatch(
+        /test summary[^]*cf failed to close: still running/,
+      );
+    });
+
+    it("fails, and its summary names the signal, when told to stop once every batch has run", async () => {
+      const { ok, printed } = await closingLane((stop) => {
+        stop.receive("SIGTERM");
+        return Promise.resolve();
+      });
+      expect(ok).toBe(false);
+      expect(printed).toMatch(
+        /test summary[^]*Stopped by SIGTERM after every batch had run\./,
+      );
+      expect(printed).not.toContain("before finishing its plan");
+    });
+
+    it("names no late signal for a lane that had failed already", async () => {
+      const { ok, printed } = await closingLane((stop) => {
+        stop.receive("SIGTERM");
+        return Promise.reject(new Error("still running"));
+      });
+      expect(ok).toBe(false);
+      expect(printed).toContain("cf failed to close: still running");
+      expect(printed).not.toContain("Stopped by SIGTERM");
+    });
+
+    it("fails, and says why, where a pattern report cannot be rewritten", async () => {
+      const coverageDir = await Deno.makeTempDir({ prefix: "lane-loop-" });
+      const at = `${coverageDir}/${PATTERN_COVERAGE_DIR}`;
+      await Deno.mkdir(at, { recursive: true });
+      await Deno.symlink(`${at}/loop.lcov`, `${at}/loop.lcov`);
+      try {
+        const { ok, printed } = await closingLane(
+          () => Promise.resolve(),
+          coverageDir,
+        );
+        expect(ok).toBe(false);
+        expect(printed).toMatch(
+          /ci-lane: Too many levels of symbolic links[^\n]*loop\.lcov/,
+        );
+        expect(printed).toMatch(
+          /test summary[^]*Too many levels of symbolic links[^\n]*loop\.lcov/,
+        );
+      } finally {
+        await Deno.remove(coverageDir, { recursive: true });
+      }
+    });
   });
 
   it("runs a lane that was given no share of the work", async () => {
@@ -4433,6 +4592,81 @@ describe("what a lane records about itself", () => {
     }
   });
 
+  it("writes nothing for the hooks of a file its suite places in no unit", async () => {
+    // `stray.test.ts` reports a describe and a test inside it like
+    // `oven.test.ts` does, but the suite places it in none of its units, so
+    // there is no unit to charge what its hooks took to.
+    const workDir = await Deno.makeTempDir({ prefix: "lane-hooks-" });
+    const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const report = `<testsuites>
+  <testsuite name="./oven.test.ts">
+    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
+  </testsuite>
+  <testsuite name="./stray.test.ts">
+    <testcase name="stray" classname="./stray.test.ts" time="4.000"/>
+  </testsuite>
+  <testsuite name="ext:cli/40_test.js">
+    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
+    <testcase name="stray &gt; rises" classname="ext:cli/40_test.js" time="1.000"/>
+  </testsuite>
+</testsuites>`;
+    const oven = "runtime/bakery/oven.test.ts";
+    try {
+      await runBatch(
+        {
+          suite: suite({
+            id: "pattern-integration",
+            units: [oven],
+            recordSurfaces: [{ kind: "integration", scope: "bakery" }],
+            locate: (record) =>
+              record.file === oven ? { level: "unit", unit: oven } : undefined,
+            command: (_units, context) =>
+              Promise.resolve([{
+                command: [
+                  Deno.execPath(),
+                  "eval",
+                  `Deno.writeTextFileSync(
+                    ${JSON.stringify(`${context.outputDir}/report.xml`)},
+                    ${JSON.stringify(report)},
+                  )`,
+                ],
+                cwd: context.root,
+                junit: [{
+                  path: `${context.outputDir}/report.xml`,
+                  kind: "integration",
+                  scope: "bakery",
+                  filePrefix: "runtime/bakery",
+                }],
+              }]),
+          }),
+          units: [{ unit: oven, skip: [] }],
+          runs: new Map([[oven, 1]]),
+          projected: 0,
+        },
+        lane,
+        workDir,
+        spool,
+        {},
+      );
+      const written: string[] = [];
+      for await (const entry of Deno.readDir(spool)) {
+        if (entry.isFile) {
+          written.push(await Deno.readTextFile(`${spool}/${entry.name}`));
+        }
+      }
+      const hooks = written.join("").trim().split("\n")
+        .map((line) => JSON.parse(line) as TestRecord)
+        .filter((record) => record.test.n.startsWith("ci-lane hooks "))
+        .map((record) => [record.test.n, record.durationMs]);
+      expect(hooks).toEqual([
+        [hooksMeasurementName("pattern-integration", false, oven), 3500],
+      ]);
+    } finally {
+      await Deno.remove(workDir, { recursive: true });
+      await Deno.remove(spool, { recursive: true });
+    }
+  });
+
   it("writes the units its passes opened and the passes it made", async () => {
     // `slow` runs once and `quick` three times, so the first pass opens
     // both units and the other two open `quick`, and the tests take six
@@ -4812,6 +5046,61 @@ describe("the last corners of a lane's bookkeeping", () => {
         repeats: 1,
       }]),
     ).toEqual([]);
+  });
+});
+
+describe("unsettled()", () => {
+  it("returns the batch's units holding a failure, and leaves out a failure placed in none of them", () => {
+    const record = (n: string, outcome: TestRecord["outcome"]): TestRecord => ({
+      line: "record",
+      test: { k: "unit", s: "bakery", n },
+      outcome,
+      durationMs: 1,
+    });
+    const batch = {
+      suite: suite({
+        id: "workspace-unit",
+        units: ["held.test.ts", "elsewhere.test.ts"],
+        locate: (placed: { test: TestIdentity }) => {
+          const unit = placed.test.n.split(" > ")[0];
+          return unit === "nowhere"
+            ? undefined
+            : { level: "unit" as const, unit: `${unit}.test.ts` };
+        },
+      }),
+      units: [{ unit: "held.test.ts", skip: [] }],
+      runs: new Map([["held.test.ts", 1]]),
+      projected: 0,
+    };
+    const failing = unsettled(batch, [
+      record("held > fails", "fail"),
+      record("held > passes", "pass"),
+      record("elsewhere > fails", "fail"),
+      record("nowhere > fails", "fail"),
+    ]);
+    expect(failing).toEqual(
+      new Map([[
+        "held.test.ts",
+        new Set([
+          testIdentityKey({ k: "unit", s: "bakery", n: "held > fails" }),
+        ]),
+      ]]),
+    );
+  });
+});
+
+describe("stopOnSignals()", () => {
+  it("returns a stop that receives SIGINT or SIGTERM once it is sent", () => {
+    for (const sent of ["SIGINT", "SIGTERM"] as const) {
+      const handlers = new Map<Deno.Signal, () => void>();
+      const stop = stopOnSignals((signal, handler) => {
+        handlers.set(signal, handler);
+      });
+      expect([...handlers.keys()]).toEqual(["SIGINT", "SIGTERM"]);
+      expect(stop.signal).toBeUndefined();
+      handlers.get(sent)!();
+      expect(stop.signal).toBe(sent);
+    }
   });
 });
 
@@ -5675,7 +5964,12 @@ describe("what a lane does with the batches it was given", () => {
       runnerTemp?: string;
       githubOutput?: string;
     } = {},
-  ): Promise<{ ok: boolean; measured: TestRecord[]; annotations: string[] }> {
+  ): Promise<{
+    ok: boolean;
+    measured: TestRecord[];
+    annotations: string[];
+    printed: string[];
+  }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const { stop, runnerTemp, githubOutput } = over;
     const restore = setEnv({
@@ -5685,7 +5979,9 @@ describe("what a lane does with the batches it was given", () => {
     });
     const log = console.log;
     const annotations: string[] = [];
+    const printed: string[] = [];
     console.log = (line: string) => {
+      printed.push(line);
       if (line.startsWith("::error")) annotations.push(line);
     };
     try {
@@ -5715,7 +6011,7 @@ describe("what a lane does with the batches it was given", () => {
       const measured = written.split("\n")
         .filter((line) => line.length > 0)
         .map((line) => JSON.parse(line) as TestRecord);
-      return { ok, measured, annotations };
+      return { ok, measured, annotations, printed };
     } finally {
       console.log = log;
       restore();
@@ -6739,6 +7035,37 @@ describe("what a lane does with the batches it was given", () => {
           .catch(() => {});
       }
     });
+
+    it("names the records off the suite's surfaces that its batches and its reruns kept", async () => {
+      // Each pass fails the one identity, so its unit runs again, and
+      // records a `pastry` identity the suite does not declare, named for
+      // whether the pass is a rerun.
+      const { printed } = await run([
+        Deno.execPath(),
+        "eval",
+        `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+         Deno.mkdirSync(dir, { recursive: true });
+         const write = (test, outcome) => Deno.writeTextFileSync(
+           \`\${dir}/fragment-\${crypto.randomUUID()}.ndjson\`,
+           JSON.stringify({ line: "record", test, outcome, durationMs: 1 }) +
+             "\\n",
+         );
+         write({ k: "unit", s: "bakery", n: "glaze > sets" }, "fail");
+         write({
+           k: "unit",
+           s: "pastry",
+           n: dir.includes("/rerun-") ? "flakes again" : "flakes",
+         }, "pass");
+         Deno.exit(1);`,
+      ], { full: true });
+      const said = printed.join("\n");
+      expect(said).toContain(
+        "These records name a surface the suite that ran them does not " +
+          "declare",
+      );
+      expect(said).toContain('- ["unit","pastry","flakes"]');
+      expect(said).toContain('- ["unit","pastry","flakes again"]');
+    });
   });
 });
 
@@ -7076,6 +7403,16 @@ describe("converting what a lane collected", () => {
     expect(await Deno.readTextFile(at)).toBe(
       "SF:patterns/a.tsx\nend_of_record\nSF:/elsewhere/b.ts\n",
     );
+  });
+
+  it("throws where a pattern report cannot be read, and returns where there are none", async () => {
+    const root = await collected([]);
+    await relativizePatternCoverage({ ...options(root) });
+    const at = `${root}/coverage/${PATTERN_COVERAGE_DIR}`;
+    await Deno.mkdir(at, { recursive: true });
+    await Deno.symlink(`${at}/loop.lcov`, `${at}/loop.lcov`);
+    await expect(relativizePatternCoverage({ ...options(root) })).rejects
+      .toThrow(Deno.errors.FilesystemLoop);
   });
 
   it("converts a directory no measured set names", async () => {

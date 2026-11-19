@@ -28,7 +28,11 @@ export type TelemetryAnnotations = {
   /**
    * Concrete structural surface for a transformer-proven complete source lift.
    * This is runner-owned metadata; raw modules, handlers, and unresolved
-   * redirect surfaces leave it absent and therefore remain fail-closed.
+   * redirect surfaces leave it absent and therefore remain fail-closed. The
+   * reads that resolve it carry `schedulerDependencyRead`, so the flow join
+   * takes nothing of them. While that holds it must decide only whether and
+   * when the action runs, never anything the transaction that resolved it
+   * writes.
    */
   completeSchedulerScopeSummary?: {
     complete: true;
@@ -325,6 +329,16 @@ export type ServedEventFailureOutcome =
 
     cause: "handler-not-run";
     message: string;
+
+    /** The scoped instance the run read while the serving loop had not
+     * produced it, where a writer that owes it will still run
+     * (`Scheduler.comingOwedScopedInstance()`): its document and its
+     * instance's scope key. When the instance is in the stream's own space,
+     * the deferral is settlement: it spends none of the drain's deferral
+     * budget, and a commit writing that instance re-drains the entry
+     * (events.md §5). An instance in another space, whose commits the drain
+     * does not see, spends the budget as any other deferral does. */
+    waitsOn?: { space: MemorySpace; id: string; scopeKey: ScopeKey };
   }
   | {
     /** The piece the event addresses records an origin the serving loop

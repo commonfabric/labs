@@ -999,6 +999,24 @@ describe("reading a run's gathered artifacts", () => {
     }
   });
 
+  it("throws where a named path is there and cannot be read", async () => {
+    // A path through a file is not missing, and reading it as a path that
+    // holds no records would judge the run on less than it gathered.
+
+    const root = await Deno.makeTempDir({ prefix: "artifacts-" });
+    try {
+      await Deno.writeTextFile(`${root}/records.ndjson`, "");
+      await expect(
+        readRecords([`${root}/records.ndjson/a`], new AliasResolver([])),
+      ).rejects.toThrow(Deno.errors.NotADirectory);
+      expect(
+        await readRecords([`${root}/absent`], new AliasResolver([])),
+      ).toEqual([]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("holds a gathered artifact's records to the commit its job named", async () => {
     // A gathered artifact carries a run's records without the context a
     // report opens with, and the commit the store half holds a tree to is

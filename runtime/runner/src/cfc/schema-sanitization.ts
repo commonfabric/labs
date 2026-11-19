@@ -721,12 +721,14 @@ const SUPPORTED_SCHEMA_TYPES = new Set([
   ...FABRIC_PRIMITIVE_SCHEMA_TYPES,
 ]);
 
-const SUPPORTED_SCHEMA_FORMATS = new Set([
-  "email",
-  "uri",
-  "date",
-  "date-time",
-]);
+/** The string formats validation checks, each with the check it makes. */
+const SCHEMA_FORMAT_MATCHERS: ReadonlyMap<string, (value: string) => boolean> =
+  new Map([
+    ["email", valueMatchesEmail],
+    ["uri", valueMatchesUri],
+    ["date", valueMatchesDate],
+    ["date-time", valueMatchesDateTime],
+  ]);
 
 const isDenseArray = (value: readonly unknown[]): boolean => {
   for (let index = 0; index < value.length; index++) {
@@ -822,7 +824,7 @@ const strictConstraintDefinitionIssue = (
   if (Object.hasOwn(record, "format")) {
     if (
       typeof record.format !== "string" ||
-      (!formatAnnotations && !SUPPORTED_SCHEMA_FORMATS.has(record.format))
+      (!formatAnnotations && !SCHEMA_FORMAT_MATCHERS.has(record.format))
     ) {
       return `schema has unsupported format ${String(record.format)}`;
     }
@@ -1966,8 +1968,8 @@ const validateAgainstSchemaUncached = (
       // schema is not gated (its type never includes "object").
       //
       // Presence only: `properties` sub-schemas are not enforced against
-      // accessor values (a schema declaring `source` as a number still
-      // matches a FabricRegExp, whose `source` is a string) — the type
+      // accessor values (a schema declaring `length` as a string still
+      // matches a FabricBytes, whose `length` is a number) — the type
       // system doesn't produce such schemas, and the property walk below
       // deliberately stays limited to plain objects.
       const typeAllowsObject = schema.type === undefined ||
@@ -2186,7 +2188,9 @@ function validateStrictSchemaConstraints(
       if (!pattern.test(value)) return mismatch(`value does not match pattern`);
     }
     if (schema.format !== undefined) {
-      if (!valueMatchesFormat(value, schema.format)) {
+      // strictConstraintDefinitionIssue() refused a format with no matcher.
+      const matches = SCHEMA_FORMAT_MATCHERS.get(schema.format);
+      if (matches?.(value) !== true) {
         return mismatch(`value does not match format ${schema.format}`);
       }
     }
@@ -2366,58 +2370,53 @@ function validateStrictSchemaConstraints(
   return undefined;
 }
 
-function valueMatchesFormat(value: string, format: string): boolean {
-  switch (format) {
-    case "email": {
-      const separator = value.lastIndexOf("@");
-      if (separator <= 0 || separator === value.length - 1) return false;
-      const local = value.slice(0, separator);
-      const domain = value.slice(separator + 1);
-      const dotAtom = !local.startsWith(".") && !local.endsWith(".") &&
-        !local.includes("..") &&
-        /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local);
-      const quoted = /^"(?:[\x20-\x21\x23-\x5B\x5D-\x7E]|\\[\x20-\x7E])*"$/
-        .test(
-          local,
-        );
-      if (
-        local.length === 0 || local.length > 64 || domain.length === 0 ||
-        domain.length > 255 || (!dotAtom && !quoted) || domain.includes("..")
-      ) {
-        return false;
-      }
-      const labels = domain.split(".");
-      return labels.every((label) =>
-        label.length > 0 && label.length <= 63 &&
-        !label.startsWith("-") && !label.endsWith("-") &&
-        /^[A-Za-z0-9-]+$/.test(label)
-      );
-    }
-    case "uri":
-      try {
-        new URL(value);
-        return true;
-      } catch {
-        return false;
-      }
-    case "date":
-      return valueMatchesDate(value);
-    case "date-time": {
-      const match =
-        /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/
-          .exec(value);
-      if (!match || !valueMatchesDate(match[1])) return false;
-      const hour = Number(match[2]);
-      const minute = Number(match[3]);
-      const second = Number(match[4]);
-      const offsetHour = match[6] === undefined ? 0 : Number(match[6]);
-      const offsetMinute = match[7] === undefined ? 0 : Number(match[7]);
-      return hour <= 23 && minute <= 59 && second <= 60 &&
-        offsetHour <= 23 && offsetMinute <= 59;
-    }
-    default:
-      return false;
+function valueMatchesEmail(value: string): boolean {
+  const separator = value.lastIndexOf("@");
+  if (separator <= 0 || separator === value.length - 1) return false;
+  const local = value.slice(0, separator);
+  const domain = value.slice(separator + 1);
+  const dotAtom = !local.startsWith(".") && !local.endsWith(".") &&
+    !local.includes("..") &&
+    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+$/.test(local);
+  const quoted = /^"(?:[\x20-\x21\x23-\x5B\x5D-\x7E]|\\[\x20-\x7E])*"$/
+    .test(
+      local,
+    );
+  if (
+    local.length === 0 || local.length > 64 || domain.length === 0 ||
+    domain.length > 255 || (!dotAtom && !quoted) || domain.includes("..")
+  ) {
+    return false;
   }
+  const labels = domain.split(".");
+  return labels.every((label) =>
+    label.length > 0 && label.length <= 63 &&
+    !label.startsWith("-") && !label.endsWith("-") &&
+    /^[A-Za-z0-9-]+$/.test(label)
+  );
+}
+
+function valueMatchesUri(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function valueMatchesDateTime(value: string): boolean {
+  const match =
+    /^(\d{4}-\d{2}-\d{2})[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?([Zz]|[+-](\d{2}):(\d{2}))$/
+      .exec(value);
+  if (!match || !valueMatchesDate(match[1])) return false;
+  const hour = Number(match[2]);
+  const minute = Number(match[3]);
+  const second = Number(match[4]);
+  const offsetHour = match[6] === undefined ? 0 : Number(match[6]);
+  const offsetMinute = match[7] === undefined ? 0 : Number(match[7]);
+  return hour <= 23 && minute <= 59 && second <= 60 &&
+    offsetHour <= 23 && offsetMinute <= 59;
 }
 
 function valueMatchesDate(value: string): boolean {

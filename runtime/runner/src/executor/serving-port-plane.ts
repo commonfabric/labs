@@ -90,6 +90,12 @@ export type ServingPlaneHost = {
   counters: () => ServingLoopCounters;
   diagnostics: () => ServingLoopDiagnostics;
   collectedMemory: () => CollectedMemory;
+
+  /**
+   * Writes the sampling heap profile of the worker's isolate into `directory`
+   * and returns the file's path.
+   */
+  heapProfile: (directory: string) => Promise<string>;
   runLifecycleVerb: (
     space: MemorySpace,
     verb: LifecycleVerbDescriptor,
@@ -114,6 +120,7 @@ type TransportPlane = Extract<
 type MirroredSession = {
   principal: string | undefined;
   servingOwn?: true;
+  notDemand?: true;
   readCeiling: SessionReadCeiling | undefined;
   expiresAt: number | null;
 };
@@ -146,6 +153,7 @@ class SessionMirror {
         sessions.set(event.sessionId, {
           principal: event.principal,
           ...(event.servingOwn === true ? { servingOwn: true } : {}),
+          ...(event.notDemand === true ? { notDemand: true } : {}),
           readCeiling: event.readCeiling,
           expiresAt: null,
         });
@@ -638,7 +646,7 @@ export class ServingPlane {
     });
     endpoint.onNotice(
       "observer.demandChanged",
-      ({ space, reason, principal, sessionId, servingOwn }) => {
+      ({ space, reason, principal, sessionId, servingOwn, notDemand }) => {
         this.#demandShares.noteChanged(space, sessionId);
         this.#observer?.demandChanged?.(
           space,
@@ -646,6 +654,7 @@ export class ServingPlane {
           principal,
           sessionId,
           servingOwn,
+          notDemand,
         );
       },
     );
@@ -756,6 +765,10 @@ export class ServingPlane {
     this.#endpoint.onRequest(
       "host.collectedMemory",
       () => host.collectedMemory(),
+    );
+    this.#endpoint.onRequest(
+      "host.heapProfile",
+      async ({ directory }) => ({ path: await host.heapProfile(directory) }),
     );
     this.#endpoint.onRequest(
       "host.runLifecycleVerb",

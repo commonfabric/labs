@@ -83,7 +83,20 @@ export interface ReplayOptions {
    * against whichever entries the repository's list holds today.
    */
   acceptedDrops?: readonly AcceptedStateDrop[];
+
+  /**
+   * Receives a line as each fixture's replay begins, then as each target the
+   * fixture records begins.
+   */
+  progress?: Progress;
 }
+
+/**
+ * Receives one line as each step of a long run begins, numbered against the
+ * count of such steps. A line is sent only once the step before it has ended,
+ * so the last line received names the step most recently begun.
+ */
+export type Progress = (line: string) => void;
 
 async function withRuntime<T>(
   roots: GateRoots,
@@ -603,7 +616,11 @@ export async function replayVintage(
       );
     }
 
-    for (const entry of targets) {
+    for (const [index, entry] of targets.entries()) {
+      options.progress?.(
+        `  target ${index + 1}/${targets.length}: ${entry.main} ` +
+          `(${entry.symbol})`,
+      );
       // A recorded `main` is either a repo path or the ROUTE the toolshed
       // serves the pattern at; both name a file under `patterns/`.
       const key = patternKeyFromMain(entry.main, patternsPrefix(roots));
@@ -1067,7 +1084,12 @@ export async function replayAll(
   const recordsFragment = options.recordResults === true
     ? FragmentWriter.openForRun()
     : undefined;
-  for (const vintage of vintages) {
+  for (const [index, vintage] of vintages.entries()) {
+    options.progress?.(
+      `fixture ${index + 1}/${vintages.length}: ${
+        relativeToRepo(vintage.path, roots.repoRoot)
+      }`,
+    );
     const replayStarted = performance.now();
     const report = await replayVintage(roots, vintage, options);
     recordsFragment?.append({
@@ -1351,6 +1373,7 @@ export async function captureMissing(
   roots: GateRoots,
   testKeys: readonly string[],
   now: Date,
+  progress?: Progress,
 ): Promise<{ captured: string[]; problems: string[] }> {
   // PINNED only, because PINNED is what coverage credits. An auto capture is
   // regenerable and pruned by count, so counting one as "already have it"
@@ -1364,19 +1387,29 @@ export async function captureMissing(
       .filter((v) => v.tier === PINNED)
       .map((v) => v.testKey),
   );
+  // `--update` can only ADD: a key already pinned is skipped whichever way it
+  // was asked for. Replacing a vintage could replace the very one that would
+  // have caught a break. A key named twice on one command line is captured
+  // once, rather than failing the whole run the second time with "already
+  // exists, and a capture never overwrites a pinned vintage".
+  const missing = [...new Set(testKeys)].filter((key) => !existing.has(key));
+  return await captureEach(roots, missing, now, PINNED, progress);
+}
+
+/** Capture a vintage of `tier` for each of `testKeys`, in order. */
+async function captureEach(
+  roots: GateRoots,
+  testKeys: readonly string[],
+  now: Date,
+  tier: string,
+  progress: Progress | undefined,
+): Promise<{ captured: string[]; problems: string[] }> {
   const captured: string[] = [];
   const problems: string[] = [];
-  for (const key of testKeys) {
-    // `--update` can only ADD: a key already pinned is skipped whichever way it
-    // was asked for. Replacing a vintage could replace the very one that would
-    // have caught a break.
-    if (existing.has(key)) continue;
-    // Recorded before the attempt, so a key named twice on one command line is
-    // skipped the second time rather than failing the whole run with "already
-    // exists, and a capture never overwrites a pinned vintage".
-    existing.add(key);
+  for (const [index, key] of testKeys.entries()) {
+    progress?.(`capture ${index + 1}/${testKeys.length}: ${key}`);
     try {
-      captured.push(await captureVintage(roots, key, now));
+      captured.push(await captureVintage(roots, key, now, tier));
     } catch (error) {
       // Report every failure rather than dying on the first: a run that
       // captures 9 of 10 and then throws leaves the tree half-seeded with no
@@ -1420,6 +1453,7 @@ export async function captureChangedGenerations(
     perVintage: readonly VintageOutcome[];
   },
   now: Date,
+  progress?: Progress,
 ): Promise<CaptureChangedOutcome> {
   // Capture from a GREEN tree only. A fixture that failed is not a statement
   // about which generation the world is on, and capturing beside it would mint
@@ -1434,7 +1468,12 @@ export async function captureChangedGenerations(
   if (stale.length === 0) {
     return { kind: "all-current", replayed: replay.perVintage.length };
   }
-  const { captured, problems } = await captureGenerations(roots, stale, now);
+  const { captured, problems } = await captureGenerations(
+    roots,
+    stale,
+    now,
+    progress,
+  );
   // Prune AFTER capturing, against a RE-READ tree, so the new generations are
   // among the ones counted. Pruning first would keep `keep` old ones and then
   // add another, leaving the tree permanently one over the bound.
@@ -1532,15 +1571,7 @@ export async function captureGenerations(
   roots: GateRoots,
   testKeys: readonly string[],
   now: Date,
+  progress?: Progress,
 ): Promise<{ captured: string[]; problems: string[] }> {
-  const captured: string[] = [];
-  const problems: string[] = [];
-  for (const key of testKeys) {
-    try {
-      captured.push(await captureVintage(roots, key, now, AUTO));
-    } catch (error) {
-      problems.push(`  ${key}: ${describeFailure(error)}`);
-    }
-  }
-  return { captured, problems };
+  return await captureEach(roots, testKeys, now, AUTO, progress);
 }

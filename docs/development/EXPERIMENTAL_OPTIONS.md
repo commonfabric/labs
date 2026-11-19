@@ -2282,7 +2282,7 @@ the per-epic implementation notes).
   runtimes' storage sessions cross as frames; and the server's observer crosses
   as events. The memory server's store has to be a file for the worker to open
   it. The pattern-lifecycle verbs reach the loop as descriptors on both arms.
-  The pool that places spaces on workers takes four more variables from the
+  The pool that places spaces on workers takes five more variables from the
   same bootstrap, each a whole number: `SERVER_EXECUTION_MAX_WORKERS`, how
   many workers spaces are placed on before a space joins a worker that
   already serves one (default 4 in the toolshed, 16 in the pool itself; `1`
@@ -2296,7 +2296,11 @@ the per-epic implementation notes).
   serving memory server tests build starts), and
   `SERVER_EXECUTION_WORKER_HEAP_BUDGET_MB`, how large the workers' heaps may
   be together before workers kept only for parked runtimes are closed
-  (default none). The serving memory server tests build reads the first.
+  (default none), and `SERVER_EXECUTION_WORKER_WATCHDOG_SECONDS`, how long a
+  worker may send no message, its heartbeats included, before it is killed
+  (default 60, at least 10). The watchdog checks every 10 seconds, so the kill
+  comes at the first check at or past that many seconds of silence in a row:
+  15 kills at 20. The serving memory server tests build reads the first.
   Where the workers' runtimes compile takes two more:
   `SERVER_EXECUTION_COMPILE_WORKERS`, how many compile workers the process
   holds for every serving runtime (default 1), and
@@ -2343,10 +2347,14 @@ the per-epic implementation notes).
   the process's own memory server, whichever process owned the target, so the
   owner learned of them only through the store. With the knob on, the loop
   reaches a space other than the ones it serves through that space's owner: a
-  routed session per target space, open as the service identity on both
+  routed session per target space, open as the process's identity on both
   threads the loop can run on, carries the crossing as a `served` request of
   the memory protocol (the memory protocol chapter's section 4.3.12), and the
-  owner admits it as its own host's call. The outbox's event appends, the
+  owner admits it as its own host's call. The owner admits a sender whose
+  identity is its own, and, behind the memory router, where each toolshed has
+  an identity of its own, a sender the deployment's directory lists as a
+  toolshed (`docs/specs/memory-v2/routed-mode-a.md`, "Toolshed deployment
+  inputs"). The outbox's event appends, the
   pattern-lifecycle handler's registration delivery, and the wave's foreign
   batches and access-list changes go that way. The genesis of a space the
   serving runtime creates takes the same route as a signed `session.open`
@@ -2367,7 +2375,9 @@ the per-epic implementation notes).
   memory server's read row admits a routed service-identity session under the
   read actor's grant.
   [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
-  runs two toolshed processes behind a proxy that routes by space. The
+  runs two toolshed processes behind a proxy that routes by space, once
+  sharing an identity and once with an identity each and a directory that
+  lists both. The
   crossings a process sent through the route are counted by kind under
   `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
   deployment reads there whether routing carries its crossings.
@@ -3132,8 +3142,7 @@ sweep does not mistake them for missing experimental flags:
 - **Runner diagnostics** (environment): `CF_TRAVERSE_CAPTURE`,
   `CF_TRAVERSE_CAPTURE_MAX`, `CF_TRAVERSE_DIAGNOSTICS`. What each one does is in
   [the configuration reference](./CONFIGURATION.md#runner-diagnostics).
-- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`,
-  `CF_PROFILE_DONE_MARKER`.
+- **CLI controls** (environment): `CF_EXEC_SHEBANG`, `CF_CLI_TRACE_TIMINGS`.
 - **`CF_ADOPT_SERVER_FLAGS`** — set to `false` to stop a client that is not
   built alongside its server from adopting that deployment's posture, leaving
   it on its own environment. An escape hatch over the mechanism, not a flag

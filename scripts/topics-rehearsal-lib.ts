@@ -263,11 +263,18 @@ export interface TopicsExport {
  * one points at. A document write cannot carry a `$link`, so these are routed
  * aside and re-linked after the apply.
  *
- * Three today: `mentionable` (the board's derived mention index),
- * `boardCrossrefs` (its reference pivot), and `boardNames` (its names table).
- * The mention index publishes display rows with stable strings and unread
- * member references, matching the wiring the board supplies when it creates a
- * topic.
+ * Not every one is re-linked. A {@link RETIRABLE_LINK_FIELDS} entry is retired
+ * for a target that does not declare it. Where the caller says which paths the
+ * board publishes (`publishedSources`), a field whose board path is not among
+ * them is decided before the apply rather than by a refused relink after it:
+ * a retirable one is left out and reported, and any other is refused.
+ * `buildRestoreDocument` makes each of these decisions.
+ *
+ * Four today: `mentionable` (the board's derived mention index),
+ * `boardCrossrefs` (its reference pivot), `boardCrossrefIndex` (that pivot's
+ * positions grouped by topic number), and `boardNames` (its names table). The
+ * mention index publishes display rows with stable strings and unread member
+ * references, matching the wiring the board supplies when it creates a topic.
  *
  * Adding a wiring input to the topic pattern means adding it here. Leaving it
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
@@ -283,15 +290,16 @@ export interface TopicsExport {
 export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
   mentionable: "mentionable",
   boardCrossrefs: "crossrefs",
+  boardCrossrefIndex: "crossrefIndex",
   boardNames: "namesTable",
 };
 
 export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
 
 /**
- * Link-valued fields the topic pattern may no longer declare, which a restore
- * retires for a target that does not declare them and re-establishes for one
- * that does.
+ * Link-valued fields declared by some generations of the topic pattern and not
+ * others, which a restore retires for a target that does not declare them and
+ * re-establishes for one that does.
  *
  * The condition is the point. A restore runs against targets of two vintages
  * at once during a migration: one whose pattern still declares the field and
@@ -305,9 +313,14 @@ export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
  *
  * `myName` predates the agentName attribution and no pattern declares it.
  * `boardNames` named the board's table a topic read its number from, before a
- * topic stored its own.
+ * topic stored its own. `boardCrossrefIndex` is declared by the generations
+ * that look their backlinks up by number, and not by the ones that scan.
  */
-export const RETIRABLE_LINK_FIELDS = ["myName", "boardNames"] as const;
+export const RETIRABLE_LINK_FIELDS = [
+  "myName",
+  "boardNames",
+  "boardCrossrefIndex",
+] as const;
 
 /**
  * Fields a restore carries forward from the LIVE piece rather than from the
@@ -371,6 +384,37 @@ export async function declaredRetirableLinks(
   return declared;
 }
 
+/**
+ * The board paths among the {@link STRUCTURAL_LINK_SOURCES} that the board
+ * publishes — `buildRestoreDocument`'s `publishedSources`, decided by asking
+ * the board.
+ *
+ * The relink after the apply is `cf piece link <board>/<source>`, which
+ * refuses a source path the board's result does not hold. The apply replaces
+ * the whole document first, so a refusal there leaves the topic with its
+ * content restored and its wiring gone, and every relink after the refused
+ * one never runs. A topic and its board are updated separately, and either can
+ * be the newer for a while, so a topic can declare an input its board does not
+ * yet, or no longer, publish. Asking the board before the apply moves that
+ * refusal ahead of it.
+ *
+ * `read` is a read of the board's result at one path, answering `undefined`
+ * where the result holds no such key, which is the check `cf piece link` makes
+ * of its source path.
+ * Each distinct source is asked once, in table order. The answer can go stale
+ * if the board changes between this probe and the relink, and the relink then
+ * refuses as it would without the probe.
+ */
+export async function publishedBoardSources(
+  read: (source: string) => Promise<unknown>,
+): Promise<string[]> {
+  const published: string[] = [];
+  for (const source of new Set(Object.values(STRUCTURAL_LINK_SOURCES))) {
+    if (await read(source) !== undefined) published.push(source);
+  }
+  return published;
+}
+
 /** What the target's current pattern declares and currently holds. */
 export interface RestoreTarget {
   /**
@@ -386,6 +430,16 @@ export interface RestoreTarget {
    * forward. A field absent here is one the target holds no value at.
    */
   preserved?: Record<string, unknown>;
+
+  /**
+   * The board paths the target's board publishes, from
+   * {@link publishedBoardSources}. A link field whose board path is missing
+   * from this list cannot be relinked: a {@link RETIRABLE_LINK_FIELDS} entry is
+   * left out and reported in `unpublished`, and any other link field is
+   * refused before the apply. Omitted, the board is not asked about and every
+   * path is taken to exist.
+   */
+  publishedSources?: readonly string[];
 }
 
 export interface RestoreDocument {
@@ -397,6 +451,13 @@ export interface RestoreDocument {
 
   /** Retirable link fields the target no longer declares, left retired. */
   legacy: string[];
+
+  /**
+   * Retirable link fields the target declares and its board publishes no
+   * path for, left out of the document and not relinked. The target reads
+   * the input's declared default until a later restore or link binds it.
+   */
+  unpublished: string[];
 
   /** Preserved fields taken from the live piece because the export names
    * none, which a whole-document apply would otherwise remove. */
@@ -425,6 +486,13 @@ export interface RestoreDocument {
  * is refused: the fields are permanent, so two values mean the export and the
  * target are not the same piece, and guessing between them is not this
  * script's to do.
+ *
+ * Where `target.publishedSources` is given, a link field the target would
+ * relink from a board path the board does not publish is decided here rather
+ * than by a refused relink after the apply: a retirable one goes to
+ * `unpublished`, any other throws. Every such decision is made before the
+ * document is returned, so the order of fields in the raw argument does not
+ * decide which links survive.
  */
 export function buildRestoreDocument(
   rawArgument: Record<string, unknown>,
@@ -435,7 +503,23 @@ export function buildRestoreDocument(
   const doc: Record<string, unknown> = {};
   const structural: string[] = [];
   const legacy: string[] = [];
+  const unpublished: string[] = [];
   const carried: string[] = [];
+  const relink = (field: string, retirable: boolean) => {
+    const source = STRUCTURAL_LINK_SOURCES[field];
+    const published = target.publishedSources;
+    if (published === undefined || published.includes(source)) {
+      structural.push(field);
+    } else if (retirable) {
+      unpublished.push(field);
+    } else {
+      throw new Error(
+        `${field} links to the board's ${source}, and the board publishes no ` +
+          `${source}; applying this document would destroy a link nothing ` +
+          "can put back",
+      );
+    }
+  };
   for (const [field, value] of Object.entries(rawArgument)) {
     if (value === undefined) continue;
     const retirable = (RETIRABLE_LINK_FIELDS as readonly string[])
@@ -449,7 +533,7 @@ export function buildRestoreDocument(
     } else if (
       (STRUCTURAL_LINK_FIELDS as readonly string[]).includes(field)
     ) {
-      structural.push(field);
+      relink(field, retirable);
     } else if (retirable) {
       // Declared by the target but with no board path to re-link from, which
       // is the shape of a field retired on the board's side first. Reported
@@ -481,7 +565,7 @@ export function buildRestoreDocument(
           "destroy a link nothing can put back",
       );
     }
-    structural.push(field);
+    relink(field, (RETIRABLE_LINK_FIELDS as readonly string[]).includes(field));
   }
   for (const field of PRESERVED_FIELDS) {
     const live = target.preserved?.[field];
@@ -499,7 +583,7 @@ export function buildRestoreDocument(
       );
     }
   }
-  return { doc, structural, legacy, carried };
+  return { doc, structural, legacy, unpublished, carried };
 }
 
 /** The path below any node where a `$link` marker appears, or null. Used to

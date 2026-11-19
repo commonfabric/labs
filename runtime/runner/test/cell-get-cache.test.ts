@@ -289,9 +289,9 @@ describe("Cell.get() per-transaction cache", () => {
     c.set(5);
 
     c.get(); // real read: registers the dependency on the tx
-    const afterReal = [...(tx.getReactivityLog?.().reads ?? [])].length;
+    const afterReal = tx.getReactivityLog().reads.length;
     c.get(); // served from cache
-    const afterCached = [...(tx.getReactivityLog?.().reads ?? [])].length;
+    const afterCached = tx.getReactivityLog().reads.length;
 
     // The first get() registered the reactive dependency, and the cached second
     // get() neither dropped it nor needed to re-add it -- so an action that

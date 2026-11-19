@@ -184,14 +184,36 @@ it finds, rather than skip it, is a change in that repository.
 
 ## The toolshed's heap limit
 
-The toolshed binary is built with `--v8-flags=--max-old-space-size=16384`
-(`tasks/build-binaries.ts`), and `scripts/start-local-dev.sh` and the package's
-`dev` and `production` tasks run with the same flag. V8 applies the limit to each
-isolate rather than to the process, so the main thread and every serving worker
-can each reach 16 GiB. The compiled binary fixes the limit when it is built: it
-ignores `DENO_V8_FLAGS`, `NODE_OPTIONS` and `--v8-flags` given when it starts,
-so changing the limit for a deployment takes a new build. A toolshed runs a serving worker per served space, up to
-`SERVER_EXECUTION_MAX_WORKERS` of them (default 4) and
+The toolshed runs with `--max-old-space-size=16384`: the binary
+(`tasks/build-binaries.ts`), `scripts/start-local-dev.sh`, and the package's
+`dev` and `production` tasks all set it. Under V8's default of about 4 GB, the
+main thread, which holds the memory server, outgrew its limit on Estuary and
+took its process down every 20 minutes or so (2026-11-16). V8 takes the flag
+over the limit each serving worker is started with, so a worker's heap could
+grow to 16 GiB without reaching `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB`. The
+pool logs `heap-limit-overridden` when a worker's limit is well past the one it
+was given, and then holds the worker to its limit itself: it ends a worker
+whose heartbeats report a heap of the limit or more twice in a row. The
+compiled binary reads no V8 flags when it starts (it ignores `DENO_V8_FLAGS`,
+`NODE_OPTIONS` and `--v8-flags`), so the only V8 flags a deployment runs with
+are the ones built in. The binary is built with
+`--perf-basic-prof-only-functions` and
+`--interpreted-frames-native-stack`: V8 writes each compiled function's name to
+`/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
+on the host name the JavaScript a thread runs, a stalled serving worker's
+included. The map grows for as long as the process runs.
+`--perf-basic-prof-only-functions` also switches on V8's event log, so the
+binary is built with `--no-logfile-per-isolate` and `--logfile=+` as well: each
+isolate writes its log to an unnamed temporary file rather than to an
+`isolate-<address>-<pid>-v8.log` file in the working directory. The system frees
+a serving worker's file when the worker ends, and the main thread's when the
+process ends. The log has a line for each chunk of memory V8 allocates or
+frees, so it grows for as long as its isolate runs. On Linux the file is in
+`/tmp`, where a directory listing does not show it; `ls -l /proc/<pid>/fd` does.
+A toolshed runs a serving worker per served space, up to
+`SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
+separated at a heap limit each hold a worker of their own, until one of those
+closes) and
 `SERVER_EXECUTION_SPARE_WORKERS` more kept started (default 1), and each holds
 about 110 MB before it serves anything
 ([`serving-loop.md`](../specs/server-side-execution/serving-loop.md) §1,
@@ -201,7 +223,9 @@ runtime; it closes no worker that serves a space, so it does not bound a space
 that grows. `SERVER_EXECUTION_WORKER_HEAP_LIMIT_MB` (default 2048, at least
 256) does: each serving worker runs as a `node:worker_threads` thread whose
 old generation that limit bounds, and the pool ends a worker whose heap
-reaches it, alone. The limit bounds each worker, not their sum, so a host that
+reaches it, alone. V8 collects a worker's garbage as its heap nears the limit,
+as it does any isolate's, so a worker reaches it only when what it still holds
+does. The limit bounds each worker, not their sum, so a host that
 runs many toolsheds sizes it, with `SERVER_EXECUTION_MAX_WORKERS`, against its
 memory. It is not exact. A worker that reaches it while evaluating its modules
 or in a timer reports an out-of-memory error and is ended at once. One that

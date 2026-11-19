@@ -31,7 +31,7 @@ describe("package-layout", () => {
     it("returns undefined for a path in no package", () => {
       for (
         const path of [
-          "tasks/test.ts",
+          "tasks/workspace-tests.ts",
           "runtime",
           "runtime/",
           "data-model/README.md",

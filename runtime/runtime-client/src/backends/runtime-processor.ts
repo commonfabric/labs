@@ -1003,6 +1003,22 @@ type RuntimeOperationSession = {
 };
 
 /**
+ * A request `RuntimeProcessor.handleRequest()` routes: every client request
+ * but those the client registry answers itself, which set up a connection or
+ * switch the worker's console forwarding rather than ask anything of the
+ * runtime.
+ */
+export type ProcessorRequest = Exclude<
+  IPCClientRequest,
+  {
+    type:
+      | RequestType.Initialize
+      | RequestType.Attach
+      | RequestType.SetForwardWorkerConsole;
+  }
+>;
+
+/**
  * The worker side of a runtime client connection. An instance owns the
  * worker's `Runtime`, keeps a `PiecesController` for the home space and for
  * each other space a request has named while something in that space is open,
@@ -4526,7 +4542,7 @@ export class RuntimeProcessor {
   }
 
   async handleRequest(
-    request: IPCClientRequest,
+    request: ProcessorRequest,
     client: WorkerClient = ownerClient,
   ): Promise<RemoteResponse | void> {
     switch (request.type) {
@@ -4722,8 +4738,14 @@ export class RuntimeProcessor {
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
         return this.handleVDomUnmount(request, client);
-      default:
-        throw new Error(`Unknown message type: ${(request as any).type}`);
+      default: {
+        // Every type the request can have is handled above, which this
+        // binding checks at compile time, so only a value from outside the
+        // type arrives here.
+        const unhandled: never = request;
+        const { type }: { type?: unknown } = unhandled;
+        throw new Error(`Unknown message type: ${String(type)}`);
+      }
     }
   }
 
@@ -4860,6 +4882,16 @@ export class RuntimeProcessor {
       if (!active) cancel?.();
       else cancelView = cancel;
       return render();
+    }, (error) => {
+      // A space deleted before its view registered admits no one again, so
+      // there is no coverage to wait for. The view renders all the same, and
+      // the reconciler shows the space's deleted placeholder, as it does for
+      // a view that was up when the deletion landed. A failed registration
+      // holds nothing, so the mount has no view registration to cancel. A
+      // mount the page has already given up renders nothing, and resolves as
+      // one whose registration succeeded after it was given up does.
+      if (isDeletedSpaceError(error)) return render();
+      throw error;
     }).catch((error) => {
       mount.cancel();
       reconciler.unmount();

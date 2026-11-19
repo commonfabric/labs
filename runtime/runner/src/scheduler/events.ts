@@ -1,5 +1,5 @@
 import { getLogger } from "@commonfabric/logger";
-import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import type { ScopeKey, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { entityKey } from "./keys.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -15,6 +15,7 @@ import type { Cancel } from "../cancel.ts";
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
+  handlerRunCounts,
   type OwningRootAddress,
   type RefusedUpdate,
 } from "../ensure-piece-running.ts";
@@ -41,6 +42,7 @@ import {
 import type {
   CommitError,
   IExtendedStorageTransaction,
+  IMemorySpaceAddress,
   IPreconditionFailedError,
   IReadActivity,
   IStorageManager,
@@ -179,6 +181,36 @@ export class EventHandlerRegistry {
 }
 
 const guardedImplementations = Symbol("guarded event implementations");
+
+/**
+ * The scoped instance a served handler's withdrawn run waits on, if any: the
+ * one link resolution found unproduced on the run's reads
+ * (`unproducedScopedInstance`), when a writer that owes it will still run
+ * (`Scheduler.comingOwedScopedInstance()`), as its document and its instance's
+ * scope key. Undefined when the run read no such instance, or when no writer
+ * that owes it is coming to produce it, so that nothing the drain could wait
+ * on will change what the argument reads.
+ */
+function servedNotRunWait(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+): { space: MemorySpace; id: string; scopeKey: ScopeKey } | undefined {
+  const unproduced = tx.tx.unproducedScopedInstance;
+  if (unproduced === undefined) return undefined;
+  // Recorded as `<space>/<scope>/<id>`; neither a space DID nor a scope holds
+  // a slash.
+  const [space, scope, ...rest] = unproduced.split("/");
+  if (scope !== "user" && scope !== "session") return undefined;
+  const address = {
+    space: space as MemorySpace,
+    id: rest.join("/") as IMemorySpaceAddress["id"],
+    scope: scope as "user" | "session",
+  };
+  const scopeKey = runtime.scheduler.comingOwedScopedInstance(address, tx);
+  return scopeKey === undefined
+    ? undefined
+    : { space: address.space, id: address.id, scopeKey };
+}
 
 type GuardedDispatcher = EventHandler & {
   [guardedImplementations]: {
@@ -950,17 +982,14 @@ function refusedUpdateNote(verdict: EnsurePieceVerdict): string {
 
 /**
  * Starts the piece an event's stream belongs to. A runtime whose run of the
- * handler is the one that counts, a serving runtime or any runtime with server
- * execution off, starts first the pieces its inputs come from
- * (`EnsurePieceOptions.startInputSources`): a stream a nested pattern defines
- * belongs to the nested instance, whose handler reads what the instance
- * enclosing it derives. A client under server execution runs the handler only
- * as its speculative echo, which the served run replaces, so it starts the
- * piece alone and leaves the pieces upstream of it, and the documents they
- * read, to the server. A serving runtime also has the piece's origin followed
- * before its first start of it (`EnsurePieceOptions.originFollowed`, which
- * the serving loop installs as `Runtime.pieceOriginFollowed`): nothing else
- * opens a piece it serves, so the start is where the piece's source is
+ * handler is the one that counts (`handlerRunCounts()`) starts first the
+ * pieces its inputs come from (`EnsurePieceOptions.startInputSources`): a
+ * stream a nested pattern defines belongs to the nested instance, whose
+ * handler reads what the instance enclosing it derives. Any other runtime
+ * starts the piece alone. A serving runtime also has the piece's origin
+ * followed before its first start of it (`EnsurePieceOptions.originFollowed`,
+ * which the serving loop installs as `Runtime.pieceOriginFollowed`): nothing
+ * else opens a piece it serves, so the start is where the piece's source is
  * brought up to date; the pieces its inputs come from are followed the same
  * way before they start. A start a follow is still owed, the piece's own or
  * an input source's, is declined, and the served event it was for is
@@ -970,9 +999,14 @@ function startEventPiece(
   runtime: Runtime,
   eventLink: NormalizedFullLink,
 ): Promise<EnsurePieceVerdict> {
+  // TODO(danfuzz): On a serving runtime, require the pieces enclosing a nested
+  // piece (`EnsurePieceOptions.sourcesRequired` with `enclosingSourcesOnly`),
+  // as the serving loop's demand start does, and hold the event while one
+  // cannot start; until then an enclosing piece that fails to start leaves the
+  // nested piece to start alone here, and its handler reads what that piece
+  // derived last. `space-server-enclosing-start.test.ts` pins it.
   return ensurePieceRunningVerdict(runtime, eventLink, {
-    startInputSources: runtime.experimental.serverExecution !== true ||
-      runtime.servingPosture,
+    startInputSources: handlerRunCounts(runtime),
     originFollowed: runtime.pieceOriginFollowed,
     forEvent: true,
   });
@@ -3134,6 +3168,12 @@ export async function dispatchQueuedEvent(state: {
         const notRunMessage = withheld
           ? "the handler did not run, and its outcome is withheld"
           : reason;
+        // What a served withdrawal waits on, decided from the run's own reads
+        // before the abort: a scoped instance a writer that will still run
+        // owes it (events.md §5).
+        const waitsOn = served === undefined
+          ? undefined
+          : servedNotRunWait(state.runtime, tx);
         if (tx.status().status === "ready") {
           tx.abort(
             new Error(
@@ -3162,6 +3202,7 @@ export async function dispatchQueuedEvent(state: {
             kind: "deferred",
             cause: "handler-not-run",
             message: notRunMessage,
+            ...(waitsOn !== undefined ? { waitsOn } : {}),
           });
           // The withdrawal is a deferral, and a deferral carries the
           // drain's arrival-order BARRIER (events.md §2; review-6459 F1):

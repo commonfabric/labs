@@ -57,9 +57,15 @@ function repository() {
     clearEnv: true,
   }).outputSync();
   Deno.mkdirSync(join(work, "sub"));
-  const git = realPushIo({ cwd: work, env, write() {} }).query;
+  const git =
+    realPushIo({ cwd: work, env, write() {}, step: () => () => {} }).query;
   /** The query that runs git in a directory inside the work tree. */
-  const gitInSub = realPushIo({ cwd: join(work, "sub"), env, write() {} })
+  const gitInSub = realPushIo({
+    cwd: join(work, "sub"),
+    env,
+    write() {},
+    step: () => () => {},
+  })
     .query;
   /** What the configuration file of `scope` sets, one `name=value` a line. */
   const file = (scope: "global" | "local") =>
@@ -298,7 +304,7 @@ describe("settings", () => {
         },
         {
           kind: "checkBox",
-          label: "Quit when the pushed branch's pull request opens",
+          label: "Quit when the pull request opens or merges",
           hotkey: "q",
           checked: true,
         },
@@ -554,6 +560,44 @@ describe("settings", () => {
       expect(s.settingsToSave).toBeNull();
     });
 
+    it("activates a button with Alt and its letter while the radio buttons have the focus", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "c", alt: true });
+
+      expect(s.view().dialog).toBeNull();
+      expect(s.settingsToSave).toBeNull();
+    });
+
+    it("leaves the focus and the fields as they are on Alt with a letter that is no shortcut", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "j", alt: true });
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "j", alt: true });
+
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "",
+        selected: true,
+      });
+    });
+
+    it("types into the focused input line the character Alt with a letter types when the letter is no shortcut, and presses the shortcut when it is one", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "z", alt: true, char: "Ω" });
+      s.handleKey({ name: "l", alt: true, char: "¬" });
+
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 0 });
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "Ω",
+      });
+    });
+
     it("closes without saving on Escape", () => {
       const s = settingsSession(OFF);
       s.handleKey(typed("q"));
@@ -702,7 +746,7 @@ describe("settings", () => {
 
       s.handleKey({ name: "home" });
       const start = drawnRows(s);
-      expect(start[shown.y]).toMatch(/ x{50}►/);
+      expect(start[shown.y]).toMatch(/ x{44}►/);
     });
 
     it("lists `O` in the help", () => {

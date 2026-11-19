@@ -25,7 +25,6 @@ import {
   DocumentLoadError,
   getMetaLink,
   type IExtendedStorageTransaction,
-  loadDocument,
   loadProfileCandidates,
   loadProfileOwnerDocuments,
   orderProfileCandidates,
@@ -356,13 +355,13 @@ export interface ListedProfile {
    * Whether the picture is attested to its owner: the label its value carries
    * names the person whose profiles these are, and no one else, as the
    * principal it represents, and the picture is the whole of the cell a write
-   * to the field lands in (`writtenPrincipalAt()`). `false` when there is no
-   * picture, for one another principal set, which anyone can, since a
-   * profile's space lets anyone write, and for one stored without a label. A
-   * host showing the picture as the person's face shows it only where this is
-   * `true`. A picture stored before writes to it were labeled carries no
-   * label, so it is `false` until its owner sets it again, as
-   * `setProfilePicture()` does with `keepCurrent`.
+   * to the field lands in, in the profile's space (`writtenPrincipalAt()`).
+   * `false` when there is no picture, for one another principal set, which
+   * anyone can, since a profile's space lets anyone write, and for one stored
+   * without a label. A host showing the picture as the person's face shows it
+   * only where this is `true`. A picture stored before writes to it were
+   * labeled carries no label, so it is `false` until its owner sets it again,
+   * as `setProfilePicture()` does with `keepCurrent`.
    */
   pictureByOwner: boolean;
 
@@ -557,13 +556,11 @@ async function ownRetiredProfiles(
   await root.key("profiles").resolveAsCell().sync();
   await root.key("retiredProfiles").resolveAsCell().sync();
   const listed = profileSpaces(root);
-  const runtime = cellRuntime(root);
   const found: Cell<unknown>[] = [];
   for (const space of profileSpaces(root, "retiredProfiles").keys()) {
     const link = listed.get(space);
     if (link === undefined) continue;
     try {
-      if (!await loadDocument(runtime, link)) continue;
       // A link that is no one's profile, one whose links run in a cycle among
       // them, is left unresolved, since only an own profile is listed.
       if (await isOwnProfile(link, root.space)) {

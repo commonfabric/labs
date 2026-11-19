@@ -4,7 +4,7 @@ import {
   markdownTemplate,
   revealedText,
 } from "../../../console/src/markdown.ts";
-import { templateText } from "./template-text.ts";
+import { templateText } from "./lit-template.ts";
 
 const rendered = (
   source: string,

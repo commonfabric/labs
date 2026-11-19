@@ -50,6 +50,13 @@ describe("lint-file-url-pathname", () => {
     ]);
   });
 
+  it("returns nothing for a declaration that binds a file URL whole, or binds nothing", () => {
+    expect(reported(`
+      const url = new URL("../..", import.meta.url);
+      let pathname;
+    `)).toEqual([]);
+  });
+
   it("reports `pathname` destructured from a file URL", () => {
     expect(reported(`
       const { pathname } = new URL("../..", import.meta.url);

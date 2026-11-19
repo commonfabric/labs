@@ -4,8 +4,8 @@
  * A suggestion offered candidates is a picker: one candidate is the result
  * outright, several wait for the user to choose. A suggestion offered none
  * asks the agent, and the test drives that conversation through the controls
- * the view renders, reading back what each one put into it. The agent itself
- * needs a model, which a pattern test has none of, so no result arrives on
+ * the view renders, reading back what each one put into it. The test states
+ * that the model fails each of the agent's replies, so no result arrives on
  * that path.
  */
 import {
@@ -27,6 +27,22 @@ import {
   setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Suggestion, { setQuestion } from "./suggestion.tsx";
+
+// The model fails the agent's reply to each message of the conversation.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "Plan a picnic" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "For four people" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "Saturday" },
+    error: "The model is unavailable.",
+  },
+];
 
 /** The text of each message the view's conversation shows. */
 const messageTexts = (ui: unknown): string[] => {

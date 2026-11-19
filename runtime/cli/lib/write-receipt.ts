@@ -64,6 +64,9 @@ export function resetWriteReceipts(): void {
  * empty transaction commits successfully. The journal's novelty for the space
  * is what the transaction actually contributed, so an empty one reports no
  * write and earns no receipt.
+ *
+ * Ask before committing `tx`: a committed transaction releases its journal,
+ * after which this reports `false` whatever was written.
  */
 export function transactionWroteTo(
   tx: IExtendedStorageTransaction,

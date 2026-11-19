@@ -1,0 +1,130 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ItemRef": {
+        "properties": {
+          "item": {
+            "$ref": "#/$defs/Item"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "type": "object"
+      },
+      "SubmittedItem": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The item's text fields. The event's schema drops a field that is not a\nstring before `addItem` sees it.",
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "Verdict": {
+        "properties": {
+          "heldOut": {
+            "description": "Whether the item is on the held-out side of the split.",
+            "type": "boolean"
+          },
+          "surprise": {
+            "description": "Whether to show the item as a surprise.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "The labels in words, or \"\" while there is no question to label for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "surprise",
+          "heldOut"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "addItem": {
+        "$ref": "#/$defs/SubmittedItem",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "items": {
+        "description": "The inductor's items, in the order they were added.",
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "removeItem": {
+        "$ref": "#/$defs/ItemRef",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "verdicts": {
+        "additionalProperties": {
+          "$ref": "#/$defs/Verdict"
+        },
+        "default": {},
+        "description": "Each item's labels, by id (`verdictsOf`).",
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "required": [
+      "items",
+      "addItem",
+      "removeItem"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/items-card.tsx",
+  "resultSchema": {
+    "description": "The inductor's items with their labels, and a box to add one.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

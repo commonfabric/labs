@@ -113,10 +113,6 @@ export class CodexJsonlClient {
         void this.stop();
       };
       signal.addEventListener("abort", this.#stopListener, { once: true });
-      if (signal.aborted) {
-        await this.stop();
-        signal.throwIfAborted();
-      }
     }
     try {
       const initialized = await this.call("initialize", {

@@ -244,6 +244,20 @@ describe("prompt-loop invalid tool calls", () => {
         field: "patternRefs",
       },
       {
+        name: "non-boolean-without-skill-handle",
+        arguments: { goal: "Inspect", withoutSkillHandle: "yes" },
+        field: "withoutSkillHandle",
+      },
+      {
+        name: "skill-handle-and-without-skill-handle",
+        arguments: {
+          goal: "Inspect",
+          skillHandle: "cfh:v:skill",
+          withoutSkillHandle: true,
+        },
+        field: "withoutSkillHandle",
+      },
+      {
         name: "unknown-profile",
         arguments: { goal: "Inspect", profile: "unknown" },
         field: "profile",

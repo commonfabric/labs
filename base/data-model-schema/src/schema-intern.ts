@@ -18,24 +18,17 @@ import { toDeepFrozenSchema } from "./schema-copy.ts";
 const schemaToSah = new WeakMap<JSONSchemaObj, SchemaAndHash>();
 
 /**
- * Reverse half of that cache: hash string to schema. An object schema is held
- * as a `WeakRef`, so it is not retained; dead refs are cleaned up by
- * `schemaFinalizer` and on lookup. A primitive schema — `true`, `false`, or
- * `undefined` — is stored as itself instead, a primitive being no possible
- * `WeakRef` target and having nothing to retain. Consumers tell the two apart
- * by `typeof`.
+ * Reverse half of that cache: hash string to object schema, held as a
+ * `WeakRef` so that it is not retained. An entry whose schema was collected is
+ * removed by `schemaFinalizer`, or by the next lookup of its hash, whichever
+ * comes first.
  *
- * Splitting the cache in two is what avoids strong retention, and it is why an
- * object schema's lookup by hash takes both halves: deref the `WeakRef` from
- * here, then read the `SchemaAndHash` out of `schemaToSah`. A `SchemaAndHash`
- * is thereby reachable only while its own schema object is alive. A primitive
- * hash takes neither step — it is read straight out of this map, and the
- * primitive stored here routes to `primInterns`.
+ * Splitting the cache in two is what avoids strong retention, and it is why a
+ * lookup by hash takes both halves: deref the `WeakRef` from here, then read
+ * the `SchemaAndHash` out of `schemaToSah`. A `SchemaAndHash` is thereby
+ * reachable only while its own schema object is alive.
  */
-const hashToRef = new Map<
-  string,
-  WeakRef<JSONSchemaObj> | boolean | undefined
->();
+const hashToRef = new Map<string, WeakRef<JSONSchemaObj>>();
 
 /**
  * Prefab instances of `SchemaAndHash` for all possible primitive-value schemas
@@ -47,17 +40,22 @@ const primInterns = {
   undefined: new SchemaAndHash(undefined, hashOf(undefined)),
 };
 
-const schemaFinalizer = new FinalizationRegistry<string>((hashStr) => {
-  const ref = hashToRef.get(hashStr);
-  if ((typeof ref === "object") && (ref.deref() === undefined)) {
-    hashToRef.delete(hashStr);
-  }
-});
+/** The prefab instances in `primInterns`, by hash string. */
+const primInternsByHash = new Map(
+  Object.values(primInterns).map((sah) => [sah.taggedHashString, sah]),
+);
 
-// Seeds `hashToRef` with intern records for the primitive-value schemas.
-hashToRef.set(primInterns.false.taggedHashString, false);
-hashToRef.set(primInterns.true.taggedHashString, true);
-hashToRef.set(primInterns.undefined.taggedHashString, undefined);
+/**
+ * The live object schema interned under `hashStr`, if any. An entry whose
+ * schema was collected is removed on the way.
+ */
+function liveInternedSchema(hashStr: string): JSONSchemaObj | undefined {
+  const schema = hashToRef.get(hashStr)?.deref();
+  if (schema === undefined) hashToRef.delete(hashStr);
+  return schema;
+}
+
+const schemaFinalizer = new FinalizationRegistry<string>(liveInternedSchema);
 
 /**
  * Helper for `internSchema()` and friends, which always returns a
@@ -95,36 +93,21 @@ function internSchemaReturningSchemaAndHash(
   const hash = hashOf(frozen);
   const hashStr = hash.taggedHashString;
 
-  const maybeRef = hashToRef.get(hashStr);
+  const existing = liveInternedSchema(hashStr);
+  if (existing !== undefined) {
+    const existingSah = schemaToSah.get(existing)!;
 
-  if (typeof maybeRef === "object") {
-    const existing = maybeRef.deref();
-    if (existing !== undefined) {
-      const existingSah = schemaToSah.get(existing)!;
-
-      // If possible, cache the result for the caller's schema, so future calls
-      // with the same object hit the `WeakMap` at the top instead of re-hashing
-      // every time. We only do this when the input was already deep-frozen or
-      // was itself deep-frozen via the assignment to `frozen` above, because
-      // mutable objects could be changed after caching, producing stale hits.
-      const inputIsFrozen = frozen === schema;
-      if (inputIsFrozen) {
-        schemaToSah.set(frozen, existingSah);
-      }
-
-      return existingSah;
+    // If possible, cache the result for the caller's schema, so future calls
+    // with the same object hit the `WeakMap` at the top instead of re-hashing
+    // every time. We only do this when the input was already deep-frozen or
+    // was itself deep-frozen via the assignment to `frozen` above, because
+    // mutable objects could be changed after caching, producing stale hits.
+    const inputIsFrozen = frozen === schema;
+    if (inputIsFrozen) {
+      schemaToSah.set(frozen, existingSah);
     }
 
-    // The `WeakRef`'s referent got collected. Clean up.
-    hashToRef.delete(hashStr);
-
-    // ...and fall through to add `frozen` to the cache.
-  } else if (typeof maybeRef === "boolean") {
-    // Shouldn't happen! This implies a hash collision between a `boolean`
-    // schema and an `object` schema.
-    throw new Error(
-      "Shouldn't happen: Schema hash collision, object vs. boolean.",
-    );
+    return existingSah;
   }
 
   // Not interned yet (or interned but later collected).
@@ -201,51 +184,14 @@ export function findInternedSchema(
   hash: FabricHash | string,
 ): SchemaAndHash | undefined {
   const hashStr = typeof hash === "string" ? hash : hash.taggedHashString;
+  const prim = primInternsByHash.get(hashStr);
+  if (prim !== undefined) return prim;
 
-  const refOrPrim = hashToRef.get(hashStr);
+  const schema = liveInternedSchema(hashStr);
 
-  switch (typeof refOrPrim) {
-    case "boolean": {
-      return refOrPrim ? primInterns.true : primInterns.false;
-    }
-
-    case "undefined": {
-      // We have to disambiguate "the caller passed the hash of `undefined`"
-      // from "the caller passed in a hash that does not correspond to an
-      // interned schema."
-      const undefinedSah = primInterns.undefined;
-      return (hashStr === undefinedSah.taggedHashString)
-        ? undefinedSah
-        : undefined;
-    }
-
-    case "object": {
-      if (refOrPrim === null) {
-        // Shouldn't happen!
-        throw new Error("Unexpected `null` reference in schema intern table.");
-      }
-
-      const schema = refOrPrim.deref();
-
-      if (schema === undefined) {
-        // The `WeakRef`'s referent got collected. Clean up.
-        hashToRef.delete(hashStr);
-        return undefined;
-      }
-
-      // The `!` below is valid because we know that `schemaToSah` definitely
-      // has a mapping for `schema`. Otherwise, we wouldn't have found a
-      // `refOrPrim` to look up.
-      return schemaToSah.get(schema)!;
-    }
-
-    default: {
-      // Shouldn't happen!
-      throw new Error(
-        `Unexpected type in schema intern table: \`${typeof refOrPrim}\``,
-      );
-    }
-  }
+  // The `!` below is valid because `schemaToSah` has a mapping for every
+  // schema `hashToRef` holds.
+  return schema === undefined ? undefined : schemaToSah.get(schema)!;
 }
 
 /**

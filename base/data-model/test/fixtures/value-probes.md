@@ -71,9 +71,15 @@ the probes.
 ### Fragments
 
 A leaf is a node with no steps under it: `null`, a boolean, a number, a string,
-`undefined`, a symbol, a bigint, or a value of a primitive type, such as
-`Bytes@1`, a temporal quantity, `Hash@1`, `KeyPair@1` or `Unavailable@1`. Only a
-leaf has a fragment, and every leaf has one, unless a patch states it.
+or a value of one of the format's leaf types, as section 12 of
+[`3-json-encoding.md`](../../../../docs/specs/space-model-formal-spec/3-json-encoding.md)
+lists them. These are `Bytes@1`, `Hash@1`, the four temporal quantities, and the
+types that carry a JavaScript primitive, which are `BigInt@1`,
+`SpecialNumber@1`, `Symbol@1` and `Undefined@1`. A value of any other type the
+format defines is an instance, `KeyPair@1` and `Unavailable@1` among them, and a
+value under a tag no codec claims is an unknown value (see "Special forms"
+below). Only a leaf has a fragment, and every leaf has one, unless a patch
+states it.
 
 A fragment is the leaf's canonical `fvj1:` text, written on its own, prefix and
 all, as sections 10 and 11 of
@@ -117,6 +123,8 @@ An instance's fields are these, in this order:
 | `Link@1`        | `payload`, a record.                                                    |
 | `Error@1`       | `type`, `name`, `message`, `stack` and `cause` where present, `extras`. |
 | `Problematic@1` | `tag`, `state`, and `error`.                                            |
+| `KeyPair@1`     | `algorithm`, `publicKey`, and `privateKey`.                             |
+| `Unavailable@1` | `reason`, then `errorKind` and `message` where present.                 |
 
 The open-ended part of an instance is always a field holding a record, so its
 keys are probed as a record's are. An `Error`'s `extras` is probed even when it

@@ -20,13 +20,9 @@ export async function resolveProgram(
   const main = await graph.main();
   const sources = new Map([[main.name, main]]);
   const toProcess = [main.name];
-  const processed: string[] = [];
 
   while (toProcess.length > 0) {
     const currentName = toProcess.shift()!;
-    if (processed.includes(currentName)) {
-      continue;
-    }
     const current = sources.get(currentName)!;
     const specifiers = scanSource(current, target, false).imports;
     for (const specifier of specifiers) {
@@ -106,10 +102,10 @@ import {
 
 /**
  * What a module declares it depends on, read out of its source by
- * {@link scanModuleDeclarations}: the modules it imports and the data files it
- * reads.
+ * {@link scanModuleDeclarations}: the modules it imports, the data files it
+ * reads, and the directories of assets it reads.
  *
- * Both lists hold what the source writes, unresolved, so that a caller can
+ * All three lists hold what the source writes, unresolved, so that a caller can
  * resolve them against whichever name it holds the module by. The scan reads
  * that name only to tell what kind of file the module is, which turns on its
  * base name alone, so one result holds for the module under every name with
@@ -124,6 +120,12 @@ export interface ModuleDeclarations {
    * {@link collectDataFileNames} finds, before it resolves them.
    */
   readonly dataFiles: readonly string[];
+
+  /**
+   * The directory each `dataFile.urls()` call names, as written. These are the
+   * directories {@link collectDataReads} finds, before it resolves them.
+   */
+  readonly dataDirectories: readonly string[];
 }
 
 /**
@@ -166,6 +168,12 @@ const FABRIC_MODULE = "commonfabric";
 /** The runtime function that reads a data file stored with the program. */
 const DATA_FILE_READER = "dataFile";
 
+/** The member of {@link DATA_FILE_READER} that reads a file as a URL. */
+const URL_READER = "url";
+
+/** The member of {@link DATA_FILE_READER} that reads a directory's assets. */
+const URLS_READER = "urls";
+
 /**
  * Returns the data-file names `source` declares, as the paths its `dataFile()`
  * calls name, each resolved against `source` the way an import specifier is.
@@ -177,30 +185,54 @@ const DATA_FILE_READER = "dataFile";
  * The runtime resolves a read the same way, so a file is attached under the
  * name it is later looked up by.
  *
- * Only a call to the runtime's own `dataFile` counts, and only where the
- * argument is a string literal. The binding is followed through a renaming
- * import and through a namespace import, so `df("./x.json")` and
- * `cf.dataFile("./x.json")` are the same declaration as the plain call. A
- * type-only import binds no value and so declares nothing. A computed path
- * cannot be read from the source at all, and stays the caller's to name.
+ * Only a call to the runtime's own `dataFile` counts, or to its `url` member,
+ * and only where the argument is a string literal. The binding is followed
+ * through a renaming import and through a namespace import, so
+ * `df("./x.json")`, `cf.dataFile("./x.json")`, and `df.url("./x.png")` are the
+ * same declaration as the plain call. A type-only import binds no value and so
+ * declares nothing. A computed path cannot be read from the source at all, and
+ * stays the caller's to name.
  */
 export function collectDataFileNames(
   source: Source,
   target: ts.ScriptTarget,
 ): string[] {
+  return collectDataReads(source, target).files;
+}
+
+/**
+ * Returns what `source` declares it reads, from one parse: the data files its
+ * `dataFile()` and `dataFile.url()` calls name, as
+ * {@link collectDataFileNames} returns them, and the data directories its
+ * `dataFile.urls()` calls name, each resolved against `source` the same way. A
+ * directory declares the assets it holds (see `dataFileAssets` in
+ * `@commonfabric/text/data-file`), which whoever lists the directory attaches.
+ */
+export function collectDataReads(
+  source: Source,
+  target: ts.ScriptTarget,
+): { files: string[]; directories: string[] } {
+  if (!mayReadDataFiles(source)) return { files: [], directories: [] };
+  const { dataFiles, dataDirectories } = scanSource(source, target, true);
+  return {
+    files: dataFiles.map((path) => resolveDeclaredDataFile(path, source)),
+    directories: dataDirectories.map((path) =>
+      resolveDeclaredDataFile(path, source)
+    ),
+  };
+}
+
+/**
+ * Helper for the collectors above, which returns whether `source` could call
+ * the runtime's `dataFile` at all, without parsing it.
+ */
+function mayReadDataFiles(source: Source): boolean {
   // Every form recognized below names the reader as the contiguous characters
   // `dataFile`, in an identifier or in a string literal, unless an escape
   // breaks them up, and every escape starts with a backslash. A source holding
   // neither declares nothing, and is not parsed.
-  if (
-    !source.contents.includes(DATA_FILE_READER) &&
-    !source.contents.includes("\\")
-  ) {
-    return [];
-  }
-  return scanSource(source, target, true).dataFiles.map((path) =>
-    resolveDeclaredDataFile(path, source)
-  );
+  return source.contents.includes(DATA_FILE_READER) ||
+    source.contents.includes("\\");
 }
 
 /**
@@ -216,7 +248,7 @@ function scanSource(
   source: Source,
   target: ts.ScriptTarget,
   includeImportTypeNodes: boolean,
-): { imports: string[]; dataFiles: string[] } {
+): { imports: string[]; dataFiles: string[]; dataDirectories: string[] } {
   const sourceFile = ts.createSourceFile(
     source.name,
     source.contents,
@@ -227,6 +259,7 @@ function scanSource(
 
   const imports: string[] = [];
   const dataFiles: string[] = [];
+  const dataDirectories: string[] = [];
 
   function visit(node: ts.Node) {
     // Handle import declarations: import { foo } from 'module'
@@ -254,14 +287,15 @@ function scanSource(
       }
     }
     if (readers !== undefined && ts.isCallExpression(node)) {
-      const path = dataFileReadPath(node, readers);
-      if (path !== undefined) dataFiles.push(path);
+      const read = dataFileRead(node, readers);
+      if (read?.kind === "file") dataFiles.push(read.path);
+      if (read?.kind === "directory") dataDirectories.push(read.path);
     }
     ts.forEachChild(node, visit);
   }
 
   visit(sourceFile);
-  return { imports: [...new Set(imports)], dataFiles };
+  return { imports: [...new Set(imports)], dataFiles, dataDirectories };
 }
 
 /** The local names a module binds the runtime's `dataFile` to. */
@@ -309,27 +343,55 @@ function dataFileReaders(
 }
 
 /**
- * Helper for `scanSource()`, which returns the path `call` reads when it calls
- * the runtime's `dataFile` through one of `readers` with a string literal, and
+ * Helper for `scanSource()`, which returns what `call` reads when it calls the
+ * runtime's `dataFile`, or its `url` member, through one of `readers` with a
+ * string literal — a file — or its `urls` member — a directory — and
  * `undefined` for any other call.
  */
-function dataFileReadPath(
+function dataFileRead(
   call: ts.CallExpression,
   readers: DataFileReaders,
-): string | undefined {
+): { kind: "file" | "directory"; path: string } | undefined {
   const callee = call.expression;
-  const read = ts.isIdentifier(callee) && readers.direct.has(callee.text)
-    ? callee
-    : ts.isPropertyAccessExpression(callee) &&
-        ts.isIdentifier(callee.expression) &&
-        readers.namespaces.has(callee.expression.text) &&
-        callee.name.text === DATA_FILE_READER
-    ? callee.expression
-    : undefined;
+  let kind: "file" | "directory" | undefined;
+  let read = dataFileReaderName(callee, readers);
+  if (read !== undefined) {
+    kind = "file";
+  } else if (ts.isPropertyAccessExpression(callee)) {
+    const member = callee.name.text;
+    kind = member === URL_READER
+      ? "file"
+      : member === URLS_READER
+      ? "directory"
+      : undefined;
+    if (kind !== undefined) {
+      read = dataFileReaderName(callee.expression, readers);
+    }
+  }
   const argument = call.arguments[0];
-  return read !== undefined && argument !== undefined &&
+  return kind !== undefined && read !== undefined && argument !== undefined &&
       ts.isStringLiteral(argument) && !isShadowed(read)
-    ? argument.text
+    ? { kind, path: argument.text }
+    : undefined;
+}
+
+/**
+ * Helper for `dataFileRead()`, which returns the identifier through which
+ * `expression` names the runtime's `dataFile` — the reader itself, or the
+ * namespace it is read off — and `undefined` when it names anything else.
+ */
+function dataFileReaderName(
+  expression: ts.Expression,
+  readers: DataFileReaders,
+): ts.Identifier | undefined {
+  if (ts.isIdentifier(expression)) {
+    return readers.direct.has(expression.text) ? expression : undefined;
+  }
+  return ts.isPropertyAccessExpression(expression) &&
+      ts.isIdentifier(expression.expression) &&
+      readers.namespaces.has(expression.expression.text) &&
+      expression.name.text === DATA_FILE_READER
+    ? expression.expression
     : undefined;
 }
 

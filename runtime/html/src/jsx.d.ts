@@ -2945,6 +2945,7 @@ interface CFAlertElement extends CFHTMLElement {}
 interface CFVStackElement extends CFHTMLElement {}
 interface CFMessageInputElement extends CFHTMLElement {}
 interface CFSubmitInputElement extends CFHTMLElement {}
+interface CFPatternInstallElement extends CFHTMLElement {}
 interface CFToolbarElement extends CFHTMLElement {}
 interface CFKbdElement extends CFHTMLElement {}
 interface CFKeybindElement extends CFHTMLElement {}
@@ -3379,6 +3380,22 @@ interface CFSubmitInputAttributes<T> extends CFHTMLAttributes<T> {
   "initialValue"?: string;
 }
 
+/**
+ * A button that installs one pattern onto one loom and says so in its own
+ * words: "Install “title” onto loom". It takes no text for its button.
+ */
+interface CFPatternInstallAttributes<T> extends CFHTMLAttributes<T> {
+  /** The id of the pattern a tap installs; shown when it has no title. */
+  "patternId"?: string | CellLike<string>;
+  /** The pattern's title. */
+  "patternTitle"?: string | CellLike<string>;
+  /** Who published the pattern. */
+  "author"?: string | CellLike<string>;
+  /** The name of the loom the pattern goes onto; left out when absent. */
+  "destinationName"?: string | CellLike<string>;
+  "disabled"?: boolean | CellLike<boolean>;
+}
+
 interface CTSendMessageAttributes<T> extends CFHTMLAttributes<T> {
   "name"?: string;
   "value"?: any;
@@ -3606,6 +3623,14 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
 interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "src": string;
   "script"?: string;
+
+  /**
+   * Static assets, from a name matching `[A-Za-z0-9_-]+` to a base64 `data:`
+   * URL. The guest's document refers to one as `cf-asset:<name>`, and its
+   * script reads one with `fabric.asset(name)`.
+   */
+  "assets"?: Readonly<Record<string, string>>;
+
   "bridge"?: {
     readonly resources: Readonly<Record<string, object>>;
   };
@@ -4116,6 +4141,13 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "autofocus"?: boolean;
   "cursorPosition"?: "start" | "end";
   "oncf-change"?: any;
+
+  /**
+   * An edit the viewer made, with the whole document after it. Unlike
+   * `oncf-change`, never another collaborator's edit, a value the bound cell
+   * pushed, or a rewrite the editor made itself.
+   */
+  "oncf-edit"?: EventHandler<{ value: string }>;
   "oncf-focus"?: any;
   "oncf-blur"?: any;
   "oncf-file-paste"?: any;
@@ -5272,6 +5304,10 @@ declare global {
       "cf-submit-input": CFDOM.DetailedHTMLProps<
         CFSubmitInputAttributes<CFSubmitInputElement>,
         CFSubmitInputElement
+      >;
+      "cf-pattern-install": CFDOM.DetailedHTMLProps<
+        CFPatternInstallAttributes<CFPatternInstallElement>,
+        CFPatternInstallElement
       >;
       "cf-chat-message": CFDOM.DetailedHTMLProps<
         CFChatMessageAttributes<CFChatMessageElement>,

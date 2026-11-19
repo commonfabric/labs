@@ -8,9 +8,14 @@ import {
   type VNode,
 } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
+import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 import { MockDoc } from "../src/mock-doc.ts";
-import { VDomRenderer } from "../src/main/renderer.ts";
+import {
+  VDomRenderer,
+  type VDomRendererOptions,
+} from "../src/main/renderer.ts";
 import { getActiveRenders, render } from "../src/render.ts";
+import * as client from "../src/client.ts";
 
 class MockConnection {
   #listeners = new Map<string, Set<(payload: unknown) => void>>();
@@ -132,34 +137,54 @@ function workerCellHandle(
   return new CellHandle(worker, cellRef);
 }
 
+/** The renderer's mount id, which a test reads once it has rendered. */
+function activeMountId(renderer: VDomRenderer): number {
+  const mountId = renderer.getMountId();
+  if (mountId === null) {
+    throw new Error("expected renderer to have an active mount");
+  }
+  return mountId;
+}
+
 describe("main-renderer", () => {
   describe("VDomRenderer", () => {
+    const setup = (
+      options:
+        & { mountRootId?: number | null }
+        & Pick<
+          VDomRendererOptions,
+          "onError" | "setProp"
+        > = {},
+    ) => {
+      const { mountRootId = null, ...rendererOptions } = options;
+      const connection = new MockConnection();
+      connection.mountRootId = mountRootId;
+      const mock = new MockDoc(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+      );
+      const renderer = new VDomRenderer({
+        runtimeClient: {} as any,
+        connection: connection as any,
+        document: mock.document,
+        ...rendererOptions,
+      });
+      const cellRef = {
+        space: "did:key:test",
+        id: "cell-id",
+        path: [],
+        type: "application/json",
+      } as unknown as CellRef;
+      const container = mock.document.getElementById(
+        "root",
+      ) as unknown as HTMLElement;
+      return { connection, renderer, cellRef, container };
+    };
+
     describe("the mount response's `rootId`", () => {
-      const setup = (mountRootId: number | null) => {
-        const connection = new MockConnection();
-        connection.mountRootId = mountRootId;
-        const mock = new MockDoc(
-          '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-        );
-        const renderer = new VDomRenderer({
-          runtimeClient: {} as any,
-          connection: connection as any,
-          document: mock.document,
-        });
-        const cellRef = {
-          space: "did:key:test",
-          id: "cell-id",
-          path: [],
-          type: "application/json",
-        } as unknown as CellRef;
-        const container = mock.document.getElementById("root")!;
-        return { connection, renderer, cellRef, container };
-      };
-
       it("reports no root when the mount reports none", async () => {
-        const { renderer, cellRef, container } = setup(null);
+        const { renderer, cellRef, container } = setup();
 
-        await renderer.render(container as unknown as HTMLElement, cellRef);
+        await renderer.render(container, cellRef);
 
         expect(renderer.getRootNode()).toBe(null);
 
@@ -167,9 +192,9 @@ describe("main-renderer", () => {
       });
 
       it("reports the node the mount named", async () => {
-        const { renderer, cellRef, container } = setup(1);
+        const { renderer, cellRef, container } = setup({ mountRootId: 1 });
 
-        await renderer.render(container as unknown as HTMLElement, cellRef);
+        await renderer.render(container, cellRef);
         // The mount names a node the applicator has yet to hear of, so create it
         // before reading back: `getRootNode()` resolves the id through the node
         // map, and an unresolved id would report no root for the wrong reason --
@@ -189,40 +214,19 @@ describe("main-renderer", () => {
     });
 
     describe("stopRendering()", () => {
-      const setup = (mountRootId: number | null) => {
-        const connection = new MockConnection();
-        connection.mountRootId = mountRootId;
-        const mock = new MockDoc(
-          '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-        );
-        const renderer = new VDomRenderer({
-          runtimeClient: {} as any,
-          connection: connection as any,
-          document: mock.document,
-        });
-        const cellRef = {
-          space: "did:key:test",
-          id: "cell-id",
-          path: [],
-          type: "application/json",
-        } as unknown as CellRef;
-        const container = mock.document.getElementById("root")!;
-        return { renderer, cellRef, container };
-      };
-
       it("leaves the caller's container when the mount reported no root", async () => {
-        const { renderer, cellRef, container } = setup(null);
-        await renderer.render(container as unknown as HTMLElement, cellRef);
+        const { renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
 
         await renderer.stopRendering();
 
-        expect((container as any).parentNode).not.toBe(null);
+        expect(container.parentNode).not.toBe(null);
         await renderer.dispose();
       });
 
       it("removes the root the mount reported, and leaves the container", async () => {
-        const { renderer, cellRef, container } = setup(1);
-        await renderer.render(container as unknown as HTMLElement, cellRef);
+        const { renderer, cellRef, container } = setup({ mountRootId: 1 });
+        await renderer.render(container, cellRef);
         renderer.getApplicator().applyBatch({
           batchId: 1,
           ops: [
@@ -231,43 +235,23 @@ describe("main-renderer", () => {
           ],
         });
         const root = renderer.getApplicator().getNode(1);
-        expect((container as any).childNodes.length).toBe(1);
+        expect(container.childNodes.length).toBe(1);
 
         await renderer.stopRendering();
 
         // The root goes and the container stays: teardown reaches into the
         // container rather than removing it, which is the distinction the two
         // steps together pin.
-        expect((root as any).parentNode).toBe(null);
-        expect((container as any).parentNode).not.toBe(null);
+        expect(root?.parentNode).toBe(null);
+        expect(container.parentNode).not.toBe(null);
         await renderer.dispose();
       });
     });
 
     it("forwards trusted event provenance through delivery", async () => {
-      const connection = new MockConnection();
-      const mock = new MockDoc(
-        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-      );
-      const renderer = new VDomRenderer({
-        runtimeClient: {} as any,
-        connection: connection as any,
-        document: mock.document,
-      });
-
-      const cellRef = {
-        space: "did:key:test",
-        id: "cell-id",
-        path: [],
-        type: "application/json",
-      } as unknown as CellRef;
-
-      const container = mock.document.getElementById("root")!;
-      await renderer.render(container as unknown as HTMLElement, cellRef);
-      const mountId = renderer.getMountId();
-      if (mountId === null) {
-        throw new Error("expected renderer to have an active mount");
-      }
+      const { connection, renderer, cellRef, container } = setup();
+      await renderer.render(container, cellRef);
+      const mountId = activeMountId(renderer);
 
       renderer.getApplicator().applyBatch({
         batchId: 1,
@@ -302,29 +286,9 @@ describe("main-renderer", () => {
     });
 
     it("acknowledges applied batches", async () => {
-      const connection = new MockConnection();
-      const mock = new MockDoc(
-        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-      );
-      const renderer = new VDomRenderer({
-        runtimeClient: {} as any,
-        connection: connection as any,
-        document: mock.document,
-      });
-
-      const cellRef = {
-        space: "did:key:test",
-        id: "cell-id",
-        path: [],
-        type: "application/json",
-      } as unknown as CellRef;
-
-      const container = mock.document.getElementById("root")!;
-      await renderer.render(container as unknown as HTMLElement, cellRef);
-      const mountId = renderer.getMountId();
-      if (mountId === null) {
-        throw new Error("expected renderer to have an active mount");
-      }
+      const { connection, renderer, cellRef, container } = setup();
+      await renderer.render(container, cellRef);
+      const mountId = activeMountId(renderer);
 
       connection.emit("vdombatch", {
         type: "vdom:batch",
@@ -346,28 +310,9 @@ describe("main-renderer", () => {
       const logger = getLogger("vdom-renderer");
       const countOf = (key: string) => logger.getTimeStats(key)?.count ?? 0;
       const before = ["mount", "batch", "unmount"].map(countOf);
-      const connection = new MockConnection();
-      const mock = new MockDoc(
-        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-      );
-      const renderer = new VDomRenderer({
-        runtimeClient: {} as any,
-        connection: connection as any,
-        document: mock.document,
-      });
-      const cellRef = {
-        space: "did:key:test",
-        id: "cell-id",
-        path: [],
-        type: "application/json",
-      } as unknown as CellRef;
-
-      const container = mock.document.getElementById("root")!;
-      await renderer.render(container as unknown as HTMLElement, cellRef);
-      const mountId = renderer.getMountId();
-      if (mountId === null) {
-        throw new Error("expected renderer to have an active mount");
-      }
+      const { connection, renderer, cellRef, container } = setup();
+      await renderer.render(container, cellRef);
+      const mountId = activeMountId(renderer);
       for (const batchId of [7, 8]) {
         connection.emit("vdombatch", {
           type: "vdom:batch",
@@ -391,30 +336,28 @@ describe("main-renderer", () => {
       await renderer.dispose();
     });
 
-    it("clears the tracked root when a batch's `rootId` is `null`", async () => {
-      const connection = new MockConnection();
-      const mock = new MockDoc(
-        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
-      );
-      const renderer = new VDomRenderer({
-        runtimeClient: {} as any,
-        connection: connection as any,
-        document: mock.document,
+    it("describes mounts, batches and unmounts in its debug log while turned on", async () => {
+      using logs = captureLogsForTestingOnly("vdom-renderer");
+      const { connection, renderer, cellRef, container } = setup();
+
+      await renderer.render(container, cellRef);
+      connection.emit("vdombatch", {
+        batchId: 7,
+        mountId: activeMountId(renderer),
+        ops: [{ op: "create-element", nodeId: 1, tagName: "b" }],
       });
+      await renderer.dispose();
 
-      const cellRef = {
-        space: "did:key:test",
-        id: "cell-id",
-        path: [],
-        type: "application/json",
-      } as unknown as CellRef;
+      const keys = new Set(["render-mount", "vdom-batch", "stop-rendering"]);
+      expect(
+        logs.logs.map(({ key }) => key).filter((key) => keys.has(key)),
+      ).toEqual(["render-mount", "vdom-batch", "stop-rendering"]);
+    });
 
-      const container = mock.document.getElementById("root")!;
-      await renderer.render(container as unknown as HTMLElement, cellRef);
-      const mountId = renderer.getMountId();
-      if (mountId === null) {
-        throw new Error("expected renderer to have an active mount");
-      }
+    it("clears the tracked root when a batch's `rootId` is `null`", async () => {
+      const { connection, renderer, cellRef, container } = setup();
+      await renderer.render(container, cellRef);
+      const mountId = activeMountId(renderer);
 
       const batch = (batchId: number, rootId: number | null | undefined) => ({
         type: "vdom:batch",
@@ -439,6 +382,185 @@ describe("main-renderer", () => {
       expect(renderer.getRootNode()).toBe(null);
 
       await renderer.dispose();
+    });
+
+    describe("lifecycle", () => {
+      it("throws on a second mount, and mounts again once cancelled", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        const cancel = await renderer.render(container, cellRef);
+        const firstMount = renderer.getMountId();
+
+        await expect(renderer.render(container, cellRef)).rejects.toThrow(
+          "VDomRenderer already has an active mount. Call cancel first.",
+        );
+        expect(renderer.getMountId()).toBe(firstMount);
+
+        await cancel();
+        expect(connection.unmountCalls).toEqual([firstMount]);
+        expect(renderer.getMountId()).toBe(null);
+
+        await renderer.render(container, cellRef);
+        expect(renderer.getMountId()).not.toBe(null);
+        expect(renderer.getMountId()).not.toBe(firstMount);
+        await renderer.dispose();
+      });
+
+      it("resets after a failed mount so that it can mount again", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        connection.mountVDom = () => Promise.reject(new Error("mount failed"));
+
+        await expect(renderer.render(container, cellRef)).rejects.toThrow(
+          "mount failed",
+        );
+        expect(renderer.getMountId()).toBe(null);
+
+        connection.mountVDom = () => Promise.resolve({ rootId: null });
+        await renderer.render(container, cellRef);
+        expect(renderer.getMountId()).not.toBe(null);
+        await renderer.dispose();
+      });
+
+      it("mounts nothing when disposed while the mount is in flight", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        const mount = Promise.withResolvers<{ rootId: number | null }>();
+        connection.mountVDom = () => mount.promise;
+
+        const rendering = renderer.render(container, cellRef);
+        await renderer.dispose();
+        mount.resolve({ rootId: 1 });
+        const cancel = await rendering;
+
+        expect(renderer.getMountId()).toBe(null);
+        expect(renderer.getRootNode()).toBe(null);
+        await cancel();
+        expect(connection.unmountCalls.length).toBe(1);
+      });
+
+      it("does nothing when disposed a second time", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+
+        await renderer.dispose();
+        await renderer.dispose();
+
+        expect(connection.unmountCalls.length).toBe(1);
+      });
+
+      it("does nothing when stopped without a mount", async () => {
+        const { connection, renderer } = setup();
+
+        await renderer.stopRendering();
+
+        expect(connection.unmountCalls).toEqual([]);
+        await renderer.dispose();
+      });
+
+      it("ignores a batch addressed to another mount", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+        const mountId = activeMountId(renderer);
+
+        connection.emit("vdombatch", {
+          batchId: 1,
+          mountId: mountId + 1,
+          rootId: 1,
+          ops: [{ op: "create-element", nodeId: 1, tagName: "b" }],
+        });
+
+        expect(renderer.getApplicator().getNode(1)).toBeUndefined();
+        expect(connection.acknowledgedBatches).toEqual([]);
+        await renderer.dispose();
+      });
+
+      it("applies a batch naming no mount without acknowledging it", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+
+        connection.emit("vdombatch", {
+          batchId: 1,
+          rootId: 1,
+          ops: [{ op: "create-element", nodeId: 1, tagName: "b" }],
+        });
+
+        expect(renderer.getRootNode()).toBe(
+          renderer.getApplicator().getNode(1),
+        );
+        expect(renderer.getRootNode()).not.toBe(null);
+        expect(connection.acknowledgedBatches).toEqual([]);
+        await renderer.dispose();
+      });
+
+      it("ignores batches once disposed", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+        const mountId = activeMountId(renderer);
+        const batch = {
+          batchId: 1,
+          mountId,
+          rootId: 1,
+          ops: [{ op: "create-element", nodeId: 1, tagName: "b" }],
+        };
+
+        await renderer.dispose();
+        connection.emit("vdombatch", batch);
+
+        expect(renderer.getApplicator().getNode(1)).toBeUndefined();
+        expect(connection.acknowledgedBatches).toEqual([]);
+      });
+
+      it("reports a batch that fails to apply through `onError`", async () => {
+        const errors: Error[] = [];
+        const refused = new Error("setter refused");
+        const { connection, renderer, cellRef, container } = setup({
+          onError: (error) => errors.push(error),
+          setProp: () => {
+            throw refused;
+          },
+        });
+        await renderer.render(container, cellRef);
+        const mountId = activeMountId(renderer);
+
+        connection.emit("vdombatch", {
+          batchId: 1,
+          mountId,
+          ops: [
+            { op: "create-element", nodeId: 1, tagName: "b" },
+            { op: "set-prop", nodeId: 1, key: "title", value: "x" },
+          ],
+        });
+        connection.ackVDomBatch = () => {
+          throw "ack refused";
+        };
+        connection.emit("vdombatch", { batchId: 2, mountId, ops: [] });
+
+        expect(errors[0]).toBe(refused);
+        expect(errors[1]).toBeInstanceOf(Error);
+        expect(errors[1].message).toBe("ack refused");
+        expect(errors).toHaveLength(2);
+        await renderer.dispose();
+      });
+
+      it("forwards no event once stopped", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+        renderer.getApplicator().applyBatch({
+          batchId: 1,
+          ops: [
+            { op: "create-element", nodeId: 1, tagName: "button" },
+            { op: "set-event", nodeId: 1, eventType: "click", handlerId: 9 },
+          ],
+        });
+        const button = renderer.getApplicator().getNode(1);
+        if (button === undefined) throw new Error("expected a button node");
+        button.dispatchEvent(new Event("click"));
+        expect(connection.sentEvents.length).toBe(1);
+
+        await renderer.stopRendering();
+        button.dispatchEvent(new Event("click"));
+
+        expect(connection.sentEvents.length).toBe(1);
+        await renderer.dispose();
+      });
     });
 
     it("constructs without throwing against an already-disposed connection", async () => {
@@ -478,6 +600,10 @@ describe("main-renderer", () => {
   });
 
   describe("render()", () => {
+    it("is what the package's client entry point exports", () => {
+      expect(client.render).toBe(render);
+    });
+
     it("cancels local rendering before pending mount and unmount replies", async () => {
       const connection = new MockConnection();
       const mount = Promise.withResolvers<{ rootId: number | null }>();
@@ -582,6 +708,29 @@ describe("main-renderer", () => {
       expect(connection.unmountCalls.length).toBe(1);
       // Let the deferred renderer.dispose() settle.
       await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    it("drops the registry entry when the connection is disposed", () => {
+      const connection = new MockConnection();
+      const mock = new MockDoc(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+      );
+      const container = mock.document.getElementById(
+        "root",
+      ) as unknown as HTMLElement;
+      const errors: Error[] = [];
+      const cancel = render(
+        container,
+        workerCellHandle(connection, "of:disposed") as CellHandle<VNode>,
+        { document: mock.document, onError: (error) => errors.push(error) },
+      );
+      expect(getActiveRenders().has(container)).toBe(true);
+
+      connection.abort();
+
+      expect(getActiveRenders().has(container)).toBe(false);
+      expect(errors).toEqual([]);
+      cancel();
     });
 
     it("reports a mount failure through `onError` while alive", async () => {

@@ -137,9 +137,16 @@ blob store, cells hold descriptors), `apps/habit-tracker/`,
 `examples/iframe-cursor-canvas/` (a shared board in a sandboxed iframe: shapes
 are stored, while each viewer's pointer and a shape held mid-drag or mid-resize
 travel through a presence room and are stored nowhere),
+`examples/iframe-donut-menu/` (a menu in a sandboxed iframe whose pictures the
+pattern ships as files and hands its guest as `assets`),
 `examples/iframe-verb-list/` (a list in a sandboxed iframe whose guest adds an
 item only by sending the pattern's `addItem` verb, which writes the pattern's
-own state), `product/lobby/`, `apps/lunch-poll/`, `examples/math-note/`,
+own state), `showcase/inductor/pool/` (lo-fi rule sets for one goal, contributed
+under per-goal pseudonyms; a rule and its count become public only once enough
+distinct contributors hold it), `product/lobby/`, `showcase/inductor/lofi/` (a
+model labels a stream of items while a regex rule set learns to match it; a
+proposed rule set replaces the current one only when it is in grammar, safe, and
+better on a held-out split), `apps/lunch-poll/`, `examples/math-note/`,
 `examples/profile-group-chat/`, `apps/project-list/`, `apps/star-chart/` (a
 kids' daily-habit sticker chart), `apps/meal-orchestrator/` (plan a multi-dish
 meal: link dishes from notes, dietary fit per guest, meal balance, and an oven
@@ -319,10 +326,11 @@ interface TopicsInput {
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the two wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor) and boardCrossrefs
-// (the reference pivot) — plus shortName, the number the create allocated,
-// which the topic stores and reports.
+// TopicInput additionally takes the three wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor), boardCrossrefs
+// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
+// topic number, which lets a topic read its own row alone) — plus shortName,
+// the number the create allocated, which the topic stores and reports.
 ```
 
 ### Output Schema
@@ -336,8 +344,11 @@ interface TopicsOutput {
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy } per topic — the reference graph, derived once here
-  crossrefs: TopicCrossrefRow[];
+  // { topic, mentionedBy, name? } per topic — the reference graph, derived
+  // once here; a row carries its topic's number when the topic has one
+  crossrefs: TopicCrossrefNamedRow[];
+  // { source, byName } — the pivot's positions grouped by topic number
+  crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
   names: Default<NamesMap, {}>;
@@ -1781,11 +1792,15 @@ moves through every edit, which the pattern reads and writes as a cell through
 `anchorsOf()`; the editor draws the text between each open comment's anchors as
 a highlight. Comments and replies are labeled `authored-by` their writer through
 `AuthoredByCurrentUser`, and shown through `cf-cfc-authorship`. Verbs let an
-agent comment on text it quotes, reply, resolve, reopen, and delete.
+agent comment on text it quotes, reply, resolve, reopen, and delete. The note
+reports what its members did under `"[ACTIVITY]"`: one row per editing session
+that changed the note, edit verb call, comment or reply (an unchanged session,
+resolving, reopening, deleting and drafts write none), labeled `authored-by` the
+person who acted.
 
 **Keywords:** multiplayer, collaborative editor, note, Markdown, profile, wish,
 co-presence, CodeMirror, comments, annotations, anchors, anchorsOf,
-AuthoredByCurrentUser
+AuthoredByCurrentUser, activity, WritePolicyAnyOf
 
 ### Input Schema
 
@@ -1794,6 +1809,7 @@ interface SharedNoteInput {
   title?: PerSpace<string | Default<"Untitled note">>;
   content?: PerSpace<string | Default<"">>;
   comments?: PerSpace<StoredComment[] | Default<[]>>;
+  activity?: PerSpace<ActivityRow[] | Default<[]>>;
 }
 ```
 
@@ -1805,6 +1821,7 @@ interface SharedNoteOutput {
   content: PerSpace<string>;
   comments: PerSpace<StoredComment[]>;
   participantName: PerUser<string>;
+  "[ACTIVITY]": PerSpace<ActivityRow[]>;
   commentAnchors: FieldAnchors | undefined;
   appendLine: Stream<LineEvent>;
   prependLine: Stream<LineEvent>;
@@ -2172,6 +2189,115 @@ type Output = {
   topic: Writable<string>;
   response: string | undefined;
 };
+```
+
+## `showcase/inductor/lofi/lofi-inductor.tsx`
+
+A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
+shadows it. Disagreements become graded examples; an LLM proposes a new rule
+set, adopted only when it is in grammar, cheap to run, and better on a held-out
+split. Rules publish under a per-goal pseudonym to an `inductor-pool`, and the
+pool's released rules come back as an offer judged the same way. The view is
+five card sub-patterns, in the order a newcomer uses them (`items-card.tsx`,
+`rules-card.tsx`, `history-card.tsx`, `pool-card.tsx`, `settings-card.tsx`).
+
+**Keywords:** classifier, regex, rule induction, hi-fi lo-fi, held-out, F1,
+pseudonym, threshold release, CFC
+
+### Input Schema
+
+```ts
+interface LofiInductorInput {
+  goal?: PerSpace<Writable<string | Default<"">>>;
+  items?: PerSpace<Writable<Item[] | Default<[]>>>;
+  rules?: PerSpace<Writable<CanonicalRule[] | Default<[]>>>;
+  history?: PerSpace<Writable<HistoryEntry[] | Default<[]>>>;
+  published?: PerSpace<Writable<Published | null | Default<null>>>;
+  pseudonym?: PerSpace<Writable<string | Default<"">>>;
+  pool?: PoolTarget;
+  hifiModel?: PerSpace<Writable<string | Default<"">>>;
+  rewriteAfter?: PerSpace<Writable<number | Default<3>>>;
+  heldOutPercent?: PerSpace<Writable<number | Default<30>>>;
+  rewriteAttempt?: PerSpace<Writable<number | Default<0>>>;
+  adopted?: PerSpace<Writable<string[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface LofiInductorOutput {
+  goal: string;
+  items: Item[];
+  rules: CanonicalRule[];
+  history: HistoryEntry[];
+  published: Published | null;
+  pseudonym: string;
+  adopted: string[];
+  hifiModel: string;
+  rewriteAfter: number;
+  heldOutPercent: number;
+  rows: ItemRow[];
+  summary: Summary;
+  heldOutF1: number;
+  rewrite: RewriteStatus;
+  poolOffer: PoolOffer | null;
+  setGoal: Stream<GoalEvent>;
+  addItem: Stream<SubmittedItem>;
+  addItems: Stream<SubmittedItems>;
+  removeItem: Stream<ItemRef>;
+  removeRule: Stream<RuleRef>;
+  resetRules: Stream<void>;
+  settleRewrite: Stream<void>;
+  retryRewrite: Stream<void>;
+  setRewriteAfter: Stream<RewriteAfterEvent>;
+  setHeldOutPercent: Stream<HeldOutPercentEvent>;
+  setHifiModel: Stream<HifiModelEvent>;
+  settlePoolOffer: Stream<void>;
+  publish: Stream<void>;
+  unpublish: Stream<void>;
+}
+```
+
+## `showcase/inductor/pool/inductor-pool.tsx`
+
+Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
+confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its
+count become public only once enough distinct contributors hold the same
+canonical rule; each rule's threshold is a sealed, configurable centre (at
+least 5) plus a secret per-rule offset. The one release path is the trusted
+`releaseConsensus` lift, witnessed by the pool's own writer. Not yet working end
+to end: a public store currently refuses even the genuine release (top/3226),
+and the label on what inductors send holds only in part (top/3175); see
+`showcase/inductor/pool/README.md`.
+
+**Keywords:** threshold release, k-anonymity, consensus, pseudonym, declassify,
+exchange rule, TransformedBy, CFC
+
+### Input Schema
+
+```ts
+interface InductorPoolInput {
+  goal: Default<string, "">;
+  thresholdCenter: Default<number, typeof DEFAULT_THRESHOLD_CENTER>;
+  jitter: Default<number, typeof DEFAULT_JITTER>;
+  contributions: Writable<Default<StoredContribution[], []>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface InductorPoolOutput {
+  goal: string;
+  thresholdCenter: number;
+  jitter: number;
+  contributions: StoredContribution[];
+  consensus: ReleasedRule[];
+  releasedCount: number;
+  submit: Stream<ContributionEvent>;
+  withdraw: Stream<void>;
+}
 ```
 
 ---

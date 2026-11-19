@@ -256,9 +256,10 @@ function walkCell(
     seenObjects.add(value);
     if (UI in value) visit(value[UI]);
     if (value.type !== "vnode" || typeof value.name !== "string") return;
+    // `rendererVDOMSchema` reads `props` as a cell.
     const propsCell = isCell(value.props) ? value.props.withTx(tx) : undefined;
-    const props = propsCell === undefined ? value.props : propsCell.get();
-    if (isObjectNotArray(props)) {
+    const props = propsCell?.get();
+    if (propsCell !== undefined && isObjectNotArray(props)) {
       for (const [name, prop] of Object.entries(props)) {
         const binding = name.startsWith("$");
         const event = name.startsWith("on");
@@ -270,8 +271,7 @@ function walkCell(
           ? undefined
           : contract?.schema;
         if (binding || event) {
-          const slot = isCell(prop) ? prop.withTx(tx) : propsCell?.key(name);
-          if (slot === undefined) continue;
+          const slot = isCell(prop) ? prop.withTx(tx) : propsCell.key(name);
           const source = slot.resolveAsCell();
           const link = source.getAsNormalizedFullLink();
           streams.push(link);
@@ -288,7 +288,7 @@ function walkCell(
           name !== "style" && isObjectOrArray(prop)
         ) {
           // The worker renderer deep-resolves ordinary object/array props.
-          if (propsCell !== undefined) readProperty(propsCell.key(name), true);
+          readProperty(propsCell.key(name), true);
         }
       }
     }

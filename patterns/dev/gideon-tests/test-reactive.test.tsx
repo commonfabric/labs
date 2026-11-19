@@ -37,6 +37,16 @@ export default pattern(() => {
   };
 });
 
-// No outcome is asserted: on the server-execution arm the runtime resets a
-// request that settles at once, answered or failed, back to pending.
-export const llmMocks = [];
+// The model fails both emails' requests. No outcome is asserted: on the
+// server-execution arm the runtime resets a request that settles at once,
+// answered or failed, back to pending.
+export const llmMocks = [
+  {
+    when: { lastMessageContains: "First email" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { lastMessageContains: "Second email" },
+    error: "The model is unavailable.",
+  },
+];

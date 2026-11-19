@@ -34,12 +34,25 @@ import {
   setPieceReconciliation,
   systemPatternSource,
 } from "../src/index.ts";
-import { readStoredCfcSchemaHash } from "../src/cfc/metadata.ts";
+import {
+  readStoredCfcMetadata,
+  readStoredCfcSchemaHash,
+} from "../src/cfc/metadata.ts";
+import { sourceDocKey } from "../src/compilation-cache/cell-cache.ts";
 import { ensurePieceRunningVerdict } from "../src/ensure-piece-running.ts";
 import { PatternsRoute } from "../src/harness/patterns-route.deno.ts";
 import type { NormalizedFullLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-import type { MemorySpace } from "../src/storage/interface.ts";
+import type {
+  IMemorySpaceAddress,
+  MemorySpace,
+} from "../src/storage/interface.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
 
 const signer = await Identity.fromPassphrase("piece source reconciliation");
 const PARENT_PATH = "/api/patterns/system/reconcile-parent.tsx";
@@ -60,6 +73,33 @@ function source(marker: string): string {
   return [
     "import { computed, pattern } from 'commonfabric';",
     `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string }>(() => ({ marker: computed(() => "${marker}") }));`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The tracked pattern with data beside its references: `note` is its data, and
+ * `release` changes only a comment.
+ */
+function sourceWithNote(release: string, note = "fixed"): string {
+  return [
+    "import { computed, pattern } from 'commonfabric';",
+    `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string; note: string }>(() => ({ marker: computed(() => "v1"), note: "${note}" }));`,
+    `// ${release}`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The tracked pattern with a sub-pattern whose result holds data beside its
+ * references, as a view does; `release` changes only a comment.
+ */
+function sourceWithNestedNote(release: string): string {
+  return [
+    "import { computed, pattern } from 'commonfabric';",
+    `const View = pattern<Record<string, never>, { marker: string; note: string }>(() => ({ marker: computed(() => "v1"), note: "fixed" }));`,
+    `export const ${SYMBOL} = pattern<Record<string, never>, { view: { marker: string; note: string } }>(() => ({ view: View({}) }));`,
+    `// ${release}`,
     "",
   ].join("\n");
 }
@@ -96,6 +136,21 @@ function sourceWithStream(marker: string): string {
     "import { computed, handler, pattern, type Stream } from 'commonfabric';",
     "const ping = handler<number, Record<string, never>>(() => {});",
     `export const ${SYMBOL} = pattern<Record<string, never>, { marker: string; ping: Stream<number> }>(() => ({ marker: computed(() => "${marker}"), ping: ping({}) }));`,
+    "",
+  ].join("\n");
+}
+
+/**
+ * The tracked pattern with an argument confidential under a label it declares,
+ * so that a setup of it is prepared and measures what it writes.
+ */
+function sourceWithConfidentialArgument(marker: string): string {
+  return [
+    "/// <cts-enable />",
+    "import { type Confidential, pattern } from 'commonfabric';",
+    "const ATOM = { type: 'https://commonfabric.org/cfc/atom/Resource', class: 'SuppliedStampRepair', subject: 'did:example:owner' } as const;",
+    "type Label = readonly [typeof ATOM];",
+    `export const ${SYMBOL} = pattern<{ seed: Confidential<string, Label> }, { marker: string }>(({ seed }) => ({ marker: "${marker}:" + seed }));`,
     "",
   ].join("\n");
 }
@@ -515,6 +570,133 @@ describe("piece source reconciliation", () => {
       expect(await runtime.start(piece)).toBe(true);
       await runtime.idle();
       expect((await piece.pull())?.marker).toBe("v2");
+    });
+
+    describe("a value stamp an earlier attempt left on the piece's result", () => {
+      // A release adopted on open is a setup the runtime starts on its own
+      // (`runtimeStarted`): its transaction holds none of the reads that
+      // chose the release.
+
+      /**
+       * Sets up `first` (v1 of the noted pattern unless given), plants a
+       * derived value stamp at the root of its result, or of its
+       * sub-pattern's result with `nested`, starts the piece with `running`,
+       * adopts `next` as the newer release, and returns that root's derived
+       * value confidentiality afterward.
+       */
+      const stampAfterAdopting = async (
+        next: string,
+        options: { first?: string; nested?: boolean; running?: boolean } = {},
+      ): Promise<unknown[]> => {
+        const nextIdentity = await identityFor(next);
+        createRuntime(servingFetch(() => nextIdentity, () => next));
+        const space = signer.did();
+        const initial = await runtime.patternManager.compilePattern(
+          parentProgram(options.first ?? sourceWithNote("v1")),
+          { space },
+        );
+        const piece = runtime.getCell<{ note?: string; view?: unknown }>(
+          space,
+          `reconcile-${crypto.randomUUID()}`,
+        );
+        await runtime.setup(undefined, initial, {}, piece);
+        if (options.running) {
+          expect(await runtime.start(piece)).toBe(true);
+          await runtime.idle();
+        }
+        const link = options.nested
+          ? (() => {
+            const tx = runtime.edit();
+            try {
+              const { space, id, scope } = piece.withTx(tx).key("view")
+                .resolveAsCell().getAsNormalizedFullLink();
+              return { space, id, scope, path: [] };
+            } finally {
+              tx.abort("address read");
+            }
+          })()
+          : piece.getAsNormalizedFullLink();
+        const document: IMemorySpaceAddress = {
+          space: link.space,
+          scope: link.scope,
+          id: link.id,
+          path: [],
+        };
+        const planted = await runtime.editWithRetry((tx) => {
+          writeSeedEnvelopeDoc(tx, space);
+          const cfc = (storedFields(tx, document).cfc ?? {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [] },
+          }) as { labelMap: { entries: FabricValue[] } };
+          seedStoredEnvelope(tx, { ...document, path: ["cfc"] }, {
+            ...cfc,
+            labelMap: {
+              ...cfc.labelMap,
+              entries: [...cfc.labelMap.entries, {
+                path: [],
+                label: { confidentiality: ["bob-secret"] },
+                origin: "derived",
+                observes: "value",
+              }],
+            },
+          } as FabricValue);
+        });
+        expect(planted.error).toBeUndefined();
+        await stampSource(piece, PARENT_SOURCE);
+
+        expect(await reconcile(piece)).toBe("updated");
+        expect(getPatternIdentityRef(piece)).toEqual({
+          identity: nextIdentity,
+          symbol: SYMBOL,
+        });
+        await runtime.idle();
+        const tx = runtime.edit();
+        try {
+          return (readStoredCfcMetadata(tx, link)?.labelMap.entries ?? [])
+            .filter((entry) =>
+              entry.origin === "derived" && entry.observes === "value" &&
+              entry.path.length === 0
+            ).flatMap((entry) => entry.label.confidentiality ?? []);
+        } finally {
+          tx.abort("label read");
+        }
+      };
+
+      it("stays where the newer release leaves the result unchanged", async () => {
+        expect(await stampAfterAdopting(sourceWithNote("v2"))).toEqual([
+          "bob-secret",
+        ]);
+      });
+
+      it("comes off where the newer release rewrites the result", async () => {
+        expect(await stampAfterAdopting(sourceWithNote("v2", "changed")))
+          .toEqual([]);
+      });
+
+      it("stays where a running piece swaps to a newer release that leaves the result unchanged", async () => {
+        // A running piece also takes the release through its pattern
+        // watcher's swap.
+
+        expect(
+          await stampAfterAdopting(sourceWithNote("v2"), { running: true }),
+        ).toEqual(["bob-secret"]);
+      });
+
+      it("stays on a running piece's sub-pattern result the newer release leaves unchanged", async () => {
+        // The swap sets the sub-pattern up again in a transaction of its own,
+        // which carries the adoption's decision and with it that the runtime
+        // started it (`#runDecisionOf` in `runner.ts`), so a view an earlier
+        // update hid stays hidden there.
+
+        expect(
+          await stampAfterAdopting(sourceWithNestedNote("v2"), {
+            first: sourceWithNestedNote("v1"),
+            nested: true,
+            running: true,
+          }),
+        ).toEqual(["bob-secret"]);
+      });
     });
 
     it("moves a running piece's pointer and lets its watcher re-instantiate", async () => {
@@ -2930,6 +3112,138 @@ describe("piece source reconciliation", () => {
     function open(piece: Cell<unknown>, origin = PARENT_SOURCE) {
       return runtime.sourceReconciler.open(piece, origin);
     }
+
+    it("repairs a stamped closure it supplies, so the creation that records its origin commits", async () => {
+      // A wish's sidecar is created in a transaction of the wish's own, so
+      // its closure is repaired when the supplied source is compiled into
+      // the space, ahead of that transaction.
+
+      const contents = sourceWithConfidentialArgument("v1");
+      const identity = await identityFor(contents);
+      // Each runtime stays open to the end: disposing one closes the storage
+      // the next one shares.
+      const opened: Runtime[] = [];
+      const strict = () => {
+        const next = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager,
+          fetch: servingFetch(() => identity, () => contents),
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+        });
+        opened.push(next);
+        return next;
+      };
+      // A space of its own, whose residency covers its owner and not the
+      // reader whose label an earlier source update left.
+      const reader = (await Identity.fromPassphrase("supplied stamp reader"))
+        .did();
+      const first = strict();
+      const space = await first.createSpace();
+      try {
+        expect(
+          await first.sourceReconciler.open(
+            first.getCell(space, `supplied-${crypto.randomUUID()}`),
+            PARENT_SOURCE,
+          ),
+        ).toBeDefined();
+        await first.patternManager.flushCompileCacheWrites();
+        await first.storageManager.synced();
+        const planter = strict();
+        const record: IMemorySpaceAddress = {
+          space,
+          scope: "space",
+          id: planter.getCell(space, sourceDocKey(identity))
+            .getAsNormalizedFullLink().id,
+          path: [],
+        };
+        await planter.getCell(space, sourceDocKey(identity)).sync();
+        const planted = await planter.editWithRetry((tx) => {
+          writeSeedEnvelopeDoc(tx, space);
+          const stored = storedFields(tx, record) as {
+            cfc?: { labelMap: { entries: FabricValue[] } };
+          };
+          const cfc = stored.cfc ?? {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [] },
+          };
+          seedStoredEnvelope(tx, record, {
+            ...stored,
+            cfc: {
+              ...cfc,
+              labelMap: {
+                ...cfc.labelMap,
+                entries: [
+                  ...cfc.labelMap.entries,
+                  ...[
+                    ["shape", []],
+                    ["value", [{
+                      type: "https://commonfabric.org/cfc/atom/TransformedBy",
+                      identity: { kind: "builtin", builtinId: "compile-cache" },
+                    }]],
+                  ].map(([observes, integrity]) => ({
+                    path: [],
+                    origin: "derived",
+                    observes,
+                    label: {
+                      confidentiality: [reader],
+                      ...((integrity as unknown[]).length > 0
+                        ? { integrity }
+                        : {}),
+                    },
+                  })),
+                ],
+              },
+            },
+          } as unknown as FabricValue);
+        });
+        expect(planted.error).toBeUndefined();
+        await planter.storageManager.synced();
+
+        runtime = strict();
+        await runtime.getCell(space, sourceDocKey(identity)).sync();
+        const stamped = runtime.edit();
+        try {
+          expect(
+            (readStoredCfcMetadata(stamped, record)?.labelMap.entries ?? [])
+              .flatMap((entry) => entry.label.confidentiality ?? []),
+          ).toEqual([reader, reader]);
+        } finally {
+          stamped.abort();
+        }
+        const piece = runtime.getCell(space, `supplied-${crypto.randomUUID()}`);
+        const pattern = await runtime.sourceReconciler.open(
+          piece,
+          PARENT_SOURCE,
+        );
+        expect(pattern).toBeDefined();
+        const tx = runtime.edit();
+        runtime.runner.run(tx, pattern!, { seed: "c" }, piece.withTx(tx), {
+          sourceOrigin: PARENT_SOURCE,
+        });
+        runtime.prepareTxForCommit(tx);
+        const { error } = await tx.commit().settled;
+
+        expect(error).toBeUndefined();
+        expect(getPieceSourceRevisions(piece).map((r) => r.origin)).toEqual([
+          PARENT_SOURCE,
+        ]);
+        const read = runtime.edit();
+        try {
+          expect(
+            (readStoredCfcMetadata(read, record)?.labelMap.entries ?? [])
+              .flatMap((entry) => entry.label.confidentiality ?? []),
+          ).toEqual([]);
+        } finally {
+          read.abort();
+        }
+      } finally {
+        for (const other of opened) {
+          if (other !== runtime) await other.dispose();
+        }
+      }
+    });
 
     it("shares supplied source across slots while compiling into each destination", async () => {
       const identity = await identityFor(source("v1"));

@@ -48,11 +48,7 @@ import {
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@/types";
-import {
-  FabricBytes,
-  FabricEpochNsec,
-  FabricRegExp,
-} from "@/fabric-primitives";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import { cloneHelper } from "./value-clone.ts";
@@ -196,10 +192,10 @@ export function errorClassFromType(type: string): ErrorConstructor {
 }
 
 /**
- * Returns the freshly-minted fabric form of a `Date`, `Uint8Array`, `RegExp`
- * or `Error`, and `undefined` for every other value. The result is always
- * frozen and always new: the whole of what this decides is whether conversion
- * produces a value, and for these four it does. An inert array or plain object
+ * Returns the freshly-minted fabric form of a `Date`, `Uint8Array` or `Error`,
+ * and `undefined` for every other value. The result is always frozen and
+ * always new: the whole of what this decides is whether conversion produces a
+ * value, and for these three it does. An inert array or plain object
  * is already a fabric layer and mints nothing; so, at the other end, does a
  * value with no fabric representation at all.
  *
@@ -245,11 +241,6 @@ export function shallowFabricFromConvertibleJsObjectElseUndefined(
       rejectExtraProperties(value as object, "Date");
       const nsec = BigInt((value as Date).getTime()) * 1_000_000n;
       return new FabricEpochNsec(nsec);
-    }
-
-    case VALUE_TAGS.JsRegExp: {
-      // `FabricRegExp` rejects extra enumerable properties of its own accord.
-      return new FabricRegExp(value as RegExp);
     }
 
     case VALUE_TAGS.JsUint8Array: {
@@ -581,7 +572,9 @@ function isValidFabricConvertibleJsValueInternal(
       return false;
     }
 
-    case "object": {
+    default: {
+      // `typeof value` is `"object"`, the one result not handled above.
+
       // `FabricSpecialObject` -- already a valid `FabricValue`.
       if (isFabricSpecialObject(value)) return true;
 
@@ -640,10 +633,6 @@ function isValidFabricConvertibleJsValueInternal(
       }
       seen.delete(value);
       return true;
-    }
-
-    default: {
-      return false;
     }
   }
 }

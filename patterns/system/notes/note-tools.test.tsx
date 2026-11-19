@@ -3,8 +3,8 @@
  *
  * The grep and translate patterns the note hands out through `patternTool`,
  * and its `editContent` stream refusing an event of the wrong shape and
- * taking one of the right shape. A language model is not reachable from a
- * pattern test, so translate is checked for what it reports when the request
+ * taking one of the right shape. The test states that the model fails the
+ * translation, so translate is checked for what it reports when the request
  * fails. The refusal logs an error, which
  * is why this file allows console output and holds nothing else.
  *
@@ -13,6 +13,14 @@
 import { action, assert, pattern, TESTS } from "commonfabric";
 import { fireEvent } from "../../tools/test-support/vnode-helpers.ts";
 import Note, { grepPattern, translatePattern } from "./note.tsx";
+
+// The model fails the translation.
+export const llmMocks = [
+  {
+    when: { systemContains: "Translate the content to French." },
+    error: "The model is unavailable.",
+  },
+];
 
 /** Sends `event` to `stream` whatever the event type the stream declares. */
 const sendUnchecked = (stream: unknown, event: unknown): void =>

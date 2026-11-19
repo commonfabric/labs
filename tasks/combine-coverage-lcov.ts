@@ -7,10 +7,10 @@ import { type LcovFileCoverage, parseLcovReports } from "./lcov.ts";
  * Merge one or more LCOV reports into a single report. A lane's reports name
  * each file of the repository by its repository-relative path, so the merged
  * report maps onto any checkout. Records that refer to the same source file
- * collapse into one, with per-line execution counts summed, so a file
- * exercised by several test jobs is reported once with its combined coverage
- * rather than as repeated records that some LCOV consumers keep only the last
- * of.
+ * collapse into one, with per-line execution counts summed over the lines
+ * `LcovFileCoverage` says count, so a file exercised by several test jobs is
+ * reported once with its combined coverage rather than as repeated records
+ * that some LCOV consumers keep only the last of.
  *
  * Only line coverage (`DA`/`LF`/`LH`) is carried through; `parseLcovReports`
  * explains what the other record kinds cost to merge.
@@ -33,7 +33,10 @@ function serializeFileCoverage(
   file: LcovFileCoverage,
 ): string {
   const lines: string[] = [];
-  if (file.testName) lines.push(`TN:${file.testName}`);
+  // A record that took in one of Deno's names Deno's lines, so it carries no
+  // pattern-coverage test name, which would have a later reader score it as
+  // the instrumentation's.
+  if (file.testName && !file.namedByDeno) lines.push(`TN:${file.testName}`);
   lines.push(`SF:${sourcePath}`);
 
   const lineNumbers = [...file.lineHits.keys()].sort((a, b) => a - b);

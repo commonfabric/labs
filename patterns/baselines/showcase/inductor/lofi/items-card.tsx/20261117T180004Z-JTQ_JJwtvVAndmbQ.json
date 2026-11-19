@@ -1,0 +1,158 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "fields"
+        ],
+        "type": "object"
+      },
+      "ItemRef": {
+        "properties": {
+          "item": {
+            "$ref": "#/$defs/Item"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "type": "object"
+      },
+      "ItemRow": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "hifi": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The hi-fi label, or null until the model has answered usably."
+          },
+          "id": {
+            "type": "string"
+          },
+          "lofi": {
+            "description": "The current rule set's label.",
+            "type": "boolean"
+          },
+          "split": {
+            "$ref": "#/$defs/Split"
+          },
+          "surprise": {
+            "description": "The lo-fi label disagrees with a hi-fi label that has arrived.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "fields",
+          "hifi",
+          "lofi",
+          "surprise",
+          "split"
+        ],
+        "type": "object"
+      },
+      "Split": {
+        "enum": [
+          "train",
+          "heldout"
+        ]
+      },
+      "SubmittedItem": {
+        "properties": {
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "The item's text fields. The event's schema drops a field that is not a\nstring before `addItem` sees it.",
+            "properties": {},
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "addItem": {
+        "$ref": "#/$defs/SubmittedItem",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "items": {
+        "description": "The inductor's items, in the order they were added.",
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "removeItem": {
+        "$ref": "#/$defs/ItemRef",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "rows": {
+        "description": "The same items, graded.",
+        "items": {
+          "$ref": "#/$defs/ItemRow"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items",
+      "rows",
+      "addItem",
+      "removeItem"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/items-card.tsx",
+  "resultSchema": {
+    "description": "The inductor's items with their labels, and a box to add one.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

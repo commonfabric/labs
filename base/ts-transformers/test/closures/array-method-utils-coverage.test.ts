@@ -288,8 +288,10 @@ Deno.test("analyzeElementBinding recurses into array elements that are themselve
 
 Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an array", () => {
   // The inner `{ [k]: chosen }` produces no residual binding element, so the
-  // nested walk returns undefined and the surrounding array element is left as
-  // its original node while the computed key is lifted into an alias.
+  // nested walk returns undefined and the surrounding array element becomes a
+  // hole, which keeps `kept` at its position, while the computed key is lifted
+  // into an alias. The destructure binds `chosen` nowhere, since the alias
+  // declares it.
   const { sourceFile, checker } = createProgram(
     "declare const k: string;\n" +
       "const f = ([{ [k]: chosen }, kept]) => chosen;",
@@ -304,8 +306,38 @@ Deno.test("analyzeElementBinding drops nested object patterns that hold only a c
   );
   assertEquals(analysis.computedAliases.length, 1);
   assertEquals(analysis.computedAliases[0].aliasName, "chosen");
+  assertEquals(analysis.computedAliases[0].path, ["0"]);
   assert(analysis.destructureStatement);
-  assert(boundNames(analysis.destructureStatement).includes("kept"));
+  assertEquals(boundNames(analysis.destructureStatement), ["kept"]);
+  const [pattern] = collect(
+    analysis.destructureStatement,
+    ts.isArrayBindingPattern,
+  );
+  assert(pattern);
+  assert(ts.isOmittedExpression(pattern.elements[0]!));
+});
+
+Deno.test("analyzeElementBinding reads a computed key nested in an array element from that element", () => {
+  // `chosen` is `element[1][k]`: the alias's path and template both name the
+  // array index the pattern sits at.
+  const { sourceFile, checker } = createProgram(
+    "declare const k: string;\n" +
+      "const f = ([kept, { [k]: chosen }]) => chosen;",
+  );
+  const analysis = analyzeElementBinding(
+    firstArrowParam(sourceFile),
+    new Map(),
+    testContext(checker),
+    new Set<string>(),
+    passthroughBindingId,
+  );
+  assertEquals(analysis.computedAliases.length, 1);
+  const [alias] = analysis.computedAliases;
+  assertEquals(alias.path, ["1"]);
+  const template = alias.baseTemplate;
+  assert(template && ts.isElementAccessExpression(template));
+  assert(ts.isNumericLiteral(template.argumentExpression));
+  assertEquals(template.argumentExpression.text, "1");
 });
 
 Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an object", () => {

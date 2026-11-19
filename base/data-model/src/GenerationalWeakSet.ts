@@ -72,8 +72,11 @@ export class GenerationalWeakSet<T extends WeakKey> {
   /** Indicates whether any kept generation holds `value`. */
   has(value: T): boolean {
     if (this.#newest.has(value)) return true;
-    for (const generation of this.#older) {
-      if (generation.has(value)) return true;
+    // An indexed loop: `for...of` allocates an iterator on each call until the
+    // optimizing compiler removes it.
+    const older = this.#older;
+    for (let i = 0; i < older.length; i++) {
+      if (older[i]?.has(value)) return true;
     }
     return false;
   }

@@ -2,48 +2,16 @@ import { encode } from "@commonfabric/text/utf8";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-function stringify(value: unknown): string {
-  switch (typeof value) {
-    case "object": {
-      if (!value) return "null";
-      if (
-        value instanceof ArrayBuffer ||
-        ("buffer" in value && value.buffer instanceof ArrayBuffer)
-      ) {
-        // All commands operate over text rather than binary
-        throw new Error("Binary data could not be stringified");
-      }
-      try {
-        return JSON.stringify(value, null, 2);
-        // deno-lint-ignore no-empty
-      } catch (_) {}
-      return value.toString();
-    }
-    case "function":
-      throw new Error("Function could not be stringified");
-    case "symbol":
-      return value.toString();
-    case "undefined":
-    case "string":
-    case "number":
-    case "boolean":
-    case "bigint":
-    default:
-      return `${value}`;
-  }
-}
-
+/**
+ * Writes `value` to stdout followed by a newline, for TTY legibility and unix
+ * file compatibility: a string as it is unless `json` asks for JSON, and any
+ * other value as JSON.
+ */
 export function render(value: unknown, { json }: { json?: boolean } = {}) {
-  if (json) {
-    // For JSON mode, output raw JSON without additional formatting
-    const jsonValue = `${safeStringify(value)}\n`;
-    Deno.stdout.writeSync(encode(jsonValue));
-    return;
-  }
-  // Append a `\n` to the stdout for TTY legibility and
-  // unix file compatibility.
-  const stringValue = `${stringify(value)}\n`;
-  Deno.stdout.writeSync(encode(stringValue));
+  const text = typeof value === "string" && !json
+    ? value
+    : safeStringify(value);
+  Deno.stdout.writeSync(encode(`${text}\n`));
 }
 
 // Helper function to safely stringify objects with circular references

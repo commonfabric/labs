@@ -4,14 +4,9 @@ const DEFAULT_HOST_PATH =
 const readHostPath = (): string => {
   try {
     return Deno.env.get("PATH") ?? DEFAULT_HOST_PATH;
-  } catch (error) {
-    if (
-      error instanceof Deno.errors.PermissionDenied ||
-      (error instanceof Error && error.name === "NotCapable")
-    ) {
-      return DEFAULT_HOST_PATH;
-    }
-    throw error;
+  } catch {
+    // Reading a valid variable name fails only when env access is denied.
+    return DEFAULT_HOST_PATH;
   }
 };
 

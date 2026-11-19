@@ -20,12 +20,14 @@ const TRACKED_IMPORT_SOURCES = new Set([
   "@commonfabric/identity/did",
   "./built-in.ts",
   "./current-principal.ts",
+  "./equals-key.ts",
   "./event-key.ts",
   "./module.ts",
   "./pattern.ts",
   "./principal-of.ts",
   "./space-access.ts",
   "./space-access-change.ts",
+  "../space-members.ts",
 ]);
 
 function getPropertyNameText(name: ts.PropertyName): string | undefined {

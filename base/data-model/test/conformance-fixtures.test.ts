@@ -14,7 +14,12 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@/fabric-bases";
 import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
-import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
+import {
+  FabricBytes,
+  FabricKeyPair,
+  FabricUnavailable,
+  UNAVAILABLE_PENDING,
+} from "@/fabric-primitives";
 import {
   fabricValueOfTextWithModsForTestingOnly,
   type FixtureRequirements,
@@ -177,6 +182,43 @@ describe("conformance-fixtures", () => {
           [["state"], { array: 1 }],
           [["state", 0], "fvj1:1"],
         ]);
+    });
+
+    it("returns a key pair's algorithm and its two keys, each a byte sequence", () => {
+      const pair = new FabricKeyPair(
+        "Ed25519",
+        new Uint8Array([1, 2]),
+        new Uint8Array([3, 4]),
+      );
+      expect(probesOfForTestingOnly(pair)).toEqual([
+        [[], { instance: "KeyPair@1" }],
+        [["algorithm"], 'fvj1:"Ed25519"'],
+        [["publicKey"], 'fvj1:{"/Bytes@1":"AQI"}'],
+        [["privateKey"], 'fvj1:{"/Bytes@1":"AwQ"}'],
+      ]);
+    });
+
+    it("returns an unavailable value's reason, and its kind and message only where its state has them", () => {
+      expect(probesOfForTestingOnly(UNAVAILABLE_PENDING)).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"pending"'],
+      ]);
+      expect(probesOfForTestingOnly(new FabricUnavailable("error", "network")))
+        .toEqual([
+          [[], { instance: "Unavailable@1" }],
+          [["reason"], 'fvj1:"error"'],
+          [["errorKind"], 'fvj1:"network"'],
+        ]);
+      expect(
+        probesOfForTestingOnly(
+          new FabricUnavailable("error", "general", "boom"),
+        ),
+      ).toEqual([
+        [[], { instance: "Unavailable@1" }],
+        [["reason"], 'fvj1:"error"'],
+        [["errorKind"], 'fvj1:"general"'],
+        [["message"], 'fvj1:"boom"'],
+      ]);
     });
 
     it("returns no probe at or under the path of a patch, and the special forms of the containers along it", () => {
@@ -651,11 +693,75 @@ describe("conformance-fixtures", () => {
           { text: "fvj1:null", patches: [{ at: [], put: { cycle: [] } }] },
           "Not a proper prefix of the path a cycle is put at: []",
         ],
+        [
+          {
+            text:
+              'fvj1:{"/Error@1":{"message":"m","name":null,"type":"Error"}}',
+            patches: [{ at: ["message"], put: { unregisteredSymbol: null } }],
+          },
+          'No `null` to patch at ["message"]',
+        ],
       ];
       for (const [stated, message] of cases) {
         expect(() => fabricValueOfTextWithModsForTestingOnly(stated))
           .toThrow(message);
       }
+    });
+
+    describe("given a text and mods read from a fixture", () => {
+      // A fixture is JSON, so what it holds is parsed rather than typed, and
+      // may be anything JSON can write.
+
+      /** Returns the value the text and mods written as JSON `json` write. */
+      function valueOfJson(json: string): FabricValue {
+        return fabricValueOfTextWithModsForTestingOnly(JSON.parse(json));
+      }
+
+      it("returns the value written, path steps in UTF-16 code units among them", () => {
+        const value = valueOfJson(
+          '{"text":"fvj1:{\\"a\\":null}","patches":[{"at":[{"utf16":[97]}],' +
+            '"put":{"unregisteredSymbol":{"utf16":[115]}}}]}',
+        );
+        expect(value).toEqual({ a: expect.any(Symbol) });
+        const { a } = value as { a: symbol };
+        expect(a.description).toBe("s");
+        expect(Symbol.keyFor(a)).toBeUndefined();
+      });
+
+      it("throws given a patch or a path step that is not as a fixture writes one", () => {
+        const cases: ReadonlyArray<readonly [string, string]> = [
+          ['{"bogus":1}', "Not a patch kind: bogus"],
+          ["[]", "Not an object: []"],
+          ["{}", "Not a single-key object: {}"],
+          [
+            '{"cycle":[],"unregisteredSymbol":null}',
+            'Not a single-key object: {"cycle":[],"unregisteredSymbol":null}',
+          ],
+          ['{"cycle":"a"}', 'Not a list: "a"'],
+        ];
+        for (const [put, message] of cases) {
+          expect(() =>
+            valueOfJson(
+              `{"text":"fvj1:[null]","patches":[{"at":[0],"put":${put}}]}`,
+            )
+          ).toThrow(message);
+        }
+
+        const steps: ReadonlyArray<readonly [string, string]> = [
+          ["true", "Not an object: true"],
+          ['{"utf8":[97]}', 'Not a fixture string: {"utf8":[97]}'],
+          ['{"utf16":[65536]}', "Not a code unit: 65536"],
+          ['{"utf16":[0.5]}', "Not a code unit: 0.5"],
+        ];
+        for (const [step, message] of steps) {
+          expect(() =>
+            valueOfJson(
+              `{"text":"fvj1:[null]","patches":[{"at":[${step}],` +
+                '"put":{"unregisteredSymbol":null}}]}',
+            )
+          ).toThrow(message);
+        }
+      });
     });
 
     it("throws given a patch that runs into what another patch puts", () => {
@@ -773,8 +879,8 @@ describe("conformance-fixtures", () => {
       const texts = [
         `fvj1:{"/Bytes@1":"${state}"}`,
         `fvj1:{"/Hash@1":{"hash":"${state}","tag":"fid1"}}`,
-        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519","privateKey":"${state}",` +
-        '"publicKey":"AA"}}',
+        `fvj1:{"/KeyPair@1":{"algorithm":"Ed25519",` +
+        `"privateKey":{"/Bytes@1":"${state}"},"publicKey":{"/Bytes@1":"AA"}}}`,
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toEqual({
@@ -843,6 +949,20 @@ describe("conformance-fixtures", () => {
       ];
       for (const text of texts) {
         expect(requirementsOfText(text)).toBeUndefined();
+      }
+    });
+
+    it("counts a key pair and an unavailable value each as an instance and its state, two deep", () => {
+      const values = [
+        '{"/KeyPair@1":{"algorithm":"Ed25519",' +
+        '"privateKey":{"/Bytes@1":"AA"},"publicKey":{"/Bytes@1":"AA"}}}',
+        '{"/Unavailable@1":{"reason":"pending"}}',
+      ];
+      for (const value of values) {
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 2, value)}`))
+          .toBeUndefined();
+        expect(requirementsOfText(`fvj1:${nestedIn(floors.depth - 1, value)}`))
+          .toEqual({ depth: floors.depth + 1 });
       }
     });
 

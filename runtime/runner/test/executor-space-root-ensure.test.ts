@@ -288,6 +288,11 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
    * (a never-settling promise — the unbounded-remote-fetch shape the
    * ensure's deadline exists to bound). */
   let hangPatternFetches = false;
+  let stallPatternBodies = false;
+  /** A slow ensure: the serving runtime's compile waits for this gate,
+   * when set, after resolving `compileEntered`. */
+  let heldCompile: PromiseWithResolvers<void> | undefined;
+  let compileEntered: PromiseWithResolvers<void> | undefined;
 
   const fetchStub: RuntimeFetch = (input, _init) => {
     const url = new URL(
@@ -303,6 +308,10 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     }
     if (hangPatternFetches && !url.searchParams.has("identity")) {
       return new Promise<Response>(() => {});
+    }
+    if (stallPatternBodies && !url.searchParams.has("identity")) {
+      // Headers answer at once; the body never ends.
+      return Promise.resolve(new Response(new ReadableStream()));
     }
     if (url.searchParams.has("identity")) {
       return identityFor(url.pathname).then((id) => new Response(id));
@@ -323,6 +332,9 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     stats = emptyServingLoopStats();
     sinkLocalSeq = { value: 0 };
     hangPatternFetches = false;
+    stallPatternBodies = false;
+    heldCompile = undefined;
+    compileEntered = undefined;
     spaceServer = undefined;
     cleanups = [];
   });
@@ -432,6 +444,16 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
         // pins can find the ensure's creation tx and read the LIVE
         // trust snapshot it carried (the rejectFirstFabricCommit
         // precedent: instance-level patching is the established seam).
+        const originalCompile = runtime.patternManager.compilePattern.bind(
+          runtime.patternManager,
+        );
+        runtime.patternManager.compilePattern = (async (...args) => {
+          if (heldCompile) {
+            compileEntered?.resolve();
+            await heldCompile.promise;
+          }
+          return await originalCompile(...args);
+        }) as typeof runtime.patternManager.compilePattern;
         const originalEdit = runtime.edit.bind(runtime);
         runtime.edit = (() => {
           const tx = originalEdit();
@@ -942,6 +964,56 @@ describe("SpaceServer space-root ensure (OW45 arm-B stage 1)", () => {
     expect(stats.rootEnsure.runs).toBe(0);
     expect(stats.rootEnsure.created).toBe(0);
     // The tenure is alive and serving — the wedge parked nothing.
+    expect(created.active).toBe(true);
+  });
+
+  it("a host that answers the headers and then stalls the body hits the deadline too", async () => {
+    await seedAcl({ [space]: "OWNER" });
+    stallPatternBodies = true;
+    const created = newSpaceServer({ rootEnsureDeadlineMs: 300 });
+    expect(await created.activate()).toBe(true);
+
+    await ensures.matching((outcome) => outcome === "failed");
+    expect(stats.rootEnsure.created).toBe(0);
+    expect(created.active).toBe(true);
+  });
+
+  it("a SLOW compile outlasting the deadline still makes the root, and a verb queued behind it runs against it", async () => {
+    // The deadline bounds a silent pattern host (each source fetch), not
+    // the compile: a cold root compile on a loaded machine can outlast it
+    // and still finish, and a served creation queued behind the ensure
+    // registers into the root it makes. Bounding the whole ensure failed
+    // such creations with "The space has no default pattern" (loom's
+    // pattern-build preview, on CI).
+    const deadlineMs = 50;
+    await seedAcl({ [space]: "OWNER" });
+    heldCompile = Promise.withResolvers<void>();
+    compileEntered = Promise.withResolvers<void>();
+    const created = newSpaceServer({ rootEnsureDeadlineMs: deadlineMs });
+    expect(await created.activate()).toBe(true);
+    await compileEntered.promise;
+
+    let ranBeforeRoot: boolean | undefined;
+    const verb = created.runLifecycleVerb({
+      name: "needs-root",
+      run: async (runtime) => {
+        const root = await resolveSpaceRootPattern(runtime, space);
+        ranBeforeRoot = root === undefined;
+        return root !== undefined;
+      },
+    });
+    // The barrier: a timer of the deadline's length armed after the
+    // compile began fires after any bound armed when the ensure began,
+    // so a bound on the whole ensure would have failed it by now.
+    await new Promise((resolve) => setTimeout(resolve, deadlineMs));
+    expect(ensures.entries).not.toContain("failed");
+    expect(ranBeforeRoot).toBeUndefined();
+
+    heldCompile.resolve();
+    await ensures.matching((outcome) => outcome === "created");
+    expect(await verb).toBe(true);
+    expect(ranBeforeRoot).toBe(false);
+    expect(stats.rootEnsure.failures).toBe(0);
     expect(created.active).toBe(true);
   });
 

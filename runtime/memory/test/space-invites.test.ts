@@ -1,15 +1,18 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
+import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import {
   buildInviteLink,
   createInviteCredentials,
   INVITE_LINK_SCHEME,
   inviteCodeVerifier,
   isInviteId,
+  isInviteProfileSuggestion,
   isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
+  SPACE_INVITE_CAPABILITY,
 } from "../space-invites.ts";
 
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
@@ -339,6 +342,11 @@ describe("space-invites", () => {
       for (
         const other of [
           `${INVITE_LINK_SCHEME}://setup?n=abc123`,
+          // A space link grants nothing and is never an invitation.
+          `${INVITE_LINK_SCHEME}://space?host=https://service.example&space=${space}`,
+          // Nor is an action this reader does not know, such as a later one.
+          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://other${query}`,
           // The setup action is never an invitation, whatever it carries.
           `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
           `https://links.example/setup${query}${link.hash}`,
@@ -372,8 +380,7 @@ describe("space-invites", () => {
         [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
           code: invite.code,
         }],
-        // Any other URL on the scheme.
-        [`${INVITE_LINK_SCHEME}://other${query}${link.hash}`, {}],
+        // A malformed `join`, or a scheme URL naming no action.
         [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],
@@ -401,6 +408,58 @@ describe("space-invites", () => {
       expect(refusal(() => parseInviteLink(scheme, { code: "short" }))).toBe(
         "invalid-request",
       );
+    });
+  });
+  describe("isInviteProfileSuggestion()", () => {
+    it("returns `true` for a name alone and for a name with a canonical picture", () => {
+      expect(isInviteProfileSuggestion({ name: "Sam" })).toBe(true);
+      expect(isInviteProfileSuggestion({ name: "Sam", picture: "AA" })).toBe(
+        true,
+      );
+    });
+    it("returns `false` for a value that is not a record", () => {
+      for (const value of [null, undefined, "Sam", 7, [{ name: "Sam" }]]) {
+        expect(isInviteProfileSuggestion(value)).toBe(false);
+      }
+    });
+    it("returns `false` for a record with a field besides `name` and `picture`", () => {
+      expect(isInviteProfileSuggestion({ name: "Sam", email: "s@example.com" }))
+        .toBe(false);
+    });
+    it("returns `false` for a malformed name", () => {
+      for (const name of [undefined, "", " Sam", "Sam\n", "S".repeat(129)]) {
+        expect(isInviteProfileSuggestion({ name })).toBe(false);
+      }
+    });
+    it("returns `false` for a picture that is not canonical unpadded base64url", () => {
+      for (
+        const picture of [
+          7,
+          "AA==",
+          "A+/A",
+          // One character left over after the last whole byte.
+          "A",
+          // Nonzero bits past the last whole byte.
+          "AB",
+        ]
+      ) expect(isInviteProfileSuggestion({ name: "Sam", picture })).toBe(false);
+    });
+    it("returns `false` for a picture larger than the capability allows", () => {
+      const { maxPictureBytes } = SPACE_INVITE_CAPABILITY.suggestedProfile;
+      const picture = (bytes: number) =>
+        toUnpaddedBase64url(new Uint8Array(bytes));
+      expect(
+        isInviteProfileSuggestion({
+          name: "Sam",
+          picture: picture(maxPictureBytes),
+        }),
+      ).toBe(true);
+      expect(
+        isInviteProfileSuggestion({
+          name: "Sam",
+          picture: picture(maxPictureBytes + 1),
+        }),
+      ).toBe(false);
     });
   });
 });

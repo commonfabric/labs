@@ -175,9 +175,12 @@ A deletion and an obliteration each write the whole message, so they write
 under the write policy the message's stored envelope holds for its reactions.
 Where that policy lists writers the room's own reactions policy does not, as a
 message stored by a room program that listed `commitDelete` and
-`commitObliterate` among its reactions' writers does, the runtime refuses the
-write ([`cfc-conformance-statement.md`](../cfc-conformance-statement.md) §10),
-and the message can be neither deleted nor obliterated.
+`commitObliterate` among its reactions' writers does, the stored policy keeps
+them as stored, and the write commits
+([`cfc-conformance-statement.md`](../cfc-conformance-statement.md) §10). The
+room reads such a message's tombstone under its own schema for a message, so a
+deleted message an earlier room program stored still counts, still shows, and
+still opens the thread it roots.
 
 ## A message the room can't read
 

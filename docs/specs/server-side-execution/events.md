@@ -685,7 +685,33 @@ loop's duty).
   armed, counted `handlerNotRunDeferrals`, serving-loop.md §7), so a
   PERMANENTLY unresolvable argument hardens through the bounded
   deferral budget into the visible T3 drop notice instead of wedging
-  the stream. The withdrawal carries §2's per-space arrival-order
+  the stream. A withdrawal whose run read a scoped instance the serving
+  loop has not produced, in the stream's own space, while a writer that
+  owes it will still run, is settlement instead (counted
+  `handlerNotRunWaits` as well). "Owes" is link resolution's
+  `unproducedScopedInstance` (serving-loop.md §3d), and "will run" is
+  the scheduler's own test for queueing the writer: invalid or never
+  run, and live, a materializer, or pending; on a fanned-out writer, the
+  instance must also be one its current demanders produce and not
+  current, since the run supply runs no other. Such a deferral spends no
+  deferral budget and arms no backstop: the entry waits on that
+  instance and is not dispatched again until a commit writes it (a write
+  to another instance of the document does not wake it) or a writer of
+  the document finishes a run that was not withdrawn, or stops writing
+  it. The second wake is what reaches a writer whose run leaves the
+  instance absent, which commits no write to it. Once dispatched again,
+  the entry is judged afresh; and
+  the drain stops its pass at the waiting entry, so later arrivals in
+  the space wait behind it. Time and unrelated commits decide nothing
+  about it. A tenure that parks forgets the wait, and the next one
+  dispatches the entry afresh. A withdrawal with nothing
+  owed, or owed only by a writer that is dormant or clean, spends the
+  budget as above, so an argument that nothing will change still ends
+  in the drop notice, and an instance in another space, whose commits
+  this loop does not see, takes the budget too. A writer that stays
+  queued without ever producing holds the entry, and §2's arrival-order
+  barrier holds the space's later arrivals behind it, as a load in
+  flight holds a client dispatch (RULED 2026-11-17, owner). The withdrawal carries §2's per-space arrival-order
   BARRIER with it, exactly as the load-park failure arm does — both
   halves: every later-arrived durable served entry already QUEUED
   behind the withdrawn dispatch in the same space defers too

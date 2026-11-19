@@ -96,6 +96,7 @@
     "SqliteTableSchemas",
     "UnavailableErrorKind",
     "UnavailableReason",
+    "UnavailableState",
     "VNode"
   ],
   "collections": [],
@@ -194,7 +195,6 @@
     "FabricMount",
     "FabricNativeWrapper",
     "FabricRef",
-    "FabricRegExp",
     "FabricValueLayer",
     "FabricValuePlus",
     "Fact",

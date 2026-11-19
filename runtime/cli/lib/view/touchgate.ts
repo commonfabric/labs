@@ -13,11 +13,13 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { join } from "@std/path";
 import {
   type CreateRequest,
+  GitHubRefusal,
   type MergeRequest,
   type PullRequestService,
   pullRequestUrl,
 } from "./github.ts";
 import { feed } from "./blame.ts";
+import { type BeginStep, say, type TaskText } from "./tasklog.ts";
 
 /** What one of libfido2's tools did. */
 export interface ToolResult {
@@ -235,12 +237,51 @@ function fromBase64(text: string | undefined): Uint8Array {
   }
 }
 
+/** What libfido2's errors mean, by the names its tools print them by. */
+const FIDO_ERRORS: ReadonlyMap<string, string> = new Map([
+  [
+    "FIDO_ERR_RX",
+    "the security key stopped answering. It may have stopped waiting for a " +
+    "touch, been unplugged, or been in use by another program",
+  ],
+  [
+    "FIDO_ERR_TX",
+    "the security key could not be reached. It may have been unplugged, or " +
+    "been in use by another program",
+  ],
+  ["FIDO_ERR_USER_ACTION_TIMEOUT", "the security key was not touched in time"],
+  ["FIDO_ERR_ACTION_TIMEOUT", "the security key was not touched in time"],
+  ["FIDO_ERR_OPERATION_DENIED", "the security key refused the request"],
+  [
+    "FIDO_ERR_KEEPALIVE_CANCEL",
+    "the request was cancelled on the security key",
+  ],
+  [
+    "FIDO_ERR_NO_CREDENTIALS",
+    "the security key does not hold the credential registered with touch-gate",
+  ],
+]);
+
+/**
+ * Returns what went wrong when `program`, one of libfido2's tools, failed
+ * printing `stderr`: what the error it names means, followed by the
+ * program and the error's name, or else what it printed.
+ */
+export function describeFidoFailure(program: string, stderr: string): string {
+  const printed = stderr.trim();
+  const name = printed.match(/FIDO_ERR_[A-Z_]+/g)?.at(-1);
+  const meaning = name === undefined ? undefined : FIDO_ERRORS.get(name);
+  return meaning === undefined
+    ? `${program} failed: ${printed}`
+    : `${meaning} (${program}: ${name})`;
+}
+
 /** The security keys, as libfido2's tools reach them. */
 function securityKeys(tool: ToolRunner, signal: AbortSignal) {
   const run = async (program: string, args: string[], input: string) => {
     const result = await tool(program, args, input, signal);
     if (!result.success) {
-      throw new Error(`${program} failed: ${result.stderr.trim()}`);
+      throw new Error(describeFidoFailure(program, result.stderr));
     }
     return result.stdout;
   };
@@ -261,7 +302,11 @@ function securityKeys(tool: ToolRunner, signal: AbortSignal) {
       return true;
     }
     if (stderr.endsWith("FIDO_ERR_NO_CREDENTIALS")) return false;
-    throw new Error(`cannot ask the security key ${device}: ${stderr}`);
+    throw new Error(
+      `cannot ask the security key ${device}: ${
+        describeFidoFailure("fido2-assert", stderr)
+      }`,
+    );
   };
   return {
     /**
@@ -313,19 +358,33 @@ function securityKeys(tool: ToolRunner, signal: AbortSignal) {
   };
 }
 
+/** The error for the server's refusal, saying `message`: the refusal GitHub
+ * answered with, when the server passes that on, and otherwise the
+ * server's own. */
+function refusal(message: string): Error {
+  const github = /^GitHub replied with status (\d{3}): ([\s\S]*)$/.exec(
+    message,
+  );
+  return github
+    ? new GitHubRefusal(Number(github[1]), github[2])
+    : new Error(`touch-gate refused: ${message}`);
+}
+
 /**
  * Sends the request of type `type` with `fields` to the server, and once the
- * server sends its challenge, writes with `write` a request to touch the
- * security key to do `action`. Resolves with the server's message, and the
- * number of the pull request it created or 0, when it carried out the
- * request, and rejects with the message when it did not.
+ * server sends its challenge, shows with `step` a request to touch the
+ * security key to do `action`, which is done as soon as the key is touched,
+ * and then a step that sends the approval, which is done once the server
+ * answers it. Resolves with the server's message, and the number of the pull
+ * request it created or 0, when it carried out the request, and rejects with
+ * the message when it did not.
  */
 async function send(
   io: TouchGateIo,
   type: number,
   fields: readonly Field[],
-  action: string,
-  write: (text: string) => void,
+  action: TaskText,
+  step: BeginStep,
   signal: AbortSignal,
 ): Promise<{ readonly message: string; readonly number: number }> {
   const config = readConfig(io.directory);
@@ -353,9 +412,16 @@ async function send(
         await sha256(config.certificate),
         request,
       );
-      write(`\nTouch the “${name}” security key to ${action}.\n`);
-      connection.write(await keys.sign(device, hash, credential));
+      const touched = step(
+        say`Touch the “${name}” security key to ${action}.`,
+        "person",
+      );
+      const approval = await keys.sign(device, hash, credential);
+      touched();
+      const sent = step(say`Sending the approval to touch-gate`);
+      connection.write(approval);
       status = await readU32();
+      sent();
     }
     const bytes: number[] = [];
     for (;;) {
@@ -372,7 +438,7 @@ async function send(
     } catch {
       throw new Error("the touch-gate server sent a message that is not UTF-8");
     }
-    if (status !== 0) throw new Error(`touch-gate refused: ${message}`);
+    if (status !== 0) throw refusal(message);
     // A server that names no pull request it created may end the connection
     // instead of sending a number.
     const number = type === CREATE_PULL_REQUEST && !await connection.ended()
@@ -397,31 +463,30 @@ export function touchGate(token: string, io: TouchGateIo): PullRequestService {
     }
   };
   return {
-    create: async (request: CreateRequest, write, signal) => {
+    create: async (request: CreateRequest, step, signal) => {
       check();
       const { repository, head, base, title, body } = request;
       const { message, number } = await send(
         io,
         CREATE_PULL_REQUEST,
         [token, repository, head, base, title, body],
-        "create a PR",
-        write,
+        say`create a PR`,
+        step,
         signal,
       );
       return number > 0 ? pullRequestUrl(repository, number) : message;
     },
-    merge: async (request: MergeRequest, write, signal) => {
+    merge: async (request: MergeRequest, step, signal) => {
       check();
       const { repository, number, method, sha } = request;
-      const { message } = await send(
+      await send(
         io,
         MERGE_PULL_REQUEST,
         [token, repository, number, method, sha],
-        "merge the PR",
-        write,
+        say`merge the PR`,
+        step,
         signal,
       );
-      return message;
     },
   };
 }

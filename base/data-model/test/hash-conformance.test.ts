@@ -13,11 +13,12 @@ import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 
 import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";
-import { JSON_FORMAT } from "@/codec-json/interface.ts";
-import { codecClassesFor } from "@/codecs.ts";
 import { valueEqual } from "@/comparison";
-import { FabricLink } from "@/fabric-instances";
-import { FabricKeyPair } from "@/fabric-primitives";
+import { fabricInstanceClassesByName, FabricLink } from "@/fabric-instances";
+import {
+  FabricKeyPair,
+  fabricPrimitiveClassesByName,
+} from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   fabricValueOfTextWithModsForTestingOnly,
@@ -223,11 +224,14 @@ describe("hash-conformance", () => {
 
   it("has a case whose value is an instance of each concrete class but those with stub codecs or none", () => {
     const values = HASH_CONFORMANCE_CASES_FOR_TESTING_ONLY.map((c) => c.make());
-    const uncovered: readonly string[] = STUB_CODEC_CLASSES;
-    for (const cls of codecClassesFor(JSON_FORMAT)) {
-      const { name } = cls;
+    const classes = {
+      ...fabricPrimitiveClassesByName(),
+      ...fabricInstanceClassesByName(),
+    };
+    const stubs: readonly string[] = STUB_CODEC_CLASSES;
+    for (const [name, cls] of Object.entries(classes)) {
       expect({ name, covered: values.some((v) => v instanceof cls) })
-        .toEqual({ name, covered: !uncovered.includes(name) });
+        .toEqual({ name, covered: !stubs.includes(name) });
     }
   });
 
@@ -397,6 +401,38 @@ describe("hash-conformance", () => {
         hash: { stream: "2200" },
         divergence: { note: "note", hash: { stream: "2201" } },
       });
+    });
+
+    it("throws given spec bytes that are not hexadecimal, two digits to a byte", () => {
+      for (const spec of ["2g", "22 0"]) {
+        expect(() =>
+          hashConformanceFixtureTextForTestingOnly([
+            { name: "true", section: "s", make: () => true, spec },
+          ])
+        ).toThrow(
+          `Not lowercase hexadecimal bytes: ${spec.replaceAll(" ", "")}`,
+        );
+      }
+    });
+
+    it("throws what decoding the value's text and mods throws, other than a refusal", () => {
+      // A link holding itself directly in its payload is a value no patch can
+      // make, a link holding its payload frozen. Building one takes a getter
+      // in the payload, which reads the link once it exists.
+
+      let link: FabricValue = null;
+      link = new FabricLink(Object.freeze({
+        get a() {
+          return link;
+        },
+      }));
+      expect(() =>
+        hashConformanceFixtureTextForTestingOnly([
+          { name: "link", section: "s", make: () => link },
+        ])
+      ).toThrow(
+        'The patch at ["payload","a"] does not hold once all are made.',
+      );
     });
 
     it("throws given `equals` naming no earlier case", () => {

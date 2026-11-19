@@ -23,9 +23,12 @@ import {
   type BinaryName,
   build,
   BUILD_HOST_VARIABLES,
+  buildCli,
   BuildConfig,
   type BuildDependencies,
+  buildShell,
   type BuildSignalApi,
+  buildToolshed,
   computeShippedCompileCacheVersion,
   defaultBuildDependencies,
   embedArgs,
@@ -36,6 +39,7 @@ import {
   revertWorkspace,
   runBuildBinaries,
   runBuildWithSignalCleanup,
+  type RunCommand,
   unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -698,10 +702,111 @@ Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async ()
       "--allow-net",
       "--allow-write",
       "--allow-run",
-      "--v8-flags=--max-old-space-size=16384",
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ]);
   } finally {
     await Deno.remove(root, { recursive: true });
+  }
+});
+
+async function toolshedV8Flags(): Promise<string[]> {
+  const root = await makeFakeRepo();
+  try {
+    const configs: BuildConfig[] = [];
+    await runBuildBinaries(["toolshed"], {
+      root,
+      runBuild: (config) => {
+        configs.push(config);
+        return Promise.resolve();
+      },
+    });
+    const prefix = "--v8-flags=";
+    const v8Flags = configs[0].toolshedFlags.filter((flag) =>
+      flag.startsWith(prefix)
+    );
+    assertEquals(v8Flags.length, 1);
+    return v8Flags[0].slice(prefix.length).split(",");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+// Runs a script that starts a worker, so that the process holds two
+// isolates, with the given V8 flags, from an empty working directory. It
+// points V8's perf map at a directory of its own, so the run leaves nothing
+// in `/tmp`.
+async function runInEmptyDirectory(v8Flags: readonly string[]): Promise<{
+  stdout: string;
+  workingDirectory: string[];
+  perfMaps: string[];
+}> {
+  const scripts = await Deno.makeTempDir({ prefix: "v8-flags-scripts-" });
+  const cwd = await Deno.makeTempDir({ prefix: "v8-flags-cwd-" });
+  const perf = await Deno.makeTempDir({ prefix: "v8-flags-perf-" });
+  try {
+    await Deno.writeTextFile(
+      join(scripts, "main.js"),
+      `const worker = new Worker(new URL("./worker.js", import.meta.url), {
+        type: "module",
+      });
+      worker.onmessage = (event) => {
+        worker.terminate();
+        console.log(event.data);
+      };
+      `,
+    );
+    await Deno.writeTextFile(
+      join(scripts, "worker.js"),
+      `self.postMessage("worker answered");\n`,
+    );
+    const output = await new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "--no-config",
+        "--no-lock",
+        `--allow-read=${scripts}`,
+        `--v8-flags=${[...v8Flags, `--perf-basic-prof-path=${perf}`].join()}`,
+        join(scripts, "main.js"),
+      ],
+      cwd,
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    assert(output.success, new TextDecoder().decode(output.stderr));
+    const namesIn = async (directory: string) =>
+      (await Array.fromAsync(Deno.readDir(directory))).map((e) => e.name)
+        .sort();
+    return {
+      stdout: new TextDecoder().decode(output.stdout),
+      workingDirectory: await namesIn(cwd),
+      perfMaps: await namesIn(perf),
+    };
+  } finally {
+    for (const directory of [scripts, cwd, perf]) {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }
+}
+
+Deno.test("toolshed V8 flags write nothing into the working directory", async () => {
+  const run = await runInEmptyDirectory(await toolshedV8Flags());
+
+  assertEquals(run.stdout, "worker answered\n");
+  assertEquals(run.workingDirectory, []);
+  assertEquals(run.perfMaps.length, 1);
+  assert(/^perf-\d+\.map$/.test(run.perfMaps[0]), run.perfMaps[0]);
+});
+
+Deno.test("toolshed V8 flags without the log file flags write V8 logs into the working directory", async () => {
+  const flags = (await toolshedV8Flags()).filter((flag) =>
+    flag !== "--no-logfile-per-isolate" && !flag.startsWith("--logfile=")
+  );
+  const run = await runInEmptyDirectory(flags);
+
+  assertEquals(run.stdout, "worker answered\n");
+  assertNotEquals(run.workingDirectory, []);
+  for (const name of run.workingDirectory) {
+    assert(/^isolate-0x[0-9a-f]+-\d+-v8\.log$/.test(name), name);
   }
 });
 
@@ -1092,6 +1197,117 @@ Deno.test("each build step throws naming its output when its command fails", asy
     for (const binary of ["toolshed", "cf"]) {
       assert(!(await exists(config.distPath(binary))), binary);
     }
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+/**
+ * A {@link RunCommand} that succeeds without running anything, and keeps
+ * what it was asked to run. `then` stands in for what the command would
+ * have done.
+ */
+function standInRunner(then: (args: readonly string[]) => Promise<void>) {
+  const asked: Deno.CommandOptions[] = [];
+  const run: RunCommand = async (command, options) => {
+    assertEquals(command, Deno.execPath());
+    asked.push(options);
+    await then(options.args ?? []);
+    return { success: true };
+  };
+  return { asked, run };
+}
+
+/** Runs `step` with what it logs kept rather than printed, and returns it. */
+async function logged(step: () => Promise<void>): Promise<string[]> {
+  const lines: string[] = [];
+  const log = console.log;
+  console.log = (line: string) => lines.push(line);
+  try {
+    await step();
+  } finally {
+    console.log = log;
+  }
+  return lines;
+}
+
+Deno.test("unusedGrammarDirectories returns every directory of a grammar's package but its parser's, and throws for a grammar in no package", async () => {
+  const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
+  try {
+    await writeFile(`${root}/pkg/package.json`, "{}");
+    await writeFile(`${root}/pkg/wasm/tree-sitter-x.wasm`, "");
+    await writeFile(`${root}/pkg/src/parser.c`, "");
+    await writeFile(`${root}/pkg/README.md`, "");
+    await Deno.mkdir(`${root}/pkg/bindings`);
+    const grammar = (id: string, at: string) => ({
+      id,
+      wasmUrl: () => toFileUrl(at).href,
+    });
+    assertEquals(
+      unusedGrammarDirectories([
+        grammar("x", `${root}/pkg/wasm/tree-sitter-x.wasm`),
+      ]),
+      [`${root}/pkg/bindings`, `${root}/pkg/src`],
+    );
+    assertThrows(
+      () => unusedGrammarDirectories([grammar("y", `${root}/loose/y.wasm`)]),
+      Error,
+      `No package holds the y grammar ${root}/loose/y.wasm`,
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("buildShell moves each build of the shell into the frontend toolshed serves", async () => {
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: [] });
+    // A frontend from an earlier build, which this one replaces whole.
+    await writeFile(`${config.toolshedShellFrontendPath()}/stale.js`, "");
+    const { asked, run } = standInRunner((args) =>
+      writeFile(`${config.shellOutPath()}/${args.at(-1)}.js`, "")
+    );
+    const lines = await logged(() => buildShell(config, "v7", run));
+    const files = (at: string) =>
+      Array.from(Deno.readDirSync(at)).map((entry) => entry.name);
+    assertEquals(files(config.toolshedShellFrontendPathDev()), ["build.js"]);
+    assertEquals(files(config.toolshedShellFrontendPath()), ["production.js"]);
+    assert(!(await exists(config.shellOutPath())));
+    assertEquals(asked.map((options) => options.args), [
+      ["task", "build"],
+      ["task", "production"],
+    ]);
+    for (const options of asked) {
+      assertEquals(options.cwd, config.shellProjectPath());
+      assertEquals(options.env, { CF_COMPILE_CACHE_RUNTIME_VERSION: "v7" });
+    }
+    assertEquals(lines.at(-1), "Shell app built successfully");
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+Deno.test("buildToolshed and buildCli compile their entry points to the dist directory", async () => {
+  const root = await makeFakeRepo();
+  try {
+    const config = new BuildConfig({ root, toolshedFlags: ["--flag"] });
+    const { asked, run } = standInRunner(() => Promise.resolve());
+    const toolshed = await logged(() => buildToolshed(config, run));
+    const cli = await logged(() => buildCli(config, run));
+    const [forToolshed, forCli] = asked;
+    const outputOf = (options: Deno.CommandOptions | undefined) =>
+      options?.args?.[(options.args.indexOf("--output")) + 1];
+    assertEquals(outputOf(forToolshed), config.distPath("toolshed"));
+    assertEquals(forToolshed?.args?.at(-1), config.toolshedEntryPath());
+    assert(forToolshed?.args?.includes("--flag"));
+    assertEquals(forToolshed?.cwd, config.toolshedProjectPath());
+    assertEquals(forToolshed?.env, { OTEL_DENO: "true" });
+    assertEquals(outputOf(forCli), config.distPath("cf"));
+    assertEquals(forCli?.args?.at(-1), config.cliEntryPath());
+    assertEquals(forCli?.cwd, root);
+    assertEquals(toolshed.at(-1), "Toolshed binary built successfully");
+    assertEquals(cli.at(-1), "CLI binary built successfully");
   } finally {
     await Deno.remove(root, { recursive: true });
   }

@@ -578,6 +578,39 @@ describe("Server", () => {
           .toBe(false);
       });
 
+      it("omits the share of another principal's session that declares it is not demand", async () => {
+        // A client that only copies documents, such as a command-line tool's
+        // mirror, has no one waiting on what the server derives for it.
+
+        const mirror = await mount(alice, { inProcess: false, demand: false });
+        await mirror.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).not.toContain(
+          mirror.sessionId,
+        );
+        expect(server.hasLiveSessionsForSpace(space, { excludePrincipal: bob }))
+          .toBe(false);
+      });
+
+      it("keeps the share of another principal's session that declares the serving binding", async () => {
+        // The serving runtime of another server is this server's client:
+        // only a declaration that a session is not demand holds everywhere.
+
+        const routed = await mount(alice, {
+          inProcess: false,
+          actingAs: "space-owner",
+        });
+        await routed.watchSet([follow("of:root")]);
+
+        const shares = server.demandForSpace(space, { excludePrincipal: bob });
+
+        expect(shares.map((share) => share.sessionId)).toContain(
+          routed.sessionId,
+        );
+      });
+
       it("returns an anonymous session's rows with no principal in their identity", async () => {
         const watcher = await mount();
         await watcher.watchSet([follow("of:leaf-a")]);

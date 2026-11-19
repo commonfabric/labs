@@ -9,7 +9,8 @@
  * grants every principal `WRITE`. Each item the sender appends becomes a
  * document of its own, created in the sender's transaction, and is bound to
  * the inbox's owner rather than to the sender. A stranger's served copy of the
- * offers into a piece of its own is refused.
+ * offers into a piece of its own lands labeled for the owner, and reaches the
+ * stranger all the same, which is a known gap (Topics top/3173).
  *
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
@@ -51,14 +52,6 @@ const cfcCount = (
 const writeRefusals = (
   counts: Record<string, Record<string, { total: number }> | number>,
 ): number => cfcCount(counts, "write-policy-gate");
-
-/**
- * The writer-fit misfits of a served run's cross-holder clauses (§8.12.5.1),
- * out of one runtime's logger counts.
- */
-const crossHolderMisfits = (
-  counts: Record<string, Record<string, { total: number }> | number>,
-): number => cfcCount(counts, "writer-fit-cross-holder");
 
 describe("owner-private inbox across runtimes", () => {
   let harness: MultiRuntimeHarness;
@@ -135,28 +128,72 @@ describe("owner-private inbox across runtimes", () => {
     ]);
   });
 
-  it("refuses a stranger's served copy of the offers", {
-    ignore: !SERVER_EXECUTION,
-  }, async () => {
-    // Copying the inbox's public title shows the stranger's handler runs and
-    // commits; copying the offers is refused, so what the stranger's piece
-    // holds stays as it was.
+  it(
+    "lands a stranger's served copy of the offers labeled for the owner, and delivers it to the stranger",
+    {
+      ignore: !SERVER_EXECUTION,
+    },
+    async () => {
+      // A served run is measured as any run is, so the copy commits, and each
+      // copied offer carries the owner's `User` clause, as a commitment to the
+      // owner's DID since the clause crossed a space boundary (§4.6.4.1). The
+      // stranger cannot read the inbox, and reads the copy: the memory server
+      // delivers a document to every reader of its space, whatever its label
+      // admits. That delivery is a known gap (Topics top/3173), and the last
+      // expectation flips when delivery checks the label.
 
-    await offer("private");
+      await offer("private");
+      const notes = await ownerNotes();
+      await expect(stranger.read(["offers"], { piece: inbox })).rejects
+        .toThrow("lacks READ");
 
-    await stranger.send("copyTitle");
-    await harness.settle();
-    expect(await stranger.read(["copiedTitle"])).toBe("Offers");
+      const refusedBefore = await refusals();
+      await stranger.send("copyOffers");
+      const copiedNotes = async (from: MultiRuntimeSession) =>
+        ((await from.read(["copiedOffers"])) as { note: string }[])
+          .map((item) => item.note);
+      await harness.settleUntil(async () =>
+        (await copiedNotes(owner)).length === notes.length ||
+        await refusals() > refusedBefore
+      );
+      expect(await refusals()).toBe(refusedBefore);
+      expect(await copiedNotes(owner)).toEqual(notes);
 
-    const before = (await harness.servingDiagnostics()).loggerCounts;
-    await stranger.send("copyOffers");
-    await harness.settle();
-    // Refused for the copy's own write: the misfit is the holder rule's.
-    const after = (await harness.servingDiagnostics()).loggerCounts;
-    expect(writeRefusals(after)).toBeGreaterThan(writeRefusals(before));
-    expect(crossHolderMisfits(after)).toBeGreaterThan(
-      crossHolderMisfits(before),
-    );
-    expect(await stranger.read(["copiedOffers"])).toEqual([]);
-  });
+      const container = await stranger.link(["copiedOffers"]);
+      const raw = await stranger.rawRead({
+        id: container.id,
+        space: container.space,
+      });
+      const rows = (raw.value as {
+        value: { copiedOffers: { "/": { "link@1": { id: string } } }[] };
+      }).value.copiedOffers;
+      expect(rows).toHaveLength(notes.length);
+      for (const row of rows) {
+        const document = await stranger.rawRead({
+          id: row["/"]["link@1"].id,
+          space: container.space,
+        });
+        const { cfc } = document.value as {
+          cfc: {
+            labelMap: {
+              entries: { origin: string; path: string[]; label: unknown }[];
+            };
+          };
+        };
+        expect(
+          cfc.labelMap.entries.filter((entry) => entry.origin === "declared"),
+        ).toMatchObject([{
+          path: [],
+          label: {
+            confidentiality: [{
+              type: "https://commonfabric.org/cfc/atom/User",
+              subject: { digestOf: expect.any(String) },
+            }],
+          },
+        }]);
+      }
+
+      expect(await copiedNotes(stranger)).toEqual(notes);
+    },
+  );
 });

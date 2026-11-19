@@ -56,6 +56,15 @@ describe("text-changes", () => {
         RangeError,
       );
     });
+
+    it("throws `TypeError` for an `insert` that is not a string", () => {
+      // Pattern code is untyped, so its changes arrive as parsed values.
+
+      const changes = JSON.parse(`[{ "from": 1, "insert": 5 }]`);
+      expect(() => applyTextChanges("ab", changes)).toThrow(
+        new TypeError("a text change's `insert` must be a string"),
+      );
+    });
   });
 
   describe("codeMirrorTextChangesPayload()", () => {
