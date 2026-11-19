@@ -235,6 +235,32 @@ const asEvaluatorAtom = (atom: Atom, patterns: readonly string[]): Atom => {
   };
 };
 
+/**
+ * A clause with the alternatives of each `anyOf` in one order: two runs
+ * store the alternatives of one clause in different orders, which
+ * `compareLabels` would count as different clauses.
+ */
+const ordered = (atom: Atom): Atom => {
+  if (Array.isArray(atom)) return atom.map(ordered);
+  if (typeof atom !== "object" || atom === null) return atom;
+  const fields = Object.entries(atom as Record<string, unknown>).map((
+    [name, value],
+  ): [string, unknown] => [name, ordered(value)]);
+  const anyOf = fields.find(([name]) => name === "anyOf");
+  if (anyOf !== undefined && Array.isArray(anyOf[1])) {
+    anyOf[1] = [...anyOf[1]].sort((a, b) =>
+      atomKey(a) < atomKey(b) ? -1 : atomKey(a) > atomKey(b) ? 1 : 0
+    );
+  }
+  return Object.fromEntries(fields);
+};
+
+/** A label with each clause's alternatives in one order (`ordered`). */
+export const orderedLabel = (label: Label): Label => ({
+  confidentiality: label.confidentiality.map(ordered),
+  integrity: label.integrity,
+});
+
 /** A stored label with the runtime's atoms of a compiled pattern mapped. */
 export const asEvaluatorLabel = (
   label: Label,
@@ -599,7 +625,10 @@ export const checkWrites = (
           { inputs: write },
           kept,
         );
-        const comparison = compareLabels(evaluated.label, stored);
+        const comparison = compareLabels(
+          orderedLabel(evaluated.label),
+          orderedLabel(stored),
+        );
         return {
           ...base,
           oracle: evaluated.label,
@@ -766,8 +795,8 @@ export const compareWithToday = (
       miss(`no stored ${row.kind}`);
       continue;
     }
-    const mapped = asEvaluatorLabel(stored, patterns);
-    const comparison = compareLabels(mapped, row.runtimeLabel);
+    const mapped = orderedLabel(asEvaluatorLabel(stored, patterns));
+    const comparison = compareLabels(mapped, orderedLabel(row.runtimeLabel));
     rows.push({
       kind: row.kind,
       path: row.path,
