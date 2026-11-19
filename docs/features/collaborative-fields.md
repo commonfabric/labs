@@ -138,8 +138,8 @@ operations and refreshes the bound Cell's materialized value. The operation
 stream remains the editor's display authority until that read completes. A
 failed refresh leaves the editor read-only and emits `cf-error`.
 
-One collaborative epoch owns a field until it is explicitly released or its
-entity is deleted. An ordinary write may change other paths, but it cannot
+One collaborative epoch owns a field until it is explicitly released, its
+entity is deleted, or a restore rewrites its document. An ordinary write may change other paths, but it cannot
 change an active collaborative path. Deliberate release plus replacement may be
 one ordered commit. Reopening the field creates a new epoch.
 

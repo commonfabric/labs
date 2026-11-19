@@ -849,7 +849,10 @@ export class XRootView extends BaseView implements ShellApp {
     const space = this.space;
     if (
       rt === undefined || space === undefined ||
-      this._openHistory?.busy === true || !Number.isSafeInteger(seq)
+      this._openHistory?.busy === true || !Number.isSafeInteger(seq) ||
+      // Opening the step already open would replace its fork, and what was
+      // done in it, with a new one.
+      this.#fork?.seq === seq
     ) return;
     this._historyError = undefined;
     const opening: OpenHistory = { seq, busy: true };

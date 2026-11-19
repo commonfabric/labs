@@ -199,10 +199,14 @@ export class XHistoryView extends BaseView {
     // The list is the newest history again after anything that adds to it
     // elsewhere: another space or runtime, or a fork opened, closed or
     // restored.
-    if (
-      changed.has("rt") || changed.has("space") ||
-      (changed.has("open") && this.open?.busy !== true)
-    ) {
+    const moved = changed.has("rt") || changed.has("space");
+    // The steps of another space name points of a history this space does
+    // not have, so none is left to choose while its own are listed.
+    if (moved) {
+      this._steps = [];
+      this._next = undefined;
+    }
+    if (moved || (changed.has("open") && this.open?.busy !== true)) {
       void this.#list.run([undefined]);
     }
   }
@@ -249,7 +253,7 @@ export class XHistoryView extends BaseView {
           data-kind="${step.kind}"
           data-event-index="${step.kind === "event" ? eventIndex : nothing}"
           aria-current="${current ? "true" : "false"}"
-          ?disabled="${this.open?.busy === true}"
+          ?disabled="${this.open?.busy === true || current}"
           @click="${() =>
             this.command({ type: "open-history", seq: step.seq })}"
         >

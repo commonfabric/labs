@@ -1378,9 +1378,11 @@ export interface IStorageProvider {
 
   /**
    * Returns the commits of a branch's history, newest first: those of
-   * `options.branch` (absent, the branch this provider's session is of)
-   * below `options.before`, and at most `options.limit` of them. Rejects
-   * when the server serves no history.
+   * `options.branch` (absent, the branch this provider's session is of),
+   * then those it inherits from each ancestor up to its fork point, below
+   * `options.before`. At most `options.limit` are returned, and 500 at the
+   * most, which is also the limit when none is given. Rejects when the
+   * server serves no history.
    */
   listHistory?(
     options?: { branch?: BranchName; before?: number; limit?: number },
@@ -1404,8 +1406,10 @@ export interface IStorageProvider {
   /**
    * Restores the space's default branch to the state `options.source`
    * (absent, the default branch) held as of `options.sourceSeq` (absent,
-   * its head). Returns the restoring commit's seq, or `undefined` when the
-   * default branch already held that state.
+   * its head). The space's access list, session-scoped documents, the
+   * serving loop's records and SQLite databases are left as they are.
+   * Returns the restoring commit's seq, or `undefined` when the default
+   * branch already held that state.
    */
   restoreBranch?(
     options?: { source?: BranchName; sourceSeq?: number },
