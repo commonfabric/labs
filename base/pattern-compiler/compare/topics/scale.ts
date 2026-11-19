@@ -3,13 +3,17 @@
  * the executor of `../../exec/` and on today's runtime, and measures the
  * board's load, the creation of one topic, and an edit of one topic.
  *
- * `deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts <arm> [sizes]`
+ * `deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts <arm> [sizes | --seed <seed>]`
  *
  * `<arm>` is `executor` or `today`, and each run prints one line of JSON
  * per measured step. The two arms run in processes of their own, one after
  * the other, so that no two timed runs share a machine at once.
  *
- * The board holds `size` topics. Each is a document of its own that holds
+ * With `--seed`, the board is the one a seed of `board-seed.ts` holds: the
+ * topics of a real board, with their mentions and its namespace, in place of
+ * generated ones.
+ *
+ * A generated board holds `size` topics. Each is a document of its own that holds
  * what the board demands of a topic (`TopicDemand` in `main.tsx`): a title,
  * a body, the times, an author, a number, and references to the two
  * topics before it as its mentions. The board's argument holds a reference
@@ -70,8 +74,28 @@ const TOPICS_FILES = [
   "system/profile-face/profile-face.ts",
 ];
 
-/** What one topic of the seeded board holds, with `mentions` as indexes. */
-const topicOf = (index: number) => ({
+/** What one topic of the board holds, with `mentions` as indexes. */
+type TopicData = {
+  $NAME: string;
+  title: string;
+  body: string;
+  createdAt: number;
+  createdBy: { kind: string; name: string; avatar?: string };
+  commentCount: number;
+  lastActivityAt: number;
+  shortName?: string;
+  mentions: number[];
+};
+
+/** The board both arms start on: its topics and its namespace. */
+type Board = {
+  topics: TopicData[];
+  /** Each name with the index of the topic it names. */
+  names: Record<string, number>;
+};
+
+/** One topic of a generated board. */
+const topicOf = (index: number): TopicData => ({
   $NAME: `Topic ${index}`,
   title: `Topic ${index}`,
   body: `The body of topic ${index}, which says what it is about.`,
@@ -82,6 +106,20 @@ const topicOf = (index: number) => ({
   shortName: `${index + 1}`,
   mentions: [index - 1, index - 2].filter((target) => target >= 0),
 });
+
+/** A generated board of `size` topics, each named by its number. */
+const generated = (size: number): Board => ({
+  topics: Array.from({ length: size }, (_, index) => topicOf(index)),
+  names: Object.fromEntries(
+    Array.from({ length: size }, (_, index) => [`${index + 1}`, index]),
+  ),
+});
+
+/** The board a seed of `board-seed.ts` holds. */
+const seeded = async (path: string): Promise<Board> => {
+  const { topics, names } = JSON.parse(await Deno.readTextFile(path)) as Board;
+  return { topics, names };
+};
 
 const CREATED = (turn: number) => ({
   title: `Created ${turn}`,
@@ -197,8 +235,9 @@ const emitted = async (): Promise<{
 };
 
 const runExecutor = async (
-  size: number,
+  { topics, names }: Board,
 ): Promise<(Baseline | Step)[]> => {
+  const size = topics.length;
   const { board, artifacts } = await emitted();
   const baseline: Baseline = {
     arm: "executor",
@@ -209,18 +248,15 @@ const runExecutor = async (
   const link = (index: number) => ({
     $link: { doc: `topic-${index}`, path: [] },
   });
-  const documents = Array.from({ length: size }, (_, index) => {
-    const { mentions, ...rest } = topicOf(index);
-    return {
-      id: `topic-${index}`,
-      kind: "topic",
-      value: { ...rest, mentions: mentions.map(link) },
-    };
-  });
+  const documents = topics.map(({ mentions, ...rest }, index) => ({
+    id: `topic-${index}`,
+    kind: "topic",
+    value: { ...rest, mentions: mentions.map(link) },
+  }));
   const argument = {
-    topics: Array.from({ length: size }, (_, index) => link(index)),
+    topics: topics.map((_, index) => link(index)),
     names: Object.fromEntries(
-      Array.from({ length: size }, (_, index) => [`${index + 1}`, link(index)]),
+      Object.entries(names).map(([name, index]) => [name, link(index)]),
     ),
   };
   const binding = board.plan.bindings.findIndex(({ name }) =>
@@ -308,7 +344,10 @@ const count = (name: string): number => {
   return found;
 };
 
-const runToday = async (size: number): Promise<(Baseline | Step)[]> => {
+const runToday = async (
+  { topics, names }: Board,
+): Promise<(Baseline | Step)[]> => {
+  const size = topics.length;
   const signer = await Identity.fromPassphrase(`topics-scale ${size}`);
   const space = signer.did();
   const storageManager = StorageManager.emulate({ as: signer });
@@ -346,14 +385,18 @@ const runToday = async (size: number): Promise<(Baseline | Step)[]> => {
       heap: heapAfterCollection(),
     });
     const seed = runtime.edit();
+    // Every cell exists before any is set, since a topic may mention one
+    // after it.
     // deno-lint-ignore no-explicit-any
-    const cells: any[] = [];
-    for (let index = 0; index < size; index++) {
-      const { mentions, ...rest } = topicOf(index);
-      const cell = runtime.getCell(space, `topic ${index}`, undefined, seed);
-      cell.set({ ...rest, mentions: mentions.map((target) => cells[target]) });
-      cells.push(cell);
-    }
+    const cells: any[] = topics.map((_, index) =>
+      runtime.getCell(space, `topic ${index}`, undefined, seed)
+    );
+    topics.forEach(({ mentions, ...rest }, index) => {
+      cells[index].set({
+        ...rest,
+        mentions: mentions.map((target) => cells[target]),
+      });
+    });
     const { error: seeded } = await seed.commit().settled;
     if (seeded !== undefined) throw seeded;
     const result = runtime.getCell<Record<string, unknown>>(
@@ -425,7 +468,7 @@ const runToday = async (size: number): Promise<(Baseline | Step)[]> => {
         runtime.run(tx, compiled, {
           topics: cells,
           names: Object.fromEntries(
-            cells.map((cell, index) => [`${index + 1}`, cell]),
+            Object.entries(names).map(([name, index]) => [name, cells[index]]),
           ),
         }, result.withTx(tx));
       }));
@@ -451,15 +494,19 @@ const runToday = async (size: number): Promise<(Baseline | Step)[]> => {
 
 if (import.meta.main) {
   const [arm, ...given] = Deno.args;
-  const sizes = given.length > 0 ? given.map(Number) : [100, 1_000, 2_000];
-  for (const size of sizes) {
+  const boards = given[0] === "--seed" && given[1] !== undefined
+    ? [await seeded(given[1])]
+    : (given.length > 0 ? given.map(Number) : [100, 1_000, 2_000]).map(
+      generated,
+    );
+  for (const board of boards) {
     const steps = arm === "executor"
-      ? await runExecutor(size)
+      ? await runExecutor(board)
       : arm === "today"
-      ? await runToday(size)
+      ? await runToday(board)
       : undefined;
     if (steps === undefined) {
-      console.error("usage: scale.ts executor|today [sizes]");
+      console.error("usage: scale.ts executor|today [sizes | --seed <seed>]");
       Deno.exit(2);
     }
     for (const step of steps) console.log(JSON.stringify(step));

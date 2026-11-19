@@ -9939,3 +9939,65 @@ today's runtime; the site returns to that form if the declarations change.
      These remain figures of the executor in memory and of today's runtime in
      the client posture on emulated storage; the integrated arm and server
      execution are not run on Topics (note 548).
+564. **Topics on the real board's 3,281 topics**
+     (`compare/topics/board-seed.ts`, `compare/topics/scale.ts --seed`). The
+     board is the team's board
+     (`of:fid1:rMKK3pYbF5IWa7KQL5oe-nd7WyFceQhXjOl2lyWwPVo`), read from the copy
+     of its space on rapids, which was copied from Estuary on 2026-11-18 and
+     written to on rapids since; the snapshot was taken on 2026-11-19 at 22:31
+     UTC (1.75 GB, sha256 `1081d29e…`). `board-seed.ts` reads the board's result
+     under a schema of what the board demands of a topic, on a copy of the
+     snapshot, and writes each topic's demanded fields, its mentions as the
+     indexes of the topics they refer to, and the namespace. The board has 3,281
+     topics, 1,645 mentions (619 of them of a later topic, one topic with 174),
+     and 3,281 names; no mention or name refers to anything outside the board,
+     and no author has a picture. The bodies hold 9.2 MB, about 2.8 KB a topic,
+     against about 60 bytes for a generated one. The seed holds the board's
+     content and is kept beside the snapshot, not in the repository. Both arms
+     start on the seed as on a generated board: the topics are documents, and
+     nothing runs a topic. One process per arm, at load averages of 7.7 to 11.9;
+     the same postures as note 563, and the same heap measure, with baselines of
+     76.6 MB for the executor and 123.3 MB for today's runtime, which include
+     the seed read into memory.
+
+     | Step                               | Executor, ms |        Today, ms |
+     | ---------------------------------- | -----------: | ---------------: |
+     | load                               |        2,874 |           58,248 |
+     | edit of one topic, 3 times         |   419 to 486 | 13,660 to 15,543 |
+     | create, 3 times                    | 933 to 1,044 | 26,856 to 27,462 |
+     | read of the result after each step |   709 to 810 |   3,005 to 3,423 |
+
+     | Heap, MB            | Executor |   Today |
+     | ------------------- | -------: | ------: |
+     | after the load      |    182.7 | 1,100.4 |
+     | after the 3 creates |    210.9 | 1,208.8 |
+
+     The counts: the load is 3,299 evaluations writing 9,849 documents in 2
+     transactions on the executor, against 6,590 actions, 6,583 commits and
+     29,606 documents today; an edit 8 evaluations and 2 documents against 4
+     actions, 3 commits and 3 documents, and a create 16 evaluations and 11
+     documents against 27 actions and 18 commits, as on a generated board. The
+     facts both arms read after each step are equal, the titles included, and
+     the pivot carries all 1,645 inbound references.
+
+     - **One edit on the real board takes 28 to 37 times less than today:** 419
+       to 486 ms against 13,660 to 15,543 ms. A create takes 26 to 29 times
+       less, and the load 20 times less.
+     - **The real content changes little against a generated board of the same
+       size.** By the slopes of note 563, a generated board of 3,281 topics
+       would take about 490 ms per edit on the executor and 11 to 13 s today;
+       the real board takes 419 to 486 ms and 13.7 to 15.5 s. The cost of a
+       change follows the number of topics, through the whole-list `lift`s of
+       note 544, more than the size of what they hold.
+     - **The board keeps 6 times less heap on the executor:** 182.7 MB against
+       1,100.4 MB, about 56 KB and 335 KB a topic; on the executor that is less
+       per topic than on a generated board (64 KB), although each body is about
+       45 times larger, so the bodies are not what the heap per topic consists
+       of. A create keeps 5.8 to 6.2 MB on the executor, in line with the
+       2,000-topic board of note 563 and the copy of note 548.
+     - **On the executor the read of the result is again more than the change:**
+       709 to 810 ms against 419 to 486 ms for an edit.
+
+     Not covered: the topics' own instances, their comments and threads, which
+     the board does not read; the integrated arm; and server execution, which is
+     how the board runs on Estuary.

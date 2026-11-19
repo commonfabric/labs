@@ -925,6 +925,17 @@ deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topi
 deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topics/scale.ts today 1000
 ```
 
+The same steps run on a real board with `--seed`. `compare/topics/board-seed.ts`
+reads a board out of a snapshot of its space, a store file named `<did>.sqlite`,
+without writing to it, and writes a seed: what the board demands of each topic,
+its mentions as indexes of topics, and the namespace. A seed holds the board's
+content, so keep it beside the snapshot and out of the repository:
+
+```sh
+deno run -A --no-check base/pattern-compiler/compare/topics/board-seed.ts <did>.sqlite of:<board> seed.json
+deno run -A --no-check --v8-flags=--expose-gc,--max-old-space-size=8192 base/pattern-compiler/compare/topics/scale.ts executor --seed seed.json
+```
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize
