@@ -1,3 +1,13 @@
+/**
+ * A confidential ballot whose approve or reject votes, with private notes,
+ * arrive through the pattern's streams, and only the tally computed by one
+ * named function is released to the public room field the view shows.
+ * Publishing a different function's output, or a raw note, stays blocked.
+ *
+ * Demonstrates an exchange rule that releases the output of a function from
+ * the policy's own module, matched through `TransformedBy` integrity and
+ * `THIS_POLICY.moduleIdentity`.
+ */
 import {
   type Confidential,
   Default,

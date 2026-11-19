@@ -1,3 +1,10 @@
+/**
+ * The top-level gallery of trusted-UI examples for Contextual Flow
+ * Control (CFC), combining the send/publish, disclaimer and provenance,
+ * process, and confirmation/redacted-release galleries on one scrolling page.
+ * Every example is an untrusted host embedding a reusable trusted surface that
+ * alone can authorize the protected write.
+ */
 import { computed, NAME, pattern, UI, type VNode } from "commonfabric";
 import ConfirmationReleaseExamples from "./confirmation-release-examples.tsx";
 import DisclaimerExamples from "./disclaimer-examples.tsx";

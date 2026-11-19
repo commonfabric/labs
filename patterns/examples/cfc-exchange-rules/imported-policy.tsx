@@ -1,3 +1,10 @@
+/**
+ * A message protected by the exchange rules defined in another module, showing
+ * that a pattern can apply a policy it imports rather than declaring its own.
+ *
+ * Demonstrates reusing `directReleaseRules` from the direct-release example
+ * through `Confidential` and `PolicyOf`.
+ */
 import {
   type Confidential,
   Default,

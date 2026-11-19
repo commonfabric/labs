@@ -1,3 +1,12 @@
+/**
+ * A three-stage publishing flow, where a draft title and body are saved, then
+ * reviewed, then published, with a stage badge and a read-only card showing
+ * each snapshot.
+ *
+ * Demonstrates chaining trusted save, review, and publish surfaces so that
+ * each protected snapshot can only be written by the previous stage's reviewed
+ * control.
+ */
 import {
   computed,
   Default,

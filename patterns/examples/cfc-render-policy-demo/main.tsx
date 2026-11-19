@@ -1,3 +1,12 @@
+/**
+ * Two attempts to render the same confidential health record: a direct render
+ * that stays blocked by a render boundary, and a trusted disclosure surface
+ * with a reveal/conceal control that shows the value inside its own region
+ * along with its label.
+ *
+ * Demonstrates render-time confidentiality with `cf-cfc-render-boundary` and
+ * `cf-cfc-label`, and a trusted action that changes what may be displayed.
+ */
 import {
   Cell,
   computed,
