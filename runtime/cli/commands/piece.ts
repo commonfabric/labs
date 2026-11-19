@@ -5431,8 +5431,9 @@ export const recordIndexedPiece = async (
 /**
  * Where `cf piece new`'s program comes from: the `main` file, or the
  * published pattern `--from-index` names, never both and never neither. A
- * published pattern needs the index to read it from, and a missing one is
- * refused here rather than when the deploy reaches the network.
+ * published pattern is read from the index the flag or `CF_PATTERN_INDEX_URL`
+ * names, else the deployment's, and a malformed URL is refused here rather
+ * than when the deploy reaches the network.
  */
 function newPieceEntry(
   options: {
