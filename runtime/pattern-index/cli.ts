@@ -184,8 +184,8 @@ const answerRequest = async (
       case "join":
         return await join(context, body);
       case "view": {
-        // A person used something in a loom: a piece (sharing settles the
-        // version of theirs deployed to it) or a pattern they placed from
+        // A person used something in a loom: a piece (counts toward settling
+        // the version of theirs deployed to it) or a pattern they placed from
         // the index (it ranks). Exactly one.
         const { patternId, piece } = body;
         const subject = typeof patternId === "string" && patternId !== "" &&
