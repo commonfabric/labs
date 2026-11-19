@@ -6259,6 +6259,18 @@ is relitigated.
   get an added atom stays open: question 120 here, which is
   `plan-and-label-templates.md` question 71. The owner's design for a value
   passed on from an argument is question 302.
+- Every commit of a compiled pattern is prepared when the experimental
+  option is on, so every kept output carries the pattern's atom
+  (2026-11-19). The owner's reason: soon all data carries a label, at least
+  a `User` or `Space` atom. It settles question 303 here, which is
+  `plan-and-label-templates.md` question 177; that document's §3.2 ("Every
+  commit is prepared") states it. Measured over the corpus in milestone 4
+  of the integration: preparing every commit raised the preparations from
+  407 to 2,280 and the preparation time from 379 ms to 690 ms, about 0.3 ms
+  per added preparation. Not yet built: the build prepares only the
+  commits that read labeled data, and forcing the preparation of every
+  commit exposed 374 commits in 77 modules that the checks of plan labels
+  refuse ([Known limits](#known-limits-of-what-exists)).
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6278,19 +6290,21 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **Question 303, with the findings of milestone 4.** Labels from templates
-   at commit are built (milestone 4 of the integration). By the owner's
-   confirmation every kept output carries the pattern's atom, but a commit
-   that reads no labeled document is not prepared, so over the corpus subset
-   612 write records store no entry where the evaluator gives the atom.
-   Either every commit of a compiled pattern is prepared, at the cost of a
-   preparation for each such commit (0.72 ms per preparation with the
-   option on, against 0.43 ms with it off, over the 133 modules of the
-   milestone with no commit refused under the option alone), or
-   the atom is stored only where a preparation runs. Beside it, and being
-   worked on: label differences against the evaluator that are not yet
-   explained, a crate panic on the whole corpus, and 59 commits refused with
-   the option on
+1. **The open findings of milestone 4.** Labels from templates at commit
+   are built (milestone 4 of the integration) and run over the whole corpus.
+   Not yet built: every commit of a compiled pattern prepared, by the
+   ruling on question 303; forcing it exposed 374 commits in 77 modules
+   that the checks of plan labels refuse. Open, most serious first, and
+   each being worked on: two soundness checks
+   not yet made (a plain value passed through an `identity` slot in
+   general, and a change of a label between the preparation and the
+   store's validation); the identity of entry 0 of `Plan.patterns` against
+   a pattern compiled into another; 44 commits in 34 modules refused with
+   the option on and not off, each with its reason; the adapter does not
+   await each commit; emitting the corpus as one program takes 339 s
+   against 1 s for `patterns/system/` alone, a cost that grows faster than
+   the input, with its cause not yet found; and the `$UI` rows that store
+   the transaction's join
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
 2. **Question 302,** the owner's design for the integrity of a value a
@@ -6314,7 +6328,8 @@ pointer to its entry.
 5. **Question 304,** a defect of today's runtime found by reading and shown
    by a test: when an array of plain values in place is spliced, the
    per-element label entries stay at their positions, so a position can
-   hold the label of the value that was there before.
+   hold the label of the value that was there before. Pull request 9982
+   does not fix it (question 306).
 6. **P9** is flagged. With it a batch of events and the same events handled one
    at a time can store different values, and today's runtime, which runs the
    writer again, stores the same value in both. The coordinator adopted it only
@@ -11652,18 +11667,13 @@ and the rulings leave open.
      read. *Assumed meanwhile:* nothing is attached, and question 120
      stands.
 303. **Whether every commit of a compiled pattern is prepared** (PL
-     question 177). Every kept output carries the pattern's atom, by the
-     owner's confirmation. A commit that reads no labeled document is not
-     prepared, today and in milestone 4, and over the corpus subset of that
-     milestone 612 write records in 106 modules store no entry at their
-     path where the evaluator gives the pattern's atom. Either every commit
-     of a compiled pattern is prepared, so that every kept output carries
-     the atom, at the cost of a preparation per commit (0.72 ms per
-     preparation with the option on, against 0.43 ms with it off, over the
-     133 modules of the milestone with no commit refused under the option
-     alone), or the atom is stored only where a preparation
-     runs. *Assumed:* not decided; the build stores the atom only where a
-     preparation runs.
+     question 177). Settled by ruling (2026-11-19; [Decided](#decided)):
+     every commit of a compiled pattern is prepared when the option is on,
+     so every kept output carries the pattern's atom. Over the corpus in
+     milestone 4 of the integration that raised the preparations from 407
+     to 2,280 and the preparation time from 379 ms to 690 ms. Not yet
+     built; forcing it exposed 374 commits in 77 modules that the checks of
+     plan labels refuse.
 304. **Per-element label entries of an array are not moved when the array
      is spliced** (a defect of today's runtime, found by reading and shown
      by a test). Where an array of plain values in place is written whole,
@@ -11689,7 +11699,8 @@ and the rulings leave open.
      compiled path P31 removes the `*` entry on a `splice`, which is wider
      and not affected. *Assumed:* a finding against the runtime, not filed;
      whether it is fixed, by writing every shifted position or by moving
-     the entries with the values, is the owner's decision.
+     the entries with the values, is the owner's decision. Pull request
+     9982 does not fix it (question 306).
 305. **What a slot under `*` binds when the collection is empty** (PL
      question 178). A binding of the `uniform` form of P31 whose address
      holds `*` covers no position of an empty array, and the `*` entry may
@@ -11698,6 +11709,26 @@ and the rulings leave open.
      `fold` over no element. The alternative binds the last `*` entry
      stored, which describes elements that no longer exist. The case is an
      array of plain values in place, the case of the `uniform` form.
+306. **Pull request 9982 and the splice defect of question 304** (for the
+     owner, with question 304). Pull request 9982 was checked against the
+     defect: with the ignore mark removed,
+     `runtime/runner/test/cfc-array-splice-element-labels.test.ts` fails the
+     same way on that pull request's base and on its head, because the
+     label entries are decided before the commit's operations are encoded
+     (`normalizeAndDiff` in `runtime/runner/src/data-updating.ts` and the
+     persist step of `prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts`, as question 304 has them). It does
+     not fix the defect. The case is an array of plain values in place that
+     is spliced; an array of references and the result of another
+     per-element construct were not tested. The complete fix moves the
+     label entries along an edit script from the old positions to the new
+     ones, and the edit script that pull request adds could supply the
+     pairs of positions. The smaller fix, which treats the whole array as
+     written when a transaction writes its `length`, gives each element the
+     writer's join and does not cover a reorder of equal values that keeps
+     the length. Either fix changes what CFC decides, so it goes through the
+     specification procedure of `docs/development/cfc-spec-correspondence.md`
+     first. *Assumed:* neither fix is built, and question 304 stands.
 
 
 ## Open, and not needing the owner
@@ -11945,31 +11976,31 @@ The open questions each document ends with stay where they are.
 
 - **Milestone 4 of the integration is built and its findings are open.**
   Labels from templates at commit are built on branch
-  `claude/compiled-pattern-m4` and measured on a subset of the corpus
+  `claude/compiled-pattern-m4` and measured over the whole corpus
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  "Milestone 4: labels from templates at commit"). Most serious first,
-  and each being worked on: stored labels that differ from the evaluator's
-  and are not yet explained; commits that are not prepared, so that a
-  kept output stores no atom (question 303); the crate's panic on the
-  whole corpus, which keeps `patterns/system/` out of the subset; and 59
-  commits in 44 modules refused with the option on and not off. Steps 11
-  and 12 of the milestone's plan, instantiation keys and verified units in
-  the prepared digest and a derived write dropped alone, are not built.
+  "Milestone 4: labels from templates at commit"). Open, most serious
+  first, and each being worked on:
+  - not yet built: every commit of a compiled pattern prepared, by the
+    ruling on question 303; the build prepares only the commits that read
+    labeled data, and forcing it exposed 374 commits in 77 modules that
+    the checks of plan labels refuse;
+  - two soundness checks not yet made: that a plain value passed through
+    an `identity` slot is labeled correctly in general, and what happens
+    when a label changes between the preparation and the store's
+    validation;
+  - the identity of entry 0 of `Plan.patterns` against a pattern compiled
+    into another;
+  - 44 commits in 34 modules refused with the option on and not off, each
+    with a stated reason;
+  - the adapter does not await each commit;
+  - the crate emits the corpus as one program in 339 s, against 1 s for
+    `patterns/system/` alone: a cost that grows faster than the input,
+    whose cause is not yet found;
+  - the `$UI` rows that store the transaction's join.
 
-- **The crate does not emit the corpus of the main branch of
-  2026-11-18** (`6e9ff5a381`), found when the integration branch merged it.
-  With `patterns/apps/weekly-calendar/view-walk.ts`, a helper of pattern
-  tests that came in with pull request #9825, or one of the four tests that
-  import it, in the corpus, footprint analysis does not finish: a sample
-  of the process after three minutes has every frame in
-  `footprint::normal_map` under `footprint::analyze_body`. Each file alone
-  analyzes in under 0.2 seconds, and a small recursive helper of the same
-  shape does not reproduce it. Without those five files the crate panics
-  with an index out of bounds in `oxc_index`, on main's changes under
-  `patterns/system/` taken together; no single directory of them
-  reproduces it. The prototype's own corpus at `3d33db2e4d` emits in 2.5
-  seconds, and the figures of milestone 1 of the integration were taken on
-  it.
+  Steps 11 and 12 of the milestone's plan, instantiation keys and verified
+  units in the prepared digest and a derived write dropped alone, are not
+  built.
 - **Neither cross-read covered every section.** Each reader states what
   was not read in full at the end of its section of the record. In the
   second, no reader read `footprint-analysis.md` against the execution or
@@ -12714,9 +12745,11 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestones 1 and 4, the open findings of milestone 4 (the label
-   differences against the evaluator, the unprepared commits of question
-   303, the crate's panic on the whole corpus, the refused commits) and its
+   after milestones 1 and 4, the open findings of milestone 4 (preparing
+   every commit and the 374 commits it exposed, the two soundness checks,
+   the identity of entry 0 against a pattern compiled into another, the
+   refused commits, the adapter's commits, the time to emit the corpus,
+   the `$UI` rows) and its
    steps 11 and 12; then Topics at scale on the runtime's storage, a
    compiled piece in the runner behind the experimental option, value code
    in the sandbox, and server execution with the network.

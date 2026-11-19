@@ -5776,6 +5776,9 @@ expected. Sixteen more rules fix what a row of the comparison is.
   the pattern's atom and not the atoms of the stored object, so neither
   integrity holds the other. It is counted as that exception by its first
   classification, and not as a row that cannot be compared.
+  By ruling every commit of a compiled pattern is prepared (section 3.2,
+  "Every commit is prepared"), so a row whose template's label without the
+  atom is empty still has the atom on the stored side.
 - **A value at a child position that is the result of a pattern.** The plan
   has the entries of the callee's `[UI]` at the position (section 1.1). The
   runtime holds the callee's result there, with its tree under `$UI`. A row
@@ -6457,6 +6460,15 @@ pattern that contains it. The atom's `identity` is an entry of
   output whose template has no label carries it too. Where the template is
   a `derive` or a `fold` of the same pattern, the atom added is the atom
   the node minted, and the output carries it once.
+- **Every commit is prepared.** By ruling (2026-11-19; section 8,
+  question 177), every commit of a compiled pattern is prepared when the
+  experimental option is on, a commit that reads no labeled data included,
+  so every kept output it writes carries the atom. The owner's reason: soon
+  all data carries a label, at least a `User` or `Space` atom. Measured over
+  the corpus in milestone 4 of the integration, preparing every commit
+  raised the preparations from 407 to 2,280 and the preparation time from
+  379 ms to 690 ms, about 0.3 ms per added preparation. Not yet built: the
+  build prepares only the commits that read labeled data.
 
 **Where the atom of a kept output is stored.** A kept output that holds a
 value has the atom in the label of the value. A kept output that passes a
@@ -15639,20 +15651,17 @@ this document made.
      *Assumed meanwhile:* nothing is attached, and question 71's assumption
      stands. It is question 302 of the continuation plan.
 177. **Whether every commit of a compiled pattern is prepared** (for the
-     project owner). By the confirmation of 2026-11-19 every kept output
-     carries the pattern's atom (section 3.2). Today a commit that reads no
-     labeled document is not prepared, and milestone 4 of the integration
-     follows that: over its corpus subset 612 write records have no stored
-     entry at their path, where the evaluator gives the atom of the pattern
-     alone. Either every commit of a compiled pattern is prepared, so that
-     every kept output carries the atom, at the cost of a preparation per
-     commit (0.72 ms per preparation with the option on, against 0.43 ms
-     with it off, over the 133 modules of that milestone with no commit
-     refused under the option alone), or the atom is stored only where a
-     preparation runs, and an unlabeled kept output carries none. *Assumed:*
-     not decided; the documents state the ruling, and the build stores the
-     atom only where a preparation runs. It is question 303 of the
-     continuation plan.
+     project owner). Settled by the ruling of 2026-11-19: every commit of a
+     compiled pattern is prepared when the option is on, so every kept
+     output carries the pattern's atom (section 3.2, "Every commit is
+     prepared"). The owner's reason: soon all data carries a label, at least
+     a `User` or `Space` atom. Over the corpus in milestone 4 of the
+     integration it raised the preparations from 407 to 2,280 and the
+     preparation time from 379 ms to 690 ms, about 0.3 ms per added
+     preparation. Not yet built: the build prepares only the commits that
+     read labeled data, and forcing the preparation of every commit exposed
+     374 commits in 77 modules that the checks of plan labels refuse. It is
+     question 303 of the continuation plan.
 178. **What a slot under `*` binds when the collection is empty** (for the
      prototype and the project owner; section 4.2, the `uniform` form). A
      binding whose address holds `*` covers no position of an empty array,

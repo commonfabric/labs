@@ -328,10 +328,13 @@ pattern carries a `TransformedBy` atom that names the pattern, a value the
 pattern only passes on included. Where the value is passed on by reference,
 the atom is on the link, as the pattern's endorsement of the selection, and
 the target keeps its own label. A value the pattern body passes on then has
-an atom where the runtime stores none today, which is tighter. What identifies
-the pattern, which pattern it is for code compiled into another, and whether
-anything besides a kept output gets the atom are *assumed* (§3.2 there,
-questions 64 and 71).
+an atom where the runtime stores none today, which is tighter. By ruling,
+every commit of a compiled pattern is prepared when the experimental option
+is on, so the atom is stored even where a commit reads no labeled data; the
+build does not yet do this. By ruling, code of a pattern compiled into
+another mints the atom of the pattern whose source holds it. What identifies
+the pattern, and whether anything besides a kept output gets the atom, are
+*assumed* (§3.2 there, question 71).
 
 Instantiating a template means substituting actual labels for slots and
 combining them. The runtime does this only for what it stores or checks:
@@ -645,16 +648,21 @@ subtrees are split off by a rule about size. Provisional (P20 of the
 continuation plan): a subtree is a part only from a minimum size on, and
 an array that is too large for one document is stored in chunk documents,
 each a contiguous run of its entries, so that one change of one row
-writes one chunk at any length of the list. Provisional (P27 to P29): a
-record with many members is stored in chunks the same way, the part of a
-row is named by a number that the runtime mints and by no key, and an
-array that declares key fields has an index from a key to its chunk. A
-reader names the result cell
-and a path, whichever document stores the path, and a split changes no value
-and no label. One evaluation writes every document it changed in one
-transaction. [Execution and storage](execution-and-storage.md) §4.10 owns the
-rule, and [plan format and label templates](plan-and-label-templates.md)
-§2.3 says what a split has to preserve.
+writes one chunk at any length of the list. Provisional (P27 and P28): a
+record with many members is stored in chunks the same way, and the part of
+a row is named by a number that the runtime mints and by no key. An index
+from a key to its chunk is open, with no provisional decision (question 299
+of the continuation plan): a runtime that does not hold an array's keys
+reads its chunks in order to resolve a reference by key. Chunked storage of
+long arrays is a requirement on the storage layer and is decided there;
+this design keeps the split points, P22 and the bound on what the change of
+one row writes (the coordinator's recommendation, not an owner ruling). A
+reader names the result cell and a path, whichever document stores the path,
+and a split changes no value and no label. One evaluation writes every
+document it changed in one transaction.
+[Execution and storage](execution-and-storage.md) §4.10 owns the rule, and
+[plan format and label templates](plan-and-label-templates.md) §2.3 says
+what a split has to preserve.
 
 A pattern compiled into another, such as the body of a `map` or an inline
 sub-pattern, is not instantiated in this sense. It has no result cell and no

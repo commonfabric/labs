@@ -856,14 +856,21 @@ Three kinds of read have no entry.
   provisional, P20 of the continuation plan): an entry for a path of a
   row is registered at the chunk that stores the row, and a split or a
   merge of chunks registers it at the chunk that stores the row
-  afterwards. Provisional (P27 and P29 of the continuation plan): the
-  same for the chunk list and the chunks of a record that is stored in
-  chunks, where an entry for a path below a member is registered at the
-  chunk that stores the member, and for the key index of an array,
-  which is read by the resolution of a reference by key and has no
-  entry of its own: a reader through a key is registered at the
-  collection's membership and at the path it resolved to, as section
-  3.2 has it, and is marked by the keys that a write touched.
+  afterwards. Provisional (P27 of the continuation plan): the same for
+  the chunk list and the chunks of a record that is stored in chunks,
+  where an entry for a path below a member is registered at the chunk
+  that stores the member. An index from a key to its chunk is open, with
+  no provisional decision (`execution-and-storage.md` §4.10, "Finding
+  the chunk of a key", and its question 110; question 299 of the
+  continuation plan), and no index is stored. A reader through a key is
+  registered at the collection's membership and at the path it resolved
+  to, as section 3.2 has it, and is marked by the keys that a write
+  touched; the chunks a runtime reads to find the key are read by
+  resolution and have no entry of their own. Chunked storage of long
+  arrays is a requirement on the storage layer and is decided there;
+  this design keeps the split points, P22 and the bound on what the
+  change of one row writes (the coordinator's recommendation on the
+  scope of the storage decisions, not an owner ruling).
 
 ### 3.2 Entries from the plan and the bindings
 

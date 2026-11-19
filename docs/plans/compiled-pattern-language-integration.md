@@ -429,8 +429,8 @@ where a client commits only the append of an event and the serving loop
 commits one derived transaction per wave with the stream's watermark in it.
 All runs were made at the prototype's commit `3d33db2e4d` with the code of
 milestone 1 added, which is the corpus and the runtime of the table of run
-times in the design's plan, because the crate does not emit the corpus of
-the main branch of 2026-11-18 (`6e9ff5a381`). With
+times in the design's plan, because the crate at that commit does not emit
+the corpus of the main branch of 2026-11-18 (`6e9ff5a381`). With
 `patterns/apps/weekly-calendar/view-walk.ts`, a helper of pattern tests
 that came in with pull request #9825, or one of the four tests that import
 it, footprint analysis does not finish: after three minutes a sample of the
@@ -438,11 +438,13 @@ process has every frame in `footprint::normal_map`. Each file alone
 analyzes in under 0.2 seconds. Without those five files the crate panics
 with an index out of bounds in `oxc_index`, on main's changes under
 `patterns/system/` taken together; no single directory of them reproduces
-it. The prototype's own corpus emits in 2.5 seconds. Each command ran in a
-process of its own on one machine, with no other work of this session
-running. The integrated runs and today's run were made twice, each pair
-back to back, and both pairs are given; today's time to settle differs by
-two thirds between the two.
+it. The prototype's own corpus emits in 2.5 seconds. The crate of milestone
+4 emits the whole corpus ("Milestone 4: labels from templates at commit"),
+and the runs of milestone 1 have not been made again with it. Each command
+ran in a process of its own on one machine, with no other work of this
+session running. The integrated runs and today's run were made twice,
+each pair back to back, and both pairs are given; today's time to settle
+differs by two thirds between the two.
 
 **The corpus.** 215 modules run on today's runtime in the comparison, the
 executor runs 214. Until the fifth pair below, 213 ran in all three ways:
@@ -619,6 +621,32 @@ identifier and a `fold` is instantiated once per group of element inputs
 (provisional decision P31 of the design's plan). The deciding sites carry
 the `SPEC-PENDING` marker for specs pull request 91.
 
+Two rules of the design's rulings are built as well. Code of a pattern B
+compiled into a pattern A mints B's atom: `mint` in
+`runtime/runner/src/cfc/plan-labels.ts` names entry `pattern` of
+`Plan.patterns` for a derivation whose `pattern` is not 0, and refuses the
+label where the plan does not list that entry. A slot bound to an address
+the transaction did not read takes the label stored there, observed in the
+committing transaction: `observeLabel` of `PlanLabelEnvironment` in
+`runtime/runner/src/cfc/prepare.ts` reads the document's label metadata,
+journaled so that the commit validates the version it used, and reads no
+value, so the transaction's value read set and its join do not change. The
+groups of a `fold` are bound this way, in both forms of P31: the `uniform`
+form, for an array of plain values in place, and the `groups` form, for an
+array of references and for the result of another per-element construct.
+The template label is asserted to be within the transaction's flow join
+together with the stored labels resolved from those observations.
+
+By the owner's ruling on question 303 of the design's plan, every commit
+of a compiled pattern is prepared when the option is on, so every kept
+output carries the pattern's atom; the owner's reason is that soon all
+data carries a label, at least a `User` or `Space` atom. It is not yet
+built: the build prepares only the commits that read labeled data.
+Forcing the preparation of every commit raised the preparations over the
+corpus from 407 to 2,280 and the preparation time from 379 ms to 690 ms,
+about 0.3 ms per added preparation, and exposed 374 commits in 77 modules
+that the checks of plan labels refuse (open finding 1).
+
 **The acceptance result.** On `examples/cfc-input-cell-demo/briefing.tsx`,
 with the option on, `climate`, which reads `city` alone, stores only the
 clause of `city`; with the option off it stores "demo-secret", the join
@@ -650,51 +678,108 @@ every size. The rule and its limits are in
 `plan-and-label-templates.md` §2.3 ("One entry for the elements of an array
 written whole").
 
-**The corpus.** `compare/corpus.ts` over a subset of the corpus: the crate
-panics on the whole corpus, so `patterns/system/` is left out. Of 226
-modules attempted 177 run; 25 need `wish`, 14 request an effect, and 10 do
-not run for other reasons (4 runs refused at commit, 2 with no value code,
-4 imports of `patterns/system/`). Beside today's rows:
+**The corpus.** `compare/corpus.ts` over the whole corpus,
+`patterns/system/` included. Of 271 modules attempted 210 run. 33 need
+`wish` and 14 request an effect. 11 runs fail at a commit that CFC
+enforcement refuses as not prepared: 6 for a missing trusted-event policy,
+3 for `writeAuthorizedBy` and 2 for `maxConfidentiality`. 3 do not run for
+other reasons: one comparison fails on a JSON string it cannot parse, one
+module has no value code, and one calls the built-in `linksOf` in a
+function body. Beside today's rows:
 
 | | Equal | Tighter | Looser | Other |
 | --- | ---: | ---: | ---: | --- |
-| 1,139 output rows | 679 | 179 | 148 | 133 whose atom names the pattern |
-| 111 write rows | 65 | 3 | 42 | 1 incomparable |
+| 1,386 output rows | 831 | 202 | 226 | 126 whose atom names the pattern, 1 incomparable |
+| 166 write rows | 109 | 9 | 46 | 2 incomparable |
 
-53 of today's rows have no stored write and 103 no stored output to
-compare. Of 1,733 write records checked against the template evaluator
-of the prototype, 1,074 agree. 612 records in 106 modules have no entry
-stored at the path, where the evaluator gives the pattern's atom: a commit
-that reads no labeled document is not prepared, with the option on as
-without it. Of the other 47, 36 differ in a label, 27 in integrity alone
-and 9 in confidentiality, and 11 were not evaluated, for dynamic reads
-that the record does not report. With the option on and
-not off, 59 commits in 44 modules are refused: 40 for a slot with no
-binding, 14 for a slot bound to an empty chain, 3 for a write record that
-names a path the transaction did not write, 1 for a slot bound to a path
-the transaction did not read in its class, and 1 for a collection with no
-elements reported; 14 runs stopped after such a refusal. The preparation
-took 0.43 ms per preparation with the option off (184 preparations, 79.9
-ms) and 0.72 ms with it on (168 preparations, 120.4 ms), over the 133
-modules in which no commit is refused with the option on alone. Over all
-177 modules the option off made 1,350 commits and 468 preparations, and
-the option on 1,059 commits and 335 preparations.
+108 of today's rows have no stored output and 49 no stored write to
+compare. Of the 226 output rows looser than today's, 164 are looser in
+confidentiality, and 55 of those are `$UI` rows that store the
+transaction's join (open finding 7). The rows looser than today's are not
+yet all attributed, so the corpus does not yet show that the labels from
+templates are equal to or tighter than today's outside the deliberate
+exceptions.
+
+Of 2,792 write records checked against the template evaluator of the
+prototype, 1,430 agree. 1,302 records in 131 modules have no entry stored
+at the path where the evaluator gives the pattern's atom alone: they are
+written by commits that read no labeled data, which the build does not
+prepare. By the ruling on question 303 those commits are prepared, which
+is not yet built. 58 records were not
+evaluated, for dynamic reads that the record does not report. 2 records,
+both in `showcase/wordsearch/main.tsx`, are equal in confidentiality and
+tighter in integrity than the evaluator's label, which is a bound there.
+No other record differs from the evaluator.
+
+With the option on and not off, 44 commits in 34 modules are refused: 23
+in 18 modules for a slot bound to an empty chain, 19 in 16 modules for a
+slot with no binding, 1 for a collection with no elements reported, and 1
+for a write record that names a path the transaction did not write. 10
+runs stopped after such a refusal. Over all 210 modules the option off
+made 2,381 commits and 528 preparations, in 307 ms of preparation, and the
+option on 2,111 commits and 407 preparations, in 379 ms; with the option
+on, the runtime took the transaction's join as a bound 140 times, for a
+`dynamic` node whose address the executor does not report. The 10 runs
+that stop after a refused commit do less work with the option on, so the
+two sides do not cover the same work. Emitting the corpus as one program takes
+339 s, against 1 s for `patterns/system/` alone.
+
+**Defects the corpus found, fixed.**
+
+- *The compiler crashed on the whole corpus.* `returned_origin` and
+  `passed_on` of `base/pattern-compiler/src/plan.rs` resolved the returned
+  expressions of a body defined in another module with the semantic tables
+  of the module being emitted, which panicked with an index out of bounds
+  in `oxc_index`. Both now resolve them in the module the body is written
+  in.
+- *Three defects stored a label narrower than the truth.* First, a
+  `select` branch used the `identity` slot of its operand where
+  `plan-and-label-templates.md` §3.5 requires the `value` for a scalar
+  (`select_in` of `src/plan.rs`), so `(name ?? "").toUpperCase()` stored no
+  clause of `name`; a branch now has the class `branch_class` gives by the
+  operand's type, and a read of a selected container in the `select`'s own
+  cone joins each branch with the `value` of its place. Second, a read
+  through the output of a selected reference in another cone, and a kept
+  output at a path below such a value, had only the references in their
+  template; they now have a `dynamic` read of kind `link` through the
+  output (`through_output` and `holds_reference` of `src/plan.rs`). Third,
+  the adapter recorded a position as read before its write at the first
+  read and did not count a read after the transaction's own write (`read`
+  of `compare/runtime-transactions.ts`), so a slot there was bound to the
+  label stored before the transaction; such a slot is now bound to the
+  label the write staged.
+- *A defect of the comparison's oracle masked them.* The evaluator
+  resolved every slot binding as a recursive read, so a `shape` slot took
+  the entries below its position. It now resolves a `shape` and an
+  `identity` slot as a read that is not recursive, as the runtime resolves
+  the read the adapter journaled.
+- *A slot below the elements of a collection that no element was read
+  for had no binding,* the commonest refusal: an `identity` slot at
+  `items/*` of a handler or a `computed` that spreads or pushes to an empty
+  list. The write record now binds it to `*` below the collection
+  (`#elementsBound` of `exec/executor.ts`), and the runtime takes the join
+  of the element entries `*` covers, none for an empty collection.
 
 **Open findings,** most serious first. Each is being worked on.
 
-1. *Label differences against the evaluator that are not yet explained.*
-   The 36 records whose stored label differs from the evaluator's, 9 of
-   them looser in confidentiality, have no stated cause. Until they and
-   the rows looser than today's (148 output rows, 42 write rows) are
-   attributed, the subset does not show that the labels from templates are
-   equal to or tighter than today's outside the deliberate exceptions.
-2. *Commits that are not prepared, and the atom of a kept output.* By the
-   owner's confirmation every kept output carries the pattern's atom; a
-   commit that is not prepared stores none. Whether every commit of a
-   compiled pattern is prepared is question 303 of the design's plan.
-3. *The crate's panic on the whole corpus.* The figures above leave out
-   `patterns/system/`, so FabriChat and Home are not in them (the design's
-   plan, "Known limits of what exists").
-4. *Refusals that remain.* The 59 commits refused with the option on and
-   not off, each a slot or a record the adapter does not yet bind or
-   report.
+1. *Every commit prepared, not yet built.* By the ruling on question 303
+   of the design's plan, every commit of a compiled pattern is prepared
+   when the option is on. Forcing it exposed 374 commits in 77 modules
+   that the checks of plan labels refuse.
+2. *Two soundness checks not yet made.* A plain value passed through an
+   `identity` slot in general, beyond the `select` branch fixed above; and
+   a change of a label between the preparation and the store's validation
+   of the commit.
+3. *The identity of entry 0 of `Plan.patterns` against a pattern compiled
+   into another.* Not yet checked.
+4. *Refusals that remain.* The 44 commits in 34 modules refused with the
+   option on and not off, with the reasons above.
+5. *The adapter does not await each commit.*
+6. *The time to emit the corpus.* 339 s for the corpus as one program,
+   against 1 s for `patterns/system/` alone: a cost that grows faster than
+   the input, whose cause is not yet found.
+7. *`$UI` rows that store the transaction's join.*
+
+Steps 11 and 12 of the milestone's plan, instantiation keys and verified
+units in the prepared digest and a derived write dropped alone, are not
+built.
