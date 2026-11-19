@@ -53,9 +53,10 @@ Explicitly deferred:
 - full UCAN transport framing for all wire messages
 - server-issued or principal-bound session ids; resume remains keyed by the
   caller-provided `sessionId`
-- public branch lifecycle commands on the v2 wire protocol
 - merge proposal generation, merge conflict workflows, and advanced branch
   live-sync optimizations
+- branches a serving loop runs: a session of a branch other than the default
+  computes what the branch stores itself (`06-branching.md` section 6.16)
 - the structured-codec readiness proof required before a WordGard integration
 - broad protocol-spec reconciliation outside these implementation notes
 
@@ -86,9 +87,9 @@ memory route.
   Session-id hardening is deferred.
 - Keep blob payload storage content-addressed. The seq rewrite applies to JSON
   entity storage, not blob data.
-- Keep branch-aware reads, writes, and watch scopes where already supported.
-  Defer public branch lifecycle commands, merge proposals, and advanced branch
-  sync.
+- Keep branch-aware reads, writes, and watch scopes, and the public branch
+  lifecycle, history and restore commands (`04-protocol.md` section 4.3.8).
+  Defer merge proposals and advanced branch sync.
 
 ## Phase 0: Spec Maintenance
 
@@ -188,10 +189,16 @@ Implemented in this pass:
 - branch-aware current reads
 - branch-aware point-in-time reads
 - branch-aware watch scopes
+- branch create, delete and list commands on the v2 wire protocol
+  (`04-protocol.md` section 4.3.8)
+- sessions opened on a branch (`06-branching.md` section 6.16)
+- history listing, and restoring the default branch to a point of its own or
+  another branch's history (`06-branching.md` sections 6.15 and 6.17)
+- collaborative fields on branches (`06-branching.md` section 6.18)
 
 Deferred:
 
-- public branch create/delete/list commands on the v2 wire protocol
+- sequencing branch creation and deletion as commit-logged writes
 - merge proposal generation
 - merge conflict workflow
 - advanced branch-specific live sync optimizations

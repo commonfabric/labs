@@ -67,7 +67,8 @@ export interface CommitSpec {
   session: string;
   createdAt?: string;
 
-  /** Confirmed reads the commit records, each at the seq it observed. */
+  /** Confirmed reads the commit records, each at the seq it observed, of the
+   * whole document as admission stores one (an empty path). */
   reads?: { id: string; seq: number }[];
 
   revisions: RevisionSpec[];
@@ -101,7 +102,13 @@ export function seedSpace(
         spec.session,
         seq,
         JSON.stringify({
-          reads: { confirmed: spec.reads ?? [], pending: [] },
+          reads: {
+            confirmed: (spec.reads ?? []).map((read) => ({
+              ...read,
+              path: [],
+            })),
+            pending: [],
+          },
           operations: spec.revisions.map((rev) => ({
             op: rev.op ?? "set",
             id: rev.id,

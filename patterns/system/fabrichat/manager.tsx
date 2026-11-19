@@ -849,6 +849,22 @@ const deliverOffers = handler<
   },
 );
 
+/** What `askForPeople` is bound to. */
+interface AskForPeopleState {
+  /** Whether the session has asked for the people its rooms hold. */
+  asked: Writable<boolean>;
+}
+
+/**
+ * Records that the session has asked for the people its rooms hold, as a
+ * picker of them is opened, so that `askedPeople` reads the listed rooms'
+ * rosters from then on. It writes nothing else, so it takes no reviewed
+ * gesture.
+ */
+const askForPeople = handler<unknown, AskForPeopleState>((_event, state) => {
+  if (state.asked.get() !== true) state.asked.set(true);
+});
+
 /** What joining a room asks: the room, and the profile to join it as. */
 export interface JoinRoomsEvent {
   /** The room to join. */
@@ -1981,9 +1997,20 @@ export interface FabriChatManagerOutput {
   /**
    * The people this user's rooms list, other than this user: by the principal
    * each one's profile attests, the profiles attesting it, each once, in the
-   * order the rooms, newest first, list them.
+   * order the rooms, newest first, list them. Reading it reads every listed
+   * room's roster; a view reads `askedPeople` instead.
    */
   people: PerUser<Record<string, ManagerProfileCell[]>>;
+
+  /**
+   * `people`, for a session that has asked for them (`askForPeople`), and no
+   * one before: until a picker of the people is opened, nothing reading it
+   * reads a room's roster.
+   */
+  askedPeople: PerSession<Record<string, ManagerProfileCell[]>>;
+
+  /** Asks for `askedPeople`, for the session, as a picker of them opens. */
+  askForPeople: Stream<unknown>;
 
   /** Finds or creates the direct room with a person. */
   openDirect: Stream<ManagerStreamEvent>;
@@ -2400,10 +2427,39 @@ export const FabriChatManagerCore = pattern<
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`
     // is: a profile attests no one to a reader its space refuses. Its
-    // binding's name is its cause, as `roomsForUser`'s is.
+    // binding's name is its cause, as `roomsForUser`'s is. Reading it reads
+    // every listed room's roster, so what the manager's views show is
+    // `peopleForSession`; `offerRoom` reads it as its state, for a member
+    // named by principal alone, and so does a host reading `people`. A
+    // room's roster is a derivation of the room's, which a handler reading
+    // the room finds as it was last stored rather than deriving it, so the
+    // act takes the people derived here rather than reading the rosters
+    // itself.
     const peopleForUser = computed(
       (): PerUser<Record<string, ManagerProfileCell[]>> =>
         peopleIn(rostersForUser, profileOwnerOf(myProfile)),
+    );
+    // Whether this session has asked for the people its rooms hold, by
+    // opening a picker of them: the group control's, or a room's add-member
+    // panel's (`askForPeople`). Each binding's name is its cause.
+    const peopleAskedForSession = new Writable.perSession<boolean>(false);
+    // The listed rooms a view's people are drawn from: none until this
+    // session asks for the people, so that a view showing the manager, or a
+    // room showing its picker, reads no room's roster, and holds no room's
+    // space open, until a picker is opened. The people are drawn from them as
+    // `peopleForUser` draws its own, the rooms list being the one
+    // difference: a derivation of `peopleForUser` itself would read it, and
+    // every roster with it, whether or not the session had asked, since a
+    // derivation reads what it is derived from before it runs.
+    const roomsAskedForSession = computed((): PerSession<ChatIndexEntry[]> =>
+      peopleAskedForSession.get() === true ? [...roomsForUser] : []
+    );
+    const rostersForSession = roomsAskedForSession.map((entry) =>
+      RoomRoster.asScope("user")({ room: entry.room })
+    );
+    const peopleForSession = computed(
+      (): PerSession<Record<string, ManagerProfileCell[]>> =>
+        peopleIn(rostersForSession, profileOwnerOf(myProfile)),
     );
     const joining = joinRooms({});
     const delivering = deliverOffers({});
@@ -2451,7 +2507,7 @@ export const FabriChatManagerCore = pattern<
     // as the draft is.
     const shownPeople = computed((): PerSession<ShownPerson[]> => {
       const picked = draft.get()?.picked ?? [];
-      const listed = Object.entries(peopleForUser).flatMap(
+      const listed = Object.entries(peopleForSession).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
           return profile === undefined ? [] : [{ principal, profile }];
@@ -2471,6 +2527,12 @@ export const FabriChatManagerCore = pattern<
     });
     const peopleDisplay = computed((): ChatDisplay =>
       shownPeople.length === 0 ? "none" : "block"
+    );
+    const asking = askForPeople({ asked: peopleAskedForSession });
+    // The control asking for the people shows until the session has asked,
+    // hidden by a prop rather than a branch, as `refusalDisplay` is.
+    const askDisplayForSession = computed((): PerSession<ChatDisplay> =>
+      peopleAskedForSession.get() === true ? "none" : "block"
     );
     // A notice whose room's roster lists a profile attesting its recipient
     // has nothing left to tell them: they are in the room. A notice of a
@@ -2546,6 +2608,8 @@ export const FabriChatManagerCore = pattern<
       requests,
       outgoingNotices: noticesForUser,
       people: peopleForUser,
+      askedPeople: peopleForSession,
+      askForPeople: asking,
       ...streams,
     };
 
@@ -2607,6 +2671,15 @@ export const FabriChatManagerCore = pattern<
                 $value={draft.key("members")}
                 placeholder="Members' chat addresses, one per line"
               />
+              <div
+                id="fabrichat-group-ask-people"
+                hidden
+                style={{ display: askDisplayForSession }}
+              >
+                <cf-button size="sm" variant="ghost" onClick={asking}>
+                  Add people from your chats
+                </cf-button>
+              </div>
               <div
                 id="fabrichat-group-people"
                 hidden
@@ -2723,6 +2796,8 @@ const FabriChatManager = pattern<
     requests: core.requests,
     outgoingNotices: core.outgoingNotices,
     people: core.people,
+    askedPeople: core.askedPeople,
+    askForPeople: core.askForPeople,
     openDirect: core.openDirect,
     createGroup: core.createGroup,
     offerRoom: core.offerRoom,

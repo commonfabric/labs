@@ -60,6 +60,19 @@ export function normalizeSpaceHostMap(
 }
 
 /**
+ * The branches a runtime opens spaces on, or `undefined` where it opens
+ * every space as it stands. An empty map and an absent one are the same
+ * posture, and both read as `undefined` here.
+ */
+export function normalizeBranches(
+  branches: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  return branches === undefined || Object.keys(branches).length === 0
+    ? undefined
+    : branches;
+}
+
+/**
  * The default storage host, spelled one way, or `undefined` where it is the
  * backend. An absent memory URL, an empty one, and one naming `apiUrl`'s own
  * origin all leave Memory at the backend, and all three read as `undefined`
@@ -95,6 +108,7 @@ const SECURITY_CONTEXT_FIELDS: Record<
   true
 > = {
   apiUrl: true,
+  branches: true,
   cfcEnforcementMode: true,
   cfcFlowLabels: true,
   cfcReadMaxConfidentiality: true,

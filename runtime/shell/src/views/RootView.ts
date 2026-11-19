@@ -1,11 +1,17 @@
 import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
-import { resolveSpaceDid, RuntimeInternals } from "@commonfabric/lib-shell";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import {
+  resolveSpaceDid,
+  RuntimeInternals,
+  type SpaceFork,
+} from "@commonfabric/lib-shell";
 import {
   AppView,
   isAppViewEqual,
   isViewingDefaultPatternView,
   navigate,
+  preserveAppViewMode,
 } from "@commonfabric/navigation";
 import {
   type ErrorNotification,
@@ -61,6 +67,7 @@ import {
   SHELL_COMMAND,
 } from "./BaseView.ts";
 import type { LoadError } from "./BodyView.ts";
+import type { OpenHistory } from "./HistoryView.ts";
 
 function getCommonfabricGlobal(): typeof globalThis & {
   commonfabric?: CommonfabricDebugState;
@@ -240,9 +247,37 @@ export class XRootView extends BaseView implements ShellApp {
   @property()
   accessor keyStore: KeyStore | undefined = undefined;
 
-  @provide({ context: runtimeContext })
+  /** The client of the runtime this element created. */
   @state()
   private accessor runtime: RuntimeClient | undefined = undefined;
+
+  /**
+   * The runtime `cf-` components act through: that of the open fork while
+   * the shell shows one, and otherwise the one this element created.
+   */
+  @provide({ context: runtimeContext })
+  @state()
+  private accessor _providedRuntime: RuntimeClient | undefined = undefined;
+
+  /** The fork of the viewed space the shell is showing, when it shows one. */
+  #fork: SpaceFork | undefined = undefined;
+
+  /** The view the shell was on when the open fork was opened. */
+  #viewBeforeFork: AppView | undefined = undefined;
+
+  /**
+   * The fork a restore is under way from, which that restore ends, and the
+   * promise that resolves once it has.
+   */
+  #restoring: { fork: SpaceFork; ended: Promise<void> } | undefined = undefined;
+
+  /** What the history panel is told of the fork. */
+  @state()
+  private accessor _openHistory: OpenHistory | undefined = undefined;
+
+  /** Why the last fork, return or restore failed, when one did. */
+  @state()
+  private accessor _historyError: string | undefined = undefined;
 
   @provide({ context: spaceContext })
   @state()
@@ -267,13 +302,16 @@ export class XRootView extends BaseView implements ShellApp {
       task: async ([app]: [AppState | undefined], { signal }) => {
         const generation = ++this.#runtimeGeneration;
         this._runtimeLoadErrors = [];
+        // A fork is deleted through the runtime that took it, so that
+        // runtime is disposed of once the deletion has been answered.
+        const dropped = this.#dropFork();
         const previous = this.#rt.value;
         if (previous) {
           this.runtime?.off(
             "eventneedsattention",
             this._handleEventNeedsAttention,
           );
-          previous.dispose().catch(console.error);
+          dropped.then(() => previous.dispose()).catch(console.error);
         }
         this.#unavailableSpaceRetry?.dispose();
         this.#unavailableSpaceRetry = undefined;
@@ -498,6 +536,8 @@ export class XRootView extends BaseView implements ShellApp {
       }
       this.#syncViewSpace(this.app);
     }
+    // Every change of the fork changes `_openHistory`, and so passes here.
+    this._providedRuntime = this.#fork?.runtime.runtime() ?? this.runtime;
   }
 
   protected override updated(changedProperties: PropertyValues<this>): void {
@@ -597,6 +637,8 @@ export class XRootView extends BaseView implements ShellApp {
     if (token !== this.#resolveSpaceToken || space === this.space) return;
     const previousSpace = this.space;
     this.space = space;
+    // A fork is of the space the view was on.
+    void this.#dropFork();
     this._eventAttention = [];
     if (previousSpace !== undefined) {
       this.#eventAttentionMutationVersions.delete(previousSpace);
@@ -670,7 +712,8 @@ export class XRootView extends BaseView implements ShellApp {
       ];
     } catch (error) {
       if (
-        generation === this.#runtimeGeneration && runtime === this.runtime &&
+        generation === this.#runtimeGeneration &&
+        runtime === this.runtime &&
         space === this.space &&
         this.#eventAttentionRefreshOwners.get(space) === owner
       ) {
@@ -735,6 +778,12 @@ export class XRootView extends BaseView implements ShellApp {
         return this.setIdentity(command.identity);
       case "set-config":
         return this.setConfig(command.key, command.value);
+      case "open-history":
+        return this.openHistory(command.seq);
+      case "close-history":
+        return this.closeHistory();
+      case "restore-history":
+        return this.restoreHistory();
     }
     throw new Error(
       debugStr`Received a non-command: $quote,long${command}`,
@@ -778,9 +827,156 @@ export class XRootView extends BaseView implements ShellApp {
     if (!isAppStateConfigKey(key)) {
       throw new Error(`Invalid config key: ${key}`);
     }
+    // The panel is the only way back from a fork, so it takes the fork with
+    // it. Leaving the fork's view can move the view, so it comes before the
+    // state this change starts from is read.
+    if (key === "showHistoryView" && !value) {
+      this.#leaveForkView();
+      void this.#dropFork();
+    }
     const next = clone(this.app);
     next.config[key] = value;
     return this.#commit(next, `set-config ${key}=${value}`);
+  }
+
+  /**
+   * Shows the viewed space as it stood at the point `seq` of its history: in
+   * a fork of it, which replaces any fork already open. The space itself is
+   * left as it is.
+   */
+  async openHistory(seq: number): Promise<void> {
+    const rt = this.#rt.value;
+    const space = this.space;
+    if (
+      rt === undefined || space === undefined ||
+      this._openHistory?.busy === true || !Number.isSafeInteger(seq) ||
+      // Opening the step already open would replace its fork, and what was
+      // done in it, with a new one.
+      this.#fork?.seq === seq
+    ) return;
+    this._historyError = undefined;
+    const view = this.app.view;
+    const opening: OpenHistory = { seq, busy: true };
+    this._openHistory = opening;
+    const previous = this.#fork;
+    let fork: SpaceFork;
+    try {
+      fork = await rt.forkSpace(space, seq);
+    } catch (error) {
+      console.error("[RootView] Failed to open history:", error);
+      if (this._openHistory !== opening) return;
+      this._historyError = describeFailure(error);
+      this._openHistory = previous === undefined
+        ? undefined
+        : { seq: previous.seq, busy: false };
+      return;
+    }
+    // Anything that let go of the fork being opened, such as the panel
+    // closing or the view moving on, replaced `_openHistory` meanwhile.
+    if (this._openHistory !== opening) {
+      void this.#discard(fork);
+      return;
+    }
+    this.#fork = fork;
+    this._openHistory = { seq, busy: false };
+    if (previous === undefined) this.#viewBeforeFork = view;
+    else void this.#discard(previous);
+  }
+
+  /** Returns from the open fork to the space as it stands. */
+  async closeHistory(): Promise<void> {
+    const fork = this.#fork;
+    if (fork === undefined || this._openHistory?.busy === true) return;
+    this._historyError = undefined;
+    this.#fork = undefined;
+    this._openHistory = undefined;
+    this.#leaveForkView();
+    await this.#discard(fork);
+  }
+
+  /**
+   * Restores the viewed space to the point of its history the open fork was
+   * taken at, and returns to the space as it then stands. What was done in
+   * the fork is not carried over.
+   */
+  async restoreHistory(): Promise<void> {
+    const fork = this.#fork;
+    if (fork === undefined || this._openHistory?.busy === true) return;
+    this._historyError = undefined;
+    const restoring: OpenHistory = { seq: fork.seq, busy: true };
+    this._openHistory = restoring;
+    const ended = Promise.withResolvers<void>();
+    this.#restoring = { fork, ended: ended.promise };
+    try {
+      await fork.restore();
+    } catch (error) {
+      console.error("[RootView] Failed to restore from history:", error);
+      // A fork let go of while it was restoring was left for the restore to
+      // end, which it did not.
+      if (this._openHistory !== restoring) {
+        await this.#discard(fork);
+        return;
+      }
+      this._historyError = describeFailure(error);
+      this._openHistory = { seq: fork.seq, busy: false };
+      return;
+    } finally {
+      this.#restoring = undefined;
+      ended.resolve();
+    }
+    if (this._openHistory !== restoring) return;
+    this.#fork = undefined;
+    this._openHistory = undefined;
+    // What was done in the fork is gone with it, a piece reached there
+    // included, and the view from before the fork may be of a piece the
+    // restored step does not hold. A view that did not move is of what the
+    // fork showed at that step, and stays; any other gives way to the space.
+    const before = this.#viewBeforeFork;
+    this.#viewBeforeFork = undefined;
+    if (before !== undefined && !isAppViewEqual(before, this.app.view)) {
+      navigate(preserveAppViewMode(this.app.view, { spaceDid: fork.space }));
+    }
+  }
+
+  /**
+   * Lets go of the open fork, where there is one, and deletes it. Resolves
+   * once the deletion has been answered, and rejects never.
+   */
+  #dropFork(): Promise<void> {
+    const fork = this.#fork;
+    this._historyError = undefined;
+    this._openHistory = undefined;
+    this.#viewBeforeFork = undefined;
+    if (fork === undefined) return Promise.resolve();
+    this.#fork = undefined;
+    // A restore under way ends the fork itself, and ending it here would
+    // take the branch from under the restore. The fork is gone once that
+    // restore has ended it.
+    return fork === this.#restoring?.fork
+      ? this.#restoring.ended
+      : this.#discard(fork);
+  }
+
+  /**
+   * Returns the view to where it was when the fork was opened, where the
+   * view moved while the fork was shown: a piece reached inside a fork may
+   * exist nowhere else.
+   */
+  #leaveForkView(): void {
+    const view = this.#viewBeforeFork;
+    this.#viewBeforeFork = undefined;
+    if (view !== undefined && !isAppViewEqual(view, this.app.view)) {
+      navigate(view);
+    }
+  }
+
+  /** Ends `fork`, reporting a failure to do so and throwing none. */
+  async #discard(fork: SpaceFork): Promise<void> {
+    try {
+      await fork.discard();
+    } catch (error) {
+      console.error("[RootView] Failed to discard a fork:", error);
+    }
   }
 
   /**
@@ -815,13 +1011,24 @@ export class XRootView extends BaseView implements ShellApp {
         <x-app-view
           .app="${this.app}"
           .keyStore="${this.keyStore}"
-          .rt="${this.#rt.value}"
+          .rt="${this.#fork?.runtime ?? this.#rt.value}"
           .space="${this.space}"
           .spaceLoadError="${loadError}"
           .runtimeLoadErrors="${this._runtimeLoadErrors}"
           .preserveRuntimeErrorsForNextViewChange="${this
             .preserveRuntimeErrorsForNextViewChange}"
         ></x-app-view>
+        ${this.app.identity !== undefined &&
+            this.app.config.showHistoryView === true
+          ? html`
+            <x-history-view
+              .rt="${this.#rt.value}"
+              .space="${this.space}"
+              .open="${this._openHistory}"
+              .error="${this._historyError}"
+            ></x-history-view>
+          `
+          : undefined}
         ${this._clientUpdateRequired === undefined ? undefined : html`
           <aside id="client-update-required" class="attention-card" role="alert">
             <h2>Update required</h2>
