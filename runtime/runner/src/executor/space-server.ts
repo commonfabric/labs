@@ -239,6 +239,11 @@ import {
 } from "./stats.ts";
 import { type SealedEffectBatch, SpaceOutbox } from "./outbox.ts";
 import {
+  type CurrencyIndexMode,
+  type CurrencySnapshot,
+  StoreCurrency,
+} from "./store-currency.ts";
+import {
   writeProcessedClaim,
   writeWithheldOutcome,
 } from "./processed-claim.ts";
@@ -445,6 +450,27 @@ export type SpaceServerPolicy = {
    * SERVER_EXECUTION_OVERLAP_COMMIT.
    */
   overlapWaveCommit?: boolean;
+
+  /**
+   * Keep the currency index of the space's store (serving-loop.md §3b): at
+   * each quiescent point, record what the pieces that ran read, write and
+   * vouch for, and judge each root awaiting its first structure load against
+   * it. `record` loads every root regardless and counts the roots the store
+   * could have served, and the pieces a judgment was wrong about
+   * (`currency.falseClean`). `skip` leaves a root the store can serve
+   * unloaded and its piece unstarted, until an input marks the piece or a
+   * session's demand reaches an instance it does not vouch for (§1). Unset,
+   * nothing is recorded or judged. The toolshed bootstrap reads
+   * SERVER_EXECUTION_CURRENCY_INDEX.
+   */
+  currencyIndex?: CurrencyIndexMode;
+
+  /**
+   * Names the build whose records the currency index trusts: a piece
+   * recorded under another epoch is started. A deployment changes it when a
+   * release can change what a stored output would be computed as.
+   */
+  currencyEpoch?: string;
 };
 
 /**
@@ -459,6 +485,9 @@ type WaveFinishContext = {
   advanceSealed: boolean;
   settleAdvanceFrom: number | undefined;
   settleAdvanceGeneration: number | undefined;
+
+  /** The currency records taken as the wave closed, if any were. */
+  currency: CurrencySnapshot | undefined;
 };
 
 /**
@@ -1250,6 +1279,10 @@ export class SpaceServer implements TransactionSealDestination {
 
   /** A structure retry that must wake a cycle after an asynchronous load. */
   #pendingStructureRetryWake = false;
+
+  /** The tenure's currency records and judgments, where the policy keeps
+   * the index (`SpaceServerPolicy.currencyIndex`). */
+  #currency: StoreCurrency | undefined;
 
   /** Level-converted demand wake (stage B): a session's watch set
    * changed (or a session opened); consumed by the next #waitForInput. */
@@ -2208,6 +2241,19 @@ export class SpaceServer implements TransactionSealDestination {
         this.#outbox?.hasDispatchedCarriage(effectKey) ?? false,
     });
 
+    const currencyIndex = this.#options.policy?.currencyIndex;
+    if (currencyIndex !== undefined) {
+      runtime.scheduler.trackChangedPieces();
+      this.#currency = new StoreCurrency({
+        space,
+        server: this.#options.server,
+        mode: currencyIndex,
+        epoch: this.#options.policy?.currencyEpoch ?? "",
+        serviceIdentity: this.#options.serviceIdentity,
+        stats: this.#options.stats,
+      });
+    }
+
     this.#active = true;
     this.#options.stats.activeSpaces += 1;
     // The wakes for the checkpoints §6 step 4 replayed above: a wake is the
@@ -2797,6 +2843,7 @@ export class SpaceServer implements TransactionSealDestination {
     while (this.#active && !this.#atRest()) await this.#nextRest.promise;
     const runtime = this.#runtime;
     if (!this.#active || runtime === undefined) return;
+    await this.#currency?.stored;
     await this.#outbox?.settle();
     await runtime.settled();
     await this.#options.server.idle();
@@ -6078,6 +6125,29 @@ export class SpaceServer implements TransactionSealDestination {
       const root = this.#demandRootAddresses.get(key);
       if (root !== undefined) rootKeys.set(key, root);
     }
+    // The roots the store can serve as they stand (serving-loop.md §1):
+    // under `skip` they are neither loaded nor started, and stay awaiting a
+    // first load, so each later pass judges them again.
+    if (this.#currency !== undefined && rootKeys.size > 0) {
+      const judged = await this.#currency.judge(
+        runtime,
+        rootKeys,
+        (key, root) =>
+          this.#rootsAwaitingFirstLoad.has(key) &&
+          !this.#warmDemandKeys.has(key) && !neverAPieceRootId(root.id),
+        changed.size > 0,
+      );
+      if (!this.#active || this.#runtime !== runtime) return;
+      // A root an input marked is the re-arm's retry to load, which keeps
+      // the watermark below that input until the load resolved.
+      for (const { key, seq } of judged.rearm) {
+        this.#noteRearmed(key, seq);
+        rootKeys.delete(key);
+      }
+      if (this.#options.policy?.currencyIndex === "skip") {
+        for (const key of judged.servable) rootKeys.delete(key);
+      }
+    }
     // ONE changed-doc collection for the whole pass, opened BEFORE the pull
     // below rather than per root inside it. The pull is what registers each
     // root's watch, and a registered watch is what lets the traversal read
@@ -6721,6 +6791,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#rearmedAwaitingSettle.delete(key);
     this.#rearmSeqsUnderRetry.delete(key);
     this.#rearmSeqsAwaitingFollow.delete(key);
+    this.#currency?.forget(key);
     // The stuck-streak entry retires with the rest of the per-key load
     // state: a departed root's streak would otherwise linger for the space's
     // whole life, and a later re-demand of the same key would resume an
@@ -7102,8 +7173,36 @@ export class SpaceServer implements TransactionSealDestination {
   }
 
   /**
-   * Re-arms the terminal root `key` for a retry after frame application,
-   * keeping the lowest seq of an input that may have re-armed it.
+   * Helper for `#serveWave()`, which takes the currency records of the pieces
+   * that ran, as the scheduler holds them at this instant
+   * (serving-loop.md §3b). `blocked` says the cycle cannot vouch for what it
+   * derived, and `asOf` is the visible input head the settle covered. Returns
+   * `undefined` where the index is not kept, the cycle is blocked, a run or
+   * a seal is still under way, an effect is outstanding, or no piece is due
+   * a record.
+   */
+  #takeCurrencySnapshot(
+    runtime: Runtime,
+    blocked: boolean,
+    asOf: number,
+  ): CurrencySnapshot | undefined {
+    const currency = this.#currency;
+    if (currency === undefined || blocked) return undefined;
+    // An effect whose result has not landed is one a start re-fires
+    // (serving-loop.md §6 step 3), so nothing is vouched for while one is
+    // outstanding.
+    const settled = runtime.scheduler.isIdle() &&
+      this.#pendingWaveSeals === 0 &&
+      !runtime.hasAsyncWorkPending && !this.#effectsRetirementOwed &&
+      (this.#outbox?.inflightCount ?? 0) === 0;
+    if (!settled) return undefined;
+    return currency.snapshot(runtime, asOf, this.#ownDerivedSeqs);
+  }
+
+  /**
+   * Re-arms the root `key`, parked terminal or left unloaded because the
+   * store could serve it, for a retry after frame application, keeping the
+   * lowest seq of an input that may have re-armed it.
    */
   #noteRearmed(key: string, seq: number): void {
     const known = this.#rearmedAwaitingSettle.get(key);
@@ -7648,6 +7747,16 @@ export class SpaceServer implements TransactionSealDestination {
    */
   async #serveWave(runtime: Runtime, overlapCommit: boolean): Promise<void> {
     const { batchHead } = this.#drainFeed(runtime);
+    // A root the store serves is re-armed here, ahead of the settle, when a
+    // commit marked its piece: the re-arm holds the watermark below that
+    // commit until the piece has started and derived (serving-loop.md §1).
+    if (this.#currency?.servesFromStore === true) {
+      const rearms = await this.#currency.advance(
+        Engine.serverSeq(this.#options.engine),
+      );
+      if (!this.#active || this.#runtime !== runtime) return;
+      for (const { key, seq } of rearms) this.#noteRearmed(key, seq);
+    }
     // Under the store read-through posture the drain is the barrier: it
     // integrated every record it consumed into the replica before returning,
     // so every input at or below the batch head has been applied here, with
@@ -8042,6 +8151,10 @@ export class SpaceServer implements TransactionSealDestination {
           `total ${this.#options.stats.wavesBudgetExhausted}`,
         ]);
       }
+      // Nothing this cycle derived needs a commit, so what the store holds
+      // is what the pieces that ran would write, and their records go now.
+      const settled = this.#takeCurrencySnapshot(runtime, exhausted, visible);
+      if (settled !== undefined) this.#currency?.store(settled);
       // The owed re-drain rides quiet cycles too (round-2 thread 9): a
       // transport-failed delivery must retry on the NEXT loop cycle,
       // not wait for a new input wave or a re-activation.
@@ -8121,7 +8234,17 @@ export class SpaceServer implements TransactionSealDestination {
     }
 
     const closing = this.#currentWave;
-    if (closing === undefined) return;
+    // Taken in the turn the wave closes in: a run after this seals into the
+    // next wave, so the records describe what this one commits.
+    const currency = this.#takeCurrencySnapshot(
+      runtime,
+      exhausted || havePendingEffects,
+      visible,
+    );
+    if (closing === undefined) {
+      if (currency !== undefined) this.#currency?.store(currency);
+      return;
+    }
     this.#currentWave = undefined;
     await this.#sealChain;
 
@@ -8139,6 +8262,7 @@ export class SpaceServer implements TransactionSealDestination {
       advanceSealed,
       settleAdvanceFrom,
       settleAdvanceGeneration,
+      currency,
     };
     const commitStart = performance.now();
     const pending = closing.commitWave(this.#sink!, { derivedThrough });
@@ -8288,6 +8412,17 @@ export class SpaceServer implements TransactionSealDestination {
       settleAdvanceGeneration,
     } = finish;
     if (outcome.aborted !== undefined) this.#barrierHead = undefined;
+    if (finish.currency !== undefined) {
+      // A record says the store holds what its piece computed, which is so
+      // only once every contribution of the wave has landed.
+      const committedWhole = outcome.aborted === undefined &&
+        outcome.dispositions.every(({ kind }) => kind === "committed");
+      if (committedWhole) {
+        this.#currency?.store(finish.currency, outcome.seq);
+      } else {
+        this.#currency?.owe(finish.currency);
+      }
+    }
     if (outcome.seq !== undefined) {
       this.#lastCommittedWaveSeq = outcome.seq;
       // A wave a seal opened while this commit was in flight took a basis
@@ -8828,6 +8963,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#rearmSeqsUnderRetry.clear();
     this.#rearmSeqsAwaitingFollow.clear();
     this.#pendingStructureRetryWake = false;
+    this.#currency = undefined;
     // Phase 5: foreign engine resolutions die with the tenure, since the
     // memory server may close their engines once it has ended.
     this.#foreignEngines.clear();

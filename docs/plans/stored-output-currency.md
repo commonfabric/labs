@@ -1,7 +1,9 @@
 # Serving a piece's stored outputs while they are current
 
-Status: In progress. Stages 1, 2 and 4 are being built behind
-`SERVER_EXECUTION_CURRENCY_INDEX`, off by default; the others are not started.
+Status: In progress. Stages 1, 2 and 4 are built behind
+`SERVER_EXECUTION_CURRENCY_INDEX`, off by default, and have run only against
+test fixtures. Stage 3, the measurement that decides whether `skip` is turned
+on anywhere, is next. Stages 5 to 8 are not started.
 
 A serving loop starts a piece whenever a session's demand reaches one of its
 documents, and a fresh serving runtime runs every demanded computation of the
@@ -161,10 +163,11 @@ reaches clean ones.
 ## Checking it before relying on it
 
 `SERVER_EXECUTION_CURRENCY_INDEX=record` records and judges and still starts
-everything. Each start of a piece the judgment would have served from the
-store is counted, and when that piece's next record shows a write row that
-moved, the judgment was wrong: the count of those is `currency.falseClean`,
-logged with the piece. `skip` acts on the judgment. `record` runs on a real
+everything. Each root the judgment would have served from the store is
+counted (`currency.servable`), and when a piece the index held clean writes
+an instance it vouched for again with no input of it changed, the judgment
+was wrong: the count of those is `currency.falseClean`, logged with the
+piece. `skip` acts on the judgment. `record` runs on a real
 space until `falseClean` stays at zero before `skip` is turned on there.
 
 ## What changes in the specifications
@@ -213,7 +216,7 @@ space until `falseClean` stays at zero before `skip` is turned on there.
    pieces whose computations changed and snapshots one piece. The space server
    takes snapshots and sends records through the memory server
    (`HostMemoryServer`, the worker port protocol). `record` mode judges each
-   root it loads and counts `wouldServeFromStore` and `falseClean`.
+   root it loads and counts `currency.servable` and `currency.falseClean`.
 3. **Measure.** Run `record` on a copy of the Topics board: the share of
    roots judged servable for a new viewer and a returning one, `falseClean`,
    the cost of a judgment at 3,264 Topics, and what a client under
@@ -261,7 +264,8 @@ For the index, in `runtime/memory/test/`:
    it.
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
-runtimes over `EmulatedStorageManager`:
+runtimes over `EmulatedStorageManager`. Tests 9 to 13 and 15 exist in
+`space-server-currency.test.ts`; 14 and 16 are still to write:
 
 9. With the index off, nothing is recorded and every start happens as today.
 10. In `record` mode a piece that settles is recorded clean, the next

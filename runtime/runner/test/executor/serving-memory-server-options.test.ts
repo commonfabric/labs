@@ -79,6 +79,33 @@ describe("serving-memory-server", () => {
       ).toBeUndefined();
     });
 
+    it("takes the currency index mode from the literals `record` and `skip` alone", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "record" }),
+        ),
+      ).toEqual({ currencyIndex: "record" });
+      expect(
+        policyFromEnvironment(
+          { idleParkMs: 7 },
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }),
+        ),
+      ).toEqual({ idleParkMs: 7, currencyIndex: "skip" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "true" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "record" },
+          environment({ SERVER_EXECUTION_CURRENCY_INDEX: "skip" }),
+        ),
+      ).toEqual({ currencyIndex: "record" });
+    });
+
     it("takes the flush deadlines from positive decimal integers within a timer's range", () => {
       expect(
         policyFromEnvironment(

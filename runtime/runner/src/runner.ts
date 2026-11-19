@@ -12800,6 +12800,59 @@ export class Runner {
   }
 
   /**
+   * What the currency index needs to know of the piece running at
+   * `resultCell` that its computations do not say (serving-loop.md §3b):
+   * whether the piece records a source origin, which a start follows, and
+   * the ids of the cells it owns that are owed a default
+   * (`ownedCellOwesSeed`). Returns `undefined` for a piece that is not
+   * running here, or whose pattern this runtime cannot name from what its
+   * replica holds.
+   */
+  pieceCurrencyFacts(
+    resultCell: Cell<any>,
+  ): { followsOrigin: boolean; owned: string[] } | undefined {
+    const link = resultCell.getAsNormalizedFullLink();
+    const rootCell = link.path.length > 0
+      ? this.#runtime.getCellFromLink({ ...link, path: [] })
+      : resultCell;
+    if (!this.isRunning(rootCell)) return undefined;
+    const read = this.#runtime.readTx();
+    restrictToLocalReads(read.tx);
+    let ref: ReturnType<typeof getPatternIdentityRef>;
+    let followsOrigin: boolean;
+    try {
+      const reading = rootCell.withTx(read);
+      ref = getPatternIdentityRef(reading);
+      followsOrigin = typeof reading.getMetaRaw("patternSource") === "string";
+    } catch (error) {
+      if (validateLocalReadBasis(read) === undefined) throw error;
+      return undefined;
+    } finally {
+      read.clearReadOnly?.();
+      read.abort("pattern pointer read complete");
+    }
+    if (ref === undefined) return undefined;
+    const loaded = this.#runtime.patternManager
+      .artifactFromIdentitySyncInSpace(
+        ref.identity,
+        ref.symbol,
+        rootCell.space,
+      );
+    if (loaded === undefined) return undefined;
+    const pattern = this.#resolveToPattern(loaded as Pattern);
+    const ownerScope = rootCell.getAsNormalizedFullLink().scope;
+    const owned: string[] = [];
+    for (const descriptor of pattern.derivedInternalCells ?? []) {
+      const derivedLink = getDerivedInternalCell(rootCell, descriptor)
+        .getAsNormalizedFullLink();
+      if (ownedCellOwesSeed(derivedLink, ownerScope)) {
+        owned.push(derivedLink.id);
+      }
+    }
+    return { followsOrigin, owned };
+  }
+
+  /**
    * Stop a pattern. This will cancel the pattern and all its children.
    *
    * TODO: This isn't a good strategy, as other instances might depend on behavior

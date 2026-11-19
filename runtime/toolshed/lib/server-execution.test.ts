@@ -192,6 +192,41 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_OVERLAP_COMMIT");
   });
 
+  it("returns the currency index mode for `record` and `skip`, with its epoch, and no mode for anything else", () => {
+    const warnings: string[] = [];
+    const policyWith = (env: Record<string, string>) =>
+      serverExecutionPolicyFromEnv(
+        envOf({ ...env, SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
+        (m) => warnings.push(m),
+      );
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
+      currencyIndex: "record",
+      storeReadThrough: true,
+    });
+    expect(
+      policyWith({
+        SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+        SERVER_EXECUTION_CURRENCY_EPOCH: "release-7",
+      }),
+    ).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "release-7",
+      storeReadThrough: true,
+    });
+    expect(
+      policyWith({
+        SERVER_EXECUTION_CURRENCY_INDEX: "off",
+        SERVER_EXECUTION_CURRENCY_EPOCH: "release-7",
+      }),
+    ).toEqual({ storeReadThrough: true });
+    expect(warnings).toEqual([]);
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "true" })).toEqual({
+      storeReadThrough: true,
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_INDEX");
+  });
+
   it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
     const warnings: string[] = [];
     const cases: [string, number][] = [

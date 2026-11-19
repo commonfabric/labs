@@ -150,6 +150,15 @@ import {
   SessionReportLog,
   type SessionReportsReport,
 } from "./session-reports.ts";
+import {
+  advanceCurrencyCursor,
+  type CurrencyBatch,
+  type CurrencyInstance,
+  type CurrencyMarked,
+  type CurrencyStored,
+  judgeCurrencyRoots,
+  storeCurrencyRecords,
+} from "./currency-index.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -11884,6 +11893,67 @@ export class Server {
       demand.push(share);
     }
     return demand;
+  }
+
+  /**
+   * Brings the marks of `space`'s currency index up to its store's head
+   * (serving-loop.md §3b), and returns the pieces the advance marked.
+   * Server-internal machinery and tests only, as `engineForSpace()` is.
+   */
+  async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
+    const engine = await this.#openEngine(space);
+    return advanceCurrencyCursor(engine, { space });
+  }
+
+  /**
+   * Stores the records a serving loop took of `space`'s pieces at a quiescent
+   * point in its currency index (serving-loop.md §3b). Server-internal
+   * machinery and tests only.
+   */
+  async storeCurrencyRecords(
+    space: string,
+    batch: Omit<CurrencyBatch, "space">,
+  ): Promise<CurrencyStored> {
+    const engine = await this.#openEngine(space);
+    return storeCurrencyRecords(engine, { ...batch, space });
+  }
+
+  /**
+   * Judges which of `roots`, raw ids of space-scoped result documents, the
+   * store can serve with no piece started (serving-loop.md §1), against the
+   * demand rows of `space`'s client sessions as `demandForSpace()` reads
+   * them, after bringing the currency index's marks up to the store's head.
+   *
+   * @returns The roots that pass, and the pieces the advance marked.
+   */
+  async judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): Promise<{ servable: string[]; marked: CurrencyMarked[] }> {
+    const engine = await this.#openEngine(space);
+    const marked = advanceCurrencyCursor(engine, { space });
+    if (roots.length === 0) return { servable: [], marked };
+    const demand = this.demandForSpace(
+      space,
+      options.excludePrincipal === undefined
+        ? {}
+        : { excludePrincipal: options.excludePrincipal },
+    );
+    const rows = function* (): Generator<CurrencyInstance> {
+      for (const share of demand) {
+        for (const row of share.rows.values()) {
+          yield { id: row.id, scopeKey: row.scopeKey };
+        }
+      }
+    };
+    const servable = judgeCurrencyRoots(engine, {
+      space,
+      roots,
+      rows: rows(),
+      epoch: options.epoch,
+    });
+    return { servable, marked };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a

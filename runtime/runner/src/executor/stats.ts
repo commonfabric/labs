@@ -349,6 +349,32 @@ export type ServingLoopStats = {
     warmWakes: number;
   };
 
+  /** The currency index (serving-loop.md §3b), which says which stored
+   * outputs are current. All zero where `SpaceServerPolicy.currencyIndex`
+   * is unset. */
+  currency: {
+    /** Piece records the loops sent to the store. */
+    recordsStored: number;
+
+    /** Roots a judgment found the store could serve with no piece started,
+     * counted at each judgment that found it so. */
+    servable: number;
+
+    /** Roots left unloaded and unstarted on that judgment, which only the
+     * `skip` mode does, counted once each time a root is first left. */
+    servedFromStore: number;
+
+    /** Roots a judgment had left unloaded that were then loaded: an input
+     * marked the piece, or a session's demand reached an instance the
+     * piece does not vouch for. */
+    rearmed: number;
+
+    /** Pieces the index held clean that wrote an instance they vouched for
+     * again with no input of theirs changed. Each one is a judgment that
+     * would have served a stale value. */
+    falseClean: number;
+  };
+
   /** SERVER SETTLE per authored input (serving-loop.md §7; stage-C design
    * §6 W4's metric): from the authored commit's ADMISSION on the server
    * (its seq, `enqueueCommit`) to W COVERING it (the wave commit whose
@@ -848,6 +874,13 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     pushGrowthWakes: 0,
     watchWakes: 0,
     warmWakes: 0,
+  },
+  currency: {
+    recordsStored: 0,
+    servable: 0,
+    servedFromStore: 0,
+    rearmed: 0,
+    falseClean: 0,
   },
   settle: { series: [], dropped: 0 },
   settleAdvances: { count: 0, lastDelta: 0, series: [], dropped: 0 },

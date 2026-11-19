@@ -501,6 +501,38 @@ class PlaneMemoryServer implements HostMemoryServer {
   }
 
   /** @inheritDoc */
+  advanceCurrency(
+    space: string,
+  ): ReturnType<HostMemoryServer["advanceCurrency"]> {
+    return this.#endpoint.request("server.advanceCurrency", { space });
+  }
+
+  /** @inheritDoc */
+  storeCurrencyRecords(
+    space: string,
+    batch: Parameters<HostMemoryServer["storeCurrencyRecords"]>[1],
+  ): ReturnType<HostMemoryServer["storeCurrencyRecords"]> {
+    return this.#endpoint.request("server.storeCurrencyRecords", {
+      space,
+      batch,
+    });
+  }
+
+  /** @inheritDoc */
+  judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
+    return this.#endpoint.request("server.judgeCurrencyRoots", {
+      space,
+      roots: [...roots],
+      excludePrincipal: options.excludePrincipal,
+      epoch: options.epoch,
+    });
+  }
+
+  /** @inheritDoc */
   foreignWriteAuthorityFor(
     space: string,
     principal: string | undefined,

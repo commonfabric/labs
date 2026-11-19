@@ -372,6 +372,27 @@ notice at all, so a subscribed client saw them only on its next own
 sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
+**A root the store can serve.** *(AMENDED 2026-11-19; behind
+`SpaceServerPolicy.currencyIndex`, off by default.)* Where the policy keeps
+the currency index (§3b) in its `skip` mode, the demand pass asks the memory
+server, for each root awaiting its first structure load whose piece is not
+running, whether the store can serve it as it stands. It can when the piece
+has a clean record of the current epoch, and every demand row of every
+session whose id the piece writes or owns, or a recorded piece beneath it
+does, has a clean owner that vouches for that instance: a vouch row for a
+written id, and a live document for an owned cell. Such a root is neither
+loaded nor started, and neither the arrival seed nor the arrival re-arm runs
+for it. It stays among the roots awaiting a first load and is judged again
+when demand changes, when it is found running, and when a commit marks its
+piece or one beneath it. That last case re-arms the root at the marking
+seq, as a commit re-arms a parked root, so W stays below that input until
+the piece has started and derived. A warm request's root, a root narrower
+than the space, and a root with no record are loaded as before. In the
+`record` mode the same judgment is made and counted, and every root is
+loaded. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+`judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
+`runtime/runner/test/executor/space-server-currency.test.ts`.
+
 **A piece a handler starts.** A handler's result pattern runs on the serving
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
@@ -1137,6 +1158,43 @@ executing:
   persisted forms; commit REPLAY bears nothing — recovery never replays
   (§6). Client reload needs none of this: every derived value is
   committed, so client reload is read-and-render.
+- **The currency index** *(AMENDED 2026-11-19; kept only where
+  `SpaceServerPolicy.currencyIndex` is set)* is a third persisted form: per
+  piece, what its live computations read, the declared write surface of
+  every computation registered under it, the document instances its clean
+  computations vouch for, and a mark. It passes the test above, ids + seqs
+  overwritten in place, with the piece as the overwrite unit in place of
+  the (action, instance). Three things set it apart from the basis index:
+  - It records WRITE links. A piece's write rows are what carry a mark to
+    the pieces that read what it writes, through documents no session
+    demands, and what say which absent document a piece would write.
+  - Its rows are written by the memory server on the serving loop's
+    request, in a transaction of their own after the wave's commit has
+    landed, never inside it and never at admission. A record lost between
+    the two leaves its piece marked by the wave's own commit.
+  - It has a reader. A commit above a read or a write row marks the piece
+    `2`, and each clean piece that reads a document a marked piece writes
+    is marked `1`, so a walk stops at a piece already marked. The marks are
+    brought up to the store's head by a cursor the serving loop advances;
+    storing a new record is all that clears one, and it clears the pieces
+    marked `1` downstream that are left with no stale input.
+
+  The loop records at the end of a cycle whose settle did not exhaust its
+  deadline, with the scheduler idle and no effect outstanding, for the
+  pieces a computation of which changed, once the wave has committed every
+  contribution. A piece is stored marked when a live computation under it
+  is not clean, when it read a document in another space or one whose
+  writer names no piece, when its root is narrower than the space, and when
+  it records a source origin (§3e), since a start is where that origin is
+  followed. Each row takes its document's head seq where every commit above
+  the settle's visible input head is the loop's own, and that head
+  otherwise, which leaves the piece marked. Nothing is recorded while an
+  effect is outstanding, because a start is what re-fires an effect whose
+  result never landed (§6 step 3). The tables are `currency_piece`,
+  `currency_under`, `currency_read`, `currency_write`, `currency_vouch`
+  and `currency_cursor`; `runtime/memory/v2/currency-index.ts` is their
+  only writer and reader, pinned in
+  `runtime/memory/test/v2-currency-index.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables
@@ -2360,10 +2418,12 @@ On activate after crash or deploy:
    here — those re-miss from memo keys in step 3, by design.
 
 There is NO replay log, NO persisted run observations, NO snapshot of
-scheduler state beyond W, `eventWatermark`, and the basis index's
-ids + seqs rows (§3b — payloads stay FORBIDDEN). If recovery seems to
-need more than these, the design is wrong somewhere else — stop and
-escalate.
+scheduler state beyond W, `eventWatermark`, the basis index's
+ids + seqs rows, and, where the policy keeps it, the currency index's
+(§3b — payloads stay FORBIDDEN). Recovery reads the currency index only
+to decide which demanded roots it need not load (§1); a store without it
+recovers as above. If recovery seems to need more than these, the design
+is wrong somewhere else — stop and escalate.
 
 ## 7. Counters (implement with the loop, not after)
 
@@ -2401,7 +2461,8 @@ aclChanges}, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
 demandPasses, demandPassMs, demandKeysReconciled, ownedDefaultSeeds,
-structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, settle:
+structureRootsPreloaded, pushGrowthWakes, watchWakes, warmWakes}, currency:
+{recordsStored, servable, servedFromStore, rearmed, falseClean}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -2579,6 +2640,15 @@ time, review MINOR-3);
 `demandKeysReconciled` the instance keys the passes reconciled, accumulated
 over the passes whose reconcile completed, so a pass that throws partway adds
 nothing.
+`currency` counts the currency index (§3b), and is all zero where the
+policy keeps none: `recordsStored` the piece records the loops sent to the
+store; `servable` the roots a judgment found the store could serve (§1);
+`servedFromStore` the roots the `skip` mode left unloaded on it, once each
+time a root is first left; `rearmed` the roots so left that were then
+loaded, because an input marked the piece or a session's demand reached an
+instance it does not vouch for; `falseClean` the pieces the index held
+clean that wrote an instance they vouched for again with no input of
+theirs changed, each one a judgment that would have served a stale value.
 `ownedDefaultSeeds` the (piece root, demanding pair) seedings the passes
 completed — the ARRIVAL SEED: a pattern-owned cell declaring a default at a
 scope narrower than its result (scoped-cell-instances.md, "A pattern-owned
@@ -2739,7 +2809,8 @@ a leftover.
 
 The intentional exception: the basis index tables (§3b — a NEW reduced
 schema of ids + seqs only, overwritten in place; correctness-bearing for
-recovery but never payloads, so NOT the evidence log).
+recovery but never payloads, so NOT the evidence log), and the currency
+index tables (§3b — ids + seqs only, overwritten in place per piece).
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

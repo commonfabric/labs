@@ -148,6 +148,10 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  type PieceCurrencySnapshot,
+  snapshotPieceCurrency,
+} from "./piece-currency.ts";
+import {
   resolveRegistrationSurface,
   resubscribePullSchedulerAction,
   type SchedulerResubscribeOptions,
@@ -1646,6 +1650,53 @@ export class Scheduler {
     address: { space: MemorySpace; id: string; scope: CellScope },
   ): boolean {
     return this.#demandedEntityRefs.has(entityNameKey(address as never));
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, for a serving loop that
+   * keeps a currency index (serving-loop.md §3b).
+   */
+  trackChangedPieces(): void {
+    this.#nodes.trackChangedPieces();
+  }
+
+  /**
+   * The pieces a node of which joined, left, or had its status written since
+   * this was last called, each named by the raw id of its result document.
+   * Every piece a run touched is among them. Empty unless
+   * `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    return this.#nodes.takeChangedPieces();
+  }
+
+  /**
+   * Has the next `takeChangedPieces()` name `pieceRootId`, whether or not a
+   * node of it changes meanwhile.
+   */
+  noteChangedPiece(pieceRootId: string): void {
+    this.#nodes.noteChangedPiece(pieceRootId);
+  }
+
+  /**
+   * What the currency index records of the piece whose result document is
+   * `pieceRootId`, in `space`, as this scheduler holds it now, or `undefined`
+   * when no active node names it as its piece.
+   */
+  pieceCurrencySnapshot(
+    space: MemorySpace,
+    pieceRootId: string,
+  ): PieceCurrencySnapshot | undefined {
+    return snapshotPieceCurrency(
+      {
+        nodes: this.#nodes,
+        liveness: this.#dependencyGraphState,
+        dependencies: this.#dependencies,
+        writeIndex: this.#writeIndex,
+      },
+      space,
+      pieceRootId,
+    );
   }
 
   /** Whether a client session tracks an instance a node of the piece `id` writes. */

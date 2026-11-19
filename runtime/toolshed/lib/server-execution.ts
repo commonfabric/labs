@@ -99,6 +99,8 @@ export type ServerExecutionEnvPolicy = {
   storeReadThrough?: boolean;
   overlapWaveCommit?: boolean;
   parkedRuntimeRetentionMs?: number;
+  currencyIndex?: "record" | "skip";
+  currencyEpoch?: string;
 };
 
 /**
@@ -124,7 +126,12 @@ export type ServerExecutionEnvPolicy = {
  *   (`SpaceServerPolicy.parkedRuntimeRetentionMs`,
  *   SERVER_EXECUTION_PARKED_RUNTIME_RETENTION_MS) stays the host's
  *   built-in default unless overridden; the literal `0` keeps none, and
- *   a value past the longest delay a timer honors reads as unset.
+ *   a value past the longest delay a timer honors reads as unset;
+ * - the currency index (`SpaceServerPolicy.currencyIndex`,
+ *   SERVER_EXECUTION_CURRENCY_INDEX) is kept for the literal `record` or
+ *   `skip` and not otherwise; anything else but `off` warns. Its epoch
+ *   (`SpaceServerPolicy.currencyEpoch`, SERVER_EXECUTION_CURRENCY_EPOCH) is
+ *   taken as written.
  *
  * Parsing is FAIL-CLOSED for the cap: an unparseable or negative value
  * ("abc", "-1", "1.5") falls back to the default and warns, instead of
@@ -236,6 +243,18 @@ export function serverExecutionPolicyFromEnv(
         "the overlapped wave commit stays OFF",
     );
   }
+  const currencyRaw = readRaw("SERVER_EXECUTION_CURRENCY_INDEX");
+  let currencyIndex: "record" | "skip" | undefined;
+  if (currencyRaw === "record" || currencyRaw === "skip") {
+    currencyIndex = currencyRaw;
+  } else if (currencyRaw !== undefined && currencyRaw !== "off") {
+    warn(
+      "Server-execution v2: ignoring SERVER_EXECUTION_CURRENCY_INDEX=" +
+        `${JSON.stringify(currencyRaw)} (expected "record", "skip" or ` +
+        '"off"); the currency index stays OFF',
+    );
+  }
+  const currencyEpoch = readRaw("SERVER_EXECUTION_CURRENCY_EPOCH");
   return {
     ...(flushDeadlineMs !== undefined ? { flushDeadlineMs } : {}),
     ...(flushDeadlineMaxMs !== undefined ? { flushDeadlineMaxMs } : {}),
@@ -245,6 +264,10 @@ export function serverExecutionPolicyFromEnv(
     ...(overlapWaveCommit !== undefined ? { overlapWaveCommit } : {}),
     ...(parkedRuntimeRetentionMs !== undefined
       ? { parkedRuntimeRetentionMs }
+      : {}),
+    ...(currencyIndex !== undefined ? { currencyIndex } : {}),
+    ...(currencyIndex !== undefined && currencyEpoch !== undefined
+      ? { currencyEpoch }
       : {}),
   };
 }
