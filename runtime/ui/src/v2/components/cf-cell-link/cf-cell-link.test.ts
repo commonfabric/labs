@@ -10,6 +10,8 @@ import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
+import { setNewTabReservation } from "@commonfabric/navigation";
+
 import { CFCellLink } from "./index.ts";
 
 function deferred<T>() {
@@ -1324,12 +1326,16 @@ describe("CFCellLink in a document", () => {
     });
 
     describe("with the command key held", () => {
+      // A host that has turned tab reservation on, as the shell does; the
+      // case for one that has not turns it off itself.
       let reserveAfterMs: number;
       beforeEach(() => {
         reserveAfterMs = CFCellLink.newTabReserveAfterMs;
+        setNewTabReservation(true);
       });
       afterEach(() => {
         CFCellLink.newTabReserveAfterMs = reserveAfterMs;
+        setNewTabReservation(false);
       });
 
       /** A tab `globalThis.open` hands back, recording what is done to it. */
@@ -1423,6 +1429,37 @@ describe("CFCellLink in a document", () => {
             // Later than a reservation due at once would be, well before one
             // due at the deadline.
             await nextTask();
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+            expect(openArgs).toEqual([]);
+          });
+        } finally {
+          globalThis.removeEventListener("cf-open-external", onOpen);
+        }
+        expect(opened).toEqual(["of:fid1:topic-111111"]);
+      });
+
+      it("reserves no tab under a host that has not turned reservation on, and hands it the target once it lands", async () => {
+        setNewTabReservation(false);
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const opened: unknown[] = [];
+        const onOpen = (event: Event) => {
+          event.preventDefault();
+          opened.push((event as CustomEvent).detail.pieceId);
+        };
+        globalThis.addEventListener("cf-open-external", onOpen);
+        try {
+          await withOpen(fakeTab(), async (openArgs) => {
+            commandClick(element);
+            await nextTask();
+            expect(openArgs).toEqual([]);
             pending.resolve(pieceCell("of:fid1:topic-111111"));
             await settle();
             await nextTask();

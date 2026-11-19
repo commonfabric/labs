@@ -50,11 +50,30 @@ export function openInNewTab(command: NavigationCommand) {
 }
 
 // How long `openInNewTabWhenReady` waits for its target before it reserves a
-// tab. A browser lets a page open a tab only within a short time of a user's
-// gesture (about five seconds in Chrome and Firefox), and opening one uses
-// that up, so a host that takes `cf-open-external` and opens its own tab can
-// do so only while nothing has been reserved.
+// tab, where reserving is turned on. A browser lets a page open a tab only
+// within a short time of a user's gesture (about five seconds in Chrome and
+// Firefox), and opening one uses that up.
 export const NEW_TAB_RESERVE_AFTER_MS = 1000;
+
+// Whether `openInNewTabWhenReady` may reserve a tab for a slow target. Off
+// unless the host turns it on. Only a host whose new tabs open through the
+// default `globalThis.open` path, the shell, gains from a reservation. A host
+// that takes `cf-open-external` itself may open no tab at all (Loom's pattern
+// panes navigate in place), and a tab reserved under it would only get in its
+// way: a blank tab that flashes, or, where a host routes `window.open` into
+// the pane, a blank page loaded in the pane.
+let newTabReservation = false;
+
+// Turn reserving a tab for a slow target on or off. A host whose new tabs
+// open through the default path, as the shell's do, turns it on.
+export function setNewTabReservation(enabled: boolean): void {
+  newTabReservation = enabled;
+}
+
+// Whether reserving a tab for a slow target is turned on.
+export function newTabReservationEnabled(): boolean {
+  return newTabReservation;
+}
 
 // A `cf-open-external` event dispatched for a tab reserved in advance. A host
 // that takes the event and wants a tab of its own calls `claimReservedTab()`
@@ -67,20 +86,27 @@ export type OpenExternalEvent = CustomEvent<NavigationCommand> & {
 
 // Open in a new tab a navigation target that is still being found, from the
 // click that asked for it.
-// - A target that arrives within `reserveAfterMs` (default
-//   `NEW_TAB_RESERVE_AFTER_MS`) is opened as `openInNewTab` opens it, while
-//   the gesture still allows a host or the default to open a tab.
-// - Past that, a tab is reserved, while the gesture still allows it, and
-//   pointed at the target once it lands. The `cf-open-external` event then
-//   dispatched offers the reserved tab to a host (`claimReservedTab()`).
+// - With reserving off (`reserve`, default `newTabReservationEnabled()`), the
+//   target is opened as `openInNewTab` opens it once it lands.
+// - With it on, a target that arrives within `reserveAfterMs` (default
+//   `NEW_TAB_RESERVE_AFTER_MS`) opens the same way, while the gesture still
+//   allows a host or the default to open a tab. Past that, a tab is reserved,
+//   while the gesture still allows it, and pointed at the target once it
+//   lands. The `cf-open-external` event then dispatched offers the reserved
+//   tab to a host (`claimReservedTab()`).
 // - A target of `undefined`, or a rejection, closes a reserved tab. So does
 //   a host that cancels the event without claiming it.
 // Where the browser opens no tab for the reservation, the target is handed to
 // `openInNewTab` once it is known.
 export async function openInNewTabWhenReady(
   target: Promise<NavigationCommand | undefined>,
-  options: { reserveAfterMs?: number } = {},
+  options: { reserveAfterMs?: number; reserve?: boolean } = {},
 ): Promise<void> {
+  if (!(options.reserve ?? newTabReservation)) {
+    const command = await target;
+    if (command !== undefined) openInNewTab(command);
+    return;
+  }
   let reserved: Window | null = null;
   let settled = false;
   const reservation = setTimeout(() => {

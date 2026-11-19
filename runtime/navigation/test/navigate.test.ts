@@ -1,11 +1,13 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   type NavigationCommand,
+  newTabReservationEnabled,
   type OpenExternalEvent,
   openInNewTab,
   openInNewTabWhenReady,
+  setNewTabReservation,
 } from "@commonfabric/navigation";
 
 // Exercises the `openInNewTab` helper that backs modifier-click ("open in new
@@ -119,6 +121,11 @@ describe("navigate", () => {
       pieceId: "fid1:pieceX",
     };
 
+    // The cases below are a host that has turned reserving on, as the shell
+    // does; the cases for one that has not turn it off themselves.
+    beforeEach(() => setNewTabReservation(true));
+    afterEach(() => setNewTabReservation(false));
+
     /** A tab `globalThis.open` hands back, recording what is done to it. */
     function fakeTab() {
       return {
@@ -187,6 +194,50 @@ describe("navigate", () => {
 
     /** Lets a timer due now, and what it leads to, run. */
     const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+    it("reserves nothing while reserving is off: a slow target opens as openInNewTab does once it lands", async () => {
+      setNewTabReservation(false);
+      await withOpen([fakeTab()], async (openArgs) => {
+        const target = pendingTarget();
+        const opening = openInNewTabWhenReady(target.promise, {
+          reserveAfterMs: 0,
+        });
+        await nextTask();
+        expect(openArgs).toEqual([]);
+        target.land(view);
+        await opening;
+        expect(openArgs.length).toBe(1);
+        const [url, tabTarget, features] = openArgs[0];
+        expect(String(url)).toContain("fid1:pieceX");
+        expect(tabTarget).toBe("_blank");
+        expect(features).toBe("noopener");
+      });
+    });
+
+    it("hands a host that takes the event a slow target with no reserved tab while reserving is off", async () => {
+      setNewTabReservation(false);
+      const seen: unknown[] = [];
+      const onOpen = (e: Event) => {
+        e.preventDefault();
+        seen.push((e as OpenExternalEvent).claimReservedTab);
+      };
+      globalThis.addEventListener("cf-open-external", onOpen);
+      try {
+        await withOpen([fakeTab()], async (openArgs) => {
+          const target = pendingTarget();
+          const opening = openInNewTabWhenReady(target.promise, {
+            reserveAfterMs: 0,
+          });
+          await nextTask();
+          target.land(view);
+          await opening;
+          expect(openArgs).toEqual([]);
+        });
+      } finally {
+        globalThis.removeEventListener("cf-open-external", onOpen);
+      }
+      expect(seen).toEqual([undefined]);
+    });
 
     it("opens a target that lands before the deadline as openInNewTab does, reserving nothing", async () => {
       await withOpen([], async (openArgs) => {
@@ -353,6 +404,16 @@ describe("navigate", () => {
         expect(tabTarget).toBe("_blank");
         expect(features).toBe("noopener");
       });
+    });
+  });
+
+  describe("setNewTabReservation", () => {
+    it("is off until a host turns it on, and off again once it turns it off", () => {
+      expect(newTabReservationEnabled()).toBe(false);
+      setNewTabReservation(true);
+      expect(newTabReservationEnabled()).toBe(true);
+      setNewTabReservation(false);
+      expect(newTabReservationEnabled()).toBe(false);
     });
   });
 });
