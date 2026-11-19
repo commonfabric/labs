@@ -15,7 +15,7 @@ import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno"
 import type { RuntimeClient } from "@/runtime-client.ts";
 import { attachedClient } from "./attached-client.ts";
 
-describe("space history", () => {
+describe("space-history", () => {
   let runtime: Runtime;
   let client: RuntimeClient;
   let space: MemorySpace;
@@ -83,6 +83,46 @@ describe("space history", () => {
     });
   });
 
+  describe("spaceHistory() over more commits than one page of the log", () => {
+    // The processor reads the commit log 500 commits at a time, so a space
+    // with more than that returns its steps over more than one request.
+
+    const PAGE = 500;
+    const REST = 2;
+
+    beforeEach(async () => {
+      const cell = runtime.getCell<number>(space, "space-history-pages");
+      const commits: Promise<unknown>[] = [];
+      for (let n = 0; n < PAGE + REST; n++) {
+        const tx = runtime.edit();
+        cell.withTx(tx).set(n);
+        commits.push(tx.commit().settled);
+      }
+      await Promise.all(commits);
+      await runtime.storageManager.synced();
+    });
+
+    it("returns one page of steps and a `next` at the oldest one's first commit", async () => {
+      const { steps, next } = await client.spaceHistory({ space });
+
+      expect(steps).toHaveLength(PAGE);
+      expect(next).toBe(steps.at(-1)!.startSeq);
+    });
+
+    it("returns the remaining steps and no `next` for a request `before` the first page's `next`", async () => {
+      const first = await client.spaceHistory({ space });
+
+      const rest = await client.spaceHistory({ space, before: first.next });
+
+      expect(rest.steps).toHaveLength(REST);
+      expect(rest.steps[0].seq).toBeLessThan(first.steps.at(-1)!.startSeq);
+      expect(rest.steps.map((step) => step.seq)).toEqual(
+        rest.steps.map((step) => step.seq).toSorted((a, b) => b - a),
+      );
+      expect(rest).not.toHaveProperty("next");
+    });
+  });
+
   describe("restoreSpace()", () => {
     it("sets the space back to what a step left, as a new step", async () => {
       await write("first");
@@ -110,7 +150,7 @@ describe("space history", () => {
   });
 
   describe("createSpaceBranch()", () => {
-    it("forks a branch that a restore can name, and that can be deleted", async () => {
+    it("forks a branch that a restore can name", async () => {
       await write("first");
       const { steps: [first] } = await client.spaceHistory({ space });
       await write("second");
@@ -121,9 +161,18 @@ describe("space history", () => {
         forkSeq: first.seq,
       });
       await client.restoreSpace({ space, branch: "fork" });
-      await client.deleteSpaceBranch({ space, name: "fork" });
 
       await storedBecomes("first");
+    });
+
+    it("resolves for a repeat of a branch that is not deleted", async () => {
+      await write("only");
+      const { steps: [{ seq: forkSeq }] } = await client.spaceHistory({
+        space,
+      });
+      await client.createSpaceBranch({ space, name: "fork", forkSeq });
+
+      await client.createSpaceBranch({ space, name: "fork", forkSeq });
     });
 
     it("rejects for a fork point past the space's history", async () => {
@@ -137,6 +186,40 @@ describe("space history", () => {
           forkSeq: newest.seq + 1000,
         }),
       ).rejects.toThrow("out of range");
+    });
+  });
+
+  describe("deleteSpaceBranch()", () => {
+    it("deletes the branch, whose name a later fork then rejects for", async () => {
+      // A repeat of an active branch resolves, as the case above pins, so
+      // the rejection is the deletion showing through the client.
+
+      await write("only");
+      const { steps: [{ seq: forkSeq }] } = await client.spaceHistory({
+        space,
+      });
+      await client.createSpaceBranch({ space, name: "fork", forkSeq });
+
+      await client.deleteSpaceBranch({ space, name: "fork" });
+
+      await expect(client.createSpaceBranch({ space, name: "fork", forkSeq }))
+        .rejects.toThrow("branch name is taken: fork");
+    });
+
+    it("leaves the branch's state for a restore to name", async () => {
+      await write("first");
+      const { steps: [first] } = await client.spaceHistory({ space });
+      await write("second");
+      await client.createSpaceBranch({
+        space,
+        name: "fork",
+        forkSeq: first.seq,
+      });
+
+      await client.deleteSpaceBranch({ space, name: "fork" });
+      await client.restoreSpace({ space, branch: "fork" });
+
+      await storedBecomes("first");
     });
   });
 });

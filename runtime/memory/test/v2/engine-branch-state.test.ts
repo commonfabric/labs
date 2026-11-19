@@ -13,6 +13,7 @@ import {
   type Engine,
   headSeq,
   open,
+  PreconditionFailedError,
   read,
   runAtomicCommit,
 } from "../../v2/engine.ts";
@@ -151,70 +152,6 @@ describe("engine", () => {
       expect(valueAt()).toEqual({ kept: "parent" });
     });
 
-    it("refuses a fork's commit that read an inherited document before its parent's last write to it", () => {
-      const first = setValue("first");
-      setValue("second");
-      createBranch(engine, "fork");
-      const commitOnFork = (seq: number) =>
-        applyCommit(engine, {
-          sessionId,
-          commit: {
-            localSeq: ++localSeq,
-            reads: {
-              confirmed: [{ id, path: toDocumentPath([]), seq }],
-              pending: [],
-            },
-            operations: [{ op: "set", id, value: { value: "fork" } }],
-            branch: "fork",
-          },
-        });
-
-      expect(() => commitOnFork(first)).toThrow(ConflictError);
-      expect(valueAt({ branch: "fork" })).toBe("second");
-    });
-
-    it("accepts a fork's commit that read an inherited document as of the fork point, whatever its parent wrote since", () => {
-      const atFork = setValue("at fork");
-      createBranch(engine, "fork");
-      setValue("parent, later");
-
-      applyCommit(engine, {
-        sessionId,
-        commit: {
-          localSeq: ++localSeq,
-          reads: {
-            confirmed: [{ id, path: toDocumentPath([]), seq: atFork }],
-            pending: [],
-          },
-          operations: [{ op: "set", id, value: { value: "fork" } }],
-          branch: "fork",
-        },
-      });
-
-      expect(valueAt({ branch: "fork" })).toBe("fork");
-    });
-
-    it("throws for a fork's commit that writes a SQLite database", () => {
-      setValue("parent");
-      createBranch(engine, "fork");
-
-      expect(() =>
-        applyCommit(engine, {
-          sessionId,
-          commit: {
-            localSeq: ++localSeq,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "sqlite",
-              db: { id: "of:db" },
-              sql: "INSERT INTO notes (body) VALUES ('fork')",
-            }],
-            branch: "fork",
-          },
-        })
-      ).toThrow("cannot write a SQLite database");
-    });
-
     it("throws for an unknown branch, and reads the branch once it exists", () => {
       setValue("parent");
 
@@ -249,6 +186,194 @@ describe("engine", () => {
         expect(headSeq(engine)).toBe(seq);
         expect(valueAt()).toBe(value);
       }
+    });
+  });
+
+  describe("applyCommit() on a fork", () => {
+    it("throws `ConflictError` for a commit that read an inherited document before its parent's last write to it, and leaves the fork's value", () => {
+      const first = setValue("first");
+      setValue("second");
+      createBranch(engine, "fork");
+      const commitOnFork = (seq: number) =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: {
+              confirmed: [{ id, path: toDocumentPath([]), seq }],
+              pending: [],
+            },
+            operations: [{ op: "set", id, value: { value: "fork" } }],
+            branch: "fork",
+          },
+        });
+
+      expect(() => commitOnFork(first)).toThrow(ConflictError);
+      expect(valueAt({ branch: "fork" })).toBe("second");
+    });
+
+    it("writes a commit that read an inherited document as of the fork point, whatever its parent wrote since", () => {
+      const atFork = setValue("at fork");
+      createBranch(engine, "fork");
+      setValue("parent, later");
+
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: {
+            confirmed: [{ id, path: toDocumentPath([]), seq: atFork }],
+            pending: [],
+          },
+          operations: [{ op: "set", id, value: { value: "fork" } }],
+          branch: "fork",
+        },
+      });
+
+      expect(valueAt({ branch: "fork" })).toBe("fork");
+    });
+
+    describe("with an `entity-absent` precondition", () => {
+      const setIfAbsent = (target: string, branch: BranchName) =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            preconditions: [{ kind: "entity-absent", id: target }],
+            operations: [{ op: "set", id: target, value: { value: "fork" } }],
+            branch,
+          },
+        });
+
+      it("throws `PreconditionFailedError` for a document the fork inherits, and leaves it", () => {
+        setValue("parent");
+        createBranch(engine, "fork");
+
+        expect(() => setIfAbsent(id, "fork")).toThrow(PreconditionFailedError);
+        expect(valueAt({ branch: "fork" })).toBe("parent");
+      });
+
+      it("writes a document its parent created after the fork point", () => {
+        setValue("parent");
+        createBranch(engine, "fork");
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:later",
+              value: { value: "parent" },
+            }],
+          },
+        });
+
+        setIfAbsent("of:later", "fork");
+
+        expect(read(engine, { id: "of:later", branch: "fork" })?.value).toBe(
+          "fork",
+        );
+        expect(read(engine, { id: "of:later" })?.value).toBe("parent");
+      });
+    });
+
+    it("throws for a commit that writes a SQLite database", () => {
+      setValue("parent");
+      createBranch(engine, "fork");
+
+      expect(() =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "sqlite",
+              db: { id: "of:db" },
+              sql: "INSERT INTO notes (body) VALUES ('fork')",
+            }],
+            branch: "fork",
+          },
+        })
+      ).toThrow("cannot write a SQLite database");
+    });
+  });
+
+  describe("a fork of a fork", () => {
+    /** Commits a `set` of the document on `branch` that read it as of `seq`. */
+    const setHavingRead = (seq: number, value: string, branch: BranchName) =>
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: {
+            confirmed: [{ id, path: toDocumentPath([]), seq }],
+            pending: [],
+          },
+          operations: [{ op: "set", id, value: { value } }],
+          branch,
+        },
+      });
+
+    it("returns the default branch's value as of the first fork point, through a fork that wrote nothing", () => {
+      setValue("at first fork");
+      createBranch(engine, "child");
+      setValue("default, later");
+      createBranch(engine, "grandchild", { parentBranch: "child" });
+
+      expect(valueAt({ branch: "grandchild" })).toBe("at first fork");
+    });
+
+    it("returns its parent's value as of its own fork point, and its own value once it writes", () => {
+      setValue("default");
+      createBranch(engine, "child");
+      setValue("child, before", "child");
+      createBranch(engine, "grandchild", { parentBranch: "child" });
+      setValue("child, after", "child");
+
+      expect(valueAt({ branch: "grandchild" })).toBe("child, before");
+      setValue("grandchild", "grandchild");
+      expect(valueAt({ branch: "grandchild" })).toBe("grandchild");
+      expect(valueAt({ branch: "child" })).toBe("child, after");
+      expect(valueAt()).toBe("default");
+    });
+
+    it("throws `ConflictError` for a commit that read the document before the default branch's last write below the first fork point", () => {
+      const first = setValue("first");
+      setValue("second");
+      createBranch(engine, "child");
+      createBranch(engine, "grandchild", { parentBranch: "child" });
+
+      expect(() => setHavingRead(first, "grandchild", "grandchild")).toThrow(
+        ConflictError,
+      );
+      expect(valueAt({ branch: "grandchild" })).toBe("second");
+    });
+
+    it("throws `ConflictError` for a commit that read the document before its parent's last write below its fork point", () => {
+      const onDefault = setValue("default");
+      createBranch(engine, "child");
+      setValue("child", "child");
+      createBranch(engine, "grandchild", { parentBranch: "child" });
+
+      expect(() => setHavingRead(onDefault, "grandchild", "grandchild"))
+        .toThrow(ConflictError);
+      expect(valueAt({ branch: "grandchild" })).toBe("child");
+    });
+
+    it("writes a commit that read the document as of the fork points, whatever both ancestors wrote since", () => {
+      setValue("default");
+      createBranch(engine, "child");
+      const onChild = setValue("child", "child");
+      createBranch(engine, "grandchild", { parentBranch: "child" });
+      setValue("child, later", "child");
+      setValue("default, later");
+
+      setHavingRead(onChild, "grandchild", "grandchild");
+
+      expect(valueAt({ branch: "grandchild" })).toBe("grandchild");
     });
   });
 

@@ -5495,7 +5495,7 @@ describe("v2-server-acl", () => {
       }
     });
 
-    it("restores for an owner", async () => {
+    it("restores for an owner, who then reads the earlier value at the restoring commit's seq", async () => {
       const { server, owner } = await serve("memory://acl-branch-owner");
       try {
         const address = { sessionId: owner.sessionId };
@@ -5523,13 +5523,20 @@ describe("v2-server-acl", () => {
         });
 
         expectExists(restore.ok);
-        expect(typeof restore.ok.seq).toBe("number");
+        const restored = await graphQuery(
+          owner.harness,
+          space,
+          owner.sessionId,
+          "of:doc",
+        );
+        expect(restored.ok?.entities[0]?.document?.value).toBe("first");
+        expect(restored.ok?.entities[0]?.seq).toBe(restore.ok.seq);
       } finally {
         await server.close();
       }
     });
 
-    it("returns an error for a write to the access list from a session of a branch", async () => {
+    it("returns `ProtocolError` for a write to the access list from a session of a branch, and leaves the list the branch reads as it was", async () => {
       const { server, open, owner } = await serve("memory://acl-branch-acl");
       try {
         expectExists(
@@ -5550,14 +5557,20 @@ describe("v2-server-acl", () => {
           1,
         );
 
-        expectExists(write.error);
+        expect(write.error).toMatchObject({
+          name: "ProtocolError",
+          message: "ACL mutations are only valid on the default branch",
+        });
         const acl = await graphQuery(
-          owner.harness,
+          onFork.harness,
           space,
-          owner.sessionId,
+          onFork.sessionId,
           `of:${space}`,
         );
-        expect(acl.ok?.entities[0]?.document?.value).toMatchObject({
+        expect(acl.ok?.entities[0]?.branch).toBe("fork");
+        expect(acl.ok?.entities[0]?.document?.value).toEqual({
+          [ALICE]: "OWNER",
+          [BOB]: "WRITE",
           [CAROL]: "READ",
         });
       } finally {

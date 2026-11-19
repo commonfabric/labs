@@ -8672,6 +8672,7 @@ export class Server {
           ...message,
           query: { ...message.query, branch: message.query.branch ?? branch },
         };
+      case "session.watch.set":
       case "session.watch.add":
         return {
           ...message,
@@ -8679,23 +8680,6 @@ export class Server {
             ...watch,
             query: { ...watch.query, branch: watch.query.branch ?? branch },
           })),
-        };
-      case "session.watch.set":
-        return {
-          ...message,
-          watches: message.watches.map((watch) => ({
-            ...watch,
-            query: { ...watch.query, branch: watch.query.branch ?? branch },
-          })),
-          // A view names no branch on the wire, so it is of the session's.
-          ...(message.views !== undefined
-            ? {
-              views: message.views.map((view) => ({
-                ...view,
-                query: { ...view.query, branch },
-              })),
-            }
-            : {}),
         };
       case "history.list":
         return { ...message, branch: message.branch ?? branch };
@@ -9668,7 +9652,16 @@ export class Server {
         ),
       );
     }
-    const views = parsedViews ?? session.views;
+    // A view names no branch on the wire, so it is of the session's.
+    const viewBranch = session.branch;
+    const views = parsedViews === undefined
+      ? session.views
+      : viewBranch === undefined
+      ? parsedViews
+      : parsedViews.map((view) => ({
+        ...view,
+        query: { ...view.query, branch: viewBranch },
+      }));
     for (const view of views) {
       const previous = session.views.find((candidate) =>
         candidate.id === view.id
