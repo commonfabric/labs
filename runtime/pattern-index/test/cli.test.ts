@@ -212,6 +212,28 @@ describe("cli", () => {
     ]);
   });
 
+  it("answers a source request the index refuses as a whole with the index's status, and a withheld program as 403", async () => {
+    reply = () => Response.json({ error: "not allowlisted" }, { status: 403 });
+    const refused = await callHelper(directory, baseUrl, {
+      op: "source",
+      patternIds: ["lunch"],
+    });
+    expect(JSON.parse(refused.stdout)).toMatchObject({
+      ok: false,
+      status: 403,
+    });
+
+    reply = (call) => Response.json(pattern(String(call.body.patternId)));
+    const withheld = await callHelper(directory, baseUrl, {
+      op: "source",
+      patternIds: ["lunch"],
+    });
+    expect(JSON.parse(withheld.stdout)).toEqual({
+      ok: true,
+      value: { patterns: [{ patternId: "lunch", status: 403 }] },
+    });
+  });
+
   it("refuses a source request naming no patterns, too many, or one that is not a string, calling nothing", async () => {
     for (
       const patternIds of [[], ["a", "b", "c", "d", "e", "f"], ["a", 1], "a"]

@@ -1501,8 +1501,8 @@ const VERSION_ENTRY_HELP =
 const NO_INDEX_VERSION_HELP =
   "Keep no version of this deploy in the pattern index, and do not wait on it.";
 
-const MADE_BY_HELP =
-  "Who wrote the source: `agent` for an agent deploying for the person. Its version is kept as agent work, in the history of the piece it is deployed to.";
+const VERSION_ORIGIN_HELP =
+  "Who wrote the source the kept version holds: `agent` for an agent deploying for the person. It is kept as agent work, in the history of the piece it is deployed to.";
 
 const VERSION_DESCRIPTION_HELP =
   "What the kept version says the pattern does, in place of the entry's doc comment.";
@@ -2560,7 +2560,7 @@ export const piece = targetOptions(
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
-  .option("--made-by <who:string>", MADE_BY_HELP)
+  .option("--version-origin <origin:string>", VERSION_ORIGIN_HELP)
   .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
   .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
@@ -2727,7 +2727,7 @@ export const piece = targetOptions(
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
-  .option("--made-by <who:string>", MADE_BY_HELP)
+  .option("--version-origin <origin:string>", VERSION_ORIGIN_HELP)
   .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
   .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
@@ -3641,7 +3641,7 @@ export interface PieceCLIOptions {
   versionEntry?: string;
 
   /** `setsrc` and `new`: who wrote the source (`agent`), for its version. */
-  madeBy?: string;
+  versionOrigin?: string;
 
   /** `setsrc` and `new`: what the kept version says the pattern does. */
   versionDescription?: string;
@@ -5349,46 +5349,61 @@ function versionEntryOf(
 }
 
 /**
- * What `--made-by`, `--version-description` and `--built-from` say about the
- * version a deploy keeps.
+ * What `--version-origin`, `--version-description` and `--built-from` say
+ * about the version a deploy keeps.
  *
- * @throws ValidationError for a `--made-by` other than `agent`, an empty
- * value, or any of them beside `--no-index-version`, which keeps no version
- * for them to describe.
+ * @throws ValidationError for a `--version-origin` other than `agent`, an
+ * empty value, any of them beside `--no-index-version` (no version to
+ * describe) or `--origin` (a piece that follows another pattern keeps no
+ * version of its own), or `--version-origin agent` beside `--version-entry`
+ * (an agent's version follows the piece, not a file).
  */
 function versionFactsOf(
   options: Pick<
     PieceCLIOptions,
-    "indexVersion" | "madeBy" | "versionDescription" | "builtFrom"
+    | "indexVersion"
+    | "versionEntry"
+    | "origin"
+    | "versionOrigin"
+    | "versionDescription"
+    | "builtFrom"
   >,
 ): Pick<DeployedSource, "madeBy" | "description" | "builtFrom"> {
-  const { madeBy, versionDescription, builtFrom } = options;
+  const { versionOrigin, versionDescription, builtFrom } = options;
   if (
-    madeBy === undefined && versionDescription === undefined &&
+    versionOrigin === undefined && versionDescription === undefined &&
     builtFrom === undefined
   ) return {};
+  const refuse = (message: string): never => {
+    throw new ValidationError(message, { exitCode: 1 });
+  };
   if (options.indexVersion === false) {
-    throw new ValidationError(
-      "--made-by, --version-description and --built-from describe the version a deploy keeps; --no-index-version keeps none.",
-      { exitCode: 1 },
+    refuse(
+      "--version-origin, --version-description and --built-from describe the version a deploy keeps; --no-index-version keeps none.",
     );
   }
-  if (madeBy !== undefined && madeBy !== "agent") {
-    throw new ValidationError(
-      `--made-by takes \`agent\`, not "${madeBy}"; leave it out for your own source.`,
-      { exitCode: 1 },
+  if (options.origin !== undefined) {
+    refuse(
+      "--version-origin, --version-description and --built-from describe a version of the piece's own source; a piece that follows --origin keeps none.",
+    );
+  }
+  if (versionOrigin !== undefined && versionOrigin !== "agent") {
+    refuse(
+      `--version-origin takes \`agent\`, not "${versionOrigin}"; leave it out for your own source.`,
+    );
+  }
+  if (versionOrigin !== undefined && options.versionEntry !== undefined) {
+    refuse(
+      "--version-origin agent keeps the version in the piece's history; --version-entry names a file's.",
     );
   }
   const description = versionDescription?.trim();
   const from = builtFrom?.trim();
   if (description === "" || from === "") {
-    throw new ValidationError(
-      "--version-description and --built-from take a non-empty value.",
-      { exitCode: 1 },
-    );
+    refuse("--version-description and --built-from take a non-empty value.");
   }
   return {
-    ...(madeBy === undefined ? {} : { madeBy }),
+    ...(versionOrigin === undefined ? {} : { madeBy: "agent" as const }),
     ...(description === undefined ? {} : { description }),
     ...(from === undefined ? {} : { builtFrom: from }),
   };

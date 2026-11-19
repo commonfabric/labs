@@ -5,8 +5,9 @@
  * --base-url <index URL>` reads one JSON request on stdin and writes one JSON
  * answer on stdout. Requests use `op: search`, `op: feedback` or `op:
  * source`; replies are `{ok: true, value}` or `{ok: false, status, error}`.
- * A completed request, including a refusal, exits zero. Host failures exit nonzero with detail on
- * stderr and nothing on stdout. Malformed stdin produces a 400 JSON answer.
+ * A completed request, including a refusal, exits zero. Host failures exit
+ * nonzero with detail on stderr and nothing on stdout. Malformed stdin
+ * produces a 400 JSON answer.
  * Index 401 (signature failure) and 403 (DID not allowlisted) remain distinct.
  *
  * CFS invocation: `deno run --no-lock --config <labs deno.json[c]>
@@ -19,9 +20,10 @@
  * holds it (`getPattern` with its source), at most
  * {@link SOURCE_PATTERNS_MAX} per request, in the order asked: `{patterns:
  * [{patternId, name?, description, mine?, program} | {patternId, status}]}`,
- * where `status` is the index's refusal of that one pattern (404 for one it
- * does not hold or will not show this member), so one unreadable pattern
- * does not cost the others. A caller reads someone else's pattern to build
+ * where `status` is 404 for a pattern the index does not hold or will not
+ * show this member, and 403 for one it answered without its program, so one
+ * unreadable pattern does not cost the others. Any other refusal answers the
+ * whole request, as for `search`. A caller reads someone else's pattern to build
  * on it, so it can credit that pattern when it deploys what it built.
  *
  * Besides `search`, `feedback` and `source`, `op: whoami` answers the member the
@@ -42,7 +44,11 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join as joinPath } from "@std/path";
-import { isPieceRef, PatternIndexClient } from "./src/client.ts";
+import {
+  isPieceRef,
+  PatternIndexClient,
+  PatternIndexError,
+} from "./src/client.ts";
 import { openPatternIndexClient } from "./src/access.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
@@ -163,7 +169,8 @@ const answerSource = async (
     try {
       const found = await client.getPattern({ patternId, includeSource: true });
       if (found.program === undefined) {
-        patterns.push({ patternId, status: 404 });
+        // The index answered for the pattern and withheld its program.
+        patterns.push({ patternId, status: 403 });
         continue;
       }
       patterns.push({
@@ -174,9 +181,12 @@ const answerSource = async (
         program: found.program,
       });
     } catch (error) {
-      const failure = patternIndexFailure(error);
-      if (failure === undefined || failure.status === 502) throw error;
-      patterns.push({ patternId, status: failure.status });
+      // Only "no such pattern" is about the one pattern; any other refusal
+      // (a signature, an allowlist, a rate) is the request's, and answers it.
+      if (!(error instanceof PatternIndexError && error.status === 404)) {
+        throw error;
+      }
+      patterns.push({ patternId, status: 404 });
     }
   }
   return { ok: true, value: { patterns } };

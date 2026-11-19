@@ -331,9 +331,12 @@ export async function recordDeployedVersion(
         if (!started) remixedFrom = fetchedFrom;
       }
     }
-    const doc = deployed.description === undefined
-      ? patternDocMetadata(await deps.readTextFile(entry))
-      : { description: deployed.description, hashtags: [], keywords: [] };
+    const doc = {
+      ...patternDocMetadata(await deps.readTextFile(entry)),
+      ...(deployed.description === undefined
+        ? {}
+        : { description: deployed.description }),
+    };
     const response = await client.publishPattern({
       ...publishRequestFor({
         patternId,

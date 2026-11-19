@@ -89,6 +89,13 @@ Its operations are:
   "eventType":"thumbs_up","recordedBy":"did:key:..."}}`.
   The author comes from the signer. Extra input fields, including `did` and
   `note`, are omitted.
+- Source: `{"op":"source","patternIds":["..."]}`, one to five ids. Each
+  pattern's program, in the order asked, for a caller that builds on it:
+  `{"ok":true,"value":{"patterns":[{"patternId":"...","name":"...",
+  "description":"...","mine":false,"program":{"main":"...","files":[...]}}]}}`.
+  A pattern the index does not hold or will not show the signer answers
+  `{"patternId":"...","status":404}` in its place, and one answered without its
+  program `status: 403`; any other refusal answers the whole request.
 - View: `{"op":"view","piece":"piece:<sha256 hex>"}` or
   `{"op":"view","patternId":"..."}`, exactly one. It records the signer's
   `viewed_in_loom`: a piece key (`deployedPieceRef`) counts toward settling the
