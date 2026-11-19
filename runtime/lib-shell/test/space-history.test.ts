@@ -1,0 +1,283 @@
+import { describe, it } from "@std/testing/bdd";
+import { expect } from "@std/expect";
+import type { DID } from "@commonfabric/identity";
+import type {
+  HistoryStep,
+  PieceSourceRevisionView,
+  PieceSourceView,
+} from "@commonfabric/runtime-client";
+
+import { withPatternChanges } from "../src/space-history.ts";
+
+describe("withPatternChanges()", () => {
+  const space = "did:key:z6Mk-lib-shell-space-history" as DID;
+
+  /** The moment the cases count from, on a whole second. */
+  const T0 = Date.parse("2026-03-01T12:00:00.000Z");
+
+  /** A `write` step numbered `seq` that began `ms` after `T0`. */
+  function stepAt(seq: number, ms: number): HistoryStep {
+    return {
+      seq,
+      startSeq: seq,
+      at: new Date(T0 + ms).toISOString(),
+      kind: "write",
+      events: 0,
+      writes: 1,
+      settled: true,
+    };
+  }
+
+  /** An `edit` revision named `revisionId`, made `ms` after `T0`. */
+  function revisionAt(
+    revisionId: string,
+    ms: number,
+    extra: Partial<PieceSourceRevisionView> = {},
+  ): PieceSourceRevisionView {
+    return {
+      revisionId,
+      timestamp: T0 + ms,
+      pattern: { identity: `identity-of-${revisionId}`, symbol: "default" },
+      operation: "edit",
+      ...extra,
+    };
+  }
+
+  /** The source of the piece `pieceId`, holding `history`. */
+  function sourceOf(
+    pieceId: string,
+    history: PieceSourceRevisionView[],
+    extra: Partial<PieceSourceView> = {},
+  ): PieceSourceView {
+    return { space, pieceId, files: [], history, ...extra };
+  }
+
+  /** The revision ids each step of `steps` took, by the step's seq. */
+  function revisionsBySeq(
+    steps: ReturnType<typeof withPatternChanges>,
+  ): Record<number, string[]> {
+    return Object.fromEntries(
+      steps.map((step) => [
+        step.seq,
+        step.patternChanges.map((change) => change.revisionId),
+      ]),
+    );
+  }
+
+  it("returns each step's own fields with no pattern changes, given no source", () => {
+    const steps: HistoryStep[] = [
+      {
+        ...stepAt(9, 5000),
+        kind: "restore",
+        restoredSeq: 4,
+        principal: "did:key:z6Mk-someone",
+        settled: false,
+      },
+      { ...stepAt(7, 0), startSeq: 5, kind: "event", events: 2, writes: 3 },
+    ];
+
+    expect(withPatternChanges(steps, [])).toEqual([
+      { ...steps[0], patternChanges: [] },
+      { ...steps[1], patternChanges: [] },
+    ]);
+  });
+
+  it("returns new steps, leaving the ones it was given without `patternChanges`", () => {
+    const steps = [stepAt(1, 0)];
+
+    const result = withPatternChanges(steps, [
+      { source: sourceOf("piece-a", [revisionAt("r1", 0)]) },
+    ]);
+
+    expect(result[0]).not.toBe(steps[0]);
+    expect(steps).toEqual([stepAt(1, 0)]);
+  });
+
+  it("gives a revision to the earliest step that began at or after its time, and to no other", () => {
+    const steps = [stepAt(3, 20_000), stepAt(2, 10_000), stepAt(1, 0)];
+
+    const result = withPatternChanges(steps, [
+      { source: sourceOf("piece-a", [revisionAt("r1", 4000)]) },
+    ]);
+
+    expect(revisionsBySeq(result)).toEqual({ 3: [], 2: ["r1"], 1: [] });
+  });
+
+  it("gives a revision to a step that began at exactly its time", () => {
+    const steps = [stepAt(2, 10_000), stepAt(1, 0)];
+
+    const result = withPatternChanges(steps, [
+      { source: sourceOf("piece-a", [revisionAt("r1", 0)]) },
+    ]);
+
+    expect(revisionsBySeq(result)).toEqual({ 2: [], 1: ["r1"] });
+  });
+
+  describe("the one-second grain of a step's time", () => {
+    it("gives a revision to a step whose second is the one the revision was made later in", () => {
+      const steps = [stepAt(2, 10_000), stepAt(1, 0)];
+
+      const result = withPatternChanges(steps, [
+        { source: sourceOf("piece-a", [revisionAt("r1", 999)]) },
+      ]);
+
+      expect(revisionsBySeq(result)).toEqual({ 2: [], 1: ["r1"] });
+    });
+
+    it("gives a revision made a whole second after a step began to the next step", () => {
+      const steps = [stepAt(2, 10_000), stepAt(1, 0)];
+
+      const result = withPatternChanges(steps, [
+        { source: sourceOf("piece-a", [revisionAt("r1", 1000)]) },
+      ]);
+
+      expect(revisionsBySeq(result)).toEqual({ 2: ["r1"], 1: [] });
+    });
+  });
+
+  describe("the sixty seconds a step may begin after a revision", () => {
+    it("gives a revision to a step that began just under sixty seconds after it", () => {
+      const result = withPatternChanges([stepAt(1, 59_999)], [
+        { source: sourceOf("piece-a", [revisionAt("r1", 0)]) },
+      ]);
+
+      expect(revisionsBySeq(result)).toEqual({ 1: ["r1"] });
+    });
+
+    it("leaves out a revision made sixty seconds or more before every step", () => {
+      const result = withPatternChanges(
+        [stepAt(2, 120_000), stepAt(1, 60_000)],
+        [{
+          source: sourceOf("piece-a", [
+            revisionAt("r1", 0),
+            revisionAt("r2", -3_600_000),
+          ]),
+        }],
+      );
+
+      expect(revisionsBySeq(result)).toEqual({ 2: [], 1: [] });
+    });
+
+    it("leaves out a revision whose first later step began too late, though a step after that one is listed", () => {
+      // The revision falls in a gap: the step before it is too early to be
+      // its commit, and the first one after it is past the window.
+
+      const result = withPatternChanges(
+        [stepAt(2, 200_000), stepAt(1, 0)],
+        [{ source: sourceOf("piece-a", [revisionAt("r1", 100_000)]) }],
+      );
+
+      expect(revisionsBySeq(result)).toEqual({ 2: [], 1: [] });
+    });
+  });
+
+  it("leaves out a revision made a second or more after every step began", () => {
+    const result = withPatternChanges([stepAt(2, 10_000), stepAt(1, 0)], [
+      { source: sourceOf("piece-a", [revisionAt("r1", 11_000)]) },
+    ]);
+
+    expect(revisionsBySeq(result)).toEqual({ 2: [], 1: [] });
+  });
+
+  it("returns no changes for any revision, given no step", () => {
+    expect(
+      withPatternChanges([], [
+        { source: sourceOf("piece-a", [revisionAt("r1", 0)]) },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("lists the revisions of several pieces on one step oldest first, whatever order they arrive in", () => {
+    const result = withPatternChanges([stepAt(2, 10_000), stepAt(1, 0)], [
+      {
+        source: sourceOf("piece-a", [
+          revisionAt("a-late", 9500),
+          revisionAt("a-early", 2000),
+        ]),
+      },
+      {
+        source: sourceOf("piece-b", [
+          revisionAt("b-middle", 5000),
+          revisionAt("b-other-step", -500),
+        ]),
+      },
+    ]);
+
+    expect(revisionsBySeq(result)).toEqual({
+      2: ["a-early", "b-middle", "a-late"],
+      1: ["b-other-step"],
+    });
+    expect(result[0].patternChanges.map((change) => change.pieceId)).toEqual([
+      "piece-a",
+      "piece-b",
+      "piece-a",
+    ]);
+  });
+
+  it("marks as current the revision the piece's source names, and no other", () => {
+    const [step] = withPatternChanges([stepAt(1, 10_000)], [
+      {
+        source: sourceOf(
+          "piece-a",
+          [revisionAt("r1", 1000), revisionAt("r2", 2000)],
+          { currentRevisionId: "r2" },
+        ),
+      },
+      // A source naming no current revision has none.
+      { source: sourceOf("piece-b", [revisionAt("r2", 3000)]) },
+    ]);
+
+    expect(
+      step.patternChanges.map((change) => [change.pieceId, change.current]),
+    ).toEqual([["piece-a", false], ["piece-a", true], ["piece-b", false]]);
+  });
+
+  it("carries the piece's name, the scope, and the revision's origin with the labels of its operation and origin", () => {
+    const origin = { url: "cf:piece:origin", kind: "fabric-piece" } as const;
+
+    const [step] = withPatternChanges([stepAt(1, 0)], [
+      {
+        source: sourceOf(
+          "piece-a",
+          [revisionAt("r1", 0, { operation: "origin-update", origin })],
+          { name: "Shopping list" },
+        ),
+        scope: "user",
+      },
+    ]);
+
+    expect(step.patternChanges).toEqual([{
+      pieceId: "piece-a",
+      scope: "user",
+      pieceName: "Shopping list",
+      revisionId: "r1",
+      operation: "origin-update",
+      label: "Source update",
+      pattern: { identity: "identity-of-r1", symbol: "default" },
+      origin,
+      originLabel: "Fabric piece",
+      current: false,
+    }]);
+  });
+
+  it("returns a change with no `pieceName`, `scope` or `origin` member where there is none, and the detached origin label", () => {
+    const [step] = withPatternChanges([stepAt(1, 0)], [
+      {
+        source: sourceOf("piece-a", [
+          revisionAt("r1", 0, { operation: "detach" }),
+        ]),
+      },
+    ]);
+
+    // `toStrictEqual` tells an absent member from one holding `undefined`.
+    expect(step.patternChanges).toStrictEqual([{
+      pieceId: "piece-a",
+      revisionId: "r1",
+      operation: "detach",
+      label: "Stopped following source",
+      pattern: { identity: "identity-of-r1", symbol: "default" },
+      originLabel: "Detached",
+      current: false,
+    }]);
+  });
+});

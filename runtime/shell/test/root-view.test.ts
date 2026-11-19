@@ -4,6 +4,7 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import {
   type ErrorNotification,
@@ -11,7 +12,7 @@ import {
   NotificationType,
   RuntimeErrorCode,
 } from "@commonfabric/runtime-client";
-import { templateMarkup } from "./lit-template-markup.ts";
+import { templateBindings, templateMarkup } from "./lit-template-markup.ts";
 
 // XRootView is a Lit element; load and exercise it under a minimal browser
 // shim, mirroring login-view.test.ts. Constructing it runs its field
@@ -1679,6 +1680,367 @@ describe("XRootView", () => {
       } finally {
         restore();
       }
+    });
+  });
+
+  describe("restorePattern()", () => {
+    const space = "did:key:z6Mk-shell-restore-pattern";
+    const otherSpace = "did:key:z6Mk-shell-restore-pattern-other";
+
+    type RestoreAnswer = {
+      compatibilityWarning?: string;
+      confirmationToken?: string;
+    };
+
+    /**
+     * A root view on `space` with the history panel showing, over a runtime
+     * that answers each pattern restore with what `answer` returns, and
+     * records what it was asked. `restore` undoes what mounting replaced.
+     */
+    async function mounted(answer: () => Promise<RestoreAnswer>) {
+      const restoreGlobals = installBrowserGlobals();
+      const errors = stub(console, "error");
+      const { XRootView } = await import("../src/views/RootView.ts");
+      const view = new XRootView();
+      const identity = await Identity.fromPassphrase(
+        "root-view-restore-pattern-test",
+      );
+      const lifecycle = view as unknown as {
+        willUpdate(changed: Map<string, unknown>): void;
+      };
+      const showSpace = (did: string) => {
+        const previous = view.app;
+        view.app = {
+          ...previous,
+          identity,
+          config: { ...previous.config, showHistoryView: true },
+          view: { spaceDid: did } as typeof view.app.view,
+        };
+        lifecycle.willUpdate(new Map([["app", previous]]));
+      };
+      showSpace(space);
+      const asked: unknown[][] = [];
+      // The runtime task's value is all of the task these cases read, and a
+      // pattern restore and a fork are all they ask of the runtime.
+      view.accessForTestingOnly.rt = {
+        value: {
+          restorePiecePattern: (...args: unknown[]) => {
+            asked.push(args);
+            return answer();
+          },
+          forkSpace: (_space: string, seq: number) =>
+            Promise.resolve({
+              seq,
+              runtime: { runtime: () => ({}) },
+              discard: () => Promise.resolve(),
+            }),
+        },
+      } as never;
+      return {
+        view,
+        asked,
+        errors,
+        showSpace,
+        /** What the history panel is handed as its `patternRestore`. */
+        patternRestore: () =>
+          templateBindings(view.render(), "patternRestore")[0],
+        /** What the history panel is handed as its `changes`. */
+        changes: () => templateBindings(view.render(), "changes")[0],
+        restore: () => {
+          errors.restore();
+          restoreGlobals();
+        },
+      };
+    }
+
+    it("asks the runtime to restore the revision, then hands the panel no restore and one more change", async () => {
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        expect(changes()).toBe(0);
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([[space, change, undefined]]);
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel a busy restore of that revision until the runtime answers", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, changes, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const restoring = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: true,
+        });
+        expect(changes()).toBe(0);
+
+        answer.resolve({});
+        await restoring;
+        expect(patternRestore()).toBeUndefined();
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the runtime's compatibility warning with its token and the scope, and counts no change", async () => {
+      const { view, changes, patternRestore, restore } = await mounted(
+        () =>
+          Promise.resolve({
+            compatibilityWarning: "The source does not fit the data.",
+            confirmationToken: "token-1",
+          }),
+      );
+      try {
+        await view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "user",
+        });
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          scope: "user",
+          warning: "The source does not fit the data.",
+          confirmationToken: "token-1",
+        });
+        expect(changes()).toBe(0);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel a warning with no token or scope member where the runtime and the change gave none", async () => {
+      const { view, patternRestore, restore } = await mounted(
+        () => Promise.resolve({ compatibilityWarning: "It does not fit." }),
+      );
+      try {
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+        // `toStrictEqual` tells an absent member from one holding
+        // `undefined`.
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          warning: "It does not fit.",
+        });
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends a second request carrying the token after a warning, and counts the change once that one lands", async () => {
+      const answers: RestoreAnswer[] = [
+        { compatibilityWarning: "It does not fit.", confirmationToken: "t1" },
+        {},
+      ];
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () => Promise.resolve(answers.shift()!),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.restorePattern(change);
+        const confirmed = { ...change, confirmationToken: "t1" };
+
+        // The panel's "Restore it anyway" arrives as a command.
+        await view.onCommand(
+          new CustomEvent("command", {
+            detail: { type: "restore-pattern", ...confirmed },
+          }),
+        );
+
+        expect(asked).toEqual([
+          [space, change, undefined],
+          [space, { type: "restore-pattern", ...confirmed }, "t1"],
+        ]);
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the failure's message when the runtime rejects, logs it, and counts no change", async () => {
+      const { view, changes, errors, patternRestore, restore } = await mounted(
+        () => Promise.reject(new Error("the piece is gone")),
+      );
+      try {
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          error: "the piece is gone",
+        });
+        expect(changes()).toBe(0);
+        expect(errors.calls).toHaveLength(1);
+        expect(errors.calls[0].args[0]).toBe(
+          "[RootView] Failed to restore a pattern:",
+        );
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends a new request after a failure", async () => {
+      let failing = true;
+      const { view, asked, changes, patternRestore, restore } = await mounted(
+        () =>
+          failing ? Promise.reject(new Error("offline")) : Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.restorePattern(change);
+        failing = false;
+
+        await view.restorePattern(change);
+
+        expect(asked).toHaveLength(2);
+        expect(patternRestore()).toBeUndefined();
+        expect(changes()).toBe(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing for a restore asked for while another is busy, and leaves the busy one in place", async () => {
+      const answer = Promise.withResolvers<RestoreAnswer>();
+      const { view, asked, patternRestore, restore } = await mounted(
+        () => answer.promise,
+      );
+      try {
+        const first = view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+
+        await view.restorePattern({ pieceId: "fid1:b", revisionId: "r2" });
+
+        expect(asked).toHaveLength(1);
+        expect(patternRestore()).toEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: true,
+        });
+        answer.resolve({});
+        await first;
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing while a fork is open, and sends again once it is closed", async () => {
+      const { view, asked, patternRestore, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        await view.openHistory(3);
+
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([]);
+        expect(patternRestore()).toBeUndefined();
+
+        await view.closeHistory();
+        await view.restorePattern(change);
+        expect(asked).toHaveLength(1);
+      } finally {
+        restore();
+      }
+    });
+
+    it("sends nothing with no runtime, or with no space resolved", async () => {
+      const { view, asked, showSpace, restore } = await mounted(
+        () => Promise.resolve({}),
+      );
+      try {
+        const change = { pieceId: "fid1:a", revisionId: "r1" };
+        const task = view.accessForTestingOnly.rt;
+        view.accessForTestingOnly.rt = { value: undefined } as never;
+        await view.restorePattern(change);
+
+        view.accessForTestingOnly.rt = task;
+        const previous = view.app;
+        view.app = { ...previous, view: { builtin: "settings" } as never };
+        (view as unknown as {
+          willUpdate(changed: Map<string, unknown>): void;
+        }).willUpdate(new Map([["app", previous]]));
+        expect(view.getRuntimeSpaceDID()).toBeUndefined();
+        await view.restorePattern(change);
+
+        expect(asked).toEqual([]);
+
+        // The same view sends once it is on a space again.
+        showSpace(space);
+        await view.restorePattern(change);
+        expect(asked).toHaveLength(1);
+      } finally {
+        restore();
+      }
+    });
+
+    describe("when the view moves to another space before the runtime answers", () => {
+      it("drops a success: the panel is handed no restore, and no change is counted", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, changes, patternRestore, showSpace, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+          showSpace(otherSpace);
+          expect(patternRestore()).toBeUndefined();
+
+          answer.resolve({ compatibilityWarning: "It does not fit." });
+          await restoring;
+
+          expect(patternRestore()).toBeUndefined();
+          expect(changes()).toBe(0);
+        } finally {
+          restore();
+        }
+      });
+
+      it("drops a failure: the panel is handed no restore, though the failure is logged", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, errors, patternRestore, showSpace, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+          showSpace(otherSpace);
+
+          answer.reject(new Error("the piece is gone"));
+          await restoring;
+
+          expect(patternRestore()).toBeUndefined();
+          expect(errors.calls).toHaveLength(1);
+        } finally {
+          restore();
+        }
+      });
     });
   });
 
