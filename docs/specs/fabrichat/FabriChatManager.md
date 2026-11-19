@@ -228,10 +228,12 @@ is what labels it `authored-by` this user.
 
 The manager's rendering composes a group in a draft of the session's own: a
 title, members typed as chat addresses, and members picked from `people`, one
-control per person, which picks the first profile `people` lists for them,
-from the newest room whose roster holds one. Creating the
-group names the picked profiles as `createGroup`'s `profiles`, so each picked
-person is offered the room, and empties the draft.
+control per person, which picks the first profile `people` lists for them, from
+the newest room whose roster holds one. The picker lists them from
+`askedPeople`, once the session's "Add people from your chats" control has sent
+`askForPeople`, so rendering the manager reads no room's roster until someone
+opens it. Creating the group names the picked profiles as `createGroup`'s
+`profiles`, so each picked person is offered the room, and empties the draft.
 
 Someone a user adds to a room later is told of it through `offerRoom`, which
 the room's `addMember` sends once it has granted them access. It runs as an
