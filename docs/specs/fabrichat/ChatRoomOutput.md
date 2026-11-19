@@ -645,11 +645,14 @@ repeated or delayed event can't undo what the person meant.
 Admits someone to a room's space, and has the reader's chat manager
 ([`ChatManagerOutput`](ChatManagerOutput.md)) tell them of the room. Unlike the
 streams in the table, it takes a gesture of its own, and it is in `[VIEWS]`
-with them.
+with them. The rendered control reads the manager's `people` only while a
+session has it open: they are drawn from every room the reader's manager lists,
+so a rendering of one room that read them would load all of those rooms.
 
 - **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
-  rendered add control, which takes an address or a pick from the people the
-  reader's manager lists who aren't in the room yet, or from a client's own
+  rendered add control, which each session opens for itself and which then
+  takes an address or a pick from the people the reader's manager lists who
+  aren't in the room yet, or from a client's own
   control through the sanctioned issuing path (see
   [`clients.md`](clients.md#the-sanctioned-issuing-path)), from an OWNER of the
   room's space, for a group room in a space of its own.

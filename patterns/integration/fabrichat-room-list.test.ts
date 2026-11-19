@@ -24,6 +24,7 @@ import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import { isObjectNotArray } from "@commonfabric/js-values/types";
 import { isDeletedSpaceError } from "@commonfabric/memory/v2/client";
 import {
   ACLManager,
@@ -36,6 +37,7 @@ import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno
 import {
   CHAT_START,
   closeMember,
+  enterRoom,
   type MemberSession,
   MemberWaits,
   openMember,
@@ -716,6 +718,118 @@ describe("fabrichat-room-list", () => {
       // its pass is counted with the clients'.
       if (serving) return;
       expect(crossSpaceReadsAtBringUp).toBe(0);
+    });
+  });
+
+  //
+  // A fresh client rendering one room
+  //
+
+  /**
+   * Renders `room` as a renderer does, holding every cell its view holds, a
+   * level at a time, apart from those in `others`, and returns what each of
+   * those cells held.
+   */
+  async function renderRoomView(
+    client: Client,
+    room: Cell<unknown>,
+    others: readonly DID[],
+  ): Promise<unknown[]> {
+    const held = new Set<string>();
+    const values: unknown[] = [];
+    let level: unknown[] = [room.key("$UI").asSchema(rendererVDOMSchema)];
+    while (level.length > 0) {
+      const cells: Cell<unknown>[] = [];
+      const visit = (value: unknown): void => {
+        if (value === null || typeof value !== "object") return;
+        if (isCell(value)) {
+          const { space, id, path } = value.getAsNormalizedFullLink();
+          if (others.includes(space as DID)) return;
+          const key = `${space}/${id}/${JSON.stringify(path)}`;
+          if (held.has(key)) return;
+          held.add(key);
+          cells.push(value);
+          return;
+        }
+        for (const each of Object.values(value)) visit(each);
+      };
+      for (const value of level) visit(value);
+      for (const cell of cells) cell.sink(() => {});
+      await Promise.all(cells.map((cell) => cell.pull()));
+      await settle(client.controller);
+      level = cells.map((cell) => cell.get());
+      for (const value of level) values.push(value);
+    }
+    return values;
+  }
+
+  /**
+   * The stream the node with `id` is clicked through, from `values`, among
+   * which a rendered view's held cells give each node's props.
+   */
+  function clickStreamOf(
+    values: readonly unknown[],
+    id: string,
+  ): Cell<unknown> {
+    for (const value of values) {
+      if (!isObjectNotArray(value) || value.id !== id) continue;
+      const { onClick } = value;
+      if (isCell(onClick)) return onClick;
+    }
+    throw new Error(`No rendered node has the id ${id}`);
+  }
+
+  describe("a fresh client rendering one room", () => {
+    let rooms: DID[];
+    let others: DID[];
+    let client: Client;
+
+    /** The documents each other room delivered before the control opened. */
+    let arrivedBeforeOpening: number[];
+
+    /** The other rooms it had a session to before the control opened. */
+    let openedBeforeOpening: DID[];
+
+    beforeAll(async () => {
+      const made = await personWithRooms("frank", 3);
+      rooms = made.rooms;
+      others = rooms.slice(1);
+      client = await bootClient({ person: made.person });
+      const rows = await listRooms(client, rooms.length);
+      const row = rows.find((each) => each.room.space === rooms[0]);
+      if (row === undefined) throw new Error("The room isn't listed");
+      const { schema: _schema, ...link } = row.room.getAsNormalizedFullLink();
+      const room = await enterRoom(
+        memberOf(client),
+        client.controller.runtime.getCellFromLink(link),
+      );
+      const values = await renderRoomView(client, room, others);
+      arrivedBeforeOpening = arrivedIn(client, others);
+      openedBeforeOpening = openedOf(client, others);
+      const tx = client.controller.runtime.edit();
+      clickStreamOf(values, "fabrichat-add-member-toggle").withTx(tx).send({
+        type: "click",
+      });
+      const { error } = await tx.commit().settled;
+      if (error) throw new Error(`Opening the control: ${error.message}`);
+      await settle(client.controller);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("receives no document from another room's space", () => {
+      expect(arrivedBeforeOpening).toEqual(others.map(() => 0));
+    });
+
+    it("opens no session to another room's space", () => {
+      expect(openedBeforeOpening).toEqual([]);
+    });
+
+    it("reads each other room once the add control is open", () => {
+      expect(arrivedIn(client, others).every((count) => count > 0)).toBe(true);
+      expect(openedOf(client, others)).toEqual(others);
     });
   });
 

@@ -439,10 +439,9 @@ describe("FabriChat flat manager sends", () => {
     });
 
     // Everything the room stores of the manager's data lands in the viewer's
-    // own documents: the picker's list of the people `candidatesForUser`
-    // reads from the manager, and the `outcomes` that merge the manager's
-    // verdicts into `addRequests`, both in their per-user ones. A user or
-    // session document may hold its own principal's personal data
+    // own documents: the `outcomes` that merge the manager's verdicts into
+    // `addRequests`, in their per-user one. A user or session document may
+    // hold its own principal's personal data
     // (§8.12.4), so the add refuses nothing and is listed as done, as it is
     // through a public manager.
     expect(addRequests).toEqual({ "add-bob": { status: "done" } });

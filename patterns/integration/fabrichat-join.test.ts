@@ -257,7 +257,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(adder, "cf-profile-badge", "Grace Hopper");
 
     // The adder creates a second group, of their own alone, and opens it. Its
-    // add control offers the person from their chats.
+    // add control, once they open that too, offers the person from their chats.
     const secondTitle = "Added team";
     await openChatManager(firstShell, adderIdentity);
     await waitForSettledText(adder, "#fabrichat-group-people", "Grace Hopper");
@@ -266,6 +266,7 @@ describe("fabrichat-join", () => {
     await waitForSettledText(adder, "#fabrichat-rooms", secondTitle);
     const secondRoomId = await clickCellLink(adder, secondTitle);
     const secondRoomView = await waitForPieceSelected(adder, secondRoomId);
+    await clickButtonWithExactText(adder, "Add people");
     await waitForSettledText(
       adder,
       "#fabrichat-add-member-people",
