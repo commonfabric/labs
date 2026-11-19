@@ -258,7 +258,14 @@ session that has none is refused.
   until a client reports it delivered, the room's roster lists a profile
   attesting its recipient, who then needs no telling, or the room is
   [deleted](../random-space-identities.md#deleting-a-space), as `rooms` tells
-  it, which leaves nothing to tell them of.
+  it, which leaves nothing to tell them of. A notice whose recipient has
+  joined is also dropped from what the manager stores, where the manager
+  finds them on the room's roster or puts them there: as an offer adds them to
+  the room's participants, as `openDirect` finds them there before offering
+  the room again, and otherwise, as when another member added them, the next
+  time this user [joins](#joinroomrequestid-string-room-cellchatroomoutput)
+  the room. A notice of a room this user never joins again stays stored, left
+  out of the list, until a client reports it delivered.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
   `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
@@ -370,10 +377,10 @@ outward act when it creates a room, or offers one it finds.
   room that was offered `counterpart` nothing, since a notice for them of it is
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
   `profile` is added to the room's participants, as for a new room, wherever
-  it points; once that puts them on the room's roster, `outgoingNotices` leaves
-  the notice out. A room whose roster already lists a
+  it points, and the notice is dropped. A room whose roster already lists a
   profile attesting `counterpart` is one they have joined, and is offered
-  nothing; so is one whose notice has been delivered. Nor is a room offered,
+  nothing, and the notice is dropped; a room whose notice has been delivered
+  is offered nothing either. Nor is a room offered,
   and its notice stays, when `requestId` is longer than an offer's `id` may be.
   A `direct` entry whose room's space is deleted, `spaceDeleted(room)`
   returning `true`, is no such entry: the request goes on as if `direct` had
@@ -576,6 +583,12 @@ opening the room's page.
   they differ, leaving the entry's revision and membership state as they are;
   with `messageAct`, which arrives with every message and reaction and none of
   which changes the title, not even that, and the room's `about` goes unread.
+  One read is added to either: a join of a room this user's manager holds a
+  notice of reads the room's roster, and drops each of those notices whose
+  recipient the roster lists, since a recipient who has joined, however they
+  came to, has nothing left to be told, and a notice kept would stay stored
+  until a client reports it delivered. A join of a room with no notice reads no
+  roster, and the notices are written only when one is dropped.
   A `messageAct` join of a room the catalog lists with no membership leaves it
   as it is too; any other join records its membership. Otherwise what
   `accept` does with no `counterpart` and without `keepArchived`: records an
@@ -648,7 +661,9 @@ A notice has to reach a principal who may share no space with this user. Until a
 pattern can deliver one itself (see [first
 contact](FabriChatManager.md#first-contact)), the manager lists notices in
 `outgoingNotices` and a client delivers them. The list leaves out a notice whose
-recipient the room's roster already lists. A notice says which room, and who
+recipient the room's roster already lists, and the manager drops such a notice
+from what it stores once it finds them there (see
+[facts](#facts)). A notice says which room, and who
 sent it: this user. A client MUST deliver only that, and MUST NOT deliver any of
 the room's contents. It then sends `delivered` with the notice's `id`.
 

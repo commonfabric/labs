@@ -31,9 +31,13 @@ nothing else: deriving it reads no room. Every link to a room the manager
 stores, in `roomMembership`, `direct`, `requests` and `outgoingNotices`, is
 declared a handle with nothing behind it (`Cell<unknown>`), so a read of any of
 them, Home's own sync among them, keeps the link and loads no room. The
-derivations that read rooms, `people` from the listed rooms' rosters and
-`outgoingNotices` from each notice's room's roster, first re-type the links to
-`ChatRoomLink`, which declares the rosters; nothing else reads them. `people`
+derivations that read rooms, `people` from the listed rooms' rosters and the
+notices with nothing left to tell from each notice's room's roster, first
+re-type the links to `ChatRoomLink`, which declares the rosters; nothing else
+reads them. `outgoingNotices` leaves those notices out in a derivation of its
+own, which also leaves out a notice of a room the catalog says is deleted, and
+which reads no room, so that a change to the catalog, such as a new room,
+derives the list again without reading any notice's room. `people`
 re-types each link where it reads that room's roster, in an instance of its
 own per room whose argument holds the handle, so no list the manager stores
 types a room as more than a handle; a reader that syncs such a list would walk
@@ -126,12 +130,12 @@ and restores its membership. A room found there that has a notice for its
 counterpart still waiting in `outgoingNotices`, since the room was offered them
 nothing, is offered to them, as step 3 of [creating a room](#creating-a-room)
 offers a new room, once a request names a profile of theirs. The offer puts
-them on the room's roster by that profile, wherever it points, and
-`outgoingNotices` leaves the notice out from then on. A counterpart the room's
-roster already lists has joined the room, and is offered nothing. A room another manager created and
-offered the user is there too once the host's share intake accepts it on the
-user's behalf. `rooms` can also hold a second direct room with the same
-counterpart, after crossing creations.
+them on the room's roster by that profile, wherever it points, and the notice
+is dropped. A counterpart the room's roster already lists has joined the room,
+is offered nothing, and has their notice dropped. A room another manager
+created and offered the user is there too once the host's share intake accepts
+it on the user's behalf. `rooms` can also hold a second direct room with the
+same counterpart, after crossing creations.
 
 `direct`'s entries, and the entry a `done` outcome in `requests` carries, hold a
 room as `FabriChatRoom.inSpace(…)` returned it at creation, or as `accept` was
