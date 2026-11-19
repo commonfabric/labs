@@ -99,8 +99,11 @@ pattern can run both ways in one runtime, under one harness.
     document with the kept outputs, state cells, documents of outputs and
     streams, is the design's. Stored as entities of a space it stays the
     design's. Part documents and chunks (provisional decisions P20 and P25
-    to P29) need storage to carry a patch to a subscriber (question 290,
-    point (a)); they are not needed to measure anything below.
+    to P28) need storage to carry a patch to a subscriber (question 290,
+    point (a)); they are not needed to measure anything below. Chunked
+    storage of long arrays is a requirement on the storage layer, which
+    today's runtime has as well (the design's plan, "The scope of the
+    storage decisions").
   - *One transaction per cause.* The executor's transactions map one to one
     onto the runtime's.
   - *Labels.* The design instantiates a label per written path from the
@@ -339,7 +342,14 @@ changes for it.
    the option of milestone 3 ("The CFC specification process" above).
    *Measures:* the cost of instantiating a template per written path
    against one join per transaction, and the labels the design stores,
-   compared with today's from the same runtime.
+   compared with today's from the same runtime. *Status:* built in the
+   coordinating session on branch `claude/compiled-pattern-m4`, steps 1 to
+   10 and 13 of its plan, behind the experimental option
+   `compiledPatterns`; steps 11 and 12, instantiation keys and verified
+   units in the prepared digest and a derived write dropped alone, are
+   not. Specs pull request 91 was updated on 2026-11-19. The figures and
+   the open findings are in "Milestone 4: labels from templates at commit"
+   below.
 5. **Value code in the sandbox.** The module texts of value code are
    evaluated in an SES compartment under the runtime's module policy, and
    the runtime compiles on load with the crate in the compile worker.
@@ -549,7 +559,8 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
     of `city` alone, and so does the design's template; `briefing` carries
     "demo-secret" in all three. This is today's join over every read of a
     transaction, applied to the design's one transaction for the whole
-    settle, and milestone 4 is what removes it.
+    settle, and milestone 4 is what removes it ("Milestone 4: labels
+    from templates at commit", "The acceptance result").
 
   - *What is left.* The 2 refusals of the runtime's bug above, and 2
     writer-fit misfits in `examples/cfc-exchange-rules/witnessed-chain.tsx`,
@@ -585,3 +596,105 @@ outlier of the labeled battleship run; how much of the wait for a commit to
 settle is idle; and why the driver's own comparison with today's values,
 made in the same process after the runs, finds 5,637 of 6,053 equal where
 the values run finds 6,013 of 6,107.
+
+## Milestone 4: labels from templates at commit
+
+**What is built.** On branch `claude/compiled-pattern-m4`, behind the
+experimental option `compiledPatterns`, off by default. The runtime side,
+under `runtime/runner/src/cfc/`: a resolver of the label one observation
+consumes, factored out of the join (`observation-label.ts`); a pure
+`instantiateTemplate` with the runtime's label operations
+(`plan-template.ts`); a registry of compiled plans and an authorized
+`plan-write` input of the transaction (`compiled-plans.ts`); and the pass
+that binds each covered path's slots and instantiates its template at
+commit (`plan-labels.ts`), whose labels replace the join at every covered
+path in the persist step of `prepare.ts`. Only a serving runtime turns
+plan labels on for its transactions, by the owner's ruling that a
+client's speculative run is never the stored result. The prototype side:
+the executor reports for each write its plan record and the slots its
+template is bound to, the selections and chosen children, and the reads
+attributed to `dynamic` nodes; the adapter records them as `plan-write`
+inputs and registers the compiled pattern. Labels are handled by
+identifier and a `fold` is instantiated once per group of element inputs
+(provisional decision P31 of the design's plan). The deciding sites carry
+the `SPEC-PENDING` marker for specs pull request 91.
+
+**The acceptance result.** On `examples/cfc-input-cell-demo/briefing.tsx`,
+with the option on, `climate`, which reads `city` alone, stores only the
+clause of `city`; with the option off it stores "demo-secret", the join
+over the whole settle (see "Labels too wide" under milestone 1).
+
+**The cost of one changed element.** `compare/template-cost.ts`, a
+`filter` over a list of 100, 1,000 and 10,000 elements with one element
+changed, preparation time in milliseconds with the option off and on, the
+median of two runs:
+
+| The list | 100: off / on | 1,000: off / on | 10,000: off / on |
+| --- | --- | --- | --- |
+| An array of plain values in place | 3.0 / 1.1 | 1.4 / 1.5 | 3.7 / 5.5 |
+| An array of references | 0.6 / 0.7 | 0.9 / 0.9 | 3.2 / 3.2 |
+| The result of a `map` | 0.4 / 0.6 | 0.5 / 0.8 | 0.5 / 0.7 |
+
+With the option on, a commit instantiates 3 to 7 templates at every size,
+and a test pins that the counters and the stored entries are equal at two
+lengths. The time at 10,000 elements of plain values in place, 5.5 ms
+against 3.7 ms, was not examined.
+
+**A defect found and fixed.** The first build stored one label entry per
+element of a kept per-element output, and every commit encoded, hashed
+and compacted all of them: the preparation of a change of one element took
+2.2, 16.8 and 157.5 ms at 100, 1,000 and 10,000 elements. Where every
+element of an array written whole has one label, one entry at the array's
+`*` path is now stored, and the same change prepares in 0.6 to 0.8 ms at
+every size. The rule and its limits are in
+`plan-and-label-templates.md` §2.3 ("One entry for the elements of an array
+written whole").
+
+**The corpus.** `compare/corpus.ts` over a subset of the corpus: the crate
+panics on the whole corpus, so `patterns/system/` is left out. Of 226
+modules attempted 177 run; 25 need `wish`, 14 request an effect, and 10 do
+not run for other reasons (4 runs refused at commit, 2 with no value code,
+4 imports of `patterns/system/`). Beside today's rows:
+
+| | Equal | Tighter | Looser | Other |
+| --- | ---: | ---: | ---: | --- |
+| 1,139 output rows | 679 | 179 | 148 | 133 whose atom names the pattern |
+| 111 write rows | 65 | 3 | 42 | 1 incomparable |
+
+53 of today's rows have no stored write and 103 no stored output to
+compare. Of 1,733 write records checked against the template evaluator
+of the prototype, 1,074 agree. 612 records in 106 modules have no entry
+stored at the path, where the evaluator gives the pattern's atom: a commit
+that reads no labeled document is not prepared, with the option on as
+without it. Of the other 47, 36 differ in a label, 27 in integrity alone
+and 9 in confidentiality, and 11 were not evaluated, for dynamic reads
+that the record does not report. With the option on and
+not off, 59 commits in 44 modules are refused: 40 for a slot with no
+binding, 14 for a slot bound to an empty chain, 3 for a write record that
+names a path the transaction did not write, 1 for a slot bound to a path
+the transaction did not read in its class, and 1 for a collection with no
+elements reported; 14 runs stopped after such a refusal. The preparation
+took 0.43 ms per preparation with the option off (184 preparations, 79.9
+ms) and 0.72 ms with it on (168 preparations, 120.4 ms), over the 133
+modules in which no commit is refused with the option on alone. Over all
+177 modules the option off made 1,350 commits and 468 preparations, and
+the option on 1,059 commits and 335 preparations.
+
+**Open findings,** most serious first. Each is being worked on.
+
+1. *Label differences against the evaluator that are not yet explained.*
+   The 36 records whose stored label differs from the evaluator's, 9 of
+   them looser in confidentiality, have no stated cause. Until they and
+   the rows looser than today's (148 output rows, 42 write rows) are
+   attributed, the subset does not show that the labels from templates are
+   equal to or tighter than today's outside the deliberate exceptions.
+2. *Commits that are not prepared, and the atom of a kept output.* By the
+   owner's confirmation every kept output carries the pattern's atom; a
+   commit that is not prepared stores none. Whether every commit of a
+   compiled pattern is prepared is question 303 of the design's plan.
+3. *The crate's panic on the whole corpus.* The figures above leave out
+   `patterns/system/`, so FabriChat and Home are not in them (the design's
+   plan, "Known limits of what exists").
+4. *Refusals that remain.* The 59 commits refused with the option on and
+   not off, each a slot or a record the adapter does not yet bind or
+   report.

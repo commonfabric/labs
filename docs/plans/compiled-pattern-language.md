@@ -3799,8 +3799,8 @@ derivation put into them.
    key fields. `push`, `set` and a `splice` do not conflict with P26: a
    `push` and a `splice` write one chunk and the lists above it, and a
    `set` of the whole array is compared with what is stored. Provisional
-   decision P29 adds an index for an array that declares key fields
-   (question 299).
+   decision P29, an index for an array that declares key fields, is
+   withdrawn, and question 299 is open with no provisional decision.
 5. **A position with no number in the chunk lists.** P20 as it was first
    stated; resolved by P25, which is what the prototype builds by default.
    With no numbers the row at position 50,000 of 100,000 is read through 20
@@ -5425,7 +5425,10 @@ is relitigated.
   built ahead of its number (2026-11-19): next, on the adapter of milestone
   1 and beside milestone 2.
   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
-  ("The order of work") has the reason.
+  ("The order of work") has the reason. It is built in the coordinating
+  session (2026-11-19), and specs pull request 91 was updated on
+  2026-11-19 (`cfc/08-09-runtime-label-propagation.md` and
+  `cfc/18-runtime-implementation-profiles.md`).
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no
@@ -6225,6 +6228,37 @@ is relitigated.
   The ruling is on the templates of outputs. Its consequence for the
   other records of a plan that hold a template is the provisional
   decision P5, and no ruling.
+- Stored labels are concrete (2026-11-19, Z59). What is stored is the
+  instantiated label, its clauses and atoms, and not a symbolic reference
+  to the labels of its sources that a reader resolves at egress. A stored
+  label does not follow a later change of a source's label; it changes by
+  re-instantiation. The owner's words: "keep concrete for now".
+  `plan-and-label-templates.md` §2.3.
+- Only a serving runtime commits labels from templates (2026-11-19, Z60).
+  A client's speculative run is never the stored result, and the store
+  does not verify a label from a template. An exception for storage held
+  in memory for tests is allowed only if it lowers the complexity of the
+  whole, and it is not built. `plan-and-label-templates.md` §4.1.
+- A `derive` and a `fold` mint their `TransformedBy` atom only beside a
+  label that has a confidentiality clause or a hereditary atom
+  (2026-11-19, Z61), which is the runtime's condition. It settles
+  `plan-and-label-templates.md` question 66, and that document's §3.2 and
+  the pseudocode of its §4.2 state it.
+- Code of a pattern B compiled into a pattern A mints B's atom (2026-11-19,
+  Z62). It settles `plan-and-label-templates.md` question 64, which is
+  question 116 here, for which pattern the atom names.
+- A template label may rest on labels that an earlier transaction observed,
+  and not only on reads of the committing transaction (2026-11-19, Z63).
+  Such a label is checked for conflicts at commit. The runtime records, in
+  the committing transaction, an observation of the label metadata of each
+  such binding. The owner's words: "Yes, allow it".
+  `plan-and-label-templates.md` §4.2.
+- Every kept output carries the pattern's atom (the owner confirmed,
+  2026-11-19). Whether an interim value, the target of a write edge, the
+  argument of a child, the request of an effect and the state of a binding
+  get an added atom stays open: question 120 here, which is
+  `plan-and-label-templates.md` question 71. The owner's design for a value
+  passed on from an argument is question 302.
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6244,11 +6278,48 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **P9** is flagged. With it a batch of events and the same events handled one
+1. **Question 303, with the findings of milestone 4.** Labels from templates
+   at commit are built (milestone 4 of the integration). By the owner's
+   confirmation every kept output carries the pattern's atom, but a commit
+   that reads no labeled document is not prepared, so over the corpus subset
+   612 write records store no entry where the evaluator gives the atom.
+   Either every commit of a compiled pattern is prepared, at the cost of a
+   preparation for each such commit (0.72 ms per preparation with the
+   option on, against 0.43 ms with it off, over the 133 modules of the
+   milestone with no commit refused under the option alone), or
+   the atom is stored only where a preparation runs. Beside it, and being
+   worked on: label differences against the evaluator that are not yet
+   explained, a crate panic on the whole corpus, and 59 commits refused with
+   the option on
+   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+   "Milestone 4: labels from templates at commit").
+2. **Question 302,** the owner's design for the integrity of a value a
+   pattern passes on from an argument: the minimum integrity it declares on
+   an input becomes a requirement on the link written for the argument. It
+   is recorded as a sketch with its open points and needs a specification
+   change of its own; whether to pursue it is the owner's decision.
+3. **P31,** which milestone 4 builds: labels by identifier, and a `fold`
+   instantiated once per group of element inputs, in the `uniform` form for
+   an array of plain values in place and the `groups` form, with a count per
+   group kept with the collection's assembly, for an array of references and
+   for the result of another per-element construct. With it a change of one
+   element costs 3 to 7 instantiations at 100, 1,000 and 10,000 elements.
+   Its `*` entry for the elements of an array written whole gives a wider
+   label after a `splice` than per-element entries would.
+4. **The scope of the storage decisions,** the coordinator's recommendation
+   after P29 was withdrawn: chunked storage of long arrays is a requirement
+   on the storage layer, which today's runtime has as well, and this design
+   keeps the split points, P22 and the bound on one row's change. It decides
+   where questions 290, point (a), 296 and 299 are answered.
+5. **Question 304,** a defect of today's runtime found by reading and shown
+   by a test: when an array of plain values in place is spliced, the
+   per-element label entries stay at their positions, so a position can
+   hold the label of the value that was there before.
+6. **P9** is flagged. With it a batch of events and the same events handled one
    at a time can store different values, and today's runtime, which runs the
    writer again, stores the same value in both. The coordinator adopted it only
    so that the work continues.
-2. **Questions 254, 255 and 295,** on keys that are formed from plain values.
+7. **Questions 254, 255 and 295,** on keys that are formed from plain values.
    Over an array of plain values in place with no declared key, each keystroke
    in a row that has state re-keys the row, moves its state, stores the row
    again and leaves one new stream document, and a list of 100 records that is
@@ -6262,23 +6333,7 @@ pointer to its entry.
    not say whether it holds plain values in place or references and 168
    reports in 80 of 286 corpus modules were mostly for lists of references,
    and is replaced by a report of the runtime at the first such edit.
-3. **Question 290, point (a),** on what storage does with a write below a path
-   of a document, which decides the size of a chunk. Read in source after
-   prototype round 5: a writer sends a patch of the paths it wrote; the
-   server stores the patch as one row and, after every tenth patch of a
-   document, the whole document as a snapshot; and every subscriber receives
-   the whole document for every change. So an edit of one small row costs
-   the writer its patch, the store the patch and a tenth of the chunk, and
-   each subscriber the chunk. The first favors a large chunk and the last a
-   small one: measured with the chunk written whole, an edit is 122,242
-   bytes in 2 documents at a maximum of 65,536 and 8,130 bytes at 4,096.
-   Not decided. The author of the documents recommends that the design
-   require of storage a sync that carries the patch of a document, after
-   which a chunk is sized for reads alone. With it goes question 296: a
-   mergeable `push` is applied by today's server as an operation on one
-   array of one document, so an array in chunks keeps merging only if
-   storage maintains the layout, which today's does not.
-4. **P18 with P19.** P18 changes the records of a plan and is written in full
+8. **P18 with P19.** P18 changes the records of a plan and is written in full
    into `plan-and-label-templates.md` §1.1. Its status: designed; amended
    after round 5 by one rule, for a callee that passes an argument on at a
    site that binds it by a literal; sound on the evidence of the corpus,
@@ -6289,30 +6344,9 @@ pointer to its entry.
    which is the one point at which the written-out form is not preserved
    outside the result (question 288). The corpus has no report that P19
    could lose.
-5. **P20 with P25 to P29,** the rule on part documents of
-   `execution-and-storage.md` §4.10. P20: a row is a part only from a minimum
-   size on, and a long array is stored in chunks. The rule it replaces turned
-   2,600 small rows into 2,800 documents in one transaction and wrote 610,081
-   bytes of documents for an append to a list of 10,000. Built as documents
-   in round 5, one change of one row writes at most 139,217 bytes in 4
-   documents for small rows at 100,000 rows. P25: a chunk list holds the
-   number of entries of each chunk. P26: the arrays of argument documents
-   and state cells are stored in chunks as well. P27: a record with many
-   members is stored in chunks as an array is, which the measurement showed
-   missing (572,774 bytes for one keystroke at 10,000 members). P28: the
-   part of a row is named by a number that the runtime mints and not by the
-   element's key, which a source array does not have and which an edit
-   changes. P29: an array that declares key fields has an index from a key
-   to its chunk. Of the three, P29 is the least settled: as stated, a split
-   of a chunk writes an index entry for each row it moves, and those are
-   spread over the whole index (question 299).
-6. **P22,** which resolves a conflict of the documents with themselves: a cone
+9. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
-7. **P30,** settled by the owner on 2026-11-18: both tracks, with Topics
-   as their shared target.
-   [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
-   has the options, the milestones, and the first figures.
 
 Beside these, question 285 is no provisional decision: the documents said that
 today's runtime commits none of the writes of a node that throws, and it commits
@@ -6407,7 +6441,9 @@ today.
   provisional paragraph of "A reference to an output" in
   `plan-and-label-templates.md` §3.2, the comments of those members in
   its §1.1, and `footprint-analysis.md` §6.5. The prototype's crate
-  writes copies in every record. Not covered: the template of a body is
+  emits the reference forms: the node that names an output in every record
+  that holds a template (`base/pattern-compiler/src/plan.rs`; prototype
+  note 499). Not covered: the template of a body is
   no output, so it is still written at each write edge of the body. The
   same for a record of an element body over an array of references,
   over an array of plain values in place, and over the result of another
@@ -6463,9 +6499,11 @@ today.
   leave its §1.2, §3.2 ("A template written once", and the last column
   of the table of "A rule over a template"), §3.4, §3.5, §3.17, §4.1 to
   §4.4 and §6.2, `footprint-analysis.md` §6.5 and
-  `execution-and-storage.md` §7.2. The prototype's crate writes every
-  template in place. Not covered: the records of a plan other than its
-  templates, and the copies of a pattern that is compiled in at several
+  `execution-and-storage.md` §7.2. The prototype's crate emits the table
+  `Plan.templates` with a `shared` node at each position
+  (`base/pattern-compiler/src/plan.rs`; prototype note 499). Not covered: the
+  records of a plan other than its templates, and the copies of a pattern that
+  is compiled in at several
   sites, whose slots differ (questions 247 to 250). The table is formed
   alike for a template of an element body over an array of references,
   over an array of plain values in place, and over the result of another
@@ -6864,7 +6902,8 @@ today.
   written at once; and rows inserted one at a time at one end leave every
   chunk half full, 55 chunks for 40,000 small rows where 28 would hold
   them, which is measured and not changed. *What the build showed missing*
-  is decided provisionally as P27, P28 and P29. *Alternative:* the rule as
+  is decided provisionally as P27 and P28; P29 is withdrawn and its
+  question 299 open. *Alternative:* the rule as
   it was, with the measured cost. *Tests:* the executor's tests bound the
   bytes of one change at two lengths for each case and each size of row.
   *If decided
@@ -7081,8 +7120,7 @@ today.
   prototype built it for a document of several arrays, and the rule takes
   what is left; a member is no part for being a member; and a `FabricMap`
   is not divided. *Tests:* none; the prototype has no split point for a
-  record. *If decided otherwise:* rule 5 and that paragraph are removed,
-  and the key index of P29 has no stored form.
+  record. *If decided otherwise:* rule 5 and that paragraph are removed.
 - **P28. The part document of a row is identified by a number that is minted,
   and not by the element's key** (question 298). The coordinator's decision,
   on the recommendation of the prototype's author. *The case:*
@@ -7109,8 +7147,8 @@ today.
   client that loads one row from a reference by key is not affected: it
   could not derive the identifier before, since it cannot read the salt,
   and it reaches the part through the storage link. A server could form
-  the identifier of the part of a key and read it with no chunk, and that
-  is lost: it reads the chunk of the key first (P29). What the scheduler
+  the identifier of the part of a key and read it with no chunk, and that is
+  lost: it reads the chunk of the key first (question 299). What the scheduler
   maps a watch on a part to was the key steps in the identifier's record,
   and is assumed held in the part as data. *Assumed in the writing,* each
   part of question 298: the number comes from one counter at the root of
@@ -7123,41 +7161,16 @@ today.
   source array as a part. *Tests:* the prototype has the minted identifier
   as an option, measured and not the default. *If decided otherwise:* those
   paragraphs return to the key.
-- **P29. Finding the chunk of a key: an index for an array that declares key
-  fields** (question 299). The coordinator's decision. *The case:* a gap in
-  P20, which has a reference by key "resolved through chunks". A chunk is
-  found by position, and the position of a key needs the keys of the array.
-  From the documents alone that is a read of every chunk and a salted hash
-  of every row (prototype notes 526 and 527). *Decision:* where the stored
-  schema of an array declares key fields (`keyFields`, by ruling), the
-  array's storage holds an index from a key to its chunk, stored in chunks
-  as P27 stores a record, in the order of the hashes, and written by every
-  insertion, removal and edit that changes a key field. Where the array
-  declares no key, a key formed from the whole value or by the fields that
-  a reader declares, no index is stored: a runtime that holds the array's
-  keys in memory resolves from them, and one that does not reads the
-  chunks. *The cost, stated:* one more document for each level for each
-  insertion with a declared key, and a read of the whole array for an
-  array with none on a runtime that has just started. *Alternative:* no
-  index. *How it is written:* the paragraph "Finding the chunk of a key" of
-  `execution-and-storage.md` §4.10 and its question 110, and a sentence in
-  `scheduler-and-serving-loop.md` §3.1. *Where the text did not determine
-  the behavior,* each assumed there and part of question 299: what the
-  stored schema is, since by ruling no record of a stored schema is kept,
-  assumed the schema that the owning instance's plan has for the place,
-  with the names of the key fields written into the chunk list; what an
-  entry names, assumed the chunk, with which a split or a merge writes the
-  entry of every row it moves, spread over the whole index, a cost that
-  the bound of P20 does not cover; two rows with equal key fields; a
-  client, which holds the hash of a stored reference and cannot tell which
-  row of the chunk has the key; the label of the index documents, assumed
-  that of the membership; an array of references, assumed to have no
-  index; the result of a `map`, a `filter` or a `flatMap` over an array of
-  plain values in place with a declared key and over the result of another
-  per-element construct, assumed to have an index of its own under the
-  keys of its rows; and a collection that P22 has a cone place at two
-  paths, which has two indexes. *Tests:* none; the prototype builds no
-  index. *If decided otherwise:* that paragraph is removed.
+- **P29. Withdrawn: an index from a key to its chunk** (question 299). The
+  coordinator withdrew it on 2026-11-18, on the showing of the author of the
+  documents that it breaks the bound of P20: an index entry that names a
+  chunk is rewritten for every row that a split or a merge moves, and those
+  entries are spread over the whole index by the order of the hashes, so one
+  split can write every chunk of the index (derived, not measured: about
+  1.1 MB for 10,000 small rows, more than the rows). Question 299 stays open
+  with no provisional decision. Until it is decided, a runtime that does not
+  hold an array's keys in memory reads the array's chunks to resolve a
+  reference by key, which is what the prototype does.
 - **P30. The design is validated by running the prototype's executor inside
   the runtime, and the prototype stays the reference for semantics.** The
   coordinator's decision, on the owner's request of 2026-11-18 for a strategy.
@@ -7187,6 +7200,74 @@ today.
   otherwise:* those three stay as a measurement, and the missing pieces are
   built into the prototype. *Settled* by the owner on 2026-11-18, with both
   tracks and Topics as their shared target; see [Decided](#decided).
+- **P31. Labels by identifier, and a `fold` instantiated once per group of
+  element inputs** (question 244, which is `plan-and-label-templates.md`
+  question 167). The coordinator's decision of 2026-11-19, made when the
+  owner asked, before milestone 4 was built, for something better than one
+  instantiation of a label per element. *The case:* the function of
+  `plan-and-label-templates.md` §4.2 instantiated a `fold`'s body for every
+  element on every commit, so the label of a collection cost the length of
+  the collection; the count per label identifier that §4.3 had "with the
+  fold's durable state" has no home for a `fold` that belongs to no
+  operation, such as the membership of a `filter` or a `flatMap`.
+  *Decision:* inside instantiation a label is handled by its identifier, the
+  content hash of the normalized label, interned in a table of the runtime
+  so that equal labels are one object; a join and a meet are computed over
+  the set of distinct identifiers and memoized by that set. A `fold` is
+  instantiated once per distinct group of element inputs, a group being the
+  label identifiers of the slots the body reads with the selections. The
+  write record reports a `fold`'s elements in one of two forms. `uniform`:
+  one set of bindings whose addresses hold `*` at the element's position,
+  allowed only where the body's template holds no `select`, `pick`,
+  `fold`, `dynamic`, `shared` or `output` node below the element, so that a
+  join before instantiation equals instantiation followed by a join; it is
+  the form for an array of plain values in place. `groups`: one entry per
+  group with its bindings, selections and the number of elements that have
+  it, with the group of each element key and the count per group kept with
+  the collection's assembly; it is the form for an array of references and
+  for the result of another per-element construct. A label that changes
+  while the value stays the same regroups only the elements that read a
+  position of the document whose label changed. A `fold` in the body of
+  another `fold` puts the set of inner groups in the outer group key, so a
+  change of the inner set regroups the enclosing element. *Added from the
+  measurement:* when every element of an array written whole has one label,
+  one entry at the array's `*` path is stored. An element with another label
+  adds its own entry and is then read with the union of the two; a `splice`
+  removes the `*` entry and the elements take the list's label. Both limits
+  give a label equal to or wider than the label per element, never a
+  narrower one. With one entry per element a change of one element prepared
+  in 2.2, 16.8 and 157.5 ms at 100, 1,000 and 10,000 elements, and with the
+  one `*` entry in 0.6 to 0.8 ms. *Alternative:* one instantiation per
+  element, with the cost in the length. *How it is written:*
+  `plan-and-label-templates.md` §2.3 ("One entry for the elements of an
+  array written whole"), §4.2 ("Labels by identifier, and a `fold` per
+  group", and `TemplateInputs.groups` in the pseudocode) and §4.3. *Not
+  determined:* a scan's prefix, whose groups change when the deciding
+  position moves; the label of a collection's array for a slot of root
+  `index`; the removal of the extreme of `min` and `max`; and what a slot
+  under `*` binds over an empty collection (question 305). *Tests:*
+  milestone 4 of the integration counts instantiations per commit, 3 to 7
+  for a change of one element at 100, 1,000 and 10,000 elements of a
+  `filter` over each of the three cases, and a test pins equal counts at
+  two lengths. *If decided otherwise:* those passages return to one
+  instantiation per element, and the count per identifier needs a home.
+
+**The scope of the storage decisions** (the coordinator's recommendation to
+the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
+today's storage receives a patch from the writer and stores it, and sends
+the whole document to every subscriber. The costs that P20 and P25 to P28
+address, what a subscriber receives for one small change of a long list,
+merging pushes into an array stored in chunks, and finding the chunk of a
+key, are properties of the storage layer and hold for today's runtime as
+much as for the compiled language. Chunked storage of long arrays is
+therefore a requirement on the storage layer, decided there: a sync that
+carries a patch to a subscriber that holds the prior version, and storage
+that maintains the chunk layout so that the four mergeable operations keep
+merging. This design keeps of it what it needs: the split points, P22 (a
+cone holds a reference to a collection it places), and the bound that the
+change of one row writes and delivers an amount that does not depend on the
+length. P20 and P25 to P28 stay recorded as the shape the design expects
+of storage.
 
 ## Open, and needing the owner
 
@@ -7601,8 +7682,10 @@ as an assumption.
 
 116. **What identifies the pattern in its `TransformedBy`, and which
     pattern it is for code compiled into another** (PL question 64).
-    *Assumed:* the pattern's module and binding, and the pattern in
-    whose source the expression is written.
+    Settled for which pattern by the ruling of 2026-11-19 ([Decided](#decided)):
+    code of a pattern B compiled into a pattern A mints B's atom, the
+    pattern in whose source the expression is written. *Assumed* for the
+    identity: the pattern's module and binding.
 117. **What the corpus comparison compares.** The runtime copies values
     where the plan passes references. *Assumed:* the comparison is made
     on dereferenced labels. The static part the runtime joins from a
@@ -7626,7 +7709,10 @@ as an assumption.
     runtime's static part included for a conditional.
 
 120. **Where the pattern's `TransformedBy` is added** (PL questions 71
-    and 72). *Assumed:* at kept outputs only, with no condition, as one
+    and 72). The owner confirmed on 2026-11-19 that every kept output
+    carries it; the rest is open, and question 302 is the owner's design
+    for a value passed on from an argument. *Assumed:* at kept outputs
+    only, with no condition, as one
     entry at the root of the result document. A promoted `computed`
     that passes a value unchanged to a child argument, a write target,
     or an effect request then has fewer atoms than today. What a reader
@@ -9725,7 +9811,11 @@ the measurement that the prototype should run.
      every element, and the label of a collection's array for the index
      joins every position with no count stated. For `min` and `max` the
      removal of the extreme needs the other contributions in an order.
-     Nothing is assumed. *Measurement:* a `filter`, a `flatMap`, a
+     Provisional decision P31 answers where the count is kept: with the
+     collection's assembly, a count per group of element inputs, and a
+     `fold` instantiated once per group. It leaves a scan's prefix, the
+     label of a collection's array for the index, and the extreme of `min`
+     and `max` undetermined. *Measurement:* a `filter`, a `flatMap`, a
      `some`, and a `map` whose body reads the index, each over 100,
      1,000 and 10,000 elements, with one element changed, one appended
      and one removed, and for `min` the extreme removed; the count of
@@ -11351,7 +11441,8 @@ a plain array generated from scratch or with a `flatMap`.
      two ways. Either storage maintains the layout: the server resolves
      the path of an operation through the chunk list, applies `append`,
      `add-unique` and `remove-by-value` to the chunks, and writes the
-     lists, the numbers of P25 and the key index of P29 in the commit.
+     lists, the numbers of P25 and any key index (question 299) in the
+     commit.
      That is a change of storage, and nothing of it exists. Or the
      runtime that writes maintains the layout with the operations that
      exist: it sends `append` to the document of the last chunk and
@@ -11387,7 +11478,8 @@ a plain array generated from scratch or with a `flatMap`.
 **From the prototype's notes 523 to 535.** At commit `3d33db2e4d` the
 prototype's executor keeps part documents as documents, and the copies of each
 callee in the plans of the corpus are compared. Questions 297 to 301 are what
-the provisional decisions P27 to P29, the replacement of P21 and the points
+the provisional decisions P27 and P28, the withdrawn P29, the replacement
+of P21 and the points
 that P20 left incomplete leave undecided. The lists of these notes are a `map`
 over an array of references, over an array of plain values in place with a
 declared key and with none, and over the result of a `filter` of plain values
@@ -11453,7 +11545,10 @@ a `flatMap`.
      same; the case that the decision was measured on is an array of plain
      values in place.
 299. **The index from a key to its chunk** (ES question 110; SS §3.1).
-     Provisional decision P29. Not determined by the decision. (a) What
+     Open, with no provisional decision: P29 is withdrawn, for point (b)
+     below. Until it is decided, a runtime that does not hold an array's
+     keys in memory reads the array's chunks to resolve a reference by
+     key. The points below are what any index has to settle. (a) What
      "the stored schema of an array" is: by ruling no record of a stored
      schema is kept, and a reader learns the key fields from the schema
      traversed at its link. *Assumed:* the schema that the plan of the
@@ -11461,15 +11556,15 @@ a `flatMap`.
      written into the chunk list by the runtime that creates the index. An
      array that a writer without that schema stored in chunks gets its
      index later, by one read of the whole array. (b) What an entry names.
-     *Assumed,* by the decision's words: the chunk. Then a split or a merge
-     of chunks writes the entry of every row that moves to another chunk,
-     about half the rows of a chunk, and those entries are spread over the
-     whole index by the order of the hashes: one split can write every
-     chunk of the index. For 10,000 small rows that is an index of about
-     a megabyte, larger than the rows, written for one insertion in about
-     700; the figure is derived from the sizes of a hash and of a storage
-     link and is not measured. The bound of P20
-     on the bytes of one change does not hold for that insertion. The
+     P29 had the chunk. Then a split or a merge of chunks writes the
+     entry of every row that moves to another chunk, about half the rows
+     of a chunk, and those entries are spread over the whole index by the
+     order of the hashes: one split can write every chunk of the index,
+     which is why P29 is withdrawn. For 10,000 small rows that is an index
+     of about a megabyte, larger than the rows, written for one insertion
+     in about 700; the figure is derived from the sizes of a hash and of a
+     storage link and is not measured. The bound of P20 on the bytes of
+     one change does not hold for that insertion. The
      author of the documents recommends an entry that a split does not
      write, which is not designed: a number minted for the row, with a
      second record from that number to the chunk, or a record in the chunk
@@ -11535,6 +11630,74 @@ a `flatMap`.
      plain values in place, a plain array generated from scratch, and a
      chain of per-element constructs whose first source is one of these,
      each with no declared key.
+
+**From milestone 4 of the integration and the rulings of 2026-11-19.**
+Labels from templates at commit are built
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). These are what the build
+and the rulings leave open.
+
+302. **The minimum integrity a pattern declares on an input, as a
+     requirement on the link of the argument** (PL question 176). The
+     owner's design of 2026-11-19, recorded as a sketch, not built, and
+     needing a specification change of its own. Where a pattern declares a
+     minimum integrity on an input, that minimum is attached as a
+     requirement to the link written for the argument passed in, so every
+     later reader of the link evaluates it and it holds when the argument
+     changes later. The pattern's atom on a value it passes through from
+     that argument then never vouches for an input below the declared
+     minimum. Open: where the requirement is stored on the link, what a
+     reader does when it fails, whether a child compiled into its caller,
+     which has no stored argument, checks it at its slots, and its cost per
+     read. *Assumed meanwhile:* nothing is attached, and question 120
+     stands.
+303. **Whether every commit of a compiled pattern is prepared** (PL
+     question 177). Every kept output carries the pattern's atom, by the
+     owner's confirmation. A commit that reads no labeled document is not
+     prepared, today and in milestone 4, and over the corpus subset of that
+     milestone 612 write records in 106 modules store no entry at their
+     path where the evaluator gives the pattern's atom. Either every commit
+     of a compiled pattern is prepared, so that every kept output carries
+     the atom, at the cost of a preparation per commit (0.72 ms per
+     preparation with the option on, against 0.43 ms with it off, over the
+     133 modules of the milestone with no commit refused under the option
+     alone), or the atom is stored only where a preparation
+     runs. *Assumed:* not decided; the build stores the atom only where a
+     preparation runs.
+304. **Per-element label entries of an array are not moved when the array
+     is spliced** (a defect of today's runtime, found by reading and shown
+     by a test). Where an array of plain values in place is written whole,
+     the array diff writes only the positions whose value changed: for an
+     array, `normalizeAndDiff` in `runtime/runner/src/data-updating.ts`
+     visits each position and writes nothing where the new value equals
+     the current one at that position, and deletes the positions past the
+     new end. The persist step of `prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts` drops a stored `derived` or
+     `structure` entry only where a path this transaction wrote is at or
+     above the entry's path. So when a removal shifts the values, a
+     position that the diff did not write keeps the entry of the value that
+     was there before, and the entry of the value that moved to it is
+     dropped with the position it left. With `["x", "y", "y"]` stored under
+     a clause at position 1 and another at position 2, writing
+     `["y", "y"]` writes position 0 and deletes position 2, and position 1,
+     which holds the value that carried the second clause, keeps the first.
+     An entry of origin `link`, for an element that is a reference, is not
+     affected: it is cleared where the pointer at its slot is replaced and
+     minted again with the element (`linkEntrySuperseded`). The milestone's
+     branch has the case as an ignored test,
+     `runtime/runner/test/cfc-array-splice-element-labels.test.ts`. For the
+     compiled path P31 removes the `*` entry on a `splice`, which is wider
+     and not affected. *Assumed:* a finding against the runtime, not filed;
+     whether it is fixed, by writing every shifted position or by moving
+     the entries with the values, is the owner's decision.
+305. **What a slot under `*` binds when the collection is empty** (PL
+     question 178). A binding of the `uniform` form of P31 whose address
+     holds `*` covers no position of an empty array, and the `*` entry may
+     be absent. *Assumed:* the slot binds the label of the array's
+     membership alone and the body contributes nothing, the label of a
+     `fold` over no element. The alternative binds the last `*` entry
+     stored, which describes elements that no longer exist. The case is an
+     array of plain values in place, the case of the `uniform` form.
 
 
 ## Open, and not needing the owner
@@ -11779,6 +11942,19 @@ a `flatMap`.
 The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
+
+- **Milestone 4 of the integration is built and its findings are open.**
+  Labels from templates at commit are built on branch
+  `claude/compiled-pattern-m4` and measured on a subset of the corpus
+  ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+  "Milestone 4: labels from templates at commit"). Most serious first,
+  and each being worked on: stored labels that differ from the evaluator's
+  and are not yet explained; commits that are not prepared, so that a
+  kept output stores no atom (question 303); the crate's panic on the
+  whole corpus, which keeps `patterns/system/` out of the subset; and 59
+  commits in 44 modules refused with the option on and not off. Steps 11
+  and 12 of the milestone's plan, instantiation keys and verified units in
+  the prepared digest and a derived write dropped alone, are not built.
 
 - **The crate does not emit the corpus of the main branch of
   2026-11-18** (`6e9ff5a381`), found when the integration branch merged it.
@@ -12159,8 +12335,8 @@ The open questions each document ends with stay where they are.
   them after each change and compares. So the rule that every resolution of
   a path passes through a storage link is tested for a reader outside the
   executor and not for value code. Not in the layout: a split point for a
-  record (P27), for an array inside a row, and for a node of the rendered
-  tree that is no row; an index from a key to its chunk (P29); a part over
+  record (P27), for an array inside a row, and for a node of the rendered tree
+  that is no row; an index from a key to its chunk (question 299); a part over
   the maximum that is divided; and any label entry or provenance record in
   a size. The identifier of a part is by the key of the reader that
   declares the most key fields, and the minted identifier of P28 is an
@@ -12204,14 +12380,15 @@ The open questions each document ends with stay where they are.
   holds, `equals`, a cone with a static side-write, or a read by key into the
   document of a computed output, is compared at every pull; question 294 has
   what the documents do not say for it.
-- **The provisional decisions P20 to P29 and their tests.** P20, P25 and P26
+- **The provisional decisions P20 to P28 and their tests** (P29 is
+  withdrawn). P20, P25 and P26
   are built as documents beside the store, with tests that bound the bytes
   of the documents that one change writes at two lengths for each case and
   each size of row; the points that P20 left incomplete are tested as the
   prototype chose them. P21 as replaced, the report of the runtime, has no
-  test; the crate has the withdrawn warning. P27 and P29 have no test and
-  no build. P28 has the minted identifier as an option, measured, with the
-  key as the default. P22, P23 and P24
+  test; the crate has the withdrawn warning. P27 has no test and no build, and
+  no index from a key to its chunk is built. P28 has the minted identifier as an
+  option, measured, with the key as the default. P22, P23 and P24
   are what the executor does, with tests of the executor that bound the
   evaluations, the hashes, the checks and the bytes of one change at 100 and
   1,000 elements; those tests were written after the measurements. For P23 the
@@ -12433,11 +12610,11 @@ The open questions each document ends with stay where they are.
       default, with a row of a result whose key changes at its position
       keeping its part (question 298). Build P27, a record stored in chunks,
       and measure the keystroke of `fixtures/rows-state.tsx` over an array of
-      references again, which wrote 572,774 bytes at 10,000 rows. Build the
-      index of P29 and measure what a split writes into it (question 299,
-      point b), with an entry that names the chunk and with one that a split
-      does not write. Have value code read through the part documents. Put a
-      stand-in for label entries and provenance records into the sizes. Run
+      references again, which wrote 572,774 bytes at 10,000 rows. For
+      question 299, which has no provisional decision since P29 is
+      withdrawn, measure what a split writes into an index with an entry that a
+      split does not write. Have value code read through the part documents. Put
+      a stand-in for label entries and provenance records into the sizes. Run
       the layout under a failed transaction with a test of its own.
    4. Measure for question 290, point (a), with the cost that the source
       shows: for each change the bytes of the patch, the bytes of each
@@ -12537,9 +12714,12 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestone 1, a compiled piece in the runner behind an experimental
-   option, labels from templates at commit, value code in the sandbox, and
-   server execution with the network.
+   after milestones 1 and 4, the open findings of milestone 4 (the label
+   differences against the evaluator, the unprepared commits of question
+   303, the crate's panic on the whole corpus, the refused commits) and its
+   steps 11 and 12; then Topics at scale on the runtime's storage, a
+   compiled piece in the runner behind the experimental option, value code
+   in the sandbox, and server execution with the network.
 
 ### Briefing an author
 

@@ -4952,6 +4952,35 @@ entries the persist step of `prepareBoundaryCommitSteps`
   instantiated membership template, and `*`-child entries for the element
   template where every element instantiates to the same label.
 
+**A stored label is concrete.** By ruling (2026-11-19), what is stored is
+the instantiated label: its clauses and atoms. A stored label is not a
+symbolic reference to the labels of its sources that a reader resolves at
+egress, so it does not follow a later change of a source's label, and a
+reader needs no envelope of a source to evaluate it. A source whose label
+changes reaches the stored label through re-instantiation alone
+(section 4.1, "A label that changes alone").
+
+**One entry for the elements of an array written whole.** Provisional
+(P31 of the continuation plan). When an array is written whole and every
+element of it is covered with one label, the runtime stores one entry at
+the array's `*` path and none per element. An element written later with
+that label adds no entry. An element written later with another label adds
+an entry of its own at its position, and a read of that position consumes
+the union of that entry and the `*` entry. A `splice` of the array removes
+the `*` entry, and the elements then take the label of the list. Each of
+the two limits gives a label equal to or wider than the label per element,
+never a narrower one. The rule is the stored form of the `uniform` form of
+section 4.2. Measured by milestone 4 of the integration, for a kept output
+per element of a list: with one entry per element, the preparation of a
+change of one element took 2.2, 16.8 and 157.5 ms at 100, 1,000 and 10,000
+elements, because every commit encoded, hashed and compacted every entry;
+with the one `*` entry, 0.6 to 0.8 ms at each size
+([the integration plan](../../plans/compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). In those fixtures the `*`
+entries are stored for a list that is an array of plain values in place and
+for one that is an array of references; the list that is the result of a
+`map` stores none.
+
 Declared entries (`origin: "declared"`) are unchanged: they come from the
 schema, not from a template. The format of the stored bytes is a host
 arrangement and does not change.
@@ -4983,14 +5012,19 @@ stored as chunk documents, each a contiguous run of its entries, with a
 list of storage links to the chunks at the place of the array. A chunk
 list and a link to a chunk are storage links, a chunk's envelope is
 complete for its paths as a part's is, and what follows holds for them as
-for a part. Provisional (P27 and P29): a record with many members is stored
-in chunks the same way, by ranges of member names, and an array that is
-stored in chunks and declares key fields has an index from the key of a row
-to its chunk; the lists and the documents of both are storage structure as
-a chunk list is. *Assumed* there: a bound in the chunk list of a record is
-a member name and is read under the label of the record's set of names,
-and the documents of a key index carry the label of the array's
-membership. A split changes neither a value nor a label when the following
+for a part. Provisional (P27): a record with many members is stored in
+chunks the same way, by ranges of member names, and its chunk list is
+storage structure as an array's is. *Assumed* there: a bound in the chunk
+list of a record is a member name and is read under the label of the
+record's set of names. How the chunk of a key is found is open, with no
+provisional decision (the continuation plan's question 299); until it is
+decided, a runtime that does not hold an array's keys in memory reads the
+array's chunks to resolve a reference by key. Chunked storage of a long
+array is a requirement on the storage layer, which today's runtime has as
+well; this design keeps of it the split points, the reference to a placed
+collection (section 1.4, "Placed, and not observed"), and the bound that
+the change of one row writes and delivers an amount that does not depend on
+the length. A split changes neither a value nor a label when the following
 hold.
 
 - **The link is not a reference of the language.** The link from the result,
@@ -5037,9 +5071,12 @@ hold.
   document holds.
 - **The repeated entry and the `*`-child entry agree.** A `*`-child entry
   stays in the collection's document, where it covers the positions stored
-  in place. It is stored only while every position instantiates to its
-  label, the positions that are parts included, and one transaction writes
-  it and the entries of the parts. A read through the result that consumes
+  in place. It is written where every position instantiates to its label,
+  the positions that are parts included, and one transaction writes it and
+  the entries of the parts. Provisional (P31; "One entry for the elements
+  of an array written whole" above): a position written later with another
+  label adds an entry of its own and is read with the union, which is wider
+  than its own label and never narrower. A read through the result that consumes
   both consumes one label twice, which a join absorbs. The entries of a
   part are those of the position its row has: a move that changes a label
   the row's slots resolve to rewrites them in the transaction that moves
@@ -6404,8 +6441,9 @@ pattern that contains it. The atom's `identity` is an entry of
   Every expression of one pattern mints one atom, whichever cone evaluates
   it. For code of a pattern compiled into another under a `site` step, that
   is the pattern compiled in and not the one that holds the site, so an
-  expression mints the same atom in every plan that holds it. Which pattern
-  it is for code compiled in is *assumed* (section 8, question 64). In this
+  expression mints the same atom in every plan that holds it: by ruling
+  (2026-11-19; section 8, question 64), code of a pattern B compiled into a
+  pattern A mints B's atom. In this
   document, "`by: { expression: true }`" names such a node whatever its
   `pattern` member is. Where a rule forms a join, `pattern` is the pattern
   in whose source the construct the rule applies to is written.
@@ -6431,7 +6469,8 @@ integrity of a link is §3.7.2 (`03-core-concepts.md`). A read through the link
 takes its integrity from the target alone (section 3.10), so the atom reaches
 a reader that observes the reference and not one that reads the target's
 content through it; what such a reader is given is open (section 8, question
-72). *Assumed* (section 8, question 71): the atom of an instance is the same
+72). The owner has confirmed (2026-11-19) that every kept output carries the
+atom. *Assumed* (section 8, question 71): the atom of an instance is the same
 at every kept output, so it is stored as one entry at the root of each
 document the keep set is stored in, which applies at every path below, and
 not as one entry per output.
@@ -6460,7 +6499,12 @@ computed the value, and no atom of the pattern where the value is passed on.
 A child's argument is the case that decides the assumption: a pattern
 compiled into its caller has no stored argument, so an atom added to a
 `Child`'s argument would make a label depend on which of the two forms the
-compiler chose.
+compiler chose. A design the owner proposed for the value a pattern passes on
+from an argument, not built and needing a specification change of its own, is
+section 8, question 176: the minimum integrity that a pattern declares on an
+input is a requirement on the link written for the argument, so the pattern's
+atom on a value passed through never vouches for an input below that
+minimum.
 
 **The inputs of a `derive`.** A join and a meet do not depend on the order
 of their operands or on how often one occurs, so `inputs` is a list for the
@@ -6598,11 +6642,11 @@ Notes on the integrity column:
 - **`const` is neutral.** A literal is not an observation, so it does not
   empty the meet. This matches the runtime, where a literal in a function
   body is not a read.
-- **When `derive` and `fold` mint.** *Assumed* (section 8, question 66): the
-  atom is minted where the label of the node has a confidentiality clause or a
-  hereditary atom, and not beside an empty label. That is the condition the
-  runtime applies (section 3.1), so the integrity is **equal**. The alternative
-  mints on every `derive`, which is tighter. The condition is on the label of
+- **When `derive` and `fold` mint.** By ruling (2026-11-19; section 8,
+  question 66): the atom is minted where the label of the node has a
+  confidentiality clause or a hereditary atom, and not beside an empty label.
+  That is the condition the runtime applies (section 3.1), so the integrity is
+  **equal**. The condition is on the label of
   the node alone. A label that the schema of a written path declares is a
   `declared` entry stored beside the template's label, and it does not make a
   node mint: `deriveFlowJoinImpl` decides on the transaction's join, before the
@@ -10155,6 +10199,15 @@ checks:
 This list is the whole of what is instantiated.
 `execution-and-storage.md` §1.6 and §1.9 refer to it.
 
+**Only a serving runtime commits labels from templates.** By ruling
+(2026-11-19), a label from a template is stored only by a transaction that a
+serving runtime commits. A client's speculative run evaluates the same
+templates for the gates the client evaluates, and is never the stored
+result. The store does not verify a label from a template: it
+accepts it from the serving runtime as it accepts that runtime's other
+derived labels. An exception for storage held in memory for tests is
+allowed only where it makes the whole simpler, and none is built.
+
 For each one:
 
 1. Decide whether there is anything to do. There is when one of these
@@ -10243,7 +10296,8 @@ output, as a memo entry is on the value side.
   once per set of inputs, and every node of a template once. The cost of
   the label evaluation of a transaction is linear in the number of nodes
   of the templates it instantiates, counted once for each cone instance
-  and each element a `fold` covers, and does not follow the number of
+  and, provisional (P31), each group of the elements a `fold` covers
+  (section 4.2), and does not follow the number of
   paths by which one output depends on another. No rule of this document
   is a walk of a template as a tree that follows `output` nodes without
   this reuse (section 3.2, "A rule over a template").
@@ -10294,8 +10348,13 @@ interface TemplateInputs {
    * `fold`, the position the runtime's own scan found (section 3.13).
    */
   selection(selector: Index): number;
-  /** Elements of a collection in order, each with its own inputs. */
-  elements(collection: Index): readonly TemplateInputs[];
+  /**
+   * The distinct groups of the elements of a collection, each one set of
+   * element inputs, over the elements up to and including position `upTo`
+   * where it is given. Elements whose inputs have equal label identifiers
+   * and equal selections are one group (provisional, P31).
+   */
+  groups(collection: Index, upTo?: number): readonly TemplateInputs[];
   /**
    * The child chosen at a choice point (`Plan.picks`), or undefined when
    * none was chosen.
@@ -10335,6 +10394,19 @@ interface TemplateInputs {
 const NEUTRAL = "neutral";
 type Instantiated = Label | typeof NEUTRAL;
 
+/**
+ * The atoms a `derive` or a `fold` mints, beside a label that has a
+ * confidentiality clause or a hereditary atom, and none beside an empty
+ * label (ruling of 2026-11-19, section 3.2).
+ */
+function mintBeside(
+  confidentiality: readonly Clause[],
+  inherited: readonly Atom[],
+  minted: readonly Atom[],
+): readonly Atom[] {
+  return confidentiality.length > 0 || inherited.length > 0 ? minted : [];
+}
+
 function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
   switch (t.op) {
     case "const":
@@ -10351,11 +10423,13 @@ function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
       const parts = t.inputs
         .map((i) => instantiateTemplate(i, inp))
         .filter((l): l is Label => l !== NEUTRAL);
+      const confidentiality = joinAll(parts.map((p) => p.confidentiality));
+      const inherited = hereditaryMeet(parts.map((p) => p.integrity));
       return {
-        confidentiality: joinAll(parts.map((p) => p.confidentiality)),
+        confidentiality,
         integrity: [
-          ...hereditaryMeet(parts.map((p) => p.integrity)),
-          ...inp.mint(t.by),
+          ...inherited,
+          ...mintBeside(confidentiality, inherited, inp.mint(t.by)),
         ],
       };
     }
@@ -10390,22 +10464,27 @@ function instantiateTemplate(t: Template, inp: TemplateInputs): Instantiated {
       };
     }
     case "fold": {
-      const all = inp.elements(t.collection);
-      const covered = t.through === undefined
-        ? all
-        : all.slice(0, inp.selection(t.through) + 1);
-      const parts = covered
-        .map((e) => instantiateTemplate(t.body, e))
+      const upTo = t.through === undefined
+        ? undefined
+        : inp.selection(t.through);
+      const parts = inp.groups(t.collection, upTo)
+        .map((g) => instantiateTemplate(t.body, g))
         .filter((l): l is Label => l !== NEUTRAL);
       const member = inp.membership(t.collection);
+      const confidentiality = joinAll([
+        member.confidentiality,
+        ...parts.map((p) => p.confidentiality),
+      ]);
+      const inherited = hereditaryMeet(parts.map((p) => p.integrity));
       return {
-        confidentiality: joinAll([
-          member.confidentiality,
-          ...parts.map((p) => p.confidentiality),
-        ]),
+        confidentiality,
         integrity: [
-          ...hereditaryMeet(parts.map((p) => p.integrity)),
-          ...inp.mint({ expression: true, pattern: t.pattern }),
+          ...inherited,
+          ...mintBeside(
+            confidentiality,
+            inherited,
+            inp.mint({ expression: true, pattern: t.pattern }),
+          ),
         ],
       };
     }
@@ -10420,6 +10499,57 @@ element, or the collection's length less one when no element decides, so
 that the fold covers everything. The value code reports neither the
 selection of a `through` selector nor the position that bounds a prefix
 fold.
+
+**Labels by identifier, and a `fold` per group.** Provisional (P31 of the
+continuation plan). Inside instantiation a label is handled by its
+identifier, the content hash of the normalized label, and the runtime holds
+one object per distinct label, so equal labels are one object with one
+identifier. A join and a meet are computed over the set of distinct
+identifiers of their inputs and memoized by that set: equal inputs cost one
+lookup and no comparison of atoms. A `fold` instantiates its body once per
+distinct group of element inputs, and not once per element: a group is a set
+of label identifiers of the slots the body reads, with the selections, and
+`TemplateInputs.groups` returns one set of inputs per group. The cost of a
+`fold`'s label in a transaction is then the number of its groups. The
+executor reports the elements of a `fold` in a write record in one of two
+forms.
+
+- **`uniform`:** one set of slot bindings whose addresses hold the path
+  segment `*` at the element's position, and the label of a slot is the
+  join of the stored entries that the `*` path covers, one entry in the
+  common case (section 2.3, "One entry for the elements of an array written
+  whole"). The form is allowed only where the body's template holds no
+  `select`, `pick`, `fold`, `dynamic`, `shared` or `output` node below the
+  element, because then a join before instantiation equals instantiation
+  followed by a join, for confidentiality and for the hereditary meet. It
+  is the form for an array of plain values in place.
+- **`groups`:** one entry per group, with its bindings, its selections and
+  the number of elements that have it. The group of each element key and
+  the count per group are kept with the collection's assembly
+  (`execution-and-storage.md` §2.5), and are updated when an element is added,
+  removed or evaluated again: one update per changed element. It is the
+  form for an array of references and for the result of another
+  per-element construct.
+
+A label that changes while the value stays the same regroups only the
+elements whose group reads a position of the document whose label entry
+changed, at, above or below the changed entry, and no other element. Where
+a `fold` stands in the body of another `fold`, the group key of an element
+of the outer collection holds the set of groups of the inner collection, so
+two outer elements whose own inputs are equal are two groups where their
+inner folds differ, and a change of the inner set regroups the enclosing
+element. For a `fold` with `through` the groups are those of the covered
+prefix; how the runtime keeps them as the deciding position moves is not
+determined by P31.
+
+A template label may rest on the labels of positions that an earlier
+transaction observed, as the element inputs of a group do when only one
+element changed. By ruling (2026-11-19) that is allowed: such a label is
+checked for conflicts at commit, as a read of the committing transaction
+is. The runtime records, in the committing transaction, an observation of
+the label metadata of each such binding, and no read of its value.
+Milestone 4 of the integration records one such observation per group of a
+`fold`'s elements.
 
 `instantiateTemplate` returns the label of a template. For a kept output
 the adapter adds the atom of entry 0 of `Plan.patterns` to the integrity of
@@ -10478,11 +10608,15 @@ value = label id
 - The memo is a pure cache, shared across instances and patterns. Template
   hashes are slot-free (section 1.2), so equal templates over different slots
   share entries.
-- A `fold` contributes the *set* of its elements' body label identifiers,
-  because join and meet are idempotent. The runtime keeps a count per
-  identifier with the fold's durable state, so adding or removing an element
-  updates the set in constant time, and the fold's label changes only when an
-  identifier's count crosses zero.
+- A `fold` contributes the *set* of its groups' body label identifiers,
+  because join and meet are idempotent. Provisional (P31; section 4.2): the
+  group of each element key and the count per group are kept with the
+  collection's assembly (`execution-and-storage.md` §2.5), not with a durable
+  state of the `fold`, so a `fold` that belongs to no operation, such as the
+  membership of a `filter` or a `flatMap`, has them as well. Adding,
+  removing or evaluating again an element updates them once, and the fold's
+  label changes only when a group's count crosses zero or a group's label
+  changes. In the `uniform` form there is one group and no count.
 - A `dynamic` node contributes the identifiers of the labels its journaled
   reads consumed, and of its trigger reads (section 3.10).
 - A slot contributes the identifier of its whole label, the pointer labels
@@ -10510,8 +10644,11 @@ value = label id
   entry holds the label inline or by reference is unchanged.
 
 For a `map` over `n` elements whose body has one template, `n` elements with
-equal slot labels are one memo entry and one stored `*`-child entry. This is
-also what makes the binding of element slots per key (section 1.3) cheap:
+equal slot labels are one memo entry and one stored `*`-child entry, over an
+array of plain values in place, an array of references and the result of
+another per-element construct alike (section 2.3, "One entry for the
+elements of an array written whole", for when the `*` entry is stored). This
+is also what makes the binding of element slots per key (section 1.3) cheap:
 keys whose slot labels are equal have one label.
 
 ### 4.4 Constraints
@@ -12419,7 +12556,14 @@ construct is a pattern, labels flow through it per value, and a node of the
 body takes nothing of what another node reads, of another element, or of the
 collection's length or order unless it reads the index or the collection,
 which is tighter than the join the runtime stores on an element's argument
-document today (2.2, 3.1, 3.6, 3.7, 3.12).
+document today (2.2, 3.1, 3.6, 3.7, 3.12). The rulings of 2026-11-19: a
+stored label is concrete (2.3); only a serving runtime commits labels from
+templates, and the store does not verify them (4.1); a `derive` and a `fold`
+mint only beside a label that has a clause or a hereditary atom (3.2, 4.2);
+code of a pattern compiled into another mints the atom of the pattern
+compiled in (3.2); every kept output carries the pattern's atom (3.2); and a
+template label may rest on labels that an earlier transaction observed,
+checked for conflicts at commit (4.2).
 
 What remains is for the project owner, the sibling documents, the
 specification change, or the prototype. Each entry states the assumption
@@ -13157,7 +13301,10 @@ this document made.
     the specification change.
 64. **What identifies the pattern in its `TransformedBy` atom, and which
     pattern it is for code compiled into another** (for the project owner; the
-    continuation plan's question 116). Not open: ruled, for the atom itself. A
+    continuation plan's question 116). Settled for which pattern by the ruling
+    of 2026-11-19: code of a pattern B compiled into a pattern A mints B's
+    atom, as the second assumption below has it. Not open: ruled, for the
+    atom itself. A
     promoted `computed` mints no `TransformedBy` atom for the code of its
     callback, and every output of a pattern carries a `TransformedBy` atom
     that names the pattern, a value the pattern only passes on included; where
@@ -13170,8 +13317,8 @@ this document made.
     alternative is a hash of the pattern's own source with the functions it
     can call, as for question 54. Second, for code of a pattern compiled into
     another under a `site` step, a `derive` and a `fold` name the pattern in
-    whose source the expression is written, and the atom of a kept output
-    names the pattern the plan is compiled from. The result of a pattern
+    whose source the expression is written (ruled), and the atom of a kept
+    output names the pattern the plan is compiled from. The result of a pattern
     compiled in then carries that pattern's atom where it computes a value and
     not where it passes one on, while the same pattern instantiated as a
     `Child` has kept outputs of its own, each with its atom. So a label can
@@ -13194,11 +13341,11 @@ this document made.
     is an expected difference. The alternative compares the label of section 3.2
     as written with what is stored at the output path, which differs wherever a
     value is passed on.
-66. **A `TransformedBy` atom beside an empty label.** The table of section 3.2
-    gives a `derive` its atom without a condition, and the runtime mints it
-    where the join has a clause or a hereditary atom (section 3.1). *Assumed:*
-    the template mints under the runtime's condition, so the integrity is
-    equal. The alternative mints on every `derive`: tighter on integrity. The
+66. **A `TransformedBy` atom beside an empty label.** Settled by the ruling
+    of 2026-11-19: a `derive` and a `fold` mint only beside a label that has
+    a clause or a hereditary atom, the runtime's condition (section 3.1), so
+    the integrity is equal; the pseudocode of section 4.2 applies it. The
+    alternative, not taken, mints on every `derive`: tighter on integrity. The
     condition does not apply to the atom of a kept output, which by ruling
     every kept output carries (question 71), so the alternative changes the
     labels of interim outputs and of what they feed, and of no kept output of
@@ -13269,7 +13416,10 @@ this document made.
     clause that the elements of an unlabeled list declare.
 71. **Where the pattern's atom is added, and how it is stored** (for the
     project owner). By ruling every output of a pattern carries the pattern's
-    `TransformedBy` atom. *Assumed:* "output" is a kept output, an entry of
+    `TransformedBy` atom, and the owner confirmed on 2026-11-19 that every
+    kept output carries it; the rest of the question stays open, and question
+    176 is the owner's design for a value passed on from an argument.
+    *Assumed:* "output" is a kept output, an entry of
     `Plan.outputs` with `kept: true`; the atom is added with no condition, an
     output with no other label included; and it is stored as one entry at the
     root of each document the keep set is stored in (section 3.2).
@@ -13677,8 +13827,9 @@ this document made.
     exceptions. The first alternative counts it under that rule, which
     makes it an exception by ruling to "equal or tighter" on the
     integrity side. The second mints on every `derive` of a write edge,
-    which is the alternative of question 66 for that case and leaves no
-    such row. The prototype's fixtures have one such row, a handler
+    which is the alternative of question 66 for that case, which the
+    ruling on that question does not take, and leaves no such row. The
+    prototype's fixtures have one such row, a handler
     bound in an element body that closes over a state cell of the
     pattern alone, over a list that declares two clauses. The corpus
     comparison has none. Without the assumption of question 85,
@@ -15149,7 +15300,18 @@ this document made.
      array of references, for an array of plain values in place, and
      for the result of another per-element construct, since the three
      differ in how a position's root label is resolved. It is question
-     244 of the continuation plan.
+     244 of the continuation plan. *Answered,* provisional (P31 of the
+     continuation plan; sections 4.2 and 4.3): the group of each element
+     key and the count per group are kept with the collection's assembly,
+     so a `fold` that belongs to no operation has them; a `fold` is
+     instantiated once per group; an array of plain values in place uses
+     the `uniform` form with no count. Measured by milestone 4 of the
+     integration for a `filter` over each of the three cases at 100, 1,000
+     and 10,000 elements: 3 to 7 instantiations for a change of one element
+     at every size. Not covered by P31: a scan's prefix, whose groups change
+     when the deciding position moves; the label of a collection's array
+     for a slot of root `index`; and the removal of the extreme of `min` and
+     `max`.
 168. **A template that is no output and stands at more than one position
      of a plan** (for the project owner). The ruling of question 160
      removes a copy of the template of an output. Five rules of this
@@ -15458,4 +15620,46 @@ this document made.
      result of another per-element construct. The open points are in
      `execution-and-storage.md` (its question 104). It is questions 259 and 292
      of the continuation plan.
-
+176. **The minimum integrity a pattern declares on an input, as a
+     requirement on the link of the argument** (for the project owner and
+     the specification change; section 3.2, "What does not get the atom").
+     The owner's design of 2026-11-19, recorded as a sketch and not built.
+     Where a pattern declares a minimum integrity for an input, the runtime
+     attaches that minimum as a requirement to the link it writes for the
+     argument passed in, so every later reader of the link evaluates it,
+     and it holds when the argument changes later, not only at the
+     instantiation. The atom of the pattern on a value it passes through
+     from that argument then never vouches for an input below the declared
+     minimum. Open: where the requirement is stored on the link (an entry of
+     the link's label, or a member of the link beside its schema); what a
+     reader does when it fails (an error state, or a refusal of the read);
+     whether a child compiled into its caller, which has no stored argument,
+     checks the same requirement at its slots; and what the requirement
+     costs a reader per read. It needs a specification change of its own.
+     *Assumed meanwhile:* nothing is attached, and question 71's assumption
+     stands. It is question 302 of the continuation plan.
+177. **Whether every commit of a compiled pattern is prepared** (for the
+     project owner). By the confirmation of 2026-11-19 every kept output
+     carries the pattern's atom (section 3.2). Today a commit that reads no
+     labeled document is not prepared, and milestone 4 of the integration
+     follows that: over its corpus subset 612 write records have no stored
+     entry at their path, where the evaluator gives the atom of the pattern
+     alone. Either every commit of a compiled pattern is prepared, so that
+     every kept output carries the atom, at the cost of a preparation per
+     commit (0.72 ms per preparation with the option on, against 0.43 ms
+     with it off, over the 133 modules of that milestone with no commit
+     refused under the option alone), or the atom is stored only where a
+     preparation runs, and an unlabeled kept output carries none. *Assumed:*
+     not decided; the documents state the ruling, and the build stores the
+     atom only where a preparation runs. It is question 303 of the
+     continuation plan.
+178. **What a slot under `*` binds when the collection is empty** (for the
+     prototype and the project owner; section 4.2, the `uniform` form). A
+     binding whose address holds `*` covers no position of an empty array,
+     so the join of the entries it covers is empty, and the stored `*` entry
+     of section 2.3 may be absent. *Assumed:* the slot binds the label of
+     the array's membership alone, and the body contributes nothing, which
+     is the label of a `fold` over no element. The alternative binds the
+     last `*` entry stored, which describes elements that no longer exist.
+     It applies to an array of plain values in place, the case of the
+     `uniform` form. It is question 305 of the continuation plan.
