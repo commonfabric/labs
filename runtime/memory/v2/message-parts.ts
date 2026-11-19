@@ -20,6 +20,7 @@
 
 import { membersWritten } from "@commonfabric/data-model/codec-json";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { utf8ByteLength } from "@commonfabric/text/utf8";
 
 import type {
   ResponseMessage,
@@ -88,8 +89,6 @@ type Size = { readonly bytes: number; readonly values: number };
 /** The wire tag every encoded message starts with. */
 const WIRE_TAG = "fvj1:";
 
-const TEXT_ENCODER = new TextEncoder();
-
 /** The sync a server message carries, if it carries one. */
 export function serverMessageSync(
   message: unknown,
@@ -106,6 +105,32 @@ export function serverMessageSync(
 }
 
 /**
+ * The encoding of `message`, or `undefined` when it would be longer than the
+ * longest string the JavaScript engine makes: V8 refuses text of more than
+ * 2^29 - 24 UTF-16 units (about 512 MiB) with a `RangeError` whose message
+ * is "Invalid string length". A sync that long can still go in parts, each
+ * encoded alone, so a sender that splits takes `undefined` for a message that
+ * does not fit whole. Any other failure, another `RangeError` such as a stack
+ * overflow among them, is the message's own and is thrown.
+ */
+export function encodeUnlessTooLong(
+  message: ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): string | undefined {
+  try {
+    return encode(message);
+  } catch (error) {
+    if (
+      error instanceof RangeError && error.message === "Invalid string length"
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/**
  * Whether `payload`, an encoded message, fits `limits`. A character takes at
  * most three UTF-8 bytes, so text of at most a third of the byte bound fits
  * it unmeasured. JSON text of `n` characters holds at most `(n + 1) / 2`
@@ -117,7 +142,7 @@ export function serverMessageSync(
 export function payloadFits(payload: string, limits: PartLimits): boolean {
   if (payload.length > limits.bytes) return false;
   if (
-    payload.length * 3 > limits.bytes && utf8Length(payload) > limits.bytes
+    payload.length * 3 > limits.bytes && utf8ByteLength(payload) > limits.bytes
   ) {
     return false;
   }
@@ -136,9 +161,10 @@ export function payloadFits(payload: string, limits: PartLimits): boolean {
  * that a part is cut by what it takes on the wire. Every part is charged
  * room for tables: those of the whole prepared message, which hold every
  * table a part can carry, up to half the bounds. A part whose own tables
- * still take it past the bounds is the caller's to check. Returns
- * `[message]` when the sync has fewer than two entries or the entries fit
- * one part.
+ * still take it past the bounds is the caller's to check. A `message` that
+ * is itself a part, whose sync says more follow, keeps saying so on its last
+ * part. Returns `[message]` when the sync has fewer than two entries or the
+ * entries fit one part.
  */
 export function splitSyncMessage(
   message: ServerMessage,
@@ -176,7 +202,7 @@ export function splitSyncMessage(
         sync,
         SYNC_LISTS,
         group,
-        index < groups.length - 1,
+        index < groups.length - 1 || sync.more === true,
         index === 0,
       ) as SessionSync,
       session,
@@ -227,6 +253,116 @@ export function halveSyncPart(
       false,
     ),
   ];
+}
+
+/** A part of a sync, prepared for its connection and encoded. */
+export type EncodedSyncPart = {
+  /** The part as it was cut, before the connection's table encodings. */
+  readonly part: ServerMessage;
+  readonly prepared: ServerMessage;
+  readonly payload: string;
+};
+
+/**
+ * Divides `message`, a sync too long for the engine to encode whole, in
+ * halves by its entries until each half encodes, and returns the halves in
+ * order, each prepared by `prepare` and encoded by `encode`. Nothing is
+ * measured before it encodes: a whole that long can carry tables that are
+ * too, though every part cut from it would fit its bounds. A half of one
+ * entry that the engine cannot encode throws the engine's error.
+ */
+export function halveTooLong(
+  message: ServerMessage,
+  session: SyncPartSession,
+  prepare: (message: ServerMessage) => ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): EncodedSyncPart[] {
+  const ready: EncodedSyncPart[] = [];
+  const stack = [message];
+  while (stack.length > 0) {
+    const part = stack.pop()!;
+    // The whole is known not to encode; each half is tried.
+    const prepared = part === message ? undefined : prepare(part);
+    const payload = prepared === undefined
+      ? undefined
+      : encodeUnlessTooLong(prepared, encode);
+    if (payload !== undefined) {
+      ready.push({ part, prepared: prepared!, payload });
+      continue;
+    }
+    const halves = halveSyncPart(part, session);
+    if (halves !== undefined) {
+      stack.push(halves[1], halves[0]);
+      continue;
+    }
+    // One entry: encoding it again raises the engine's own error.
+    const alone = prepared ?? prepare(part);
+    ready.push({ part, prepared: alone, payload: encode(alone) });
+  }
+  return ready;
+}
+
+/**
+ * Divides `message`, a sync too large for one message within `limits`, into
+ * parts and returns each in order, prepared by `prepare` and encoded by
+ * `encode`. `prepared` and `payload` are the whole message's, `payload`
+ * absent when the whole is too long for the engine to encode
+ * (`encodeUnlessTooLong()`).
+ *
+ * A part cut to its bounds by its entries can exceed them once it carries its
+ * own tables, as can the whole message when its entries fit one part, so a
+ * part that does is halved until its halves fit, or a half is one entry,
+ * which goes as it is. A whole with no `payload` is halved until each half
+ * encodes before anything measures it (`halveTooLong()`), and each half then
+ * goes as it is or is divided in turn.
+ */
+export function encodeSyncParts(
+  message: ServerMessage,
+  prepared: ServerMessage,
+  payload: string | undefined,
+  session: SyncPartSession,
+  limits: PartLimits,
+  prepare: (message: ServerMessage) => ServerMessage,
+  encode: (message: ServerMessage) => string = (value) =>
+    encodeMemoryBoundary(value as never),
+): [ServerMessage, string][] {
+  if (payload === undefined) {
+    return halveTooLong(message, session, prepare, encode)
+      .flatMap((half): [ServerMessage, string][] =>
+        payloadFits(half.payload, limits)
+          ? [[half.prepared, half.payload]]
+          : encodeSyncParts(
+            half.part,
+            half.prepared,
+            half.payload,
+            session,
+            limits,
+            prepare,
+            encode,
+          )
+      );
+  }
+  const split = splitSyncMessage(message, session, limits, prepared);
+  const queue: {
+    part: ServerMessage;
+    prepared?: ServerMessage;
+    payload?: string;
+  }[] = split.length === 1
+    ? [{ part: message, prepared, payload }]
+    : split.map((part) => ({ part })).reverse();
+  const ready: [ServerMessage, string][] = [];
+  while (queue.length > 0) {
+    const item = queue.pop()!;
+    const partPrepared = item.prepared ?? prepare(item.part);
+    const partPayload = item.payload ?? encode(partPrepared);
+    const halves = payloadFits(partPayload, limits)
+      ? undefined
+      : halveSyncPart(item.part, session);
+    if (halves === undefined) ready.push([partPrepared, partPayload]);
+    else queue.push({ part: halves[1] }, { part: halves[0] });
+  }
+  return ready;
 }
 
 /**
@@ -540,13 +676,5 @@ function requireParts(condition: boolean): asserts condition {
 /** Helper for the splits: the encoded size of one value, as a message holds it. */
 function measure(value: unknown): Size {
   const json = encodeMemoryBoundary(value as never).slice(WIRE_TAG.length);
-  return { bytes: utf8Length(json), values: membersWritten(json) + 1 };
-}
-
-function utf8Length(text: string): number {
-  // Text that is ASCII throughout encodes to one byte a character.
-  // deno-lint-ignore no-control-regex
-  return /^[\x00-\x7f]*$/.test(text)
-    ? text.length
-    : TEXT_ENCODER.encode(text).length;
+  return { bytes: utf8ByteLength(json), values: membersWritten(json) + 1 };
 }

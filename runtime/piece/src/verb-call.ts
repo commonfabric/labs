@@ -26,6 +26,7 @@ import {
   startWithInputSources,
   transactionFailureMessage,
 } from "@commonfabric/runner";
+import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isInstance, isObjectNotArray } from "@commonfabric/js-values/types";
 import { loadPiecePattern } from "./ops/piece-controller.ts";
@@ -293,7 +294,9 @@ export async function pieceVerbs(
 
 /** What {@link callVerb} returns. */
 export type VerbCall =
-  /** Refused before anything was sent: nothing ran and nothing was written. */
+  /** Refused before the event was sent: no handler ran, so a retry cannot
+   * commit twice. Starting the piece may already have started it, or the
+   * pieces that enclose it, and they keep running. */
   | { status: "refused"; message: string }
   /** Sent, and the handling failed: nothing it wrote was kept. */
   | { status: "failed"; message: string }
@@ -353,6 +356,68 @@ const isValueLessReceipt = (raw: unknown): boolean =>
   isObjectNotArray(raw) && !isInstance(raw) && Object.keys(raw).length === 0;
 
 /**
+ * Helper for {@link callVerb}: judges `event` against the verb `listed`
+ * declares, starts the piece in `runtime` with what encloses it, and finds the
+ * verb's stream, or returns the refusal of whichever step refused. Nothing is
+ * sent.
+ *
+ * @throws Whatever a read on the way throws, the read ceiling's
+ * `CfcReadCeilingError` among them.
+ */
+async function prepareDispatch(
+  runtime: Runtime,
+  cell: Cell<unknown>,
+  verb: string,
+  event: unknown,
+  listed: PieceCallableListing,
+  pattern: Pattern,
+): Promise<{ value: unknown; stream: Cell<unknown> } | VerbCall> {
+  const schema = listed.inputSchema === true
+    ? undefined
+    : listed.inputSchema as JSONSchema;
+  const judged = await verbEventForDispatch(
+    event,
+    schema,
+    () => Promise.resolve(handlerVerbEvents(pattern).get(verb)),
+  );
+  if ("refusal" in judged) {
+    return {
+      status: "refused",
+      message:
+        `the event for "${verb}" was refused before it was sent: ${judged.refusal}`,
+    };
+  }
+  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
+    return {
+      status: "refused",
+      message:
+        "the piece could not be started here: its start was superseded or it was stopped",
+    };
+  }
+  const stream = cell.key(verb).asSchemaFromLinks() as Cell<unknown>;
+  if (!isStream(stream)) {
+    return {
+      status: "refused",
+      message: `"${verb}" did not resolve to a stream on this piece`,
+    };
+  }
+  return { value: judged.value, stream };
+}
+
+/**
+ * The refusal of a call to `verb` that threw before its event was sent. A
+ * read the read ceiling withholds is said in fixed text, since what was
+ * withheld is not the caller's to learn and the ceiling binds every reader the
+ * session runs; anything else is described.
+ */
+const refusedBeforeSending = (verb: string, error: unknown): string =>
+  error instanceof CfcReadCeilingError
+    ? `the event for "${verb}" was not sent: this piece could not be ` +
+      "started here, because something it reads is above this session's " +
+      "read ceiling"
+    : `the event for "${verb}" was not sent: ${describeFailure(error)}`;
+
+/**
  * Calls the verb `verb` of the piece at `piece` with `event`, and returns
  * what the handling returned.
  *
@@ -393,39 +458,28 @@ export async function callVerb(
     return { status: "refused", message: notAVerbMessage(verb, verbs) };
   }
 
-  const schema = listed.inputSchema === true
-    ? undefined
-    : listed.inputSchema as JSONSchema;
-  const judged = await verbEventForDispatch(
-    event,
-    schema,
-    () => Promise.resolve(handlerVerbEvents(pattern).get(verb)),
-  );
-  if ("refusal" in judged) {
-    return {
-      status: "refused",
-      message:
-        `the event for "${verb}" was refused before it was sent: ${judged.refusal}`,
-    };
+  // Judging the event, starting the piece and finding the verb's stream all
+  // read the piece, and any of them can throw — a read the runtime's read
+  // ceiling withholds, above all, since starting a piece reads what it reads.
+  // Nothing has been sent yet, so a throw is a refusal the caller can act
+  // on, never an error that escapes the call.
+  let prepared: { value: unknown; stream: Cell<unknown> } | VerbCall;
+  try {
+    prepared = await prepareDispatch(
+      runtime,
+      cell,
+      verb,
+      event,
+      listed,
+      pattern,
+    );
+  } catch (error) {
+    return { status: "refused", message: refusedBeforeSending(verb, error) };
   }
-
-  if (!await startWithInputSources(runtime, cell, () => runtime.start(cell))) {
-    return {
-      status: "refused",
-      message:
-        "the piece could not be started here: its start was superseded or it was stopped",
-    };
-  }
-  const stream = cell.key(verb).asSchemaFromLinks() as Cell<unknown>;
-  if (!isStream(stream)) {
-    return {
-      status: "refused",
-      message: `"${verb}" did not resolve to a stream on this piece`,
-    };
-  }
+  if ("status" in prepared) return prepared;
   let sent: VerbEventCommitted | VerbHandlingFailed;
   try {
-    sent = await sendVerbEvent(stream, judged.value, options);
+    sent = await sendVerbEvent(prepared.stream, prepared.value, options);
   } catch (error) {
     return {
       status: "failed",

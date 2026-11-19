@@ -1,3 +1,8 @@
+/**
+ * A landing page for the reusable trusted surfaces from the system CFC
+ * library, which it re-exports so broader host patterns can embed them. The
+ * page itself only describes how to import them.
+ */
 import { computed, NAME, pattern, UI } from "commonfabric";
 
 export * from "../../system/cfc/trusted-surfaces/mod.ts";

@@ -1,3 +1,9 @@
+/**
+ * An editable tag list where you can add and remove tags, with the list held
+ * in a cell.
+ * Demonstrates `cf-tags` bound to a string array, writing changes back through
+ * its `oncf-change` event.
+ */
 import {
   Default,
   handler,

@@ -1,3 +1,10 @@
+/**
+ * A showcase of components for picking one option from a list: `cf-select`
+ * with string and numeric values, `cf-autocomplete`, `cf-radio-group`, and
+ * `cf-tabs`. Each is bound to a cell with `$value`; the string select,
+ * autocomplete, and radio group share one cell, so a choice in any of them
+ * shows in all three.
+ */
 import { Default, NAME, pattern, UI, type VNode, Writable } from "commonfabric";
 
 type Input = {

@@ -1,3 +1,12 @@
+/**
+ * A directory of users shared across a space, with `joinAs` and `rename`
+ * streams through which each user adds themselves under a display name and
+ * later renames themselves; the view shows only the user count and the
+ * viewer's own name. The directory is `PerSpace` data, while each user's
+ * pointer to their own entry is `PerUser`, so the pattern shows a per-user
+ * cell that refers into shared data.
+ */
+
 import {
   Default,
   handler,
