@@ -1,0 +1,1585 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "DietaryCompatibility": {
+        "properties": {
+          "compatible": {
+            "description": "Dietary tags the dish meets: \"vegan\", \"gluten-free\", \"nut-free\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incompatible": {
+            "description": "Dietary tags the dish fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryIngredients": {
+            "description": "The handful of ingredients that define the dish, for \"no-X\" matching.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Readable caveats: \"Contains dairy (butter)\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compatible",
+          "incompatible",
+          "warnings",
+          "primaryIngredients"
+        ],
+        "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      },
+      "GuestDietaryProfile": {
+        "properties": {
+          "guestName": {
+            "type": "string"
+          },
+          "requirements": {
+            "description": "\"vegan\", \"gluten-free\", \"no-mushrooms\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "guestName",
+          "requirements"
+        ],
+        "type": "object"
+      },
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "MealPreparedFood": {
+        "properties": {
+          "addDietaryTag": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "tag": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tag"
+            ],
+            "type": "object"
+          },
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "requiresReheating": {
+            "type": "boolean"
+          },
+          "servings": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "MealRecipe": {
+        "properties": {
+          "analyzeDiet": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "cookTime": {
+            "type": "number"
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "holdTime": {
+            "type": "number"
+          },
+          "ingredients": {
+            "items": {
+              "$ref": "#/$defs/Ingredient"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ovenRequirements": {
+            "$ref": "#/$defs/OvenRequirements"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "restTime": {
+            "type": "number"
+          },
+          "servings": {
+            "type": "number"
+          },
+          "stepGroups": {
+            "items": {
+              "$ref": "#/$defs/StepGroup"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "OvenConfig": {
+        "properties": {
+          "physicalRacks": {
+            "description": "Racks actually owned, 1 to 3.",
+            "type": "number"
+          },
+          "rackPositions": {
+            "description": "Vertical rack positions the oven has, 3 to 7.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rackPositions",
+          "physicalRacks"
+        ],
+        "type": "object"
+      },
+      "OvenNeed": {
+        "properties": {
+          "duration": {
+            "description": "Minutes in the oven.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "description": "Rack height the dish takes: 1 a sheet pan, 2 a casserole, 5 a turkey.",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "°F.",
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "OvenRequirements": {
+        "properties": {
+          "needsOven": {
+            "type": "boolean"
+          },
+          "tempChanges": {
+            "description": "More than one temperature is needed.",
+            "type": "boolean"
+          },
+          "temps": {
+            "description": "Every distinct temperature, ascending.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "needsOven",
+          "temps",
+          "tempChanges"
+        ],
+        "type": "object"
+      },
+      "RecipeStep": {
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "StepGroup": {
+        "properties": {
+          "duration": {
+            "description": "Minutes the group takes, active and passive.",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "description": "Minutes its result can wait before the next group without suffering.",
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed",
+            "description": "Absent when the group does not use the oven."
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/RecipeStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "dietaryProfiles": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/GuestDietaryProfile"
+        },
+        "type": "array"
+      },
+      "guestCount": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 4,
+        "type": "number"
+      },
+      "mealDate": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "ISO date: \"2026-11-26\".",
+        "type": "string"
+      },
+      "mealName": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "mealTime": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "24-hour serving time: \"18:00\".",
+        "type": "string"
+      },
+      "notes": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "type": "string"
+      },
+      "ovens": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [
+          {
+            "physicalRacks": 2,
+            "rackPositions": 5
+          }
+        ],
+        "items": {
+          "$ref": "#/$defs/OvenConfig"
+        },
+        "type": "array"
+      },
+      "planningNotes": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "",
+        "description": "Rough ideas, free text, to link dishes from.",
+        "type": "string"
+      },
+      "preparedFoods": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/MealPreparedFood"
+        },
+        "type": "array"
+      },
+      "recipes": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/MealRecipe"
+        },
+        "type": "array"
+      },
+      "stovetopBurners": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 4,
+        "type": "number"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/meal-orchestrator/meal-orchestrator.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CategoryLine": {
+        "properties": {
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "dishes": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          },
+          "servings": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "label",
+          "dishes",
+          "servings"
+        ],
+        "type": "object"
+      },
+      "DietaryCompatibility": {
+        "properties": {
+          "compatible": {
+            "description": "Dietary tags the dish meets: \"vegan\", \"gluten-free\", \"nut-free\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "incompatible": {
+            "description": "Dietary tags the dish fails.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "primaryIngredients": {
+            "description": "The handful of ingredients that define the dish, for \"no-X\" matching.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Readable caveats: \"Contains dairy (butter)\".",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "compatible",
+          "incompatible",
+          "warnings",
+          "primaryIngredients"
+        ],
+        "type": "object"
+      },
+      "DietarySource": {
+        "enum": [
+          "analyzed",
+          "stale",
+          "declared",
+          "none"
+        ]
+      },
+      "DishKind": {
+        "enum": [
+          "recipe",
+          "prepared"
+        ]
+      },
+      "GuestDietaryProfile": {
+        "properties": {
+          "guestName": {
+            "type": "string"
+          },
+          "requirements": {
+            "description": "\"vegan\", \"gluten-free\", \"no-mushrooms\", ...",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "guestName",
+          "requirements"
+        ],
+        "type": "object"
+      },
+      "Ingredient": {
+        "properties": {
+          "amount": {
+            "description": "Free text so \"1 1/2\", \"2-3\" and \"a handful\" all fit.",
+            "type": "string"
+          },
+          "item": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "amount",
+          "unit"
+        ],
+        "type": "object"
+      },
+      "LinkAnalysis": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/$defs/LinkItem"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "LinkItem": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "existingName": {
+            "description": "The existing dish's exact name when one matches, else \"\".",
+            "type": "string"
+          },
+          "name": {
+            "description": "A clean name for the dish.",
+            "type": "string"
+          },
+          "quote": {
+            "description": "The words in the notes it came from.",
+            "type": "string"
+          },
+          "servings": {
+            "type": "number"
+          },
+          "source": {
+            "description": "Where a prepared dish comes from: a store, a person, takeout.",
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/$defs/DishKind",
+            "description": "\"recipe\" when cooked at home; \"prepared\" when bought, brought or\nordered."
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "existingName",
+          "quote"
+        ],
+        "type": "object"
+      },
+      "MealBalance": {
+        "properties": {
+          "categories": {
+            "items": {
+              "$ref": "#/$defs/CategoryLine"
+            },
+            "type": "array"
+          },
+          "dishCount": {
+            "type": "number"
+          },
+          "totalServings": {
+            "type": "number"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "categories",
+          "dishCount",
+          "totalServings",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "MealPreparedFood": {
+        "properties": {
+          "addDietaryTag": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "tag": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "tag"
+            ],
+            "type": "object"
+          },
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "requiresReheating": {
+            "type": "boolean"
+          },
+          "servings": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "MealRecipe": {
+        "properties": {
+          "analyzeDiet": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "cookTime": {
+            "type": "number"
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "holdTime": {
+            "type": "number"
+          },
+          "ingredients": {
+            "items": {
+              "$ref": "#/$defs/Ingredient"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ovenRequirements": {
+            "$ref": "#/$defs/OvenRequirements"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "restTime": {
+            "type": "number"
+          },
+          "servings": {
+            "type": "number"
+          },
+          "stepGroups": {
+            "items": {
+              "$ref": "#/$defs/StepGroup"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MenuSuggestions": {
+        "properties": {
+          "suggestions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "suggestions"
+        ],
+        "type": "object"
+      },
+      "OffTimeline": {
+        "properties": {
+          "dish": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "dish",
+          "step",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "OvenConfig": {
+        "properties": {
+          "physicalRacks": {
+            "description": "Racks actually owned, 1 to 3.",
+            "type": "number"
+          },
+          "rackPositions": {
+            "description": "Vertical rack positions the oven has, 3 to 7.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "rackPositions",
+          "physicalRacks"
+        ],
+        "type": "object"
+      },
+      "OvenConflict": {
+        "properties": {
+          "at": {
+            "description": "Minutes before serving the dish has nowhere to go.",
+            "type": "number"
+          },
+          "dish": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "temperature": {
+            "description": "°F the dish wants.",
+            "type": "number"
+          },
+          "with": {
+            "description": "Who else is involved: the dishes it collides with.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "dish",
+          "step",
+          "at",
+          "temperature",
+          "with",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "OvenNeed": {
+        "properties": {
+          "duration": {
+            "description": "Minutes in the oven.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "description": "Rack height the dish takes: 1 a sheet pan, 2 a casserole, 5 a turkey.",
+            "type": "number"
+          },
+          "temperature": {
+            "description": "°F.",
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "temperature",
+          "duration",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "OvenPlan": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "$ref": "#/$defs/OvenConflict"
+            },
+            "type": "array"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/$defs/PlacedEvent"
+            },
+            "type": "array"
+          },
+          "offTimeline": {
+            "items": {
+              "$ref": "#/$defs/OffTimeline"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "Problems short of a conflict: a dish not out by serving time.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "events",
+          "conflicts",
+          "offTimeline",
+          "warnings"
+        ],
+        "type": "object"
+      },
+      "OvenRequirements": {
+        "properties": {
+          "needsOven": {
+            "type": "boolean"
+          },
+          "tempChanges": {
+            "description": "More than one temperature is needed.",
+            "type": "boolean"
+          },
+          "temps": {
+            "description": "Every distinct temperature, ascending.",
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "needsOven",
+          "temps",
+          "tempChanges"
+        ],
+        "type": "object"
+      },
+      "PlacedEvent": {
+        "properties": {
+          "dish": {
+            "type": "string"
+          },
+          "end": {
+            "description": "Minutes before serving it comes out; negative is after serving.",
+            "type": "number"
+          },
+          "heightSlots": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "oven": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "start": {
+            "description": "Minutes before serving it goes in.",
+            "type": "number"
+          },
+          "step": {
+            "type": "string"
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "width": {
+            "enum": [
+              "full",
+              "half"
+            ]
+          }
+        },
+        "required": [
+          "oven",
+          "id",
+          "dish",
+          "step",
+          "start",
+          "end",
+          "temperature",
+          "heightSlots",
+          "width"
+        ],
+        "type": "object"
+      },
+      "PreparedFoodForMeal": {
+        "properties": {
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "requiresReheating": {
+            "type": "boolean"
+          },
+          "servings": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "prepTime",
+          "requiresReheating",
+          "name",
+          "servings",
+          "category",
+          "dietaryCompatibility",
+          "dietarySource"
+        ],
+        "type": "object"
+      },
+      "RecipeForMeal": {
+        "properties": {
+          "category": {
+            "enum": [
+              "appetizer",
+              "bread",
+              "dessert",
+              "main",
+              "other",
+              "side",
+              "starch",
+              "vegetable"
+            ]
+          },
+          "cookTime": {
+            "type": "number"
+          },
+          "dietaryCompatibility": {
+            "$ref": "#/$defs/DietaryCompatibility"
+          },
+          "dietarySource": {
+            "$ref": "#/$defs/DietarySource"
+          },
+          "holdTime": {
+            "type": "number"
+          },
+          "ingredients": {
+            "items": {
+              "$ref": "#/$defs/Ingredient"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ovenRequirements": {
+            "$ref": "#/$defs/OvenRequirements"
+          },
+          "prepTime": {
+            "type": "number"
+          },
+          "restTime": {
+            "type": "number"
+          },
+          "servings": {
+            "type": "number"
+          },
+          "stepGroups": {
+            "items": {
+              "$ref": "#/$defs/StepGroup"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "prepTime",
+          "cookTime",
+          "restTime",
+          "holdTime",
+          "ingredients",
+          "stepGroups",
+          "ovenRequirements",
+          "name",
+          "servings",
+          "category",
+          "dietaryCompatibility",
+          "dietarySource"
+        ],
+        "type": "object"
+      },
+      "RecipeStep": {
+        "properties": {
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "description"
+        ],
+        "type": "object"
+      },
+      "RequirementCheck": {
+        "properties": {
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "guest": {
+            "type": "string"
+          },
+          "requirement": {
+            "type": "string"
+          },
+          "unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "warning": {
+            "description": "Empty when something on the menu is known to suit the guest.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "guest",
+          "requirement",
+          "fits",
+          "conflicts",
+          "unknown",
+          "warning"
+        ],
+        "type": "object"
+      },
+      "StepGroup": {
+        "properties": {
+          "duration": {
+            "description": "Minutes the group takes, active and passive.",
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "maxWaitMinutes": {
+            "description": "Minutes its result can wait before the next group without suffering.",
+            "type": "number"
+          },
+          "minutesBeforeServing": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nightsBeforeServing": {
+            "type": "number"
+          },
+          "oven": {
+            "$ref": "#/$defs/OvenNeed",
+            "description": "Absent when the group does not use the oven."
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/$defs/RecipeStep"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "steps"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Meal planner that coordinates several recipes and prepared foods.\n#mealPlan",
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addGuest": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "addOven": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "analyzeDiets": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Run the dietary analysis of every recipe not analyzed or out of date."
+      },
+      "applyLinking": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "balance": {
+        "$ref": "#/$defs/MealBalance"
+      },
+      "cancelLinking": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "clearSuggestions": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "dietary": {
+        "items": {
+          "$ref": "#/$defs/RequirementCheck"
+        },
+        "type": "array"
+      },
+      "dietaryProfiles": {
+        "items": {
+          "$ref": "#/$defs/GuestDietaryProfile"
+        },
+        "type": "array"
+      },
+      "guestCount": {
+        "type": "number"
+      },
+      "linkAnalysis": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LinkAnalysis"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "The notes analysis under review, or null."
+      },
+      "linkNotes": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Ask the model to find the dishes in the planning notes.",
+        "tier": "wrapper"
+      },
+      "markSuits": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Record that a prepared food suits a requirement.",
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "requirement": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "requirement"
+        ],
+        "type": "object"
+      },
+      "mealDate": {
+        "type": "string"
+      },
+      "mealName": {
+        "type": "string"
+      },
+      "mealTime": {
+        "type": "string"
+      },
+      "mentionable": {
+        "description": "Dishes this meal created, published so other pieces can find them.",
+        "items": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RecipeForMeal"
+            },
+            {
+              "$ref": "#/$defs/PreparedFoodForMeal"
+            }
+          ]
+        },
+        "type": "array"
+      },
+      "notes": {
+        "type": "string"
+      },
+      "ovenPlan": {
+        "$ref": "#/$defs/OvenPlan",
+        "description": "Every oven step group placed in an oven, and what does not fit."
+      },
+      "ovens": {
+        "items": {
+          "$ref": "#/$defs/OvenConfig"
+        },
+        "type": "array"
+      },
+      "planningNotes": {
+        "type": "string"
+      },
+      "preparedFoods": {
+        "items": {
+          "$ref": "#/$defs/MealPreparedFood"
+        },
+        "type": "array"
+      },
+      "recipes": {
+        "items": {
+          "$ref": "#/$defs/MealRecipe"
+        },
+        "type": "array"
+      },
+      "removeGuest": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "removeOven": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "removePreparedFood": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "removeRecipe": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      },
+      "setOvenField": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "field": {
+            "enum": [
+              "physicalRacks",
+              "rackPositions"
+            ]
+          },
+          "index": {
+            "type": "number"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "field",
+          "value"
+        ],
+        "type": "object"
+      },
+      "setRequirements": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "index": {
+            "type": "number"
+          },
+          "requirements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "index",
+          "requirements"
+        ],
+        "type": "object"
+      },
+      "stovetopBurners": {
+        "type": "number"
+      },
+      "suggest": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Ask the model for menu suggestions.",
+        "tier": "wrapper"
+      },
+      "suggestions": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/MenuSuggestions"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Menu suggestions, or null until asked for."
+      },
+      "toggleLinkItem": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Check or uncheck one found item in the review.",
+        "properties": {
+          "index": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "index"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "mealName",
+      "mealDate",
+      "mealTime",
+      "guestCount",
+      "ovens",
+      "stovetopBurners",
+      "dietaryProfiles",
+      "planningNotes",
+      "recipes",
+      "preparedFoods",
+      "notes",
+      "ovenPlan",
+      "balance",
+      "dietary",
+      "linkAnalysis",
+      "suggestions",
+      "mentionable",
+      "addOven",
+      "removeOven",
+      "setOvenField",
+      "addGuest",
+      "removeGuest",
+      "setRequirements",
+      "linkNotes",
+      "toggleLinkItem",
+      "applyLinking",
+      "cancelLinking",
+      "removeRecipe",
+      "removePreparedFood",
+      "analyzeDiets",
+      "markSuits",
+      "suggest",
+      "clearSuggestions",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}
