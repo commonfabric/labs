@@ -285,12 +285,43 @@ and reports what it measures beside the figures before it.
    *Needs first:* a crate that emits the corpus of the main branch, which
    it does not today (the method of the figures below says where it
    fails), and the decision of milestone 2.
-4. **Labels from templates at commit.** `prepareCfc()` instantiates the
-   template of each path the plan covers and checks the plan's constraints
-   (`execution-and-storage.md` §1.9). The label comparison of
-   `compare/corpus.ts` runs against the integrated path. *Measures:* the
-   cost of instantiating templates against the join, and the labels the
-   design stores, compared with today's from the same runtime.
+4. **Labels from templates at commit.** Today `prepareCfc()` derives one
+   label, the join over everything the transaction read
+   (`deriveFlowJoin` in `runtime/runner/src/cfc/prepare.ts`), and stamps
+   it on every path the transaction writes. With one transaction per cause
+   that join covers far more than one node's reads, so milestones 1 to 3
+   store labels that are too wide (see "Milestone 1: first figures",
+   `briefing.tsx`). Milestone 4 replaces it, for every path the plan
+   covers, as `execution-and-storage.md` §1.9 describes:
+   - *The label of a written path* is its template from the plan
+     (`Plan.outputs`, the write edges, the state cells; the templates of
+     `plan-and-label-templates.md` §3), instantiated with the labels of
+     the slots that template names, which are the labels of the places
+     that output reads and nothing else. The preparation instantiates the
+     template itself, with the runtime's label operations; it accepts no
+     label the executor computed.
+   - *The plan's constraints* (write-floor, writer-fit and egress,
+     `plan-and-label-templates.md` §4.4) are checked from the same
+     templates, and a failed constraint drops a derived write alone or
+     rejects the event's transaction whole, by ruling.
+   - *The prepared digest* binds the compiled pattern's identity and each
+     template's instantiation key, and the preparation records what it
+     verified per unit, so that a conflict can withdraw one derived write
+     (§1.9, items 3 and 4).
+   - *The journal* stays the read set for conflicts, and the source of the
+     `dynamic` templates (§1.9, item 5).
+
+   The executor tells the adapter, for each write, which plan record it
+   belongs to and which slots that record's template is bound to, and the
+   adapter records that in the transaction for the preparation. The label
+   comparison of `compare/corpus.ts`, which today evaluates templates in
+   TypeScript beside the runtime (`compare/template.ts`), then compares
+   what the runtime stores on the integrated path with what today's
+   runtime stores. It is a change to what Contextual Flow Control decides,
+   so it follows "The CFC specification process" above. *Measures:* the
+   cost of instantiating a template per written path against one join per
+   transaction, and the labels the design stores, compared with today's
+   from the same runtime.
 5. **Value code in the sandbox.** The module texts of value code are
    evaluated in an SES compartment under the runtime's module policy, and
    the runtime compiles on load with the crate in the compile worker.
@@ -481,10 +512,25 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   - *2 writer-fit misfits remain,* both in the transaction that settles the
     instance (`examples/cfc-input-cell-demo/briefing.tsx` and
     `apps/budget-tracker/confidential.tsx`), where today's runtime settles
-    both modules with no refusal. The likely cause, not examined, is the
-    one "Labels" above describes: today's join over every read of a
+    both modules with no refusal. The cause, examined on `briefing.tsx`:
+    the result document is not a store the runtime owns. Today's runner
+    enrolls the stores of a piece when it sets the piece up
+    (`enrollPieceOwnedStores` in `runtime/runner/src/runner.ts`), and a
+    clause that does not fit a store the runtime owns is declared onto the
+    store rather than refused (§8.12.5); the adapter enrolls nothing. A
+    variant of the pattern that writes `briefing` alone, whose value rightly
+    carries "demo-secret", is refused the same way, and with the result
+    document enrolled the settle commits.
+  - *Labels too wide, as "Labels" above predicts.* With the result document
+    enrolled, the settle of `briefing.tsx` stores one label at the root of
+    the result: "demo-secret" with the clause of `city`, for the value and
+    the shape. So `climate`, which reads `city` alone, and the text of
+    `[UI]` carry "demo-secret". Today's runtime, which runs each node in a
+    transaction of its own, labels `climate` and that text with the clause
+    of `city` alone, and so does the design's template; `briefing` carries
+    "demo-secret" in all three. This is today's join over every read of a
     transaction, applied to the design's one transaction for the whole
-    settle, puts a clause on a store that does not admit it.
+    settle, and milestone 4 is what removes it.
 
   With the fixes, the labeled runs store the values of the run in memory in
   every module but the 7 that read the clock and the 2 with a refused
@@ -511,8 +557,9 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   gain until milestones 3 to 6.
 
 **Not examined.** The failure of `witnessed-chain.tsx` in storage, which
-the change to the covering path did not fix; the two writer-fit misfits;
-the outlier of the labeled battleship run; how much of the wait for a commit to
+the change to the covering path did not fix; whether
+`budget-tracker/confidential.tsx` has the cause of `briefing.tsx`; the
+outlier of the labeled battleship run; how much of the wait for a commit to
 settle is idle; and why the driver's own comparison with today's values,
 made in the same process after the runs, finds 5,637 of 6,053 equal where
 the values run finds 6,013 of 6,107.
