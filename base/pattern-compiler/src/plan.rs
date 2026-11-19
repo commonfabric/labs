@@ -1211,6 +1211,52 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// A `select` over the condition `test` and two branches (PL §3.5).
     /// `first` and `second` say what each branch is: an expression, or
     /// the condition itself.
+    /// `a && b` is `select(a, [b, a])`, and `a || b` and `a ?? b` are
+    /// `select(a, [a, b])` (PL §3.5); `??` tests whether `a` is present.
+    fn logical(&mut self, logical: &LogicalExpression<'a>, hint: &str, at: u32) -> Place {
+        match logical.operator {
+            LogicalOperator::And => {
+                self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
+            }
+            LogicalOperator::Or => {
+                self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
+            }
+            LogicalOperator::Coalesce => self.select(
+                hint,
+                at,
+                &logical.left,
+                Some("shape"),
+                [None, Some(&logical.right)],
+            ),
+        }
+    }
+
+    /// Evaluates a member read with a computed key, and records, for the
+    /// value code, the pick it made whose key the value code chooses
+    /// (`chosenBy: "valueCode"`, PL §3.18).
+    fn reported_pick(
+        &mut self,
+        span: oxc_span::Span,
+        evaluate: impl FnOnce(&mut Self) -> Place,
+    ) -> Place {
+        let first = self.picks.len();
+        let place = evaluate(self);
+        if self.picks.get(first) == Some(&"valueCode") {
+            self.facts.pick((span.start, span.end), first);
+        }
+        place
+    }
+
+    /// Records, for the value code, that the selection at `span` has the
+    /// selector numbered `first` where evaluating it made one: the first
+    /// selector it made is its own, and those after it are of its
+    /// operands.
+    fn reported_selector(&mut self, span: oxc_span::Span, first: usize, presence: bool) {
+        if self.selectors.len() > first {
+            self.facts.selector((span.start, span.end), first, presence);
+        }
+    }
+
     fn select(
         &mut self,
         hint: &str,
@@ -1836,6 +1882,11 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 Statement::IfStatement(statement) => {
                     let selector = self.selector(2);
+                    self.facts.selector(
+                        (statement.span.start, statement.span.end),
+                        selector,
+                        false,
+                    );
                     let class = self.test_class(&statement.test);
                     let (_, condition) =
                         self.one(class, |emitter| emitter.eval(&statement.test, "condition"));
@@ -2222,7 +2273,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         if matches!(object, Place::Const) && matches!(key, Place::Const) {
                             return Place::Const;
                         }
-                        self.pick(&object, &key, hint, at)
+                        self.reported_pick(member.span, |emitter| {
+                            emitter.pick(&object, &key, hint, at)
+                        })
                     }
                 }
             }
@@ -2236,7 +2289,9 @@ impl<'a> Emitter<'_, '_, 'a> {
                         Expression::StringLiteral(key) => Self::extend(&object, key.value.as_str()),
                         key => {
                             let key = self.eval(key, hint);
-                            self.pick(&object, &key, hint, at)
+                            self.reported_pick(member.span, |emitter| {
+                                emitter.pick(&object, &key, hint, at)
+                            })
                         }
                     }
                 }
@@ -2476,30 +2531,27 @@ impl<'a> Emitter<'_, '_, 'a> {
                 }
                 built
             }
-            Expression::ConditionalExpression(conditional) => self.select(
-                hint,
-                at,
-                &conditional.test,
-                None,
-                [Some(&conditional.consequent), Some(&conditional.alternate)],
-            ),
-            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
-            // analogous" (PL §3.5). `??` tests whether `a` is present.
-            Expression::LogicalExpression(logical) => match logical.operator {
-                LogicalOperator::And => {
-                    self.select(hint, at, &logical.left, None, [Some(&logical.right), None])
-                }
-                LogicalOperator::Or => {
-                    self.select(hint, at, &logical.left, None, [None, Some(&logical.right)])
-                }
-                LogicalOperator::Coalesce => self.select(
+            Expression::ConditionalExpression(conditional) => {
+                let first = self.selectors.len();
+                let place = self.select(
                     hint,
                     at,
-                    &logical.left,
-                    Some("shape"),
-                    [None, Some(&logical.right)],
-                ),
-            },
+                    &conditional.test,
+                    None,
+                    [Some(&conditional.consequent), Some(&conditional.alternate)],
+                );
+                self.reported_selector(conditional.span, first, false);
+                place
+            }
+            // "`a && b` is `select(a, [b, a])` ... `a || b` and `??` are
+            // analogous" (PL §3.5). `??` tests whether `a` is present.
+            Expression::LogicalExpression(logical) => {
+                let first = self.selectors.len();
+                let place = self.logical(logical, hint, at);
+                let presence = logical.operator == LogicalOperator::Coalesce;
+                self.reported_selector(logical.span, first, presence);
+                place
+            }
             Expression::BinaryExpression(binary) => self.derived(hint, at, |emitter, _| {
                 let equality = matches!(
                     binary.operator,
