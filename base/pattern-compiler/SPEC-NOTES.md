@@ -9785,3 +9785,58 @@ today's runtime; the site returns to that form if the declarations change.
      stubbed `wish`'s `[UI]` and 8 are `referencedBy`), and the labels those of
      note 547 (52 outputs tighter and 6 whose atom names the pattern, none
      looser; 7 write edges, 3 equal and 4 tighter).
+560. **The rewrite of note 556 is refused by the pattern-update compatibility
+     gate.** `deno task pattern-compat` refuses `topic.tsx` over all 12 of its
+     recorded baselines (20260911T185348Z to 20261116T101720Z), each with the
+     same two findings: `argument.createdByName` and
+     `argument.comments[].authorName`: "the candidate no longer accepts every
+     previous type". The argument's schema was `unknown` at both paths, and
+     declaring them `string`, as LS §7.8 asks for a key of older data that code
+     reads as a string, narrows the contract. The gate is right by its own
+     terms: the automatic updater checks the same compatibility, so a deployed
+     Topics board would not take the new source unless the update were forced,
+     as the profile-picture narrowing was
+     (`docs/history/topics-profile-picture-forced-update/`). Nothing a reader
+     sees would change: a stored value that is not a string reads as absent, and
+     the upgrade already completed such a topic with no author. The break is in
+     the contract alone. The ruling and the gate conflict for every deployed
+     pattern with such a key; in main's corpus two other files still read a data
+     position typed `unknown` (6 sites, in `showcase/wordsearch/generator.ts`
+     and `examples/reading-list/reading-list.tsx`).
+
+     Before the rewrite the source kept the contract `unknown` and read the
+     position under a schema of its own: the upgrade's state declared
+     `createdByName` and `authorName` as `type: ["string", "unknown"]`, a string
+     where one is stored and a reference otherwise. Keeping the two keys
+     `unknown` and declaring the upgrade's handle
+     `ReadonlyCell<string | undefined>` is refused by the crate
+     (`subset-type:mismatch`, 18 sites: "a cell of the value's type would not be
+     assignable to the declared handle"), correctly by LS §7.5.1, under which a
+     read-only handle is covariant and `unknown` is not assignable to `string`.
+     Two ways out, neither of which this work takes:
+
+     - **Accept the break**: an entry in
+       `tasks/pattern-compat-accepted-breaks.ts` for the 12 pairs and the two
+       paths, with a decision record, and a forced update of every deployed
+       Topics board. It changes no value and strands no data, by the argument
+       above.
+     - **Change the ruling**: let a read-only handle declare a type narrower
+       than a place typed `unknown`, a stored value outside it reading as
+       `undefined` by the rule for stored data that does not match its declared
+       type (`plan-and-label-templates.md`, §5.2). That is the subset form of
+       the reader schema the source had, and keeps the contract.
+
+     `deno task pattern-vintage` passes on the rewritten source, and its report
+     differs from a replay of the source before the rewrite in one respect: of
+     136 upgrade targets, 85 update cleanly against 87 before. The two are
+     hoisted sub-patterns of `topic.tsx` (`__cfPattern_1` and `__cfPattern_2`,
+     in the fixture of 2026-11-16) whose stored arguments today's schema
+     refuses; the gate holds such a target back by rule, since the updated
+     source re-runs the derivation and supplies the arguments again
+     (`tasks/pattern-vintage-run.ts`, `capturesSuperseded`). Every line naming a
+     changed value is the same in both replays. Three other patterns import the
+     rewritten modules and have contracts not yet recorded
+     (`apps/person-workbench/main.tsx`, `apps/topic-workbench/main.tsx`,
+     `dev/factory-outputs/lot-watch/main.tsx`); that is the routine finding
+     `pattern-compat --update` records, left until the question above is
+     settled.
