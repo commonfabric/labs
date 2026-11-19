@@ -52,10 +52,12 @@ adoption and the run step by step. This repository's own patterns sync through
 `.github/workflows/pattern-index-sync.yml`, which runs only while the repository
 variable `PATTERN_INDEX_SYNC` is `on`.
 
-An oversized program's publish refusal reports the server's byte limit in the
-sync summary. The report recognizes only the server's fixed size-error wording
-with a bounded decimal limit; other index response details remain withheld. The
-entry stays failed, and the sync continues with the remaining entries.
+A publish the index refuses for its program's size is listed in the sync summary
+as too large for the index, with the server's byte limit, rather than as failed.
+Like an entry with no description, it does not fail the job, and the sync
+continues with the remaining entries. Only the server's fixed size-error wording
+with a bounded decimal limit is recognized; any other refusal fails the entry,
+and other index response details remain withheld.
 
 ## Loom helper contract
 
@@ -89,9 +91,10 @@ Its operations are:
   `note`, are omitted.
 - View: `{"op":"view","piece":"piece:<sha256 hex>"}` or
   `{"op":"view","patternId":"..."}`, exactly one. It records the signer's
-  `viewed_in_loom`: a piece key (`deployedPieceRef`) settles the version of
-  theirs deployed to that piece, which shares it under their sharing setting,
-  and ranks nothing. A pattern id ranks a pattern the person placed from the
+  `viewed_in_loom`: a piece key (`deployedPieceRef`) counts toward settling the
+  version of theirs deployed to that piece: used for a day with no newer
+  version, and past the privacy check, it is shared under their sharing setting.
+  It ranks nothing. A pattern id ranks a pattern the person placed from the
   index. The result is the index's answer,
   `{"ok":true,"value":{"ok":true,
   "recorded":false,"settled":{...}}}`; an

@@ -934,9 +934,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
    * session has answered, to whether some root was kept only for having been
    * loaded or read since the previous call began, which a later call may
-   * release.
+   * release. Then, unless a commit spanning several spaces is still
+   * applying, it releases each space nothing uses any more, as "Releasing a
+   * space's session" in `docs/features/document-release.md` says: it closes
+   * the space's session and forgets the space, which the next use opens
+   * again.
    */
   releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
+
+  /** Calls `observer` with each space a release pass releases. */
+  subscribeSpacesReleased?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the

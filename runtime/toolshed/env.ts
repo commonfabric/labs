@@ -390,6 +390,12 @@ export const EnvSchema = z.object({
   // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),
 
+  // Whether the main thread samples its heap from startup, for the profiles
+  // SIGUSR2 writes (`lib/heap-profiles.ts`). Off by default: the sampler's
+  // inspector session makes Deno hold each worker the main thread starts
+  // about a second for a debugger. The serving workers sample either way.
+  HEAP_PROFILE_MAIN_THREAD: boolFlag(),
+
   // The space this deployment keeps its ingest registry in: channel
   // registrations, their indexes, and Gmail mailbox bindings. Empty means the
   // space named by this deployment's own identity. A space named here must

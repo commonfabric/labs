@@ -3480,6 +3480,16 @@ export class Runtime {
           );
         }
       }),
+      // A released space opens again on its next use, as a first open does:
+      // its loads are kicked again, and the effects channel subscribes to
+      // it again.
+      manager.subscribeSpacesReleased?.((space) => {
+        const prefix = `${space}\0`;
+        for (const key of this.#missingDocLoadKicks) {
+          if (key.startsWith(prefix)) this.#missingDocLoadKicks.delete(key);
+        }
+        this.#effectsChannel?.forgetSpace(space);
+      }),
     ];
     for (const cancel of cancels) {
       if (cancel !== undefined) this.#documentReleaseCancels.push(cancel);

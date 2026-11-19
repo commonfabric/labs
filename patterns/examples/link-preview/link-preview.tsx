@@ -1,3 +1,8 @@
+/**
+ * A URL input with a rich preview of the linked page beneath it, defaulting
+ * to a GitHub address. It demonstrates the `cf-link-preview` component bound
+ * to a cell alongside a `cf-input` using `$value`.
+ */
 import {
   computed,
   type Default,

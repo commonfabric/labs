@@ -1,3 +1,9 @@
+/**
+ * Two views of one shared counter, each with its own decrement and
+ * increment buttons, so a change in either updates both. It demonstrates
+ * passing a cell to a sub-pattern and invoking a pattern either as a function
+ * call or as a JSX element.
+ */
 import {
   computed,
   Default,
