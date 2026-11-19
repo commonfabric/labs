@@ -1727,9 +1727,9 @@ uses the pattern's defaults. The file is read once; later edits to it are not
 synchronized.
 
 `--host-fact <key>=<value>`, repeatable, hands the creation a fact about where
-the piece is created. It fills each argument property the pattern marks with
-`HostFact<T, key>`, unless `--input-file` writes that property itself; a fact no
-property is marked with is not used
+the piece is created, as a string. It fills each argument property the pattern
+marks with `HostFact<T, key>`, unless `--input-file` writes that property
+itself; a fact no property is marked with is not used
 ([Host facts](../../docs/features/host-embedding.md#14-host-facts)). An option
 with no `=` or no key, or a key named twice, refuses before creation.
 
