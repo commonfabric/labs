@@ -522,6 +522,41 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
 }
 
 #[test]
+fn what_a_body_of_another_module_returns_is_resolved_in_that_module() {
+    // A body defined in one module and used in another: the identifiers
+    // of what it returns are resolved in the module it is written in.
+    // Resolved in the module of the call, a reference identifier of the
+    // body's module indexes the other module's tables, which have fewer
+    // entries, and the crate panicked (`pattern-compiler emit --corpus`
+    // over `patterns/system`).
+    let library = format!(
+        "import {{ lift }} from \"commonfabric\";\n{refs}\nconst fallback = v59;\nexport const pick = lift((x: {{ n?: number }}) => {{ return x.n ?? fallback; }});\n",
+        refs = REFS,
+    );
+    let analysis = analyze(&[
+        SourceFile {
+            path: "library.ts".to_string(),
+            text: library,
+        },
+        SourceFile {
+            path: "outer.tsx".to_string(),
+            text: r#"import { pattern } from "commonfabric";
+import { pick } from "./library.ts";
+export const Outer = pattern<{ n?: number }>(({ n }) => {
+  const chosen = pick({ n });
+  return { chosen };
+});
+"#
+            .to_string(),
+        },
+    ]);
+    let plan = plan_of(&analysis, "Outer");
+    assert!(output_named(&plan, "chosen")["template"].is_object());
+}
+
+const REFS: &str = "const v0 = 0;\nconst v1 = 1 + v0;\nconst v2 = 2 + v1;\nconst v3 = 3 + v2;\nconst v4 = 4 + v3;\nconst v5 = 5 + v4;\nconst v6 = 6 + v5;\nconst v7 = 7 + v6;\nconst v8 = 8 + v7;\nconst v9 = 9 + v8;\nconst v10 = 10 + v9;\nconst v11 = 11 + v10;\nconst v12 = 12 + v11;\nconst v13 = 13 + v12;\nconst v14 = 14 + v13;\nconst v15 = 15 + v14;\nconst v16 = 16 + v15;\nconst v17 = 17 + v16;\nconst v18 = 18 + v17;\nconst v19 = 19 + v18;\nconst v20 = 20 + v19;\nconst v21 = 21 + v20;\nconst v22 = 22 + v21;\nconst v23 = 23 + v22;\nconst v24 = 24 + v23;\nconst v25 = 25 + v24;\nconst v26 = 26 + v25;\nconst v27 = 27 + v26;\nconst v28 = 28 + v27;\nconst v29 = 29 + v28;\nconst v30 = 30 + v29;\nconst v31 = 31 + v30;\nconst v32 = 32 + v31;\nconst v33 = 33 + v32;\nconst v34 = 34 + v33;\nconst v35 = 35 + v34;\nconst v36 = 36 + v35;\nconst v37 = 37 + v36;\nconst v38 = 38 + v37;\nconst v39 = 39 + v38;\nconst v40 = 40 + v39;\nconst v41 = 41 + v40;\nconst v42 = 42 + v41;\nconst v43 = 43 + v42;\nconst v44 = 44 + v43;\nconst v45 = 45 + v44;\nconst v46 = 46 + v45;\nconst v47 = 47 + v46;\nconst v48 = 48 + v47;\nconst v49 = 49 + v48;\nconst v50 = 50 + v49;\nconst v51 = 51 + v50;\nconst v52 = 52 + v51;\nconst v53 = 53 + v52;\nconst v54 = 54 + v53;\nconst v55 = 55 + v54;\nconst v56 = 56 + v55;\nconst v57 = 57 + v56;\nconst v58 = 58 + v57;\nconst v59 = 59 + v58;";
+
+#[test]
 fn a_call_of_a_standard_library_function_is_expression_code_that_consumes_its_arguments() {
     // PL §1.4: a cone is expression code over slots; a conversion such as
     // `String(n)` is an operator over its operand (note 91).
