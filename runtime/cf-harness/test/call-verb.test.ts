@@ -10,7 +10,6 @@ import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
-import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import {
   createLLMFriendlyLink,
   parseLLMFriendlyLink,
@@ -361,30 +360,6 @@ describe("call-verb", () => {
         "start: minutes must be positive",
       );
       expect(await readField(ref, "status")).toBe("idle");
-    });
-
-    it("answers a call that throws as a failure whose event may have been sent, naming the read ceiling", async () => {
-      // `callVerb()` answers each phase it knows of; a throw it lets out is
-      // from none of them, so the run is told to look before calling again,
-      // and goes on rather than ending on the throw.
-      const ref = await createTimer();
-      const tool = createCallVerbTool(() =>
-        Promise.reject(new CfcReadCeilingError())
-      );
-
-      const output = await tool.invoke(contextWith(session, held), {
-        token: ref,
-        verb: "start",
-        event: { minutes: 5 },
-      });
-
-      expect(output).toEqual({
-        outputId: expect.any(String),
-        status: "error",
-        message: 'the call to "start" failed, and whether its event was ' +
-          "sent is not known: something it reads is above this session's " +
-          "read ceiling; read the piece's state before calling it again",
-      });
     });
 
     it("refuses, without sending, a call whose piece cannot start under the session's read ceiling", async () => {

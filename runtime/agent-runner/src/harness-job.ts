@@ -322,7 +322,9 @@ export type HarnessJobResult =
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
        * was submitted, or the field the schema refused and the reason; for a
-       * run that ended on a thrown error, that error described.
+       * run that ended on a thrown error, that error described. That text
+       * is unlabelled and may carry host detail: it is for the job's owner
+       * and operator, never for a model or a share.
        */
       errorDetail?: string;
     }

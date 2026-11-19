@@ -20,10 +20,7 @@
 import type { JSONSchema } from "@commonfabric/api";
 import { callVerb } from "@commonfabric/piece/verb-call";
 import { isLink } from "@commonfabric/runner";
-import {
-  CfcReadCeilingError,
-  describeSinkReleaseRefusal,
-} from "@commonfabric/runner/cfc";
+import { describeSinkReleaseRefusal } from "@commonfabric/runner/cfc";
 import { localRefTarget } from "@commonfabric/runner/cfc/schema-sanitization";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -392,28 +389,12 @@ export const createCallVerbTool = (
     // handler that commits after the tool had answered "cancelled" would be
     // a write the run reported as not made.
     const { runtime } = pieces;
-    // `callVerb()` answers a refusal before sending as a refusal, so a throw
-    // here comes from no phase it names: whether the event was sent is not
-    // known. It is answered as a tool failure the model can act on — check
-    // the piece before calling again — rather than one that ends the run. The
-    // message is fixed text, carrying nothing the call read.
-    let called: Awaited<ReturnType<typeof callVerb>>;
-    try {
-      called = await call(
-        runtime,
-        piece.cell.getAsNormalizedFullLink(),
-        name,
-        input.event,
-      );
-    } catch (error) {
-      return fail(
-        `the call to "${name}" failed, and whether its event was sent is not known` +
-          (error instanceof CfcReadCeilingError
-            ? ": something it reads is above this session's read ceiling"
-            : "") +
-          "; read the piece's state before calling it again",
-      );
-    }
+    const called = await call(
+      runtime,
+      piece.cell.getAsNormalizedFullLink(),
+      name,
+      input.event,
+    );
     // SHORTCUT (2026-10-12): a failing handler's message, its thrown text
     // included, reaches the model as written. A handler over data the model
     // cannot read may carry that data in what it throws, and a pattern's

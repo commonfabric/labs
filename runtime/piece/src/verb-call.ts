@@ -294,7 +294,9 @@ export async function pieceVerbs(
 
 /** What {@link callVerb} returns. */
 export type VerbCall =
-  /** Refused before anything was sent: nothing ran and nothing was written. */
+  /** Refused before the event was sent: no handler ran, so a retry cannot
+   * commit twice. Starting the piece may already have started it, or the
+   * pieces that enclose it, and they keep running. */
   | { status: "refused"; message: string }
   /** Sent, and the handling failed: nothing it wrote was kept. */
   | { status: "failed"; message: string }
