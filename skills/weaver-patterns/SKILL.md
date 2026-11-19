@@ -74,7 +74,7 @@ step checks before it changes anything.
 5. **The person is in the index**, as the same member their service is. If
    `cf index whoami` says this machine has not joined, hand the service's
    membership to this Mac:
-   `echo '{"actor":"user"}' | cf fetch -X POST "$CF_SERVICE_URL/command/index.chain" | plutil -extract outputs.chain raw -o - - | cf index join --chain /dev/stdin`.
+   `echo '{"actor":"user"}' | cf fetch -X POST "$CF_SERVICE_URL/command/index.chain" | plutil -extract outputs.chain raw -o - - | cf index join --chain -`.
    Run the same again whenever an index command says the chain lapsed or was
    refused: only the service renews it, and a chain lasts about three months. If
    the service is not a member either, ask them to copy their invite link and
