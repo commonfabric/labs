@@ -415,15 +415,15 @@ export default pattern(() => {
 
   const assert_legacy_board_empty = assert(() => legacyBoard.topicCount === 0);
 
-  // The refused backfill wrote no number, which is the half a throw alone does
-  // not prove: the verb rejects before it reaches the namespace. The board
-  // holds one unnumbered topic, so a backfill that ran would write `1` into
-  // the namespace and the table would name it. Removing the verb's guard reds
-  // every clause here: the count moves only if the create's rejection also
-  // stopped landing, the namespace gains the key the run wrote, and the table
-  // follows the namespace.
+  // The refused backfill wrote nothing, which is the half a throw alone does
+  // not prove: the verb rejects before it reaches the collection or the
+  // namespace. The board's list holds one unnumbered topic, so a backfill
+  // that ran would add it to the collection, write `1` into the namespace,
+  // and the table would name it. Removing the verb's guard reds every clause
+  // here: the count moves, the namespace gains the key the run wrote, and the
+  // table follows the namespace.
   const assert_unnamed_topic_went_unnamed = assert(() =>
-    legacyBoard.topicCount === 1 &&
+    legacyBoard.topicCount === 0 &&
     Object.keys(legacyNames.get()).length === 0 &&
     (legacyBoard.namesTable ?? []).length === 0
   );

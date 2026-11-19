@@ -51,6 +51,7 @@ import {
   assert,
   Default,
   equals,
+  indexedCollections,
   NAME,
   pattern,
   TESTS,
@@ -69,15 +70,8 @@ import {
   hasText,
   innermostNode,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Topics, {
-  submitProfileTopic,
-  type TopicCrossrefRow,
-  type TopicDemand,
-} from "./main.tsx";
-import Topic, {
-  TOPIC_STATE_VERSION,
-  type TopicCrossrefIndex,
-} from "./topic.tsx";
+import Topics, { submitProfileTopic, type TopicDemand } from "./main.tsx";
+import Topic, { TOPIC_STATE_VERSION, type TopicMirrored } from "./topic.tsx";
 
 /**
  * The number badge under `node`, if one is rendered. A topic's number rides in
@@ -279,6 +273,9 @@ export default pattern(() => {
     olderTopics.push(
       Topic({ title: "Older two", createdAt: 2, shortName: olderTwo }),
     );
+    // The board reads its topics out of its collection, which a listed topic
+    // joins when the board is asked to adopt its list.
+    older.adoptTopics.send({ agentName: "Sol" });
   });
   // An unnamed member's row reads the default, so the board reads whole before
   // anything names it, and its universe row is one no `#42` query matches.
@@ -355,21 +352,24 @@ export default pattern(() => {
     older.index?.[2]?.shortName === "3" &&
     older.index?.[3]?.title === "Older three" &&
     older.index?.[3]?.shortName === "4" &&
-    nameOf(olderTopics.key(2), older.namesTable ?? []) === "3" &&
-    nameOf(olderTopics.key(3), older.namesTable ?? []) === "4"
+    // A create adds to the collection and not to the list, so the list's
+    // third entry is the topic filed after the create.
+    nameOf(olderNames.key("3"), older.namesTable ?? []) === "3" &&
+    nameOf(olderTopics.key(2), older.namesTable ?? []) === "4"
   );
-  // A later run over a board every topic of which publishes its number: it
-  // allocates nothing, asks nothing, and reports all four under `named` with
-  // `pending` empty. An empty `pending` is the report that says the board is
-  // finished, and it is the one the step can only make by reading what a topic
-  // publishes.
+  // A later run over a list every topic of which publishes its number: it
+  // allocates nothing, asks nothing, and reports all three under `named` with
+  // `pending` empty. The topic the board created holds `3` and is not on the
+  // list, so the run does not report it. An empty `pending` is the report
+  // that says the list is finished, and it is the one the step can only make
+  // by reading what a topic publishes.
   const action_backfill_a_third_time = action(() => {
     runs.push(recordNames(olderTopics, olderNames));
   });
   const assert_later_run_reports_them_named = assert(() =>
     runs.get().length === 2 &&
     runs.get()[1]?.assigned?.length === 0 &&
-    runs.get()[1]?.named?.join(",") === "1,2,3,4" &&
+    runs.get()[1]?.named?.join(",") === "1,2,4" &&
     runs.get()[1]?.pending?.length === 0
   );
   // And it stored nothing new: every topic publishes the number it held before
@@ -433,17 +433,16 @@ export default pattern(() => {
   // file's five expected runtime errors, and dropping the pass-through at the
   // create makes the call succeed and the count fall to four.
   const madeNames = new Writable<NamesMap>({});
-  const madeTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const made = Topics({ topics: madeTopics, names: madeNames });
+  const made = Topics({ names: madeNames });
   const action_make_one = action(() => {
     made.addTopic.send({ title: "Made topic", agentName: "Sol" });
   });
   const action_record_a_second_number = action(() => {
-    madeTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
+    madeNames.key("1").resolveAsCell().key("recordName").send({ name: "9" });
   });
   const assert_create_allocated_into_the_namespace = assert(() =>
     Object.keys((madeNames.get() ?? {}) as NamesMap).join(",") === "1" &&
-    nameOf(madeTopics.key(0), made.namesTable ?? []) === "1" &&
+    nameOf(madeNames.key("1"), made.namesTable ?? []) === "1" &&
     made.index?.[0]?.shortName === "1"
   );
 
@@ -455,18 +454,20 @@ export default pattern(() => {
   // is that topic's input; its refusal of a second number stands beside that
   // read the way the headless create's does.
   const composerNames = new Writable<NamesMap>({});
-  const composerTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const composerCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>([]);
-  const composerCrossrefIndex = new Writable<
-    // deno-lint-ignore ban-types
-    Default<TopicCrossrefIndex, { byName: {} }>
-  >({ byName: {} });
+  const composerMentionable = new Writable<TopicDemand[] | Default<[]>>([]);
+  const composerBoard = indexedCollections<{ topics: TopicMirrored }>({
+    topics: {
+      columns: { shortName: "text" },
+      relations: ["mentioned", "mentions"],
+    },
+  });
+  const composerFiled = composerBoard.query<{ shortName: string }>(
+    "SELECT shortName FROM topics",
+  );
   const composerDraft = new Writable("Composed topic");
   const composerSubmit = submitProfileTopic({
-    topics: composerTopics,
-    mentionable: composerTopics,
-    boardCrossrefs: composerCrossrefs,
-    boardCrossrefIndex: composerCrossrefIndex,
+    board: composerBoard,
+    mentionable: composerMentionable,
     names: composerNames,
     newTitle: composerDraft,
     profileName: "Ada",
@@ -476,15 +477,13 @@ export default pattern(() => {
   });
   const assert_composer_allocated_into_the_namespace = assert(() =>
     Object.keys(composerNames.get() ?? {}).join(",") === "1" &&
-    (composerTopics.get() ?? []).length === 1 &&
-    (composerTopics.get() ?? [])[0]?.shortName === "1" &&
-    equals(
-      (composerNames.get() ?? {})["1"] as object,
-      composerTopics.key(0),
-    )
+    (composerFiled.result ?? []).length === 1 &&
+    composerFiled.result?.[0]?.shortName === "1"
   );
   const action_offer_the_composed_topic_another = action(() => {
-    composerTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
+    composerNames.key("1").resolveAsCell().key("recordName").send({
+      name: "9",
+    });
   });
 
   // A write that could not land on one run and lands on the next, which is the
@@ -508,6 +507,7 @@ export default pattern(() => {
         topicStateVersion: blockedVersion,
       }),
     );
+    blocked.adoptTopics.send({ agentName: "Sol" });
   });
   const action_record_blocked = action(() => {
     blockedRuns.push(recordNames(blockedTopics, blockedNames));
@@ -547,6 +547,7 @@ export default pattern(() => {
     });
     foreignTopics.push(topic);
     foreignNames.key("007").set(topic);
+    foreignBoard.adoptTopics.send({ agentName: "Sol" });
   });
   const assert_foreign_key_is_no_name = assert(() =>
     Object.keys(foreignNames.get() ?? {}).join(",") === "007" &&
@@ -677,6 +678,7 @@ export default pattern(() => {
     mislabeledTopics.push(
       Topic({ title: "Mislabeled", createdAt: 1, shortName: mislabeledNumber }),
     );
+    mislabeled.adoptTopics.send({ agentName: "Sol" });
   });
   const action_record_mislabeled = action(() => {
     recordNames(mislabeledTopics, mislabeledNames);
