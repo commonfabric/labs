@@ -209,9 +209,12 @@ space until `falseClean` stays at zero before `skip` is turned on there.
 
 - **A piece is recorded only after a cycle that ran it settled.** A piece
   served before the index was on starts on its first demand.
-- **A piece is marked whole.** A change to a document only an undemanded
-  computation reads marks the piece, which starts once on its next cold
-  demand.
+- **A piece is marked whole.** A computation that is not live when a record
+  is taken contributes no reads and no vouch, so an undemanded part of a
+  piece does not keep it marked. A computation that was live then, and that
+  no session demands since, still has its reads in the record: a change to
+  one of them marks the piece, which starts once on its next cold demand,
+  and the record that start leaves no longer holds them.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
 - **A piece with a source origin, a foreign read, or a root narrower than the
