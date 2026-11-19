@@ -647,7 +647,26 @@ type ConeInputs = {
   selections: Map<number, number>;
   picks: Map<number, string | null>;
   dynamic: Map<number, Address[]>;
+  /** The identifier of what the bindings consumed (`#idOf`). */
   id?: string;
+  /** The positions whose labels `id` holds, with those of upstream elements. */
+  positions?: Address[];
+};
+
+/**
+ * The elements of a `fold` that read positions of one document, by path:
+ * the elements whose group reads a position at the node, and the nodes of
+ * the paths below.
+ */
+type LabelReaders = {
+  readers: Set<string>;
+  children: Map<string, LabelReaders>;
+};
+
+/** The paths of the label entries of a document that changed. */
+export type LabelChange = {
+  doc: string;
+  paths: readonly (readonly string[])[];
 };
 
 /**
@@ -1756,6 +1775,15 @@ export type TransactionHooks = {
   labelOf?(doc: string, path: readonly string[]): string | undefined;
 
   /**
+   * Registers what the store calls when the labels of documents changed
+   * while their values may not have: for each document, the paths of the
+   * label entries that changed. The executor then updates the group of
+   * each element of a `fold` that read a position at, above or below one
+   * of them, and of no other element.
+   */
+  watchLabels?(changed: (changes: readonly LabelChange[]) => void): void;
+
+  /**
    * The transaction in progress changed a path of a document, which
    * `store` holds as it is after the change. A splice is a change of the
    * array's path, a document that was removed is a change of its root, and
@@ -2557,6 +2585,7 @@ export class Instance {
         this.store.onRead = (doc, path, by) => {
           if (this.#tx !== undefined) hooks.read(doc, path, by);
         };
+        hooks.watchLabels?.((changes) => this.labelsChanged(changes));
       }
     }
     for (const { id, kind, value } of options.documents ?? []) {
@@ -5265,6 +5294,11 @@ export class Instance {
   #drop(collection: number, around: readonly string[], key: string): void {
     const id = this.#name("under", collection, around, key);
     const table = this.#groups.get(this.#name("assembly", collection, around));
+    this.#indexReader(
+      `${this.#name("assembly", collection, around)}\n${key}`,
+      { collection, around, key },
+      undefined,
+    );
     if (table?.byKey.has(key)) {
       if (this.#leaveGroup(table, key)) {
         this.#regroupEnclosing(collection, around);
@@ -7048,6 +7082,21 @@ export class Instance {
   readonly #elementConesOf = new Map<number, number[]>();
   /** The folded collections directly inside each collection. */
   readonly #innerFoldsOf = new Map<number, number[]>();
+  /** The elements of a `fold` that read positions, by document and path. */
+  readonly #labelReaders = new Map<string, LabelReaders>();
+  /**
+   * The element each reader in `#labelReaders` stands for, by the name of
+   * its assembly and its key, with the positions its group read.
+   */
+  readonly #readerOf = new Map<
+    string,
+    {
+      collection: number;
+      around: readonly string[];
+      key: string;
+      positions: readonly Address[];
+    }
+  >();
 
   /**
    * The records of the write edges of a cone that `matches` selects, each
@@ -7167,6 +7216,7 @@ export class Instance {
     for (const [at, branch] of host.selections) held.selections.set(at, branch);
     for (const [at, key] of host.picks) held.picks.set(at, key);
     delete held.id;
+    delete held.positions;
     this.#inputs.set(name, held);
     const collection = within.at(-1);
     if (collection !== undefined && this.#folded().has(collection)) {
@@ -7188,18 +7238,24 @@ export class Instance {
   #idOf(inputs: ConeInputs): string {
     if (inputs.id !== undefined) return inputs.id;
     const parts: string[] = [];
+    const positions: Address[] = [];
     const slots = [...inputs.slots].sort(([a], [b]) => a - b);
     for (const [slot, bound] of slots) {
       if ("upstream" in bound) {
         const { collection, keys } = bound.upstream;
         const ids = this.#elementCones(collection).map((cone) => {
           const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
-          return upstream === undefined ? "" : this.#idOf(upstream);
+          if (upstream === undefined) return "";
+          const id = this.#idOf(upstream);
+          positions.push(...upstream.positions ?? []);
+          return id;
         });
         parts.push(`${slot}<${ids.join("|")}>`);
         continue;
       }
-      const labels = this.#addressesOf(bound.at).map(({ doc, path }) =>
+      const addresses = this.#addressesOf(bound.at);
+      positions.push(...addresses);
+      const labels = addresses.map(({ doc, path }) =>
         this.root.options.transactions?.labelOf?.(doc, path) ??
           JSON.stringify([doc, path])
       );
@@ -7216,7 +7272,110 @@ export class Instance {
       parts.push(`p${pick}=${JSON.stringify(key)}`);
     }
     inputs.id = parts.join(";");
+    inputs.positions = positions;
     return inputs.id;
+  }
+
+  /**
+   * Forgets the identifier of what a cone instance's bindings consumed, and
+   * of what the upstream elements its slots read consumed, so that the
+   * next `#idOf` asks for the labels again.
+   */
+  #forget(inputs: ConeInputs): void {
+    delete inputs.id;
+    delete inputs.positions;
+    for (const bound of inputs.slots.values()) {
+      if (!("upstream" in bound)) continue;
+      const { collection, keys } = bound.upstream;
+      for (const cone of this.#elementCones(collection)) {
+        const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
+        if (upstream !== undefined) this.#forget(upstream);
+      }
+    }
+  }
+
+  /**
+   * On the root: the labels of documents changed (`watchLabels`). Updates
+   * the group of each element of a `fold`, in this instance and in every
+   * instance it made, that read a position at, above or below a label
+   * entry that changed. The work is the number of those elements and the
+   * length of the paths, and not the number of elements.
+   */
+  labelsChanged(changes: readonly LabelChange[]): void {
+    for (const instance of new Set([this, ...this.#instances.values()])) {
+      instance.#relabel(changes);
+    }
+  }
+
+  /** Helper for `labelsChanged()`, for the folds of this instance. */
+  #relabel(changes: readonly LabelChange[]): void {
+    const readers = new Set<string>();
+    const collect = (node: LabelReaders) => {
+      for (const reader of node.readers) readers.add(reader);
+      for (const child of node.children.values()) collect(child);
+    };
+    for (const { doc, paths } of changes) {
+      const root = this.#labelReaders.get(doc);
+      if (root === undefined) continue;
+      for (const path of paths) {
+        let node: LabelReaders | undefined = root;
+        for (const segment of path) {
+          for (const reader of node.readers) readers.add(reader);
+          if (segment === "*") break;
+          node = node.children.get(segment);
+          if (node === undefined) break;
+        }
+        if (node !== undefined) collect(node);
+      }
+    }
+    for (const reader of readers) {
+      const at = this.#readerOf.get(reader);
+      if (at === undefined) continue;
+      const keys = [...at.around, at.key];
+      for (const cone of this.#elementCones(at.collection)) {
+        const inputs = this.#inputsOf(cone, keys);
+        if (inputs !== undefined) this.#forget(inputs);
+      }
+      this.#regroupKey(at.collection, at.around, at.key);
+    }
+  }
+
+  /**
+   * Keeps the positions the group of an element read in the index of
+   * label readers, in place of those it read before; none removes it.
+   */
+  #indexReader(
+    reader: string,
+    at: { collection: number; around: readonly string[]; key: string },
+    positions: readonly Address[] | undefined,
+  ): void {
+    const before = this.#readerOf.get(reader);
+    for (const { doc, path } of before?.positions ?? []) {
+      let node = this.#labelReaders.get(doc);
+      for (const segment of path) node = node?.children.get(segment);
+      node?.readers.delete(reader);
+    }
+    if (positions === undefined) {
+      this.#readerOf.delete(reader);
+      return;
+    }
+    this.#readerOf.set(reader, { ...at, positions });
+    for (const { doc, path } of positions) {
+      let node = this.#labelReaders.get(doc);
+      if (node === undefined) {
+        node = { readers: new Set(), children: new Map() };
+        this.#labelReaders.set(doc, node);
+      }
+      for (const segment of path) {
+        let child: LabelReaders | undefined = node.children.get(segment);
+        if (child === undefined) {
+          child = { readers: new Set(), children: new Map() };
+          node.children.set(segment, child);
+        }
+        node = child;
+      }
+      node.readers.add(reader);
+    }
   }
 
   /**
@@ -7261,10 +7420,19 @@ export class Instance {
       this.#groups.set(name, table);
     }
     const keys = [...around, key];
+    const positions: Address[] = [];
     const own = this.#elementCones(collection).map((cone) => {
       const inputs = this.#inputsOf(cone, keys);
-      return inputs === undefined ? "" : this.#idOf(inputs);
+      if (inputs === undefined) return "";
+      const id = this.#idOf(inputs);
+      positions.push(...inputs.positions ?? []);
+      return id;
     });
+    this.#indexReader(
+      `${name}\n${key}`,
+      { collection, around, key },
+      positions,
+    );
     const inner = this.#innerFolds(collection).map((folded) => {
       const ids = [
         ...this.#groups.get(this.#name("assembly", folded, keys))?.groups

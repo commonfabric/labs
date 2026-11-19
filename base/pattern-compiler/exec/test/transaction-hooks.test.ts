@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import {
   type Artifact,
   Instance,
+  type LabelChange,
   type Transaction,
   type TransactionHooks,
 } from "../executor.ts";
@@ -59,6 +60,13 @@ class Recorder implements TransactionHooks {
 
   labelOf(doc: string, path: readonly string[]): string | undefined {
     return this.label?.(doc, [...path]);
+  }
+
+  /** What the executor registered to hear of changed labels. */
+  labelsChanged?: (changes: readonly LabelChange[]) => void;
+
+  watchLabels(changed: (changes: readonly LabelChange[]) => void): void {
+    this.labelsChanged = changed;
   }
 
   /** Each end, with its changes and the documents of the store after it. */
@@ -641,5 +649,57 @@ describe("the elements of a `fold` whose body holds another `fold`", () => {
       JSON.stringify(group).includes('"doc":"secret"')
     );
     expect(inner.sort()).toEqual([false, true]);
+  });
+});
+
+describe("a label that changes while the value stays", () => {
+  /**
+   * `fold-groups.tsx` at `size`, with `items` an array of references, each
+   * to a document of its own, all labeled "plain". The label of the
+   * document of item 3 becomes "secret", the store reports it, and item 0
+   * is pointed at the document of item 1, which runs the `filter` of
+   * `open` again. Returns the counts of the groups that the record of
+   * `open` reports, and the group updates the change of the label made.
+   */
+  const run = async (size: number) => {
+    const labels = new Map<string, string>();
+    const recorder = new Recorder((doc) => labels.get(doc) ?? "plain");
+    const documents = Array.from({ length: size }, (_, index) => ({
+      id: `item-${index}`,
+      kind: "input",
+      value: { title: `i${index}`, done: false },
+    }));
+    const instance = new Instance(
+      await artifactOf("fold-groups"),
+      {
+        tags: [],
+        items: documents.map(({ id }) => ({ $link: { doc: id, path: [] } })),
+      },
+      { transactions: recorder, documents },
+    );
+    const before = instance.counts.groupUpdates;
+    labels.set("item-3", "secret");
+    recorder.labelsChanged?.([{ doc: "item-3", paths: [[]] }]);
+    const updates = instance.counts.groupUpdates - before;
+    const begun = recorder.changed.length;
+    instance.writeArgument(["items", "0"], {
+      $link: { doc: "item-1", path: [] },
+    });
+    const open = byOutput(
+      recorder.changed.slice(begun).flatMap(({ writes }) => writes ?? []),
+    ).get(2)?.elements?.[1] as { groups: { count: number }[] } | undefined;
+    return {
+      counts: open?.groups.map(({ count }) => count).sort((a, b) => a - b),
+      updates,
+    };
+  };
+
+  it("regroups the elements that read the document, and no other", async () => {
+    const small = await run(10);
+    expect(small.counts).toEqual([1, 9]);
+    const large = await run(1_000);
+    expect(large.counts).toEqual([1, 999]);
+    expect(small.updates).toBe(1);
+    expect(large.updates).toBe(1);
   });
 });

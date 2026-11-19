@@ -7,7 +7,10 @@ import {
   resetAllTimingStats,
 } from "../../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../../runtime/runner/src/builder/types.ts";
-import type { MemorySpace } from "../../../../runtime/runner/src/cell.ts";
+import {
+  type MemorySpace,
+  recordRelevantSchemaWritePolicyInput,
+} from "../../../../runtime/runner/src/cell.ts";
 import {
   consumedEntriesForRead,
   labelForConsumedEntries,
@@ -15,7 +18,11 @@ import {
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
-import { type Artifact, Instance } from "../../exec/executor.ts";
+import {
+  type Artifact,
+  Instance,
+  type LabelChange,
+} from "../../exec/executor.ts";
 import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
 import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
@@ -480,6 +487,55 @@ describe("RuntimeTransactions with labels from templates", () => {
     expect(both.clauses).toContain('"input:city"');
     expect(both.clauses).toContain("demo-secret");
     expect([climate.atom, both.atom, text.atom]).toEqual([true, true, true]);
+  });
+
+  it("reports to the executor the label entries a commit changed in a document whose labels it asked for", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      artifact: await artifactOf("briefing"),
+    });
+    try {
+      const write = async (schema: JSONSchema, value: string) => {
+        const tx = runtime.edit();
+        const cell = runtime.getCell<string>(space, { probe: 1 }, schema, tx);
+        recordRelevantSchemaWritePolicyInput(
+          tx,
+          cell.getAsNormalizedFullLink(),
+          schema,
+        );
+        cell.set(value);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        return cell.getAsNormalizedFullLink().id;
+      };
+      const id = await write({ type: "string" }, "a");
+      hooks.external(id);
+      const plain = hooks.labelOf(id, []);
+      const changes: LabelChange[] = [];
+      hooks.watchLabels((changed) => changes.push(...changed));
+      await write({
+        type: "string",
+        ifc: { confidentiality: [inputClause("probe")] },
+      } as JSONSchema, "b");
+      // The executor's next transaction hears of it first.
+      hooks.begin("event");
+      hooks.end({ committed: false });
+      expect(changes.map(({ doc }) => doc)).toEqual([id]);
+      expect(changes[0].paths).toContainEqual([]);
+      expect(hooks.labelOf(id, [])).not.toBe(plain);
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
 
   it("stores the transaction's join at each output with the option off", async () => {

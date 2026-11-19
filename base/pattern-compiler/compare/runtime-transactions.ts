@@ -70,10 +70,12 @@ import type { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
+  IStorageNotification,
   TransactionCommitReceipt,
 } from "../../../runtime/runner/src/storage/interface.ts";
 import type {
   Artifact,
+  LabelChange,
   Transaction,
   TransactionHooks,
 } from "../exec/executor.ts";
@@ -138,6 +140,17 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #written = new Map<string, (readonly string[])[]>();
   /** The stored labels of each document `labelOf` read, per transaction. */
   readonly #metadata = new Map<string, CfcMetadata | undefined>();
+  /**
+   * The label entries of each document `labelOf` read, each as text by the
+   * text of its path, which a change of the document is compared against.
+   */
+  readonly #entries = new Map<string, Map<string, string>>();
+  /** The documents of `#entries` that a commit changed since. */
+  readonly #touched = new Set<string>();
+  /** What the executor registered to hear of changed labels. */
+  #labelsChanged: ((changes: readonly LabelChange[]) => void) | undefined;
+  /** The subscription that hears of the commits of the space. */
+  readonly #subscription: IStorageNotification | undefined;
 
   /**
    * Constructs an instance which keeps the documents in `space` of
@@ -175,6 +188,29 @@ export class RuntimeTransactions implements TransactionHooks {
         JSON.stringify(options.artifact.code),
         runtimeWritePolicyAuthorization,
       );
+    if (this.#compiledPattern !== undefined) {
+      // A commit of the space, the executor's own or another's, can change
+      // the labels of a document whose positions the executor grouped
+      // elements by.
+      this.#subscription = {
+        next: (notification) => {
+          if (
+            notification.type === "reset" ||
+            notification.space !== this.#space
+          ) {
+            return undefined;
+          }
+          for (const { address } of notification.changes) {
+            const doc = this.#byEntity.get(address.id);
+            if (doc !== undefined && this.#entries.has(doc)) {
+              this.#touched.add(doc);
+            }
+          }
+          return undefined;
+        },
+      };
+      runtime.storageManager.subscribe(this.#subscription);
+    }
     // The replica drops a document that nothing holds or reads at its next
     // release pass (`releaseUnreadDocuments()`), and a read through a
     // transaction does not load it again: it reads the document as absent
@@ -204,6 +240,62 @@ export class RuntimeTransactions implements TransactionHooks {
   /** Stops keeping the documents of the executor loaded. */
   close(): void {
     this.#stopReading?.();
+    if (this.#subscription !== undefined) {
+      this.#runtime.storageManager.unsubscribe?.(this.#subscription);
+    }
+  }
+
+  /** @inheritDoc */
+  watchLabels(changed: (changes: readonly LabelChange[]) => void): void {
+    this.#labelsChanged = changed;
+  }
+
+  /**
+   * Tells the executor of the label entries that changed in each document
+   * a commit touched since the last call: those added, removed or changed,
+   * by path. The work is the number of entries of the touched documents.
+   */
+  #reportLabels(): void {
+    if (this.#touched.size === 0) return;
+    const changes: LabelChange[] = [];
+    const tx = this.#runtime.edit();
+    try {
+      for (const doc of this.#touched) {
+        this.#metadata.delete(doc);
+        const before = this.#entries.get(doc) ?? new Map();
+        const after = entriesOf(this.#storedLabels(tx, doc));
+        this.#entries.set(doc, after);
+        const paths = new Set<string>();
+        for (const [path, label] of after) {
+          if (before.get(path) !== label) paths.add(path);
+        }
+        for (const path of before.keys()) {
+          if (!after.has(path)) paths.add(path);
+        }
+        if (paths.size > 0) {
+          changes.push({
+            doc,
+            paths: [...paths].map((path) => JSON.parse(path) as string[]),
+          });
+        }
+      }
+    } finally {
+      tx.abort();
+      this.#touched.clear();
+    }
+    if (changes.length > 0) this.#labelsChanged?.(changes);
+  }
+
+  /** The stored labels of a document of the executor, read through `tx`. */
+  #storedLabels(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+  ): CfcMetadata | undefined {
+    return readStoredCfcMetadata(tx, {
+      space: this.#space,
+      id: this.entityOf(doc),
+      scope: "space",
+    });
   }
 
   /** @inheritDoc */
@@ -211,6 +303,7 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#tx !== undefined) {
       throw new Error("A transaction began while another was open.");
     }
+    this.#reportLabels();
     this.#cause = cause;
     this.#tx = this.#runtime.edit();
     this.#read.clear();
@@ -242,14 +335,11 @@ export class RuntimeTransactions implements TransactionHooks {
     if (!this.#metadata.has(doc)) {
       const tx = this.#tx ?? this.#runtime.edit();
       try {
-        this.#metadata.set(
-          doc,
-          readStoredCfcMetadata(tx, {
-            space: this.#space,
-            id: this.entityOf(doc),
-            scope: "space",
-          }),
-        );
+        const metadata = this.#storedLabels(tx, doc);
+        this.#metadata.set(doc, metadata);
+        if (!this.#entries.has(doc)) {
+          this.#entries.set(doc, entriesOf(metadata));
+        }
       } finally {
         if (tx !== this.#tx) tx.abort();
       }
@@ -460,6 +550,7 @@ export class RuntimeTransactions implements TransactionHooks {
       return;
     }
     this.#receipts.push(tx.commit());
+    this.#reportLabels();
     this.#counts.committed += 1;
     this.#counts.byCause[this.#cause] = (this.#counts.byCause[this.#cause] ??
       0) + 1;
@@ -624,3 +715,20 @@ export class RuntimeTransactions implements TransactionHooks {
     return value;
   }
 }
+
+/**
+ * The label entries of stored labels, each as text by the text of its path;
+ * entries at one path are one, their texts in order.
+ */
+const entriesOf = (metadata: CfcMetadata | undefined): Map<string, string> => {
+  const byPath = new Map<string, string[]>();
+  for (const entry of metadata?.labelMap.entries ?? []) {
+    const path = JSON.stringify(entry.path);
+    const texts = byPath.get(path) ?? [];
+    texts.push(JSON.stringify(entry));
+    byPath.set(path, texts);
+  }
+  return new Map(
+    [...byPath].map(([path, texts]) => [path, texts.sort().join("\n")]),
+  );
+};
