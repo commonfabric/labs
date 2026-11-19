@@ -559,6 +559,8 @@ describe("write records the runtime instantiates with the option on", () => {
     name: string,
     argument: Record<string, unknown>,
     path: readonly string[],
+    /** The binding of a handler to send one event to, once settled. */
+    binding?: number,
   ) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
@@ -596,6 +598,10 @@ describe("write records the runtime instantiates with the option on", () => {
         documents,
       });
       const refused = await hooks.settled();
+      if (binding !== undefined) {
+        instance.send(binding, {});
+        for (const reason of await hooks.settled()) refused.push(reason);
+      }
       const read = runtime.edit();
       try {
         const metadata = readStoredCfcMetadata(read, {
@@ -648,6 +654,18 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
       '"input:box"',
     );
+  });
+
+  it("binds the slot of a handler's write edge that read the position the edge writes to what it read, and commits", async () => {
+    // The edge writes the input's own cell, which the result document does
+    // not hold: what is asserted is that the commit is not refused.
+    const { refused } = await commitWithOptionOn(
+      "increment",
+      { count: 1 },
+      [],
+      0,
+    );
+    expect(refused).toEqual([]);
   });
 
   it("binds the source slot of the result of a `map` over plain values in place that a selector's branch names from outside the element body, and commits", async () => {

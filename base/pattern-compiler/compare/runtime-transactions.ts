@@ -118,6 +118,11 @@ export class RuntimeTransactions implements TransactionHooks {
   #cause = "";
   /** The positions the transaction in progress read, as text. */
   readonly #read = new Set<string>();
+  /**
+   * The positions of `#read` that the transaction read before it wrote
+   * them, as text.
+   */
+  readonly #readBeforeWrite = new Set<string>();
   readonly #receipts: {
     receipt: TransactionCommitReceipt;
     writes: RecordedPlanWrite[];
@@ -326,6 +331,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#cause = cause;
     this.#tx = this.#runtime.edit();
     this.#read.clear();
+    this.#readBeforeWrite.clear();
     this.#observed.clear();
     this.#written.clear();
     this.#metadata.clear();
@@ -339,6 +345,7 @@ export class RuntimeTransactions implements TransactionHooks {
     const text = JSON.stringify([doc, path]);
     if (this.#read.has(text)) return;
     this.#read.add(text);
+    if (!this.#wrote({ doc, path })) this.#readBeforeWrite.add(text);
     this.#counts.reads += 1;
     const address = this.#address(doc, path);
     const value = tx.readValueOrThrow(address);
@@ -532,7 +539,14 @@ export class RuntimeTransactions implements TransactionHooks {
       return { staged: this.#cfcAddress(binding.staged) };
     }
     const last = binding.chain.at(-1);
-    if (last !== undefined && this.#wrote(last)) {
+    // A position the transaction read before it wrote it holds, for the
+    // slot, what the read found: its stored label, and not the label the
+    // write stages, which a write edge that reads its own target would
+    // make depend on itself.
+    if (
+      last !== undefined && this.#wrote(last) &&
+      !this.#readBeforeWrite.has(JSON.stringify([last.doc, last.path]))
+    ) {
       return { staged: this.#cfcAddress(last) };
     }
     const observes = observesOf(binding.observes);
