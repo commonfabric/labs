@@ -1,7 +1,7 @@
 /**
  * Two piles of playing cards you rearrange by dragging a card from one pile
  * and dropping it on the other. A Shuffle button mixes all the cards and deals
- * them back into two even piles.
+ * them back into two roughly equal piles.
  */
 import {
   action,

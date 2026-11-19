@@ -1,6 +1,7 @@
 /**
- * A gallery of the results the suggestion assistant has produced before. Each
- * appears as a scaled live preview with a link to open it and its timestamp.
+ * A gallery of past suggestion results, read from the piece tagged
+ * `#suggestions`. Each appears as a scaled live preview with a link to open it
+ * and its timestamp.
  * Other patterns can search it by what was asked, so a similar earlier result
  * can be reused.
  */
