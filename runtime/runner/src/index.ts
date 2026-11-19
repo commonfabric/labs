@@ -273,6 +273,7 @@ export {
 export {
   applyPieceSourceTransition,
   extractDefaultValues,
+  fillHostFacts,
   getPatternIdentityRef,
   getPatternRepository,
   getPatternSetupIdentityRef,
@@ -282,6 +283,7 @@ export {
   getPieceSourceRecord,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
+  type HostFacts,
   isStoredArgumentSchemaRefusal,
   keepLaterConfirmation,
   knownPieceReleasedAt,

@@ -19,6 +19,7 @@ import {
 import {
   isModule,
   type JSONSchema,
+  type JSONValue,
   type Module,
   type Pattern,
 } from "./builder/types.ts";
@@ -527,6 +528,49 @@ export function foldStoredArgumentSlots<T>(
     return supplied;
   }
   return { ...stored as object, ...supplied as object } as T;
+}
+
+/**
+ * The facts a host knows about where it creates a piece, by key: the values a
+ * pattern's argument properties marked `hostFact` are filled from
+ * (`HostFact<T, K>`; `docs/features/host-embedding.md`, "Host facts").
+ */
+export type HostFacts = Readonly<Record<string, JSONValue>>;
+
+/**
+ * `argument`, a new piece's argument, with each top-level property `schema`
+ * marks `hostFact: <key>` filled from `facts[key]`. A property the argument
+ * already holds is kept, as is a property whose fact `facts` does not hold,
+ * which then takes its default as any absent property does. A fact no
+ * property is marked with is not used. The result is `argument` itself when
+ * nothing was filled.
+ */
+export function fillHostFacts(
+  argument: object,
+  schema: JSONSchema,
+  facts: HostFacts | undefined,
+): object {
+  if (facts === undefined || !isObjectOrArray(schema)) return argument;
+  const root = schema.$ref ? resolveCfcSchemaRefs(schema, schema) : schema;
+  if (!isObjectOrArray(root) || !isObjectOrArray(root.properties)) {
+    return argument;
+  }
+  const filled: Record<string, JSONValue> = {};
+  for (const [name, declared] of Object.entries(root.properties)) {
+    const property = isObjectOrArray(declared) && declared.$ref
+      ? resolveCfcSchemaRefs(declared, schema)
+      : declared;
+    const key = isObjectOrArray(property) ? property.hostFact : undefined;
+    if (
+      typeof key === "string" && Object.hasOwn(facts, key) &&
+      !Object.hasOwn(argument, name)
+    ) {
+      filled[name] = facts[key]!;
+    }
+  }
+  return Object.keys(filled).length === 0
+    ? argument
+    : { ...argument, ...filled };
 }
 
 /**

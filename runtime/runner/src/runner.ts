@@ -361,6 +361,8 @@ import {
 } from "./meta-seam.ts";
 export {
   extractDefaultValues,
+  fillHostFacts,
+  type HostFacts,
   mergeObjects,
   mergeSchemaDefaults,
   schemaAcceptsOpaqueCellValue,
