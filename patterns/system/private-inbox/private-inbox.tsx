@@ -1240,10 +1240,10 @@ export const replaceRefusedPrivateInbox = handler<
     privateInbox.set({ piece: own });
   }
   privateInboxRefusal.set({});
-  // TODO(danfuzz): With server execution off, a runtime of the owner's started
-  // after the refused inbox's space revoked the owner's `READ` can't commit
-  // this typed link to the refused inbox, so CFC refuses the replacement and
-  // nothing changes. Record the replaced inbox without the typed link.
+  // TODO(served-inbox): With server execution off, a runtime of the owner's
+  // started after the refused inbox's space revoked the owner's `READ` can't
+  // commit this typed link to the refused inbox, so CFC refuses the replacement
+  // and nothing changes. Record the replaced inbox without the typed link.
   privateInboxReplacement.set({
     replacement: {
       inbox: refusal.inbox,

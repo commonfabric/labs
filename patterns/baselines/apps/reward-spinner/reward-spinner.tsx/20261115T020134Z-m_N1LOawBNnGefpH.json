@@ -1,0 +1,216 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "PrizeId": {
+        "enum": [
+          "three-beans",
+          "one-bean",
+          "hug"
+        ]
+      },
+      "SpinRecord": {
+        "properties": {
+          "generosity": {
+            "description": "The generosity the spin was made at, 0-10.",
+            "type": "number"
+          },
+          "prize": {
+            "$ref": "#/$defs/PrizeId"
+          },
+          "timestamp": {
+            "description": "When the spin was made, ms since the epoch.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "timestamp",
+          "generosity",
+          "prize"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "generosity": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": 10,
+        "description": "0 = mostly hugs, 10 = mostly candy.",
+        "type": "number"
+      },
+      "spinHistory": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SpinRecord"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/reward-spinner/reward-spinner.tsx",
+  "resultSchema": {
+    "$defs": {
+      "PrizeId": {
+        "enum": [
+          "three-beans",
+          "one-bean",
+          "hug"
+        ]
+      },
+      "PrizeOdds": {
+        "properties": {
+          "dots": {
+            "description": "One dot per ten percent: green for candy, red for a hug.",
+            "type": "string"
+          },
+          "emoji": {
+            "type": "string"
+          },
+          "percent": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "emoji",
+          "dots",
+          "percent"
+        ],
+        "type": "object"
+      },
+      "SpinRecord": {
+        "properties": {
+          "generosity": {
+            "description": "The generosity the spin was made at, 0-10.",
+            "type": "number"
+          },
+          "prize": {
+            "$ref": "#/$defs/PrizeId"
+          },
+          "timestamp": {
+            "description": "When the spin was made, ms since the epoch.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "timestamp",
+          "generosity",
+          "prize"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "generosity": {
+        "type": "number"
+      },
+      "lastPrize": {
+        "description": "The prize the reel shows at rest: the last spin's, or 🎁 before any.",
+        "type": "string"
+      },
+      "lessGenerous": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "moreGenerous": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "odds": {
+        "description": "Each prize's chance at the current generosity.",
+        "items": {
+          "$ref": "#/$defs/PrizeOdds"
+        },
+        "type": "array"
+      },
+      "reel": {
+        "description": "The strip this session's latest spin scrolls through; empty before one.",
+        "items": {
+          "type": "string"
+        },
+        "scope": "session",
+        "type": "array"
+      },
+      "spin": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Spin the reel: picks the prize and records the spin.",
+        "tier": "wrapper"
+      },
+      "spinHistory": {
+        "items": {
+          "$ref": "#/$defs/SpinRecord"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "generosity",
+      "spinHistory",
+      "lastPrize",
+      "odds",
+      "reel",
+      "spin",
+      "moreGenerous",
+      "lessGenerous",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

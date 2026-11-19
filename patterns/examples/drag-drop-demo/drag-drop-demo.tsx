@@ -1,3 +1,9 @@
+/**
+ * A drag-and-drop demo where items in an "Available Items" list, including
+ * an embedded counter, can be dragged into a drop zone and removed again. It
+ * demonstrates `cf-drag-source` and `cf-drop-zone` passing cell references
+ * through the drop event.
+ */
 import {
   computed,
   Default,
@@ -60,7 +66,7 @@ export default pattern<DragDropDemoInput, DragDropDemoOutput>(
     const items = computed(() => {
       const defaultItems: Item[] = [
         { title: "Item A", [UI]: <div>Hello World!!!</div> },
-        { title: "Counter", [UI]: counter[UI] }, // TODO(seefeld): fix this, title is indeed missing
+        { title: "Counter", [UI]: counter[UI] }, // TODO(drag-title): fix this, title is indeed missing
         { title: "Item C" },
       ];
 

@@ -3440,13 +3440,13 @@ the same person through chains the root issues:
 `cf index sharing` shows the person's give-to-get setting, the same one their
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
-they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared on its own (what they shared with
-`cf pattern share` stays shared until `cf pattern unshare`), and search and
-listings show them only patterns published under a name, though a shared pattern
-opened by its id, as an import or `--from-index` does, still works.
-`--self-built` says whether that covers the patterns they build themselves in
-`cf` and Claude Code.
+they have used them in their loom for a day with no newer version and they pass
+the privacy check, and they see what others share; off, nothing of theirs is
+shared on its own (what they shared with `cf pattern share` stays shared until
+`cf pattern unshare`), and search and listings show them only patterns published
+under a name, though a shared pattern opened by its id, as an import or
+`--from-index` does, still works. `--self-built` says whether that covers the
+patterns they build themselves in `cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
@@ -3488,22 +3488,23 @@ original's history.
 
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece
-points at, with its source, so it is exactly what was deployed. The sharing
-setting never shares it on its own (`keepPrivate`); `cf pattern share` does. It
-pairs with `--no-index-version` deploys, keeping one when a change is done, and
-exits 1 with the reason when no version was kept. A checkpoint of a source the
-newest version already has keeps no new one, says so, and exits 0. It refuses an
-entry file whose contents are not what the piece runs (another file, or this one
-edited since its deploy). A piece following an origin keeps no version, as a
-deploy of it does not.
+points at, with its source, so it is exactly what was deployed. It is shared as
+a deployed version is: by `cf pattern share`, or by the sharing setting once it
+settles. It pairs with `--no-index-version` deploys, keeping one when a change
+is done, and exits 1 with the reason when no version was kept. A checkpoint of a
+source the newest version already has keeps no new one, says so, and exits 0. It
+refuses an entry file whose contents are not what the piece runs (another file,
+or this one edited since its deploy). A piece following an origin keeps no
+version, as a deploy of it does not.
 
 A deploy never shares a version by itself: drafts land many times an hour. The
-index shares a version once it settles, when its owner opens it in a loom, and
-only while their sharing setting (kept by the index; `cf index sharing` and
-Loom's settings change it) covers what they build; the deploy's line says so,
-and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
-shares one at once. The index write follows the deploy's commit and never
-changes its outcome, but the command waits for it before exiting.
+index shares a version once it settles, when its owner has used it in a loom for
+a day with no newer version and it passes the privacy check, and only while
+their sharing setting (kept by the index; `cf index sharing` and Loom's settings
+change it) covers what they build; the deploy's line says so, and `--json`
+carries it as `version.autoShare: "when_used"`. `cf pattern share` shares one at
+once. The index write follows the deploy's commit and never changes its outcome,
+but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`
 lists one entry's versions, newest first, and where each stands.
