@@ -416,19 +416,6 @@ const refusedBeforeSending = (verb: string, error: unknown): string =>
     : `the event for "${verb}" was not sent: ${describeFailure(error)}`;
 
 /**
- * The answer to a call to `verb` whose event was sent and whose wait on the
- * handling threw: whether the handling committed is not known. Fixed text,
- * carrying nothing the handling read.
- */
-const unknownOutcome = (verb: string, error: unknown): string =>
-  `the event for "${verb}" was sent, and whether its handling committed is ` +
-  "not known" +
-  (error instanceof CfcReadCeilingError
-    ? ": something it reads is above this session's read ceiling"
-    : "") +
-  "; check the piece's state before sending it again";
-
-/**
  * Calls the verb `verb` of the piece at `piece` with `event`, and returns
  * what the handling returned.
  *
@@ -499,17 +486,7 @@ export async function callVerb(
       }`,
     };
   }
-  // The event was sent, so a throw while waiting on its handling leaves
-  // whether it committed unknown: the call answers as a withheld one does,
-  // so the caller checks before sending it again rather than reading the
-  // throw as a refusal. The message is fixed text, carrying nothing the
-  // handling read.
-  let handling: Awaited<ReturnType<VerbEventCommitted["handled"]>>;
-  try {
-    handling = sent.status === "committed" ? await sent.handled() : sent;
-  } catch (error) {
-    return { status: "withheld", message: unknownOutcome(verb, error) };
-  }
+  const handling = sent.status === "committed" ? await sent.handled() : sent;
   if (handling.status === "failed") {
     return {
       status: "failed",

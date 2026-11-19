@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
+import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import {
   createLLMFriendlyLink,
   parseLLMFriendlyLink,
@@ -18,6 +19,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
+  storedFields,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import type { HarnessFabricSessionConfig } from "../src/config.ts";
@@ -359,6 +361,101 @@ describe("call-verb", () => {
         "start: minutes must be positive",
       );
       expect(await readField(ref, "status")).toBe("idle");
+    });
+
+    it("answers a call that throws as a failure whose event may have been sent, naming the read ceiling", async () => {
+      // `callVerb()` answers each phase it knows of; a throw it lets out is
+      // from none of them, so the run is told to look before calling again,
+      // and goes on rather than ending on the throw.
+      const ref = await createTimer();
+      const tool = createCallVerbTool(() =>
+        Promise.reject(new CfcReadCeilingError())
+      );
+
+      const output = await tool.invoke(contextWith(session, held), {
+        token: ref,
+        verb: "start",
+        event: { minutes: 5 },
+      });
+
+      expect(output).toEqual({
+        outputId: expect.any(String),
+        status: "error",
+        message: 'the call to "start" failed, and whether its event was ' +
+          "sent is not known: something it reads is above this session's " +
+          "read ceiling; read the piece's state before calling it again",
+      });
+    });
+
+    it("refuses, without sending, a call whose piece cannot start under the session's read ceiling", async () => {
+      // Starting a piece reads its own document; where the session's read
+      // ceiling withholds what that holds, the call is refused before the
+      // event is sent, and the refusal names the ceiling, not the label.
+      const ceilingStorage = StorageManager.emulate({ as: signer });
+      const ceilingRuntime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: ceilingStorage,
+        cfcEnforcementMode: "observe",
+        cfcFlowLabels: "persist",
+        cfcReadMaxConfidentiality: ["call-verb-ceiling-other"],
+      });
+      try {
+        const pieces = new PiecesController(
+          createSession({
+            identity: signer,
+            spaceDid: (await Identity.generate()).did(),
+          }),
+          ceilingRuntime,
+        );
+        await pieces.synced();
+        const created = await pieces.create(TIMER_PATTERN_SOURCE, {
+          input: {},
+          start: false,
+        });
+        const link = created.getCell().getAsNormalizedFullLink();
+        const address = {
+          space: link.space,
+          scope: "space" as const,
+          id: link.id,
+          path: [],
+        };
+        const seed = ceilingRuntime.edit();
+        const stored = storedFields(seed, address);
+        writeSeedEnvelopeDoc(seed, link.space);
+        seedStoredEnvelope(seed, address, {
+          ...stored,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["label"],
+                label: { confidentiality: ["call-verb-ceiling-secret"] },
+              }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).ok).toBeDefined();
+        const ref = await hold(createLLMFriendlyLink(link, link.space));
+
+        const output = await callVerbTool.invoke(
+          contextWith({ pieces }, held),
+          { token: ref, verb: "stop" },
+        );
+
+        expect(output).toEqual({
+          outputId: expect.any(String),
+          status: "error",
+          message: 'the event for "stop" was not sent: this piece could not ' +
+            "be started here, because something it reads is above this " +
+            "session's read ceiling",
+        });
+        expect(ceilingRuntime.runner.isRunning(created.getCell())).toBe(false);
+      } finally {
+        await ceilingRuntime.dispose();
+        await ceilingStorage.close();
+      }
     });
 
     it("answers a call whose handling's outcome is withheld as one that ran, with that message and no result", async () => {
