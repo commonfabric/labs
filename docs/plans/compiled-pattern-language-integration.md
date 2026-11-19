@@ -449,37 +449,55 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   modules; each of the other 7 reads the wall clock or calls
   `crypto.randomUUID()`, which the comparison does not make equal between
   two runs.
-- **With the schema of each write recorded, 13 commits are refused, in 5
-  modules** (a third pair of runs). 9 are conflicts of the store ("stale
-  confirmed read") and 1 a "pending dependency not resolved". The executor
-  writes its documents and never subscribes to them, so the replica's
-  confirmed view of each stays at seq 0 while the store's moves on: an
-  accepted commit retires its pending entries only once the confirmed view
-  reaches the commit's seq, and that view advances when the store delivers
-  the document to a subscription. A later commit relevant to Contextual Flow
-  Control that reads such a document, the instance's argument document in
-  the two `scoped-group-chat` modules, is refused as stale. With the adapter
-  subscribing to each document it writes, as the runtime syncs the cells it
-  runs, none of these is refused (tried on those two modules and on
-  `examples/map-demo/map-demo.tsx`). 2 are "type changed incompatibly", a
-  defect of the labeled runs' setup: the driver writes each input through
-  `Cell.set`, which stores each record of an array as a document of its own
-  and the array as links to them, and gives the executor the same input
-  with its records held in place, so a handler's write of a member of a
-  record lands, in storage, below a link. Today's runtime accepts a write
-  below an index of an array that holds strings in place, checked
-  directly. 1 is the writer-fit misfit. The labeled runs then store the
-  values of the run in memory in 191 of 213 modules. Of the other 22, 5
-  have a refused commit, 6 read the clock, and in 11 an element record that
-  the run in storage holds differs from the run in memory with no commit
-  refused. A
-  run of one of the 11 alone (`apps/project-list/main.tsx`) stores the
-  same element records as the run in memory, and the cause was not found.
-  The same pair took 4,537 against 60,900 ms to settle and 25,085 against
-  191,688 ms for the events, with 434 CFC preparations for the events
-  against 2,067; every time of it is about three times those of the two
-  pairs above, on both sides, because the machine was busy with other work
-  then, and it is given for the ratio and the counts alone.
+- **What remains refused, after three fixes to the adapter and the
+  driver.** A third pair of runs recorded the schema of each write, and 13
+  commits were refused in 5 modules. Two causes were then found and fixed,
+  and a fourth pair has 4 refused commits in 4 modules.
+  - *A document the replica dropped.* The replica drops a watched document
+    that nothing holds or reads at its next release pass
+    (`releaseUnreadDocuments`), and a read through a transaction then sees
+    it absent at seq 0, so a commit that read it is refused as a stale
+    read: 9 conflicts and 1 "pending dependency not resolved" in the third
+    pair. The adapter now registers itself as the reader of every document
+    it has named (`addDocumentReader`), and none is left.
+  - *The shape of the inputs.* The driver wrote each labeled input with
+    `Cell.set`, which stores the records of an array as documents of their
+    own, and gave the executor the records in place. It now writes an input
+    as the runner writes a lift's result, `diffAndUpdate` with no source of
+    anchor identifiers, so storage and the executor hold the same shape.
+    That removed the 11 modules whose stored element records differed from
+    the run in memory.
+  - *A bug of today's runtime: 2 refusals remain.* A write below an index
+    of a labeled array whose records are held in place is refused with
+    "type changed incompatibly at /" (`render-test.tsx`, `map-demo.tsx`).
+    The same refusal happens with no executor, for a cell write into such
+    an array written as a lift's result is. The schema of the write is
+    wrapped from the root down the path with every segment an object
+    property (`schemaEnvelopeForTargetPath` in
+    `runtime/runner/src/cfc/prepare.ts`), and merging that with the stored
+    array schema fails (`schema-merge.ts`). `Cell.set` avoids it only by
+    splitting records into documents of their own. The fix belongs on the
+    main branch.
+  - *2 writer-fit misfits remain,* both in the transaction that settles the
+    instance (`examples/cfc-input-cell-demo/briefing.tsx` and
+    `apps/budget-tracker/confidential.tsx`), where today's runtime settles
+    both modules with no refusal. The likely cause, not examined, is the
+    one "Labels" above describes: today's join over every read of a
+    transaction, applied to the design's one transaction for the whole
+    settle, puts a clause on a store that does not admit it.
+
+  With the fixes, the labeled runs store the values of the run in memory in
+  every module but the 7 that read the clock and the 2 with a refused
+  write, and the runs with the argument in place have no refused commit.
+  The fourth pair, on a quiet machine:
+
+  | Over 213 modules | In memory | Argument in place | Labeled inputs | Today's runtime |
+  | --- | ---: | ---: | ---: | ---: |
+  | To a settled result | 789 ms | 2,394 ms | 1,885 ms | 33,997 ms |
+  | 536 events | 4,593 ms | 12,116 ms | 11,971 ms | 89,231 ms |
+  | Commits for the events | | 1,959 | 1,957 | 1,448 |
+  | CFC preparations (settle / events) | | 0 / 1 | 95 / 430 | 2,743 / 2,067 |
+
 - **`showcase/battleship/pass-and-play/main.tsx` is slower than today's
   runtime per event by the executor's own work:** 13.5 ms in memory
   against 7.7 to 9.7 ms for today's whole event. The prototype's last
@@ -493,9 +511,8 @@ that is slower than today. Milliseconds; a range is the two pairs of runs.
   gain until milestones 3 to 6.
 
 **Not examined.** The failure of `witnessed-chain.tsx` in storage, which
-the change to the covering path did not fix; the 11 labeled modules that
-store another element record with no commit refused; the outlier of the labeled
-battleship run; how much of the wait for a commit to
+the change to the covering path did not fix; the two writer-fit misfits;
+the outlier of the labeled battleship run; how much of the wait for a commit to
 settle is idle; and why the driver's own comparison with today's values,
 made in the same process after the runs, finds 5,637 of 6,053 equal where
 the values run finds 6,013 of 6,107.
