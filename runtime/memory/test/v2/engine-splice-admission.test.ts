@@ -310,6 +310,44 @@ describe("applyCommit()", () => {
           ],
         }],
       },
+      {
+        beside:
+          "beside two splices of an array above it, the later one past its element",
+        operations: () => [{
+          op: "patch",
+          id,
+          patches: [
+            marked("/value/rows/1/items", 0, 0, ["x"]),
+            {
+              op: "splice",
+              path: "/value/rows",
+              index: 0,
+              remove: 0,
+              add: [{ items: [] }],
+            },
+            {
+              op: "splice",
+              path: "/value/rows",
+              index: 3,
+              remove: 0,
+              add: [{ items: [] }],
+            },
+          ],
+        }],
+      },
+      {
+        beside:
+          "beside two adds to an array above it, the later one before its element",
+        operations: () => [{
+          op: "patch",
+          id,
+          patches: [
+            marked("/value/rows/1/items", 0, 0, ["x"]),
+            { op: "add", path: "/value/rows/2", value: { items: [] } },
+            { op: "add", path: "/value/rows/0", value: { items: [] } },
+          ],
+        }],
+      },
     ];
 
     for (const { beside, operations, reads } of refused) {
@@ -436,6 +474,26 @@ describe("applyCommit()", () => {
         ...seeded,
         byKey: { 0: { items: [] }, 1: { items: ["x", "r"] } },
       });
+    });
+
+    it("beside operations on other documents", () => {
+      commitOperations([{
+        op: "set",
+        id: "of:patched",
+        value: { value: { n: 1 } },
+      }]);
+      commitOperations([
+        { op: "patch", id, patches: [marked("/value/tags", 0, 0, ["x"])] },
+        {
+          op: "patch",
+          id: "of:patched",
+          patches: [{ op: "replace", path: "/value/n", value: 2 }],
+        },
+        { op: "set", id: "of:set", value: { value: { n: 3 } } },
+      ], [readAt(["value"])]);
+      expect(stored()).toEqual({ ...seeded, tags: ["x", "a", "b", "c", "d"] });
+      expect(read(engine, { id: "of:patched" })?.value).toEqual({ n: 2 });
+      expect(read(engine, { id: "of:set" })?.value).toEqual({ n: 3 });
     });
 
     it("beside an add at a key of a record above it", () => {

@@ -1274,6 +1274,17 @@ export type ClientCommit = {
   eventAppends?: EventAppendDecl[];
 };
 
+/** Whether `commit` carries a marked splice (`PatchOp`'s `pinned`). */
+export const carriesMarkedSplice = (
+  commit: { readonly operations: readonly Operation[] },
+): boolean =>
+  commit.operations.some((operation) =>
+    operation.op === "patch" &&
+    operation.patches.some((patch) =>
+      patch.op === "splice" && patch.pinned === true
+    )
+  );
+
 export type SessionOpenResult = {
   /** Serving Toolshed process commit, not the router or a compatibility gate. */
   serverBuild?: string;

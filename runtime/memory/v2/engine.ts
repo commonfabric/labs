@@ -94,6 +94,7 @@ import {
   type ApplyOpOperation,
   type ApplyOpResolution,
   type BranchName,
+  carriesMarkedSplice,
   type CellScope,
   type ClientCommit,
   type CommitClass,
@@ -4703,6 +4704,7 @@ const refuseUnfoundedMarkedSplices = (
   },
 ): void => {
   const { commit, branch, principal, sessionId, scopeKeyByOpIndex } = options;
+  if (!carriesMarkedSplice(commit)) return;
   // The instance each operation writes, keyed as the write keys it
   // (`writeOperation()`): an annotated scope key, or the scope resolved for
   // the identity the commit writes as, which `principal` and `sessionId` are.
@@ -4783,19 +4785,19 @@ const refuseUnfoundedMarkedSplices = (
         })?.document,
       }).document;
 
-    // Every pointer the operation's patches name (a move names two), indexed
-    // once, so that each marked array looks up only the patches on its own
-    // path: by the pointer itself, by each pointer above it, and, for an add,
-    // remove or move, by the pointer of its parent.
+    // Every pointer the operation's patches name (a move names two), summed
+    // up once, so that each marked array looks up only the paths from the
+    // root down to it, one lookup per path:
+    // - `at`, by the pointer itself: its first op other than a splice, whether
+    //   any splice there is unmarked, and the lowest index a splice names;
+    // - `beneath`, by each pointer above it: the ops themselves;
+    // - `shifting`, by the pointer of its parent, for an add, remove or move
+    //   at an element: the one at the lowest index.
     type Named = { patch: PatchOp; pointer: string; path: string[] };
-    const at = new Map<string, Named[]>();
+    type At = { other?: Named; unmarked: boolean; lowestSplice: number };
+    const at = new Map<string, At>();
     const beneath = new Map<string, Named[]>();
-    const shifting = new Map<string, Named[]>();
-    const index = (into: Map<string, Named[]>, key: string, named: Named) => {
-      const entries = into.get(key);
-      if (entries === undefined) into.set(key, [named]);
-      else entries.push(named);
-    };
+    const shifting = new Map<string, { lowest: number; named: Named }>();
     for (const patch of operation.patches) {
       const pointers = patch.op === "move"
         ? [patch.from, patch.path]
@@ -4803,16 +4805,47 @@ const refuseUnfoundedMarkedSplices = (
       for (const pointer of pointers) {
         const path = parsePointer(pointer);
         const named = { patch, pointer, path };
-        index(at, encodePointer(path), named);
-        for (let depth = 0; depth < path.length; depth++) {
-          index(beneath, encodePointer(path.slice(0, depth)), named);
+        const key = encodePointer(path);
+        const here = at.get(key) ??
+          { unmarked: false, lowestSplice: Infinity };
+        if (patch.op === "splice") {
+          here.unmarked ||= patch.pinned !== true;
+          here.lowestSplice = Math.min(here.lowestSplice, patch.index);
+        } else {
+          here.other ??= named;
         }
-        if (structural(patch) && path.length > 0) {
-          index(shifting, encodePointer(path.slice(0, -1)), named);
+        at.set(key, here);
+        for (let depth = 0; depth < path.length; depth++) {
+          const above = encodePointer(path.slice(0, depth));
+          const entries = beneath.get(above);
+          if (entries === undefined) beneath.set(above, [named]);
+          else entries.push(named);
+        }
+        const segment = path[path.length - 1];
+        if (
+          structural(patch) && segment !== undefined &&
+          isArrayIndexPropertyName(segment)
+        ) {
+          const parent = encodePointer(path.slice(0, -1));
+          const lowest = shifting.get(parent);
+          if (lowest === undefined || Number(segment) < lowest.lowest) {
+            shifting.set(parent, { lowest: Number(segment), named });
+          }
         }
       }
     }
     const reads = pins.get(`${operation.id}\0${scope}`);
+    // Whether the container at each pointer above a marked array is an array
+    // in the document as the store holds it, read once per pointer.
+    const arrays = new Map<string, boolean>();
+    const isArrayAt = (pointer: string, path: readonly string[]): boolean => {
+      let known = arrays.get(pointer);
+      if (known === undefined) {
+        known = arrayAtPath(currentDocument(), path) !== undefined;
+        arrays.set(pointer, known);
+      }
+      return known;
+    };
 
     for (const [array, first] of firstMarked) {
       if ((operationsByInstance.get(instanceOf(operation, opIndex)) ?? 0) > 1) {
@@ -4828,26 +4861,30 @@ const refuseUnfoundedMarkedSplices = (
       if (!above.some((pointer) => reads?.has(pointer) === true)) {
         refuse(array, "without a recursive read of the array or above it");
       }
-      // At the array or above it: a splice of an array above it stands past
-      // the element the array is in, and every splice of the array itself is
-      // marked.
-      above.forEach((pointer, depth) => {
-        for (const named of at.get(pointer) ?? []) {
-          const { patch } = named;
-          if (patch.op === "splice" && depth === arrayPath.length) {
-            if (patch.pinned !== true) refuse(array, "beside an unmarked one");
-            continue;
-          }
-          const ours = arrayPath[depth];
-          if (
-            patch.op === "splice" && ours !== undefined &&
-            isArrayIndexPropertyName(ours) && patch.index > Number(ours)
-          ) {
-            continue;
-          }
-          refuse(array, `beside a ${patch.op} at ${named.pointer}`);
+      for (let depth = 0; depth <= arrayPath.length; depth++) {
+        const here = at.get(above[depth]);
+        if (here === undefined) continue;
+        // At the array or above it, nothing but splices: every one of the
+        // array's own marked, and one of an array above it only past the
+        // element the array is in.
+        if (here.other !== undefined) {
+          refuse(
+            array,
+            `beside a ${here.other.patch.op} at ${here.other.pointer}`,
+          );
         }
-      });
+        if (depth === arrayPath.length) {
+          if (here.unmarked) refuse(array, "beside an unmarked one");
+          continue;
+        }
+        const ours = arrayPath[depth]!;
+        if (
+          here.lowestSplice !== Infinity &&
+          !(isArrayIndexPropertyName(ours) && here.lowestSplice > Number(ours))
+        ) {
+          refuse(array, `beside a splice at ${above[depth]}`);
+        }
+      }
       // Beneath the array: below the first index, and no element added,
       // removed or moved.
       for (const named of beneath.get(above[arrayPath.length]) ?? []) {
@@ -4863,21 +4900,18 @@ const refuseUnfoundedMarkedSplices = (
       // An element of an array above it, added, removed or moved at or
       // before the element the array is in, moves the array.
       for (let depth = 0; depth < arrayPath.length; depth++) {
-        for (const named of shifting.get(above[depth]) ?? []) {
-          const segment = named.path[depth]!;
-          const ours = arrayPath[depth]!;
-          if (
-            isArrayIndexPropertyName(segment) &&
-            isArrayIndexPropertyName(ours) &&
-            Number(segment) <= Number(ours) &&
-            arrayAtPath(currentDocument(), arrayPath.slice(0, depth)) !==
-              undefined
-          ) {
-            refuse(
-              array,
-              `beside a ${named.patch.op} at ${named.pointer} that moves it`,
-            );
-          }
+        const shift = shifting.get(above[depth]);
+        const ours = arrayPath[depth]!;
+        if (
+          shift !== undefined && isArrayIndexPropertyName(ours) &&
+          shift.lowest <= Number(ours) &&
+          isArrayAt(above[depth], arrayPath.slice(0, depth))
+        ) {
+          refuse(
+            array,
+            `beside a ${shift.named.patch.op} at ${shift.named.pointer} ` +
+              "that moves it",
+          );
         }
       }
     }
