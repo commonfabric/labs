@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/data-file.tsx",
-              "source": "const { \"computed\": computed, \"dataFile\": dataFile, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst WORDS = JSON.parse($rt.dataFile(0));\nconst wordAt = (index) => WORDS[index] ?? \"\";\nconst $default = (pattern(\"sha256:c3536e8d4e354ed8fdb670c6f7ceeb6feb55f51c626e1eb1095fb213e2f4e965\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((index) => WORDS[index] ?? \"\")($a[\"index\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ first: ((WORDS)[(0)]), count: ((WORDS).length), picked: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"dataFile\": dataFile, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst WORDS = JSON.parse($rt.dataFile(0));\nconst wordAt = (index) => WORDS[index] ?? \"\";\nconst $default = (pattern(\"sha256:1fdfd946c26a8e945cc10cc44713154a3c5767eedd4d1615aa5102c8236d274a\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((index) => WORDS[index] ?? \"\")($a[\"index\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => ($h.invoke(0, {  })));\nreturn $rt.thunk(($h) => (({ first: ((WORDS)[(0)]), count: ((WORDS).length), picked: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -113,7 +113,7 @@
             }
           ],
           "patterns": [
-            "sha256:c3536e8d4e354ed8fdb670c6f7ceeb6feb55f51c626e1eb1095fb213e2f4e965"
+            "sha256:1fdfd946c26a8e945cc10cc44713154a3c5767eedd4d1615aa5102c8236d274a"
           ],
           "picks": [],
           "selectors": [],

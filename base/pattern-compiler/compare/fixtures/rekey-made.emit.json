@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/rekey-made.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\"sha256:72f36d47514642c32a801ee184a2be8386102d26a1efb4520d0f2c084aa013b4\");\nconst made = lift((input) => Row({ title: input.title }));\nconst bound = lift((input) => ({\n  press: bump({ count: input.pressed }),\n}));\nconst finish = handler((_, { task }) => {\n  task.key(\"done\").set(true);\n});\nconst $default = (pattern(\"sha256:d3933fc7eb41bc74e52d880b21f5dde0ac2bbb05597d8c3a27769d65fd400698\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(4), count: $h.slot(3), bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\"sha256:869cb5d273f92e1831a39457f5e574cf76d30058757716a4af9575a4d6a24342\");\nconst made = lift((input) => Row({ title: input.title }));\nconst bound = lift((input) => ({\n  press: bump({ count: input.pressed }),\n}));\nconst finish = handler((_, { task }) => {\n  task.key(\"done\").set(true);\n});\nconst $default = (pattern(\"sha256:ffb3bf6a5e37e02b9a40e6360b31cbc6883b470060b958b6b62fcac9b20251d1\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ title: $h.slot(4), count: $h.slot(3), bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -189,7 +189,7 @@
             }
           ],
           "patterns": [
-            "sha256:72f36d47514642c32a801ee184a2be8386102d26a1efb4520d0f2c084aa013b4"
+            "sha256:869cb5d273f92e1831a39457f5e574cf76d30058757716a4af9575a4d6a24342"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",
@@ -371,7 +371,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/rekey-made.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\"sha256:72f36d47514642c32a801ee184a2be8386102d26a1efb4520d0f2c084aa013b4\");\nconst made = lift((input) => Row({ title: input.title }));\nconst bound = lift((input) => ({\n  press: bump({ count: input.pressed }),\n}));\nconst finish = handler((_, { task }) => {\n  task.key(\"done\").set(true);\n});\nconst $default = (pattern(\"sha256:d3933fc7eb41bc74e52d880b21f5dde0ac2bbb05597d8c3a27769d65fd400698\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) => Row({ title: input.title }))($a));\n$rt.body(1, ($a) => ((input) => ({\n  press: bump({ count: input.pressed }),\n}))($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ done: $h.slot(8), row: $h.invoke(0, ({ title: $h.slot(1) })), button: $h.invoke(1, ({ pressed: $h.slot(2) })), finish: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ pressed: $h.slot(2), rows: $h.output(0) })));\n});\n$rt.body(2, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { task }) => {\n  task.key(\"done\").set(true);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\n\nconst Row = pattern(\"sha256:869cb5d273f92e1831a39457f5e574cf76d30058757716a4af9575a4d6a24342\");\nconst made = lift((input) => Row({ title: input.title }));\nconst bound = lift((input) => ({\n  press: bump({ count: input.pressed }),\n}));\nconst finish = handler((_, { task }) => {\n  task.key(\"done\").set(true);\n});\nconst $default = (pattern(\"sha256:ffb3bf6a5e37e02b9a40e6360b31cbc6883b470060b958b6b62fcac9b20251d1\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) => Row({ title: input.title }))($a));\n$rt.body(1, ($a) => ((input) => ({\n  press: bump({ count: input.pressed }),\n}))($a));\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ done: $h.slot(8), row: $h.invoke(0, ({ title: $h.slot(1) })), button: $h.invoke(1, ({ pressed: $h.slot(2) })), finish: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ pressed: $h.slot(2), rows: $h.output(0) })));\n});\n$rt.body(2, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { task }) => {\n  task.key(\"done\").set(true);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -790,7 +790,7 @@
             }
           ],
           "patterns": [
-            "sha256:d3933fc7eb41bc74e52d880b21f5dde0ac2bbb05597d8c3a27769d65fd400698"
+            "sha256:ffb3bf6a5e37e02b9a40e6360b31cbc6883b470060b958b6b62fcac9b20251d1"
           ],
           "picks": [],
           "selectors": [],

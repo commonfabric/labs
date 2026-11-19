@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/increment.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst increment = handler(\n  (_, { count }) => {\n    count.set(count.get() + 1);\n  },\n);\nconst $default = (pattern(\"sha256:0e008f02557cf7167ae98319570185d77c0ffabd66a2bf50e3c8594e8bea89fb\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { count }) => {\n    count.set(count.get() + 1);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst increment = handler(\n  (_, { count }) => {\n    count.set(count.get() + 1);\n  },\n);\nconst $default = (pattern(\"sha256:6ba26c7b821520880a8976fffe4df638cc79de715e4d0ce85407588a956c2e1a\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ bump: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { count }) => {\n    count.set(count.get() + 1);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -122,7 +122,7 @@
           "operations": [],
           "outputs": [],
           "patterns": [
-            "sha256:0e008f02557cf7167ae98319570185d77c0ffabd66a2bf50e3c8594e8bea89fb"
+            "sha256:6ba26c7b821520880a8976fffe4df638cc79de715e4d0ce85407588a956c2e1a"
           ],
           "picks": [],
           "selectors": [],

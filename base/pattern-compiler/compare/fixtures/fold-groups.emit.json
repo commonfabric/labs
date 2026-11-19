@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/fold-groups.tsx",
-              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\n  \"sha256:0878c8f5248bc91b39d114e941c12aa62df4de18ca1db012858ab407a515e789\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) !== (\"skip\"))));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(4)))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(6)) + (\"!\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) !== (\"skip!\"))));\n}\nreturn $rt.thunk(($h) => (({ kept: $h.output(0), open: $h.output(2), loud: $h.output(6) })));\n});"
+              "source": "const { \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\nconst $default = (pattern(\n  \"sha256:a05d8aa71873f143c09d2c7fbf8573dd841577ae011c5887fc17bc7c802501a5\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (($h.v($h.slot(1)) !== (\"skip\"))));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(4)))));\n}\n{\n$rt.element(2, ($h) => (($h.v($h.slot(6)) + (\"!\"))));\n}\n{\n$rt.element(3, ($h) => (($h.v($h.slot(7)) !== (\"skip!\"))));\n}\nreturn $rt.thunk(($h) => (({ kept: $h.output(0), open: $h.output(2), loud: $h.output(6) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -328,7 +328,7 @@
             }
           ],
           "patterns": [
-            "sha256:0878c8f5248bc91b39d114e941c12aa62df4de18ca1db012858ab407a515e789"
+            "sha256:a05d8aa71873f143c09d2c7fbf8573dd841577ae011c5887fc17bc7c802501a5"
           ],
           "picks": [],
           "selectors": [],

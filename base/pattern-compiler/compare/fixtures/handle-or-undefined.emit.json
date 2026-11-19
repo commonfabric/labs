@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handle-or-undefined.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst copy = handler((_, { item, out }) => {\n  if (!item) return;\n  out.set(item.get().title);\n});\nconst $default = (pattern(\"sha256:d25ba660a6016729dc0294146de5a85ddfc63f1235a8b5e30fbdf37216e2be1c\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ out: $h.slot(4), copy: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, out }) => {\n  if (!item) return;\n  out.set(item.get().title);\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst copy = handler((_, { item, out }) => {\n  if (!item) return;\n  out.set(item.get().title);\n});\nconst $default = (pattern(\"sha256:916326ac23c8cd5f881329144ab5cacd96f69e27e563fecc6ab69dfcdea81588\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ out: $h.slot(4), copy: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_, { item, out }) => {\n  if (!item) return;\n  out.set(item.get().title);\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -193,7 +193,7 @@
             }
           ],
           "patterns": [
-            "sha256:d25ba660a6016729dc0294146de5a85ddfc63f1235a8b5e30fbdf37216e2be1c"
+            "sha256:916326ac23c8cd5f881329144ab5cacd96f69e27e563fecc6ab69dfcdea81588"
           ],
           "picks": [],
           "selectors": [],

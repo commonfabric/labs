@@ -17,7 +17,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/input-writes.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst add = handler((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n});\n\nconst $default = (pattern(\"sha256:9d657f34594ff35ca7d96fd0807e6da0256954c78521e25f891345df21fa91a5\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ count: $h.slot(4), items: $h.slot(5), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\nconst add = handler((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n});\n\nconst $default = (pattern(\"sha256:89f343b968d209a076fd417f87efc2de1063fb57ed57f76834121a99bfa5970a\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ count: $h.slot(4), items: $h.slot(5), add: $h.stream(0) })));\n});\n$rt.body(0, ($e, $s) => ((_event, { label, count, items }) => {\n  count.set(count.get() + 1);\n  items.push({ text: label });\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -220,7 +220,7 @@
             }
           ],
           "patterns": [
-            "sha256:9d657f34594ff35ca7d96fd0807e6da0256954c78521e25f891345df21fa91a5"
+            "sha256:89f343b968d209a076fd417f87efc2de1063fb57ed57f76834121a99bfa5970a"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

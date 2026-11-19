@@ -150,7 +150,7 @@
             }
           ],
           "patterns": [
-            "sha256:fea8ba7e57e9e3e299e83803d6cb967ed197114b81f1de31b6f5c23abe8cf530"
+            "sha256:3b8510b7d1c75a2ea85fccb21437951933c361332ed14ae1981d4b105f7e6efc"
           ],
           "picks": [],
           "resultSchema": "unhashed:schema/1",

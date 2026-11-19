@@ -26,7 +26,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/flat-inner.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst add = handler(({ name, titles }, { groups }) => {\n  groups.push({ name, parts: titles.map((title) => ({ title })) });\n});\nconst pick = handler((_, { group, title, chosen }) => {\n  chosen.set(`${group}/${title}`);\n});\nconst $default = (pattern(\"sha256:e75d6842415c017397c883786bf187229e804561f1f3f39103f68ec8c685f736\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(7)])));\n}\n$rt.element(0, ($h) => ($h.output(0)));\n}\n{\n{\n$rt.element(3, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(1) }, [$h.slot(11)])));\n}\n$rt.element(2, ($h) => ($h.output(5)));\n}\n$rt.value(6, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"ul\", {  }, [$h.output(3)]), $rt.h(\"ol\", {  }, [$h.output(8)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(10), add: $h.stream(2), chosen: $h.slot(5) })));\n});\n$rt.body(0, ($e, $s) => ((_, { group, title, chosen }) => {\n  chosen.set(`${group}/${title}`);\n})($e, $s));\n$rt.body(1, ($e, $s) => (({ name, titles }, { groups }) => {\n  groups.push({ name, parts: titles.map((title) => ({ title })) });\n})($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"UI\": UI, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\n\n\nconst add = handler(({ name, titles }, { groups }) => {\n  groups.push({ name, parts: titles.map((title) => ({ title })) });\n});\nconst pick = handler((_, { group, title, chosen }) => {\n  chosen.set(`${group}/${title}`);\n});\nconst $default = (pattern(\"sha256:ccbf5cdc2ccf9cc90862758ced8d79900d99c8e1c66a48c040dc3183997df206\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n{\n$rt.element(1, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(0) }, [$h.slot(7)])));\n}\n$rt.element(0, ($h) => ($h.output(0)));\n}\n{\n{\n$rt.element(3, ($h) => ($rt.h(\"li\", { \"onClick\": $h.stream(1) }, [$h.slot(11)])));\n}\n$rt.element(2, ($h) => ($h.output(5)));\n}\n$rt.value(6, ($h) => ($rt.h(\"div\", {  }, [$rt.h(\"ul\", {  }, [$h.output(3)]), $rt.h(\"ol\", {  }, [$h.output(8)])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(10), add: $h.stream(2), chosen: $h.slot(5) })));\n});\n$rt.body(0, ($e, $s) => ((_, { group, title, chosen }) => {\n  chosen.set(`${group}/${title}`);\n})($e, $s));\n$rt.body(1, ($e, $s) => (({ name, titles }, { groups }) => {\n  groups.push({ name, parts: titles.map((title) => ({ title })) });\n})($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -751,7 +751,7 @@
             }
           ],
           "patterns": [
-            "sha256:e75d6842415c017397c883786bf187229e804561f1f3f39103f68ec8c685f736"
+            "sha256:ccbf5cdc2ccf9cc90862758ced8d79900d99c8e1c66a48c040dc3183997df206"
           ],
           "picks": [],
           "selectors": [],

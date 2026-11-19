@@ -14,7 +14,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/pass-through-containers.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"sha256:7049e92516ecffdc06f3bc52ebbadf9504951316be88cedc77060cf4a1dc164e\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.select(0, $h.v($h.slot(0))) ? $h.slot(1) : $h.slot(2))));\n$rt.value(3, ($h) => (($h.select(1, $h.v($h.slot(0))) ? $h.slot(3) : ({ a: (\"none\") }))));\n$rt.value(5, ($h) => ([...$h.spread($h.slot(4))]));\n$rt.value(6, ($h) => ($h.slot(6)));\n$rt.value(7, ($h) => ($h.slot(7)));\n{\n$rt.element(0, ($h) => ($h.slot(8)));\n}\n$rt.value(9, ($h) => ($h.output(6)));\n$rt.value(10, ($h) => (((() => {\n    const held = $h.v($h.slot(9));\n    return $h.v($h.slot(9));\n  })())));\nreturn $rt.thunk(($h) => (({ chosenList: $h.output(0), chosenBox: $h.output(1), spreadList: $h.output(2), member: $h.output(4), element: $h.output(5), mapped: $h.output(8), local: $h.output(9) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst $default = (pattern(\"sha256:b2e9a6ccfcb1b2fdba48c6841ea4290e6cfab552ee3e6ae06c02c1e6c56bff3f\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.select(0, $h.v($h.slot(0))) ? $h.slot(1) : $h.slot(2))));\n$rt.value(3, ($h) => (($h.select(1, $h.v($h.slot(0))) ? $h.slot(3) : ({ a: (\"none\") }))));\n$rt.value(5, ($h) => ([...$h.spread($h.slot(4))]));\n$rt.value(6, ($h) => ($h.slot(6)));\n$rt.value(7, ($h) => ($h.slot(7)));\n{\n$rt.element(0, ($h) => ($h.slot(8)));\n}\n$rt.value(9, ($h) => ($h.output(6)));\n$rt.value(10, ($h) => (((() => {\n    const held = $h.v($h.slot(9));\n    return $h.v($h.slot(9));\n  })())));\nreturn $rt.thunk(($h) => (({ chosenList: $h.output(0), chosenBox: $h.output(1), spreadList: $h.output(2), member: $h.output(4), element: $h.output(5), mapped: $h.output(8), local: $h.output(9) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -395,7 +395,7 @@
             }
           ],
           "patterns": [
-            "sha256:7049e92516ecffdc06f3bc52ebbadf9504951316be88cedc77060cf4a1dc164e"
+            "sha256:b2e9a6ccfcb1b2fdba48c6841ea4290e6cfab552ee3e6ae06c02c1e6c56bff3f"
           ],
           "picks": [],
           "selectors": [

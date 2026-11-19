@@ -72,6 +72,16 @@ pub struct DefRef {
 }
 
 /// Resolves an import of one module to a definition of another.
+/// The content hash of a JSON value: SHA-256 over its text, written
+/// `sha256:` and hex. `serde_json` writes the members of an object in the
+/// order of their names.
+pub(crate) fn content_hash(value: &serde_json::Value) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(value.to_string().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
 pub struct Resolver<'m, 'a> {
     paths: HashMap<String, usize>,
     models: &'m [Option<ModuleModel>],
@@ -82,6 +92,9 @@ pub struct Resolver<'m, 'a> {
     /// The span and kind of each body of each module, once the walk of
     /// `crate::check` has found them.
     bodies: std::cell::RefCell<Vec<Vec<BodySpan>>>,
+    /// The identity of each module (`module_identity`), formed for every
+    /// module at the first request.
+    module_identities: std::cell::OnceCell<Vec<String>>,
 }
 
 /// The span of a body and its kind.
@@ -114,7 +127,127 @@ impl<'m, 'a> Resolver<'m, 'a> {
             parsed,
             types: Types::default(),
             bodies: std::cell::RefCell::new(vec![Vec::new(); files.len()]),
+            module_identities: std::cell::OnceCell::new(),
         }
+    }
+
+    /// The content-addressed identity of a module (PL §1.5, the `module`
+    /// of `Body.code`), from its path, its source text, and what it
+    /// imports. The modules of one import cycle depend on each other's
+    /// text, so the cycle is hashed as one: the paths and texts of its
+    /// modules, ordered by path, and the identities of the modules outside
+    /// it that they import. A module's identity is the hash of that and its
+    /// own path. Each is formed once, for every module, in one pass over the
+    /// import graph.
+    pub fn module_identity(&self, module: usize) -> String {
+        self.module_identities
+            .get_or_init(|| self.form_module_identities())
+            .get(module)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The identities of all modules (`module_identity`): the import graph's
+    /// strongly connected components, by Tarjan's algorithm, which finds
+    /// each after every component it imports.
+    fn form_module_identities(&self) -> Vec<String> {
+        let count = self.files.len();
+        let edges: Vec<Vec<usize>> = (0..count)
+            .map(|module| {
+                let mut targets: Vec<usize> = self.models[module]
+                    .as_ref()
+                    .map(|model| &model.imports[..])
+                    .unwrap_or(&[])
+                    .iter()
+                    .filter_map(|import| self.module_of(module, &import.specifier))
+                    .collect();
+                targets.dedup();
+                targets
+            })
+            .collect();
+        let mut identities = vec![String::new(); count];
+        let mut component_of = vec![usize::MAX; count];
+        let mut index = vec![usize::MAX; count];
+        let mut low = vec![0usize; count];
+        let mut on_stack = vec![false; count];
+        let mut stack: Vec<usize> = Vec::new();
+        let mut next = 0usize;
+        let mut components = 0usize;
+        for root in 0..count {
+            if index[root] != usize::MAX {
+                continue;
+            }
+            // An explicit stack of (module, next edge) in the place of
+            // recursion, which a long import chain would overflow.
+            let mut frames: Vec<(usize, usize)> = vec![(root, 0)];
+            index[root] = next;
+            low[root] = next;
+            next += 1;
+            stack.push(root);
+            on_stack[root] = true;
+            while let Some(&mut (module, ref mut edge)) = frames.last_mut() {
+                if let Some(&target) = edges[module].get(*edge) {
+                    *edge += 1;
+                    if index[target] == usize::MAX {
+                        index[target] = next;
+                        low[target] = next;
+                        next += 1;
+                        stack.push(target);
+                        on_stack[target] = true;
+                        frames.push((target, 0));
+                    } else if on_stack[target] {
+                        low[module] = low[module].min(index[target]);
+                    }
+                    continue;
+                }
+                frames.pop();
+                if let Some(&(parent, _)) = frames.last() {
+                    low[parent] = low[parent].min(low[module]);
+                }
+                if low[module] != index[module] {
+                    continue;
+                }
+                let mut members = Vec::new();
+                while let Some(member) = stack.pop() {
+                    on_stack[member] = false;
+                    component_of[member] = components;
+                    members.push(member);
+                    if member == module {
+                        break;
+                    }
+                }
+                components += 1;
+                members.sort_by(|a, b| self.files[*a].path.cmp(&self.files[*b].path));
+                let texts: Vec<serde_json::Value> = members
+                    .iter()
+                    .map(|member| {
+                        serde_json::json!({
+                            "path": self.files[*member].path,
+                            "source": self.files[*member].text,
+                        })
+                    })
+                    .collect();
+                let mut imported: Vec<&str> = members
+                    .iter()
+                    .flat_map(|member| &edges[*member])
+                    .filter(|target| component_of[**target] != component_of[module])
+                    .map(|target| identities[*target].as_str())
+                    .collect();
+                imported.sort_unstable();
+                imported.dedup();
+                let component = content_hash(&serde_json::json!({
+                    "modules": texts,
+                    "imports": imported,
+                }));
+                for member in &members {
+                    identities[*member] = content_hash(&serde_json::json!({
+                        "component": component,
+                        "path": self.files[*member].path,
+                    }));
+                }
+            }
+        }
+        identities
     }
 
     fn set_bodies(&self, module: usize, bodies: &[Body]) {

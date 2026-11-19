@@ -20,7 +20,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/member-kind.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"sha256:c6fb19789720d57689533d184f6fed4fc76d8f14479fffa93fadcdaab97f27dd\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\nreturn $rt.thunk(($h) => (({ rows: [({ title: (\"first\") }), ...$h.spread($h.output(0)), ({ pick: $h.stream(0) })], words: [...$h.spread($h.output(4)), ({ pick: $h.stream(1) })], count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst bump = handler(\n  (event, { count }) => {\n    count.set(count.get() + event.by);\n  },\n);\nconst $default = (pattern(\n  \"sha256:199e803337c30c0d87d927a61f2e9a106c978a91d28ffc2ab20d0b01b4f29d1d\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ title: $h.slot(5) })));\n}\n{\n$rt.element(1, ($h) => (({ tag: $h.slot(7) })));\n}\nreturn $rt.thunk(($h) => (({ rows: [({ title: (\"first\") }), ...$h.spread($h.output(0)), ({ pick: $h.stream(0) })], words: [...$h.spread($h.output(4)), ({ pick: $h.stream(1) })], count: $h.slot(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { count }) => {\n    count.set(count.get() + event.by);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -421,7 +421,7 @@
             }
           ],
           "patterns": [
-            "sha256:c6fb19789720d57689533d184f6fed4fc76d8f14479fffa93fadcdaab97f27dd"
+            "sha256:199e803337c30c0d87d927a61f2e9a106c978a91d28ffc2ab20d0b01b4f29d1d"
           ],
           "picks": [],
           "selectors": [],

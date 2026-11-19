@@ -25,7 +25,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/handler-effect.tsx",
-              "source": "const { \"fetchJson\": fetchJson, \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst load = handler((event, { body, loaded }) => {\n  loaded.push(fetchJson({ url: event.url, options: { body } }));\n});\nconst loadAndFail = handler(\n  (event, { loaded }) => {\n    loaded.push(fetchJson({ url: event.url }));\n    throw new Error(\"the handler fails\");\n  },\n);\nconst setBody = handler(\n  (event, { body }) => {\n    body.set({ id: event.id });\n  },\n);\nconst $default = (pattern(\"sha256:2acff5dcd3033496dc5ff414190ef0a074bb9d5749d074eeccea3c76136153bd\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([$h.slot(0)]));\nreturn $rt.thunk(($h) => (({ loaded: $h.slot(5), load: $h.stream(0), loadAndFail: $h.stream(1), setBody: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((event, { body, loaded }) => {\n  loaded.push(fetchJson({ url: event.url, options: { body } }));\n})($e, $s));\n$rt.body(1, ($e, $s) => ((event, { loaded }) => {\n    loaded.push(fetchJson({ url: event.url }));\n    throw new Error(\"the handler fails\");\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { body }) => {\n    body.set({ id: event.id });\n  })($e, $s));"
+              "source": "const { \"fetchJson\": fetchJson, \"handler\": handler, \"navigateTo\": navigateTo, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst load = handler((event, { body, loaded }) => {\n  loaded.push(fetchJson({ url: event.url, options: { body } }));\n});\nconst loadAndFail = handler(\n  (event, { loaded }) => {\n    loaded.push(fetchJson({ url: event.url }));\n    throw new Error(\"the handler fails\");\n  },\n);\nconst setBody = handler(\n  (event, { body }) => {\n    body.set({ id: event.id });\n  },\n);\nconst $default = (pattern(\"sha256:b01e4de2562d05522050b04e282373ac03ae9ed3f65c9c4a3b4822b99f616e78\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.request(0, ($h) => ([$h.slot(0)]));\nreturn $rt.thunk(($h) => (({ loaded: $h.slot(5), load: $h.stream(0), loadAndFail: $h.stream(1), setBody: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((event, { body, loaded }) => {\n  loaded.push(fetchJson({ url: event.url, options: { body } }));\n})($e, $s));\n$rt.body(1, ($e, $s) => ((event, { loaded }) => {\n    loaded.push(fetchJson({ url: event.url }));\n    throw new Error(\"the handler fails\");\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { body }) => {\n    body.set({ id: event.id });\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -421,7 +421,7 @@
             }
           ],
           "patterns": [
-            "sha256:2acff5dcd3033496dc5ff414190ef0a074bb9d5749d074eeccea3c76136153bd"
+            "sha256:b01e4de2562d05522050b04e282373ac03ae9ed3f65c9c4a3b4822b99f616e78"
           ],
           "picks": [],
           "selectors": [],

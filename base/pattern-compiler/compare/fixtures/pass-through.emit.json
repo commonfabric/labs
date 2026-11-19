@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/pass-through.tsx",
-              "source": "const { \"computed\": computed, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst same = (value) => value;\nconst echo = lift((value) => value);\nconst $default = (pattern(\n  \"sha256:8f583ff56d75112a61714dbde0ba270d707338bf8c963166252af7ae3871d89a\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((value) => value)($a));\n$rt.body(1, ($a) => ((value) => value)($a[\"value\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, undefined)));\n$rt.value(1, ($h) => ($h.slot(1)));\n$rt.value(2, ($h) => (({ inner: $h.slot(1) })));\n$rt.value(3, ($h) => ([$h.slot(1)]));\n$rt.value(5, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(0) : (\"none\"))));\n$rt.value(7, ($h) => ($h.invoke(1, {  })));\n$rt.value(8, ($h) => ($h.output(0)));\nreturn $rt.thunk(($h) => (({ whole: $h.output(1), member: $h.output(2), element: $h.output(4), chosen: $h.output(6), parameter: $h.output(7), lifted: $h.output(0), fromLift: $h.output(8) })));\n});"
+              "source": "const { \"computed\": computed, \"lift\": lift, \"pattern\": pattern } = $rt.external(\"commonfabric\");\nconst same = (value) => value;\nconst echo = lift((value) => value);\nconst $default = (pattern(\n  \"sha256:f94dbdc7a3753a2f189e65d2a2308357dfb971b9b5b20dbf0dc11a317f528366\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((value) => value)($a));\n$rt.body(1, ($a) => ((value) => value)($a[\"value\"]));\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, undefined)));\n$rt.value(1, ($h) => ($h.slot(1)));\n$rt.value(2, ($h) => (({ inner: $h.slot(1) })));\n$rt.value(3, ($h) => ([$h.slot(1)]));\n$rt.value(5, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(0) : (\"none\"))));\n$rt.value(7, ($h) => ($h.invoke(1, {  })));\n$rt.value(8, ($h) => ($h.output(0)));\nreturn $rt.thunk(($h) => (({ whole: $h.output(1), member: $h.output(2), element: $h.output(4), chosen: $h.output(6), parameter: $h.output(7), lifted: $h.output(0), fromLift: $h.output(8) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -378,7 +378,7 @@
             }
           ],
           "patterns": [
-            "sha256:8f583ff56d75112a61714dbde0ba270d707338bf8c963166252af7ae3871d89a"
+            "sha256:f94dbdc7a3753a2f189e65d2a2308357dfb971b9b5b20dbf0dc11a317f528366"
           ],
           "picks": [],
           "selectors": [

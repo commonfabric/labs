@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/tagged.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"sha256:0b6b514df6452e646fcea3b342ab4f20d15ffcdbcb0f02c76f24360a2fb5913d\");\n\nconst $default = (pattern(\"sha256:3574fa009ad3dd3735bfdb9f62fd6aa7ea858923e70bf66debecf2e544f082d5\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"sha256:3aea7de806021b3366668f3fb8134616f91583f0b0b92e032bf89147f1522b95\");\n\nconst $default = (pattern(\"sha256:7124a424d6bee16e523ffe35d81da565f54e843b76d652ab7ba367dedb98d184\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -139,7 +139,7 @@
             }
           ],
           "patterns": [
-            "sha256:0b6b514df6452e646fcea3b342ab4f20d15ffcdbcb0f02c76f24360a2fb5913d"
+            "sha256:3aea7de806021b3366668f3fb8134616f91583f0b0b92e032bf89147f1522b95"
           ],
           "picks": [],
           "selectors": [],
@@ -193,7 +193,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/tagged.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"sha256:0b6b514df6452e646fcea3b342ab4f20d15ffcdbcb0f02c76f24360a2fb5913d\");\n\nconst $default = (pattern(\"sha256:3574fa009ad3dd3735bfdb9f62fd6aa7ea858923e70bf66debecf2e544f082d5\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force($s1, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern, \"UI\": UI } = $rt.external(\"commonfabric\");\n\nconst Row = pattern(\"sha256:3aea7de806021b3366668f3fb8134616f91583f0b0b92e032bf89147f1522b95\");\n\nconst $default = (pattern(\"sha256:7124a424d6bee16e523ffe35d81da565f54e843b76d652ab7ba367dedb98d184\"));\nObject.defineProperty($exports, \"Row\", { enumerable: true, get: () => Row });\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(1, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)) + (\"!\"))));\n$rt.value(2, ($h) => ($rt.h(\"span\", {  }, [$h.output(0)])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(1) })));\n});\n$rt.setup(0, function ($arg, $h) {\nconst $s1 = $rt.setups[1]({  }, $h);\n$rt.value(3, ($h) => ($rt.h(\"div\", {  }, [$h.at($rt.force($s1, $h), [\"$UI\"])])));\nreturn $rt.thunk(($h) => (({ [(UI)]: $h.output(3) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -381,8 +381,8 @@
             }
           ],
           "patterns": [
-            "sha256:3574fa009ad3dd3735bfdb9f62fd6aa7ea858923e70bf66debecf2e544f082d5",
-            "sha256:0b6b514df6452e646fcea3b342ab4f20d15ffcdbcb0f02c76f24360a2fb5913d"
+            "sha256:7124a424d6bee16e523ffe35d81da565f54e843b76d652ab7ba367dedb98d184",
+            "sha256:3aea7de806021b3366668f3fb8134616f91583f0b0b92e032bf89147f1522b95"
           ],
           "picks": [],
           "selectors": [],

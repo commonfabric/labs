@@ -12,7 +12,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/defaulted.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:db944ad9de5eb1ee3ce4a039eb175ff79394faad67f8ece37215469eec7ca196\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ whole: $h.slot(3), nick: $h.slot(2), name: $h.slot(1), derived: $h.output(0) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"sha256:3301c1f9760179ee2c977ea865ebe8528f2c148039d1bc24235ef35fe0fad712\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (((JSON).stringify($h.v($h.slot(0))))));\nreturn $rt.thunk(($h) => (({ whole: $h.slot(3), nick: $h.slot(2), name: $h.slot(1), derived: $h.output(0) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -169,7 +169,7 @@
             }
           ],
           "patterns": [
-            "sha256:db944ad9de5eb1ee3ce4a039eb175ff79394faad67f8ece37215469eec7ca196"
+            "sha256:3301c1f9760179ee2c977ea865ebe8528f2c148039d1bc24235ef35fe0fad712"
           ],
           "picks": [],
           "selectors": [],

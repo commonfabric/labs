@@ -19,7 +19,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/array-by-key-reader.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst Rows = pattern(\"sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })),\n);\n\nconst $default = (pattern(\"sha256:4c86a1dffacbdfe9508c1485639252db6fa70d14f5d2b3db247d15c9a0d9a5b8\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ name: $h.slot(4), stars: $h.slot(5), noted: $h.slot(3), note: $h.stream(0) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst Rows = pattern(\"sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })),\n);\n\nconst $default = (pattern(\"sha256:4a7bf2345e27eff8a9281dae4e4f81f25bc5a1c567e90835c84f0cf07a27083d\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ name: $h.slot(4), stars: $h.slot(5), noted: $h.slot(3), note: $h.stream(0) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(0) })));\n});\n$rt.body(0, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -237,7 +237,7 @@
             }
           ],
           "patterns": [
-            "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],
@@ -446,7 +446,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/array-by-key-reader.tsx",
-              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst Rows = pattern(\"sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })),\n);\n\nconst $default = (pattern(\"sha256:4c86a1dffacbdfe9508c1485639252db6fa70d14f5d2b3db247d15c9a0d9a5b8\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })))($a));\n$rt.setup(1, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ name: $h.slot(7), stars: $h.slot(8), noted: $h.slot(6), note: $h.stream(0) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(1) })));\n});\n$rt.setup(2, function ($arg, $h) {\n{\n$rt.element(1, ($h) => (({ name: $h.slot(10), stars: $h.slot(11), noted: $h.slot(9), note: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(6) })));\n});\n$rt.setup(3, function ($arg, $h) {\n{\n$rt.element(3, ($h) => (({ name: $h.slot(15), stars: $h.slot(16), noted: $h.slot(14), note: $h.stream(2) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(13) })));\n});\n$rt.setup(4, function ($arg, $h) {\n{\n$rt.element(4, ($h) => (({ name: $h.slot(19), stars: $h.slot(20), noted: $h.slot(18), note: $h.stream(3) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(18) })));\n});\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0) }))));\nconst $s1 = $rt.setups[1]({  }, $h);\nconst $s2 = $rt.setups[2]({  }, $h);\n{\n$rt.element(2, ($h) => (($h.v($h.slot(12)) > (0))));\n}\nconst $s3 = $rt.setups[3]({  }, $h);\nconst $s4 = $rt.setups[4]({  }, $h);\n$rt.child(0, ($h) => (({ repos: $h.slot(21) })));\n$rt.child(1, ($h) => (({ repos: $h.output(0) })));\n{\n$rt.element(5, ($h) => (($h.v($h.slot(22)) > (0))));\n}\n$rt.child(2, ($h) => (({ repos: $h.output(23) })));\n{\n$rt.element(6, ($h) => (($h.v($h.slot(24)) > (0))));\n}\n$rt.child(3, ($h) => (({ repos: $h.output(25) })));\nreturn $rt.thunk(($h) => (({ inPlace: $rt.force($s1, $h), scratch: $rt.force($s2, $h), derived: $rt.force($s3, $h), none: $rt.force($s4, $h), made: $h.slot(26), madeScratch: $h.slot(29), madeDerived: $h.slot(27), madeKept: $h.slot(28) })));\n});\n$rt.body(1, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"lift\": lift, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst note = handler(\n  (event, { noted }) => {\n    noted.set(event.text);\n  },\n);\nconst Rows = pattern(\"sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495\");\nconst fetched = lift(\n  (input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })),\n);\n\nconst $default = (pattern(\"sha256:4a7bf2345e27eff8a9281dae4e4f81f25bc5a1c567e90835c84f0cf07a27083d\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.body(0, ($a) => ((input) =>\n    input.names.map((name, index) => ({\n      id: index + 1,\n      name,\n      stars: name.length + input.bonus,\n    })))($a));\n$rt.setup(1, function ($arg, $h) {\n{\n$rt.element(0, ($h) => (({ name: $h.slot(7), stars: $h.slot(8), noted: $h.slot(6), note: $h.stream(0) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(1) })));\n});\n$rt.setup(2, function ($arg, $h) {\n{\n$rt.element(1, ($h) => (({ name: $h.slot(10), stars: $h.slot(11), noted: $h.slot(9), note: $h.stream(1) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(6) })));\n});\n$rt.setup(3, function ($arg, $h) {\n{\n$rt.element(3, ($h) => (({ name: $h.slot(15), stars: $h.slot(16), noted: $h.slot(14), note: $h.stream(2) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(13) })));\n});\n$rt.setup(4, function ($arg, $h) {\n{\n$rt.element(4, ($h) => (({ name: $h.slot(19), stars: $h.slot(20), noted: $h.slot(18), note: $h.stream(3) })));\n}\nreturn $rt.thunk(($h) => (({ rows: $h.output(18) })));\n});\n$rt.setup(0, function ($arg, $h) {\n$rt.value(0, ($h) => ($h.invoke(0, ({ names: $h.slot(1), bonus: $h.slot(0) }))));\nconst $s1 = $rt.setups[1]({  }, $h);\nconst $s2 = $rt.setups[2]({  }, $h);\n{\n$rt.element(2, ($h) => (($h.v($h.slot(12)) > (0))));\n}\nconst $s3 = $rt.setups[3]({  }, $h);\nconst $s4 = $rt.setups[4]({  }, $h);\n$rt.child(0, ($h) => (({ repos: $h.slot(21) })));\n$rt.child(1, ($h) => (({ repos: $h.output(0) })));\n{\n$rt.element(5, ($h) => (($h.v($h.slot(22)) > (0))));\n}\n$rt.child(2, ($h) => (({ repos: $h.output(23) })));\n{\n$rt.element(6, ($h) => (($h.v($h.slot(24)) > (0))));\n}\n$rt.child(3, ($h) => (({ repos: $h.output(25) })));\nreturn $rt.thunk(($h) => (({ inPlace: $rt.force($s1, $h), scratch: $rt.force($s2, $h), derived: $rt.force($s3, $h), none: $rt.force($s4, $h), made: $h.slot(26), madeScratch: $h.slot(29), madeDerived: $h.slot(27), madeKept: $h.slot(28) })));\n});\n$rt.body(1, ($e, $s) => ((event, { noted }) => {\n    noted.set(event.text);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -725,7 +725,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -736,7 +736,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -747,7 +747,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -758,7 +758,7 @@
             {
               "asInstance": true,
               "callee": {
-                "compiled": "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+                "compiled": "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
               },
               "name": {
                 "name": "Rows",
@@ -1740,8 +1740,8 @@
             }
           ],
           "patterns": [
-            "sha256:4c86a1dffacbdfe9508c1485639252db6fa70d14f5d2b3db247d15c9a0d9a5b8",
-            "sha256:00d894e30673bb1e1a288651c4eed9d8484aa84764a995532669d81f7191efc1"
+            "sha256:4a7bf2345e27eff8a9281dae4e4f81f25bc5a1c567e90835c84f0cf07a27083d",
+            "sha256:14fc86b38bfdaff38222d4ce7aa09be6f8e730179a631d6983aad14a4137d495"
           ],
           "picks": [],
           "selectors": [],
