@@ -271,6 +271,20 @@ This is the difference from `reactOn: db` on an ordinary database, where the
 revision is part of the request and every write to the database rewrites the
 result's control state.
 
+The revision has two parts. `add()` and `remove()` advance a count on the
+collection's handle, as `exec()` does on any database. Maintenance marks each
+of its writes in a document of the collection's own, with a value no write has
+carried before, and leaves the handle alone. A handler that adds to the
+collection reads the handle, so maintenance writing it would cost that
+handler its commit whenever the two ran side by side. The value is fresh
+rather than counted because a maintenance transaction can be run again, and a
+count would then repeat: a query that asked at that count, before the rows
+were there, would take itself to be current.
+
+A serving runtime commits in waves and can withdraw a maintenance transaction
+that ended well. The members that transaction re-read are then owed again,
+through the documents they were read from.
+
 A cell bound to a named `_cf_link` parameter of such a query is bound as the
 reference its member is stored under, so any link to a member looks it up. A
 cell bound anywhere else, positionally included, is refused as it is for any
@@ -311,9 +325,9 @@ SQLite built-in already has, and refuses what they cannot express.
   either is not written. `add()` throws, and a re-read leaves the member's
   rows as they were and logs it. A relation declares no label, so a relation
   field that carries one is refused.
-- **The handle carries the join.** Every write to the database advances the
-  handle's revision in the same commit, so the handle is written under the
-  maintenance transaction's flow join.
+- **The revision carries the join.** Every maintenance write to the database
+  marks the collection's revision document in the same commit, so that
+  document is written under the maintenance transaction's flow join.
 - **A result's shape carries the request's label.** A re-run reads the handle,
   so the label of what triggered it joins the result's membership label, as
   the SQLite read rules already require of any request.
@@ -326,8 +340,8 @@ so a rule would refuse every labeled write.
 
 The quiet re-run narrows what a reader can observe: a write that leaves a
 result's rows as they were produces no write to that result. It does not make
-a confidential write unobservable in general. The handle's revision still
-advances, and a result whose rows do change is written under a label that
+a confidential write unobservable in general. The collection's revision still
+moves, and a result whose rows do change is written under a label that
 includes the trigger's.
 
 Hiding the trigger entirely would take a rule this repository cannot make on

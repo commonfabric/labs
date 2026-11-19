@@ -15,7 +15,10 @@ import {
   type IndexedCollectionDefinition,
   type IndexedCollectionOptions,
 } from "../src/builtins/indexed-collection/definition.ts";
-import { memberKeyOf } from "../src/builtins/indexed-collection/maintenance.ts";
+import {
+  maintenanceRevisionCell,
+  memberKeyOf,
+} from "../src/builtins/indexed-collection/maintenance.ts";
 import { type Cell, createCell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
@@ -117,10 +120,11 @@ describe("indexed-collection", () => {
     return result.rows as Record<string, unknown>[];
   }
 
-  async function rev(): Promise<unknown> {
+  /** How many writes maintenance has made to the collection. */
+  async function rev(): Promise<number> {
     await runtime.idle();
-    return (runtime.getCell(space, "collection").getRaw() as { rev?: number })
-      .rev;
+    const revision = maintenanceRevisionCell(runtime, space, db.id).getRaw();
+    return revision === undefined ? 0 : Number(revision.split(":")[1]);
   }
 
   describe("add()", () => {
@@ -594,12 +598,28 @@ describe("indexed-collection", () => {
 
     it("writes one statement for one changed member, however many members there are", async () => {
       for (let n = 0; n < 60; n++) await addTopic(`extra-${n}`);
-      const before = await rev() as number;
+      const before = await rev();
       await commit((tx) => topic("a", tx).key("rank").set(9));
 
-      // Each statement advances the handle's revision by one, so the
+      // Each statement advances the maintenance revision by one, so the
       // difference counts the statements the re-read wrote.
-      expect((await rev() as number) - before).toBe(1);
+      expect((await rev()) - before).toBe(1);
+    });
+
+    it("leaves the collection's handle unwritten", async () => {
+      // A handler that adds to the collection reads the handle, so a write
+      // to it here would cost that handler its commit.
+
+      await runtime.idle();
+      const handle = () =>
+        JSON.stringify(runtime.getCell(space, "collection").getRaw());
+      const before = handle();
+      await commit((tx) => topic("a", tx).key("rank").set(11));
+      await runtime.idle();
+
+      expect(await rows("SELECT rank FROM topics WHERE title = 'a'"))
+        .toEqual([{ rank: 11 }]);
+      expect(handle()).toBe(before);
     });
 
     it("leaves the database unwritten when no mirrored field changed", async () => {

@@ -18,7 +18,10 @@ import {
 } from "../../cfc/observation.ts";
 
 import { createSigilLinkFromParsedLink, isCellLink } from "../../link-utils.ts";
-import type { IExtendedStorageTransaction } from "../../storage/interface.ts";
+import type {
+  IExtendedStorageTransaction,
+  MemorySpace,
+} from "../../storage/interface.ts";
 import {
   type IndexedColumnLabel,
   indexedFieldPath,
@@ -171,6 +174,52 @@ export function projectMember(
     relations,
     deps: [...deps],
   };
+}
+
+/** Cause of the document that names a collection's last maintenance write. */
+const REVISION_CAUSE = "indexed-collection-revision";
+
+/**
+ * The cell that names the last write maintenance made to the collection
+ * whose database is `id`. A document of its own, because the collection's
+ * handle is read by every handler that adds to the collection: a revision
+ * kept on the handle would make each of those handlers lose its commit to
+ * maintenance running beside it.
+ */
+export function maintenanceRevisionCell(
+  runtime: {
+    getCell<T>(
+      space: MemorySpace,
+      cause: unknown,
+      schema?: JSONSchema,
+      tx?: IExtendedStorageTransaction,
+    ): Cell<T>;
+  },
+  space: MemorySpace,
+  id: string,
+  tx?: IExtendedStorageTransaction,
+): Cell<string> {
+  return runtime.getCell<string>(
+    space,
+    { [REVISION_CAUSE]: id },
+    undefined,
+    tx,
+  );
+}
+
+/** What tells this process's maintenance revisions from another's. */
+const REVISION_ORIGIN = crypto.randomUUID();
+
+let revisionCount = 0;
+
+/**
+ * Returns a maintenance revision no write has carried. Not a count read from
+ * the cell and advanced: a transaction that is run again would then write the
+ * value its first attempt wrote, and a query that asked at that value, before
+ * the rows were there, would take itself to be current.
+ */
+export function nextMaintenanceRevision(): string {
+  return `${REVISION_ORIGIN}:${++revisionCount}`;
 }
 
 /**
