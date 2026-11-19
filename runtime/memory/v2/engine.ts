@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -4418,12 +4419,15 @@ export type SessionOverwrite =
  * `delete` revision reports the root path, and a `patch` revision reports
  * the paths of its `replace`, `add` and `remove` patches and both paths of a
  * `move`. The splices a revision makes to one array report, as ranges
- * (`SessionOverwrite`), the indices both before and after it that hold a
- * different element and a different value: the indices the per-index form of
- * the same change replaces (`overwrittenArrayElements()`). An element a
- * splice only appends past the old end, and one it only drops off the new
- * end, is overwritten by nothing. A patch that merges into existing content —
- * an append, an increment — overwrites nothing and is left out.
+ * (`SessionOverwrite`), the indices both before and after it whose value
+ * differs, from the first splice's index on: the indices the per-index form
+ * of the same change replaces (`overwrittenArrayElements()`). That is exact
+ * because a commit's splices stand alone on their array: nothing else in the
+ * commit touches the array at or past its first splice's index, or above it
+ * (`refuseMixedSplices()`). An element a splice only appends past the old end,
+ * and one it only drops off the new end, is overwritten by nothing. A patch
+ * that merges into existing content — an append, an increment — overwrites
+ * nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4457,7 +4461,7 @@ ORDER BY r.seq, r.op_index
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
       const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
-      const splicedArrays = new Set<string>();
+      const splicedArrays = new Map<string, SplicedArray>();
       for (const patch of patches) {
         if (
           patch.op === "replace" || patch.op === "add" || patch.op === "remove"
@@ -4467,7 +4471,11 @@ ORDER BY r.seq, r.op_index
           paths.push(parsePointer(patch.from));
           paths.push(parsePointer(patch.path));
         } else if (patch.op === "splice") {
-          splicedArrays.add(patch.path);
+          const spliced = splicedArrays.get(patch.path) ??
+            { fromIndex: Infinity, shrinkBound: 0 };
+          spliced.fromIndex = Math.min(spliced.fromIndex, patch.index);
+          spliced.shrinkBound += patch.remove - patch.add.length;
+          splicedArrays.set(patch.path, spliced);
         }
       }
       if (splicedArrays.size === 0) continue;
@@ -4477,14 +4485,12 @@ ORDER BY r.seq, r.op_index
         scopeKey: options.scopeKey,
         seq: row.seq,
         opIndex: row.op_index,
-      }, patches);
-      const touching = arrayTouchingPatches(patches, splicedArrays);
-      for (const pointer of splicedArrays) {
+      });
+      for (const [pointer, spliced] of splicedArrays) {
         for (
           const overwrite of overwrittenArrayElements(
             parsePointer(pointer),
-            patches,
-            touching.get(pointer)!,
+            spliced,
             documents,
           )
         ) {
@@ -4500,19 +4506,17 @@ ORDER BY r.seq, r.op_index
 
 /**
  * The documents one revision row's overwrites are worked out from, each read
- * at most once, on first use: the document as the row left it, as it stood
- * before the row, and as it stood after the row's first `count` patches.
+ * at most once, on first use, and shared by every array the row splices: the
+ * document as the row left it, and as it stood before the row.
  */
 type RevisionDocuments = {
   after(): EntityDocument | null;
   before(): EntityDocument | null;
-  during(count: number): EntityDocument | null;
 };
 
 /**
  * Helper for {@link selectSessionOverwritePathsSince}, which returns the
- * {@link RevisionDocuments} of the revision row `revision`, whose patches
- * are `patches`.
+ * {@link RevisionDocuments} of the revision row `revision`.
  */
 const revisionDocuments = (
   engine: Engine,
@@ -4523,194 +4527,140 @@ const revisionDocuments = (
     seq: number;
     opIndex: number;
   },
-  patches: readonly PatchOp[],
 ): RevisionDocuments => {
   let after: { document: EntityDocument | null } | undefined;
   let before: { document: EntityDocument | null } | undefined;
-  const documents: RevisionDocuments = {
+  return {
     after: () =>
       (after ??= { document: readRevision(engine, revision) }).document,
     before: () =>
       (before ??= { document: previousRevisionDocument(engine, revision) })
         .document,
-    during: (count) =>
-      applyPatchToDocument(
-        documents.before() ?? undefined,
-        patches.slice(0, count),
-      ),
   };
-  return documents;
 };
 
 /**
- * How one revision's patches bear on one array it splices: `covered` where a
- * patch replaces, adds, removes or moves the array itself or a value above
- * it, whose own path then covers every element; otherwise `ops`, the indices
- * among the patches of those that change which element an index holds, in
- * order: a splice, append, add-unique or remove-by-value at the array, and an
- * add, remove or move at one of its elements by index.
+ * What one revision's splices of one array say of it: the lowest index they
+ * splice at, and the most the array's length before the revision can exceed
+ * its length after, which is what they can remove less what they add.
  */
-type ArrayTouch = { covered: boolean; ops: number[] };
-
-/**
- * Helper for {@link selectSessionOverwritePathsSince}, which sorts `patches`
- * by the arrays among `arrays` (pointers) they bear on, in one pass: the
- * {@link ArrayTouch} of each.
- */
-const arrayTouchingPatches = (
-  patches: readonly PatchOp[],
-  arrays: ReadonlySet<string>,
-): Map<string, ArrayTouch> => {
-  const touches = new Map<string, ArrayTouch>();
-  for (const array of arrays) touches.set(array, { covered: false, ops: [] });
-  const replacing: string[] = [];
-  patches.forEach((patch, index) => {
-    const pointers = patch.op === "move" ? [patch.from, patch.path] : [
-      patch.path,
-    ];
-    if (
-      patch.op === "splice" || patch.op === "append" ||
-      patch.op === "add-unique" || patch.op === "remove-by-value"
-    ) {
-      touches.get(patch.path)?.ops.push(index);
-      return;
-    }
-    if (
-      patch.op === "replace" || patch.op === "add" ||
-      patch.op === "remove" || patch.op === "move"
-    ) {
-      for (const pointer of pointers) replacing.push(pointer);
-    }
-    if (patch.op !== "add" && patch.op !== "remove" && patch.op !== "move") {
-      return;
-    }
-    const parents = new Set(
-      pointers.map((pointer) =>
-        encodePointer(parsePointer(pointer).slice(0, -1))
-      ),
-    );
-    for (const parent of parents) touches.get(parent)?.ops.push(index);
-  });
-  // A replacing op covers an array at or beneath its path.
-  const replaced = new Set(replacing);
-  for (const [array, touch] of touches) {
-    const path = parsePointer(array);
-    for (let length = 0; length <= path.length; length += 1) {
-      if (replaced.has(encodePointer(path.slice(0, length)))) {
-        touch.covered = true;
-        break;
-      }
-    }
-  }
-  return touches;
-};
+type SplicedArray = { fromIndex: number; shrinkBound: number };
 
 /**
  * Helper for {@link selectSessionOverwritePathsSince}, which returns the
- * elements of the array at `array` that one revision's `patches` overwrote by
- * splicing it: as ranges, the indices below both the array's length before
- * the revision and its length after that hold a different element and a
- * different value. That is what the per-index form of the same change
- * writes: a `replace` at each index whose element it moved and whose value
- * it changed, and a splice at the tail for the length. An index whose value
- * only another op changed, an `increment` or a `replace` at it, keeps its
- * element, and that op reports its own path or none, as without a splice.
- *
- * Which element each index holds is followed through `touch`'s ops in order,
- * as `patch.ts` applies them: a splice removes no more than the array holds,
- * an add-unique adds what it found absent and a remove-by-value takes what it
- * found equal, read from the document as the revision's earlier patches left
- * it. A splice whose index is at or past the array's prior length, as a tail
- * append's is, moves no element, and where nothing else could shrink the
- * array the answer comes from the later document alone.
+ * elements of the array at `array` that one revision's splices of it,
+ * `spliced`, overwrote: as ranges, the indices from the first splice's index
+ * up to the shorter of the array's lengths before and after the revision
+ * whose value differs between the two. That is what the per-index form of the
+ * same change writes: a `replace` at each index whose value it changed, and a
+ * splice at the tail for the length. An index below the first splice's is
+ * one no splice reaches, and nothing else in the revision touches the array
+ * from there on (`refuseMixedSplices()`). A first splice at or past the
+ * array's prior length, as a tail append's is, changes no index both sides
+ * hold, and the earlier document is not read.
  */
 const overwrittenArrayElements = (
   array: readonly string[],
-  patches: readonly PatchOp[],
-  touch: ArrayTouch,
+  spliced: SplicedArray,
   documents: RevisionDocuments,
 ): SessionOverwrite[] => {
-  if (touch.covered) return [];
-  const pointer = encodePointer(array);
-  let fromIndex = Infinity;
-  // The most the array's length before the revision can exceed its length
-  // after: what the splices can remove, less what they and the appends add.
-  // An op that may remove elements without saying how many leaves no bound.
-  let shrinkBound = 0;
-  for (const index of touch.ops) {
-    const patch = patches[index]!;
-    if (patch.path === pointer && patch.op === "splice") {
-      fromIndex = Math.min(fromIndex, patch.index);
-      shrinkBound += patch.remove - patch.add.length;
-    } else if (patch.path === pointer && patch.op === "append") {
-      shrinkBound -= patch.values.length;
-    } else if (patch.op !== "add-unique") {
-      shrinkBound = Infinity;
-    }
-  }
-
-  const after = arrayAtPath(documents.after(), array);
-  if (after === undefined) return [];
-  if (fromIndex >= after.length + shrinkBound) return [];
-  const before = arrayAtPath(documents.before(), array);
-  if (before === undefined) return [];
-
-  // The index each element held before the revision, or -1 for one the
-  // revision added.
-  let held = before.map((_, index) => index);
-  const elementIndex = (other: string): number | undefined => {
-    const path = parsePointer(other);
-    if (path.length !== array.length + 1 || !isPrefixPath(array, path)) {
-      return undefined;
-    }
-    const segment = path[array.length]!;
-    return segment === "-" ? held.length : Number(segment);
-  };
-  for (const index of touch.ops) {
-    const patch = patches[index]!;
-    if (patch.op === "splice") {
-      held = [
-        ...held.slice(0, patch.index),
-        ...Array.from({ length: patch.add.length }, () => -1),
-        ...held.slice(patch.index + patch.remove),
-      ];
-    } else if (patch.op === "append") {
-      for (const _ of patch.values) held.push(-1);
-    } else if (patch.op === "add-unique") {
-      const found = arrayAtPath(documents.during(index), array) ?? [];
-      const left = arrayAtPath(documents.during(index + 1), array) ?? [];
-      for (let added = found.length; added < left.length; added += 1) {
-        held.push(-1);
-      }
-    } else if (patch.op === "remove-by-value") {
-      const found = arrayAtPath(documents.during(index), array) ?? [];
-      held = held.filter((_, at) => !valueEqual(found[at]!, patch.value));
-    } else {
-      // An add, remove or move at an element by index: a move takes its
-      // element out, then puts it in.
-      const from = patch.op === "move"
-        ? elementIndex(patch.from)
-        : patch.op === "remove"
-        ? elementIndex(patch.path)
-        : undefined;
-      const moved = from === undefined ? -1 : held[from]!;
-      if (from !== undefined) held.splice(from, 1);
-      const to = patch.op === "remove" ? undefined : elementIndex(patch.path);
-      if (to !== undefined) held.splice(to, 0, moved);
-    }
-  }
+  const after = arrayAtPath(documents.after(), array) ?? [];
+  if (spliced.fromIndex >= after.length + spliced.shrinkBound) return [];
+  const before = arrayAtPath(documents.before(), array) ?? [];
 
   const overwritten: SessionOverwrite[] = [];
   const bound = Math.min(before.length, after.length);
-  const changed = (index: number): boolean =>
-    held[index] !== index && !valueEqual(before[index]!, after[index]!);
-  for (let index = 0; index < bound; index += 1) {
-    if (!changed(index)) continue;
+  for (let index = spliced.fromIndex; index < bound; index += 1) {
+    if (valueEqual(before[index]!, after[index]!)) continue;
     const start = index;
-    while (index < bound && changed(index)) index += 1;
+    while (index < bound && !valueEqual(before[index]!, after[index]!)) {
+      index += 1;
+    }
     overwritten.push({ array, fromIndex: start, toIndex: index });
   }
   return overwritten;
+};
+
+/**
+ * Throws a {@link ProtocolError} where `patches`, one patch operation's on the
+ * document `id`, splice an array beside another op that touches it at or past
+ * the lowest index they splice it at, adds, removes or moves one of its
+ * elements, or touches the array itself or a value above it. Each of those
+ * can change which element an index holds, or what it holds, around the
+ * splices, so the indices the splices overwrote could not be read back from
+ * the documents before and after the commit (`overwrittenArrayElements()`).
+ * Splices of an array above it are judged by the same rule for that array,
+ * and a replace or other op beneath an element below the first splice's
+ * index stands. The runner sends nothing else: it drops what a splice would
+ * cover, sends no add, remove or move at an element, and diffs an array a
+ * mergeable op reaches index by index.
+ */
+const refuseMixedSplices = (
+  id: string,
+  patches: readonly PatchOp[],
+): void => {
+  const firstSplice = new Map<string, number>();
+  for (const patch of patches) {
+    if (patch.op !== "splice") continue;
+    firstSplice.set(
+      patch.path,
+      Math.min(firstSplice.get(patch.path) ?? Infinity, patch.index),
+    );
+  }
+  if (firstSplice.size === 0) return;
+  const refuse = (array: string, patch: PatchOp): never => {
+    throw new ProtocolError(
+      `memory v2 commit splices ${array} in document ${id} beside a ` +
+        `${patch.op} at ${patch.path} that touches the array at or past ` +
+        `index ${firstSplice.get(array)}, or the array itself, or a value ` +
+        "above it: a commit's splices must stand alone on their array",
+    );
+  };
+  const outside = new Set<string>();
+  for (const patch of patches) {
+    const pointers = patch.op === "move" ? [patch.from, patch.path] : [
+      patch.path,
+    ];
+    for (const pointer of pointers) {
+      if (patch.op !== "splice") outside.add(pointer);
+      const path = parsePointer(pointer);
+      // Each spliced array at or above the op's path.
+      for (let length = 0; length <= path.length; length += 1) {
+        const array = encodePointer(path.slice(0, length));
+        const first = firstSplice.get(array);
+        if (first === undefined) continue;
+        if (length === path.length) {
+          if (patch.op !== "splice") refuse(array, patch);
+          continue;
+        }
+        // An add, remove or move at an element moves every element after
+        // it, wherever it is.
+        const segment = path[length]!;
+        if (
+          !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
+          (length === path.length - 1 &&
+            (patch.op === "add" || patch.op === "remove" ||
+              patch.op === "move"))
+        ) {
+          refuse(array, patch);
+        }
+      }
+    }
+  }
+  // An op other than a splice at a path above a spliced array.
+  for (const array of firstSplice.keys()) {
+    const path = parsePointer(array);
+    for (let length = 0; length < path.length; length += 1) {
+      const above = encodePointer(path.slice(0, length));
+      if (!outside.has(above)) continue;
+      const patch = patches.find((candidate) =>
+        candidate.op !== "splice" &&
+        (candidate.path === above ||
+          (candidate.op === "move" && candidate.from === above))
+      )!;
+      refuse(array, patch);
+    }
+  }
 };
 
 /** The array at `path` of `document`, or `undefined` where there is none. */
@@ -6804,6 +6754,16 @@ const applyCommitTransaction = (
   // through another connection in between is visible. An exact replay
   // already answered from the store above.
   refuseDeletedSpace(engine, space);
+
+  // A splice stands alone on its array (`refuseMixedSplices()`), which is
+  // what lets what a session's splices overwrote be read back exactly
+  // (`selectSessionOverwritePathsSince()`). Fresh commits only: an exact
+  // replay already answered from the store above.
+  for (const operation of commit.operations) {
+    if (operation.op === "patch") {
+      refuseMixedSplices(operation.id, operation.patches);
+    }
+  }
 
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
   // `derived` row): the producer holds the space's lease — ONE equality check

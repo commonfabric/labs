@@ -113,6 +113,15 @@ the session that fired the event, and drops the ones they overwrote
 (server-side-execution serving-loop.md §3d), which it cannot do to part of a
 splice.
 
+The engine holds every commit to the shapes above: it refuses one whose
+splices share their array with another op at or past the lowest index they
+splice, an add, remove or move at one of its elements, or an op at the array
+or above it other than a splice of an outer array (`refuseMixedSplices()` in
+memory `v2/engine.ts`), none of which the runner sends. That is what lets a
+splice's overwrites be read back exactly, by comparing the array's values
+before and after the commit from the first splice's index on
+(server-side-execution serving-loop.md §3d).
+
 A length change already puts a splice on the array's path, so sending it as
 splices throughout costs no conflict precision; a change that keeps the length
 gives up the per-element precision of its `replace`s only where they would be
