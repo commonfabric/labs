@@ -124,6 +124,16 @@ describe("definition", () => {
         .toThrow("not an identifier");
     });
 
+    it("throws on a name that an object reads as its prototype", () => {
+      expect(() => defineIndexedCollections({ ["__proto__"]: {} }))
+        .toThrow("not an identifier");
+      expect(() =>
+        defineIndexedCollections({
+          donuts: { columns: { ["__proto__"]: "text" } },
+        })
+      ).toThrow("not an identifier");
+    });
+
     it("throws on a kind named for one of the collection's own tables", () => {
       expect(() => defineIndexedCollections({ member_deps: {} }))
         .toThrow("twice");

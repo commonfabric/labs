@@ -296,6 +296,18 @@ describe("indexed-collection", () => {
       expect(await rows(parents)).toEqual([{ child: "a", parent: "root" }]);
     });
 
+    it("stores one row for a reference to a cell holding nothing", async () => {
+      await commit((tx) => {
+        const cell = topic("a", tx);
+        cell.setRawUntyped({ title: "a", parent: topic("unset").getAsLink() });
+        collection(tx).add("topics", cell);
+      });
+
+      expect(await rows("SELECT count(*) AS n FROM topics_parent")).toEqual([
+        { n: 1 },
+      ]);
+    });
+
     it("stores no row for a member holding no reference", async () => {
       await addTopic("a");
 

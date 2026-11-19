@@ -213,13 +213,19 @@ export function ensureTables(
     db.exec(createTableSQL(name, schema, alias));
     // A table that was there already keeps its rows, and gains the columns
     // the declaration has gained since it was created.
-    const existing = new Set(
-      (db.prepare(
-        `SELECT name FROM ${
-          alias === undefined ? "" : `"${alias}".`
-        }pragma_table_info(?)`,
-      ).all(name) as { name: string }[]).map((column) => column.name),
+    const columns = db.prepare(
+      `SELECT name FROM ${
+        alias === undefined ? "" : `"${alias}".`
+      }pragma_table_info(?)`,
     );
+    let existing: Set<string>;
+    try {
+      existing = new Set(
+        (columns.all(name) as { name: string }[]).map((column) => column.name),
+      );
+    } finally {
+      columns.finalize();
+    }
     for (const statement of addColumnSQL(name, schema, existing, alias)) {
       db.exec(statement);
     }

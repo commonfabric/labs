@@ -82,8 +82,10 @@ for the kind and the relation joined by an underscore, here
 `donuts_pairsWith`.
 
 The result is a database handle with two more methods. `add(kind, member)`
-and `remove(kind, member)` change membership, and are called inside a handler like
-`exec()`. `query()` is the database's own, so a typed row lowers to a schema
+and `remove(kind, member)` change membership, and are called inside a handler
+like `exec()`. A member is a cell, or a value a handler read from one, as
+`donut` is above; a value written out in the handler is no cell, and `add()`
+throws on it. `query()` is the database's own, so a typed row lowers to a schema
 the same way.
 
 A collection lives at the scope of its space, and holds cells of that space.

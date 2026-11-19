@@ -388,8 +388,9 @@ export default pattern<{ favorite: Cell<Donut> }, {
   few fields a list needs beside it, and the list never opens a member.
 - A column can mirror a nested value,
   `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
-  field holding one reference as well as a list of them. A field that is
-  absent is stored as `NULL`.
+  field holding one reference as well as a list of them. A column whose
+  field is absent holds `NULL`, and a relation whose field is absent has no
+  row.
 - `add(kind, member)` and `remove(kind, member)` are called in a handler. After `add()`,
   you write to the member and nothing else: the runtime re-reads a member when
   a document its mirrored fields were read from is written.
@@ -404,8 +405,8 @@ export default pattern<{ favorite: Cell<Donut> }, {
   declares it: `name: { type: "text", ifc: { confidentiality: […] } }`.
 
 Mirror the fields your queries filter, order, or join on, and read the rest
-from the member cell. A column holds a string, a number, or a boolean; any
-other value is stored as `NULL`.
+from the member cell. A column holds a string, a finite number, or a boolean;
+any other value is stored as `NULL`.
 [Indexed collections](../../features/indexed-collections.md) describes how the
 mirror is maintained and where it stops, and
 `patterns/examples/indexed-topics/` is a board of topics that mention one

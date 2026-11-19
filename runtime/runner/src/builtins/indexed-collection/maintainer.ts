@@ -73,6 +73,9 @@ interface SpaceState {
   /** Settles once the space's registry of collections has been read. */
   loaded: Promise<void> | undefined;
 
+  /** Id of the document holding the registry, once it was asked for. */
+  registryId: string | undefined;
+
   /** Whether the registry needs no reading, or has been read. */
   read: boolean;
 }
@@ -163,8 +166,18 @@ export class IndexedCollectionMaintainer {
     const state = this.#spaceState(space);
     // A space with no collection has nothing to follow. In a serving runtime
     // that is known once the registry has been read; in any other, at once.
+    const written = [...ids];
+    if (
+      this.#runtime.servingPosture && state.read &&
+      written.includes(this.#registryId(space, state))
+    ) {
+      // Another runtime listed a collection after this one read the
+      // registry, so the registry is read again.
+      state.read = false;
+      state.loaded = undefined;
+    }
     if (state.collections.size === 0 && state.read) return;
-    for (const id of ids) state.early.add(id);
+    for (const id of written) state.early.add(id);
     if (state.read) return this.#flush(state);
     // The registry read is not tracked as async work of the runtime: only a
     // drain is, and a space that lists nothing starts none.
@@ -172,7 +185,11 @@ export class IndexedCollectionMaintainer {
       state.read = read;
       if (!read) state.loaded = undefined;
     });
-    void state.loaded.then(() => this.#flush(state));
+    // Writes stay held while the registry could not be read, for the read
+    // the next write starts.
+    void state.loaded.then(() => {
+      if (state.read) this.#flush(state);
+    });
   }
 
   /** Hands the writes held for a space to each of its collections. */
@@ -207,6 +224,7 @@ export class IndexedCollectionMaintainer {
         collections: new Map(),
         early: new Set(),
         loaded: undefined,
+        registryId: undefined,
         // Only a serving runtime maintains a collection whose declaring
         // piece it never loaded, so only it has a registry to read.
         read: !this.#runtime.servingPosture,
@@ -214,6 +232,12 @@ export class IndexedCollectionMaintainer {
       this.#spaces.set(space, state);
     }
     return state;
+  }
+
+  /** Returns the id of the document holding the registry of `space`. */
+  #registryId(space: MemorySpace, state: SpaceState): string {
+    state.registryId ??= this.#registryCell(space).getAsNormalizedFullLink().id;
+    return state.registryId;
   }
 
   #registryCell(space: MemorySpace): Cell<Record<string, unknown>> {
@@ -394,14 +418,13 @@ export class IndexedCollectionMaintainer {
 
   /**
    * Carries the pending writes of one collection into its tables. A failure
-   * before the members are known leaves the writes owed, so that the next
+   * before every affected member was re-read leaves the writes owed, so that the next
    * drain of this collection asks about them again.
    */
   async #drain(collection: CollectionState): Promise<void> {
     await collection.reconciled;
     const docs = [...collection.pending];
     collection.pending.clear();
-    let members: MemberRows[];
     try {
       const opened = await this.#open(collection);
       const provider = this.#runtime.storageManager.open(
@@ -413,12 +436,14 @@ export class IndexedCollectionMaintainer {
         memberRowsSql(opened.descriptor, AFFECTED_MEMBERS_SQL),
         { docs: JSON.stringify(docs) },
       );
-      members = groupMemberRows(opened.descriptor, rows);
+      await this.#reread(
+        collection,
+        groupMemberRows(opened.descriptor, rows),
+      );
     } catch (error) {
       for (const doc of docs) collection.pending.add(doc);
       throw error;
     }
-    await this.#reread(collection, members);
   }
 
   /**

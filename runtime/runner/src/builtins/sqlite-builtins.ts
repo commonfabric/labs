@@ -80,6 +80,7 @@ import {
   type FabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isCfLinkColumn } from "@commonfabric/memory/sqlite/columns";
 import { validateRowLabelSpec } from "@commonfabric/memory/sqlite/row-label";
 import {
   columnDeclaresIfc,
@@ -975,21 +976,18 @@ export function sqliteQueryMemoDecision(options: {
 }
 
 /**
- * Returns `params` with every cell bound at its top level replaced by the
- * reference an indexed collection stores that cell under.
+ * Returns `params` with every cell bound to a named `_cf_link` parameter
+ * replaced by the reference an indexed collection stores that cell under.
+ * A cell bound anywhere else is left for the parameter encoder to refuse.
  */
 function withMemberKeys(params: WireParams): WireParams {
-  const key = (value: unknown): unknown => {
-    const cell = asBoundCell(value);
-    return cell === undefined ? value : memberKeyOf(cell);
-  };
-  if (Array.isArray(params)) return params.map(key) as WireParams;
-  if (isObjectNotArray(params)) {
-    return Object.fromEntries(
-      Object.entries(params).map(([name, value]) => [name, key(value)]),
-    ) as WireParams;
-  }
-  return params;
+  if (!isObjectNotArray(params)) return params;
+  return Object.fromEntries(
+    Object.entries(params).map(([name, value]) => {
+      const cell = isCfLinkColumn(name) ? asBoundCell(value) : undefined;
+      return [name, cell === undefined ? value : memberKeyOf(cell)];
+    }),
+  ) as WireParams;
 }
 
 /** sqliteQuery: reactive server-side read. */

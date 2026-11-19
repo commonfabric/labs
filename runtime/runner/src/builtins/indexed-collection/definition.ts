@@ -126,7 +126,9 @@ export interface IndexedCollectionDefinition {
   index: IndexedCollectionDescriptor;
 }
 
-const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+// `__proto__` is spelled like an identifier, and as a key of an ordinary
+// object it names the prototype rather than an entry.
+const IDENTIFIER_RE = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
 
 /** Tables no kind or relation may be named for. */
 const RESERVED_TABLES: readonly string[] = [

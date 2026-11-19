@@ -69,7 +69,7 @@ describe("engine-side exec", () => {
       "EXPLAIN QUERY PLAN SELECT source FROM edges WHERE target = ?",
     ).all("x") as { detail: string }[];
     expect(plan.map((row) => row.detail).join(" ")).toContain(
-      "edges__target__idx",
+      "edges__idx(target)",
     );
   });
 

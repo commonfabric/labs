@@ -159,6 +159,13 @@ const selectTopic = handler<
   { selected: Writable<SelectedTopic | undefined> }
 >(({ topic }, { selected }) => selected.set(topic));
 
+// A listing row's button carries the row's reference, which a click's own
+// event does not.
+const selectListed = handler<
+  unknown,
+  { topic: TopicRef; selected: Writable<SelectedTopic | undefined> }
+>((_event, { topic, selected }) => selected.set(topic));
+
 export default pattern<Record<string, never>, BoardOutput>(() => {
   const board = indexedCollections<{ topics: TopicFields }>({
     topics: {
@@ -187,7 +194,9 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
           <cf-label id="topic-count">{topicCount} topics</cf-label>
           <cf-vstack gap="1" id="topic-list">
             {listed.map((row) => (
-              <cf-button onClick={selectTopic({ selected })}>
+              <cf-button
+                onClick={selectListed({ topic: row.topic, selected })}
+              >
                 {row.title}
               </cf-button>
             ))}

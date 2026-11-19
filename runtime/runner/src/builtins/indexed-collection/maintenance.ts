@@ -17,7 +17,7 @@ import {
   cfcObservationFitsCeiling,
 } from "../../cfc/observation.ts";
 
-import { createSigilLinkFromParsedLink } from "../../link-utils.ts";
+import { createSigilLinkFromParsedLink, isCellLink } from "../../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../../storage/interface.ts";
 import {
   type IndexedColumnLabel,
@@ -144,10 +144,11 @@ export function projectMember(
       }
       return [...keys];
     }
-    // A field that is not a list holds one reference, or nothing.
-    const single = field(name).resolveAsCell();
-    const held = single.getRaw();
-    return held === undefined || held === null ? [] : [memberKeyOf(single)];
+    // A field that is not a list holds one reference, or nothing. What it
+    // holds is the link stored in the field, whatever the cell that link
+    // names holds.
+    const single = field(name);
+    return isCellLink(single.getRaw()) ? [memberKeyOf(single)] : [];
   });
   const deps = new Set<string>([
     bound.getAsNormalizedFullLink().id,

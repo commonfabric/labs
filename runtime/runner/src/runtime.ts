@@ -2464,6 +2464,9 @@ export class Runtime {
     } catch (error) {
       this.#releaseServerExecutionEnabler();
       immutableCellsFor(this).dispose();
+      // Unset when the failure came before the maintainer was constructed.
+      (this as { indexedCollections?: IndexedCollectionMaintainer })
+        .indexedCollections?.dispose();
       throw error;
     }
   }

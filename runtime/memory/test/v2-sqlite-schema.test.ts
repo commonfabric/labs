@@ -146,15 +146,28 @@ describe("createIndexSQL", () => {
       indexes: [["a"], ["b", "a"]],
     });
     expect(createIndexSQL("t", schema)).toEqual([
-      'CREATE INDEX IF NOT EXISTS "t__a__idx" ON "t" ("a")',
-      'CREATE INDEX IF NOT EXISTS "t__b__a__idx" ON "t" ("b", "a")',
+      'CREATE INDEX IF NOT EXISTS "t__idx(a)" ON "t" ("a")',
+      'CREATE INDEX IF NOT EXISTS "t__idx(b,a)" ON "t" ("b", "a")',
     ]);
+  });
+
+  it("names differently two indexes whose table and columns join to one string", () => {
+    const [first] = createIndexSQL(
+      "a",
+      table({ b__c: "text" }, undefined, { indexes: [["b__c"]] }),
+    );
+    const [second] = createIndexSQL(
+      "a__b",
+      table({ c: "text" }, undefined, { indexes: [["c"]] }),
+    );
+
+    expect(first.split(" ON ")[0]).not.toBe(second.split(" ON ")[0]);
   });
 
   it("qualifies the index, not the table, with an attach alias", () => {
     const schema = table({ a: "text" }, undefined, { indexes: [["a"]] });
     expect(createIndexSQL("t", schema, "cell")).toEqual([
-      'CREATE INDEX IF NOT EXISTS "cell"."t__a__idx" ON "t" ("a")',
+      'CREATE INDEX IF NOT EXISTS "cell"."t__idx(a)" ON "t" ("a")',
     ]);
   });
 

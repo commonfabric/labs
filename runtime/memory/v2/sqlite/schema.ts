@@ -267,7 +267,9 @@ export function createIndexSQL(
       }
       assertSafeColumn(column, "");
     }
-    const indexName = quoteIdent(`${name}__${columns.join("__")}__idx`);
+    // No identifier holds a parenthesis or a comma, so two indexes share a
+    // name only when they share a table and a column list.
+    const indexName = quoteIdent(`${name}__idx(${columns.join(",")})`);
     const qualified = schema ? `${quoteIdent(schema)}.${indexName}` : indexName;
     return `CREATE INDEX IF NOT EXISTS ${qualified} ON ${quoteIdent(name)} (${
       columns.map(quoteIdent).join(", ")
