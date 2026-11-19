@@ -271,12 +271,15 @@ WHERE branch = :branch AND entity_space = :space AND entity = :id
 SELECT piece, seq FROM currency_write
 WHERE branch = :branch AND id = :id AND owned = 0 AND seq < :seq
 `),
+  // The three joins below name their order and their index: each starts
+  // from one piece's rows, and a plan that starts from the other table
+  // reads every row of the branch.
   selectReadersOfPiece: engine.prepare(`
 SELECT DISTINCT r.piece AS piece
 FROM currency_write w
-JOIN currency_read r
+CROSS JOIN currency_read r INDEXED BY idx_currency_read_entity
   ON r.branch = w.branch AND r.entity_space = :space AND r.entity = w.id
-JOIN currency_piece p
+CROSS JOIN currency_piece p
   ON p.branch = r.branch AND p.piece = r.piece
 WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
   AND r.piece != :piece AND p.mark = :mark
@@ -284,9 +287,9 @@ WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
   selectAllReadersOfPiece: engine.prepare(`
 SELECT DISTINCT r.piece AS piece, p.mark AS mark
 FROM currency_write w
-JOIN currency_read r
+CROSS JOIN currency_read r INDEXED BY idx_currency_read_entity
   ON r.branch = w.branch AND r.entity_space = :space AND r.entity = w.id
-JOIN currency_piece p
+CROSS JOIN currency_piece p
   ON p.branch = r.branch AND p.piece = r.piece
 WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
   AND r.piece != :piece
@@ -294,9 +297,9 @@ WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
   selectMarkedProducers: engine.prepare(`
 SELECT DISTINCT w.piece AS piece
 FROM currency_read r
-JOIN currency_write w
+CROSS JOIN currency_write w INDEXED BY idx_currency_write_id
   ON w.branch = r.branch AND w.id = r.entity AND w.owned = 0
-JOIN currency_piece p
+CROSS JOIN currency_piece p
   ON p.branch = w.branch AND p.piece = w.piece
 WHERE r.branch = :branch AND r.piece = :piece AND r.entity_space = :space
   AND w.piece != :piece AND p.mark > 0
