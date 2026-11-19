@@ -107,27 +107,31 @@ the commit where anything beneath the array moved since, so the splices land
 on exactly the array they were diffed from and stand for the per-index writes
 they replace. A commit without such a read, a blind UI-input write among
 them, goes per index, which leaves each index it wrote holding its value
-however the array moved. So does a transaction a serving loop runs an event
-handler in: the wave judges each of its patches against the later writes of
-the session that fired the event, and drops the ones they overwrote
-(server-side-execution serving-loop.md §3d), which it cannot do to part of a
-splice.
+however the array moved. So does a transaction a serving loop runs in a wave,
+a derivation's or an event handler's: the wave batch it is sealed into carries
+no read set the engine checks, and the wave judges each patch of an event
+handler's commit against the later writes of the session that fired the event,
+dropping the ones they overwrote (server-side-execution serving-loop.md §3d),
+which it cannot do to part of a splice.
 
-Edit-script splices go marked (`pinned` on the `splice` op), and only to a
-server that advertises `markedSplicesV1` (see
+Edit-script splices go marked (`pinned` on the `splice` op), and only over a
+connection that is up to a server that advertises `markedSplicesV1` (see
 [`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md#markedsplicesv1));
 otherwise the change goes per index. What a commit's marked splices overwrote
 is read back by comparing the array's values before and after the commit, from
 the first splice's index on (`overwrittenArrayElements()` in memory
 `v2/engine.ts`, for server-side-execution serving-loop.md §3d). That is exact
 because the engine admits a marked splice only under a recursive read covering
-its array, with its document in no other operation of the commit, and alone on
-its array: nothing else in its patch operation touches the array at or past
+its array on the branch the commit writes (a confirmed read, or a pending one
+naming its `basisSeq`), with its document in no other operation of the commit,
+and alone on its array: nothing else in its patch operation touches the array at or past
 the first splice's index, adds, removes or moves one of its elements, touches
 the array or a value above it (save a splice of an outer array past the
 element the array is in), or moves the array by adding, removing or moving an
 element of an outer array at or before it (`refuseUnfoundedMarkedSplices()`).
-An unmarked splice, such as the tail splice of the per-index form, is read as
+So a document the commit also changes text in goes per index: the text change
+travels as an `apply-op`, an operation of its own on the document. An unmarked
+splice, such as the tail splice of the per-index form, is read as
 overwriting nothing. The engine also refuses a splice whose index or count is
 not a whole number.
 

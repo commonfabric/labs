@@ -1757,10 +1757,12 @@ differs, from the first splice's index on: they stand for the per-index
 writes of the same change (memory-v2 08-conflict-granularity.md, "Array
 writes and the leaf-only matcher"), which replace exactly those indices, and
 the store admits them only where that reading is exact. An unmarked splice,
-such as the tail splice of the per-index form, overwrites nothing. An element a splice only appends past
-the old end, or only drops off the new end, is overwritten by nothing. A served
-handler's own array changes go index by index, so a patch this rule drops is
-never part of a splice that also carries a write it keeps. A write that
+such as the tail splice of the per-index form, overwrites nothing. An element
+a splice only appends past the old end, or only drops off the new end, is
+overwritten by nothing. A served handler's own array changes go index by
+index, as every served wave run's do (its wave batch carries no read set that
+could pin an array), so a patch this rule drops is never part of a splice that
+also carries a write it keeps. A write that
 merges into existing content (`append`, `increment`, and the like)
 overwrites nothing. The rule holds
 wherever the session's write fell: below the wave's basis, which is

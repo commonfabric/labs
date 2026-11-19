@@ -1828,9 +1828,13 @@ the per-epic implementation notes).
 - **Toggle via.** The memory `Server`'s `markedSplices` option, which toolshed
   sets from `MEMORY_MARKED_SPLICES`: `true` or `1` turns it on, `false`, `0`
   or no setting leaves it off, and any other spelling refuses startup. A
-  server advertises the capability in
-  `hello.ok` only when it is on. A client reads it from the connection
-  (`ISpaceReplica.markedSplices()`); it has no switch of its own.
+  server advertises the capability in `hello.ok` only when it is on. A client
+  reads it from the connection that is up (`ISpaceReplica.markedSplices()`),
+  and diffs a change per index while the connection is down or
+  reconnecting; it has no switch of its own. Just before sending a marked
+  commit it checks the connection again, and refuses the commit as a
+  conflict, to be diffed again, where the connection no longer advertises
+  the capability.
 - **Purpose.** A change to a long array that inserts, removes or moves
   elements near its head goes as edit-script splices instead of a `replace`
   at every shifted index: on the Topics board, one new topic at the head of
@@ -1849,8 +1853,10 @@ the per-epic implementation notes).
   delayed handler's write land over the change it stands for, so a
   deployment turns the capability on only once every serving worker that may
   read its rows, a rollback's included, runs a build that reads the mark.
-  Turning it off again stops new marked splices on each client's next
-  connection; rows already stored keep their mark.
+  Turning it off again stops new marked splices from each client's next
+  connection on. A commit already sent goes again unchanged if it is resent
+  after a reconnect, so that the store can tell it from a new one; rows
+  already stored keep their mark.
 - **Added by.** Gideon Wald, with Bernhard Seefeld's ruling (#9982).
 
 ### `messageCompressionV1`
