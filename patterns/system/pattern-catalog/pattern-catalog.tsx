@@ -61,13 +61,19 @@ export interface CatalogCounts {
   returning?: number;
 }
 
-/** The part of a Common Fabric profile an entry's byline reads. */
-export type CatalogProfile = Cell<{ name?: string; avatar?: string }>;
+/**
+ * A link to a Common Fabric profile, opaque on purpose: render it with
+ * `<cf-profile-badge>`, which reads the name and picture from the profile and
+ * shows whether they are the profile owner's own. Never read a name out of it
+ * yourself.
+ */
+export type CatalogProfile = Cell<Record<string, never>>;
 
 /**
  * One original along a remix's chain: the pattern and its published name, or
  * `unavailable` for an original the viewer may not see (taken down, say),
- * which ends the chain and says nothing else about it.
+ * which ends the chain and says nothing else about it. A step with no
+ * `patternId` is read as `unavailable`.
  */
 export type CatalogRemixStep =
   | { patternId: string; title?: string }
@@ -102,8 +108,9 @@ export interface CatalogEntry {
   authorProfile?: CatalogProfile;
   /**
    * What this pattern is a remix of, nearest original first: a remix of a
-   * remix lists its whole chain. Absent when it is not a remix, or when the
-   * viewer may not see what it remixed.
+   * remix lists its whole chain. An original the viewer may not see is
+   * `{unavailable: true}` and ends the chain. Absent when it is not a remix,
+   * or when the index shows it to this viewer as no remix at all.
    */
   remixOf?: CatalogRemixStep[];
   /** Present only on the viewer's own entries that others cannot find yet. */
@@ -386,16 +393,26 @@ export interface CatalogBylineOutput {
   [UI]: VNode;
 }
 
-/** How a remix's chain reads: "Remix of A, a remix of B". */
+/**
+ * How a remix's chain reads: "Remix of “A”, a remix of “B”". A step without a
+ * title is "an untitled pattern", never its id. The chain stops at the first
+ * step the viewer may not see, or that is not well formed (fail closed), and
+ * says "a pattern that's no longer available" for it.
+ */
 export const remixOfText = (steps: readonly CatalogRemixStep[]): string => {
   const names: string[] = [];
-  for (const step of steps ?? []) {
-    if (!step || "unavailable" in step || !step.patternId) {
-      names.push("a pattern no longer shown");
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (
+      !step || typeof step !== "object" || "unavailable" in step ||
+      typeof step.patternId !== "string" || !step.patternId
+    ) {
+      names.push("a pattern that's no longer available");
       break;
     }
-    const title = (step.title ?? "").split(/\s+/).join(" ").trim();
-    names.push(title ? `“${title}”` : step.patternId);
+    const title = typeof step.title === "string"
+      ? step.title.split(/\s+/).join(" ").trim()
+      : "";
+    names.push(title ? `“${title}”` : "an untitled pattern");
   }
   return names.length === 0 ? "" : `Remix of ${names.join(", a remix of ")}`;
 };
@@ -413,7 +430,7 @@ export const CatalogByline = pattern<CatalogBylineInput, CatalogBylineOutput>(
       entry?.authorProfile ? "" : (entry?.author ?? "")
     );
     return {
-      [NAME]: computed(() => "Byline"),
+      [NAME]: "Byline",
       [UI]: (
         <cf-hstack
           gap="2"

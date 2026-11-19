@@ -28,18 +28,12 @@
             "type": "string"
           },
           "authorProfile": {
+            "additionalProperties": false,
             "asCell": [
               "cell"
             ],
             "description": "The Common Fabric profile the author published this pattern under, when\nthey chose to be named (`cf pattern publish --as`). The name and picture\nare read from the profile itself, never carried here. Absent on a pattern\nshared anonymously, which shows only `author`.",
-            "properties": {
-              "avatar": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              }
-            },
+            "properties": {},
             "type": "object"
           },
           "blurb": {
@@ -64,7 +58,7 @@
             "$ref": "#/$defs/CatalogQuality"
           },
           "remixOf": {
-            "description": "What this pattern is a remix of, nearest original first: a remix of a\nremix lists its whole chain. Absent when it is not a remix, or when the\nviewer may not see what it remixed.",
+            "description": "What this pattern is a remix of, nearest original first: a remix of a\nremix lists its whole chain. An original the viewer may not see is\n`{unavailable: true}` and ends the chain. Absent when it is not a remix,\nor when the index shows it to this viewer as no remix at all.",
             "items": {
               "$ref": "#/$defs/CatalogRemixStep"
             },
@@ -239,7 +233,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
-              "moduleIdentity": "rPMAjAMGejNx2rm5x33O_XUq3fb5_jqfKDWvtFbSnOg",
+              "moduleIdentity": "Bz85NsqkBp0G6dGV2XzmsBQVPFARCXEMx_xNNW4nIYo",
               "path": [
                 "requestGetIt"
               ]
@@ -331,15 +325,9 @@
             "type": "string"
           },
           "authorProfile": {
+            "additionalProperties": false,
             "description": "The Common Fabric profile the author published this pattern under, when\nthey chose to be named (`cf pattern publish --as`). The name and picture\nare read from the profile itself, never carried here. Absent on a pattern\nshared anonymously, which shows only `author`.",
-            "properties": {
-              "avatar": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              }
-            },
+            "properties": {},
             "type": "object"
           },
           "blurb": {
@@ -364,7 +352,7 @@
             "$ref": "#/$defs/CatalogQuality"
           },
           "remixOf": {
-            "description": "What this pattern is a remix of, nearest original first: a remix of a\nremix lists its whole chain. Absent when it is not a remix, or when the\nviewer may not see what it remixed.",
+            "description": "What this pattern is a remix of, nearest original first: a remix of a\nremix lists its whole chain. An original the viewer may not see is\n`{unavailable: true}` and ends the chain. Absent when it is not a remix,\nor when the index shows it to this viewer as no remix at all.",
             "items": {
               "$ref": "#/$defs/CatalogRemixStep"
             },
@@ -587,7 +575,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/pattern-catalog/pattern-catalog.tsx",
-              "moduleIdentity": "rPMAjAMGejNx2rm5x33O_XUq3fb5_jqfKDWvtFbSnOg",
+              "moduleIdentity": "Bz85NsqkBp0G6dGV2XzmsBQVPFARCXEMx_xNNW4nIYo",
               "path": [
                 "requestGetIt"
               ]

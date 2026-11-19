@@ -135,7 +135,7 @@ export default pattern(() => {
   } as GetItButtonInput);
   const forge = forgeRequest({ getItRequests: catalog.getItRequests });
 
-  const samProfile: CatalogProfile = new Writable({ name: "Sam" });
+  const samProfile: CatalogProfile = new Writable<Record<string, never>>({});
   const anonymous = CatalogByline({
     entry: {
       patternId: "habit-2",
@@ -160,6 +160,32 @@ export default pattern(() => {
   const plain = CatalogByline({
     entry: { patternId: "plain-1", title: "Plain" },
   });
+  const takenDown = CatalogByline({
+    entry: {
+      patternId: "remix-9",
+      title: "Remix",
+      remixOf: [{ unavailable: true }, {
+        patternId: "behind-1",
+        title: "Hidden",
+      }],
+    },
+  });
+  const malformed = CatalogByline({
+    entry: {
+      patternId: "remix-8",
+      title: "Remix",
+      remixOf: [
+        { patternId: "", title: "No id" },
+        { patternId: "behind-2", title: "Hidden" },
+      ],
+    },
+  });
+  const changing = new Writable<CatalogEntry>({
+    patternId: "habit-4",
+    title: "Habit tracker",
+    author: "a-9zz1q0xxxxx",
+  });
+  const unpublished = CatalogByline({ entry: changing });
 
   const action_page = action(() => {
     catalog.page.send({ text: " MONEY ", result: searched });
@@ -194,9 +220,42 @@ export default pattern(() => {
   const assert_remix_chain_stops_at_what_viewer_cannot_see = assert(() =>
     hasText(
       anonymous[UI],
-      "Remix of “Habit tracker”, a remix of log-1, a remix of a pattern no longer shown",
-    ) && !hasText(anonymous[UI], "Past the end") &&
+      "Remix of “Habit tracker”, a remix of an untitled pattern, a remix of a pattern that's no longer available",
+    ) && !hasText(anonymous[UI], "log-1") &&
+    !hasText(anonymous[UI], "Past the end") &&
     !hasText(anonymous[UI], "beyond-1")
+  );
+  const assert_unavailable_first_step_hides_the_rest = assert(() =>
+    hasText(takenDown[UI], "Remix of a pattern that's no longer available") &&
+    !hasText(takenDown[UI], "Hidden") && !hasText(takenDown[UI], "behind-1") &&
+    hasText(malformed[UI], "Remix of a pattern that's no longer available") &&
+    !hasText(malformed[UI], "No id") && !hasText(malformed[UI], "Hidden")
+  );
+  const action_publish = action(() => {
+    changing.set({
+      patternId: "habit-4",
+      title: "Habit tracker",
+      author: "a-9zz1q0xxxxx",
+      authorProfile: samProfile,
+      remixOf: [{ patternId: "habit-1", title: "Habit tracker" }],
+    });
+  });
+  const assert_named_remix_shows_both = assert(() =>
+    countElements(unpublished[UI], "cf-profile-badge") === 1 &&
+    !hasText(unpublished[UI], "a-9zz1q0xxxxx") &&
+    hasText(unpublished[UI], "Remix of “Habit tracker”")
+  );
+  const action_unpublish = action(() => {
+    changing.set({
+      patternId: "habit-4",
+      title: "Habit tracker",
+      author: "a-9zz1q0xxxxx",
+    });
+  });
+  const assert_unpublished_drops_badge_and_remix = assert(() =>
+    countElements(unpublished[UI], "cf-profile-badge") === 0 &&
+    hasText(unpublished[UI], "by a-9zz1q0xxxxx") &&
+    !hasText(unpublished[UI], "Remix")
   );
   const assert_not_a_remix_says_nothing = assert(() =>
     !hasText(plain[UI], "Remix") && !hasText(plain[UI], "by ") &&
@@ -319,6 +378,11 @@ export default pattern(() => {
       { assertion: assert_named_shows_profile_not_pseudonym },
       { assertion: assert_remix_chain_stops_at_what_viewer_cannot_see },
       { assertion: assert_not_a_remix_says_nothing },
+      { assertion: assert_unavailable_first_step_hides_the_rest },
+      { action: action_publish },
+      { assertion: assert_named_remix_shows_both },
+      { action: action_unpublish },
+      { assertion: assert_unpublished_drops_badge_and_remix },
       { action: action_forge },
       { assertion: assert_forged_and_untrusted_writes_refused },
       { assertion: assert_untapped_shows_nothing },
