@@ -1738,9 +1738,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
         let Some(symbol) = symbol_of(scoping, identifier) else {
             return Val::Computed;
         };
+        // A closure that a function of another module calls reads the
+        // frames of its own module below that function's (FA §3.6,
+        // "Closures").
         for frame in self.frames.iter().rev() {
             if frame.module != module {
-                break;
+                continue;
             }
             if let Some(val) = frame.env.get(&symbol) {
                 return val.clone();
@@ -1757,13 +1760,12 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 None => Val::Computed,
             };
         }
-        // A value the body captures is a formal input (FA, "Notation").
+        // A value the body captures is a formal input (FA, "Notation"): a
+        // name written in the body's text that is declared outside it.
         let declared = scoping.symbol_span(symbol);
         let (root_module, (from, to)) = self.root;
-        let in_body = self
-            .frames
-            .iter()
-            .all(|frame| frame.module == root_module && from <= frame.span.0 && frame.span.1 <= to);
+        let in_body =
+            module == root_module && from <= identifier.span.start && identifier.span.end <= to;
         if in_body && !(from <= declared.start && declared.end <= to) {
             if let AstKind::Function(function) = parsed
                 .semantic

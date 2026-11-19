@@ -1381,9 +1381,9 @@ export class Host {
       argument = instance.placed(argument, at, given);
     }
     // An entry at `*` where the body declares a handle is placed at each
-    // child the path reaches (ES §2.4): each element of a stored array is
-    // a handle to its position, over an array of references and over an
-    // array of plain values in place alike.
+    // child the path reaches (ES §2.4): each element of a stored array,
+    // and each member of a stored record, is a handle to its position,
+    // over references and over plain values in place alike.
     for (const { slot, at, handle } of layout) {
       const { root, path } = instance.plan.slots[slot];
       if (
@@ -1393,14 +1393,22 @@ export class Host {
       const above = path.slice(0, -1);
       const container = this.at(instance.rootOf(root, this, above), above);
       const held = this.at(argument, at.slice(0, -1));
-      if (!(container instanceof Ref) || !Array.isArray(held)) continue;
-      argument = instance.placed(
-        argument,
-        at.slice(0, -1),
-        held.map((_, index) =>
-          instance.handleOf(container.key(`${index}`), this, slot)
-        ),
-      );
+      if (!(container instanceof Ref)) continue;
+      const child = (key: string) =>
+        instance.handleOf(container.key(key), this, slot);
+      if (Array.isArray(held)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          held.map((_, index) => child(`${index}`)),
+        );
+      } else if (isRecord(held) && !(held instanceof Handle)) {
+        argument = instance.placed(
+          argument,
+          at.slice(0, -1),
+          Object.fromEntries(Object.keys(held).map((key) => [key, child(key)])),
+        );
+      }
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(

@@ -796,3 +796,39 @@ fn a_function_that_returns_a_value_over_the_bound_widens_and_reads_its_projectio
         record.reads
     );
 }
+
+// ----- §3.6: a closure called by a function of another module -----
+
+#[test]
+fn a_name_a_closure_captures_from_the_body_is_an_input_where_another_module_calls_it() {
+    // "A function expression inside a body is analyzed in the environment
+    // it is created in", and "A captured value is tracked inside the
+    // closure like any local". The closure is called by `withName` of
+    // another module, between the body's frame and the closure's.
+    let found = footprints(&[
+        SourceFile {
+            path: "helper.ts".to_string(),
+            text: "export function withName<M>(make: (name: string) => M): M {\n\
+                     return make(\"1\");\n\
+                   }\n"
+                .to_string(),
+        },
+        SourceFile {
+            path: "case.tsx".to_string(),
+            text: format!(
+                "{PRELUDE}import {{ action }} from \"commonfabric\";\n\
+                 import {{ withName }} from \"./helper.ts\";\n\
+                 const Outer = pattern<{{ donut: Donut; list: Cell<unknown[]> }}>(({{ donut, list }}) => {{\n\
+                   const f = action(() => {{ list.push(withName((name) => Child({{ donut, n: name.length }}))); }});\n\
+                   return {{ f }};\n\
+                 }});\n"
+            ),
+        },
+    ]);
+    let record = found
+        .into_iter()
+        .find(|body| body.name.as_deref() == Some("f"))
+        .expect("the body of `f`")
+        .record;
+    assert!(has(&record.reads, "donut : identity"), "{:?}", record.reads);
+}

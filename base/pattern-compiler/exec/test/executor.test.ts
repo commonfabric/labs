@@ -459,6 +459,24 @@ describe("an instance", () => {
 
     expect((instance.result() as { summary: unknown }).summary).toBe("2:a");
   });
+
+  it("hands a body a handle at each member of a record where it declares one at `*`", async () => {
+    // ES §2.4: "An entry whose `at` holds `*` is placed at each child the
+    // path reaches". Two members link to one cell.
+    const link = (index: number) => ({
+      $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
+    });
+    const instance = new Instance(await artifactOf("record-of-handles"), {
+      pool: { 0: { name: "x" }, 1: { name: "y" } },
+      byName: { a: link(0), b: link(1), c: link(0) },
+    });
+
+    expect((instance.result() as { listed: unknown }).listed).toEqual([
+      "a:x:true",
+      "b:y:false",
+      "c:x:true",
+    ]);
+  });
 });
 
 describe("an event", () => {
