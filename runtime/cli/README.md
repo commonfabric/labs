@@ -2293,6 +2293,7 @@ What the Fabric lane does, in order:
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
 | finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
 | failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
+| was stopped by a read the read ceiling withholds      | `failed`, `CFC_REFUSED`      |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
