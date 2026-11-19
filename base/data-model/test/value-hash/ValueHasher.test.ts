@@ -651,6 +651,19 @@ describe("ValueHasher", () => {
           0x00,
         ];
 
+        it("includes obsolete guidance while distinguishing absence from an empty message", () => {
+          const messages = [null, "", "Use new.title.", "Use new.body."];
+          const hashes = messages.map((message) => {
+            const value = new FabricUnavailable("obsolete", null, message);
+            const entries: [string, string][] = message === null
+              ? [["reason", "obsolete"]]
+              : [["message", message], ["reason", "obsolete"]];
+            expect(hashBytesOf(value)).toEqual(sha256(instanceStream(entries)));
+            return hex(hashBytesOf(value));
+          });
+          expect(new Set(hashes).size).toBe(messages.length);
+        });
+
         it('matches a hand-computed byte stream for `FabricUnavailable("pending")`', () => {
           const expected = sha256(instanceStream([["reason", "pending"]]));
           expect(hashBytesOf(new FabricUnavailable("pending"))).toEqual(

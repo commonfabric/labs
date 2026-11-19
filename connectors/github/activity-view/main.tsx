@@ -3,9 +3,13 @@ import {
   Default,
   fetchJson,
   generateText,
+  hasError,
+  isPending,
+  isSyncing,
   NAME,
   type OpaqueCell,
   pattern,
+  resultOf,
   UI,
   type VNode,
   Writable,
@@ -198,10 +202,11 @@ function shortOid(value: string | null): string {
 export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   const activeTab = new Writable.perSession<SyncedTab>("pull-requests");
 
+  const hasIndex = computed(() => state.pullRequestIndex !== undefined);
   const parsed = computed(() => parseUrl(state.repoUrl.get()));
   const fallbackApiUrl = computed(() => {
     // Empty URL and prompt inputs keep both network-backed built-ins idle.
-    if (state.pullRequestIndex !== undefined) return "";
+    if (hasIndex) return "";
     const { owner, repo } = parsed;
     if (owner && repo) {
       return `https://api.github.com/repos/${owner}/${repo}/commits`;
@@ -209,12 +214,12 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
     return "";
   });
 
-  // The result is absent while the URL is empty or the request is pending,
-  // and typing it as optional lets the computations below run meanwhile.
   const commitsData = fetchJson<CommitResponse | undefined>({
     url: fallbackApiUrl,
   });
-  const commits = commitsData.result;
+  const commits = computed(() =>
+    hasError(commitsData) ? [] : resultOf(commitsData)
+  );
   const fallbackPrompt = computed(() => {
     const commitList = commits ?? [];
     if (commitList.length === 0) return "";
@@ -229,6 +234,12 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
       "You are a concise technical writer. Summarize the recent development activity based on these commit messages. Focus on themes and notable changes. Keep it to 2-3 sentences.",
     prompt: fallbackPrompt,
   });
+  const summaryText = computed(() =>
+    hasError(summary) ? "" : resultOf(summary)
+  );
+  const summaryPending = computed(() =>
+    hasError(summary) ? false : isPending(summary) || isSyncing(summary)
+  );
 
   const repoName = computed(() => {
     const { owner, repo } = parsed;
@@ -289,8 +300,8 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
   );
   const recentPullRequests = computed(() => indexedPullRequests.slice(0, 12));
   const pieceName = computed(() =>
-    state.pullRequestIndex
-      ? `GitHub pull requests: ${state.pullRequestIndex.viewer}`
+    hasIndex
+      ? `GitHub pull requests: ${state.pullRequestIndex?.viewer}`
       : `GitHub Activity: ${repoName}`
   );
 
@@ -646,19 +657,19 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
                 />
               </div>
 
-              {summary.pending
+              {summaryPending
                 ? (
                   <div style="margin-bottom: 16px;">
                     <cf-loader showElapsed /> Generating summary...
                   </div>
                 )
-                : summary.result
+                : summaryText
                 ? (
                   <div style="margin-bottom: 16px; padding: 12px; background: #f5f5f5; border-radius: 4px;">
                     <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600;">
                       Activity Summary
                     </h3>
-                    <p style="margin: 0; line-height: 1.5;">{summary.result}</p>
+                    <p style="margin: 0; line-height: 1.5;">{summaryText}</p>
                   </div>
                 )
                 : null}

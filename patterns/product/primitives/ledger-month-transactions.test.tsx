@@ -228,7 +228,11 @@ export default pattern(() => {
     tables: { rows_plaid_transaction: ledgerTable() },
   });
   const seedCurrent = seedCurrentMonth({ db: current });
-  const forwarded = ForwardedMonthCaller({ bank: current });
+  const forwardedMonth = new Writable<string | undefined>();
+  const forwarded = ForwardedMonthCaller({
+    bank: current,
+    month: forwardedMonth,
+  });
 
   return {
     // The one warning this allows is normalizeAndDiff's "Storing a
@@ -239,12 +243,14 @@ export default pattern(() => {
     // declare. The flag is a boolean, so it cannot be pinned to that text.
     allowConsoleWarnings: true,
     [TESTS]: [
+      { action: action(() => forwardedMonth.set("1970-01")) },
       { assertion: assert(() => ledger.rowCount === 0) },
       { assertion: assert(() => broken.rowCount === 0) },
 
       { action: action(() => seed.send()) },
       { action: action(() => seedNarrowRow.send()) },
       { action: action(() => seedCurrent.send()) },
+      { action: action(() => forwardedMonth.set(undefined)) },
       { action: action(() => brokenMonth.set("2026-03")) },
 
       // A store of another shape reports why rather than an empty month, and
@@ -344,11 +350,9 @@ export default pattern(() => {
       // the read finds is one whichever side of a month boundary the read's
       // own clock lands on.
       //
-      // Read for the first time HERE, after the seed, and that is what makes
-      // the row visible: the atom takes no `reactOn`, so a read that already
-      // settled over an empty table would not run again for a write. An
-      // assertion over `forwarded` placed before the seed would settle that
-      // read and take the row away from these.
+      // Changing the forwarded month to undefined after seeding re-runs the
+      // query through its default-month path. The atom takes no `reactOn`, so
+      // writing the table alone does not invalidate a settled query.
       { assertion: assert(() => forwarded.errorMessage === "") },
       { assertion: assert(() => forwarded.month.length === 7) },
       { assertion: assert(() => forwarded.rowCount === 1) },

@@ -20,11 +20,9 @@
  * own entity doc, and INHERITED by a consumer that reads the leaf.
  *
  * Where the labels live is itself the point. A labeled result splits each row
- * into its own entity doc and stores the row's labels THERE; the query doc
- * holds `{ pending, result, requestHash }` and links to the rows. That is true
- * of the in-frame path too. A label read of a path into the result therefore
- * crosses links, and a reader that stopped at the document a path starts in
- * would report "unlabeled" for a fully labeled result.
+ * into its own entity doc and stores its content label there. The query doc
+ * carries separate membership and reference labels, so probes distinguish
+ * root content, array enumeration, reference selection, and row content.
  */
 
 import { Database } from "@db/sqlite";
@@ -68,7 +66,7 @@ const TABLES = {
 type QueryState = {
   pending?: boolean;
   error?: unknown;
-  result?: unknown[];
+  value?: { rows?: unknown[] };
   requestHash?: string;
 };
 
@@ -140,7 +138,7 @@ function settled(query: Cell<QueryState>, superseded?: unknown): Promise<void> {
               error: query.key("error").getRaw(),
               requestHash: query.key("requestHash").getRaw(),
               superseded,
-              result: query.key("result").getRaw(),
+              rows: query.key("value").key("rows").getRaw(),
             }),
         ),
       );
@@ -150,7 +148,7 @@ function settled(query: Cell<QueryState>, superseded?: unknown): Promise<void> {
   });
 }
 
-/** The label a consumer INHERITS by reading `query.result[0].<column>`: the
+/** The label a consumer INHERITS by reading `query.value.rows[0].<column>`: the
  *  read traverses the links (pattern result -> query result -> the row's own
  *  entity doc), and the traces it accumulates carry the label back out. */
 async function inheritedConfidentiality(
@@ -240,13 +238,31 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
     const cancelSink = result.sink(() => {});
 
     try {
-      const direct = result.key("direct") as Cell<QueryState>;
-      const derived = result.key("derived") as Cell<QueryState>;
+      const directValue = result.key("direct").resolveAsCell();
+      const derivedValue = result.key("derived").resolveAsCell();
+      await Promise.all([directValue.pull(), derivedValue.pull()]);
+      const queryState = (value: Cell<unknown>): Cell<QueryState> => {
+        const link = parseLink(value.getRaw());
+        if (!link?.id || link.path?.at(-1) !== "value") {
+          throw new Error(
+            "query result did not resolve through its value channel",
+          );
+        }
+        return runtime.getCellFromLink({
+          ...link,
+          space: link.space ?? space,
+          path: [],
+        }) as Cell<QueryState>;
+      };
+      const direct = queryState(directValue);
+      const derived = queryState(derivedValue);
       /** The row's own entity doc, which a labeled result splits each row into
        *  and stores the row's labels on. Declared here because the labeled
        *  reads below and the contract-free probe above them both need it. */
       const rowDoc = (query: Cell<QueryState>) => {
-        const link = parseLink(query.key("result").key(0).getRaw());
+        const link = parseLink(
+          query.key("value").key("rows").key(0).getRaw(),
+        );
         if (!link?.id) {
           throw new Error("result row did not split into its own entity doc");
         }
@@ -283,7 +299,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
           }
           const inherited = await inheritedConfidentiality(
             runtime,
-            query.key("result").key(0).key(column),
+            query.key("value").key("rows").key(0).key(column),
           );
           if (inherited.length !== 0) {
             throw new Error(
@@ -320,13 +336,13 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       }
 
       // (a) The rows read back through the injected source.
-      const row = direct.key("result").key(0).get() as
+      const row = direct.key("value").key("rows").key(0).get() as
         | Record<string, unknown>
         | undefined;
       if (!row || row.secret !== "top secret") {
         throw new Error(`unexpected direct row: ${JSON.stringify(row)}`);
       }
-      const derivedRow = derived.key("result").key(0).get() as
+      const derivedRow = derived.key("value").key("rows").key(0).get() as
         | Record<string, unknown>
         | undefined;
       if (!derivedRow || derivedRow.shouted !== "TOP SECRET") {
@@ -409,7 +425,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       // (c) A consumer reading the leaf inherits that confidentiality.
       const secretConf = await inheritedConfidentiality(
         runtime,
-        direct.key("result").key(0).key("secret"),
+        direct.key("value").key("rows").key(0).key("secret"),
       );
       if (!sameAtoms(secretConf, ["secret-body"])) {
         throw new Error(
@@ -419,7 +435,7 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
       }
       const shoutedConf = await inheritedConfidentiality(
         runtime,
-        derived.key("result").key(0).key("shouted"),
+        derived.key("value").key("rows").key(0).key("shouted"),
       );
       if (!sameAtoms(shoutedConf, WHOLE_DB_UNION)) {
         throw new Error(
@@ -429,9 +445,44 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         );
       }
 
+      // (d) Content labels stay on the row docs. Enumeration of the result
+      // array consumes its membership label without labeling the query root.
+      for (const [name, query] of columns) {
+        for (const path of [[], ["value"], ["value", "rows"]] as const) {
+          let probe: Cell<unknown> = query as Cell<unknown>;
+          for (const key of path) probe = probe.key(key as never);
+          const { view, readFailed } = cfcLabelViewForCellWithStatus(probe);
+          if (readFailed || view === undefined) {
+            throw new Error(`${name} query label metadata is unavailable`);
+          }
+          const confidentiality = cfcConfidentialityForObservationNode({
+            labelView: view,
+            logicalPath: [],
+          });
+          const expected = path.length === 2
+            ? name === "direct" ? ["secret-body"] : WHOLE_DB_UNION
+            : [];
+          if (!sameAtoms(confidentiality, expected)) {
+            throw new Error(
+              `${name} query observation at ${JSON.stringify(path)} wanted ${
+                JSON.stringify(expected)
+              }, got ${JSON.stringify(confidentiality)}`,
+            );
+          }
+          if (
+            path.length === 2 &&
+            !view.entries.some((entry) =>
+              entry.path.length === 0 && entry.observes === "enumerate"
+            )
+          ) {
+            throw new Error(`${name} query rows lack an enumeration label`);
+          }
+        }
+      }
+
       // (d) The labels live on the row docs, NOT on the query doc, and the
       // paths selected here cross links on the way to them: the piece's
-      // field links to the query's document, and `result/0` links to the
+      // field links to the query's document, and `value/rows/0` links to the
       // row's. A cell's own reader follows those links, so it reports the
       // column's label at the column and one entry per labeled column at the
       // row, as the inspection reader in (e) does.
@@ -446,24 +497,24 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         }
         return status.view;
       };
-      const ownColumn = ownAt(["result", 0, "secret"]);
+      const ownColumn = ownAt(["value", "rows", 0, "secret"]);
       if (
         !ownColumn?.entries.find((e) => e.path.length === 0)?.label
           .confidentiality?.some((a) => a === "secret-body")
       ) {
         throw new Error(
           `the cell's own reader reported no confidentiality at ` +
-            `result/0/secret; got ${JSON.stringify(ownColumn)}`,
+            `value/rows/0/secret; got ${JSON.stringify(ownColumn)}`,
         );
       }
-      const ownRow = ownAt(["result", 0]);
+      const ownRow = ownAt(["value", "rows", 0]);
       if (
         !ownRow?.entries.find((e) =>
           e.path.length === 1 && e.path[0] === "secret"
         )?.label.confidentiality?.some((a) => a === "secret-body")
       ) {
         throw new Error(
-          `the cell's own reader reported no per-column entry at result/0; ` +
+          `the cell's own reader reported no per-column entry at value/rows/0; ` +
             `got ${JSON.stringify(ownRow)}`,
         );
       }
@@ -486,32 +537,42 @@ async function runTest(base: URL, contractArrivesLate: boolean) {
         }
         return status.view;
       };
-      const atColumn = resolvedAt(direct, ["result", 0, "secret"]);
+      const atColumn = resolvedAt(direct, [
+        "value",
+        "rows",
+        0,
+        "secret",
+      ]);
       const columnEntry = atColumn?.entries.find((e) => e.path.length === 0);
       if (
         !columnEntry?.label.confidentiality?.some((a) => a === "secret-body")
       ) {
         throw new Error(
-          `get-label reported no confidentiality at result/0/secret; got ${
+          `get-label reported no confidentiality at value/rows/0/secret; got ${
             JSON.stringify(atColumn)
           }`,
         );
       }
-      const atRow = resolvedAt(direct, ["result", 0]);
+      const atRow = resolvedAt(direct, ["value", "rows", 0]);
       const rowEntry = atRow?.entries.find((e) =>
         e.path.length === 1 && e.path[0] === "secret"
       );
       if (!rowEntry?.label.confidentiality?.some((a) => a === "secret-body")) {
         throw new Error(
-          `get-label reported no per-column entry at result/0; got ${
+          `get-label reported no per-column entry at value/rows/0; got ${
             JSON.stringify(atRow)
           }`,
         );
       }
       // The null-origin column reaches the same reader with its class intact.
-      const atDerived = resolvedAt(derived, ["result", 0, "shouted"]);
+      const atDerived = resolvedAt(derived, [
+        "value",
+        "rows",
+        0,
+        "shouted",
+      ]);
       const atDerivedEntry = atDerived?.entries.find((e) =>
-        e.path.length === 0
+        e.path.length === 0 && e.observes === "value"
       );
       if (
         !sameAtoms(atDerivedEntry?.label.confidentiality, WHOLE_DB_UNION) ||

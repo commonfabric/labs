@@ -31,7 +31,7 @@ export interface Recommendation extends Book {
 
 /** The library supplies authorized data and durable actions to its display. */
 export interface LibraryViewInput {
-  profile: ReadonlyCell<Profile>;
+  profile?: ReadonlyCell<Profile>;
   books: Book[];
   favoriteAuthors: string[];
   agentStatus: string;

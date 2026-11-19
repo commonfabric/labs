@@ -28,6 +28,7 @@ import {
   type FabricValue,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
+import { hasError, isUnavailable } from "@commonfabric/data-model/availability";
 import {
   loadProfileOwnerDocuments,
   profileOwnerAt,
@@ -300,9 +301,11 @@ describe("profile-ownership", () => {
     await tx.commit().settled;
     await result.pull();
     const found = result.key("profile");
-    return found.key("result").getRaw() === undefined
-      ? String(found.key("error").get())
-      : addressOf(found.key("result").resolveAsCell());
+    const profile = found.key("result");
+    const value = profile.getRaw();
+    if (hasError(value)) return value.message;
+    expect(isUnavailable(value)).toBe(false);
+    return addressOf(profile.resolveAsCell());
   }
 
   /** The space and document `profile` is, which tell any two apart. */

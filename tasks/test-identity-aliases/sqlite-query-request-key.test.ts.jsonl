@@ -1,0 +1,1 @@
+{"date":"2026-11-18","from":{"k":"unit","s":"runner","n":"sqlite query request keys > preserves legacy request correlation when a returned row violates its schema"},"to":{"k":"unit","s":"runner","n":"sqlite query request keys > preserves request correlation when native row validation fails"}}

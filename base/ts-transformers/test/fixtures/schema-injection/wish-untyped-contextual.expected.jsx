@@ -33,7 +33,7 @@ export default pattern(() => {
                     anyOf: [{
                             type: "unknown"
                         }, {
-                            type: "undefined"
+                            $ref: "#/$defs/UnavailableVariant"
                         }]
                 },
                 candidates: {
@@ -42,7 +42,6 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
-                error: true,
                 errorCode: {
                     $ref: "#/$defs/WishErrorCode"
                 },
@@ -59,7 +58,7 @@ export default pattern(() => {
                     anyOf: [{
                             type: "unknown"
                         }, {
-                            type: "undefined"
+                            $ref: "#/$defs/UnavailableVariant"
                         }]
                 },
                 candidates: {
@@ -68,7 +67,6 @@ export default pattern(() => {
                         type: "unknown"
                     }
                 },
-                error: true,
                 errorCode: {
                     $ref: "#/$defs/WishErrorCode"
                 },
@@ -83,6 +81,29 @@ export default pattern(() => {
     $defs: {
         WishErrorCode: {
             "enum": ["no-match", "failed"]
+        },
+        UnavailableVariant: {
+            anyOf: [{
+                    $ref: "#/$defs/IsPending"
+                }, {
+                    $ref: "#/$defs/IsSyncing"
+                }, {
+                    $ref: "#/$defs/IsObsolete"
+                }, {
+                    $ref: "#/$defs/HasError"
+                }]
+        },
+        HasError: {
+            type: "FabricUnavailable"
+        },
+        IsObsolete: {
+            type: "FabricUnavailable"
+        },
+        IsSyncing: {
+            type: "FabricUnavailable"
+        },
+        IsPending: {
+            type: "FabricUnavailable"
         }
     }
 } as const satisfies __cfHelpers.JSONSchema);

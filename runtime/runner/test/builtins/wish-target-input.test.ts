@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { unavailableError } from "@commonfabric/data-model/availability";
 
 import { UI } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
@@ -77,7 +78,10 @@ describe("wish-target-input", () => {
       expect(state.key("error").get()).toBe(
         "Wish target is not recognized: `undefined`",
       );
-      expect(state.key("result").get()).toBeUndefined();
+      expect(state.key("result").get()).toEqual(unavailableError(
+        "Wish target is not recognized: `undefined`",
+      ));
+      expect(state.key("errorCode").get()).toBe("failed");
       expect(state.key("candidates").get()).toEqual([]);
       expect(state.key(UI).get()).toBeDefined();
     });
@@ -87,6 +91,9 @@ describe("wish-target-input", () => {
     const state = await stateFor("empty query", { query: "" });
 
     expect(state.key("error").get()).toMatch(/has no query\.$/);
-    expect(state.key("result").get()).toBeUndefined();
+    expect(state.key("result").get()).toEqual(unavailableError(
+      String(state.key("error").get()),
+      "invalidInput",
+    ));
   });
 });

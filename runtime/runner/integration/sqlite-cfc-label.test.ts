@@ -67,40 +67,33 @@ async function runTest(base: URL) {
       while (Date.now() < deadline) {
         await runtime.idle();
         await runtime.storageManager.synced();
-        if ((result.key("q").key("pending").get() as unknown) === false) {
-          const arr = result.key("q").key("result").getRaw() as
-            | unknown[]
-            | undefined;
-          if (Array.isArray(arr) && arr.length === 1) {
-            ready = true;
-            break;
-          }
+        const arr = result.key("q").key("rows").getRaw() as
+          | unknown[]
+          | undefined;
+        if (Array.isArray(arr) && arr.length === 1) {
+          ready = true;
+          break;
         }
         await new Promise((r) => setTimeout(r, 50));
       }
       if (!ready) {
-        const q = result.key("q");
         throw new Error(
           "query never reflected the seeded row; q=" +
-            JSON.stringify({
-              pending: q.key("pending").getRaw(),
-              error: q.key("error").getRaw(),
-              result: q.key("result").getRaw(),
-            }),
+            JSON.stringify(result.key("q").getRaw()),
         );
       }
 
       // The row read back correctly (aliased output name `secret`). Each row is
       // split into its own entity doc, so `.key(0)` is a link — `.get()`
       // dereferences it to the row value.
-      const row = result.key("q").key("result").key(0).get() as
+      const row = result.key("q").key("rows").key(0).get() as
         | Record<string, unknown>
         | undefined;
       if (!row || row.secret !== "top secret") {
         throw new Error(`unexpected row: ${JSON.stringify(row)}`);
       }
 
-      // THE POINT: a consumer reading `q.result[0].secret` inherits `body`'s
+      // THE POINT: a consumer reading `q.rows[0].secret` inherits `body`'s
       // confidentiality. As that read TRAVERSES the links (pattern result ->
       // query result cell -> per-row entity doc), the runtime accumulates
       // dereference traces, and the confidentiality the consumer observes is
@@ -108,7 +101,7 @@ async function runTest(base: URL) {
       // "comes back out of SQLite" and is re-established across the opaque
       // SQLite boundary.
       const dtx = runtime.edit();
-      const leaf = result.key("q").key("result").key(0).key("secret").withTx(
+      const leaf = result.key("q").key("rows").key(0).key("secret").withTx(
         dtx,
       );
       leaf.get(); // traverse the links -> populate dtx.dereferenceTraces

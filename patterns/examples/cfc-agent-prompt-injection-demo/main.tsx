@@ -4,10 +4,15 @@ import {
   computed,
   fetchJsonUnchecked,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   llmDialog,
   NAME,
   pattern,
   patternTool,
+  resultOf,
   toIndentedDebugString,
   UI,
   Writable,
@@ -336,11 +341,20 @@ export default pattern<Record<string, never>>(() => {
     SUB_AGENT_BRIEFING_MESSAGES,
     SUB_AGENT_BRIEFING_MESSAGES_SCHEMA,
   );
-  const { result: modelDirectory } = fetchJsonUnchecked({
+  const modelDirectoryRequest = fetchJsonUnchecked({
     url: "/api/ai/llm/models",
   });
+  const modelDirectory = resultOf(modelDirectoryRequest);
   const modelItems = computed(() => {
-    if (!modelDirectory) return FALLBACK_MODEL_ITEMS;
+    if (
+      isPending(modelDirectoryRequest) ||
+      hasError(modelDirectoryRequest) ||
+      isSyncing(modelDirectoryRequest) ||
+      hasSchemaMismatch(modelDirectoryRequest) ||
+      !modelDirectory
+    ) {
+      return FALLBACK_MODEL_ITEMS;
+    }
 
     const directoryItems = Object.keys(modelDirectory as any).map((key) => ({
       label: key,

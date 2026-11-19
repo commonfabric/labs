@@ -7,6 +7,8 @@ import { forwardReference } from "./forward-reference.ts";
 /**
  * `when(condition, value)`, the `&&` of a pattern: forwards a reference to
  * `value` when the condition is truthy, and to the condition otherwise.
+ * An unavailable condition propagates its native marker without selecting
+ * either input.
  */
 export function when(
   inputsCell: Cell<{ condition: any; value: any }>,

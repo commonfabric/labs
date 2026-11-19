@@ -1,5 +1,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import {
+  UNAVAILABLE_PENDING,
+  unavailableError,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
 
 import {
   GOOGLE_SEARCH_NATIVE_MODEL_TOOL,
@@ -321,9 +326,11 @@ describe("llm", () => {
         f.release("not a number");
         await f.runtime.settled();
         expect(f.output.key("pending").get()).toBe(false);
-        expect(f.output.key("result").get()).toBeUndefined();
+        expect(f.output.key("result").get()).toEqual(unavailableMismatch(
+          "generateObject result failed schema validation: answer: value does not match type number",
+        ));
         expect(f.output.key("error").get()).toMatch(
-          /^generateObject result failed schema sanitization validation: /,
+          /^generateObject result failed schema validation: /,
         );
       } finally {
         await f.close();
@@ -382,7 +389,9 @@ describe("llm", () => {
         f.release("Sequoia, but in prose.");
         await f.runtime.settled();
         expect(f.output.key("pending").get()).toBe(false);
-        expect(f.output.key("result").get()).toBeUndefined();
+        expect(f.output.key("result").get()).toEqual(unavailableError(
+          "LLM did not call presentResult tool with structured data",
+        ));
         expect(f.output.key("error").get()).toBe(
           "LLM did not call presentResult tool with structured data",
         );
@@ -469,7 +478,7 @@ describe("llm", () => {
         f.requests[0].resolve(presentResult("A"));
         await f.works[0];
         expect(f.output.key("pending").get()).toBe(true);
-        expect(f.output.key("result").get()).toBeUndefined();
+        expect(f.output.key("result").get()).toEqual(UNAVAILABLE_PENDING);
         expect(f.output.key("error").get()).toBeUndefined();
         f.requests[1].resolve(presentResult("B"));
         await f.runtime.settled();
@@ -502,7 +511,7 @@ describe("llm", () => {
         await f.issued(2);
         await f.works[0];
         expect(f.output.key("pending").get()).toBe(true);
-        expect(f.output.key("result").get()).toBeUndefined();
+        expect(f.output.key("result").get()).toEqual(UNAVAILABLE_PENDING);
         f.requests[1].resolve(presentResult("B"));
         await f.runtime.settled();
         expect(f.output.key("result").get()).toEqual({ answer: "B" });
@@ -535,7 +544,9 @@ describe("llm", () => {
           const hashB = f.output.key("requestHash").get();
           expect(hashB).not.toBe(hashA);
           expect(f.output.key("pending").get()).toBe(true);
-          expect(f.output.key("result").get()).toBeUndefined();
+          expect(f.output.key("result").get()).toEqual(
+            path === "llm" ? undefined : UNAVAILABLE_PENDING,
+          );
           f.requests[1].resolve(response("B"));
           await f.runtime.settled();
           expect(f.output.key("result").get()).toEqual(result("B"));

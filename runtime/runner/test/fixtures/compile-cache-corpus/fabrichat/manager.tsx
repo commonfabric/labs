@@ -48,12 +48,14 @@ import {
   eventKey,
   getPatternEnvironment,
   handler,
+  hasError,
   type InSpaceGrants,
   isWellFormedDID,
   NAME,
   pattern,
   type PerSession,
   principalOf,
+  resultOf,
   spaceAccess,
   spaceOf,
   Stream,
@@ -1771,6 +1773,9 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
       scope: computed(() => isWellFormedDID(space) ? [space] : []),
     });
     const standalone = computed(() => kind === CHAT_ROOM_OFFER_KIND);
+    const resolvedRoot = computed(() =>
+      hasError(root.result) ? undefined : resultOf(root.result)
+    );
     // The room is the document its root or declaration finally reaches. A
     // declaration may reach it through a document holding only a link, as a
     // Loom root's ensured room is reached through the handler's output for
@@ -1779,7 +1784,7 @@ const FoundRoom = pattern<FoundRoomInput, FoundRoomOutput>(
     // the room carries.
     return {
       room: computed(() =>
-        (standalone ? root.result : root.result?.key("chatRoom").get())
+        (standalone ? resolvedRoot : resolvedRoot?.key("chatRoom").get())
           ?.resolveAsCell()
       ),
     };

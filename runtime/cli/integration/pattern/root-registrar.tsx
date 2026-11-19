@@ -5,7 +5,15 @@
  * the root at delivery.
  */
 
-import { handler, NAME, pattern, str, type Stream, wish } from "commonfabric";
+import {
+  handler,
+  NAME,
+  pattern,
+  resultOf,
+  str,
+  type Stream,
+  wish,
+} from "commonfabric";
 import "commonfabric/schema";
 
 interface EntryInput {
@@ -40,9 +48,10 @@ interface RootRegistrarOutput {
 }
 
 export default pattern<Record<string, never>, RootRegistrarOutput>(() => {
-  const { addPiece } = wish<{
+  const rootWish = wish<{
     addPiece: Stream<{ piece: EntryOutput }>;
-  }>({ query: "#default" }).result!;
+  }>({ query: "#default" });
+  const { addPiece } = resultOf(rootWish.result);
 
   return {
     [NAME]: "Root registrar",

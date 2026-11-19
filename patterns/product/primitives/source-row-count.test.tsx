@@ -103,9 +103,10 @@ export default pattern(() => {
     predicate,
   });
 
+  const forwardedTable = new Writable("rows_plaid_account");
   const forwarded = ForwardingCaller({
     source: db,
-    table: "rows_plaid_transaction",
+    table: forwardedTable,
   });
 
   const missingTable = new Writable("rows_plaid_transaction");
@@ -132,6 +133,7 @@ export default pattern(() => {
 
       { action: action(() => seed.send()) },
       { action: action(() => predicate.set("deleted = 0")) },
+      { action: action(() => forwardedTable.set("rows_plaid_transaction")) },
 
       // The live rows match the tombstone rule the store writes; the total
       // counts the tombstone too.

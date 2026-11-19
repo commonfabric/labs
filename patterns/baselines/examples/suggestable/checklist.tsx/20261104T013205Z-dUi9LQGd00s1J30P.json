@@ -1,0 +1,71 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "topic": {
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/suggestable/checklist.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ChecklistItem": {
+        "properties": {
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "done"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "error": {
+        "description": "Terminal generation failure, or an empty string when none is present.",
+        "type": "string"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/ChecklistItem"
+        },
+        "type": "array"
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "topic": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "topic",
+      "items",
+      "pending",
+      "error",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

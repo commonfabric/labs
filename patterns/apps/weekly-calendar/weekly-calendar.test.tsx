@@ -3,6 +3,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   wish,
   Writable,
@@ -16,9 +17,10 @@ import {
 
 export default pattern(() => {
   const events = new Writable<EventPiece[]>([]);
-  const pieceRegistry = wish<Writable<EventPiece[]>>({
+  const pieceRegistryRequest = wish<Writable<EventPiece[]>>({
     query: "#pieceRegistry",
-  }).result!;
+  });
+  const pieceRegistry = resultOf(pieceRegistryRequest.result);
   const newEventTitle = new Writable("Modal Event");
   const newEventDate = new Writable("2026-07-22");
   const newEventStartTime = new Writable("09:00");

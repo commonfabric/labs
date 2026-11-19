@@ -7,7 +7,16 @@
  * home space partway through, so the first run is reported to nobody and the
  * later ones reach the log.
  */
-import { action, assert, NAME, pattern, TESTS, UI, wish } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  resultOf,
+  TESTS,
+  UI,
+  wish,
+} from "commonfabric";
 import type { Writable } from "commonfabric";
 import ActivityLog from "../activity-log/activity-log.tsx";
 import Agent from "./agent.tsx";
@@ -70,7 +79,8 @@ const learnedToggle = (ui: unknown): unknown => clickable(ui, "Learned");
 export default pattern(() => {
   const agent = Agent({ agentName: "Scout" });
   const log = ActivityLog({});
-  const home = wish<Writable<HomeDefault>>({ query: "#default" }).result!;
+  const homeWish = wish<Writable<HomeDefault>>({ query: "#default" });
+  const home = resultOf(homeWish.result);
 
   // ===== Initial state =====
 

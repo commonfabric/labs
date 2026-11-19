@@ -53,6 +53,7 @@ import {
   eventKey,
   getPatternEnvironment,
   handler,
+  hasError,
   type InSpaceGrants,
   isWellFormedDID,
   NAME,
@@ -61,6 +62,7 @@ import {
   type PerUser,
   principalOf,
   profileOwnerOf,
+  resultOf,
   spaceAccess,
   spaceDeleted,
   spaceOf,
@@ -2614,13 +2616,21 @@ const FabriChatManager = pattern<
   // whose wish finds none, or fails, writes that into its own instance, never
   // over the one a session that found the profile reads.
   const profileWish = wish<ChatManagerProfile>({ query: "#profile" });
-  const sessionProfileWish = wish<PerSession<ChatManagerProfile>>({
+  const sessionProfileWish = wish<Cell<PerSession<ChatManagerProfile>>>({
     query: "#profile",
   });
+  const myProfile = computed(() =>
+    hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
+  );
+  const sessionProfile = computed(() =>
+    hasError(sessionProfileWish.result)
+      ? undefined
+      : resultOf(sessionProfileWish.result)
+  );
   const core = FabriChatManagerCore(
     {
-      myProfile: profileWish.result,
-      sessionProfile: sessionProfileWish.result,
+      myProfile,
+      sessionProfile,
       sharedSpaceCatalog: input.sharedSpaceCatalog,
       direct: input.direct,
       requests: input.requests,

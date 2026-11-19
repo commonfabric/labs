@@ -6,8 +6,10 @@
 import {
   assert,
   generateText,
+  hasError,
   multiUserTest,
   pattern,
+  resultOf,
   TESTS,
 } from "commonfabric";
 
@@ -18,7 +20,9 @@ export const llmMocks = [
 const asker = pattern(() => {
   const reply = generateText({ prompt: "hello" });
   return {
-    [TESTS]: [{ assertion: assert(() => reply.pending === false) }],
+    [TESTS]: [{
+      assertion: assert(() => hasError(reply) || resultOf(reply) === "Hi."),
+    }],
     // The unanswered request's failure is logged as a warning.
     allowConsoleWarnings: true,
   };

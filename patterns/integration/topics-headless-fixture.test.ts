@@ -9,6 +9,15 @@ import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import {
+  hasSchemaMismatch,
+  isUnavailable,
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
+import {
   type Cell,
   type IExtendedStorageTransaction,
   parseLink,
@@ -968,14 +977,6 @@ describe("topics-headless-fixture", () => {
           : [];
 
       /**
-       * What the pivot's own row for a topic says mentions it, which is nothing
-       * for a topic with no row.
-       */
-      const pivotSays = (topic: number): number[] =>
-        pivotEntriesOf(measurement.seeded, held.table!)
-          .find((entry) => entry.topic === topic)?.mentionedBy.slice() ?? [];
-
-      /**
        * Checks the measurement's errors, and every lookup of every topic against
        * `oracle`, which defaults to the fixture's own data.
        */
@@ -1081,6 +1082,7 @@ describe("topics-headless-fixture", () => {
                       tx,
                       derivations.lifts.backlinksOf,
                       {
+                        tableReady: wayTable,
                         table: wayTable,
                         index: wayIndex,
                         self: topic,
@@ -1215,19 +1217,67 @@ describe("topics-headless-fixture", () => {
         });
         checkAll("shrink");
 
-        // An entry linking to a document nothing has written. The pivot
-        // mishandles one, against what `distinctByIdentity` and
-        // `crossrefTable` document of it, which is a defect of the pivot and
-        // not of the lookup: with lazy materialization on it reads the board as
-        // holding no topics, and with it off it gives the entry a row of no
-        // topic. So the pivot's own rows are the oracle here rather than the
-        // fixture's data, and this phase holds every lookup to the pivot, not
-        // the pivot to the board.
+        const readyTable = table.resolveAsCell().getRaw();
+        for (
+          const marker of [
+            UNAVAILABLE_PENDING,
+            UNAVAILABLE_SYNCING,
+            unavailableError("The pivot could not be read.", "general"),
+            unavailableMismatch(),
+            unavailableObsolete("Use the replacement board's pivot."),
+          ]
+        ) {
+          await measurement.update((tx) => {
+            table.withTx(tx).asSchema<unknown>().set(marker);
+          });
+          for (const way of WAYS) {
+            for (const output of lookups.get(way)!) {
+              const value = output.get();
+              if (way === "tableless") {
+                expect(value).toEqual([]);
+                continue;
+              }
+              expect(isUnavailable(value)).toBe(true);
+              if (!isUnavailable(value)) {
+                throw new Error(`${way} discarded the unavailable pivot.`);
+              }
+              expect({
+                reason: value.reason,
+                errorKind: value.errorKind,
+                message: value.message,
+              }).toEqual({
+                reason: marker.reason,
+                errorKind: marker.errorKind,
+                message: marker.message,
+              });
+            }
+          }
+          expect(measurement.errors).toEqual([]);
+          await measurement.update((tx) => {
+            table.withTx(tx).asSchema<unknown>().set(readyTable);
+          });
+          checkAll(`recovered from ${marker.reason}/${marker.errorKind}`);
+        }
+
+        // A dangling source makes the lazy pivot unavailable. Every consumer
+        // of that pivot preserves the failure; the independent tableless
+        // lookup still has an ordinary empty table.
         await measurement.update((tx) => {
           board = board.map((entry, at) => at === 0 ? -1 : entry);
           writeBoard(tx);
         });
-        checkAll("entry with nothing behind it", pivotSays);
+        if (mode === "lazy-materialization-on") {
+          expect(hasSchemaMismatch(table.get())).toBe(true);
+          expect(measurement.errors).toEqual([]);
+          for (const way of WAYS) {
+            for (const output of lookups.get(way)!) {
+              if (way === "tableless") expect(output.get()).toEqual([]);
+              else expect(hasSchemaMismatch(output.get())).toBe(true);
+            }
+          }
+        } else {
+          checkAll("entry with nothing behind it");
+        }
       });
     });
   }

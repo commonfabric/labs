@@ -3,10 +3,12 @@ import {
   Default,
   equals,
   handler,
+  hasError,
   ifElse,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   UI,
   type VNode,
   wish,
@@ -168,10 +170,13 @@ export default pattern<LobbyInput, LobbyOutput>(
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
 
-    const myName = computed(() => profileNameWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
+    const profile = computed(() =>
+      hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
     );
+    const myName = computed(() =>
+      hasError(profileNameWish.result) ? "" : resultOf(profileNameWish.result)
+    );
+    const hasProfile = computed(() => myName.trim() !== "");
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${myName}` : "Create a profile to join"
     );
@@ -182,7 +187,7 @@ export default pattern<LobbyInput, LobbyOutput>(
       messages,
       users,
       sessionId,
-      profile: profileWish.result,
+      profile,
       name: myName,
     });
 

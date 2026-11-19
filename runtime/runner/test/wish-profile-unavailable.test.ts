@@ -131,10 +131,9 @@ function profileValue(name: string) {
   };
 }
 
-/** Moves logical time past the wish debounce and drains the scheduler. */
+/** Waits for source loads and their reactive consequences. */
 async function settle(runtime: Runtime): Promise<void> {
-  await clock.tick(100);
-  await runtime.idle();
+  await runtime.settled();
 }
 
 const nameOf = (found: Cell<unknown>) =>
@@ -193,7 +192,10 @@ describe("wish-profile-unavailable", () => {
       try {
         const found = await fixture.wish("#profile");
         expect(errorOf(found)).toContain("Could not load document");
-        expect(found.key("result").get()).toBeUndefined();
+        expect(found.key("result").get()).toMatchObject({
+          reason: "error",
+          errorKind: "general",
+        });
       } finally {
         await fixture.dispose();
       }

@@ -12,6 +12,10 @@ import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";
 import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
 import { Runtime } from "../src/runtime.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import {
+  sqliteQueryNodeFactory,
+  sqliteQueryStateNodeFactory,
+} from "../src/builtins/sqlite/query-node.ts";
 
 const signer = await Identity.fromPassphrase("sqlite request correlation");
 const space = signer.did();
@@ -28,6 +32,73 @@ describe("sqlite query request keys", () => {
   afterEach(async () => {
     await runtime.dispose();
     await storageManager.close();
+  });
+
+  it("preserves request correlation when native row validation fails", async () => {
+    const provider = storageManager.open(space);
+    const original = provider.sqliteQuery?.bind(provider);
+    if (!original) throw new Error("SQLite query provider is required");
+    provider.sqliteQuery = () =>
+      Promise.resolve({ rows: [{ id: "not a number" }] });
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const query = cf.pattern(() => {
+      const db = cf.sqliteDatabase({
+        tables: { notes: cf.table({ id: "integer" }) },
+      });
+      const inputs = {
+        db,
+        sql: "SELECT id FROM notes",
+        requestKey: "invalid-row-search",
+        rowSchema: {
+          type: "object",
+          properties: { id: { type: "number" } },
+          required: ["id"],
+        },
+      };
+      return {
+        native: sqliteQueryNodeFactory(inputs),
+        legacy: sqliteQueryStateNodeFactory(inputs),
+      };
+    });
+    const tx = runtime.edit();
+    const result = runtime.run(
+      tx,
+      query,
+      {},
+      runtime.getCell(space, "keyed-invalid-row", undefined, tx),
+    );
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const cancel = result.sink(() => {});
+    try {
+      await runtime.settled();
+      const native = result.key("native").resolveAsCell();
+      expect(native.getRaw()).toMatchObject({
+        reason: "error",
+        errorKind: "schemaMismatch",
+      });
+      // The native adapter exposes the compatibility state's value child.
+      const link = native.getAsNormalizedFullLink();
+      expect(link.path.at(-1)).toBe("value");
+      const state = runtime.getCellFromLink({
+        ...link,
+        path: link.path.slice(0, -1),
+        schema: undefined,
+      });
+      expect(state.key("pending").get()).toBe(false);
+      expect(state.key("requestKey").get()).toBe("invalid-row-search");
+      expect(typeof state.key("error").get()).toBe("string");
+      expect(state.key("result").get()).toBeUndefined();
+
+      // Persisted raw nodes keep rowSchema's projection/link-metadata role.
+      const legacy = result.key("legacy");
+      expect(legacy.key("pending").get()).toBe(false);
+      expect(legacy.key("requestKey").get()).toBe("invalid-row-search");
+      expect(legacy.key("error").get()).toBeUndefined();
+      expect(legacy.key("result").get()).toEqual([{ id: "not a number" }]);
+    } finally {
+      cancel();
+      provider.sqliteQuery = original;
+    }
   });
 
   it("forwards optional keys through a compiled handle query without replacing unchanged rows", async () => {
@@ -48,6 +119,14 @@ describe("sqlite query request keys", () => {
       sql: "INSERT INTO notes (id) VALUES (1)",
     });
     expect((await seed.commit().settled).error).toBeUndefined();
+    const provider = storageManager.open(space);
+    const original = provider.sqliteQuery?.bind(provider);
+    if (!original) throw new Error("SQLite query provider is required");
+    let queries = 0;
+    provider.sqliteQuery = (...args) => {
+      queries++;
+      return original(...args);
+    };
     const tx = runtime.edit();
     const handle = runtime.getCell<SqliteDbRef>(
       space,
@@ -74,25 +153,23 @@ describe("sqlite query request keys", () => {
     try {
       await runtime.settled();
       expect(result.key("requestKey").get()).toBe("A");
-      expect(result.key("result").get()).toEqual([{ id: 1 }]);
-      const rows = result.key("result").getRaw();
+      expect(result.key("rows").get()).toEqual([{ id: 1 }]);
+      const rows = result.key("rows").getRaw();
       expect(Array.isArray(rows)).toBe(true);
-      let previousHash = result.key("requestHash").get();
       for (const value of ["B", undefined, "A"]) {
+        const priorQueries = queries;
         const edit = runtime.edit();
         key.withTx(edit).set(value);
         expect((await edit.commit().settled).error).toBeUndefined();
         await runtime.settled();
-        expect(result.key("pending").get()).toBe(false);
-        expect(result.key("error").get()).toBeUndefined();
         expect(result.key("requestKey").get()).toBe(value);
-        expect(result.key("requestHash").get()).not.toBe(previousHash);
-        expect(result.key("result").get()).toEqual([{ id: 1 }]);
-        expect(result.key("result").getRaw()).toEqual(rows);
-        previousHash = result.key("requestHash").get();
+        expect(queries).toBeGreaterThan(priorQueries);
+        expect(result.key("rows").get()).toEqual([{ id: 1 }]);
+        expect(result.key("rows").getRaw()).toEqual(rows);
       }
     } finally {
       cancel();
+      provider.sqliteQuery = original;
     }
   });
 
@@ -112,7 +189,7 @@ describe("sqlite query request keys", () => {
       const db = cf.sqliteDatabase({
         tables: { notes: cf.table({ id: "integer primary key" }) },
       });
-      return cf.sqliteQuery({
+      return sqliteQueryStateNodeFactory({
         db,
         sql: "SELECT id FROM notes",
         requestKey,
@@ -171,7 +248,11 @@ describe("sqlite query request keys", () => {
       const db = cf.sqliteDatabase({
         tables: { notes: cf.table({ id: "integer primary key" }) },
       });
-      return cf.sqliteQuery({ db, sql: "SELECT id FROM notes", requestKey });
+      return sqliteQueryStateNodeFactory({
+        db,
+        sql: "SELECT id FROM notes",
+        requestKey,
+      });
     });
     const tx = runtime.edit();
     const key = runtime.getCell<string>(space, "labeled-error-key", {
@@ -227,7 +308,7 @@ describe("sqlite query request keys", () => {
         const db = cf.sqliteDatabase({
           tables: { notes: cf.table({ id: "integer primary key" }) },
         });
-        return cf.sqliteQuery({
+        return sqliteQueryStateNodeFactory({
           db,
           sql: "SELECT id FROM notes",
           requestKey,
@@ -283,7 +364,7 @@ describe("sqlite query request keys", () => {
         const db = cf.sqliteDatabase({
           tables: { notes: cf.table({ id: "integer primary key" }) },
         });
-        return cf.sqliteQuery({
+        return sqliteQueryStateNodeFactory({
           db,
           sql: failure === "parameter"
             ? "SELECT id FROM notes WHERE id = ?"

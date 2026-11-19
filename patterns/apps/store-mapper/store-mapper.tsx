@@ -14,8 +14,13 @@ import {
   Default,
   generateObject,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
   pattern,
+  resultOf,
   UI,
   VNode,
   Writable,
@@ -891,7 +896,7 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
     // each as "Analyzing photo..." until it answers, so "Add All" and the ×
     // button hide a photo (hiddenPhotoIds) rather than remove it.
     const photoExtractions = uploadedPhotos.map((photo) => {
-      const extraction = generateObject<{ aisles: ExtractedAisle[] }>({
+      const extractionRequest = generateObject<{ aisles: ExtractedAisle[] }>({
         system:
           'You are analyzing photos from a grocery store. Your task is to extract ALL visible aisle signs and return them as JSON.\n\nIMPORTANT: You MUST return a JSON object with an "aisles" array, even if you only see one aisle or partial information.\n\nFor each aisle sign you see:\n- Extract ONLY the aisle number (e.g., "8", "12", "5A", "5B") - DO NOT include the word "Aisle"\n- Extract each product category as a separate item in the products array\n- Include partially visible signs - do your best to read them\n\nExample output:\n{\n  "aisles": [\n    {"name": "8", "products": ["Bread", "Cereal", "Coffee"]},\n    {"name": "9", "products": ["Snacks", "Chips"]}\n  ]\n}',
         prompt: computed(() => {
@@ -935,14 +940,41 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
         },
       });
 
+      const extractionState = computed(() => {
+        if (isPending(extractionRequest) || isSyncing(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: true,
+            error: undefined,
+          };
+        }
+        if (hasError(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: false,
+            error: extractionRequest.message,
+          };
+        }
+        if (isObsolete(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: false,
+            error: extractionRequest.message ||
+              "This photo analysis output has been retired.",
+          };
+        }
+        return {
+          aisles: resultOf(extractionRequest).aisles || [],
+          pending: false,
+          error: undefined,
+        };
+      });
       return {
         photo,
         photoName: photo.name,
-        extractedAisles: {
-          aisles: (extraction.result && extraction.result.aisles) || [],
-        },
-        pending: extraction.pending,
-        error: extraction.error,
+        extractedAisles: extractionState,
+        pending: extractionState.pending,
+        error: extractionState.error,
       };
     });
 
@@ -1140,8 +1172,7 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
                                 fontStyle: "italic",
                               }}
                             >
-                              Error analyzing photo. Please try removing and
-                              re-uploading.
+                              {extraction.error}
                             </div>
                           )
                           : (

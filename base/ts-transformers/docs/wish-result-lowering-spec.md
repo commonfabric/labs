@@ -10,22 +10,22 @@ long-tail reference.
 Source shapes that produce correctly-lowered output in a pattern body:
 
 ```ts
-const w = wish<T>(...);                              // (1) two-step named
-const x = w.result;
+const state = wish<T>(...);                          // (1) two-step named
+const request = state.result;                        // AsyncResult<T>
+const value = resultOf(request);                     // usable T
 
-const { result } = wish<T>(...);                     // (2) single-level destructure
-const { result: { pieceRegistry } } = wish<T>(...);  // (3) nested destructure
+const { result: request } = wish<T>(...);             // (2) destructured request
+const value = resultOf(request);
 
-const x = wish<T>(...).result;                       // (4) one-line direct
-const x = wish<T>(...).result.pieceRegistry;         // (5) one-line chained
-const { pieceRegistry } = wish<T>(...).result;       // (6) one-line + destructure
-const { pieceRegistry } = wish<T>(...).result!;      // (7) with non-null assertion
-const { pieceRegistry } = (wish<T>(...) as U).result; // (8) with cast
+const request = wish<T>(...).result;                 // (3) one-line request
+const value = resultOf(request);
 ```
 
-Shapes (4)–(8) are handled by a pre-pass (`rewriteInlineReactiveOriginChains`)
-that rewrites them into the equivalent nested-destructure form (2)/(3) before
-the body walker runs. The existing destructure machinery then handles the rest.
+Shape (3) is handled by a pre-pass (`rewriteInlineReactiveOriginChains`) that
+rewrites it into the equivalent destructure form (2) before the body walker
+runs. The existing destructure machinery then handles the rest. Do not chain
+through `.result` as though it were `T`: Wish now exposes `AsyncResult<T>`, and
+`resultOf()` is the explicit usable-value projection.
 
 ## Design decisions worth knowing
 
@@ -73,8 +73,10 @@ non-null assertions (purely syntactic — no runtime effect, no type information
 but preserves `as T` and `satisfies T` (load-bearing type information that
 downstream passes like schema injection use).
 
-So `(wish(...) as { result: T }).result` rewrites to
-`const { result } = wish(...) as { result: T }` — the cast survives.
+So `(wish(...) as { result: AsyncResult<T> }).result` rewrites to
+`const { result } = wish(...) as { result: AsyncResult<T> }` — the cast
+survives. A non-null assertion is only syntactic; it does not remove
+`DataUnavailable` variants and is not a substitute for `resultOf()`.
 
 ### 4. The inline diagnostic is kept as a fallback
 
@@ -105,27 +107,24 @@ Two additions to keep it honest:
 
 ## Open issues / out-of-scope
 
-### Nested `computed(() => ...)` walker gap
+### Nested `computed(() => ...)` factory placement
 
-The body-walker doesn't descend into nested `computed(...)` callbacks. So shapes
-like:
+The `wish()` factory belongs in the pattern body. It cannot be created directly
+or through a helper inside `computed()`, `lift()`, `action()`, or `handler()`
+callbacks. Capture the request or its usable projection in `computed()`:
 
 ```ts
-const fromWish = computed(() => {
-  const foo = wish<T>(...).result!;        // not lowered
-  return foo.map(...);                     // works anyway via Reactive proxy
-});
+const state = wish<T>(...);
+const request = state.result;
+const value = resultOf(request);
+const derived = computed(() => value.items.map(...));
 ```
 
-…stay as plain JS access at compile time. The `foo.map(...)` lowering still
-works because the Reactive proxy at runtime returns a cell for `.result`, and
-`.map`/`.mapWithPattern` work on cells. So in practice the lowering gap is
-silent. Producing correct lowered output here would require either extending the
-walker to descend into `computed(...)` callbacks (alongside the existing
-`derive(...)` descent) or routing them through the same expression-site
-machinery. Not in scope for this branch.
-
-Fixture: `closures/map-regains-reactive-aliases` documents this case.
+Creating the Wish inside an execution callback is rejected with
+`compute-context:local-reactive-use`, including at sites whose downstream array
+method can otherwise be lowered. `map-regains-reactive-aliases` keeps its Wish
+projection outside the compute and verifies that capturing the projection still
+regains the reactive array alias for pattern-owned callback lowering.
 
 ### Element-access terminals with computed keys
 

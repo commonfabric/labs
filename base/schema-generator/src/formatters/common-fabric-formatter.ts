@@ -14,6 +14,7 @@ import {
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
 import ts from "typescript";
+import { isCommonFabricAvailabilityType } from "../typescript/availability-brand.ts";
 
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
 import type {
@@ -128,6 +129,12 @@ const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
  * reads (`undefined` written as a type), so it cannot stand for this.
  */
 const UNREAD: unique symbol = Symbol("unread syntax");
+
+function isCommonFabricFabricErrorType(type: ts.Type): boolean {
+  return [type.aliasSymbol, type.getSymbol()].some((symbol) =>
+    symbol?.getName() === "FabricError" && isCommonFabricSymbol(symbol)
+  );
+}
 
 /**
  * Whether `name`, an alias this formatter lowers, is lowered from its syntax.
@@ -1368,6 +1375,14 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   supportsType(type: ts.Type, context: GenerationContext): boolean {
+    if (isCommonFabricFabricErrorType(type)) {
+      return true;
+    }
+
+    if (isCommonFabricAvailabilityType(type, context.typeNode)) {
+      return true;
+    }
+
     const aliasName = type.aliasSymbol?.name;
     if (scopeForWrapperName(aliasName) !== undefined) {
       return true;
@@ -1460,6 +1475,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
+    // FabricError's public runtime surface includes FabricValue payloads and
+    // iterable extra-property accessors. Those are not the stored JSON shape,
+    // and traversing them reaches symbol-keyed iterator types which JSON Schema
+    // cannot represent. The FabricInstance codec validates the actual value.
+    if (isCommonFabricFabricErrorType(type)) {
+      return { type: "object" };
+    }
+
     const n = context.typeNode;
     const resolvedScopeWrapper = resolveScopeWrapperNode(n);
     if (resolvedScopeWrapper) {
@@ -1605,6 +1628,12 @@ export class CommonFabricFormatter implements TypeFormatter {
         of: payloadOfStamp(stamp, carried.payload),
       }));
       return this.#withPlacedLabels(payload, type, metadata, context);
+    }
+
+    // Narrowed aliases retain the primitive's native schema type; reason and
+    // error-kind restrictions are enforced at the compute boundary.
+    if (isCommonFabricAvailabilityType(type, context.typeNode)) {
+      return { type: "FabricUnavailable" };
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)

@@ -1,5 +1,5 @@
 /** A request no entry answers: the runner fails the test for it. */
-import { assert, generateText, pattern, TESTS } from "commonfabric";
+import { assert, generateText, hasError, pattern, TESTS } from "commonfabric";
 
 export const llmMocks = [
   { when: { lastMessageContains: "weather" }, text: "Sunny." },
@@ -11,7 +11,8 @@ export default pattern(() => {
     [TESTS]: [
       {
         assertion: assert(() =>
-          String(capital.error).includes("No llmMocks entry answers")
+          hasError(capital) &&
+          capital.message?.includes("No llmMocks entry answers") === true
         ),
       },
     ],

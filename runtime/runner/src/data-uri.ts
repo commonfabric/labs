@@ -21,6 +21,7 @@ import {
   hashStringOf,
   refuseFabricInstance,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import {
   codecOf,
   NULL_LIVE_ENVIRONMENT,
@@ -204,7 +205,7 @@ function mapLinks(
         );
       }
       return rewrite(value);
-    } else if (value instanceof FabricPrimitive) {
+    } else if (isUnavailable(value) || value instanceof FabricPrimitive) {
       // A `FabricPrimitive` is a leaf; the value encoding represents it
       // via its codec.
       return value;
@@ -528,7 +529,7 @@ function inlineDataUriLinks(
       }
     }
     return next ?? value;
-  } else if (value instanceof FabricPrimitive) {
+  } else if (isUnavailable(value) || value instanceof FabricPrimitive) {
     // A leaf, and `isObjectOrArray`, so it leaves ahead of the record branch below.
     // It holds no link to inline, so returning it whole is the answer rather
     // than an omission.

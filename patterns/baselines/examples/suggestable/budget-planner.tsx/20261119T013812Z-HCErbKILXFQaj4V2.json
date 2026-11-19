@@ -1,0 +1,83 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "context": {
+        "additionalProperties": true,
+        "default": {},
+        "properties": {},
+        "type": "object"
+      },
+      "maxAmount": {
+        "default": 1000,
+        "type": "number"
+      },
+      "topic": {
+        "default": "",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/suggestable/budget-planner.tsx",
+  "resultSchema": {
+    "$defs": {
+      "BudgetItem": {
+        "properties": {
+          "amount": {
+            "default": 0,
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "amount"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "error": {
+        "description": "Terminal generation or retirement guidance, otherwise empty.",
+        "type": "string"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/BudgetItem"
+        },
+        "type": "array"
+      },
+      "pending": {
+        "type": "boolean"
+      },
+      "remaining": {
+        "type": "number"
+      },
+      "topic": {
+        "type": "string"
+      },
+      "total": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "topic",
+      "items",
+      "total",
+      "remaining",
+      "pending",
+      "error",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

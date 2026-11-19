@@ -23,6 +23,7 @@ export class PatternBuilder {
   #usedBindingNames = new Set<string>();
 
   #captureRenames: Map<string, string> = new Map();
+  #captureBindingNames: ReadonlyMap<string, string> | undefined;
 
   #context: TransformationContext;
   #factory: ts.NodeFactory;
@@ -76,6 +77,12 @@ export class PatternBuilder {
     return this;
   }
 
+  /** Uses capture bindings whose names have already been allocated together. */
+  setCaptureBindingNames(names: ReadonlyMap<string, string>): this {
+    this.#captureBindingNames = names;
+    return this;
+  }
+
   /**
    * Build the arrow function with destructured parameters.
    *
@@ -126,7 +133,10 @@ export class PatternBuilder {
       const renamedName = this.#captureRenames.get(originalName) ??
         originalName;
 
-      const bindingName = createBindingIdentifier(renamedName);
+      const plannedName = this.#captureBindingNames?.get(originalName);
+      const bindingName = plannedName === undefined
+        ? createBindingIdentifier(renamedName)
+        : this.#factory.createIdentifier(plannedName);
       const propertyName = renamedName !== bindingName.text
         ? this.#factory.createIdentifier(renamedName)
         : undefined;

@@ -1000,7 +1000,8 @@ function assignComputedCellKinds(
   // A writer that disqualifies its output cells from the computed kind:
   // anything whose writes are not a deterministic replay of its inputs.
   // Handlers never appear as writers (their `outputs` is `{}`), but the
-  // checks stay for hand-built nodes. `javascript` computes qualify even
+  // checks stay for hand-built nodes. `javascript` and
+  // `javascript-availability` computes qualify even
   // with capture writes / `materializerWriteInputPaths` — those writes
   // replay. `pattern` writers qualify (instantiation writes converge on
   // replay; see plan risk 4 — flip to disqualifying if that fails in
@@ -1013,6 +1014,7 @@ function assignComputedCellKinds(
     if (module.isEffect === true) return true;
     switch (module.type) {
       case "javascript":
+      case "javascript-availability":
       case "pattern":
       case "passthrough":
         return false;
@@ -1169,6 +1171,7 @@ function assignComputedCellKinds(
     if (module.isEffect === true) return all();
     switch (module.type) {
       case "javascript":
+      case "javascript-availability":
       case "passthrough":
         // Qualifying computes and the passthrough copy read their inputs;
         // their (replayable) writes are covered on the writer side.

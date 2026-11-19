@@ -67,6 +67,7 @@ export {
 } from "./function-predicates.ts";
 export {
   getExpressionText,
+  getIdentifierValueSymbol,
   getMemberSymbol,
   getMethodCallTarget,
   getNodeText,

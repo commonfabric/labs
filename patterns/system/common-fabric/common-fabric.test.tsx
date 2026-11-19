@@ -7,7 +7,15 @@
  * through `fetchMocks`, so what is asserted is the tool's reading of a known
  * response.
  */
-import { action, assert, pattern, TESTS, wish, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  pattern,
+  resultOf,
+  TESTS,
+  wish,
+  Writable,
+} from "commonfabric";
 import {
   addListItem,
   bash,
@@ -89,9 +97,10 @@ export default pattern(() => {
   // would see the earlier index. `pattern-index-default.test.tsx` reads
   // the index with no favorite.
   const index = listPatternIndex({});
-  const defaultApp = wish<
+  const defaultAppWish = wish<
     Writable<{ favorites?: { cell: Writable<unknown>; userTags: string[] }[] }>
-  >({ query: "#default" }).result!;
+  >({ query: "#default" });
+  const defaultApp = resultOf(defaultAppWish.result);
   const indexPointer = new Writable<{ url: string }>({
     url: "/custom/patterns.md",
   });

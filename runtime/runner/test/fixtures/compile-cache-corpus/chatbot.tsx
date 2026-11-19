@@ -5,9 +5,15 @@ import {
   fetchJsonUnchecked,
   generateObject,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   llmDialog,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   Stream,
   UI,
   VNode,
@@ -15,6 +21,15 @@ import {
   Writable,
 } from "commonfabric";
 import { type MentionablePiece } from "./system/backlinks-index.tsx";
+
+const isStringRecord = (
+  value: unknown,
+): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+const modelDirectoryOrEmpty = (
+  value: unknown,
+): Record<string, unknown> => isStringRecord(value) ? value : {};
 
 const sendMessage = handler<
   {
@@ -125,7 +140,7 @@ export const TitleGenerator = pattern<
     return JSON.stringify(firstMessage);
   });
 
-  const { result } = generateObject({
+  const titleRequest = generateObject<{ title: string }>({
     system:
       "Generate at most a 3-word title based on the following content, respond with NOTHING but the literal title text.",
     prompt: previewMessage,
@@ -141,10 +156,18 @@ export const TitleGenerator = pattern<
       required: ["title"],
     },
   });
+  const observedTitle = observeAvailability(titleRequest);
 
-  const title = computed(() => {
-    return result?.title || "Untitled Chat";
+  const titleResult = computed<{ title: string }>(() => {
+    if (
+      isPending(observedTitle) || hasError(observedTitle) ||
+      isSyncing(observedTitle) || hasSchemaMismatch(observedTitle)
+    ) {
+      return { title: "" };
+    }
+    return resultOf(observedTitle);
   });
+  const title = computed(() => titleResult.title || "Untitled Chat");
 
   return title;
 });
@@ -174,13 +197,21 @@ export default pattern<ChatInput, ChatOutput>(
       },
     );
 
-    const { result } = fetchJsonUnchecked({
+    const modelDirectoryRequest = fetchJsonUnchecked({
       url: "/api/ai/llm/models",
     });
-
+    const observedModelDirectory = observeAvailability(modelDirectoryRequest);
+    const modelDirectory = computed<Record<string, unknown>>(() => {
+      if (
+        isPending(observedModelDirectory) ||
+        hasError(observedModelDirectory) ||
+        isSyncing(observedModelDirectory) ||
+        hasSchemaMismatch(observedModelDirectory)
+      ) return {};
+      return modelDirectoryOrEmpty(resultOf(observedModelDirectory));
+    });
     const items = computed(() => {
-      if (!result) return [];
-      const items = Object.keys(result as any).map((key) => ({
+      const items = Object.keys(modelDirectory).map((key) => ({
         label: key,
         value: key,
       }));

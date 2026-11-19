@@ -1,10 +1,18 @@
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { Logger } from "@commonfabric/logger";
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import {
+  preferDataUnavailable,
+  readAvailabilityAwareCell,
+} from "../data-unavailability.ts";
 import {
   linkResolutionProbe,
   machineryRead,
@@ -78,14 +86,15 @@ export function settleOnceInputSyncs(
  * element's per-element result (a predicate boolean for filter, a result value
  * or array for flatMap); `inputElement` is the corresponding input list entry.
  * Append the contribution to `out`, or return "pending" if the element's result
- * has not arrived yet. A present-but-undefined value that the builtin treats as
+ * has not arrived yet, or an unavailable marker to publish that outcome instead
+ * of an aggregate. A present-but-undefined value that the builtin treats as
  * a settled exclusion contributes nothing and is not pending.
  */
 export type ElementContribution = (
   value: unknown,
   inputElement: unknown,
   out: any[],
-) => "pending" | void;
+) => "pending" | UnavailableVariant | void;
 
 export interface ResumeRepublisher {
   /**
@@ -154,8 +163,9 @@ export interface ResumeRepublisherOptions {
  * output is link-shaped and never holds element values to reconcile.
  *
  * On a resume reconcile the durable aggregate is held while the per-element
- * results stream in. Once their docs confirm, the aggregate is rebuilt from the
- * settled results and written. The only per-builtin variation is how each
+ * results stream in. Once their docs confirm, unavailable contributions publish
+ * their marker; otherwise the aggregate is rebuilt from the settled results and
+ * written. The only per-builtin variation is how each
  * element maps to its contribution, supplied as `contribute`; everything else —
  * the element-identity keying, the straggler re-defer, and the convergence
  * bookkeeping — is the same.
@@ -230,6 +240,7 @@ export function createResumeRepublisher(
       const keyCounts = new Map<string, number>();
       const out: any[] = [];
       const stillPending: Cell<any>[] = [];
+      let unavailable: UnavailableVariant | undefined;
       for (let i = 0; i < list.length; i++) {
         if (!(i in list)) continue;
         const { dedupKey, linkKey } = cellIdentityKey(list[i]);
@@ -238,13 +249,21 @@ export function createResumeRepublisher(
         const elementKey = JSON.stringify([...linkKey, occurrence]);
         const entry = elementRuns.get(elementKey);
         if (!entry) continue;
-        const value = entry.resultCell.withTx(tx).get();
+        const value = readAvailabilityAwareCell(tx, entry.resultCell);
+        const contribution = contribute(value, list[i], out);
+        if (isUnavailable(contribution)) {
+          unavailable = preferDataUnavailable(unavailable, contribution);
+        }
         if (
-          contribute(value, list[i], out) === "pending" &&
+          contribution === "pending" &&
           !awaited.has(entry.resultCell.getAsNormalizedFullLink().id)
         ) {
           stillPending.push(entry.resultCell);
         }
+      }
+      if (unavailable !== undefined) {
+        result.withTx(tx).setRawUntyped(unavailable, true);
+        return stillPending;
       }
       if (stillPending.length > 0) return stillPending;
       // The element reads above are real content reads (the aggregate genuinely

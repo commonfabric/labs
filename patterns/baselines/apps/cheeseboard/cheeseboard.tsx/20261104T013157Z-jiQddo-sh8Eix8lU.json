@@ -1,0 +1,34 @@
+{
+  "argumentSchema": false,
+  "pattern": "apps/cheeseboard/cheeseboard.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CheeseboardEntry": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "pizzaList": {
+        "items": {
+          "$ref": "#/$defs/CheeseboardEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "pizzaList",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

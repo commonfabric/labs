@@ -19,6 +19,7 @@ import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { sqliteQueryStateNodeFactory } from "../src/builtins/sqlite/query-node.ts";
 
 const signer = await Identity.fromPassphrase("shared query read ceilings");
 const BOB = "did:mailto:bob@example.test";
@@ -127,7 +128,7 @@ describe("sqlite shared read ceiling", () => {
     // The result is shared; the runtime's ceiling belongs to observation.
     const pattern = cf.pattern(() =>
       // deno-lint-ignore no-explicit-any
-      cf.sqliteQuery({ db, reactOn: db, sql, ...query } as any)
+      sqliteQueryStateNodeFactory({ db, reactOn: db, sql, ...query } as any)
     );
     const tx = runtime.edit();
     const cell = runtime.getCell(
@@ -208,7 +209,7 @@ describe("sqlite shared read ceiling", () => {
     tick.set(0);
     const pattern = cf.pattern<{ tick: number }>(({ tick }) =>
       // deno-lint-ignore no-explicit-any
-      cf.sqliteQuery({ db, sql: SQL, reactOn: tick } as any)
+      sqliteQueryStateNodeFactory({ db, sql: SQL, reactOn: tick } as any)
     );
     const result = runtime.run(
       tx,

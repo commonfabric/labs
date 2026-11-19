@@ -1,16 +1,21 @@
 import {
   action,
+  type AsyncResult,
   type BuiltInLLMMessage,
   computed,
   type Default,
   handler,
+  hasError,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
   llmDialog,
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   Stream,
-  toSchema,
   UI,
   type VNode,
   wish,
@@ -122,13 +127,36 @@ const handleGoToToday = handler<void, EntryState>((
 
 // ===== Weekly rollup =====
 
-type WeeklyRollup = {
+export type WeeklyRollup = {
   headline: string;
   themes: Array<{ name: string; detail: string }>;
   accomplishments: string[];
   openThreads: string[];
   mood: string;
 };
+
+/** Displays a rollup's terminal failure without treating it as empty success. */
+export const WeeklyRollupPresentation = pattern(
+  ({ response }: { response: AsyncResult<WeeklyRollup> }) => {
+    const weeklyRollup = computed(() =>
+      isPending(response) || isSyncing(response) || hasError(response) ||
+        isObsolete(response)
+        ? undefined
+        : resultOf(response)
+    );
+    const error = computed(() => {
+      if (isPending(response) || isSyncing(response)) return "";
+      return hasError(response) || isObsolete(response)
+        ? response.message || "This weekly rollup output has been retired."
+        : "";
+    });
+    return {
+      weeklyRollup,
+      error,
+      [UI]: ifElse(error, <p role="alert">{error}</p>, <span />),
+    };
+  },
+);
 
 const triggerRollup = handler<
   unknown,
@@ -363,19 +391,21 @@ export interface DailyJournalOutput {
 export default pattern<DailyJournalInput, DailyJournalOutput>(
   ({ title, entries, template }) => {
     // Access default-app for addPiece (global piece registration)
-    const { addPiece } = wish<{
+    const defaultWish = wish<{
       addPiece: Stream<{ piece: MentionablePiece }>;
-    }>({ query: "#default" }).result!;
+    }>({ query: "#default" });
+    const { addPiece } = resultOf(defaultWish.result);
 
     // UI state
     const showSettings = new Writable(false);
-    // Reactive #now; the date input defaults to today once it resolves (the
-    // ambient clock is not available at pattern body).
+    // Reactive #now; dependent computations remain unavailable until it
+    // resolves because the ambient clock is not readable from the pattern body.
     const nowCell = wish<number>({ query: "#now" });
+    const nowCellValue = resultOf(nowCell.result);
     const selectedDate = new Writable("");
     computed(() => {
-      const nowMs = nowCell.result;
-      if (nowMs != null && selectedDate.get() === "") {
+      const nowMs = nowCellValue;
+      if (selectedDate.get() === "") {
         selectedDate.set(getTodayDate(nowMs));
       }
     });
@@ -432,8 +462,7 @@ export default pattern<DailyJournalInput, DailyJournalOutput>(
 
     // Gather last 7 days of note content for the system prompt
     const recentNotesContext = computed(() => {
-      const now = nowCell.result;
-      if (now == null) return [];
+      const now = nowCellValue;
       const today = new Date(now);
       const sevenDaysAgo = new Date(now);
       sevenDaysAgo.setDate(today.getDate() - 7);
@@ -490,17 +519,17 @@ ${notesXml}
       tools: {},
       model: "anthropic:claude-haiku-4-5" as const,
       builtinTools: false,
-      resultSchema: toSchema<WeeklyRollup>(),
     };
+    const rollupDialog = llmDialog<WeeklyRollup>(rollupParams);
     const {
       addMessage: rollupAddMessage,
       pending: rollupPending,
-      result: rollupResult,
-    } = llmDialog(rollupParams);
+    } = rollupDialog;
 
-    const weeklyRollup = computed(() =>
-      rollupResult as WeeklyRollup | undefined
-    );
+    const rollupPresentation = WeeklyRollupPresentation({
+      response: rollupDialog.result,
+    });
+    const weeklyRollup = rollupPresentation.weeklyRollup;
     const hasRollup = computed(() => !!weeklyRollup);
 
     // The rollup as shown, and what it asks the suggestion beside it for.
@@ -610,6 +639,7 @@ ${notesXml}
                       })}
                     />
 
+                    {rollupPresentation[UI]}
                     {ifElse(
                       hasRollup,
                       rollupView[UI],

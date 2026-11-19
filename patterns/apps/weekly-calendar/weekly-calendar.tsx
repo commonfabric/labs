@@ -23,6 +23,7 @@ import {
   NAME,
   navigateTo,
   pattern,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -363,16 +364,16 @@ const handleSetTitle = handler<
 
 const WeeklyCalendar = pattern<Input, Output>(
   ({ title, events, isCalendar, isHidden }) => {
-    const pieceRegistry = wish<EventPiece[]>({
+    const pieceRegistryWish = wish<EventPiece[]>({
       query: "#pieceRegistry",
-    }).result!;
+    });
+    const pieceRegistry = resultOf(pieceRegistryWish.result);
 
-    // Today, in Los Angeles, from a clock that ticks every five minutes, so it
-    // advances while the piece stays open and on every later load.
     const nowCell = wish<number>({ query: "#now/300" });
+    const nowCellValue = resultOf(nowCell.result);
     const todayDate = computed(() => {
-      const nowMs = nowCell.result;
-      return nowMs != null ? getTodayDate(nowMs) : "";
+      const nowMs = nowCellValue;
+      return getTodayDate(nowMs);
     });
 
     // Navigation State. `startDate` holds the first day the user moved to,

@@ -187,7 +187,7 @@ export const SPEC_CITATIONS = {
     doc: SQLITE_CFC_SPEC,
     clause: "\u00a7 Read \u2014 sound column provenance, per-field labels",
     quote:
-      "writes the result rows under a **per-field label schema** (`labelResultSchema`), so a consumer reading `q.result[i].<col>` inherits that column's label",
+      "writes the result rows under a **per-field label schema** (`labelResultSchema`), so a consumer reading `resultOf(q).rows[i].<col>` inherits that column's label",
   },
   "AH-LIFE-6": {
     doc: RUNTIME_SPEC,

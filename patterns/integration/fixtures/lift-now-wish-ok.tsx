@@ -1,4 +1,12 @@
-import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
+import {
+  computed,
+  NAME,
+  pattern,
+  resultOf,
+  UI,
+  type VNode,
+  wish,
+} from "commonfabric";
 
 // Positive control for the enforceTimeCapability behavioral check. Reading the
 // reactive #now clock (one-shot, coarsened to 1s) inside a computed is the
@@ -11,9 +19,10 @@ interface Output {
 
 const LiftNowWishOk = pattern<void, Output>(() => {
   const nowCell = wish<number>({ query: "#now" });
+  const nowCellValue = resultOf(nowCell.result);
   const label = computed(() => {
-    const nowMs = nowCell.result;
-    return nowMs == null ? "loading" : `now:${Math.floor(nowMs / 1000)}`;
+    const nowMs = nowCellValue;
+    return `now:${Math.floor(nowMs / 1000)}`;
   });
   return {
     [NAME]: "lift-now-wish-ok",

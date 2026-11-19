@@ -7,37 +7,33 @@ function __cfHardenFn(fn: Function) {
     return fn;
 }
 import { __cfHelpers } from "commonfabric";
-import { computed, fetchText, ifElse, pattern, UI } from "commonfabric";
+import { computed, generateTextStream, ifElse, isPending, pattern, resultOf, UI, } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
 const __cfLift_1 = __cfHelpers.lift<{
-    pending: boolean;
-    result: string;
-}, boolean>(({ pending, result }) => pending || !result, {
+    request: __cfHelpers.AsyncStreamResult<string, string>;
+}, boolean>(({ request }) => isPending(request), {
     type: "object",
     properties: {
-        pending: {
-            type: "boolean"
-        },
-        result: {
-            type: "string"
+        request: {
+            type: "unknown"
         }
     },
-    required: ["pending", "result"]
+    required: ["request"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
-} as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
+} as const satisfies __cfHelpers.JSONSchema, { unavailableInputPolicy: [{ path: ["request"], reasons: ["pending"] }] });
 const __cfLift_2 = __cfHelpers.lift<{
-    result: string;
-}, boolean>(({ result }) => !!result, {
+    request: string;
+}, boolean>(({ request }) => !!request, {
     type: "object",
     properties: {
-        result: {
+        request: {
             type: "string"
         }
     },
-    required: ["result"]
+    required: ["request"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "boolean"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
@@ -50,13 +46,12 @@ const __cfLift_2 = __cfHelpers.lift<{
 //   ifElse(cond, {data}, undefined)   → ifElse(schema, schema, schema, schema, lift(...)(...), {data}, undefined)
 // Context: undefined is a VALUE argument, not a missing argument
 export default pattern(() => {
-    const __cf_destructure_1 = fetchText({
-        url: "/api/data",
-    }), pending = __cf_destructure_1.key("pending").for("pending", true), result = __cf_destructure_1.key("result").for("result", true);
+    const request = generateTextStream({
+        prompt: "load data",
+    }).for("request", true);
+    const result = resultOf(request);
     // Pattern 1: undefined as ifTrue (waiting state returns nothing)
-    const output1 = ifElse({
-        type: "boolean"
-    } as const satisfies __cfHelpers.JSONSchema, {
+    const output1 = ifElse(true as const satisfies __cfHelpers.JSONSchema, {
         type: "undefined"
     } as const satisfies __cfHelpers.JSONSchema, {
         type: "object",
@@ -78,10 +73,7 @@ export default pattern(() => {
                 },
                 required: ["result"]
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({
-        pending: pending,
-        result: result
-    }).for(["output1", 4], true), undefined, { result }).for("output1", true);
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_1({ request: request }).for(["output1", 4], true), undefined, { result }).for("output1", true);
     // Pattern 2: undefined as ifFalse (error state returns nothing)
     const output2 = ifElse({
         type: "boolean"
@@ -107,7 +99,7 @@ export default pattern(() => {
                 },
                 required: ["data"]
             }]
-    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ result: result }).for(["output2", 4], true), { data: result }, undefined).for("output2", true);
+    } as const satisfies __cfHelpers.JSONSchema, __cfLift_2({ request: request }).for(["output2", 4], true), { data: result }, undefined).for("output2", true);
     return {
         [UI]: (<div>
         <span>{output1}</span>

@@ -1,5 +1,9 @@
 import { action, assert, NAME, pattern, TESTS, UI } from "commonfabric";
-import { hasText } from "../../tools/test-support/vnode-helpers.ts";
+import {
+  findElement,
+  hasText,
+  setBound,
+} from "../../tools/test-support/vnode-helpers.ts";
 import FetchProgramTest from "./fetch-program-test.tsx";
 
 const BROKEN_URL = "https://example.test/broken.tsx";
@@ -28,13 +32,13 @@ export default pattern<{ value: number }>(({ value }) => ({
 ];
 
 export default pattern(() => {
-  const subject = FetchProgramTest({});
+  const subject = FetchProgramTest(undefined);
 
   const action_fetch_broken = action(() => {
-    subject.url.set(BROKEN_URL);
+    setBound(findElement(subject[UI], "cf-input"), "$value", BROKEN_URL);
   });
   const action_fetch_missing = action(() => {
-    subject.url.set(MISSING_URL);
+    setBound(findElement(subject[UI], "cf-input"), "$value", MISSING_URL);
   });
 
   const assert_named = assert(() => subject[NAME] === "Fetch Program Test");
@@ -70,6 +74,5 @@ export default pattern(() => {
       { settle: true },
       { assertion: assert_fetch_error_shown },
     ],
-    subject,
   };
 });

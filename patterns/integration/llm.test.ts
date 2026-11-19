@@ -14,7 +14,7 @@ import {
 const { API_URL, FRONTEND_URL } = env;
 const ignore = !TEST_LLM;
 
-// LLM tests are skipped in CI until we handle llm() calls properly in CI environments.
+// LLM tests are skipped in CI until we handle live provider calls in CI environments.
 // This requires either:
 // 1. Adding a flag to enable LLM tests in CI with proper API keys
 // 2. Resurrecting the LLM cache functionality from toolshed

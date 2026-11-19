@@ -142,8 +142,24 @@ describe("CFC builtin implementation identity", () => {
       "named-test-builtin",
       "user",
     );
+    const argumentSchema = { type: "string" } as const;
+    const resultSchema = { type: "number" } as const;
+    const specialized = runtime.moduleRegistry.getModule(
+      "named-test-builtin",
+      undefined,
+      {
+        argumentSchema,
+        resultSchema,
+      },
+    );
+    expect(specialized.argumentSchema).toBe(argumentSchema);
+    expect(specialized.resultSchema).toBe(resultSchema);
+    expect(plain.argumentSchema).toBeUndefined();
+    expect(plain.resultSchema).toBeUndefined();
+    expect(resolvePolicyFacingImplementationIdentity({ ...specialized }))
+      .toBeUndefined();
 
-    for (const module of [plain, scoped]) {
+    for (const module of [plain, scoped, specialized]) {
       expect(Object.keys(module)).not.toContain("debugName");
       expect(
         Object.getOwnPropertyDescriptor(module, "debugName")?.enumerable,

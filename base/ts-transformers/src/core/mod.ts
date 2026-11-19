@@ -2,9 +2,8 @@
  * Cross-transformer communication state.
  *
  * `CrossStageState` (cross-stage-state.ts) owns the pipeline's cross-transformer
- * channels. Each is keyed by AST node or symbol identity, which is preserved
- * when transformers are applied in sequence via ts.transform(). The channels are
- * organized into three families:
+ * channels. Keys are AST nodes, symbols, or availability variant-name strings.
+ * The channels are organized into four families:
  *
  *   1. Bare cross-package maps — `typeRegistry`, `schemaHints`. The published
  *      boundary contract: the separate schema-generator package reads these
@@ -22,6 +21,10 @@
  *      mutators are coupled to reactive-analysis cache invalidation
  *      (mapCallbackRegistry, syntheticComputeCallbackRegistry,
  *      syntheticComputeOwnedNodeRegistry, syntheticReactiveCollectionRegistry).
+ *   4. Availability provenance — `availabilityObservationNodeRegistry` and
+ *      `availabilityObservationSymbolRegistry` retain exact-path observation
+ *      facts; node lookups also follow original nodes. `availabilityVariantTypes`
+ *      caches canonical variant types by name, rather than node identity.
  *
  * (Former members no longer exist: `syntheticLiftAppliedCallRegistry`, removed
  * after being verified functionally inert (see

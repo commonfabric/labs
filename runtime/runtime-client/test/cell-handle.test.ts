@@ -1,3 +1,9 @@
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableMismatch,
+} from "@commonfabric/data-model/availability";
+
 // `assertThrows` returns the error it caught, typed as the class it checked,
 // for the lines that read its members.
 import { assertThrows } from "@std/assert";
@@ -14,6 +20,7 @@ import {
   FabricError,
   FabricLink,
 } from "@commonfabric/data-model/fabric-instances";
+
 import {
   FabricBytes,
   FabricEpochNsec,
@@ -1710,6 +1717,34 @@ describe("cell-handle", () => {
       expect(calls.length).toBe(after + 1);
     });
 
+    it("applies `FabricUnavailable` as an atomic control value", () => {
+      const cell = new CellHandle<unknown>(makeRuntime(), ref);
+      const calls: unknown[] = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      }, { onRefused: () => {} });
+      const unavailable = UNAVAILABLE_PENDING;
+
+      cell[$onCellUpdate](unavailable);
+
+      expect(calls.at(-1)).toBe(unavailable);
+    });
+
+    it("notifies when a `FabricUnavailable` marker changes", () => {
+      const cell = new CellHandle<unknown>(makeRuntime(), ref);
+      const calls: unknown[] = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      }, { onRefused: () => {} });
+
+      cell[$onCellUpdate](UNAVAILABLE_PENDING);
+      const afterPending = calls.length;
+      cell[$onCellUpdate](UNAVAILABLE_SYNCING);
+
+      expect(calls.length).toBe(afterPending + 1);
+      expect(calls.at(-1)).toBe(UNAVAILABLE_SYNCING);
+    });
+
     it("refuses a `FabricInstance` rather than apply one", () => {
       // A tripwire: the transport delivers a fabric class whole, so what keeps
       // an instance out of a cell is this refusal rather than a lossy arrival.
@@ -3245,6 +3280,19 @@ describe("cell-handle", () => {
       ).toBe(bytes);
     });
 
+    it("hydrates `FabricUnavailable` as itself, not as a record", () => {
+      const unavailable = unavailableMismatch();
+
+      expect(CellHandle.deserialize(makeHandle(), unavailable)).toBe(
+        unavailable,
+      );
+      expect(
+        (CellHandle.deserialize(makeHandle(), { a: [unavailable] }) as {
+          a: unknown[];
+        }).a[0],
+      ).toBe(unavailable);
+    });
+
     it("refuses a `FabricInstance` rather than hydrate one", () => {
       // A container, reached by its codec contents rather than by property
       // name, so a sigil link can sit inside one where this walk cannot see
@@ -3312,6 +3360,14 @@ describe("cell-handle", () => {
       const wire = CellHandle.serialize([bytes]) as unknown[];
 
       expect(wire[0]).toBe(bytes);
+    });
+
+    it("returns `FabricUnavailable` whole in either direction", () => {
+      const unavailable = UNAVAILABLE_SYNCING;
+      const handle = new CellHandle(makeRuntime(), makeRef());
+
+      expect(CellHandle.serialize(unavailable)).toBe(unavailable);
+      expect(CellHandle.deserialize(handle, unavailable)).toBe(unavailable);
     });
 
     it("hydrates a `FabricBytes` as itself, not as a record", () => {

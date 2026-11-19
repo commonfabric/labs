@@ -12,6 +12,7 @@ import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
 import { defer } from "@commonfabric/async/defer";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 
 import { wish } from "../../src/builtins/wish.ts";
 import type { Cell } from "../../src/cell.ts";
@@ -153,7 +154,12 @@ describe("wish-profile-reads", () => {
 
       expect(state).toBeDefined();
       expect(state!.key("error").get()).toBe("Error: Could not load document");
-      expect(state!.key("result").get()).toBeUndefined();
+      expect(state!.key("errorCode").get()).toBe("failed");
+      const result = state!.key("result").get();
+      expect(isUnavailable(result)).toBe(true);
+      if (!isUnavailable(result)) throw new Error("Expected failed wish");
+      expect(result.reason).toBe("error");
+      expect(result.message).toBe("Error: Could not load document");
     });
 
     it("sends nothing while one of them is loading", async () => {

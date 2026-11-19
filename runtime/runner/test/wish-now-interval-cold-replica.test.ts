@@ -20,12 +20,15 @@ const PROGRAM: RuntimeProgram = {
     {
       name: "/main.tsx",
       contents: [
-        "import { computed, pattern, wish } from 'commonfabric';",
+        "import { computed, hasError, isObsolete, isPending, isSyncing, pattern, wish } from 'commonfabric';",
         "",
         "export default pattern<Record<string, never>, { tick: number | null }>(",
         "  () => {",
         "    const now = wish<number>({ query: '#now/300' });",
-        "    const tick = computed(() => now.result ?? null);",
+        "    const tick = computed(() => {",
+        "      const value = now.result;",
+        "      return isPending(value) || isSyncing(value) || hasError(value) || isObsolete(value) ? null : value ?? null;",
+        "    });",
         "    return { tick };",
         "  },",
         ");",

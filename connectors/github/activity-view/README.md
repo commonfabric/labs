@@ -27,6 +27,11 @@ does not export the index's opaque `detail` cells.
   language-model summary. It defaults to
   `https://github.com/anthropics/claude-code`.
 
+In the public-repository view, a terminal fetch failure leaves the empty commit
+view renderable, and a failed summary leaves usable commits visible. Both
+recover reactively. An empty request URL or summary prompt keeps its network
+operation idle; it is not treated as a completed empty response.
+
 The connector host prints the stable pull-request-index and health cell
 identifiers after its initial collection. Supply those cells as the
 `pullRequestIndex` and `health` inputs when creating the view piece.

@@ -35,15 +35,16 @@ const signer = await Identity.fromPassphrase("cf-harness sqlite input");
  * input is a `SqliteDb`, and the rows come from `query` on it.
  */
 const MAIL_PATTERN_SOURCE = [
-  "import { computed, pattern, type SqliteDb } from 'commonfabric';",
+  "import { computed, isPending, pattern, resultOf, type SqliteDb } from 'commonfabric';",
   "interface BillRow { id: number; subject: string; }",
   "type Input = { mail: SqliteDb };",
   "type Output = { subjects: string[]; pending: boolean };",
   "export default pattern<Input, Output>(({ mail }) => {",
   "  const bills = mail.query<BillRow>('SELECT id, subject FROM messages', {});",
+  "  const billResult = resultOf(bills);",
   "  return {",
-  "    subjects: computed(() => (bills.result ?? []).map((row) => row.subject)),",
-  "    pending: computed(() => bills.pending === true),",
+  "    subjects: computed(() => billResult.rows.map((row) => row.subject)),",
+  "    pending: computed(() => isPending(bills)),",
   "  };",
   "});",
   "",

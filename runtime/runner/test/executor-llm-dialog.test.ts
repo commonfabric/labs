@@ -375,6 +375,11 @@ export default pattern<{ messages: ${scopeType}<Writable<BuiltInLLMMessage[]>> }
           );
           await waitForSettled(peer, space, seq);
           await peerResult.key("dialog").pull();
+          await waitForCellValue<{ addMessage?: unknown }>(
+            peer,
+            peerResult.key("dialog"),
+            (dialog) => dialog?.addMessage !== undefined,
+          );
           expect(peerResult.key("dialog").get()?.addMessage).toBeDefined();
           const secondAck = Promise.withResolvers<void>();
           sendEvent(

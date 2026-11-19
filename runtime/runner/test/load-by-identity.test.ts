@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { hasSchemaMismatch } from "@commonfabric/data-model/availability";
 import type { Source } from "@commonfabric/js-compiler";
 import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -440,11 +441,11 @@ describe("load by module identity (warm + version-bump recovery)", () => {
     await tx.commit().settled;
     tx = runtime.edit();
     await result.pull();
-    // The observer's input does not meet its schema, so it yields nothing
-    // where it yielded "was undefined" without the flag.
+    // The required observer input refuses with schemaMismatch; it does not
+    // fabricate "was undefined" from an input its schema excludes.
     const value = result.withTx(tx).get();
     expect(value.value).toBeUndefined();
-    expect(value.observed).toBeUndefined();
+    expect(hasSchemaMismatch(value.observed)).toBe(true);
   });
 
   it("cold-loads an exact attached source-root package", async () => {

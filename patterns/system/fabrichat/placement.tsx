@@ -10,15 +10,22 @@
 import {
   type Cell,
   computed,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSession,
+  resultOf,
   spaceAccess,
   spaceDeleted,
   VIEWS,
   wish,
 } from "commonfabric";
 import {
+  type ChatProfile,
   type ChatReaction,
   type ChatReactionTally,
   type ChatRoomAbout,
@@ -135,9 +142,14 @@ const FabriChatPlacement = pattern<
   // Wished for as a cell, which the tallies compare reactors against; the
   // placement never tests it for absence, which a cell's handle would defeat.
   // Each session finds its own profile, as the room's does.
-  const profileWish = wish<PerSession<ProfileCell>>({ query: "#profile" });
-  const viewer = profileWish.result;
+  const profileWish = wish<Cell<PerSession<ChatProfile>>>({
+    query: "#profile",
+  });
+  const viewer = computed(() =>
+    hasError(profileWish.result) ? undefined : resultOf(profileWish.result)
+  );
   const about = computed(() => room.get()?.about);
+  const observedAbout = observeAvailability(about);
   // A deleted space is read first, since its level is `"none"` for everyone
   // and no retry admits anyone. Otherwise the viewer's access to the room's
   // space decides: `"none"` is not a member, and `undefined`, not known yet,
@@ -147,7 +159,9 @@ const FabriChatPlacement = pattern<
     const level = spaceAccess(room);
     return level === "none"
       ? "not-member"
-      : level === undefined || about?.kind === undefined
+      : level === undefined || hasError(observedAbout) ||
+          isObsolete(observedAbout) || isPending(observedAbout) ||
+          isSyncing(observedAbout) || observedAbout?.kind === undefined
       ? "unavailable"
       : "member";
   });
@@ -167,7 +181,7 @@ const FabriChatPlacement = pattern<
   );
   const chat = {
     state,
-    about: computed(() => (isMember ? about : undefined)),
+    about: isMember ? about : undefined,
     messages,
     canSend: canSendForSession,
     participants: computed(() =>
@@ -177,9 +191,7 @@ const FabriChatPlacement = pattern<
   };
 
   return {
-    [NAME]: computed(() =>
-      isMember ? about?.title ?? "Chat" : "Chat (unavailable)"
-    ),
+    [NAME]: isMember ? about?.title ?? "Chat" : "Chat (unavailable)",
     room,
     [VIEWS]: { chat },
   };

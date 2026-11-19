@@ -1,4 +1,9 @@
-import { assertEquals } from "@std/assert";
+import {
+  unavailableError,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
+import { fabricAwareEqual } from "@commonfabric/data-model";
+import { assertEquals, assertStrictEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -49,12 +54,39 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
     assertEquals(cancels.length, 1);
     assertEquals(sendResultCount, 1);
     assertEquals(outputs.pending.withTx(tx).get(), false);
-    assertEquals(outputs.result.withTx(tx).get(), undefined);
+    assertEquals(
+      fabricAwareEqual(
+        outputs.result.withTx(tx).resolveAsCell().getRaw(),
+        unavailableError(
+          "Compilation requires a main entrypoint and files",
+          "invalidInput",
+        ),
+      ),
+      true,
+    );
     assertEquals(outputs.error.withTx(tx).get(), undefined);
     assertEquals(outputs.errors.withTx(tx).get(), undefined);
 
+    const initialOutputs = outputs;
     action(tx);
-    assertEquals(sendResultCount, 1);
+    assertEquals(sendResultCount, 2);
+    assertEquals(cancels.length, 1);
+    for (const key of ["pending", "result", "error", "errors"]) {
+      assertStrictEquals(outputs[key], initialOutputs[key]);
+    }
+
+    const obsolete = unavailableObsolete("Use the replacement program.");
+    inputs.setRawUntyped(obsolete);
+    action(tx);
+    assertEquals(
+      fabricAwareEqual(
+        outputs.result.withTx(tx).resolveAsCell().getRaw(),
+        obsolete,
+      ),
+      true,
+    );
+    assertEquals(outputs.error.withTx(tx).get(), undefined);
+    assertEquals(outputs.pending.withTx(tx).get(), false);
 
     inputs.set({
       main: "/missing.tsx",
@@ -67,7 +99,14 @@ Deno.test("compileAndRun initializes outputs and handles invalid programs", asyn
       outputs.error.withTx(tx).get(),
       '"/missing.tsx" not found in files',
     );
-
+    const missingResult = outputs.result.withTx(tx).resolveAsCell()
+      .getRaw();
+    assertEquals(missingResult.reason, "error");
+    assertEquals(
+      missingResult.message,
+      '"/missing.tsx" not found in files',
+    );
+    assertEquals(missingResult.errorKind, "compile");
     await tx.commit().settled;
   } finally {
     await runtime.dispose();

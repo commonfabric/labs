@@ -212,12 +212,20 @@ describe("piece input paths", () => {
       id: "of:forced-reconciliation",
       scope: "space",
     }];
-    storage.pendingLoadGeneration = () => 1;
-    storage.loadsSettled = () => {
-      if (!first) return Promise.resolve();
+    const isForcedReconciliation = (key: string) =>
+      key.endsWith("/space/of:forced-reconciliation");
+    storage.pendingLoadGeneration = (key) =>
+      isForcedReconciliation(key) ? 1 : originalPendingLoadGeneration(key);
+    storage.loadsSettled = (keys) => {
+      const realKeys = keys.filter((key) => !isForcedReconciliation(key));
+      const realLoadsSettled = realKeys.length === 0
+        ? Promise.resolve()
+        : originalLoadsSettled(realKeys);
+      if (!keys.some(isForcedReconciliation)) return realLoadsSettled;
+      if (!first) return realLoadsSettled;
       first = false;
       entered.resolve();
-      return release.promise;
+      return Promise.all([realLoadsSettled, release.promise]).then(() => {});
     };
     let rounds = 0;
     provider.presentCount = () => (++rounds === 1 ? 1 : 0);

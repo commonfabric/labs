@@ -16,6 +16,7 @@ import {
   computed,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -64,9 +65,10 @@ const listText = (ui: unknown): string =>
   );
 
 export default pattern(() => {
-  const journal = wish<Writable<JournalEntry[]>>({ query: "#journal" })
-    .result!;
+  const journalWish = wish<Writable<JournalEntry[]>>({ query: "#journal" });
+  const journal = resultOf(journalWish.result);
   const nowCell = wish<number>({ query: "#now/60" });
+  const nowValue = resultOf(nowCell.result);
   // The clock's reading when the entries were written, and the date an entry
   // over a week old shows, worked out then.
   const writtenAt = new Writable(0);
@@ -82,7 +84,7 @@ export default pattern(() => {
   );
 
   const action_write_entries = action(() => {
-    const now = nowCell.result;
+    const now = nowValue;
     if (now === undefined) return;
     writtenAt.set(now);
     oldDate.set(new Date(now - 30 * DAY).toLocaleDateString());
@@ -136,7 +138,7 @@ export default pattern(() => {
   );
   // Minutes the clock has ticked since the write: normally none.
   const ticks = computed(() =>
-    Math.round(((nowCell.result ?? 0) - writtenAt.get()) / MINUTE)
+    Math.round((nowValue - writtenAt.get()) / MINUTE)
   );
   const assert_shows_ages = assert(() =>
     rowText(view[UI], "Newest").includes(

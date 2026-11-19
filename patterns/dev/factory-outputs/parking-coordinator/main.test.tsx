@@ -19,6 +19,7 @@ import {
   assert,
   computed,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -61,15 +62,12 @@ export default pattern(() => {
   // the future (+7/+8 days): the #now wish can advance while this large test runs
   // (notably across midnight), so anchoring later actions a week out keeps them
   // from becoming nondeterministically "past". testDate/nextTestDate are computed
-  // cells; they read as "" until #now resolves, and the runtime re-runs the
-  // dependent actions and assertions once it does.
+  // cells; they and their dependents remain unavailable until #now resolves,
+  // then the runtime re-runs the actions and assertions.
   const nowCell = wish<number>({ query: "#now" });
-  const testDate = computed(() =>
-    nowCell.result == null ? "" : addDays(nowCell.result, 7)
-  );
-  const nextTestDate = computed(() =>
-    nowCell.result == null ? "" : addDays(nowCell.result, 8)
-  );
+  const nowCellValue = resultOf(nowCell.result);
+  const testDate = computed(() => addDays(nowCellValue, 7));
+  const nextTestDate = computed(() => addDays(nowCellValue, 8));
 
   // ============================================================
   // Subject 1: People Management

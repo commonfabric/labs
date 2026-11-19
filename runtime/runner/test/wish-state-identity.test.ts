@@ -10,11 +10,9 @@
  *
  * Each wish resolves its output slot's write redirects when it writes its
  * result, and that resolution reads the slot, so a wish re-runs when another
- * session rewrites the slot. The wish built-in is registered with a 50 ms
- * debounce, and the fake clock the runner suite installs moves only when a
- * test moves it, which is why a case that looks for a loop ticks the clock:
- * without the ticks no wish re-run comes due, and a loop between the two
- * sessions would never show.
+ * session rewrites the slot. Once both sessions settle, clock-spaced rounds
+ * verify that their state stays stable: neither session writes again, both
+ * keep their own result, and neither trips the echo breaker.
  */
 
 import { expect } from "@std/expect";
@@ -45,7 +43,7 @@ const TAG = "wish_state_identity_profile";
 /** Rounds of clock time both sessions run through once settled. */
 const ROUNDS = 6;
 
-/** Clock time per round, past the debounce a wish's re-run waits out. */
+/** Logical clock advance per stability round. */
 const ROUND_MS = 1000;
 
 type Result = { name: string | undefined; found: unknown };
@@ -59,12 +57,13 @@ const program = (resultType: string): RuntimeProgram => ({
   files: [{
     name: "/main.tsx",
     contents: [
-      'import { pattern, wish } from "commonfabric";',
+      'import { pattern, resultOf, wish } from "commonfabric";',
       "",
       "export default pattern<{}, { name: string | undefined; found: unknown }>(",
       "  () => {",
       `    const found = wish<${resultType}>({ query: "#${TAG}", scope: ["~"] });`,
-      "    return { name: found.result?.name, found };",
+      "    const profile = resultOf(found.result);",
+      "    return { name: profile.name, found };",
       "  },",
       ");",
     ].join("\n"),

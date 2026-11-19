@@ -6,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 
 import { sqliteQuery } from "../../src/builtins/sqlite-builtins.ts";
+import { sqliteQueryStateNodeFactory } from "../../src/builtins/sqlite/query-node.ts";
 import { collectConsumedLabel } from "../../src/cfc/prepare.ts";
 import { cfcLabelViewForCell } from "../../src/cfc/label-view.ts";
 import { cfcConfidentialityForObservationNode } from "../../src/cfc/observation.ts";
@@ -95,8 +96,9 @@ describe("sqlite-builtins", () => {
       sent.push(db);
       return query(db, ...args);
     };
+    // Persisted query nodes expose the correlation state this test checks.
     const pattern = cf.pattern<{ db: unknown }>(({ db }) =>
-      cf.sqliteQuery({
+      sqliteQueryStateNodeFactory({
         db: db as never,
         sql: "SELECT COUNT(*) AS n FROM notes",
       })

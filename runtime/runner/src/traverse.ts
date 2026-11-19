@@ -10,6 +10,7 @@ import {
   isWalkableObjectNotArray,
   toIndentedDebugString,
 } from "@commonfabric/data-model";
+import { isUnavailable } from "@commonfabric/data-model/availability";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import {
@@ -129,6 +130,7 @@ import {
   reactivityLogFromActivities,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
+import { readAvailabilityValue } from "./storage/read-availability.ts";
 import {
   recordTraverseInvocation,
   wrapTxForTraverseCapture,
@@ -2379,7 +2381,9 @@ export function mergeAnyOfMatches<T>(
     // special object among them sends the whole set to the first-match return
     // below: it has no properties for `Object.assign` to copy, so merging one
     // yields `{}` and the value is lost.
-    if (matches.every((v) => isWalkableObjectNotArray(v))) {
+    if (
+      matches.every((v) => !isUnavailable(v) && isWalkableObjectNotArray(v))
+    ) {
       const unified: Record<string, T> = {};
       for (const match of matches) {
         for (const [key, value] of Object.entries(match as object)) {
@@ -2938,6 +2942,16 @@ export function getAtPath(
   let remaining = [...path];
 
   while (true) {
+    if (!context.referenceOnly && isUnavailable(curDoc.value)) {
+      tx.read(curDoc.address, READ_FOR_SCHEDULING);
+      return [{
+        ...curDoc,
+        address: {
+          ...curDoc.address,
+          path: ["value", ...curDoc.address.path.slice(1), ...remaining],
+        },
+      }, selector];
+    }
     if (isSigilLink(curDoc.value)) {
       // We've only done a nonRecursive read on curDoc, so promote that
       tx.read(curDoc.address, READ_FOR_SCHEDULING);
@@ -3357,15 +3371,12 @@ function followPointer(
   // for scheduling. We'll have to tag it later.
   // We use a nonRecursive read, since we may not need everything at the target.
   if (readStatsActive) recordLinkResolution(tx);
-  const { ok: valueEntry, error } = tx.read(
-    target,
-    context.referenceOnly
-      ? {
-        ...READ_NON_RECURSIVE,
-        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
-      }
-      : READ_NON_RECURSIVE,
-  );
+  const { ok: valueEntry, error } = context.referenceOnly
+    ? tx.read(target, {
+      ...READ_NON_RECURSIVE,
+      meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+    })
+    : readAvailabilityValue(tx, target, READ_NON_RECURSIVE);
 
   if (error !== undefined) {
     // If we had an unexpected error, or didn't find the doc at all, return.
@@ -5253,6 +5264,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
             link,
           );
           if (error === undefined) {
+            // A propagated control-flow leaf is not an ambiguous payload
+            // merely because several ordinary branch shapes accept it.
+            if (isUnavailable(val)) return { ok: val };
             matchCount++;
             match = val;
           }
@@ -5376,7 +5390,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       );
       return { ok: this.objectCreator.createObject(newLink, doc.value) };
     }
-    if (doc.value === undefined) {
+    if (isUnavailable(doc.value)) {
+      // Availability markers are control-flow leaves, not user containers.
+      // They must survive projection through any declared result schema so
+      // consumers can propagate or inspect the exact unavailable reason.
+      return { ok: doc.value };
+    } else if (doc.value === undefined) {
       // If we have a default, annotate it and return it
       // Otherwise, return undefined
       const defaultValue = this.#applyDefault(doc, resolved);
@@ -5620,6 +5639,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     reads: PlainSchemaReads,
   ): TraverseResult<FabricValue> | undefined {
     if (isSigilLink(doc.value)) return undefined;
+    if (isUnavailable(doc.value)) return { ok: doc.value };
 
     if (plan.kind === "primitive") {
       return matchesPlainType(doc.value, plan.type)

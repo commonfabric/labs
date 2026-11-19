@@ -18,6 +18,7 @@ import {
   computed,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -76,12 +77,14 @@ const userMessageCount = (ui: unknown): number =>
   messageRoles(ui).split(",").filter((role) => role === "user").length;
 
 export default pattern(() => {
-  const mentionable = wish<Writable<MentionablePiece[]>>({
+  const mentionableWish = wish<Writable<MentionablePiece[]>>({
     query: "#mentionable",
-  }).result!;
-  const defaultApp = wish<
+  });
+  const mentionable = resultOf(mentionableWish.result);
+  const defaultAppWish = wish<
     Writable<{ summaryIndex?: { entries: SummaryEntry[] } }>
-  >({ query: "#default" }).result!;
+  >({ query: "#default" });
+  const defaultApp = resultOf(defaultAppWish.result);
 
   const recipe = piece("Recipe");
   const groceries = piece("Groceries");

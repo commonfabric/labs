@@ -11,6 +11,7 @@ import {
   assert,
   NAME,
   pattern,
+  resultOf,
   TESTS,
   UI,
   wish,
@@ -27,9 +28,10 @@ import SummaryIndex, {
 } from "./summary-index.tsx";
 
 export default pattern(() => {
-  const mentionable = wish<Writable<SummarizablePiece[]>>({
+  const mentionableWish = wish<Writable<SummarizablePiece[]>>({
     query: "#mentionable",
-  }).result!;
+  });
+  const mentionable = resultOf(mentionableWish.result);
 
   const recipe = new Writable<SummarizablePiece>({
     [NAME]: "Recipe",

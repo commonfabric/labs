@@ -15,12 +15,15 @@ import {
   dataFile,
   Default,
   handler,
+  hasError,
   ifElse,
+  isObsolete,
   NAME,
   pattern,
   type PerSession,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -1125,11 +1128,19 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
+    const nameStatus = computed(() => {
+      const name = profileNameWish.result;
+      return hasError(name) || isObsolete(name)
+        ? name.message || "This profile name is no longer served."
+        : "";
+    });
+    const profile = resultOf(profileWish.result);
 
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
-    );
+    const profileName =
+      hasError(profileNameWish.result) || isObsolete(profileNameWish.result)
+        ? ""
+        : resultOf(profileNameWish.result);
+    const hasProfile = computed(() => profileName.trim() !== "");
     // The button is the JOIN action; the adjacent `#profile` wish UI is the
     // create/pick surface. Label it as such (a disabled "Join" until the viewer
     // has a profile) rather than mislabeling the button "Create a profile…".
@@ -1152,7 +1163,7 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
     );
     const joinGame = joinGameHandler({
       name: profileName,
-      profile: profileWish.result,
+      profile,
       myName,
       rack,
       placed,
@@ -1239,7 +1250,7 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                     {/* The viewer's own identity, first-class (CT-1761). */}
                     <cf-profile-badge
                       variant="chip"
-                      $profile={profileWish.result}
+                      $profile={profile}
                     />
                   </cf-hstack>
                 )
@@ -1256,7 +1267,16 @@ const ScrabbleGame = pattern<GameInput, GameOutput>(
                       /* Built-in profile UI: create a profile when there is
                         none, pick between existing profiles otherwise. */
                     }
-                    <div style={{ flex: 1 }}>{profileWish[UI]}</div>
+                    <div style={{ flex: 1 }}>
+                      {profileWish[UI]}
+                      {nameStatus
+                        ? (
+                          <span role="status">
+                            {nameStatus}
+                          </span>
+                        )
+                        : null}
+                    </div>
                     <cf-button
                       onClick={joinGame}
                       disabled={computed(() => !hasProfile)}

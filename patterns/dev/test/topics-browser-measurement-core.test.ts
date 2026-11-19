@@ -106,6 +106,39 @@ describe("topics-browser-measurement-core", () => {
   });
 
   describe("compiledLiftText()", () => {
+    it("returns the function assigned to a compiled named export", () => {
+      const emitted =
+        "exports.crossrefTable = (0, commonfabric_2.lift)(({ sources, values }) => values);";
+      expect(compiledLiftText(emitted, "crossrefTable")).toBe(
+        "({ sources, values }) => values",
+      );
+    });
+
+    it("rejects assignments to another receiver, name, operator, or callee", () => {
+      for (
+        const emitted of [
+          "other.crossrefTable = (0, commonfabric_2.lift)(() => []);",
+          "exports.other = (0, commonfabric_2.lift)(() => []);",
+          "exports.crossrefTable += (0, commonfabric_2.lift)(() => []);",
+          "exports.crossrefTable = (1, commonfabric_2.lift)(() => []);",
+          "exports.crossrefTable = (0, commonfabric_2.computed)(() => []);",
+          "exports.crossrefTable = (0, commonfabric_2.lift)();",
+        ]
+      ) {
+        expect(() => compiledLiftText(emitted, "crossrefTable"))
+          .toThrow("found 0");
+      }
+    });
+
+    it("rejects a local and exported binding with the same name", () => {
+      const emitted = [
+        "const crossrefTable = (0, commonfabric_2.lift)(() => []);",
+        "exports.crossrefTable = (0, commonfabric_2.lift)(() => []);",
+      ].join("\n");
+      expect(() => compiledLiftText(emitted, "crossrefTable"))
+        .toThrow("found 2");
+    });
+
     it("returns each Topics lift's compiled function, which the browser's preview begins", () => {
       for (const [name, lift] of Object.entries(fixture.lifts)) {
         const text = compiledLiftText(lift.excerpt, name, lift.module);

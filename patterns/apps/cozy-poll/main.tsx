@@ -24,10 +24,16 @@ import {
   computed,
   Default,
   handler,
+  hasError,
+  hasSchemaMismatch,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSpace,
   type PerUser,
+  resultOf,
   Stream,
   UI,
   type VNode,
@@ -391,11 +397,16 @@ export default pattern<CozyPollInput, CozyPollOutput>(
       query: "#profile",
     });
     const profileNameWish = wish<string>({ query: "#profileName" });
-
-    const profileName = computed(() => profileNameWish.result ?? "");
-    const hasProfile = computed(() =>
-      (profileNameWish.result ?? "").trim() !== ""
-    );
+    const observedProfileName = observeAvailability(profileNameWish.result);
+    const profileName = computed(() => {
+      if (
+        hasError(observedProfileName) || isPending(observedProfileName) ||
+        isSyncing(observedProfileName) ||
+        hasSchemaMismatch(observedProfileName)
+      ) return "";
+      return resultOf(observedProfileName);
+    });
+    const hasProfile = computed(() => profileName.trim() !== "");
     const joinLabel = computed(() =>
       hasProfile ? `Join as ${profileName}` : "Create a profile to join"
     );

@@ -16,6 +16,7 @@
 import {
   action,
   assert,
+  handler,
   NAME,
   pattern,
   TESTS,
@@ -53,6 +54,15 @@ const heldPieceAddress = (held: unknown): string => {
   return uri ? `/${uri}` : "";
 };
 
+const seedReference = handler<void, {
+  references: Writable<MentionRefMap>;
+  key: string;
+  destination: Writable<NotePiece>;
+  held: Writable<NotePiece | null>;
+}>((_, { references, key, destination, held }) => {
+  references.key(key).set({ destination, modifiedTitle: false });
+  held.set(destination);
+});
 /** The section listing backlinks: the innermost `div` holding its caption. */
 const backlinksSection = (root: unknown): unknown =>
   innermostNode(
@@ -294,9 +304,11 @@ export default pattern(() => {
     mdCheckbox.checkboxToggle.send({ detail: { index: 2, checked: true } });
   });
 
-  const action_seed_reference = action(() => {
-    references.key("a3f9zz").set({ destination: alice, modifiedTitle: false });
-    aliceHeld.set(alice as NotePiece);
+  const action_seed_reference = seedReference({
+    references,
+    key: "a3f9zz",
+    destination: alice,
+    held: aliceHeld,
   });
 
   // Add an entry for a key already sitting in a document, which is the order
@@ -304,9 +316,11 @@ export default pattern(() => {
   const bob = Note({ title: "Bob", content: "", isHidden: false });
   const bobHeld = new Writable<NotePiece | null>(null);
 
-  const action_add_reference = action(() => {
-    references.key("zzzz99").set({ destination: bob, modifiedTitle: false });
-    bobHeld.set(bob as NotePiece);
+  const action_add_reference = seedReference({
+    references,
+    key: "zzzz99",
+    destination: bob,
+    held: bobHeld,
   });
 
   // Update wiki content to have multiple links

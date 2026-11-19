@@ -26,6 +26,7 @@ describe("continuation", () => {
       },
       hasPendingLineageHeadEvent: () => false,
       hasLoadWaitingHeadEvent: () => true,
+      hasInputParkedHeadEvent: () => false,
       settleDeferredForLoadPark: () => true,
       scheduleWake: () => {},
       hasWakeTimer: () => false,

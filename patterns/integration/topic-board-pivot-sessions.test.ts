@@ -149,8 +149,8 @@ function currentSource(runtime: Runtime, main = BOARD_PATH) {
 /**
  * `program` with the derivation `statement` matches in `file` stored in the
  * document `name`. The rest of the file reaches the derivation by the name the
- * current source binds it as, which here aliases `name`. `statement` captures
- * the binding's name and the expression it binds.
+ * current source binds it as, which here aliases `name`. `statement`'s first
+ * capture is the binding's name; its complete declaration is retained.
  */
 function storedAs(
   program: RuntimeProgram,
@@ -162,8 +162,8 @@ function storedAs(
     ...program,
     files: program.files.map((each) => {
       if (!file.endsWith(each.name)) return each;
-      const [, bound, expression] = each.contents.match(statement) ?? [];
-      if (bound === undefined) {
+      const [declaration, bound] = each.contents.match(statement) ?? [];
+      if (declaration === undefined || bound === undefined) {
         throw new Error(`${file} has no binding matching ${statement}`);
       }
       if (bound === name) return each;
@@ -171,7 +171,9 @@ function storedAs(
         ...each,
         contents: each.contents.replace(
           statement,
-          `const ${name} = ${expression};\n  const ${bound} = ${name};`,
+          () =>
+            declaration.replace(`const ${bound}`, `const ${name}`) +
+            `\n  const ${bound} = ${name};`,
         ),
       };
     }),
@@ -210,7 +212,7 @@ async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
         storedAs(
           await currentSource(runtime),
           BOARD_PATH,
-          /const (\w+) = (crossrefTable\(\{ sources: topics \}\));/,
+          /const (\w+) = (crossrefTable\(\{ sources: topics, values: topics \}\));/,
           "crossrefs",
         ),
         BOARD_PATH,
@@ -218,7 +220,7 @@ async function deployedSource(runtime: Runtime): Promise<RuntimeProgram> {
         "unusedCrossrefIndex",
       ),
       TOPIC_PATH,
-      /const (\w+) = (backlinksOf\(\{[^}]*\}\));/,
+      /const (\w+)(?:\s*:[^=;]+)? = (backlinksOf\(\{[^}]*\}\));/,
       "referencedBy",
     ),
     BOARD_PATH,

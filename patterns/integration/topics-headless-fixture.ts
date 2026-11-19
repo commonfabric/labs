@@ -1215,7 +1215,7 @@ async function startTopicsLifts(
     const table = runtime.run(
       tx,
       lifts.crossrefTable,
-      { sources: seeded.board },
+      { sources: seeded.board, values: seeded.board },
       output<PivotRow[]>(`${prefix}crossrefs`),
     );
     const index = runtime.run(
@@ -1232,8 +1232,14 @@ async function startTopicsLifts(
             tx,
             lifts.backlinksOf,
             unbound
-              ? { table, self: topic, shortName: topic.key("shortName") }
+              ? {
+                tableReady: table,
+                table,
+                self: topic,
+                shortName: topic.key("shortName"),
+              }
               : {
+                tableReady: table,
                 table,
                 index,
                 self: topic,

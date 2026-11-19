@@ -7,7 +7,7 @@ function __cfHardenFn(fn: Function) {
     return fn;
 }
 import { __cfHelpers } from "commonfabric";
-import { type Cell, lift, pattern, sqliteDatabase } from "commonfabric";
+import { type Cell, lift, pattern, resultOf, sqliteDatabase, } from "commonfabric";
 const define = undefined;
 const runtimeDeps = undefined;
 const __cfAmdHooks = undefined;
@@ -16,22 +16,23 @@ interface User {
 }
 // FIXTURE: db-query-consumer-decode
 // Verifies the CONSUMER half of `_cf_link` auto-decode: reading
-// `q.result[0].author_cf_link` off a typed `db.query<{ author_cf_link: Cell<User> }>`
+// `resultOf(q).rows[0].author_cf_link` off a typed
+// `db.query<{ author_cf_link: Cell<User> }>`
 // lowers (via the <Row> return type) to a consumer input schema where
-// `result.items.author_cf_link` carries `asCell: ["cell"]`. Combined with the
+// `rows.items.author_cf_link` carries `asCell: ["cell"]`. Combined with the
 // runtime storing a sigil OBJECT (Piece A), that asCell read rehydrates the
 // column to a live Cell. The cell-ness also survives the lift's RESULT type
 // (factory result types are not stripped), so the pattern's result schema for
 // `author` carries `asCell: ["cell"]` too — consumers of the pattern get the
 // live Cell, not a dereferenced copy.
 const readAuthor = lift((qv: {
-    result?: Array<{
+    rows: Array<{
         author_cf_link: Cell<User>;
     }>;
-}) => qv.result?.[0]?.author_cf_link, {
+}) => qv.rows[0]?.author_cf_link, {
     type: "object",
     properties: {
-        result: {
+        rows: {
             type: "array",
             items: {
                 type: "object",
@@ -45,6 +46,7 @@ const readAuthor = lift((qv: {
             }
         }
     },
+    required: ["rows"],
     $defs: {
         User: {
             type: "object",
@@ -102,7 +104,7 @@ export default pattern(() => {
             }
         } as const satisfies __cfHelpers.JSONSchema
     }).for("q", true);
-    return { author: readAuthor(q).for(["__patternResult", "author"], true) };
+    return { author: readAuthor(resultOf(q)).for(["__patternResult", "author"], true) };
 }, false as const satisfies __cfHelpers.JSONSchema, {
     type: "object",
     properties: {

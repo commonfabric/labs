@@ -114,11 +114,15 @@ describe("wish commit-failure reporting", () => {
   });
 
   /** Point the space cell's `/secret` at a document carrying a labeled name. */
-  const seedWishTarget = async (rt: Runtime, name: string) => {
+  const seedWishTarget = async (
+    rt: Runtime,
+    name: string,
+    targetCause = "wish-target",
+  ) => {
     const spaceCell = rt.getCell<{ secret?: unknown }>(space, space);
     await spaceCell.pull();
     const tx = rt.edit();
-    const target = rt.getCell(space, "wish-target", profileViewSchema, tx);
+    const target = rt.getCell(space, targetCause, profileViewSchema, tx);
     target.set({ name });
     spaceCell.withTx(tx).key("secret").set(target.withTx(tx));
     rt.prepareTxForCommit(tx);
@@ -214,6 +218,8 @@ describe("wish commit-failure reporting", () => {
     seedSchema: JSONSchema,
     withUILink: boolean,
     seedFields: Record<string, unknown> = {},
+    afterReport?: (reports: readonly string[]) => Promise<void>,
+    beforeReportSettles?: (reports: readonly string[]) => Promise<void>,
   ) => {
     // Learn the state document's address: it is derived from the space, the
     // pattern and the result cell, so a throwaway runtime names the same one.
@@ -268,7 +274,7 @@ describe("wish commit-failure reporting", () => {
     // which happened instead of never returning. Neither wait has a timer
     // under it — the surfacing chain is deliberately untracked by the
     // scheduler, so `idle()` can return a beat before the report lands.
-    const settled = defer<void>();
+    let settled = defer<void>();
     const reports: string[] = [];
     const realConsoleError = console.error;
     console.error = (...args: unknown[]) => {
@@ -297,8 +303,15 @@ describe("wish commit-failure reporting", () => {
     });
     try {
       await runWish(runtime);
+      if (beforeReportSettles) await beforeReportSettles(reports);
       await settled.promise;
       await runtime.idle();
+      if (afterReport) {
+        settled = defer<void>();
+        await afterReport(reports);
+        await settled.promise;
+        await runtime.idle();
+      }
       return { doc, reports, value: readState() ?? {} };
     } finally {
       cancel();
@@ -418,13 +431,16 @@ describe("wish commit-failure reporting", () => {
     }
   });
 
-  it("prints the refusal, and why it went unreported, when the report itself throws", async () => {
+  it("coalesces through pending dispositions and prints each fresh refusal once", async () => {
     // A throw out of the report's own transaction is not a refusal the report
     // can retry or name in the document, so the console is the one place the
     // refusal and the throw are both said.
     const stampServerRun = runtime.stampServerRun;
     const prepareTxForCommit = runtime.prepareTxForCommit;
     const reportTransactions = new WeakSet<object>();
+    const disposition = defer<void>();
+    const reportFailed = defer<void>();
+    let heldDisposition = false;
     runtime.stampServerRun = (tx, info) => {
       stampServerRun.call(runtime, tx, info);
       if (info.actionId.startsWith("wish/commit-failure-ui/")) {
@@ -433,6 +449,15 @@ describe("wish commit-failure reporting", () => {
     };
     runtime.prepareTxForCommit = (tx) => {
       if (reportTransactions.has(tx)) {
+        if (!heldDisposition) {
+          heldDisposition = true;
+          storageManager.trackPendingCommit(disposition.promise, () => ({
+            kind: "action-disposition",
+            spaces: [space],
+            spacesOmitted: 0,
+          }));
+        }
+        reportFailed.resolve();
         throw new Error("report preparation crashed");
       }
       return prepareTxForCommit.call(runtime, tx);
@@ -441,16 +466,38 @@ describe("wish commit-failure reporting", () => {
       const { reports, value } = await refusedWishReport(
         ambiguousWishShapedSchema,
         true,
+        {},
+        async (firstReports) => {
+          // A later source change reaches the same wish after its first
+          // failed cascade settles; it must be able to report again.
+          expect(firstReports.filter((line) => line.includes("Can't report")))
+            .toHaveLength(1);
+          await seedWishTarget(
+            runtime,
+            "fresh-classified",
+            "fresh-wish-target",
+          );
+        },
+        async (earlyReports) => {
+          await reportFailed.promise;
+          await runtime.idle();
+          expect(earlyReports.filter((line) => line.includes("Can't report")))
+            .toHaveLength(0);
+          disposition.resolve();
+        },
       );
       const unreported = reports.filter((line) =>
         line.includes("Can't report")
       );
-      expect(unreported.length).toBe(1);
-      expect(unreported[0]).toMatch(/divergent anyOf|commit-prep/);
-      expect(unreported[0]).toContain("report preparation crashed");
+      expect(unreported.length).toBe(2);
+      for (const report of unreported) {
+        expect(report).toMatch(/divergent anyOf|commit-prep/);
+        expect(report).toContain("report preparation crashed");
+      }
       expect(value.error).toBeUndefined();
       expect(value.result).toEqual({ name: "Bob" });
     } finally {
+      disposition.resolve();
       runtime.prepareTxForCommit = prepareTxForCommit;
       runtime.stampServerRun = stampServerRun;
     }

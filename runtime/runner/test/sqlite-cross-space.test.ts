@@ -18,9 +18,7 @@ const source = (await Identity.fromPassphrase("cross-space sqlite source"))
 const consumer = signer.did();
 
 interface QueryState {
-  pending: boolean;
-  result?: unknown;
-  error?: unknown;
+  rows: unknown[];
 }
 
 describe("sqlite-cross-space", () => {
@@ -140,10 +138,9 @@ describe("sqlite-cross-space", () => {
     const state = await waitForCellValue<QueryState>(
       runtime,
       result,
-      (value) => value?.pending === false,
+      (value) => Array.isArray(value?.rows),
     );
-    expect(state.error).toBeUndefined();
-    expect(state.result).toEqual([{ body: "source" }]);
+    expect(state.rows).toEqual([{ body: "source" }]);
     const switchTx = runtime.edit();
     const localHandle = runtime.getCell(
       consumer,
@@ -157,11 +154,8 @@ describe("sqlite-cross-space", () => {
     const switched = await waitForCellValue<QueryState>(
       runtime,
       result,
-      (value) =>
-        value?.pending === false &&
-        JSON.stringify(value.result) === '[{"body":"consumer"}]',
+      (value) => JSON.stringify(value?.rows) === '[{"body":"consumer"}]',
     );
-    expect(switched.error).toBeUndefined();
-    expect(switched.result).toEqual([{ body: "consumer" }]);
+    expect(switched.rows).toEqual([{ body: "consumer" }]);
   });
 });

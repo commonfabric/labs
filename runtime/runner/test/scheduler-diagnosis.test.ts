@@ -1,6 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
+import { UNAVAILABLE_SYNCING } from "@commonfabric/data-model/availability";
 import {
   captureCommittedReads,
   captureDiagnosisRecord,
@@ -28,6 +29,7 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
 } from "../src/storage/interface.ts";
+import { recordUnavailableRead } from "../src/storage/read-availability.ts";
 
 const SPACE = "did:key:zDiagnosis" as IMemorySpaceAddress["space"];
 
@@ -204,6 +206,7 @@ describe("scheduler-diagnosis", () => {
       action: Action,
       tx: IExtendedStorageTransaction,
       tx2: IExtendedStorageTransaction,
+      firstLog = log,
     ): NonIdempotentReport[] {
       const violations: NonIdempotentReport[] = [];
       runIdempotencyRecheck(
@@ -216,7 +219,7 @@ describe("scheduler-diagnosis", () => {
         },
         action,
         tx,
-        log,
+        firstLog,
       );
       return violations;
     }
@@ -255,6 +258,197 @@ describe("scheduler-diagnosis", () => {
 
       expect(recheck(() => {}, tx, tx2)).toEqual([]);
       expect(tx2.wasAborted()).toBe(true);
+    });
+
+    it("records nothing when the exact failed readiness read becomes available", () => {
+      const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+      recordUnavailableRead(tx, input);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: input, value: "loaded" }],
+      );
+      expect(recheck(() => {}, tx, tx2)).toEqual([]);
+      expect(tx2.wasAborted()).toBe(true);
+    });
+
+    for (
+      const disposition of [
+        "no-witness",
+        "still-unavailable",
+        "other-address",
+        "other-scope",
+        "own-write",
+      ] as const
+    ) {
+      it(`keeps differing writes flagged for readiness ${disposition}`, () => {
+        const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+        if (disposition !== "no-witness") recordUnavailableRead(tx, input);
+        const reached = disposition === "other-address"
+          ? address("of:other", ["value"])
+          : disposition === "other-scope"
+          ? { ...input, scope: "user" as const }
+          : input;
+        const tx2 = fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () =>
+            disposition === "still-unavailable"
+              ? []
+              : [{ address: reached, value: "loaded" }],
+        );
+        const firstLog = disposition === "own-write"
+          ? { ...log, writes: [counted, input] }
+          : log;
+        expect(recheck(() => {}, tx, tx2, firstLog).map((v) => v.actionId))
+          .toEqual(["action-1"]);
+      });
+    }
+
+    it("does not excuse an authored syncing value without a failed read", () => {
+      const tx = fakeTransaction([{
+        address: counted,
+        value: UNAVAILABLE_SYNCING,
+      }], () => []);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: input, value: "loaded" }],
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("keeps differing writes flagged when the same readiness read fails again", () => {
+      const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+      recordUnavailableRead(tx, input);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: input, value: undefined }],
+      );
+      recordUnavailableRead(tx2, input);
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("does not conflate different paths whose slash-joined spellings match", () => {
+      const failed = address("of:input", ["value", "a/b"]);
+      const reached = address("of:input", ["value", "a", "b"]);
+      const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+      recordUnavailableRead(tx, failed);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: reached, value: "loaded" }],
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("does not conflate two users' instances of the same failed address", () => {
+      const scoped = { ...input, scope: "user" as const };
+      const tx = Object.assign(
+        fakeTransaction([{ address: counted, value: 1 }], () => []),
+        { tx: { scopeKeyIdentity: { principal: "alice" } } },
+      );
+      recordUnavailableRead(tx, scoped);
+      const tx2 = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: scoped, value: "loaded" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "bob" } } },
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("prefers explicit scope keys to the same ambient identity", () => {
+      const failed = {
+        ...input,
+        scope: "user" as const,
+        scopeKey: "user:alice" as const,
+      };
+      const reached = {
+        ...input,
+        scope: "user" as const,
+        scopeKey: "user:bob" as const,
+      };
+      const tx = Object.assign(
+        fakeTransaction([{ address: counted, value: 1 }], () => []),
+        { tx: { scopeKeyIdentity: { principal: "ambient" } } },
+      );
+      recordUnavailableRead(tx, failed);
+      const tx2 = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: reached, value: "loaded" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "ambient" } } },
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    for (const ownInstance of ["user:alice", "user:bob"] as const) {
+      it(`compares a readiness transition with own writes in ${ownInstance}`, () => {
+        const failed = {
+          ...input,
+          scope: "user" as const,
+          scopeKey: "user:alice" as const,
+        };
+        const ownWrite = { ...failed, scopeKey: ownInstance };
+        const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+        recordUnavailableRead(tx, failed);
+        const tx2 = fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: failed, value: "loaded" }],
+        );
+        const firstLog = { ...log, writes: [counted, ownWrite] };
+        expect(recheck(() => {}, tx, tx2, firstLog))
+          .toHaveLength(ownInstance === "user:alice" ? 1 : 0);
+      });
+    }
+
+    it("keeps differing writes flagged when an overlapping own write has no instance identity", () => {
+      const failed = {
+        ...input,
+        scope: "user" as const,
+        scopeKey: "user:alice" as const,
+      };
+      const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+      recordUnavailableRead(tx, failed);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: failed, value: "loaded" }],
+      );
+      const firstLog = {
+        ...log,
+        writes: [counted, { ...input, scope: "user" as const }],
+      };
+      expect(recheck(() => {}, tx, tx2, firstLog)).toHaveLength(1);
+    });
+
+    it("does not compare successful reads belonging to different user instances", () => {
+      const scoped = { ...input, scope: "user" as const };
+      const tx = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 1 }],
+          () => [{ address: scoped, value: "alice's value" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "alice" } } },
+      );
+      const tx2 = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: scoped, value: "bob's value" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "bob" } } },
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("does not use an unidentified scoped read as evidence of external interference", () => {
+      const tx = fakeTransaction(
+        [{ address: counted, value: 1 }],
+        () => [{ address: { ...input, scope: "user" }, value: "before" }],
+      );
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: { ...input, scope: "session" }, value: "after" }],
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
     });
 
     it("records a violation when the first run's read values cannot be inspected", () => {

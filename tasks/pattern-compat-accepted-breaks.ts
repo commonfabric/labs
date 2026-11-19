@@ -818,6 +818,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     pattern: "apps/deep-research/deep-research.tsx",
     baselines: [
       "20260729T022742Z-6PInVAlNOHThJNGH",
+      "20260729T215043Z-N-aECY83NHI2C9W1",
     ],
     paths: [
       "argument.messages[].role",
@@ -2897,6 +2898,8 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261024T225740Z-FEJJ-fCjXaitwVrk",
       "20261025T161339Z-J50T5PCn-_x_96OQ",
       "20261103T232111Z-WI0DoWHlDvsdqAUJ",
+      "20261104T040301Z-WpSuO4fAQ9tdgXZ9",
+      "20261104T183809Z-PAO1U8hEuJgDC6ON",
     ],
     paths: [
       "result.$VIEWS.chats.deletedRooms[].room",
@@ -2933,10 +2936,12 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261103T004951Z-YjF832RNw8dEpIq8",
       "20261103T232115Z-yuH4X-xPwoYbMWDi",
       "20261104T011014Z-EZrmgm8t6mn3wc10",
+      "20261104T040315Z-iGTpNYQfCaKdgy8X",
       "20261104T052226Z-h_22FjOJmq99TGHY",
       "20261104T063436Z-jxgbGkoTPTe3inht",
       "20261104T063658Z-Qu5VbE7R-YZoTRHI",
       "20261104T083752Z-vfDPOo3zXqnloDkA",
+      "20261104T183831Z-juXVBxuN9OIZdWaR",
       "20261104T211840Z-tStGPZkDpJ8byaId",
       "20261104T213946Z-RfcPnPdhpV0y2L1i",
       "20261109T183946Z-RbcB-5BTNXNab5Hx",
@@ -2944,6 +2949,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261109T230108Z-ARdTLVq89voJNUiU",
       "20261110T005249Z-limIp5d_imp8k6IF",
       "20261110T191000Z-9DFXhrR8-iPde6xe",
+      "20261110T200414Z-keinlP1yqL1rSxUG",
     ],
     paths: [
       "result.chatManager.$VIEWS.chats.deletedRooms[].room",

@@ -124,6 +124,37 @@ describe("guarded-event-handlers", () => {
     ]);
   });
 
+  it("parks a pending selected implementation without spinning", async () => {
+    const ready = env.runtime.getCell(space, "guarded-input-ready");
+    ready.withTx(env.tx).set(false);
+    await env.tx.commit().settled;
+    env.tx = env.runtime.edit();
+
+    const handler = implementation("a");
+    let readinessChecks = 0;
+    handler.inputReadiness = (tx) => {
+      readinessChecks++;
+      return ready.withTx(tx).get()
+        ? { ready: true }
+        : { ready: false, reason: "pending" };
+    };
+    handler.populateDependencies = (tx) => {
+      ready.withTx(tx).get();
+    };
+    register(handler);
+    queue(alice, 1);
+
+    await env.runtime.idle();
+    expect(calls).toEqual([]);
+    expect(readinessChecks).toBeGreaterThan(0);
+    const checksWhileParked = readinessChecks;
+    await env.runtime.idle();
+    expect(readinessChecks).toBe(checksWhileParked);
+    expect(
+      env.runtime.scheduler.accessForTestingOnly.eventQueueState.eventQueue,
+    ).toHaveLength(1);
+  });
+
   it("supplies transient demand to every live candidate root at a shared stream", async () => {
     register(implementation("unannotated"));
     register(Object.assign(implementation("a"), {

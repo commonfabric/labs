@@ -14,13 +14,19 @@ import {
   type FieldAnchors,
   FS,
   handler,
+  hasError,
+  isObsolete,
+  isPending,
+  isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSession,
   type PerSpace,
   type PerUser,
   principalOf,
   profileOwnerOf,
+  resultOf,
   type Stream,
   TILE_UI,
   UI,
@@ -1625,17 +1631,39 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
   ({ title, content, comments, activity }) => {
     const profile = wish<NoteProfile>({ query: "#profile" });
     const profileName = wish<string>({ query: "#profileName" });
-    const participantName = computed(() =>
-      normalizePresenceParticipantName(profileName.result ?? "")
-    );
-    const hasProfile = computed(() =>
-      participantName !== "" &&
-      profile.result !== undefined
-    );
+    const observedProfile = observeAvailability(profile.result);
+    const observedProfileName = observeAvailability(profileName.result);
+    const participantName = computed(() => {
+      if (
+        isPending(profileName.result) || isSyncing(profileName.result) ||
+        hasError(profileName.result)
+      ) return "";
+      return normalizePresenceParticipantName(resultOf(profileName.result));
+    });
+    const hasProfile = computed(() => {
+      if (
+        isPending(observedProfile) || isSyncing(observedProfile) ||
+        hasError(observedProfile) || isObsolete(observedProfile) ||
+        isPending(observedProfileName) || isSyncing(observedProfileName) ||
+        hasError(observedProfileName) || isObsolete(observedProfileName)
+      ) return false;
+      return normalizePresenceParticipantName(resultOf(observedProfileName)) !==
+        "";
+    });
+    const retirementGuidance = computed(() => {
+      if (isObsolete(observedProfile)) {
+        return observedProfile.message || "This profile has been retired.";
+      }
+      if (isObsolete(observedProfileName)) {
+        return observedProfileName.message ||
+          "This profile name has been retired.";
+      }
+      return "";
+    });
     const note = SharedNoteCore({
       content,
       comments,
-      myProfile: profile.result,
+      myProfile: resultOf(profile.result),
       participantName,
       title,
       activity,
@@ -1675,6 +1703,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
               </div>
             )}
         </cf-hstack>
+        {retirementGuidance ? <p role="status">{retirementGuidance}</p> : null}
         {note[UI]}
       </cf-vstack>
     );

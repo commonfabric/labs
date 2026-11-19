@@ -1,10 +1,15 @@
 import {
+  type AsyncResult,
   computed,
+  hasError,
   type JSXElement,
+  lift,
   NAME,
   pattern,
+  resultOf,
   UI,
   wish,
+  type WishErrorCode,
   Writable,
 } from "commonfabric";
 import { type SummaryIndexEntry } from "../../system/summary-index/summary-index.tsx";
@@ -13,6 +18,18 @@ type SummaryIndexResult = {
   entries: SummaryIndexEntry[];
   search: { pattern: unknown; extraParams: { entries: SummaryIndexEntry[] } };
 };
+
+/** Reads entries while treating only confirmed discovery absence as an empty index. */
+export const summaryIndexEntries = lift<{
+  response: AsyncResult<SummaryIndexResult>;
+  errorCode?: WishErrorCode;
+}, SummaryIndexEntry[]>(({ response, errorCode }) => {
+  if (hasError(response)) {
+    if (errorCode === "no-match") return [];
+    return resultOf<SummaryIndexEntry[]>(response);
+  }
+  return resultOf(response).entries ?? [];
+});
 
 export interface SummaryIndexBrowserInput {
   /** The index entries to list. */
@@ -106,8 +123,10 @@ export const SummaryIndexBrowser = pattern<
 export default pattern<Record<string, never>, SummaryIndexTesterOutput>(
   (_) => {
     const index = wish<SummaryIndexResult>({ query: "#summaryIndex" });
-    // A space with no summary index lists nothing.
-    const entries = computed(() => index.result?.entries ?? []);
+    const entries = summaryIndexEntries({
+      response: index.result,
+      errorCode: index.errorCode,
+    });
     return SummaryIndexBrowser({ entries, query: new Writable("") });
   },
 );

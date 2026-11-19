@@ -1,10 +1,18 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateObject,
+  hasError,
   ifElse,
+  isObsolete,
+  isPending,
+  isSyncing,
+  lift,
   NAME,
+  observeAvailability,
   pattern,
+  resultOf,
   UI,
   type VNode,
 } from "commonfabric";
@@ -31,7 +39,29 @@ export type BudgetOutput = {
   total: number;
   remaining: number;
   pending: boolean;
+
+  /** Terminal generation or retirement guidance, otherwise empty. */
+  error: string;
 };
+
+/** Projects generation outcomes into the budget's loading and message state. */
+export const budgetPresentationState = lift(({
+  topic,
+  request,
+}: { topic: string; request: AsyncResult<{ items: BudgetItem[] }> }) => {
+  if (!topic) return { response: { items: [] }, pending: false, error: "" };
+  if (isPending(request) || isSyncing(request)) {
+    return { response: { items: [] }, pending: true, error: "" };
+  }
+  if (hasError(request) || isObsolete(request)) {
+    return {
+      response: { items: [] },
+      pending: false,
+      error: request.message || "This budget output has been retired.",
+    };
+  }
+  return { response: resultOf(request), pending: false, error: "" };
+});
 
 // ===== Pattern =====
 
@@ -54,7 +84,7 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
       )
     );
 
-    const response = generateObject<{ items: BudgetItem[] }>({
+    const responseRequest = generateObject<{ items: BudgetItem[] }>({
       system:
         "You create practical budget breakdowns. Each item should have a descriptive name and a reasonable dollar amount. Keep categories specific and actionable. Amounts should be whole numbers.",
       prompt,
@@ -78,8 +108,12 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
+    const responseState = budgetPresentationState({
+      topic,
+      request: observeAvailability(responseRequest),
+    });
 
-    const items = computed(() => response.result?.items || []);
+    const items = computed(() => responseState.response.items || []);
 
     const total = computed(() => totalAmount(items));
 
@@ -99,8 +133,11 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
           </cf-vstack>
 
           <cf-vstack gap="3" style="padding: 1.5rem;">
+            {responseState.error
+              ? <p role="alert">{responseState.error}</p>
+              : null}
             {ifElse(
-              response.pending,
+              responseState.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
                 <cf-loader showElapsed /> Generating budget...
               </div>,
@@ -171,7 +208,8 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
       items,
       total,
       remaining,
-      pending: response.pending,
+      pending: responseState.pending,
+      error: responseState.error,
     };
   },
 );

@@ -11,7 +11,9 @@
 import {
   action,
   assert,
+  hasError,
   NAME,
+  observeAvailability,
   pattern,
   TESTS,
   UI,
@@ -27,6 +29,14 @@ import {
   setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Suggestion, { setQuestion } from "./suggestion.tsx";
+
+export const fetchMocks = [
+  {
+    urlIncludes: "/api/patterns/index.md",
+    contentType: "text/markdown",
+    body: "# Pattern index\n- counter",
+  },
+];
 
 // The model fails the agent's reply to each message of the conversation.
 export const llmMocks = [
@@ -117,6 +127,11 @@ export default pattern(() => {
   const assert_start_sends_situation = assert(() =>
     messageTexts(freeform[UI])[0] === "Plan a picnic"
   );
+  const observedFreeformResult = observeAvailability(freeform.result);
+  const assert_model_failure_reaches_result = assert(() =>
+    hasError(observedFreeformResult) &&
+    observedFreeformResult.message.includes("The model is unavailable")
+  );
 
   // Asking to refine shows the input, and what is typed there goes to the
   // agent.
@@ -174,6 +189,7 @@ export default pattern(() => {
       { assertion: assert_freeform_hides_inputs },
       { action: action_start },
       { assertion: assert_start_sends_situation },
+      { assertion: assert_model_failure_reaches_result },
       { action: action_refine },
       { assertion: assert_refine_shows_input },
       { action: action_send_refinement },

@@ -49,6 +49,8 @@ describe("wish-sidecar-surfaces", () => {
     surface = pattern<{ situation?: string }>(({ situation }) => ({
       shown: "surface",
       situation,
+      result: { situation },
+      candidates: [],
     }));
     open = runtime.sourceReconciler.open;
     runtime.sourceReconciler.open = (_piece, origin) => {
@@ -166,7 +168,7 @@ describe("wish-sidecar-surfaces", () => {
 
       const after = await run();
       await after.pull();
-      expect(after.key("situation").get()).toBe("#gadget");
+      expect(after.key("result").key("situation").get()).toBe("#gadget");
       // The surface opened once, and the second run used what it opened.
       expect(opened).toEqual(["system:system/suggestion/suggestion.tsx"]);
     });

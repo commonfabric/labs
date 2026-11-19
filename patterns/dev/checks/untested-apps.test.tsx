@@ -6,10 +6,9 @@
  * patterns built on scoped or shared profiles, a voice note, and two policy
  * demos.
  *
- * Every one finds its data through wishes rather than through inputs, so in an
- * empty space each has to come up with an empty view rather than fail. This
- * builds each one, checks the name it goes under, and reads its rendered tree,
- * which is what runs the derived expressions inside it.
+ * This builds each app, checks its name, and reads its available controls in
+ * an empty space. The row-label demo also exposes the SQLite refusal that
+ * protects a query without column provenance; that error is not empty data.
  */
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import ActivityLog from "../../apps/activity-log/activity-log.tsx";
@@ -66,7 +65,9 @@ export default pattern(() => {
 
   const assert_cfc_demos_render = assert(() =>
     textContent(promptInjectionDemo[UI]).length > 0 &&
-    textContent(rowLabelRecords[UI]).length > 0
+    rowLabelRecords[UI].name === "cf-screen" &&
+    textContent(rowLabelRecords[UI].props?.title) ===
+      "Patient Records — composed labels"
   );
 
   return {
@@ -75,6 +76,7 @@ export default pattern(() => {
       { assertion: assert_cfc_demos_named },
       { assertion: assert_chat_apps_render },
       { assertion: assert_tools_render },
+      { render: rowLabelRecords[UI] },
       { assertion: assert_cfc_demos_render },
     ],
   };

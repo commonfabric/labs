@@ -5,8 +5,6 @@
  * sends back, and shaping the examples a decision records.
  */
 
-import type { BuiltInLLMGenerateObjectState } from "commonfabric";
-
 // =============================================================================
 // TYPES
 // =============================================================================
@@ -129,10 +127,16 @@ export interface AutoClassifiedItem {
 }
 
 /** The parts of a `generateObject` call's state that a decision reads. */
-export type Generation<T> = Pick<
-  BuiltInLLMGenerateObjectState<T>,
-  "pending" | "error" | "result"
->;
+export interface Generation<T> {
+  /** Whether the model is still producing its response. */
+  pending: boolean;
+
+  /** The model failure, when generation failed. */
+  error?: string | undefined;
+
+  /** The usable response, when generation completed. */
+  result?: T | undefined;
+}
 
 // =============================================================================
 // REGEX SAFETY

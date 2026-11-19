@@ -526,6 +526,8 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     bind?: unknown;
   };
   let implementation = module.implementation;
+  const isJavaScriptModule = module.type === "javascript" ||
+    module.type === "javascript-availability";
 
   // CT-1230 WORKAROUND: Preserve pattern structure when serializing pattern modules.
   //
@@ -564,7 +566,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     // design §5) — closure-bearing, so by-identity resolution is their only
     // rehydration. Everything else (test-built, never verified) keeps its
     // stringified body below for the SES fallback.
-    const provenance = module.type === "javascript"
+    const provenance = isJavaScriptModule
       ? getVerifiedProvenance(implementation)
       : undefined;
     // The entry-ref fallback (host pseudo-modules) is REGISTRY-scoped, unlike
@@ -573,7 +575,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     // a host trust grant in another runtime of the same process proves
     // nothing here (Codex/cubic P1 on the E5 PR).
     const entryRefCandidate =
-      provenance?.symbol === undefined && module.type === "javascript"
+      provenance?.symbol === undefined && isJavaScriptModule
         ? getArtifactEntryRef(implementation)
         : undefined;
     const entryRefValue = entryRefCandidate !== undefined &&
@@ -586,7 +588,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     const implRefValue = (provenance?.symbol
       ? { identity: provenance.identity, symbol: provenance.symbol }
       : undefined) ?? entryRefValue;
-    if (module.type === "javascript" && implRefValue === undefined) {
+    if (isJavaScriptModule && implRefValue === undefined) {
       // This module serializes body-only with no `$implRef` — a shape a
       // reader can resolve only through the bare-SES stringified-source
       // fallback, where module-scope references do not exist. Surfacing it
@@ -624,7 +626,7 @@ export function moduleToEncodableForm(module: Module): FabricExecPlainObject {
     return {
       ...rest,
       ...implRef,
-      ...(module.type === "javascript" && !implRefResolvable
+      ...(isJavaScriptModule && !implRefResolvable
         ? {
           implementation: Function.prototype.toString.call(implementation),
         }

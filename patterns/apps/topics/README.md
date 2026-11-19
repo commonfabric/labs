@@ -249,6 +249,16 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   `mentionedBy` states the same join for one topic pair by pair, and the
   pattern's tests hold `mentionedByEach` to it.
 
+  The identity and value views are separate inputs of the pivot, bound to the
+  same topics array. Normal unavailable-input preflight checks the narrow
+  mention values before the join writes any rows. A pending, syncing, obsolete,
+  or error source therefore propagates its native state through the pivot while
+  the durable backlinks remain intact, including replacement guidance for an
+  obsolete source. A usable empty mention list removes edges; recovery
+  recomputes them. Identity deduplication preserves first-occurrence order and
+  omits absent sources. The callback reads these deduplicated handles directly,
+  so duplicates add no extra rows.
+
   Each topic then does a lookup rather than the join: `backlinksOf` finds the
   pivot row whose topic is itself, and takes that row's `mentionedBy`. Each row
   carries its topic's number as `name`, and the board groups the pivot's
@@ -259,15 +269,17 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   reads one row however large the board. When that fails — no index, an index of
   another pivot, no number or a malformed one, or no row of its own among those
   positions — it scans the pivot. The pivot holds one row per topic, so both
-  find the same row, or none: the number only decides how much is read. An index
-  element is a position of the pivot rather than a copy of a row, so an index
-  the board has stopped updating still reads the pivot as it is now, and a
-  position past the end of a pivot that has shrunk reads as nothing. The
-  comparison is of a field nested inside a row, and what lets it is that row's
-  declaration — the field is declared a `ComparableCell`, the annotation that
-  makes it arrive as something `equals` can follow rather than a value to look
-  at. The published row declares both sides `unknown` instead, so a consumer
-  that only carries the graph onward expands neither.
+  find the same row, or none: the number only decides how much is read. Each
+  lookup also receives the same pivot as a root-only readiness value, so native
+  unavailable state propagates before the callback reads its handle without
+  reading any other row. An index element is a position of the pivot rather than
+  a copy of a row, so an index the board has stopped updating still reads the
+  pivot as it is now, and a position past the end of a pivot that has shrunk
+  reads as nothing. The comparison is of a field nested inside a row, and what
+  lets it is that row's declaration — the field is declared a `ComparableCell`,
+  the annotation that makes it arrive as something `equals` can follow rather
+  than a value to look at. The published row declares both sides `unknown`
+  instead, so a consumer that only carries the graph onward expands neither.
 
   The pivot works over the board's distinct topics, with distinctness decided by
   the same `equals`: a topic the board lists at two entries, whether as the same

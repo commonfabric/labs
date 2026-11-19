@@ -7,13 +7,14 @@ export interface CompileDiagnostic {
 
 /**
  * What went wrong with a `compileAndRun`, as text, or `undefined` when nothing
- * did. A compile failure arrives as structured `errors`, one per diagnostic;
- * `error` carries only failures that are not diagnostics.
+ * did. Structured diagnostics carry the source location and detail; the error
+ * message supplies the failure when no diagnostics are available.
  */
 export const compileFailure = (
   error: string | undefined,
   errors: readonly CompileDiagnostic[] | undefined,
 ): string | undefined =>
-  error ??
-    errors?.map(({ line, column, message }) => `${line}:${column} ${message}`)
-      .join("\n");
+  errors?.length
+    ? errors.map(({ line, column, message }) => `${line}:${column} ${message}`)
+      .join("\n")
+    : error;

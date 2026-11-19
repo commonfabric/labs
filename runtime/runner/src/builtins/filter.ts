@@ -1,4 +1,8 @@
 import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
 
@@ -9,6 +13,10 @@ import type { NormalizedFullLink } from "../link-types.ts";
 import type { RawBuiltinReturnType } from "../module.ts";
 import { setResultCell } from "../result-utils.ts";
 import type { Runtime } from "../runtime.ts";
+import {
+  preferDataUnavailable,
+  readAvailabilityAwareCell,
+} from "../data-unavailability.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
@@ -38,6 +46,7 @@ import {
 } from "./list-op-argument-usage.ts";
 import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
+import { shouldAwaitResumedListInput } from "./list-resume-state.ts";
 import {
   createResumeRepublisher,
   resumeSettleRunKind,
@@ -210,6 +219,7 @@ function createFilterInstance(
       aggregateNoun: "filtered list",
       elementNoun: "predicate",
       contribute: (included, inputElement, out) => {
+        if (isUnavailable(included)) return included;
         if (included) out.push(inputElement);
         else if (included === undefined) return "pending";
       },
@@ -273,7 +283,7 @@ function createFilterInstance(
       parentCell,
       outputBinding,
     );
-    const { opPattern, argumentUsage, list } = plan;
+    const { opPattern, argumentUsage, list, rawList } = plan;
     const outputScope = plan.scope;
 
     // Whether this reconcile issues the container's links: a container it
@@ -314,6 +324,16 @@ function createFilterInstance(
     // every element's taint into the coordinator's per-tx join.
     const resultWithLog = result.asSchema(RESULT_PRESENCE_SCHEMA)
       .withTx(tx);
+
+    if (isUnavailable(rawList)) {
+      resultWithLog.setRawUntyped(rawList, true);
+      for (const entry of elementRuns.values()) {
+        runtime.runner.stop(entry.resultCell);
+      }
+      elementRuns.clear();
+      return;
+    }
+
     // (S16) Declare the result container so prepare re-derives its `structure`
     // label (membership/order, §8.5.6.1) from this tx's J — the selection
     // criteria the coordinator read (predicate results) — EVERY reconcile,
@@ -337,6 +357,7 @@ function createFilterInstance(
         { ...linkResolutionProbe, ...machineryRead },
         fn,
       );
+    const rawResult = probeScoped(() => result!.getRaw());
     const droppedArgumentFields = unusedListOpArgumentFields(argumentUsage);
     const createRunInput = (element: Cell<any>, index: number) => ({
       ...(argumentUsage.usesElement ? { element } : {}),
@@ -381,8 +402,12 @@ function createFilterInstance(
     // empty input clears the result. Outside resume the flag is clear, so a list
     // set undefined at runtime still runs the cleanup below.
     if (
-      elementAwaitSync && priorLen > 0 &&
-      (list === undefined || (Array.isArray(list) && list.length === 0))
+      shouldAwaitResumedListInput(
+        elementAwaitSync,
+        rawResult,
+        list,
+        priorLen,
+      )
     ) {
       awaitInputThenSettle(inputsCell.key("list").withTx(tx).resolveAsCell());
       return;
@@ -431,6 +456,7 @@ function createFilterInstance(
     // list can be republished once they confirm — distinct from a predicate that
     // has settled falsy, which reads false and is excluded immediately.
     const pendingCells: Cell<any>[] = [];
+    let unavailable: UnavailableVariant | undefined;
     const childSetup = listChildSetupBatch();
     for (let i = 0; i < list.length; i++) {
       // Skip sparse holes — don't create predicate runs for them
@@ -525,8 +551,10 @@ function createFilterInstance(
       // Truthy/falsy coercion, not strict boolean.
       const childCell = elementRuns.get(elementKey)!.resultCell;
       if (elementAwaitSync) resumeCells.push(childCell);
-      const included = childCell.withTx(tx).get();
-      if (included) {
+      const included = readAvailabilityAwareCell(tx, childCell);
+      if (isUnavailable(included)) {
+        unavailable = preferDataUnavailable(unavailable, included);
+      } else if (included) {
         newArrayValue.push(list[i]); // Original element cell reference
       } else if (included === undefined) {
         pendingCells.push(childCell);
@@ -538,6 +566,10 @@ function createFilterInstance(
     // The batch is processed only once no child is left to load: the fresh
     // pass a load asks for is still the resume pass, and its children wait.
     if (list.length > 0) resumeBatchAwaitSync = false;
+    if (unavailable !== undefined) {
+      resultWithLog.setRawUntyped(unavailable, true);
+      return;
+    }
 
     // Wait for the whole resume batch before the aggregate moves. Its
     // documents are the ones still catching up, and republishing from them once

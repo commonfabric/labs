@@ -30,7 +30,9 @@
  * `fetchJsonUnchecked`, `fetchProgram`, `streamData`, `llm`, `llmDialog`,
  * `compileAndRun`, `generateObject`, `generateText`, `agent` (stages a sink
  * request and creates a run record after commit), `navigateTo`, `wish`,
- * `sqliteQuery` (server round-trip, like `llm`),
+ * `sqliteQuery` (server round-trip, like `llm`), `sqliteQueryResult`,
+ * `streamDataResult`, `compileAndRunResult` (async producer projections),
+ * `latestComplete` (retains its last complete snapshot across unavailable inputs),
  * `inspectConfLabel` (reads stored label metadata — ambient CFC state that
  * changes independently of the node's inputs), `cellFromUrl` (resolves a
  * space name against the runtime's cache, which is ambient in the same sense,

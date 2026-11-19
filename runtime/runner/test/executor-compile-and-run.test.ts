@@ -6,6 +6,10 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import {
+  isUnavailable,
+  type UnavailableVariant,
+} from "@commonfabric/data-model/availability";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -63,7 +67,7 @@ const Child = pattern<{ count: Writable<number> }, { answer: number; bump: Strea
   }),
 );
 export default pattern<{ code?: PerUser<Writable<string | Default<"">>>; count?: PerUser<Writable<number | Default<0>>> }>(
-  ({ count }) => ({ compiled: { pending: false, result: Child({ count: count! }) } }),
+  ({ count }) => ({ compiled: Child({ count: count! }) }),
 );
 `;
 
@@ -122,18 +126,17 @@ function sourceOf(program: string | RuntimeProgram): string {
 
 /** Public result of one compile request. */
 type CompiledView = {
-  /** Whether compilation or child setup is in progress. */
-  pending?: boolean;
+  /** Value produced by the compiled child. */
+  answer?: number;
 
-  /** The child piece's result. */
-  result?: { answer?: number; isHidden?: boolean; bump?: unknown };
+  /** Compiled children remain hidden from top-level piece lists. */
+  isHidden?: boolean;
 
-  /** Unstructured compiler failure. */
-  error?: string;
-
-  /** Source diagnostics from a compiler failure. */
-  errors?: unknown[];
+  /** Optional child event stream. */
+  bump?: unknown;
 };
+
+type CompileOutput = CompiledView | UnavailableVariant;
 
 describe("executor-compile-and-run", () => {
   let server: MemoryV2Server.Server;
@@ -253,7 +256,7 @@ describe("executor-compile-and-run", () => {
       "compile-arg",
       perUser ? parent.argumentSchema : undefined,
     );
-    const result = client.getCell<{ compiled: CompiledView }>(
+    const result = client.getCell<{ compiled: CompileOutput }>(
       space,
       "compile-result",
       parent.resultSchema,
@@ -299,7 +302,7 @@ describe("executor-compile-and-run", () => {
       "compile-arg",
       piece.parent.argumentSchema,
     );
-    const result = runtime.getCell<{ compiled: CompiledView }>(
+    const result = runtime.getCell<{ compiled: CompileOutput }>(
       space,
       "compile-result",
       piece.parent.resultSchema,
@@ -392,17 +395,25 @@ describe("executor-compile-and-run", () => {
 
   /** Observes the child's visible output from the client. */
   function childValue(
-    result: Cell<{ compiled: CompiledView }>,
+    result: Cell<{ compiled: CompileOutput }>,
     answer: number,
     reader = client,
   ) {
-    return waitForCellValue<CompiledView>(
+    return waitForCellValue<CompileOutput>(
       reader,
       result.key("compiled"),
       (value) =>
-        value?.pending === false && value.result?.answer === answer &&
-        value.result.isHidden === true,
+        !isUnavailable(value) && value?.answer === answer &&
+        value.isHidden === true,
     );
+  }
+
+  /** Returns a concrete child value, excluding availability markers. */
+  function visibleChild(
+    result: Cell<{ compiled: CompileOutput }>,
+  ): CompiledView | undefined {
+    const value = result.key("compiled").get();
+    return isUnavailable(value) ? undefined : value as CompiledView;
   }
 
   it("serves a compiled child and recompiles changed source without compiling on the client", async () => {
@@ -423,30 +434,28 @@ describe("executor-compile-and-run", () => {
           }`,
       );
       expect(host.stats().outbox.queued).toBeGreaterThanOrEqual(1);
-      const value = await waitForCellValue<CompiledView>(
+      const value = await waitForCellValue<CompileOutput>(
         client,
         compiled,
         (value) =>
-          value?.pending === false && value.result?.answer === 42 &&
-          value.result.isHidden === true,
+          !isUnavailable(value) && value?.answer === 42 &&
+          value.isHidden === true,
       );
-      expect(value.error).toBeUndefined();
-      expect(value.errors).toBeUndefined();
-      expect(value.result?.isHidden).toBe(true);
+      expect(value).toMatchObject({ answer: 42, isHidden: true });
       expect(servingCompiles.filter((code) => code === childProgram(42)))
         .toHaveLength(1);
       expect(clientCompiles).toEqual([PARENT_PATTERN]);
       await waitUntil(() => created.length === 1, "child creation callback");
       expect(created[0].getAsNormalizedFullLink().id).toBe(
-        compiled.key("result").resolveAsCell().getAsNormalizedFullLink().id,
+        compiled.resolveAsCell().getAsNormalizedFullLink().id,
       );
       const tx = client.edit();
       argument.withTx(tx).set({ code: childProgram(7) });
       expect((await tx.commit().settled).error).toBeUndefined();
-      await waitForCellValue<CompiledView>(
+      await waitForCellValue<CompileOutput>(
         client,
         compiled,
-        (value) => value?.pending === false && value.result?.answer === 7,
+        (value) => !isUnavailable(value) && value?.answer === 7,
       );
       expect(servingCompiles.filter((code) => code === childProgram(7)))
         .toHaveLength(1);
@@ -466,15 +475,14 @@ describe("executor-compile-and-run", () => {
     const broken = "this is not valid (((";
     const piece = await createParent(broken);
     try {
-      const value = await waitForCellValue<CompiledView>(
+      const value = await waitForCellValue<CompileOutput>(
         client,
         piece.result.key("compiled"),
-        (value) =>
-          value?.pending === false &&
-          (value.error !== undefined || value.errors !== undefined),
+        (value) => isUnavailable(value) && value.reason === "error",
       );
-      expect(value.errors?.length).toBeGreaterThan(0);
-      expect(value.result).toBeUndefined();
+      expect(value).toMatchObject({ reason: "error" });
+      expect(value).toMatchObject({ errorKind: "compile" });
+      expect((value as UnavailableVariant).message).not.toBe("");
       const poke = client.getCell<number>(space, "unrelated-input");
       const tx = client.edit();
       poke.withTx(tx).set(1);
@@ -483,9 +491,7 @@ describe("executor-compile-and-run", () => {
       expect(servingCompiles.filter((code) => code === broken)).toHaveLength(1);
       expect(created).toEqual([]);
       await setCode(piece.argument, childProgram(9));
-      const fixed = await childValue(piece.result, 9);
-      expect(fixed.error).toBeUndefined();
-      expect(fixed.errors).toBeUndefined();
+      await childValue(piece.result, 9);
       expect(host.stats().outbox.failed).toBe(0);
       expect(host.stats().unstampedSealRefusals).toBe(0);
       expect(servingErrors).toEqual([]);
@@ -516,9 +522,7 @@ export default pattern<Record<string, never>, { answer: number }>(() => ({
 `;
     const piece = await createParent(code, parentSource);
     try {
-      const value = await childValue(piece.result, 42);
-      expect(value.error).toBeUndefined();
-      expect(value.errors).toBeUndefined();
+      await childValue(piece.result, 42);
       expect(servingCompiles.filter((source) => source === code)).toHaveLength(
         1,
       );
@@ -580,12 +584,12 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
     try {
       await gate.entered.promise;
       await covered();
-      const pending = await waitForCellValue<CompiledView>(
+      const pending = await waitForCellValue<CompileOutput>(
         client,
         piece.result.key("compiled"),
-        (value) => value?.pending === true,
+        (value) => isUnavailable(value) && value.reason === "pending",
       );
-      expect(pending.pending).toBe(true);
+      expect(pending).toMatchObject({ reason: "pending" });
       await host.spaceServer(space)!.park("test-pending-compile-recovery");
       const poke = client.getCell<number>(space, "reactivation-input");
       const tx = client.edit();
@@ -625,7 +629,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
         "both compile retirements",
       );
       await client.idle();
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(31);
+      expect(visibleChild(piece.result)?.answer).toBe(31);
       expect(servingCompiles.filter((code) => code === a)).toHaveLength(1);
       expect(servingCompiles.filter((code) => code === b)).toHaveLength(1);
       expect(host.stats().outbox.superseded).toBe(1);
@@ -655,7 +659,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       "compile-arg",
       piece.parent.argumentSchema,
     );
-    const bobResult = bob.getCell<{ compiled: CompiledView }>(
+    const bobResult = bob.getCell<{ compiled: CompileOutput }>(
       space,
       "compile-result",
       piece.parent.resultSchema,
@@ -680,10 +684,10 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(piece.result, 21);
       await childValue(bobResult, 21, bob);
       expect(servingCompiles.filter((code) => code === a)).toHaveLength(1);
-      const childId = piece.result.key("compiled").key("result")
+      const childId = piece.result.key("compiled")
         .resolveAsCell().getAsNormalizedFullLink().id;
       expect(
-        bobResult.key("compiled").key("result").resolveAsCell()
+        bobResult.key("compiled").resolveAsCell()
           .getAsNormalizedFullLink().id,
       )
         .toBe(childId);
@@ -697,13 +701,13 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       count.withTx(updateInput).key("count").set(3);
       expect((await updateInput.commit().settled).error).toBeUndefined();
       await childValue(piece.result, 24);
-      expect(bobResult.key("compiled").get()?.result?.answer).toBe(21);
+      expect(visibleChild(bobResult)?.answer).toBe(21);
 
       const change = bob.edit();
       bobArgument.withTx(change).key("code").set(reactiveChildProgram(22));
       expect((await change.commit().settled).error).toBeUndefined();
       await childValue(bobResult, 22, bob);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(24);
+      expect(visibleChild(piece.result)?.answer).toBe(24);
       await variantsFor(childId, 2);
 
       await writeInput(bob, piece, "code", a);
@@ -711,9 +715,9 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await variantsFor(childId, 1);
       await writeInput(bob, piece, "count", 5);
       await childValue(bobResult, 26, bob);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(24);
+      expect(visibleChild(piece.result)?.answer).toBe(24);
       expect(
-        bobResult.key("compiled").key("result").resolveAsCell()
+        bobResult.key("compiled").resolveAsCell()
           .getAsNormalizedFullLink().id,
       )
         .toBe(childId);
@@ -738,25 +742,29 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(piece.result, 43);
       bob = await joinParent(piece, bobSigner, code);
       await childValue(bob.result, 43, bob.runtime);
-      const childId = piece.result.key("compiled").key("result")
+      const childId = piece.result.key("compiled")
         .resolveAsCell().getAsNormalizedFullLink().id;
       await variantsFor(childId, 1);
 
       await writeInput(client, piece, "code", "");
-      const cleared = await waitForCellValue<CompiledView>(
+      const cleared = await waitForCellValue<CompileOutput>(
         client,
         piece.result.key("compiled"),
-        (value) => value?.pending === false && value.result === undefined,
+        (value) => isUnavailable(value) && value.errorKind === "invalidInput",
       );
-      expect(cleared.error).toBeUndefined();
-      expect(cleared.errors).toBeUndefined();
+      expect(cleared).toMatchObject({
+        reason: "error",
+        errorKind: "invalidInput",
+      });
       await writeInput(client, piece, "count", 7);
       await writeInput(bob.runtime, piece, "count", 2);
       await childValue(bob.result, 45, bob.runtime);
       await covered();
       await client.idle();
-      expect(piece.result.key("compiled").get()?.result).toBeUndefined();
-      expect(piece.result.key("compiled").get()?.pending).toBe(false);
+      expect(piece.result.key("compiled").get()).toMatchObject({
+        reason: "error",
+        errorKind: "invalidInput",
+      });
       await variantsFor(childId, 1);
       expect(host.stats().unstampedSealRefusals).toBe(0);
       expect(servingErrors).toEqual([]);
@@ -777,7 +785,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(piece.result, 51);
       bob = await joinParent(piece, bobSigner, reactiveChildProgram(61));
       await childValue(bob.result, 61, bob.runtime);
-      const childId = piece.result.key("compiled").key("result")
+      const childId = piece.result.key("compiled")
         .resolveAsCell().getAsNormalizedFullLink().id;
       await variantsFor(childId, 2);
       await writeInput(client, piece, "count", 2);
@@ -799,9 +807,9 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(bob.result, 64, bob.runtime);
       await writeInput(bob.runtime, piece, "count", 8);
       await childValue(bob.result, 69, bob.runtime);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(56);
+      expect(visibleChild(piece.result)?.answer).toBe(56);
       expect(
-        bob.result.key("compiled").key("result").resolveAsCell()
+        bob.result.key("compiled").resolveAsCell()
           .getAsNormalizedFullLink().id,
       )
         .toBe(childId);
@@ -828,10 +836,10 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       expect(other.runtime.scopeKeyIdentity.sessionId).not.toBe(
         client.scopeKeyIdentity.sessionId,
       );
-      const childId = piece.result.key("compiled").key("result")
+      const childId = piece.result.key("compiled")
         .resolveAsCell().getAsNormalizedFullLink().id;
       expect(
-        other.result.key("compiled").key("result").resolveAsCell()
+        other.result.key("compiled").resolveAsCell()
           .getAsNormalizedFullLink().id,
       )
         .toBe(childId);
@@ -839,18 +847,18 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
 
       await writeInput(client, piece, "count", 2);
       await childValue(piece.result, 73);
-      expect(other.result.key("compiled").get()?.result?.answer).toBe(71);
+      expect(visibleChild(other.result)?.answer).toBe(71);
       await writeInput(other.runtime, piece, "code", reactiveChildProgram(81));
       await childValue(other.result, 81, other.runtime);
       await variantsFor(childId, 2);
       await writeInput(other.runtime, piece, "count", 4);
       await childValue(other.result, 85, other.runtime);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(73);
+      expect(visibleChild(piece.result)?.answer).toBe(73);
 
       await writeInput(other.runtime, piece, "code", a);
       await childValue(other.result, 75, other.runtime);
       await variantsFor(childId, 1);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(73);
+      expect(visibleChild(piece.result)?.answer).toBe(73);
       expect(servingCompiles.filter((code) => code === a)).toHaveLength(1);
       expect(host.stats().unstampedSealRefusals).toBe(0);
       expect(servingErrors).toEqual([]);
@@ -893,7 +901,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
 
           const firstDelivered = Promise.withResolvers<string>();
           sendEvent(
-            piece.result.key("compiled").key("result").key("bump"),
+            piece.result.key("compiled").key("bump"),
             {},
             (tx) => {
               firstDelivered.resolve(tx.status().status);
@@ -903,11 +911,11 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           await childValue(piece.result, 1);
           await covered();
           await other.runtime.idle();
-          expect(other.result.key("compiled").get()?.result?.answer).toBe(0);
+          expect(visibleChild(other.result)?.answer).toBe(0);
 
           const secondDelivered = Promise.withResolvers<string>();
           sendEvent(
-            other.result.key("compiled").key("result").key("bump"),
+            other.result.key("compiled").key("bump"),
             {},
             (tx) => {
               secondDelivered.resolve(tx.status().status);
@@ -917,7 +925,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
           await childValue(other.result, 1, other.runtime);
           await covered();
           await client.idle();
-          expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+          expect(visibleChild(piece.result)?.answer).toBe(1);
           expect(host.stats().unstampedSealRefusals).toBe(0);
           expect(servingErrors).toEqual([]);
         } finally {
@@ -936,17 +944,17 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       await childValue(piece.result, 0);
       bob = await joinParent(piece, bobSigner, handlerChildProgram(10), 0);
       await childValue(bob.result, 0, bob.runtime);
-      const childId = piece.result.key("compiled").key("result")
+      const childId = piece.result.key("compiled")
         .resolveAsCell().getAsNormalizedFullLink().id;
       expect(
-        bob.result.key("compiled").key("result").resolveAsCell()
+        bob.result.key("compiled").resolveAsCell()
           .getAsNormalizedFullLink().id,
       ).toBe(childId);
       await variantsFor(childId, 2);
 
       const aliceDelivered = Promise.withResolvers<string>();
       sendEvent(
-        piece.result.key("compiled").key("result").key("bump"),
+        piece.result.key("compiled").key("bump"),
         {},
         (tx) => {
           aliceDelivered.resolve(tx.status().status);
@@ -954,8 +962,8 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       );
       expect(await aliceDelivered.promise).not.toBe("error");
       await childValue(piece.result, 1);
-      expect(bob.result.key("compiled").get()?.result?.answer).toBe(0);
-      const bobBump = bob.result.key("compiled").key("result").key("bump")
+      expect(visibleChild(bob.result)?.answer).toBe(0);
+      const bobBump = bob.result.key("compiled").key("bump")
         .resolveAsCell();
       const bobDelivered = Promise.withResolvers<string>();
       sendEvent(bobBump, {}, (tx) => {
@@ -963,7 +971,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       });
       expect(await bobDelivered.promise).not.toBe("error");
       await childValue(bob.result, 10, bob.runtime);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+      expect(visibleChild(piece.result)?.answer).toBe(1);
 
       await writeInput(bob.runtime, piece, "code", a);
       await childValue(bob.result, 10, bob.runtime);
@@ -974,7 +982,7 @@ export default pattern<{ code: string; count: number }, { compiled: any }>(({ co
       });
       expect(await bobReplacedDelivered.promise).not.toBe("error");
       await childValue(bob.result, 11, bob.runtime);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+      expect(visibleChild(piece.result)?.answer).toBe(1);
       expect(host.stats().unstampedSealRefusals).toBe(0);
       expect(servingErrors).toEqual([]);
     } finally {
@@ -1021,23 +1029,23 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
       await childValue(piece.result, 104);
       await waitForCellValue<{ doubled: number }>(
         client,
-        piece.result.key("compiled").key("result").key("nested"),
+        piece.result.key("compiled").key("nested"),
         (value) => value?.doubled === 4,
       );
       bob = await joinParent(piece, bobSigner, a, 3);
       await childValue(bob.result, 106, bob.runtime);
       await waitForCellValue<{ doubled: number }>(
         bob.runtime,
-        bob.result.key("compiled").key("result").key("nested"),
+        bob.result.key("compiled").key("nested"),
         (value) => value?.doubled === 6,
       );
-      const selectedChild = piece.result.key("compiled").key("result")
+      const selectedChild = piece.result.key("compiled")
         .resolveAsCell();
       const childId = selectedChild.getAsNormalizedFullLink().id;
       const nestedId = selectedChild.key("nested").resolveAsCell()
         .getAsNormalizedFullLink().id;
       expect(
-        bob.result.key("compiled").key("result").key("nested")
+        bob.result.key("compiled").key("nested")
           .resolveAsCell().getAsNormalizedFullLink().id,
       ).toBe(nestedId);
       await variantsFor(childId, 1);
@@ -1045,25 +1053,25 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
 
       await writeInput(client, piece, "count", 4);
       await childValue(piece.result, 108);
-      expect(bob.result.key("compiled").get()?.result?.answer).toBe(106);
+      expect(visibleChild(bob.result)?.answer).toBe(106);
       await writeInput(bob.runtime, piece, "code", program(200));
       await childValue(bob.result, 206, bob.runtime);
       await variantsFor(childId, 2);
       await variantsFor(nestedId, 1);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(108);
+      expect(visibleChild(piece.result)?.answer).toBe(108);
 
       await writeInput(bob.runtime, piece, "code", a);
       await childValue(bob.result, 106, bob.runtime);
       await variantsFor(childId, 1);
       await writeInput(bob.runtime, piece, "count", 5);
       await childValue(bob.result, 110, bob.runtime);
-      expect(piece.result.key("compiled").get()?.result?.answer).toBe(108);
+      expect(visibleChild(piece.result)?.answer).toBe(108);
       await writeInput(client, piece, "count", 6);
       await childValue(piece.result, 112);
-      expect(bob.result.key("compiled").get()?.result?.answer).toBe(110);
+      expect(visibleChild(bob.result)?.answer).toBe(110);
       await variantsFor(nestedId, 1);
       expect(
-        bob.result.key("compiled").key("result").key("nested")
+        bob.result.key("compiled").key("nested")
           .resolveAsCell().getAsNormalizedFullLink().id,
       ).toBe(nestedId);
       expect(host.stats().unstampedSealRefusals).toBe(0);
@@ -1076,12 +1084,12 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
 
   /** Delivers one child write and observes its committed output. */
   async function bumpChild(
-    result: Cell<{ compiled: CompiledView }>,
+    result: Cell<{ compiled: CompileOutput }>,
     reader: Runtime,
     answer: number,
   ) {
     const delivered = Promise.withResolvers<string>();
-    sendEvent(result.key("compiled").key("result").key("bump"), {}, (tx) => {
+    sendEvent(result.key("compiled").key("bump"), {}, (tx) => {
       delivered.resolve(tx.status().status);
     });
     expect(await delivered.promise).not.toBe("error");
@@ -1123,12 +1131,12 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
           }
           await bumpChild(bob.result, bob.runtime, 1);
           await Promise.all([client.idle(), bobOther.runtime.idle()]);
-          expect(bobOther.result.key("compiled").get()?.result?.answer).toBe(0);
-          expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+          expect(visibleChild(bobOther.result)?.answer).toBe(0);
+          expect(visibleChild(piece.result)?.answer).toBe(1);
           await bumpChild(bobOther.result, bobOther.runtime, 1);
           await bumpChild(bobOther.result, bobOther.runtime, 2);
           await bob.runtime.idle();
-          expect(bob.result.key("compiled").get()?.result?.answer).toBe(1);
+          expect(visibleChild(bob.result)?.answer).toBe(1);
           expect(host.stats().unstampedSealRefusals).toBe(0);
           expect(servingErrors).toEqual([]);
         } finally {
@@ -1183,7 +1191,7 @@ export default pattern<{ count: number }, { answer: number; nested: { doubled: n
         await bumpChild(bobOther.result, bobOther.runtime, 2);
         await childValue(bob.result, 2, bob.runtime);
         await client.idle();
-        expect(piece.result.key("compiled").get()?.result?.answer).toBe(1);
+        expect(visibleChild(piece.result)?.answer).toBe(1);
         expect(host.stats().unstampedSealRefusals).toBe(0);
         expect(servingErrors).toEqual([]);
       } finally {
