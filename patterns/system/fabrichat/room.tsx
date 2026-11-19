@@ -345,9 +345,12 @@ export interface RoomManager extends JoiningManager {
 
   /**
    * The people the viewer's rooms list, other than the viewer: by principal,
-   * the profiles attesting it.
+   * the profiles attesting it; empty until the session asks for them.
    */
-  people: PerUser<Record<string, ProfileCell[]>>;
+  people: PerSession<Record<string, ProfileCell[]>>;
+
+  /** Asks for `people`, for the session, as a picker of them is opened. */
+  askForPeople?: Stream<unknown>;
 }
 
 /** Each of the viewer's adds' outcomes, by its `requestId`. */
@@ -762,11 +765,13 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     );
     // Each person the manager lists who isn't a member of the room's space, by
     // the first profile attesting them, with what tells them apart from
-    // another of them under the same name, per user, as the manager's people
-    // are, and no one while the space's members aren't known. The binding's
-    // name is the value's cause, the identity of the document that stores it,
-    // so renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
+    // another of them under the same name, per session, as the manager's
+    // people are, and no one while the space's members aren't known. The
+    // manager lists no one until the session asks it to (`askForPeople`), as
+    // the panel's control below does, so the room reads no other room until
+    // then. The binding's name is the value's cause, the identity of the
+    // document that stores it, so renaming it moves its data.
+    const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
       if (members === undefined) return [];
       const listed = Object.entries(manager?.people ?? {}).flatMap(
         ([principal, profiles]) => {
@@ -787,7 +792,11 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       }));
     });
     const candidatesDisplay = computed((): ChatDisplay =>
-      candidatesForUser.length === 0 ? "none" : "block"
+      candidatesForSession.length === 0 ? "none" : "block"
+    );
+    // The control asking for the people shows while the picker offers no one.
+    const askDisplay = computed((): ChatDisplay =>
+      candidatesForSession.length === 0 ? "block" : "none"
     );
 
     return {
@@ -811,6 +820,19 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
             />
           </div>
           <div
+            id="fabrichat-add-member-ask-people"
+            hidden
+            style={{ display: askDisplay }}
+          >
+            <cf-button
+              size="sm"
+              variant="ghost"
+              onClick={manager?.askForPeople}
+            >
+              Add people from your chats
+            </cf-button>
+          </div>
+          <div
             id="fabrichat-add-member-people"
             hidden
             style={{ display: candidatesDisplay }}
@@ -819,7 +841,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidatesForUser.map((candidate) => (
+              {candidatesForSession.map((candidate) => (
                 <cf-hstack
                   gap="2"
                   align="center"

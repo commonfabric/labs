@@ -493,8 +493,11 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: revokeGesture,
       },
       { action: action_list_room },
-      // The room's picker offers Alice, whom Bob's people list and the room's
-      // space doesn't.
+      // The room's picker offers no one until the session asks for the
+      // people, as its control does, and then offers Alice, whom Bob's people
+      // list and the room's space doesn't.
+      { assertion: assert(() => pickerOf(room[UI]) === "none:0") },
+      { action: manager.askForPeople, event: {} },
       { assertion: assert(() => pickerOf(room[UI]) === "block:1") },
       // An offer names a group room, and nothing else in its space.
       {
