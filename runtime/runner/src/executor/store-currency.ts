@@ -116,6 +116,13 @@ export class StoreCurrency {
     this.#onMarked = options.onMarked;
   }
 
+  /** The pieces a later snapshot covers whether or not they change again. */
+  get accessForTestingOnly(): {
+    readonly owed: Set<string>;
+  } {
+    return { owed: this.#owed };
+  }
+
   /** Settles once every record handed to `store()` so far has been stored. */
   get stored(): Promise<void> {
     return this.#stored;
@@ -124,6 +131,11 @@ export class StoreCurrency {
   /** Whether records handed to `store()` are still on their way. */
   get storing(): boolean {
     return this.#storing > 0;
+  }
+
+  /** Whether a root the store can serve is left unloaded. */
+  get skips(): boolean {
+    return this.#mode === "skip";
   }
 
   /** Whether any root is left unloaded on a judgment. */
@@ -210,11 +222,23 @@ export class StoreCurrency {
         at += RECORDS_PER_REQUEST
       ) {
         const records = snapshot.records.slice(at, at + RECORDS_PER_REQUEST);
+        // The last request names the pieces the earlier ones stored, so
+        // pieces that read each other's writes across requests settle
+        // together.
+        const last = at + RECORDS_PER_REQUEST >= snapshot.records.length;
+        const later = new Set(
+          snapshot.records.slice(at + RECORDS_PER_REQUEST).map(({ piece }) =>
+            piece
+          ),
+        );
         const stored = await this.#server.storeCurrencyRecords(this.#space, {
           asOf: snapshot.asOf,
           seen,
           epoch: this.#epoch,
           records,
+          ...(last && at > 0 && {
+            settle: snapshot.records.slice(0, at).map(({ piece }) => piece),
+          }),
         });
         this.#stats.currency.recordsStored += records.length;
         this.#stats.currency.falseClean += stored.falseClean.length;
@@ -236,8 +260,13 @@ export class StoreCurrency {
         }
         // A piece that keeps one of these marked is recorded with it, so
         // that a producer running here clears what reads it.
-        if (stored.blockedBy.length > 0) {
-          for (const piece of [...stored.blockedBy, ...stored.blocked]) {
+        // A producer a later request of this snapshot stores is not one to
+        // take again: the last request settles what it keeps marked.
+        const blockedBy = last
+          ? stored.blockedBy
+          : stored.blockedBy.filter((piece) => !later.has(piece));
+        if (blockedBy.length > 0) {
+          for (const piece of [...blockedBy, ...stored.blocked]) {
             if (this.#retakenForBlock.has(piece)) continue;
             this.#retakenForBlock.add(piece);
             this.#owed.add(piece);
@@ -252,6 +281,8 @@ export class StoreCurrency {
         }
       }
     }).catch((error) => {
+      // What was not stored is owed again, to the next cycle that settles.
+      this.owe(snapshot);
       logger.warn("currency-store-failed", () => [
         `space ${this.#space}: storing currency records failed`,
         error,

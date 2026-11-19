@@ -378,9 +378,10 @@ const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
 
 /**
  * How many `result` back-links the currency judgment follows from a root to
- * the piece it belongs to, which is as deep as a start follows them.
+ * the piece it belongs to: as many as a start follows
+ * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
  */
-const CURRENCY_ROOT_HOPS_MAX = 8;
+const CURRENCY_ROOT_HOPS_MAX = 10;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -11956,7 +11957,7 @@ export class Server {
     /** The recorded piece `root` leads to, if its back-links reach one. */
     const pieceOf = (root: string): string | undefined => {
       let id = root;
-      for (let hops = 0; hops < CURRENCY_ROOT_HOPS_MAX; hops++) {
+      for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
         if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
           return id;
         }

@@ -7,13 +7,16 @@
  */
 
 import {
+  canResolveScopeKey,
   identityOfScopeKey,
   resolveScopeKey,
   type ScopeKey,
+  type ScopeKeyIdentity,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
 import { entityKindOfIdString } from "../entity-kind.ts";
-import { normalizeCellScope } from "../scope.ts";
+import type { CellScope } from "../builder/types.ts";
+import { normalizeCellScope, scopeRank } from "../scope.ts";
 import type { IMemorySpaceAddress, MemorySpace } from "../storage/interface.ts";
 import { isLive, type SchedulerLivenessState } from "./dependency-graph.ts";
 import { entityNameKey } from "./keys.ts";
@@ -92,6 +95,31 @@ const chainOf = (key: ScopeKey): ScopeKey[] => {
     : [key, resolveScopeKey("user", identity), "space"];
 };
 
+/**
+ * The scope keys a clean run at the instance `key`, resolved under
+ * `identity`, wrote a document declared at the scope `declared` at. The
+ * value lands at the narrower of the run's instance and the declared scope
+ * as the run's identity resolves it, and each slot from there up to the
+ * declared scope holds the redirect that leads to it. Empty where the
+ * declared scope is narrower than the run's and the identity cannot name it.
+ */
+const writtenKeys = (
+  declared: CellScope,
+  key: ScopeKey,
+  identity: ScopeKeyIdentity | undefined,
+): ScopeKey[] => {
+  let value = key;
+  if (scopeRank(declared) > scopeRank(scopeOfScopeKey(key))) {
+    if (identity === undefined || !canResolveScopeKey(declared, identity)) {
+      return [];
+    }
+    value = resolveScopeKey(declared, identity);
+  }
+  return chainOf(value).filter((slot) =>
+    scopeRank(scopeOfScopeKey(slot)) >= scopeRank(declared)
+  );
+};
+
 /** Whether `node` is clean in every instance it runs. */
 const isCleanThroughout = (node: SchedulerNode): boolean => {
   if (node.status !== "clean") return false;
@@ -155,9 +183,12 @@ export function snapshotPieceCurrency(
     }
     for (const write of surface) {
       if (write.space !== space) continue;
+      const declared = normalizeCellScope(write.scope);
       const keys: ScopeKey[] = node.fanOut !== undefined
-        ? [...node.fanOut.clean].flatMap(chainOf)
-        : normalizeCellScope(write.scope) === "space"
+        ? [...node.fanOut.clean].flatMap((key) =>
+          writtenKeys(declared, key, node.fanOut!.instances.get(key)?.identity)
+        )
+        : declared === "space"
         ? ["space"]
         : [];
       for (const scopeKey of keys) {

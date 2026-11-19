@@ -175,6 +175,38 @@ describe("currency-index", () => {
         .toEqual([2, 1, 1]);
     });
 
+    it("reports a piece two marked pieces feed at the earlier one's seq", () => {
+      const asOf = write(
+        "of:a",
+        "of:x",
+        "computed:b",
+        "computed:y",
+        "computed:c",
+      );
+      store(asOf, [
+        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceY", { reads: [input("of:x")], writes: ["computed:y"] }),
+        record("of:pieceC", {
+          reads: [derived("computed:b"), derived("computed:y")],
+          writes: ["computed:c"],
+        }),
+        record("of:pieceD", { reads: [derived("computed:c")] }),
+      ]);
+      const first = write("of:x");
+      const second = write("of:a");
+
+      const marked = advanceCurrencyCursor(engine, { space: SPACE });
+
+      expect(
+        Object.fromEntries(marked.map(({ piece, seq }) => [piece, seq])),
+      ).toEqual({
+        "of:pieceB": second,
+        "of:pieceY": first,
+        "of:pieceC": first,
+        "of:pieceD": first,
+      });
+    });
+
     it("reports nothing downstream of a piece that was already marked", () => {
       const asOf = write("of:a", "of:other", "computed:b", "computed:c");
       store(asOf, [
@@ -406,6 +438,78 @@ describe("currency-index", () => {
       ]);
 
       expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([0, 0]);
+    });
+
+    it("settles a piece an earlier batch stored with one that names it and writes its input", () => {
+      const asOf = write("computed:b", "computed:c");
+      store(asOf, [
+        record("of:pieceC", {
+          reads: [derived("computed:b")],
+          writes: ["computed:c"],
+        }),
+      ]);
+      expect(markOf("of:pieceC")).toBe(1);
+
+      storeCurrencyRecords(engine, {
+        space: SPACE,
+        asOf,
+        seen: [],
+        epoch: EPOCH,
+        records: [
+          record("of:pieceB", {
+            reads: [derived("computed:c")],
+            writes: ["computed:b"],
+          }),
+        ],
+        settle: ["of:pieceC"],
+      });
+
+      expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([0, 0]);
+    });
+
+    it("leaves marked `1` a named piece of an earlier batch that reads a document no record writes", () => {
+      const asOf = write("computed:b", "computed:c", "computed:z");
+      store(asOf, [
+        record("of:pieceC", {
+          reads: [derived("computed:b"), derived("computed:z")],
+          writes: ["computed:c"],
+        }),
+      ]);
+
+      storeCurrencyRecords(engine, {
+        space: SPACE,
+        asOf,
+        seen: [],
+        epoch: EPOCH,
+        records: [
+          record("of:pieceB", {
+            reads: [derived("computed:c")],
+            writes: ["computed:b"],
+          }),
+        ],
+        settle: ["of:pieceC"],
+      });
+
+      expect([markOf("of:pieceB"), markOf("of:pieceC")]).toEqual([1, 1]);
+    });
+
+    it("stores marked `2` a record that read a document in another space", () => {
+      const asOf = write("of:a");
+
+      store(asOf, [
+        record("of:pieceB", {
+          reads: [
+            input("of:a"),
+            {
+              space: "did:key:z6Mk-another-space",
+              id: "of:far",
+              derived: false,
+            },
+          ],
+        }),
+      ]);
+
+      expect(markOf("of:pieceB")).toBe(2);
     });
 
     it("keeps marked a piece whose output a commit that is no derivation overwrote, through a later record of it", () => {

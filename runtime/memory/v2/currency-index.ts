@@ -95,6 +95,13 @@ export type CurrencyBatch = {
 
   /** The records, one per piece. */
   records: readonly CurrencyRecord[];
+
+  /**
+   * Pieces of the same quiescent point that earlier batches stored. Pieces
+   * that read each other's writes are clean only together, so the last batch
+   * of a point names the others and they are settled as one.
+   */
+  settle?: readonly string[];
 };
 
 /** A piece an advance of the cursor marked. */
@@ -274,6 +281,16 @@ JOIN currency_piece p
 WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
   AND r.piece != :piece AND p.mark = :mark
 `),
+  selectAllReadersOfPiece: engine.prepare(`
+SELECT DISTINCT r.piece AS piece, p.mark AS mark
+FROM currency_write w
+JOIN currency_read r
+  ON r.branch = w.branch AND r.entity_space = :space AND r.entity = w.id
+JOIN currency_piece p
+  ON p.branch = r.branch AND p.piece = r.piece
+WHERE w.branch = :branch AND w.piece = :piece AND w.owned = 0
+  AND r.piece != :piece
+`),
   selectMarkedProducers: engine.prepare(`
 SELECT DISTINCT w.piece AS piece
 FROM currency_read r
@@ -384,23 +401,46 @@ const underOf = (context: Context, piece: string): string[] =>
 /**
  * Marks `1` every clean piece downstream of the pieces in `from`, each of
  * which has just become marked: the readers of what they write, the readers
- * of what those write, and so on. A piece that is already marked is where
- * the walk stops. `seqs` gains each piece marked, at the seq of the piece
- * that marked it.
+ * of what those write, and so on. A piece that was marked before this walk
+ * is where it stops. `seqs` gains each piece marked, at the lowest seq of a
+ * piece that marks it, and a piece `seqs` already holds at a higher seq is
+ * lowered to it.
  */
 const markDownstream = (
   context: Context,
   from: readonly string[],
   seqs: Map<string, number>,
 ): void => {
-  const queue = [...from];
-  while (queue.length > 0) {
-    const piece = queue.pop()!;
-    for (const reader of readersOf(context, piece, 0)) {
-      setMark(context, reader, 1);
+  // Lowest seq first, so the first seq a piece is given is the lowest one
+  // that reaches it through pieces this walk marks.
+  const sources = [...from].sort((a, b) =>
+    (seqs.get(a) ?? Infinity) - (seqs.get(b) ?? Infinity)
+  );
+  for (const source of sources) {
+    const queue = [source];
+    while (queue.length > 0) {
+      const piece = queue.pop()!;
       const seq = seqs.get(piece);
-      if (seq !== undefined) seqs.set(reader, seq);
-      queue.push(reader);
+      const readers = context.statements.selectAllReadersOfPiece.all({
+        branch: context.branch,
+        space: context.space,
+        piece,
+      }) as Array<{ piece: string; mark: CurrencyMark }>;
+      for (const reader of readers) {
+        if (reader.mark === 0) {
+          setMark(context, reader.piece, 1);
+          if (seq !== undefined) seqs.set(reader.piece, seq);
+          queue.push(reader.piece);
+          continue;
+        }
+        // A piece this advance marked at a later seq is stale from the
+        // earlier one, and so is what reads it.
+        const known = seqs.get(reader.piece);
+        if (seq !== undefined && known !== undefined && seq < known) {
+          seqs.set(reader.piece, seq);
+          queue.push(reader.piece);
+        }
+      }
     }
   }
 };
@@ -656,10 +696,14 @@ export const storeCurrencyRecords = (
         { space: batch.space, id: piece, derived: false },
         ...record.reads,
       ];
+      // Nothing marks a piece for a change in another space, so a record
+      // that read one is not vouched for, whatever it says.
+      let foreign = false;
       for (const read of reads) {
         const local = read.space === batch.space;
         const at = local ? standingOf(read.id) : { seq: 0, unseen: false };
         unseen ||= at.unseen;
+        foreign ||= !local;
         statements.insertRead.run({
           branch,
           piece,
@@ -703,26 +747,47 @@ export const storeCurrencyRecords = (
         }
         statements.insertVouch.run({ branch, piece, id, scope_key: scopeKey });
       }
-      if (record.vouched && unseen && !overwritten) result.behind.push(piece);
+      const vouched = record.vouched && !foreign;
+      if (vouched && unseen && !overwritten) result.behind.push(piece);
       statements.upsertPiece.run({
         branch,
         piece,
-        mark: record.vouched && !unseen && !overwritten ? 0 : 2,
+        mark: vouched && !unseen && !overwritten ? 0 : 2,
         epoch: batch.epoch,
       });
     }
 
-    // A piece of the batch can read what another piece of it writes, so the
-    // `1` marks among them are settled together.
+    // A piece of the batch can read what another piece of it writes, and so
+    // can a piece an earlier batch of the same point stored, so the `1`
+    // marks among them are settled together: every such piece is taken as
+    // clean, and one with an input that is stale even so is dropped, until
+    // none is.
     const pieces = batch.records.map((record) => record.piece);
+    const settling = new Set(
+      (batch.settle ?? []).filter((piece) => markOf(context, piece) === 1),
+    );
+    const assumed = new Set([
+      ...pieces.filter((piece) => markOf(context, piece) === 0),
+      ...settling,
+    ]);
     for (let changed = true; changed;) {
       changed = false;
-      for (const piece of pieces) {
-        if (markOf(context, piece) !== 0) continue;
-        if (!hasStaleInput(context, piece)) continue;
-        setMark(context, piece, 1);
+      for (const piece of assumed) {
+        const stale = hasUnrecordedInput(context, piece) ||
+          markedProducersOf(context, piece).some((producer) =>
+            !assumed.has(producer)
+          );
+        if (!stale) continue;
+        assumed.delete(piece);
+        // A dropped piece is a marked producer from here on.
+        if (!settling.has(piece)) setMark(context, piece, 1);
         changed = true;
       }
+    }
+    const settled = [...settling].filter((piece) => assumed.has(piece));
+    for (const piece of settled) {
+      setMark(context, piece, 0);
+      statements.setWasClean.run({ branch, piece });
     }
     const blockedBy = new Set<string>();
     const marked: string[] = [];
@@ -745,7 +810,7 @@ export const storeCurrencyRecords = (
     // A record can name writes its piece's last one did not, so a marked
     // piece marks its readers whether or not it was marked before.
     markDownstream(context, marked, new Map());
-    clearDownstream(context, clean);
+    clearDownstream(context, [...clean, ...settled]);
     result.blockedBy = [...blockedBy];
   }).immediate();
   return result;

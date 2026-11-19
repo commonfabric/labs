@@ -81,6 +81,9 @@ type Demanded = {
   session?: string;
 };
 
+/** The epoch the hosts of these tests record under. */
+const EPOCH = "test-epoch";
+
 describe("SpaceServer", () => {
   let server: MemoryV2Server.Server;
   let host: ExecutorHost | undefined;
@@ -140,8 +143,14 @@ describe("SpaceServer", () => {
     await server.close();
   });
 
-  /** A host serving the space, keeping the currency index as `mode` says. */
-  const newHost = (mode: CurrencyIndexMode | undefined): ExecutorHost =>
+  /**
+   * A host serving the space, keeping the currency index as `mode` says and
+   * under `epoch`, or with no epoch named where it is `null`.
+   */
+  const newHost = (
+    mode: CurrencyIndexMode | undefined,
+    epoch: string | null = EPOCH,
+  ): ExecutorHost =>
     new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
@@ -167,6 +176,8 @@ describe("SpaceServer", () => {
       policy: {
         idleParkMs: 600_000,
         ...(mode !== undefined && { currencyIndex: mode }),
+        ...(mode !== undefined && epoch !== null &&
+          { currencyEpoch: epoch }),
       },
       onWaveCycle: cycles.record,
     });
@@ -346,7 +357,7 @@ describe("SpaceServer", () => {
           () => host!.stats().currency.recordsStored > 0 && serves(root),
         );
         await settled();
-        expect(await recordOf(root)).toEqual({ mark: 0, epoch: "" });
+        expect(await recordOf(root)).toEqual({ mark: 0, epoch: EPOCH });
         await host.spaceServer(space)!.park("test-park");
 
         await touchSpace();
@@ -450,7 +461,7 @@ describe("SpaceServer", () => {
         await awaitEach(cycles, () => serves(piece.root));
         await settled();
 
-        expect(await recordOf(piece.root)).toEqual({ mark: 0, epoch: "" });
+        expect(await recordOf(piece.root)).toEqual({ mark: 0, epoch: EPOCH });
         expect(host.stats().currency.servable).toBe(0);
       });
 
@@ -466,6 +477,19 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.servable).toBe(1);
         expect(host.stats().currency.servedFromStore).toBe(0);
         expect(host.stats().currency.falseClean).toBe(0);
+      });
+
+      it("starts a piece the store could serve, and counts it, under `skip` with no epoch named", async () => {
+        host = newHost("skip", null);
+        const piece = await setUpTripler();
+        await serveAndPark(piece);
+
+        await touchSpace();
+        await awaitEach(cycles, () => serves(piece.root));
+        await settled();
+
+        expect(host.stats().currency.servable).toBe(1);
+        expect(host.stats().currency.servedFromStore).toBe(0);
       });
 
       it("leaves unstarted a piece whose record is clean and vouches for what is demanded, under `skip`", async () => {

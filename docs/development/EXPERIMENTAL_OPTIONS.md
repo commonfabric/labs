@@ -2457,8 +2457,9 @@ the per-epic implementation notes).
   anything else keeps none, with a warning from the toolshed bootstrap and
   none from the test server. `SERVER_EXECUTION_CURRENCY_EPOCH` names the
   build whose records are trusted (`SpaceServerPolicy.currencyEpoch`), and
-  is read only with a mode set; the toolshed runs `skip` as `record`, with
-  a warning, when it is unset. Meaningful only with the serving loop
+  is read only with a mode set; a serving loop asked to `skip` with no
+  epoch named runs as `record`, with a warning from the toolshed bootstrap
+  and from the loop. Meaningful only with the serving loop
   running ([`serverExecution`](#serverexecution) on).
 - **Added by.** Bernhard Seefeld, in the change that adds the currency index
   of a space's store.
@@ -2471,7 +2472,7 @@ the per-epic implementation notes).
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §3b).
   A commit above one of those rows marks the piece, and a marked piece
   marks each piece that reads a document it writes. `record` stores the
-  records, judges every root it is about to load, and loads it regardless:
+  records, judges each eligible cold root, and loads every root regardless:
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
   wrote a vouched output again with no input changed, each one a judgment
@@ -2489,7 +2490,7 @@ the per-epic implementation notes).
   marks are covered in `runtime/memory/test/v2-currency-index.test.ts`, and
   recording, the judgment, and a skipped root's re-arm in
   `runtime/runner/test/executor/space-server-currency.test.ts`. Not measured
-  on a deployed space, and not run under the serving worker.
+  on a deployed space.
 - **Path to removal.** Run `record` on a copy of the Topics board, then on a
   deployed space; turn `skip` on where `falseClean` stays zero; then delete
   the mode and the unconditional start.

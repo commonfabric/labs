@@ -150,7 +150,10 @@ awaiting a first load. It is judged again when demand changes and when it is
 found running, which an event's auto-start can cause. When an advance marks
 its piece, the root is re-armed at the marking sequence number through the
 path a parked structure load takes (`#noteRearmed()`), so the watermark stays
-below that input until the piece has started and derived. A root demanded by
+below that input until the piece has started and derived. The marking
+sequence number is the lowest one that reaches the piece, through whichever
+marked piece it reads. An advance runs when the loop is told of a commit, so
+this holds for the commits its own memory server admits. A root demanded by
 a warm request is always loaded.
 
 Two cases are decided on the cautious side and are worth revisiting with
@@ -185,10 +188,11 @@ an instance it vouched for again with no input of it changed, the judgment
 was wrong: the count of those is `currency.falseClean`, logged with the
 piece. Whether a piece had been clean is kept with its record, so a mark that
 lands before the next record is stored does not hide it. `skip` acts on the
-judgment, and the toolshed turns it on only with
-`SERVER_EXECUTION_CURRENCY_EPOCH` set: a record is trusted across builds
-only by the epoch it names. `record` runs on a real
-space until `falseClean` stays at zero before `skip` is turned on there.
+judgment, and only with `SERVER_EXECUTION_CURRENCY_EPOCH` set: a record is
+trusted across builds only by the epoch it names, so a serving loop asked to
+skip with no epoch named runs as `record` and logs a warning. `record` runs
+on a real space until `falseClean` stays at zero before `skip` is turned on
+there.
 
 ## What changes in the specifications
 

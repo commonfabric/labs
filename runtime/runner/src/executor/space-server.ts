@@ -459,8 +459,9 @@ export type SpaceServerPolicy = {
    * could have served, and the pieces a judgment was wrong about
    * (`currency.falseClean`). `skip` leaves a root the store can serve
    * unloaded and its piece unstarted, until an input marks the piece or a
-   * session's demand reaches an instance it does not vouch for (§1). Unset,
-   * nothing is recorded or judged. The toolshed bootstrap reads
+   * session's demand reaches an instance it does not vouch for (§1), and
+   * runs as `record` unless `currencyEpoch` is set. Unset, nothing is
+   * recorded or judged. The toolshed bootstrap reads
    * SERVER_EXECUTION_CURRENCY_INDEX.
    */
   currencyIndex?: CurrencyIndexMode;
@@ -2248,12 +2249,23 @@ export class SpaceServer implements TransactionSealDestination {
 
     const currencyIndex = this.#options.policy?.currencyIndex;
     if (currencyIndex !== undefined) {
+      const epoch = this.#options.policy?.currencyEpoch;
+      // A record is trusted across builds only by the epoch it names, so
+      // leaving pieces unstarted on one takes a named epoch.
+      if (currencyIndex === "skip" && epoch === undefined) {
+        logger.warn("currency-skip-without-epoch", () => [
+          `space ${space}: the currency index is asked to leave current ` +
+          "pieces unstarted with no epoch named " +
+          "(`SpaceServerPolicy.currencyEpoch`); it records and judges, " +
+          "and starts every piece",
+        ]);
+      }
       runtime.scheduler.trackChangedPieces();
       this.#currency = new StoreCurrency({
         space,
         server: this.#options.server,
-        mode: currencyIndex,
-        epoch: this.#options.policy?.currencyEpoch ?? "",
+        mode: epoch === undefined ? "record" : currencyIndex,
+        epoch: epoch ?? "",
         serviceIdentity: this.#options.serviceIdentity,
         stats: this.#options.stats,
         onOwed: () => {
@@ -6167,7 +6179,7 @@ export class SpaceServer implements TransactionSealDestination {
         this.#noteRearmed(key, seq);
         rootKeys.delete(key);
       }
-      if (this.#options.policy?.currencyIndex === "skip") {
+      if (this.#currency.skips) {
         for (const key of judged.servable) {
           rootKeys.delete(key);
           // A re-arm the judgment did not bear out leaves no retry owed.
@@ -8449,7 +8461,10 @@ export class SpaceServer implements TransactionSealDestination {
       if (committedWhole) {
         this.#currency?.store(finish.currency, outcome.seq);
       } else {
+        // Nothing else brings the cycle that takes these records again.
         this.#currency?.owe(finish.currency);
+        this.#pendingCurrencyWake = true;
+        this.#feedArrived?.resolve();
       }
     }
     if (outcome.seq !== undefined) {

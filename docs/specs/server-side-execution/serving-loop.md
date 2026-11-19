@@ -391,7 +391,8 @@ seq, as a commit re-arms a parked root, so W stays below that input until
 the piece has started and derived. A warm request's root, a root narrower
 than the space, and a root with no record are loaded as before. In the
 `record` mode the same judgment is made and counted, and every root is
-loaded. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
+loaded; a loop whose policy names `skip` and no epoch
+(`SpaceServerPolicy.currencyEpoch`) runs in it. Impl: `StoreCurrency` in `runtime/runner/src/executor/store-currency.ts`,
 `judgeCurrencyRoots()` in `runtime/memory/v2/currency-index.ts`; pinned in
 `runtime/runner/test/executor/space-server-currency.test.ts`.
 
@@ -1176,7 +1177,9 @@ executing:
     the two leaves its piece marked by the wave's own commit.
   - It has a reader. A commit above a read or a write row marks the piece
     `2`, and each clean piece that reads a document a marked piece writes
-    is marked `1`, so a walk stops at a piece already marked. The marks are
+    is marked `1`, so a walk stops at a piece already marked. A piece an
+    advance marks is reported at the lowest seq of a commit that reaches
+    it, directly or through a marked piece it reads. The marks are
     brought up to the store's head by a cursor the serving loop advances;
     storing a new record is all that clears one, and it clears the pieces
     marked `1` downstream that are left with no stale input.
@@ -1188,7 +1191,13 @@ executing:
   is not clean, when it read a document in another space or one whose
   writer names no piece, when its root is narrower than the space, and when
   it records a source origin (§3e), since a start is where that origin is
-  followed. Each row takes its document's head seq where every commit above
+  followed. A clean computation vouches for the instances its runs wrote:
+  for a run at a fan-out instance, the narrower of that instance and the
+  write's declared scope as the run's identity resolves it, and each
+  broader slot up to the declared scope, which holds the redirect. The
+  records of one quiescent point reach the memory server in requests of
+  bounded size, and the last names the pieces the earlier ones stored, so
+  pieces that read each other's writes are judged clean together. Each row takes its document's head seq where every commit above
   the settle's visible input head is the loop's own, and that head
   otherwise, which leaves the piece marked. The serving runtime can hold a
   frame above that head, so the loop takes such a piece's record again at

@@ -30,9 +30,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Serving a piece's stored outputs while they are current](stored-output-currency.md)
   keeps a durable record, per piece, of what it read, what it writes and which
   stored outputs a serving loop vouched for, marks a piece stale through the
-  store when an input changes, and has the demand pass start a piece only when
-  it is marked or a demanded output of it was never vouched for, with a mode
-  that records and judges without acting so the judgment can be checked first.
+  store when an input changes, and has the demand pass leave a piece unstarted
+  only while its record proves every demanded output of it current, with a
+  mode that records and judges without acting so the judgment can be checked
+  first.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the

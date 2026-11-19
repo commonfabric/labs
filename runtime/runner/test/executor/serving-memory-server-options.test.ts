@@ -106,6 +106,45 @@ describe("serving-memory-server", () => {
       ).toEqual({ currencyIndex: "record" });
     });
 
+    it("takes the currency epoch from the environment where a currency mode is set and the policy names none", () => {
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({
+            SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+            SERVER_EXECUTION_CURRENCY_EPOCH: "build-7",
+          }),
+        ),
+      ).toEqual({ currencyIndex: "skip", currencyEpoch: "build-7" });
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "record" },
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toEqual({ currencyIndex: "record", currencyEpoch: "build-7" });
+      expect(
+        policyFromEnvironment(
+          { currencyIndex: "skip", currencyEpoch: "named" },
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toEqual({ currencyIndex: "skip", currencyEpoch: "named" });
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({ SERVER_EXECUTION_CURRENCY_EPOCH: "build-7" }),
+        ),
+      ).toBeUndefined();
+      expect(
+        policyFromEnvironment(
+          undefined,
+          environment({
+            SERVER_EXECUTION_CURRENCY_INDEX: "skip",
+            SERVER_EXECUTION_CURRENCY_EPOCH: "",
+          }),
+        ),
+      ).toEqual({ currencyIndex: "skip" });
+    });
+
     it("takes the flush deadlines from positive decimal integers within a timer's range", () => {
       expect(
         policyFromEnvironment(
