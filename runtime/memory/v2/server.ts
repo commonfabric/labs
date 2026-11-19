@@ -8661,7 +8661,9 @@ export class Server {
       message.type !== "op.query" && message.type !== "session.watch.set" &&
       message.type !== "session.watch.add" && message.type !== "history.list"
     ) return message;
-    const branch = this.#sessions.get(message.space, message.sessionId)
+    // This runs for every such message, so it reads the registry without
+    // the pruning pass a `get()` makes over every session.
+    const branch = this.#sessions.peek(message.space, message.sessionId)
       ?.branch;
     if (branch === undefined) return message;
     switch (message.type) {

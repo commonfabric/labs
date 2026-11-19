@@ -8976,7 +8976,11 @@ const findConflictSeq = (
     nonRecursive,
     exclude,
   );
-  if (own !== null || typeof branch !== "string") return own;
+  // The default branch inherits nothing, which spares its reads the lineage
+  // lookup.
+  if (own !== null || typeof branch !== "string" || branch === DEFAULT_BRANCH) {
+    return own;
+  }
   // A fork holds what its ancestors wrote up to each fork point, so a write
   // there after the basis conflicts as one of the fork's own does. An
   // unknown branch has no lineage, and is refused where the commit's branch
@@ -9027,6 +9031,7 @@ const hasSetOrDelete = (
       through_seq: throughSeq,
     }) as SetDeleteConflictRow;
     if (row.seq !== null) return true;
+    if (from === DEFAULT_BRANCH) return false;
     const lineage = requireLineage(engine, from);
     throughSeq = Math.min(throughSeq, lineage.forkSeq ?? 0);
     from = lineage.parentBranch;
@@ -9517,7 +9522,7 @@ const storedEntitySourcesMayContainRef = (
   // With no base on this branch the pre-state starts from the document the
   // branch inherits, whose rows this probe does not read.
   if (
-    !snapshotRow && !baseRow &&
+    !snapshotRow && !baseRow && branch !== DEFAULT_BRANCH &&
     requireLineage(engine, branch).parentBranch !== null
   ) {
     return true;
@@ -9784,9 +9789,11 @@ const reconstructPatchedDocument = (
       // With no base on this branch, the patches were written over the
       // document the branch inherits, which its parent holds as of the fork
       // point.
-      const lineage = requireLineage(engine, branch);
-      const forkSeq = lineage.forkSeq ?? 0;
-      const inherited = baseRow === undefined && lineage.parentBranch !== null
+      const lineage = baseRow === undefined && branch !== DEFAULT_BRANCH
+        ? requireLineage(engine, branch)
+        : null;
+      const forkSeq = lineage?.forkSeq ?? 0;
+      const inherited = lineage !== null && lineage.parentBranch !== null
         ? readStateForScopeKey(engine, {
           id,
           scopeKey,
