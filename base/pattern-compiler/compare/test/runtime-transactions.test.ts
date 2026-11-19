@@ -652,6 +652,21 @@ describe("write records the runtime instantiates with the option on", () => {
     );
   });
 
+  it("binds a slot whose position the transaction read after it wrote it to the label the write staged", async () => {
+    // `bumped` reads `count` and writes it from `trigger`; `shown` reads
+    // `count` in the same transaction after that write, and sees the value
+    // the write made: the label of `shown` holds the clause of `trigger`.
+    const { refused, label } = await commitWithOptionOn(
+      "read-after-side-write",
+      { trigger: 1 },
+      ["shown"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:trigger"',
+    );
+  });
+
   it("journals the shape of a position whose value a slot of the same template observes too, and commits", async () => {
     const { refused, label } = await commitWithOptionOn(
       "shape-and-keys",

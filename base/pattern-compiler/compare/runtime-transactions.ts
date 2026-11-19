@@ -123,6 +123,12 @@ export class RuntimeTransactions implements TransactionHooks {
    * them, as text.
    */
   readonly #readBeforeWrite = new Set<string>();
+  /**
+   * The positions the transaction read after it wrote them, at their path
+   * or above, as text. A read is counted here even where `#read` already
+   * held its position from a read before the write.
+   */
+  readonly #readAfterWrite = new Set<string>();
   readonly #receipts: {
     receipt: TransactionCommitReceipt;
     writes: RecordedPlanWrite[];
@@ -332,6 +338,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#tx = this.#runtime.edit();
     this.#read.clear();
     this.#readBeforeWrite.clear();
+    this.#readAfterWrite.clear();
     this.#observed.clear();
     this.#written.clear();
     this.#metadata.clear();
@@ -343,9 +350,11 @@ export class RuntimeTransactions implements TransactionHooks {
   read(doc: string, path: readonly string[]): void {
     const tx = this.#open();
     const text = JSON.stringify([doc, path]);
+    const wrote = this.#wrote({ doc, path });
+    if (wrote) this.#readAfterWrite.add(text);
     if (this.#read.has(text)) return;
     this.#read.add(text);
-    if (!this.#wrote({ doc, path })) this.#readBeforeWrite.add(text);
+    if (!wrote) this.#readBeforeWrite.add(text);
     this.#counts.reads += 1;
     const address = this.#address(doc, path);
     const value = tx.readValueOrThrow(address);
@@ -539,13 +548,19 @@ export class RuntimeTransactions implements TransactionHooks {
       return { staged: this.#cfcAddress(binding.staged) };
     }
     const last = binding.chain.at(-1);
-    // A position the transaction read before it wrote it holds, for the
-    // slot, what the read found: its stored label, and not the label the
-    // write stages, which a write edge that reads its own target would
-    // make depend on itself.
+    // A position the transaction read before it wrote it, and only then,
+    // holds for the slot what the read found: its stored label, and not
+    // the label the write stages, which a write edge that reads its own
+    // target would make depend on itself. A position it read after the
+    // write holds what the write made, whose label is the staged one; the
+    // binding names no read, so a position read both before and after the
+    // write takes the staged label, and a slot whose label then depends on
+    // itself is refused as a cycle.
+    const position = JSON.stringify([last?.doc, last?.path]);
     if (
       last !== undefined && this.#wrote(last) &&
-      !this.#readBeforeWrite.has(JSON.stringify([last.doc, last.path]))
+      (this.#readAfterWrite.has(position) ||
+        !this.#readBeforeWrite.has(position))
     ) {
       return { staged: this.#cfcAddress(last) };
     }
