@@ -5593,13 +5593,20 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
+  const facts = versionFactsOf(options);
+  if (main === undefined && Object.keys(facts).length > 0) {
+    throw new ValidationError(
+      "--version-origin, --version-description and --built-from describe the version a deploy of a file keeps; --from-index keeps none.",
+      { exitCode: 1 },
+    );
+  }
   const version = main === undefined ? undefined : versionRecorder(
     options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     versionEntryOf(options, main),
     undefined,
     deps.note ?? note,
-    versionFactsOf(options),
+    facts,
   );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,

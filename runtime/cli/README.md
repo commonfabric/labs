@@ -3484,18 +3484,20 @@ of it (a snapshot in a temporary directory), so the copy continues the
 original's history.
 
 An agent deploying a pattern it wrote for the person (a service building one for
-their piece) says so with `--version-origin agent` on `piece new` or
-`piece
-setsrc`: the version is kept as agent work, so the person's sharing
+their piece) says so with `--version-origin agent` on `piece new <file>` or
+`piece setsrc`: the version is kept as agent work, so the person's sharing
 setting treats it as one, in the history of the piece it is deployed to rather
-than of the file, which for such a deploy is a staged copy.
-`--version-description <text>` says what the version does, in place of the
-entry's doc comment (its hashtags stay). `--built-from <patternId>` names the
+than of the file, which for such a deploy is a staged copy. Its description and
+hashtags come from the doc comment of the program the deploy committed, not from
+the staged entry, which may be gone by the time the version is recorded.
+`--version-description <text>` says what the version does, in place of that doc
+comment's description (its hashtags stay). `--built-from <patternId>` names the
 index pattern the source was built from, as `piece getsrc` notes it for a file
 it writes: someone else's is credited as the remix's origin on the history's
 first version, and that pattern deployed unchanged keeps no version. None of
-them goes with `--no-index-version` or `setsrc --origin`, and `--version-origin`
-does not go with `--version-entry`.
+them goes with `--no-index-version`, `setsrc --origin` or `new --from-index`
+(none of which keeps a version), and `--version-origin` does not go with
+`--version-entry`.
 
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece

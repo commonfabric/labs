@@ -969,6 +969,22 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
       );
 
       expect(recorded.map((d) => d.entry)).toEqual([entry]);
+
+      // a piece made from the index keeps no version, so there is none for
+      // version flags to describe
+      await expect(
+        newPieceFromCommand(
+          {
+            ...config,
+            fromIndex: "pat-theirs",
+            patternIndexUrl: "https://index.example",
+            versionOrigin: "agent",
+          },
+          undefined,
+          deps as never,
+        ),
+      ).rejects.toThrow(/--from-index keeps none/);
+      expect(recorded).toHaveLength(1);
     });
 
     it("reports a deploy under --no-index-version as skipped in its --json receipt, with no index call", async () => {

@@ -164,31 +164,33 @@ const answerSource = async (
         `patternIds must name 1 to ${SOURCE_PATTERNS_MAX} patterns, each a non-empty string`,
     };
   }
-  const patterns = [];
-  for (const patternId of patternIds as string[]) {
-    try {
-      const found = await client.getPattern({ patternId, includeSource: true });
-      if (found.program === undefined) {
+  // Read concurrently; `Promise.all` keeps the order asked.
+  const patterns = await Promise.all(
+    (patternIds as string[]).map(async (patternId) => {
+      try {
+        const found = await client.getPattern({
+          patternId,
+          includeSource: true,
+        });
         // The index answered for the pattern and withheld its program.
-        patterns.push({ patternId, status: 403 });
-        continue;
+        if (found.program === undefined) return { patternId, status: 403 };
+        return {
+          patternId: found.patternId,
+          ...(found.name === undefined ? {} : { name: found.name }),
+          description: found.description,
+          ...(found.mine === undefined ? {} : { mine: found.mine }),
+          program: found.program,
+        };
+      } catch (error) {
+        // Only "no such pattern" is about the one pattern; any other refusal
+        // (a signature, an allowlist, a rate) is the request's, and answers it.
+        if (!(error instanceof PatternIndexError && error.status === 404)) {
+          throw error;
+        }
+        return { patternId, status: 404 };
       }
-      patterns.push({
-        patternId: found.patternId,
-        ...(found.name === undefined ? {} : { name: found.name }),
-        description: found.description,
-        ...(found.mine === undefined ? {} : { mine: found.mine }),
-        program: found.program,
-      });
-    } catch (error) {
-      // Only "no such pattern" is about the one pattern; any other refusal
-      // (a signature, an allowlist, a rate) is the request's, and answers it.
-      if (!(error instanceof PatternIndexError && error.status === 404)) {
-        throw error;
-      }
-      patterns.push({ patternId, status: 404 });
-    }
-  }
+    }),
+  );
   return { ok: true, value: { patterns } };
 };
 
