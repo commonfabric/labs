@@ -125,7 +125,7 @@ describe("refused-run-keeps-result", () => {
   };
 
   /** Each value the store has held for the document `id`, in order. */
-  const storedValues = async (id: string): Promise<unknown[]> => {
+  const storedValues = async (id: string): Promise<string[]> => {
     const engine = await server.engineForSpace(space);
     return (engine.database.prepare(
       `SELECT data FROM revision WHERE id = :id ORDER BY seq, op_index`,
