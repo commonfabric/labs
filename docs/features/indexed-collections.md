@@ -188,7 +188,7 @@ writes its rows there, so a member and its rows commit together. It also
 records the member's reference on the handle, as the member added last. A
 piece the calling handler has just made is set up only when something the
 handler writes refers to it, and a row is not such a write; the handle is
-written by every database write already.
+written by every `add()` already.
 
 After that the member is followed by the `IndexedCollectionMaintainer` in
 `runtime/runner/src/builtins/indexed-collection/maintainer.ts`:
@@ -288,8 +288,8 @@ events of a space run one at a time, each after the wave of the one before
 has settled, whichever collection they belong to. A maintenance transaction
 that a wave withdraws after it ended well is owed again: its members through
 the documents they were read from, so the next drain asks the database what
-it holds for them. After three withdrawals in a row, what is owed waits for
-the next write to the collection.
+it holds for them. Three withdrawals in a row are each answered that way; a
+fourth leaves what is owed for the drain the next write to the space starts.
 
 A handler that writes one collection in the same wave as maintenance writing
 another is refused with it, and a served event is not run again.
@@ -337,8 +337,8 @@ SQLite built-in already has, and refuses what they cannot express.
 - **The revision carries the join.** Every maintenance write to the database
   marks the collection's revision document in the same commit, so that
   document is written under the maintenance transaction's flow join.
-- **A result's shape carries the request's label.** A re-run reads the handle,
-  so the label of what triggered it joins the result's membership label, as
+- **A result's shape carries the request's label.** A re-run reads the handle
+  and the revision document, so the label of what triggered it joins the result's membership label, as
   the SQLite read rules already require of any request.
 
 A column's label is static: every row of the column carries the same one. A
