@@ -188,8 +188,10 @@ describe("refused-run-keeps-result", () => {
     );
     await watched.sync();
     const watcherSeen: unknown[] = [];
+    const watcherSawNew = Promise.withResolvers<void>();
     const cancelWatcher = watched.key("out").sink((value) => {
       watcherSeen.push(value);
+      if (value === "out:def") watcherSawNew.resolve();
     });
     await watcher.idle();
     await watcher.storageManager.synced();
@@ -211,12 +213,11 @@ describe("refused-run-keeps-result", () => {
     expect(after.slice(before.length)).toHaveLength(1);
     expect(after.some((data) => data.includes("Undefined"))).toBe(false);
     expect(seen).toEqual(["out:abc", "out:def"]);
-    // The watcher never sees `out` without a value. Whether its subscription
-    // reports the new value as well is the subscription's business, so the
-    // value is read afresh.
-    expect(watcherSeen[0]).toBe("out:abc");
-    expect(watcherSeen.every((value) => typeof value === "string")).toBe(true);
-    expect(await watched.key("out").pull()).toBe("out:def");
+    // The server pushes the new value to the watcher after the cold runtime
+    // settles, so the case waits for the push to reach the watcher's
+    // subscription.
+    await watcherSawNew.promise;
+    expect(watcherSeen).toEqual(["out:abc", "out:def"]);
     expect(outRuns(watcher)).toBe(0);
     cancel();
     cancelWatcher();

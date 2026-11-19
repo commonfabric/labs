@@ -238,7 +238,7 @@ currency. The existing overlay and retirement rules below still apply.
   inputs in spaces it has not loaded yet, and each would otherwise
   commit `undefined` over the stored result, blanking it for every
   client until the inputs arrived and the run came again. — decided
-  by @danfuzz, 2026-11-19; the owner of the 2026-08-21 ruling (Berni)
+  by @danfuzz, 2026-11-19; @seefeldb, who made the 2026-08-21 ruling,
   is informed.
 
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
