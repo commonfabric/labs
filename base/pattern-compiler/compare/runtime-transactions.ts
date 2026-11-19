@@ -61,6 +61,7 @@ import {
   type CfcMetadata,
   type PlanElements,
   type PlanInputs as RuntimePlanInputs,
+  type PlanWrite as RuntimePlanWrite,
   runtimeWritePolicyAuthorization,
   type SlotBinding as RuntimeSlotBinding,
   type SlotBindings as RuntimeSlotBindings,
@@ -103,6 +104,12 @@ export type RuntimeCounts = {
   writes: number;
 };
 
+/**
+ * A write record as the adapter recorded it with the runtime: the runtime's
+ * `plan-write` input without its kind.
+ */
+export type RecordedPlanWrite = RuntimePlanWrite;
+
 /** Keeps the documents of one executor in one space of a runtime. */
 export class RuntimeTransactions implements TransactionHooks {
   readonly #runtime: Runtime;
@@ -111,7 +118,14 @@ export class RuntimeTransactions implements TransactionHooks {
   #cause = "";
   /** The positions the transaction in progress read, as text. */
   readonly #read = new Set<string>();
-  readonly #receipts: TransactionCommitReceipt[] = [];
+  readonly #receipts: {
+    receipt: TransactionCommitReceipt;
+    writes: RecordedPlanWrite[];
+  }[] = [];
+  /** The write records recorded in the transaction in progress. */
+  #recorded: RecordedPlanWrite[] = [];
+  /** What hears of the write records of each commit that settled. */
+  #onCommitted: ((writes: readonly RecordedPlanWrite[]) => void) | undefined;
   /** Removes this adapter from the readers of the storage manager. */
   readonly #stopReading: (() => void) | undefined;
   /**
@@ -312,6 +326,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#observed.clear();
     this.#written.clear();
     this.#metadata.clear();
+    this.#recorded = [];
   }
 
   /** @inheritDoc */
@@ -422,18 +437,19 @@ export class RuntimeTransactions implements TransactionHooks {
     );
     if (this.#compiledPattern === undefined) return;
     for (const write of writes ?? []) {
+      const recorded: RecordedPlanWrite = {
+        ...this.#inputs(write),
+        target: this.#cfcAddress(write.target),
+        compiledPattern: this.#compiledPattern,
+        record: write.record,
+        instance: write.instance,
+        keys: write.keys,
+      };
+      this.#recorded.push(recorded);
       // The runtime's mark: this adapter stands in for the runner, which
       // records what its own code computed.
       tx.recordCfcWritePolicyInput(
-        {
-          kind: "plan-write",
-          ...this.#inputs(write),
-          target: this.#cfcAddress(write.target),
-          compiledPattern: this.#compiledPattern,
-          record: write.record,
-          instance: write.instance,
-          keys: write.keys,
-        },
+        { kind: "plan-write", ...recorded },
         runtimeWritePolicyAuthorization,
       );
     }
@@ -581,7 +597,8 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#counts.aborted += 1;
       return;
     }
-    this.#receipts.push(tx.commit());
+    this.#receipts.push({ receipt: tx.commit(), writes: this.#recorded });
+    this.#recorded = [];
     this.#reportLabels();
     this.#counts.committed += 1;
     this.#counts.byCause[this.#cause] = (this.#counts.byCause[this.#cause] ??
@@ -594,11 +611,21 @@ export class RuntimeTransactions implements TransactionHooks {
    */
   async settled(): Promise<string[]> {
     const refused: string[] = [];
-    for (const receipt of this.#receipts.splice(0)) {
+    for (const { receipt, writes } of this.#receipts.splice(0)) {
       const { error } = await receipt.settled;
       if (error !== undefined) refused.push(`${error.name}: ${error.message}`);
+      else this.#onCommitted?.(writes);
     }
     return refused;
+  }
+
+  /**
+   * Has `listener` hear, as `settled()` finds each commit settled without
+   * a refusal, the write records the commit recorded, in the order they
+   * were recorded.
+   */
+  onCommitted(listener: (writes: readonly RecordedPlanWrite[]) => void): void {
+    this.#onCommitted = listener;
   }
 
   /**

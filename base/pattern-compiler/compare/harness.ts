@@ -451,7 +451,7 @@ type AnyCell = Cell<unknown>;
  * entry is what crossing a link on the way consumed, which every read below
  * it retains; its integrity vouches for the reference and is left out.
  */
-const consumed = (
+export const consumed = (
   view: CfcLabelView | undefined,
   observes: "value" | "shape" | "followRef",
 ): Label => {

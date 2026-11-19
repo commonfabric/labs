@@ -35,6 +35,7 @@ import { argumentOf, ExecutorRun } from "./values.ts";
 import {
   type Category,
   categoryOf,
+  type Label,
   namedTemplate,
   type Relation,
   type Template,
@@ -83,6 +84,8 @@ export type ResultRow = {
   /** The `op` of the root of the template. */
   root: string;
   runtime: string;
+  /** The runtime's label, as `runtime` shows it. */
+  runtimeLabel?: Label;
   runtimeWithoutStatic: string;
   template: string;
   confidentiality: Relation;
@@ -243,6 +246,7 @@ export const resultRow = (
     ...("handler" in row ? { binding: row.binding } : {}),
     root: template?.op ?? "",
     runtime: showLabel(row.runtime),
+    runtimeLabel: row.runtime,
     runtimeWithoutStatic: showLabel(row.runtimeByOrigin.withoutStatic),
     template: showLabel(evaluated.label),
     confidentiality: row.comparison.confidentiality,
