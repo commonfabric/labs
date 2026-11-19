@@ -3666,7 +3666,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     let origin = if self.returns_handle(function) {
                         Some(Declared::Whole)
                     } else {
-                        self.returned_origin(function)
+                        self.returned_origin(self.module, function)
                     };
                     let place = self.use_body(self.module, start, name, &[], hint, at);
                     if let Place::Value(value, _) = &place {
@@ -3720,7 +3720,8 @@ impl<'a> Emitter<'_, '_, 'a> {
                         });
                         self.env = saved;
                         if let Place::Value(value, _) = &place {
-                            self.values[*value].origin = self.returned_origin(function);
+                            self.values[*value].origin =
+                                self.returned_origin(self.module, function);
                         }
                         place
                     }
@@ -5350,7 +5351,7 @@ impl<'a> Emitter<'_, '_, 'a> {
         // What the body returns, by the form of its returns. The caller of
         // a `computed` decides with the names it captures.
         let saved = std::mem::replace(&mut self.formal_names, formals);
-        self.values[value].origin = self.returned_origin(function);
+        self.values[value].origin = self.returned_origin(home, function);
         self.formal_names = saved;
         Place::Value(value, Vec::new())
     }
@@ -5701,7 +5702,8 @@ impl<'a> Emitter<'_, '_, 'a> {
     /// an element or a selection of elements of one (ruling T3: "an
     /// element that a `filter` (or another construct that passes elements
     /// on) in a `computed` yields, or a handle that a `computed` returns").
-    fn returned_origin(&self, function: FunctionLike<'_, 'a>) -> Option<Declared> {
+    /// `module` is the module the function is written in.
+    fn returned_origin(&self, module: usize, function: FunctionLike<'_, 'a>) -> Option<Declared> {
         fn gather<'e, 'a>(
             statements: &'e [Statement<'a>],
             returned: &mut Vec<&'e Expression<'a>>,
@@ -5761,15 +5763,17 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
         let found: Vec<Option<Declared>> = returned
             .iter()
-            .map(|expression| self.passed_on(expression, &locals, 0))
+            .map(|expression| self.passed_on(module, expression, &locals, 0))
             .collect();
         Some(combine(found).unwrap_or(Declared::Produced))
     }
 
-    /// What one returned expression of a function body passes on. `None`
-    /// is a constant, which is no branch of a selection.
+    /// What one returned expression of a function body written in
+    /// `module` passes on. `None` is a constant, which is no branch of a
+    /// selection.
     fn passed_on(
         &self,
+        module: usize,
         expression: &Expression<'a>,
         locals: &HashMap<String, &Expression<'a>>,
         depth: u32,
@@ -5803,37 +5807,44 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // An array the body fills by `push` starts empty.
                     return match unwrap(init) {
                         Expression::ArrayExpression(_) => Some(Declared::Mixed),
-                        _ => self.passed_on(init, locals, next),
+                        _ => self.passed_on(module, init, locals, next),
                     };
                 }
                 if self.formal_names.iter().any(|formal| formal == name) {
                     // A parameter returned unchanged.
                     return Some(Declared::Mixed);
                 }
-                match self.env.get(name) {
+                // A body of another module captures no name of the
+                // reactive tier of this one.
+                let place = if module == self.module {
+                    self.env.get(name)
+                } else {
+                    None
+                };
+                match place {
                     Some(place) => self.declared_of(place),
                     None if name == "undefined" => None,
-                    None if self.resolver.value_def(self.module, identifier).is_some() => None,
+                    None if self.resolver.value_def(module, identifier).is_some() => None,
                     None => Some(Declared::Produced),
                 }
             }
             Expression::ConditionalExpression(conditional) => combine([
-                self.passed_on(&conditional.consequent, locals, next),
-                self.passed_on(&conditional.alternate, locals, next),
+                self.passed_on(module, &conditional.consequent, locals, next),
+                self.passed_on(module, &conditional.alternate, locals, next),
             ]),
             Expression::LogicalExpression(logical) => {
-                let right = self.passed_on(&logical.right, locals, next);
+                let right = self.passed_on(module, &logical.right, locals, next);
                 if logical.operator == LogicalOperator::And {
                     right
                 } else {
-                    combine([self.passed_on(&logical.left, locals, next), right])
+                    combine([self.passed_on(module, &logical.left, locals, next), right])
                 }
             }
             Expression::StaticMemberExpression(member) => {
-                below(self.passed_on(&member.object, locals, next))
+                below(self.passed_on(module, &member.object, locals, next))
             }
             Expression::ComputedMemberExpression(member) => {
-                below(self.passed_on(&member.object, locals, next))
+                below(self.passed_on(module, &member.object, locals, next))
             }
             Expression::CallExpression(call) => {
                 let Expression::StaticMemberExpression(member) = unwrap(&call.callee) else {
@@ -5841,7 +5852,7 @@ impl<'a> Emitter<'_, '_, 'a> {
                     // here: it can pass on a reference it was given.
                     return Some(Declared::Mixed);
                 };
-                let receiver = self.passed_on(&member.object, locals, next);
+                let receiver = self.passed_on(module, &member.object, locals, next);
                 match member.property.name.as_str() {
                     "get" | "sample" => receiver,
                     "key" | "find" | "findLast" | "at" => below(receiver),

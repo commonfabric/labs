@@ -240,12 +240,14 @@ numbers have gaps.
     that accompany a `value` entry, and the `sampled` mark of §2.3.
 65. **A summary is applied by evaluating the callee again** (FA §3.6). FA
     computes one summary per function and applies it at each call. The crate
-    evaluates the callee's body at each call with the arguments' abstract values
-    bound, which gives the same record where the callee does not call itself. A
-    function that is being evaluated, and a call nested more than eight deep, is
-    not followed: each argument that is a projection is read in full, and the
-    site is counted as W7. FA's fixed point over a group of recursive functions
-    is not computed. W6 is implemented as note 79 has it.
+    evaluates the callee's body at a call with the arguments' abstract values
+    bound, which gives the same record where the callee does not call itself,
+    and keeps the result of a function written at module scope for the later
+    calls of one body that give it the same arguments (note 537). A function
+    that is being evaluated, and a call nested more than eight deep, is not
+    followed: each argument that is a projection is read in full, and the site
+    is counted as W7. FA's fixed point over a group of recursive functions is
+    not computed. W6 is implemented as note 79 has it.
 66. **Control flow** (FA §3.7). The environment is not joined on the
     control-flow graph. An assignment under a condition joins the old and the
     new value of the binding, a loop body is evaluated twice, and a `break` or a
@@ -9352,3 +9354,72 @@ generated from scratch, and none of a `flatMap`.
      undone in the part documents as in the store, with no test of its own; a
      part document or a chunk under concurrent writers, which the executor does
      not have.
+
+## The corpus of the main branch, and Topics
+
+Notes 536 on are about emitting the corpus of the main branch at `6e9ff5a381`,
+which the crate did not finish, and about Topics (`patterns/apps/topics/`) on
+the executor. `FA` is `footprint-analysis.md`.
+
+536. **What the body of another module returns was read in the calling
+     module: fixed.** `use_body` hands `returned_origin` a function of the
+     module the body is written in, and `passed_on` resolved a name it returns
+     with `value_def` in the module of the call. The name's reference indexes
+     the tables of its own module, so the lookup read another name, or, where
+     the calling module has fewer references, panicked (`index out of bounds:
+     the len is 460 but the index is 590` in `oxc_index`, on the changes of
+     the main branch under `patterns/system/` taken together). `passed_on`
+     now takes the module of the function, and reads the names of the
+     reactive tier around the call only for a function of the calling
+     module (`tests/plan.rs`,
+     `what_a_body_of_another_module_returns_is_resolved_in_that_module`).
+537. **Footprint analysis did not finish on
+     `patterns/apps/weekly-calendar/view-walk.ts`: two causes, both fixed.**
+     The module walks a rendered tree with helpers that call each other at
+     several sites, and the walk recurses.
+     - _The number of evaluations was exponential in the depth of calls._
+       With a summary applied by evaluating the callee again (note 65), a
+       helper called at five sites by each of six levels is evaluated five to
+       the sixth times. FA §3.6 has one summary per function. The crate now
+       keeps, for one body, the result of each evaluation of a function
+       written at module scope, under its arguments and whether the call is
+       under a condition, and applies it to a later call with the same
+       arguments where the same functions are being evaluated around it as far
+       as the evaluation depended on them: it enters none of them, the
+       recursion guard cut it off at the same ones, and it reached the bound on
+       nesting in the same way (`Trace` in `src/footprint.rs`). An argument
+       that the body built is compared by its members and by which places
+       share it, and the result shares with the arguments of the later call
+       what it shared with those of the first. An evaluation that adds to a
+       list of the store (a pending write, a write target, an output, a
+       binding) or changes an argument it was given is not kept, so a second
+       call does what it did. A function written inside another reads the
+       frames around the call, and is evaluated at each call as before. The
+       record has the count of evaluations (`Record.evaluations`), which the
+       tests bound.
+     - _A value could grow without bound._ FA §3.7: "Where a value would exceed
+       a fixed number of alternatives ... the analysis widens (W7)". The crate
+       had no such bound, and the value that `kids` of `view-walk.ts` returns
+       doubled its alternatives at each level of the walk (the key of one call
+       was 9 MB of text). A function's result of more than 512 nodes, counting
+       each alternative, each member of a built value, and a built value once
+       however often it is shared, is now `Computed`, each projection it holds
+       is read in full, and the site is counted as W7. The largest result in
+       the rest of the corpus of the main branch has 200 nodes.
+     The output of `emit --corpus` is the same, byte for byte, as before both
+     changes on the corpus of the prototype at `3d33db2e4d` and on the corpus
+     of the main branch without `view-walk.ts`. `view-walk.ts` with the three
+     modules it imports emits in 2.7 s.
+538. **The corpus of the main branch, emitted.** `emit --corpus` on
+     `patterns/` of the main branch at `6e9ff5a381` finishes in 10.4 s (the
+     prototype's corpus: 5.4 s). 432 modules are parsed and 343 accepted, 286
+     of them with a pattern; a plan with no unsupported construct is emitted
+     for 271 of the 286 modules and 365 of 382 patterns. Four tests of
+     `cargo test` fail on the branch before and after these changes, as they
+     did before them: the two of `tests/catalog.rs` (the copy of the
+     identifiers of the specification), `commit_edit_has_the_footprint_of_section_12_3`
+     (`state.room` is now `identity (resolved)`), and
+     `the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2`. The
+     first two follow from the design branch merged into this one, the last
+     two from `system/fabrichat/room.tsx` of the main branch.
+

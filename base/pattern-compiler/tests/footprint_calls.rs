@@ -645,3 +645,134 @@ fn a_write_through_what_a_site_returned_is_an_edge_or_an_envelope_that_names_the
     );
     assert_eq!(record.envelopes, ["created n0", "created n3"]);
 }
+
+// ----- §3.6: one summary per function -----
+
+#[test]
+fn a_function_called_again_with_the_same_arguments_is_evaluated_once() {
+    // "Summaries are computed over the program's call graph from the
+    // leaves", and "At a call, the summary is applied with the arguments'
+    // abstract values in place of the parameters."
+    let record = analyze(
+        "const leaf = (donut: Donut) => donut.name;\n\
+         const middle = (donut: Donut) => leaf(donut) + leaf(donut) + leaf(donut);\n\
+         const top = (donut: Donut) => middle(donut) + middle(donut) + middle(donut);\n\
+         const f = lift((donut: Donut) => top(donut) + top(donut) + top(donut));\n",
+    );
+    assert_eq!(record.reads, ["donut.name : value"]);
+    assert_eq!(record.widenings, Vec::<String>::new());
+    assert_eq!(record.evaluations, 4);
+}
+
+#[test]
+fn the_evaluations_of_a_chain_of_calls_follow_its_length() {
+    // Six levels, each calling the level below it five times: the
+    // analysis evaluates each function once, and not five to the sixth
+    // times.
+    let mut snippet = String::from("const level0 = (donut: Donut) => donut.price;\n");
+    for level in 1..=6 {
+        let below = level - 1;
+        snippet.push_str(&format!(
+            "const level{level} = (donut: Donut) => level{below}(donut) + level{below}(donut) + level{below}(donut) + level{below}(donut) + level{below}(donut);\n"
+        ));
+    }
+    snippet.push_str("const f = lift((donut: Donut) => level6(donut));\n");
+    let record = analyze(&snippet);
+    assert_eq!(record.reads, ["donut.price : value"]);
+    assert_eq!(record.evaluations, 8);
+}
+
+#[test]
+fn a_function_cut_off_by_the_recursion_guard_is_evaluated_again_where_it_is_not() {
+    // `even` evaluated from inside `odd` is cut off where it calls `odd`
+    // (W7). Called from the body, where `odd` is not being evaluated, it
+    // is evaluated in full and reads the name.
+    let record = analyze(
+        "const odd = (donut: Donut, n: number): string => n > 0 ? even(donut, n - 1) : donut.glaze ?? \"\";\n\
+         const even = (donut: Donut, n: number): string => n > 0 ? odd(donut, n - 1) : donut.name;\n\
+         const f = lift((donut: Donut) => odd(donut, 3) + even(donut, 3));\n",
+    );
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line == "donut.name : value" || line == "donut : value"),
+        "{:?}",
+        record.reads
+    );
+    assert_eq!(record.evaluations, 5);
+}
+
+#[test]
+fn a_function_called_again_with_a_list_the_body_built_is_evaluated_once() {
+    // As above, with an argument the body built: an array literal.
+    let record = analyze(
+        "const leaf = (list: string[]) => list[0];\n\
+         const middle = (list: string[]) => leaf(list) + leaf(list) + leaf(list);\n\
+         const top = (list: string[]) => middle(list) + middle(list) + middle(list);\n\
+         const f = lift((donut: Donut) => top([donut.name]));\n",
+    );
+    assert_eq!(record.reads, ["donut.name : value"]);
+    assert_eq!(record.evaluations, 4);
+}
+
+#[test]
+fn a_member_of_a_list_the_caller_built_is_returned_as_that_member() {
+    // `first` returns a member of the list it is given. Called again with
+    // another list that has the same members, its result is the member of
+    // that list: the record `pick` returns is the one `f` writes into.
+    let record = analyze(
+        "const first = (list: { name: string }[]) => list[0];\n\
+         const f = lift((donut: Donut) => {\n\
+           const one = [{ name: donut.name }];\n\
+           const two = [{ name: donut.name }];\n\
+           first(one).name = donut.glaze ?? \"\";\n\
+           const picked = first(two);\n\
+           picked.name = \"x\";\n\
+           return one[0].name + two[0].name;\n\
+         });\n",
+    );
+    assert_eq!(record.evaluations, 2);
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line.starts_with("donut.glaze")),
+        "{:?}",
+        record.reads
+    );
+}
+
+// ----- §3.7: a value of more alternatives than the bound -----
+
+#[test]
+fn a_function_that_returns_a_value_over_the_bound_widens_and_reads_its_projections_in_full() {
+    // "Where a value would exceed a fixed number of alternatives ... the
+    // analysis widens (W7)." Each `down` returns one of two members of
+    // each alternative it is given, so the tenth returns 1,024
+    // projections.
+    let mut snippet = String::new();
+    for level in 0..10 {
+        let next = level + 1;
+        snippet.push_str(&format!(
+            "interface T{level} {{ n: number; a: T{next}; b: T{next} }}\n\
+             const down{level} = (t: T{level}): T{next} => t.n > 0 ? t.a : t.b;\n"
+        ));
+    }
+    snippet.push_str("interface T10 { name: string }\n");
+    let mut nested = String::from("tree");
+    for level in 0..10 {
+        nested = format!("down{level}({nested})");
+    }
+    snippet.push_str(&format!("const f = lift((tree: T0) => {nested}.name);\n"));
+    let record = analyze(&snippet);
+    assert_eq!(record.widenings, ["W7"]);
+    assert!(
+        record
+            .reads
+            .iter()
+            .any(|line| line.ends_with(" : value") && line.contains("tree.")),
+        "{:?}",
+        record.reads
+    );
+}
