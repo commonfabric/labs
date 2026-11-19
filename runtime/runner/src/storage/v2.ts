@@ -1683,6 +1683,27 @@ const toCommitReadPath = (
 const scalarizeLocalSeq = (localSeq: number | number[]): number =>
   Array.isArray(localSeq) ? maxOf(localSeq) : localSeq;
 
+/**
+ * Whether `connection` is up and advertises `markedSplicesV1` on the
+ * handshake it is up on. While it is down or reconnecting the flags it holds
+ * are the last connection's, and the server the next one reaches may not
+ * advertise the mark.
+ */
+const advertisesMarkedSplices = (
+  connection: SessionConnection | undefined,
+): boolean =>
+  connection?.connectionState === "connected" &&
+  connection.serverFlags?.markedSplicesV1 === true;
+
+/** Whether `commit` carries a marked splice (`PatchOp`'s `pinned`). */
+const carriesMarkedSplice = (commit: ClientCommit): boolean =>
+  commit.operations.some((operation) =>
+    operation.op === "patch" &&
+    operation.patches.some((patch) =>
+      patch.op === "splice" && patch.pinned === true
+    )
+  );
+
 const scalarizePendingReadStacks = (commit: ClientCommit): ClientCommit => {
   const hasStack = (reads: { localSeq: number | number[] }[]): boolean =>
     reads.some((read) => Array.isArray(read.localSeq));
@@ -7785,21 +7806,21 @@ export class SpaceReplica
 
   /**
    * Whether the server this replica is connected to advertises
-   * `markedSplicesV1` on the connection that is up now. `false` until a
-   * session exists, and while its connection is down or reconnecting, when
-   * the flags still held are the last connection's: a commit built then goes
-   * index by index, as the server it reaches may not advertise the mark. A
-   * commit built on a live connection that advertises it goes marked, and a
-   * resend of it after a reconnect keeps those bytes, so that the store can
+   * `markedSplicesV1` on the connection that is up now
+   * (`advertisesMarkedSplices()`). `false` until a session exists, and while
+   * its connection is down or reconnecting: a commit built then goes index by
+   * index.
+   *
+   * A commit built marked is checked again just before it is handed to the
+   * session, which may be on another connection by then (`#pushCommit()`).
+   * A resend of one already sent keeps its bytes, so that the store can
    * answer a resend of a commit it already took (its replay identity); the
    * readers-first rollout (`markedSplicesV1` in
    * docs/development/EXPERIMENTAL_OPTIONS.md) is what makes such a resend
    * safe on a server that stopped advertising it.
    */
   markedSplices(): boolean {
-    const client = this.#sessionClient;
-    return client?.connectionState === "connected" &&
-      client.serverFlags?.markedSplicesV1 === true;
+    return advertisesMarkedSplices(this.#sessionClient);
   }
 
   async registerSqliteDiskSource(
@@ -10709,6 +10730,39 @@ export class SpaceReplica
             operations,
             source,
             sealed,
+            { pushed: true },
+          );
+        }
+        if (
+          carriesMarkedSplice(wireCommit) && !advertisesMarkedSplices(client)
+        ) {
+          // Its array changes were diffed into marked splices on a connection
+          // that advertised `markedSplicesV1`, and the one it would go out on
+          // now does not, or is down, so the server it reaches may read them
+          // as overwriting nothing (serving-loop.md §3d). Refused before it is
+          // sent, as a conflict, so that the action runs again and diffs the
+          // change for the connection as it is then.
+          const withdrawn = this.#makeLocalRejection(
+            commit,
+            "marked splices not sent: the connection does not advertise " +
+              "markedSplicesV1",
+          );
+          if (inFlight !== undefined) {
+            this.#rejectInFlightCommitLocally(inFlight, withdrawn);
+          }
+          telemetry?.submit({
+            type: "storage.push.error",
+            id: pushOpId,
+            sessionId: session.sessionId,
+            error: withdrawn.name,
+            ...rejectionAttribution(withdrawn, commit),
+          });
+          notifyRejectionSources(withdrawn);
+          return await this.#finalizeRejection(
+            localSeq,
+            operations,
+            source,
+            withdrawn,
             { pushed: true },
           );
         }
