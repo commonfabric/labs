@@ -4921,7 +4921,9 @@ export type Default<T, V extends T = T> = IsEmptyTuple<T> extends true
  *
  * At runtime the value is a plain `T`; the carrier is a phantom.
  */
-export type HostFact<T extends {}, K extends string> = T & HostFactCarrier<K>;
+export type HostFact<T extends NonNullable<unknown>, K extends string> =
+  & T
+  & HostFactCarrier<K>;
 
 /**
  * What `HostFact` intersects its payload with: the fact's key, in a member no
