@@ -1278,6 +1278,8 @@ const ARGUMENT_PROVIDERS: Readonly<Record<string, Provider>> = {
   "exec:mountedFile": () => Promise.resolve(directive({ kind: "files" })),
   "id did:keypath": () =>
     Promise.resolve(directive({ kind: "files", glob: "*.key" })),
+  "id pair:keypath": () =>
+    Promise.resolve(directive({ kind: "files", glob: "*.key" })),
   "piece getsrc:outpath": () => Promise.resolve(directive({ kind: "files" })),
   "deps update:file": () => Promise.resolve(directive({ kind: "files" })),
   "delegation show:file": () =>
