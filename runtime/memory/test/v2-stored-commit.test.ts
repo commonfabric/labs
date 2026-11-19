@@ -178,6 +178,30 @@ describe("stored-commit", () => {
       expect(storedReadCounts({ hollowed: { bytes: 10 } })).toBeUndefined();
       expect(storedReadCounts("text")).toBeUndefined();
     });
+
+    it("returns `undefined` for a digest of a shape the engine does not write", () => {
+      const digest = (decodeTrustedMemoryBoundary(
+        encodeStoredCommit(readingCommit, false),
+      ) as { digest: Record<string, unknown> }).digest;
+      for (
+        const malformed of [
+          { ...digest, confirmed: 0, pending: 0 },
+          { ...digest, confirmed: -1 },
+          { ...digest, pending: 1.5 },
+          { ...digest, confirmed: "2" },
+          { ...digest, bytes: 0 },
+          { ...digest, bytes: undefined },
+          { ...digest, sha256: "x" },
+        ]
+      ) {
+        expect(storedReadCounts({ digest: malformed })).toBeUndefined();
+      }
+      expect(storedReadCounts({ digest })).toEqual({
+        confirmed: 2,
+        pending: 0,
+        kept: false,
+      });
+    });
   });
 
   describe("applyCommit()", () => {
@@ -211,6 +235,22 @@ describe("stored-commit", () => {
         engine = await open({ url: toFileUrl(path) });
       });
 
+      it("stores a commit's reads as a digest, the default", () => {
+        const seq = installThenRead();
+
+        expect(storedAt(seq).reads).toBeUndefined();
+        expect(encodeMemoryBoundary(storedAt(seq))).toBe(
+          encodeStoredCommit(readingCommit, false),
+        );
+      });
+    });
+
+    describe("on an engine opened with `storeReadsDigest: false`", () => {
+      beforeEach(async () => {
+        path = await Deno.makeTempFile({ suffix: ".sqlite" });
+        engine = await open({ url: toFileUrl(path), storeReadsDigest: false });
+      });
+
       it("stores a commit's reads as submitted", () => {
         const seq = installThenRead();
 
@@ -223,7 +263,7 @@ describe("stored-commit", () => {
         const seq = installThenRead();
         expect(storedAt(seq).reads).toBeUndefined();
         close(engine);
-        engine = await open({ url: toFileUrl(path) });
+        engine = await open({ url: toFileUrl(path), storeReadsDigest: false });
 
         const replay = applyCommit(engine, {
           sessionId: "s:a",

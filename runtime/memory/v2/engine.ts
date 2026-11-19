@@ -1416,10 +1416,11 @@ export type OpenOptions = {
   /**
    * Whether admission stores an admitted commit's reads as a digest of the
    * whole submission where nothing reads them afterward (02-storage.md §3.3).
-   * Off by default. Every engine reads both forms whatever this says, so an
-   * operator enables it only once no version the deployment may roll back to
-   * predates digest-form rows: a version that does refuses a retry of a
-   * commit stored with a digest as a replay mismatch.
+   * On by default. Every engine reads both forms whatever this says. A store
+   * that must keep its read sets passes `false`: a test whose stale-read
+   * audit replays them, or a deployment about to roll back to a version that
+   * predates digest-form rows, which refuses a retry of a commit stored with
+   * a digest as a replay mismatch.
    */
   storeReadsDigest?: boolean;
 
@@ -2368,7 +2369,7 @@ export const open = async (
     snapshotRetention = DEFAULT_SNAPSHOT_RETENTION,
     operationCheckpointInterval = DEFAULT_OPERATION_CHECKPOINT_INTERVAL,
     operationCodecs = createDefaultOperationCodecRegistry(),
-    storeReadsDigest = false,
+    storeReadsDigest = true,
     documentCacheBudgetBytes = DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,

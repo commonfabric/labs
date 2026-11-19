@@ -126,12 +126,13 @@ function buildConflicts(
 ): ContendedEntity[] {
   const STALE_READ_ANALYSIS_CAP = 60;
   const contended = contendedEntities(space, { branch, scope, limit: 300 });
-  // One pass over the log for every cell analyzed here.
-  const coverage = readCoverage(space);
+  // One pass over the log for every cell analyzed here, made only once one is.
+  let coverage: ReturnType<typeof readCoverage> | undefined;
   let analyzed = 0;
   for (const c of contended) {
     if (c.multiUser && analyzed < STALE_READ_ANALYSIS_CAP) {
       analyzed++;
+      coverage ??= readCoverage(space);
       const analysis = entityConflicts(space, c.id, {
         branch,
         scope,

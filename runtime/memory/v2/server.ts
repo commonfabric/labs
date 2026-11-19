@@ -3708,7 +3708,7 @@ export class Server {
 
       /** Whether each space's engine stores admitted commits' reads as a
        * digest where nothing reads them afterward; handed to Engine.open
-       * (see `OpenOptions.storeReadsDigest` there). Off by default. */
+       * (see `OpenOptions.storeReadsDigest` there). On by default. */
       storeReadsDigest?: boolean;
 
       /** Bound on decoded documents retained across every space this

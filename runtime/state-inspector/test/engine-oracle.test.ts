@@ -281,7 +281,8 @@ Deno.test("oracle: parses read sets once per report, whatever the values hold", 
   // which JSON escapes. The read ids are spelled as written, so no entity's
   // search parses any commit's read set.
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
-  const engine = await open({ url: toFileUrl(path) });
+  // The audit replays these read sets, so the store keeps them.
+  const engine = await open({ url: toFileUrl(path), storeReadsDigest: false });
   try {
     applyCommit(engine, {
       ...ALICE,
@@ -450,7 +451,8 @@ Deno.test("oracle: counts a read below what compaction kept of the instance it r
   // commit 6's basis is lower still, but compaction left its instance whole.
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const out = `${path}.compacted.sqlite`;
-  const engine = await open({ url: toFileUrl(path) });
+  // The audit replays these read sets, so the store keeps them.
+  const engine = await open({ url: toFileUrl(path), storeReadsDigest: false });
   const alice = {
     sessionId: "session:did%3Akey%3AzAlice:s1",
     principal: "did:key:zAlice",
@@ -597,6 +599,34 @@ Deno.test("oracle: reads a history of escaped reads longer than SQLite binds par
     assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
     const entity = entityConflicts(space, "entity:doc");
     assertEquals([entity.staleReads.length, entity.readSetsNotKept], [0, 0]);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+Deno.test("oracle: reads a store with more compaction runs than SQLite binds parameters for", async () => {
+  // 32,767 compaction commits, one more than the 32,766 parameters a statement
+  // may bind, so the lookup of what compaction truncated sees them all.
+  const { engine, path } = await seedContendedStore();
+  close(engine);
+  const db = new Database(path);
+  try {
+    db.exec(`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 32767)
+      INSERT INTO "commit"
+        (seq, branch, session_id, local_seq, original, resolution, created_at)
+      SELECT 10 + i, '', 'compaction:run-' || i, 1, '{"compaction":{}}',
+        '{"seq":' || (10 + i) || '}', datetime('now')
+      FROM n`);
+  } finally {
+    db.close();
+  }
+
+  const space = openSpace(path);
+  try {
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
+    assertEquals(entityConflicts(space, "entity:doc").readSetsNotKept, 0);
   } finally {
     space.close();
     await Deno.remove(path).catch(() => {});

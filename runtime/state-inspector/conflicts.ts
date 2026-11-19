@@ -3,7 +3,11 @@
 // The durable store records enough to reconstruct who fought over what:
 //   - `revision` — every write, joinable to `commit.session_id` (the writer).
 //   - `commit.original.reads.confirmed[]` — `ConfirmedRead { id, scope?, branch?,
-//     path, seq, nonRecursive? }`: what each commit READ and at which seq.
+//     path, seq, nonRecursive? }`: what each commit READ and at which seq,
+//     where the row keeps them. A row stored in digest form
+//     (`docs/specs/memory-v2/02-storage.md` §3.3) holds a digest of the whole
+//     submission in their place, and compaction hollows old payloads; the
+//     stale-read scan counts such rows as unchecked (`readSetsNotKept`).
 //
 // Two grounded views:
 //   1. CONTENTION (write-write): entities written by ≥2 distinct sessions, with
@@ -504,14 +508,13 @@ function squashedAt(
   if (coverage.compactions.length === 0) return undefined;
   // The instance's oldest row, as the engine's rule reads it: a row a run
   // appended above older ones (the ACL document's audit revision) cut
-  // nothing.
+  // nothing. The compaction commits are bound as one JSON array, so no number
+  // of runs takes the statement past SQLite's limit on bound parameters.
   coverage.squashedAt ??= new Map(
     space.db
       .prepare(
         `SELECT r.id, max(r.commit_seq) AS seq FROM revision r
-         WHERE r.commit_seq IN (${
-          coverage.compactions.map(() => "?").join(", ")
-        })
+         WHERE r.commit_seq IN (SELECT value FROM json_each(?))
            AND NOT EXISTS (
              SELECT 1 FROM revision o
              WHERE o.branch = r.branch AND o.id = r.id
@@ -520,7 +523,9 @@ function squashedAt(
            )
          GROUP BY r.id`,
       )
-      .all<{ id: string; seq: number }>(coverage.compactions)
+      .all<{ id: string; seq: number }>([
+        JSON.stringify(coverage.compactions),
+      ])
       .map(({ id, seq }) => [id, seq]),
   );
   return coverage.squashedAt.get(id);

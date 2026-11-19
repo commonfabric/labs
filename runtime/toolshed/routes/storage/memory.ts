@@ -221,8 +221,8 @@ export async function openMemory(
       : {}),
     documentCacheBudgetBytes: environment.MEMORY_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries: environment.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
-    // Off unless the deployment turns it on, once no version it may roll back
-    // to predates digest-form rows.
+    // On unless the deployment turns it off, as it must before rolling back to
+    // a version that predates digest-form rows.
     storeReadsDigest: environment.MEMORY_STORE_READS_DIGEST,
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,

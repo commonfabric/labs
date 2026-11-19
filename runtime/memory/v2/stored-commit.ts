@@ -53,6 +53,25 @@ const hasReadSet = (commit: ClientCommit): boolean =>
 const carriesReads = (commit: ClientCommit): boolean =>
   commit.reads.confirmed.length > 0 || commit.reads.pending.length > 0;
 
+const isCount = (value: unknown): value is number =>
+  Number.isSafeInteger(value) && (value as number) >= 0;
+
+/** Unpadded base64url of 32 bytes. */
+const SHA256_TEXT = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * Whether `digest` has the shape {@link digestForm} writes: a SHA-256, the
+ * encoding's byte length, and the commit's read counts. The engine writes a
+ * digest only for a commit that carried reads, so counts that are both zero
+ * mark a digest it did not write.
+ */
+const isCommitDigest = (digest: unknown): digest is CommitDigest =>
+  isObject(digest) &&
+  typeof digest.sha256 === "string" && SHA256_TEXT.test(digest.sha256) &&
+  isCount(digest.bytes) && digest.bytes > 0 &&
+  isCount(digest.confirmed) && isCount(digest.pending) &&
+  digest.confirmed + digest.pending > 0;
+
 /**
  * The digest form of `commit`, whose whole encoding is `whole`: every member
  * but `reads`, and a `digest` of the whole submission. A `digest` member the
@@ -114,7 +133,7 @@ export type StoredReadCounts = {
  * Returns the read counts `stored`, a decoded commit row's `original`, records:
  * from its read set when it keeps one, from its digest when it holds that in
  * place of its reads, and `undefined` for any other payload, such as a
- * compaction marker.
+ * compaction marker or a digest of a shape the engine does not write.
  */
 export const storedReadCounts = (
   stored: unknown,
@@ -128,11 +147,7 @@ export const storedReadCounts = (
       kept: true,
     };
   }
-  if (
-    reads === undefined && isObject(digest) &&
-    typeof digest.sha256 === "string" &&
-    typeof digest.confirmed === "number" && typeof digest.pending === "number"
-  ) {
+  if (reads === undefined && isCommitDigest(digest)) {
     return {
       confirmed: digest.confirmed,
       pending: digest.pending,
