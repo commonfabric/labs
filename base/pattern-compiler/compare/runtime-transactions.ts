@@ -561,7 +561,13 @@ export class RuntimeTransactions implements TransactionHooks {
     chain.forEach(({ doc, path }, index) => {
       if (path.includes("*")) return;
       const probe = index < chain.length - 1 || observes === "followRef";
-      const text = JSON.stringify([doc, path, probe]);
+      // A read of the value and a read of the shape are observations of
+      // different classes at one position.
+      const text = JSON.stringify([
+        doc,
+        path,
+        probe ? "probe" : observes === "shape" ? "shape" : "value",
+      ]);
       if (this.#observed.has(text)) return;
       this.#observed.add(text);
       const address = this.#address(doc, path);

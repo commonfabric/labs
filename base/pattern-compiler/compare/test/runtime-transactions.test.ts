@@ -638,6 +638,18 @@ describe("write records the runtime instantiates with the option on", () => {
     );
   });
 
+  it("journals the shape of a position whose value a slot of the same template observes too, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "shape-and-keys",
+      { box: { a: 1, b: 2 } },
+      ["count"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:box"',
+    );
+  });
+
   it("binds the source slot of the result of a `map` over plain values in place that a selector's branch names from outside the element body, and commits", async () => {
     const { refused, label } = await commitWithOptionOn(
       "collection-output",
