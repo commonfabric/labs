@@ -48,7 +48,6 @@ export const identity = new Command()
       service,
       code,
       keyfile: keypath,
-      deviceName: `cf on ${Deno.hostname()}`,
     });
     render(
       paired.wrote
