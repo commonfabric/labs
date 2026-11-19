@@ -28,11 +28,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
 - [Serving a piece's stored outputs while they are current](stored-output-currency.md)
-  keeps a durable record of which stored outputs a serving loop vouched for
-  and what their pieces read, marks the outputs stale through the store when
-  an input changes, and has the demand pass start a piece only when a demanded
-  output is marked or was never recorded, starting stale producers upstream
-  of a demanded piece as well.
+  keeps a durable record, per piece, of what it read, what it writes and which
+  stored outputs a serving loop vouched for, marks a piece stale through the
+  store when an input changes, and has the demand pass start a piece only when
+  it is marked or a demanded output of it was never vouched for, with a mode
+  that records and judges without acting so the judgment can be checked first.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the
