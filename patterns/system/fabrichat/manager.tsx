@@ -503,7 +503,7 @@ const listRoom = (
     // manager creates. A room it accepts is registered under it as well,
     // since a pattern can't read which host serves a space, and a room
     // another host serves is then registered under the wrong one.
-    // TODO(danfuzz): Register an accepted room under the host that serves
+    // TODO: Register an accepted room under the host that serves
     // its space, once a pattern can read it.
     registerSharedSpaceIn(catalog, {
       space,
@@ -807,7 +807,7 @@ function joinStreamOf(room: Cell<ChatRoomLink>): unknown {
  */
 const joinRooms = handler<JoinRoomsEvent, Record<PropertyKey, never>>(
   (event) => {
-    // TODO(danfuzz): A stop-gap. A member named by principal alone, whose
+    // TODO: A stop-gap. A member named by principal alone, whose
     // manager neither created nor accepted the room, is never sent here, so
     // isn't on the room's roster, and is shown among its participants only as
     // an author, once they write. Add each member once their manager lists the
@@ -1142,7 +1142,7 @@ const performManagerAct = (
     // A chip a room rendered before its control named a profile names the
     // person by principal. Such a start finds or creates the room, but offers
     // it to no one, since it carries no profile.
-    // TODO(danfuzz): Stop reading `target.dataset.counterpart` once no
+    // TODO: Stop reading `target.dataset.counterpart` once no
     // deployed room renders a chip that sends it, and record the contract
     // break that removing the field from the event's type is.
     const counterpart = event?.counterpart ?? namedPrincipal ??
@@ -1458,7 +1458,7 @@ const performManagerAct = (
     // A member named by principal alone is offered the room through the
     // profiles `people` lists for them, so a person this user shares no room
     // with is offered nothing.
-    // TODO(danfuzz): Under server execution a served run finds a member in
+    // TODO: Under server execution a served run finds a member in
     // `people` only where a runtime of this user's, such as a page listing
     // its rooms, has derived the rooms `people` is drawn from; where none has,
     // it finds no one, and the member gets a notice. Offer through `people`

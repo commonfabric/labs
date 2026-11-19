@@ -60,7 +60,7 @@ export default pattern<DragDropDemoInput, DragDropDemoOutput>(
     const items = computed(() => {
       const defaultItems: Item[] = [
         { title: "Item A", [UI]: <div>Hello World!!!</div> },
-        { title: "Counter", [UI]: counter[UI] }, // TODO(seefeld): fix this, title is indeed missing
+        { title: "Counter", [UI]: counter[UI] }, // TODO: fix this, title is indeed missing
         { title: "Item C" },
       ];
 

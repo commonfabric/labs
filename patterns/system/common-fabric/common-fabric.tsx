@@ -203,7 +203,7 @@ export const searchWeb = pattern<
     },
   });
 
-  // TODO(seefeld): Should we instead return { result, error }? Or allocate a
+  // TODO: Should we instead return { result, error }? Or allocate a
   // special [ERROR] for errors? Ideally this isn't specific to using patterns as
   // tools but a general pattern.
   return ifElse(error, { error }, result);
