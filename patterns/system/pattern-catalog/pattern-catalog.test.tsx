@@ -24,13 +24,16 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  countElements,
   findElement,
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import {
+  CatalogByline,
   type CatalogEntry,
   type CatalogPage,
+  type CatalogProfile,
   type CatalogStatus,
   GET_IT_ACTION,
   GET_IT_SURFACE,
@@ -132,6 +135,32 @@ export default pattern(() => {
   } as GetItButtonInput);
   const forge = forgeRequest({ getItRequests: catalog.getItRequests });
 
+  const samProfile: CatalogProfile = new Writable({ name: "Sam" });
+  const anonymous = CatalogByline({
+    entry: {
+      patternId: "habit-2",
+      title: "Habit tracker",
+      author: "a-3kf9q2xxxxx",
+      remixOf: [
+        { patternId: "habit-1", title: "Habit   tracker\n" },
+        { patternId: "log-1" },
+        { unavailable: true },
+        { patternId: "beyond-1", title: "Past the end" },
+      ],
+    },
+  });
+  const named = CatalogByline({
+    entry: {
+      patternId: "habit-3",
+      title: "Habit tracker",
+      author: "a-7hh2m0xxxxx",
+      authorProfile: samProfile,
+    },
+  });
+  const plain = CatalogByline({
+    entry: { patternId: "plain-1", title: "Plain" },
+  });
+
   const action_page = action(() => {
     catalog.page.send({ text: " MONEY ", result: searched });
     catalog.page.send({ text: "  ", result: listed });
@@ -153,6 +182,26 @@ export default pattern(() => {
       missing_.patternId === "gone-1" && missing_.patternTitle === "" &&
       missing_.destinationName === undefined;
   });
+
+  const assert_anonymous_shows_pseudonym_only = assert(() =>
+    hasText(anonymous[UI], "by a-3kf9q2xxxxx") &&
+    countElements(anonymous[UI], "cf-profile-badge") === 0
+  );
+  const assert_named_shows_profile_not_pseudonym = assert(() =>
+    countElements(named[UI], "cf-profile-badge") === 1 &&
+    !hasText(named[UI], "a-7hh2m0xxxxx")
+  );
+  const assert_remix_chain_stops_at_what_viewer_cannot_see = assert(() =>
+    hasText(
+      anonymous[UI],
+      "Remix of “Habit tracker”, a remix of log-1, a remix of a pattern no longer shown",
+    ) && !hasText(anonymous[UI], "Past the end") &&
+    !hasText(anonymous[UI], "beyond-1")
+  );
+  const assert_not_a_remix_says_nothing = assert(() =>
+    !hasText(plain[UI], "Remix") && !hasText(plain[UI], "by ") &&
+    countElements(plain[UI], "cf-profile-badge") === 0
+  );
 
   const action_forge = action(() => {
     forge.send();
@@ -266,6 +315,10 @@ export default pattern(() => {
       { action: action_page },
       { assertion: assert_page_answers_in_callers_cell },
       { assertion: assert_button_names_catalog_title_and_destination },
+      { assertion: assert_anonymous_shows_pseudonym_only },
+      { assertion: assert_named_shows_profile_not_pseudonym },
+      { assertion: assert_remix_chain_stops_at_what_viewer_cannot_see },
+      { assertion: assert_not_a_remix_says_nothing },
       { action: action_forge },
       { assertion: assert_forged_and_untrusted_writes_refused },
       { assertion: assert_untapped_shows_nothing },

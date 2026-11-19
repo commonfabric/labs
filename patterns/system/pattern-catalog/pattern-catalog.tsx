@@ -14,6 +14,7 @@
  * declares its one trusted writer.
  */
 import {
+  type Cell,
   computed,
   eventKey,
   handler,
@@ -60,6 +61,18 @@ export interface CatalogCounts {
   returning?: number;
 }
 
+/** The part of a Common Fabric profile an entry's byline reads. */
+export type CatalogProfile = Cell<{ name?: string; avatar?: string }>;
+
+/**
+ * One original along a remix's chain: the pattern and its published name, or
+ * `unavailable` for an original the viewer may not see (taken down, say),
+ * which ends the chain and says nothing else about it.
+ */
+export type CatalogRemixStep =
+  | { patternId: string; title?: string }
+  | { unavailable: true };
+
 /**
  * One published pattern, as the catalog describes it. Every field but
  * `patternId` and `title` may be absent; a caller shows what is there.
@@ -80,6 +93,19 @@ export interface CatalogEntry {
   bucket?: CatalogBucket;
   /** The author's stable pseudonym, not who they are. */
   author?: string;
+  /**
+   * The Common Fabric profile the author published this pattern under, when
+   * they chose to be named (`cf pattern publish --as`). The name and picture
+   * are read from the profile itself, never carried here. Absent on a pattern
+   * shared anonymously, which shows only `author`.
+   */
+  authorProfile?: CatalogProfile;
+  /**
+   * What this pattern is a remix of, nearest original first: a remix of a
+   * remix lists its whole chain. Absent when it is not a remix, or when the
+   * viewer may not see what it remixed.
+   */
+  remixOf?: CatalogRemixStep[];
   /** Present only on the viewer's own entries that others cannot find yet. */
   unlisted?: CatalogUnlisted;
   counts?: CatalogCounts;
@@ -345,6 +371,66 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       ),
       answer,
       getIt,
+    };
+  },
+);
+
+/** What `CatalogByline` takes. */
+export interface CatalogBylineInput {
+  entry: CatalogEntry;
+}
+
+/** What `CatalogByline` returns. */
+export interface CatalogBylineOutput {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+/** How a remix's chain reads: "Remix of A, a remix of B". */
+export const remixOfText = (steps: readonly CatalogRemixStep[]): string => {
+  const names: string[] = [];
+  for (const step of steps ?? []) {
+    if (!step || "unavailable" in step || !step.patternId) {
+      names.push("a pattern no longer shown");
+      break;
+    }
+    const title = (step.title ?? "").split(/\s+/).join(" ").trim();
+    names.push(title ? `“${title}”` : step.patternId);
+  }
+  return names.length === 0 ? "" : `Remix of ${names.join(", a remix of ")}`;
+};
+
+/**
+ * Who made an entry and what it remixes, the way every caller shows it. A
+ * pattern published under a profile shows that profile's badge, which reads
+ * the name and picture from the profile itself; one shared anonymously shows
+ * only its pseudonym. A remix says what it is a remix of, down its chain.
+ */
+export const CatalogByline = pattern<CatalogBylineInput, CatalogBylineOutput>(
+  ({ entry }) => {
+    const remixText = computed(() => remixOfText(entry?.remixOf ?? []));
+    const pseudonym = computed(() =>
+      entry?.authorProfile ? "" : (entry?.author ?? "")
+    );
+    return {
+      [NAME]: computed(() => "Byline"),
+      [UI]: (
+        <cf-hstack
+          gap="2"
+          wrap
+          style={{
+            alignItems: "center",
+            fontSize: "13px",
+            color: "var(--cf-theme-color-text-secondary)",
+          }}
+        >
+          {entry?.authorProfile
+            ? <cf-profile-badge $profile={entry.authorProfile} size="xs" />
+            : null}
+          {computed(() => pseudonym ? <span>by {pseudonym}</span> : null)}
+          {computed(() => remixText ? <span>{remixText}</span> : null)}
+        </cf-hstack>
+      ),
     };
   },
 );
