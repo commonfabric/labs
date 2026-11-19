@@ -1501,7 +1501,7 @@ interface PreparedFoodInput {
 interface PreparedFoodOutput {
   // every input field, as a plain value, plus:
   dietaryCompatibility: DietaryCompatibility; // compatible = dietaryTags
-  dietarySource: "declared";
+  dietarySource: "declared" | "none"; // "none" until a tag or ingredient is entered
   addDietaryTag: Stream<{ tag: string }>;
 }
 ```
