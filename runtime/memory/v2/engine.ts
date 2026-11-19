@@ -4730,13 +4730,26 @@ const refuseUnfoundedMarkedSplices = (
   // pending read only where it names its confirmed basis (`basisSeq`): one
   // that does not is checked for staleness from its highest dependency's
   // resolution on, which misses a peer's write landing before that (INV-1's
-  // CT-1910 deviation, docs/specs/memory-v2/09-invariants.md).
-  const reads = [
-    ...commit.reads.confirmed,
-    ...commit.reads.pending.filter((read) => read.basisSeq !== undefined),
-  ].filter((read) =>
-    (("branch" in read ? read.branch : undefined) ?? branch) === branch
-  );
+  // CT-1910 deviation, docs/specs/memory-v2/09-invariants.md). The pointers
+  // each document's recursive reads cover, keyed by document and scope.
+  const pins = new Map<string, Set<string>>();
+  for (
+    const read of [
+      ...commit.reads.confirmed,
+      ...commit.reads.pending.filter((read) => read.basisSeq !== undefined),
+    ]
+  ) {
+    if (
+      read.nonRecursive === true ||
+      (("branch" in read ? read.branch : undefined) ?? branch) !== branch
+    ) {
+      continue;
+    }
+    const key = `${read.id}\0${normalizeScope(read.scope)}`;
+    const covered = pins.get(key) ?? new Set<string>();
+    covered.add(encodePointer(read.path));
+    pins.set(key, covered);
+  }
   const structural = (patch: PatchOp): boolean =>
     patch.op === "add" || patch.op === "remove" || patch.op === "move";
 
@@ -4770,69 +4783,100 @@ const refuseUnfoundedMarkedSplices = (
         })?.document,
       }).document;
 
+    // Every pointer the operation's patches name (a move names two), indexed
+    // once, so that each marked array looks up only the patches on its own
+    // path: by the pointer itself, by each pointer above it, and, for an add,
+    // remove or move, by the pointer of its parent.
+    type Named = { patch: PatchOp; pointer: string; path: string[] };
+    const at = new Map<string, Named[]>();
+    const beneath = new Map<string, Named[]>();
+    const shifting = new Map<string, Named[]>();
+    const index = (into: Map<string, Named[]>, key: string, named: Named) => {
+      const entries = into.get(key);
+      if (entries === undefined) into.set(key, [named]);
+      else entries.push(named);
+    };
+    for (const patch of operation.patches) {
+      const pointers = patch.op === "move"
+        ? [patch.from, patch.path]
+        : [patch.path];
+      for (const pointer of pointers) {
+        const path = parsePointer(pointer);
+        const named = { patch, pointer, path };
+        index(at, encodePointer(path), named);
+        for (let depth = 0; depth < path.length; depth++) {
+          index(beneath, encodePointer(path.slice(0, depth)), named);
+        }
+        if (structural(patch) && path.length > 0) {
+          index(shifting, encodePointer(path.slice(0, -1)), named);
+        }
+      }
+    }
+    const reads = pins.get(`${operation.id}\0${scope}`);
+
     for (const [array, first] of firstMarked) {
       if ((operationsByInstance.get(instanceOf(operation, opIndex)) ?? 0) > 1) {
         refuse(array, "beside another operation on the document");
       }
       const arrayPath = parsePointer(array);
-      if (
-        !reads.some((read) =>
-          read.id === operation.id && normalizeScope(read.scope) === scope &&
-          read.nonRecursive !== true && isPrefixPath(read.path, arrayPath)
-        )
-      ) {
+      // The pointer of each path from the root down to the array, the array's
+      // own last.
+      const above = Array.from(
+        { length: arrayPath.length + 1 },
+        (_, depth) => encodePointer(arrayPath.slice(0, depth)),
+      );
+      if (!above.some((pointer) => reads?.has(pointer) === true)) {
         refuse(array, "without a recursive read of the array or above it");
       }
-      for (const patch of operation.patches) {
-        if (patch.op === "splice" && patch.path === array) {
-          if (patch.pinned !== true) refuse(array, "beside an unmarked one");
-          continue;
-        }
-        const pointers = patch.op === "move" ? [patch.from, patch.path] : [
-          patch.path,
-        ];
-        for (const pointer of pointers) {
-          const path = parsePointer(pointer);
-          if (isPrefixPath(path, arrayPath)) {
-            // At the array or above it: a splice of an array above it stands
-            // past the element the array is in.
-            const ours = arrayPath[path.length];
-            if (
-              patch.op === "splice" && ours !== undefined &&
-              isArrayIndexPropertyName(ours) && patch.index > Number(ours)
-            ) {
-              continue;
-            }
-            refuse(array, `beside a ${patch.op} at ${pointer}`);
-          }
-          if (isPrefixPath(arrayPath, path)) {
-            const segment = path[arrayPath.length]!;
-            if (
-              !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
-              (path.length === arrayPath.length + 1 && structural(patch))
-            ) {
-              refuse(array, `beside a ${patch.op} at ${pointer}`);
-            }
+      // At the array or above it: a splice of an array above it stands past
+      // the element the array is in, and every splice of the array itself is
+      // marked.
+      above.forEach((pointer, depth) => {
+        for (const named of at.get(pointer) ?? []) {
+          const { patch } = named;
+          if (patch.op === "splice" && depth === arrayPath.length) {
+            if (patch.pinned !== true) refuse(array, "beside an unmarked one");
             continue;
           }
-          // An element of an array above it, added, removed or moved at or
-          // before the element the array is in, moves the array.
-          const parent = path.slice(0, -1);
+          const ours = arrayPath[depth];
           if (
-            !structural(patch) || parent.length >= arrayPath.length ||
-            !isPrefixPath(parent, arrayPath)
+            patch.op === "splice" && ours !== undefined &&
+            isArrayIndexPropertyName(ours) && patch.index > Number(ours)
           ) {
             continue;
           }
-          const segment = path[parent.length]!;
-          const ours = arrayPath[parent.length]!;
+          refuse(array, `beside a ${patch.op} at ${named.pointer}`);
+        }
+      });
+      // Beneath the array: below the first index, and no element added,
+      // removed or moved.
+      for (const named of beneath.get(above[arrayPath.length]) ?? []) {
+        const segment = named.path[arrayPath.length]!;
+        if (
+          !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
+          (named.path.length === arrayPath.length + 1 &&
+            structural(named.patch))
+        ) {
+          refuse(array, `beside a ${named.patch.op} at ${named.pointer}`);
+        }
+      }
+      // An element of an array above it, added, removed or moved at or
+      // before the element the array is in, moves the array.
+      for (let depth = 0; depth < arrayPath.length; depth++) {
+        for (const named of shifting.get(above[depth]) ?? []) {
+          const segment = named.path[depth]!;
+          const ours = arrayPath[depth]!;
           if (
-            arrayAtPath(currentDocument(), parent) !== undefined &&
             isArrayIndexPropertyName(segment) &&
             isArrayIndexPropertyName(ours) &&
-            Number(segment) <= Number(ours)
+            Number(segment) <= Number(ours) &&
+            arrayAtPath(currentDocument(), arrayPath.slice(0, depth)) !==
+              undefined
           ) {
-            refuse(array, `beside a ${patch.op} at ${pointer} that moves it`);
+            refuse(
+              array,
+              `beside a ${named.patch.op} at ${named.pointer} that moves it`,
+            );
           }
         }
       }

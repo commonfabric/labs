@@ -32,6 +32,7 @@ describe("applyCommit()", () => {
     tags: ["a", "b", "c", "d"],
     counts: [10, 20, 30],
     rows: [{ items: ["p"] }, { items: ["q"] }],
+    byKey: { 1: { items: ["r"] } },
     extra: {},
   };
   let engine: Engine;
@@ -423,6 +424,17 @@ describe("applyCommit()", () => {
       expect(stored()).toEqual({
         ...seeded,
         rows: [{ items: ["p"] }, { items: ["x", "q"] }, { items: [] }],
+      });
+    });
+
+    it("beside an add at a numbered key of a record above it, before its element", () => {
+      commit([
+        marked("/value/byKey/1/items", 0, 0, ["x"]),
+        { op: "add", path: "/value/byKey/0", value: { items: [] } },
+      ], [readAt(["value"])]);
+      expect(stored()).toEqual({
+        ...seeded,
+        byKey: { 0: { items: [] }, 1: { items: ["x", "r"] } },
       });
     });
 
