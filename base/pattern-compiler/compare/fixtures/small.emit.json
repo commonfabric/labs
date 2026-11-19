@@ -15,7 +15,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/small.tsx",
-              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/small.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + (\"?\"))));\n$rt.value(5, ($h) => (((\"hi \") + $h.v($h.slot(1)))));\n$rt.value(7, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(3) : $h.slot(4))));\n$rt.value(8, ($h) => (($h.select(1, $h.v($h.slot(2))) ? $h.slot(3) : $h.slot(4))));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\n$rt.value(11, ($h) => ($h.v($h.slot(5)).length));\n{\n$rt.element(0, ($h) => ($h.slot(6)));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(7)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ shout: $h.output(0), echo: $h.output(1), greeting: $h.output(2), chosen: $h.output(3), direct: $h.output(4), both: $h.output(5), count: $h.output(6), titles: $h.output(7), loud: $h.output(9), note: $h.slot(4), secret: $h.slot(3) })));\n});"
+              "source": "const { \"computed\": computed, \"pattern\": pattern } = $rt.external(\"commonfabric\");\n\n\nconst $default = (pattern(\"unhashed:pattern/compare/fixtures/small.tsx#default\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n$rt.value(1, ($h) => (($h.v($h.slot(0)).toUpperCase())));\n$rt.value(3, ($h) => (($h.v($h.output(0)) + (\"?\"))));\n$rt.value(5, ($h) => (((\"hi \") + $h.v($h.slot(1)))));\n$rt.value(7, ($h) => (($h.select(0, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(8, ($h) => (($h.select(1, $h.v($h.slot(2))) ? $h.slot(0) : $h.slot(1))));\n$rt.value(10, ($h) => (($h.v($h.slot(0)) + $h.v($h.slot(1)))));\n$rt.value(11, ($h) => ($h.v($h.slot(3)).length));\n{\n$rt.element(0, ($h) => ($h.slot(4)));\n}\n{\n$rt.element(1, ($h) => (($h.v($h.slot(5)) + (\"!\"))));\n}\nreturn $rt.thunk(($h) => (({ shout: $h.output(0), echo: $h.output(1), greeting: $h.output(2), chosen: $h.output(3), direct: $h.output(4), both: $h.output(5), count: $h.output(6), titles: $h.output(7), loud: $h.output(9), note: $h.slot(6), secret: $h.slot(7) })));\n});"
             }
           ],
           "outputsBelow": [],
@@ -106,11 +106,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               },
               "name": "titles",
               "source": {
-                "slot": 5
+                "slot": 3
               },
               "within": []
             },
@@ -118,11 +118,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               },
               "name": "loud",
               "source": {
-                "slot": 5
+                "slot": 3
               },
               "within": []
             }
@@ -183,9 +183,9 @@
                 0
               ],
               "slots": [
-                2,
-                3,
-                4
+                0,
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -202,9 +202,9 @@
                 1
               ],
               "slots": [
-                2,
-                3,
-                4
+                0,
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -235,7 +235,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                5
+                3
               ],
               "within": [],
               "writes": []
@@ -250,7 +250,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                6
+                4
               ],
               "within": [
                 {
@@ -269,7 +269,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                7
+                5
               ],
               "within": [
                 {
@@ -288,7 +288,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                4
+                6
               ],
               "within": [],
               "writes": []
@@ -303,7 +303,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                3
+                7
               ],
               "within": [],
               "writes": []
@@ -400,11 +400,11 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 3
+                    "slot": 0
                   },
                   {
                     "op": "slot",
-                    "slot": 4
+                    "slot": 1
                   }
                 ],
                 "condition": {
@@ -426,11 +426,11 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 3
+                    "slot": 0
                   },
                   {
                     "op": "slot",
-                    "slot": 4
+                    "slot": 1
                   }
                 ],
                 "condition": {
@@ -474,7 +474,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -487,7 +487,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -500,7 +500,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 6
+                "slot": 4
               }
             },
             {
@@ -513,7 +513,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -531,7 +531,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 5
                   },
                   {
                     "op": "const"
@@ -549,7 +549,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 4
+                "slot": 6
               }
             },
             {
@@ -561,7 +561,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 3
+                "slot": 7
               }
             }
           ],
@@ -619,26 +619,6 @@
               "schema": "unhashed:schema/3"
             },
             {
-              "observes": "identity",
-              "path": [
-                "secret"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/1"
-            },
-            {
-              "observes": "identity",
-              "path": [
-                "note"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/2"
-            },
-            {
               "observes": "enumeration",
               "path": [
                 "items"
@@ -674,6 +654,26 @@
                 "kind": "element"
               },
               "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "secret"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
             }
           ],
           "stateCells": [],

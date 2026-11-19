@@ -45,8 +45,7 @@
               ],
               "slots": [
                 1,
-                2,
-                3
+                2
               ],
               "within": [],
               "writes": []
@@ -64,8 +63,8 @@
               ],
               "slots": [
                 2,
-                4,
-                5
+                3,
+                4
               ],
               "within": [],
               "writes": []
@@ -83,8 +82,8 @@
               ],
               "slots": [
                 0,
-                3,
-                6
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -141,7 +140,7 @@
                 ],
                 "condition": {
                   "op": "slot",
-                  "slot": 3
+                  "slot": 2
                 },
                 "op": "select",
                 "selector": 1
@@ -158,7 +157,7 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 5
+                    "slot": 4
                   },
                   {
                     "op": "slot",
@@ -167,7 +166,7 @@
                 ],
                 "condition": {
                   "op": "slot",
-                  "slot": 4
+                  "slot": 3
                 },
                 "op": "select",
                 "selector": 2
@@ -184,11 +183,11 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 6
+                    "slot": 1
                   },
                   {
                     "op": "slot",
-                    "slot": 3
+                    "slot": 2
                   }
                 ],
                 "condition": {
@@ -230,7 +229,12 @@
               "schema": "unhashed:schema/1"
             },
             {
-              "observes": "identity",
+              "declared": {
+                "confidentiality": [
+                  "alice"
+                ]
+              },
+              "observes": "value",
               "path": [
                 "secret"
               ],
@@ -238,16 +242,6 @@
                 "kind": "argument"
               },
               "schema": "unhashed:schema/2"
-            },
-            {
-              "observes": "identity",
-              "path": [
-                "plain"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/3"
             },
             {
               "observes": "value",
@@ -270,7 +264,7 @@
               "schema": "unhashed:schema/3"
             },
             {
-              "observes": "identity",
+              "observes": "value",
               "path": [
                 "extra"
               ],
@@ -278,21 +272,6 @@
                 "kind": "argument"
               },
               "schema": "unhashed:schema/3"
-            },
-            {
-              "declared": {
-                "confidentiality": [
-                  "alice"
-                ]
-              },
-              "observes": "value",
-              "path": [
-                "secret"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/2"
             }
           ],
           "stateCells": [],

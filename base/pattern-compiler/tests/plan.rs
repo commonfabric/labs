@@ -1826,7 +1826,8 @@ fn a_conditional_and_a_logical_operator_are_a_select() {
     // template of `c` and two branches. `a && b` is `select(a, [b, a])`
     // ... `a || b` and `??` are analogous." "The condition's slots have
     // the class the test needs: `value` at the root for a scalar
-    // condition, `shape` at the root for a record or array".
+    // condition, `shape` at the root for a record or array". A branch
+    // that passes a scalar on is its `value` (the next test).
     let analysis = program(
         r#"import { pattern } from "commonfabric";
 export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number } }>(({ on, a, b, box }) => {
@@ -1840,8 +1841,8 @@ export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number 
 "#,
     );
     let plan = plan_of(&analysis, "P");
-    let a = "[argument a : identity]";
-    let b = "[argument b : identity]";
+    let a = "[argument a : value]";
+    let b = "[argument b : value]";
     assert_eq!(
         interim_template(&plan, "one"),
         format!("select([argument on : value] ? {a} | {b})")
@@ -1870,6 +1871,75 @@ export const P = pattern<{ on: boolean; a: string; b: string; box?: { n: number 
         plan["selectors"][one["selector"].as_u64().unwrap() as usize],
         json!({ "arity": 2 })
     );
+}
+
+#[test]
+fn the_branch_of_a_select_that_passes_a_scalar_on_is_its_value() {
+    // PL §3.5: "`a ?? b` tests presence, so the condition is `a` read for
+    // `shape`, and the branch that is `a` is the operand passed on: its
+    // `value` where it is a scalar, and the `slot` node of its reference
+    // where it is a container or a handle." The branch of a scalar read
+    // in a `computed`, which the expression code then reads whole, is
+    // its `value` slot: an `identity` slot there leaves the content's
+    // label out.
+    let analysis = program(
+        r#"import { computed, pattern, Writable } from "commonfabric";
+export const P = pattern<{ name?: string; on: boolean; box?: { n: number }; other: { n: number } }>(({ name, on, box, other }) => {
+  const typed = new Writable("");
+  const shout = computed(() => (name ?? "").toUpperCase());
+  const echo = computed(() => (typed.get() ?? "").toUpperCase());
+  const either = computed(() => (on || name) ? 1 : 0);
+  const kept = box ?? other;
+  return { shout, echo, either, kept };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let shout = interim_template(&plan, "shout");
+    assert!(shout.contains("[argument name : value]"), "{shout}");
+    assert!(!shout.contains("identity"), "{shout}");
+    let echo = interim_template(&plan, "echo");
+    assert!(!echo.contains("identity"), "{echo}");
+    assert!(echo.contains(": value]"), "{echo}");
+    // A container passed on is the slot of its reference.
+    assert_eq!(
+        interim_template(&plan, "kept"),
+        "select([argument box : shape] ? [argument box : identity] | [argument other : identity])"
+    );
+}
+
+#[test]
+fn a_read_below_the_reference_a_select_passes_on_observes_the_branch() {
+    // PL §3.5: "The result is the selected operand itself, not a copy: a
+    // reference stays the same reference", and §2.5: a read below a
+    // reference resolves through it. Expression code of the cone of the
+    // `select` that reads the membership, a member, or the content of the
+    // selected container observes the branch's container, as its `value`
+    // at the position the value code reads it, beside the reference.
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ list?: string[]; box?: { n: number }; other: { n: number } }>(({ list, box, other }) => {
+  const count = computed(() => (list ?? []).length);
+  const n = computed(() => (box ?? other).n);
+  const whole = computed(() => JSON.stringify(box ?? other));
+  return { count, n, whole };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let list = "derive(expression) { [argument list : identity] [argument list : value] }";
+    assert_eq!(
+        interim_template(&plan, "count"),
+        format!("select([argument list : shape] ? {list} | const)")
+    );
+    let box_ = "derive(expression) { [argument box : identity] [argument box : value] }";
+    let other = "derive(expression) { [argument other : identity] [argument other : value] }";
+    assert_eq!(
+        interim_template(&plan, "n"),
+        format!("select([argument box : shape] ? {box_} | {other})")
+    );
+    let whole = interim_template(&plan, "whole");
+    assert!(whole.contains(box_) && whole.contains(other), "{whole}");
 }
 
 #[test]

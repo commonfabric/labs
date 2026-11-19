@@ -16,11 +16,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               },
               "name": "titles",
               "source": {
-                "slot": 5
+                "slot": 3
               },
               "within": []
             },
@@ -28,11 +28,11 @@
               "construct": "map",
               "membership": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               },
               "name": "loud",
               "source": {
-                "slot": 5
+                "slot": 3
               },
               "within": []
             }
@@ -93,9 +93,9 @@
                 0
               ],
               "slots": [
-                2,
-                3,
-                4
+                0,
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -112,9 +112,9 @@
                 1
               ],
               "slots": [
-                2,
-                3,
-                4
+                0,
+                1,
+                2
               ],
               "within": [],
               "writes": []
@@ -145,7 +145,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                5
+                3
               ],
               "within": [],
               "writes": []
@@ -160,7 +160,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                6
+                4
               ],
               "within": [
                 {
@@ -179,7 +179,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                7
+                5
               ],
               "within": [
                 {
@@ -198,7 +198,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                4
+                6
               ],
               "within": [],
               "writes": []
@@ -213,7 +213,7 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                3
+                7
               ],
               "within": [],
               "writes": []
@@ -310,11 +310,11 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 3
+                    "slot": 0
                   },
                   {
                     "op": "slot",
-                    "slot": 4
+                    "slot": 1
                   }
                 ],
                 "condition": {
@@ -336,11 +336,11 @@
                 "branches": [
                   {
                     "op": "slot",
-                    "slot": 3
+                    "slot": 0
                   },
                   {
                     "op": "slot",
-                    "slot": 4
+                    "slot": 1
                   }
                 ],
                 "condition": {
@@ -384,7 +384,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -397,7 +397,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -410,7 +410,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 6
+                "slot": 4
               }
             },
             {
@@ -423,7 +423,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 5
+                "slot": 3
               }
             },
             {
@@ -441,7 +441,7 @@
                 "inputs": [
                   {
                     "op": "slot",
-                    "slot": 7
+                    "slot": 5
                   },
                   {
                     "op": "const"
@@ -459,7 +459,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 4
+                "slot": 6
               }
             },
             {
@@ -471,7 +471,7 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 3
+                "slot": 7
               }
             }
           ],
@@ -529,26 +529,6 @@
               "schema": "unhashed:schema/3"
             },
             {
-              "observes": "identity",
-              "path": [
-                "secret"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/1"
-            },
-            {
-              "observes": "identity",
-              "path": [
-                "note"
-              ],
-              "root": {
-                "kind": "argument"
-              },
-              "schema": "unhashed:schema/2"
-            },
-            {
               "observes": "enumeration",
               "path": [
                 "items"
@@ -584,6 +564,26 @@
                 "kind": "element"
               },
               "schema": "unhashed:schema/5"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "note"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/2"
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "secret"
+              ],
+              "root": {
+                "kind": "argument"
+              },
+              "schema": "unhashed:schema/1"
             }
           ],
           "stateCells": [],

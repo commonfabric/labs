@@ -94,7 +94,7 @@
             {
               "at": {
                 "file": "compare/fixtures/collection-output.tsx",
-                "start": 390
+                "start": 382
               },
               "bodies": [],
               "entry": "map",
@@ -113,7 +113,7 @@
             {
               "at": {
                 "file": "compare/fixtures/collection-output.tsx",
-                "start": 352
+                "start": 344
               },
               "bodies": [],
               "entry": "$UI",

@@ -124,7 +124,7 @@
               "schema": "unhashed:schema/1"
             },
             {
-              "observes": "identity",
+              "observes": "value",
               "path": [
                 "name"
               ],

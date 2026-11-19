@@ -415,7 +415,7 @@
               }
             },
             {
-              "observes": "identity",
+              "observes": "value",
               "path": [
                 "result",
                 "name"

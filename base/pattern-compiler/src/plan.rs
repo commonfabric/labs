@@ -318,7 +318,20 @@ struct Computed {
     step: bool,
     /// What the value holds, where the emitter decided it (ruling T3).
     origin: Option<Declared>,
+    /// For a `select` that passes an operand on: its selector, its
+    /// condition, and the place and the template of each branch. A read
+    /// below the selected operand, or of its content, observes the
+    /// branch's place at the read's path (`passed_template`).
+    passed: Option<Passed>,
     order: usize,
+}
+
+/// The branches of a `select` that passes an operand on (`Computed.passed`).
+#[derive(Clone)]
+struct Passed {
+    selector: usize,
+    condition: Option<Value>,
+    branches: Vec<(Place, Option<Value>)>,
 }
 
 /// The children that an expression written among the children of a view
@@ -392,6 +405,27 @@ fn entries_whole(entries: &Entries, path: &[String]) -> Option<Value> {
         .map(|(_, template)| template.clone())
         .collect();
     Some(joined(below?))
+}
+
+/// The template of a path of a constructed value, from its entries: the
+/// nearest entry at or above the path, and where the value is observed
+/// whole there, the join of the entries at and below it. An observation of
+/// class `shape`, `enumeration` or `identity` at a container has the
+/// container entry's template alone (PL §3.4).
+fn entries_template(entries: &Entries, path: &[String], class: &'static str) -> Option<Value> {
+    let below = entries
+        .iter()
+        .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
+    if !below {
+        return entry_at(entries, path);
+    }
+    if class == "value" {
+        return entries_whole(entries, path);
+    }
+    match entries.iter().find(|(at, _)| at == path) {
+        Some((_, template)) => template.clone(),
+        None => Some(json!({ "op": "const" })),
+    }
 }
 
 /// A static target of a side-write: the slot of the handle, its root and
@@ -1112,6 +1146,7 @@ impl<'a> Emitter<'_, '_, 'a> {
             step: false,
             referred: false,
             origin: None,
+            passed: None,
             order,
         });
         order
@@ -1208,6 +1243,18 @@ impl<'a> Emitter<'_, '_, 'a> {
         }
     }
 
+    /// The class of a branch of a `select` that passes an operand on
+    /// (PL §3.5): "its `value` where it is a scalar, and the `slot` node
+    /// of its reference where it is a container or a handle". A type
+    /// the resolver does not know is passed on as a reference, as
+    /// `test_class` reads it as a container.
+    fn branch_class(&self, expression: &Expression<'a>) -> &'static str {
+        match self.test_class(expression) {
+            "value" => "value",
+            _ => "identity",
+        }
+    }
+
     /// A `select` over the condition `test` and two branches (PL §3.5).
     /// `first` and `second` say what each branch is: an expression, or
     /// the condition itself.
@@ -1265,12 +1312,12 @@ impl<'a> Emitter<'_, '_, 'a> {
         class: Option<&'static str>,
         branches: [Option<&Expression<'a>>; 2],
     ) -> Place {
-        let mut origins: Vec<Option<Declared>> = Vec::new();
-        let place = self.select_in(hint, at, test, class, branches, &mut origins);
+        let (place, origins, passed) = self.select_in(hint, at, test, class, branches);
         // A selection passes the selected branch on: it is a reference
         // where every branch is one (ruling T3).
         if let Place::Value(value, _) = &place {
             self.values[*value].origin = combine(origins);
+            self.values[*value].passed = passed;
         }
         place
     }
@@ -1282,33 +1329,46 @@ impl<'a> Emitter<'_, '_, 'a> {
         test: &Expression<'a>,
         class: Option<&'static str>,
         branches: [Option<&Expression<'a>>; 2],
-        origins: &mut Vec<Option<Declared>>,
-    ) -> Place {
-        self.build(hint, at, |emitter, _| {
+    ) -> (Place, Vec<Option<Declared>>, Option<Passed>) {
+        let mut origins: Vec<Option<Declared>> = Vec::new();
+        let mut passed = None;
+        let place = self.build(hint, at, |emitter, _| {
             let selector = emitter.selector(2);
             let class = class.unwrap_or_else(|| emitter.test_class(test));
             let (tested, condition) = emitter.one(class, |emitter| emitter.eval(test, "condition"));
             let mut templates = Vec::new();
             let mut constructed = Vec::new();
+            let mut kept = Vec::new();
             for branch in branches {
                 let (place, template) = match branch {
                     Some(branch) => {
-                        emitter.one("identity", |emitter| emitter.eval(branch, "branch"))
+                        let class = emitter.branch_class(branch);
+                        emitter.one(class, |emitter| emitter.eval(branch, "branch"))
                     }
                     // "When the selected arm of `&&` or `||` is the
                     // condition, the result carries that operand's full
                     // template, not only its truthiness."
-                    None => emitter.one("identity", |_| tested.clone()),
+                    None => {
+                        let class = emitter.branch_class(test);
+                        emitter.one(class, |_| tested.clone())
+                    }
                 };
                 origins.push(emitter.declared_of(&place));
                 constructed.push((emitter.entries_of(&place), template.clone()));
-                templates.push(template);
+                templates.push(template.clone());
+                kept.push((place, template));
             }
+            passed = Some(Passed {
+                selector,
+                condition: condition.clone(),
+                branches: kept,
+            });
             emitter.per_path(&constructed, |at| {
                 select_node(selector, condition.clone(), at)
             });
             select_node(selector, condition, templates)
-        })
+        });
+        (place, origins, passed)
     }
 
     /// A dynamic key in the reactive tier: a `pick` whose choice the value
@@ -1512,25 +1572,88 @@ impl<'a> Emitter<'_, '_, 'a> {
             node["body"] = json!({ "op": "slot", "slot": slot });
             return Some(node);
         }
+        if let Some(passed) = self.values[value].passed.clone() {
+            let here = self.cone.is_none_or(|cone| cone == self.values[value].cone);
+            if here && !(path.is_empty() && class == "identity") {
+                return self.passed_template(&passed, path, class);
+            }
+        }
         let Some(entries) = &self.values[value].entries else {
             return self.template_by_reference(value);
         };
         if path.is_empty() && class == "value" {
             return self.values[value].template.clone();
         }
-        let below = entries
-            .iter()
-            .any(|(at, _)| at.len() > path.len() && at.starts_with(path));
-        if !below {
-            return entry_at(entries, path);
+        entries_template(entries, path, class)
+    }
+
+    /// The template of a read of a `select` that passes an operand on,
+    /// where the read observes more than which reference the selection
+    /// holds: a path below the selected operand, or its content (PL §3.5,
+    /// "The result is the selected operand itself"; §2.5, "A slot path
+    /// may cross a link"). Each branch is its own template joined with
+    /// the template of its place read at `path` with `class`, which is
+    /// what a read through the reference the branch passes on observes.
+    /// Only a reader in the cone of the `select` has it: the slots of a
+    /// branch are read by that cone's value code, and the write record
+    /// of another cone binds none of them.
+    fn passed_template(
+        &mut self,
+        passed: &Passed,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        let mut branches = Vec::new();
+        for (place, template) in &passed.branches {
+            let branch = match place {
+                Place::Slot(..) | Place::Read(..) | Place::Record(_) => {
+                    let read = self.read_through(place, path, class)?;
+                    joined(vec![template.clone()?, read])
+                }
+                // A `select` nested in a branch is read through in turn.
+                Place::Value(inner, _) if self.values[*inner].passed.is_some() => {
+                    let read = self.read_through(place, path, class)?;
+                    joined(vec![template.clone()?, read])
+                }
+                // Any other value the cone computed has a template that
+                // covers its content: a `pick` reads its chosen child
+                // for `value` where it is passed on (`chosen_slot`), and
+                // expression code joins what it observed.
+                _ => template.clone()?,
+            };
+            branches.push(Some(branch));
         }
-        if class == "value" {
-            return entries_whole(entries, path);
+        select_node(passed.selector, passed.condition.clone(), branches)
+    }
+
+    /// The template of `place` read at `path` below it with `class`, with
+    /// the slots of that read listed in the cone being evaluated. A read
+    /// below the place is its `value`: the slot stays at the position the
+    /// value code reads the branch at, so the write record binds it there
+    /// (`#samePositionBound` of `exec/executor.ts`), and a path below a
+    /// reference, `.length` of a collection among them, is covered by the
+    /// `value` of what the reference names.
+    fn read_through(
+        &mut self,
+        place: &Place,
+        path: &[String],
+        class: &'static str,
+    ) -> Option<Value> {
+        if let Place::Record(_) = place {
+            let entries = self.entries_of(place)?;
+            return entries_template(&entries, path, class);
         }
-        match entries.iter().find(|(at, _)| at == path) {
-            Some((_, template)) => template.clone(),
-            None => Some(json!({ "op": "const" })),
+        if let Place::Value(..) = place {
+            let mut at = place.clone();
+            for key in path {
+                at = Self::extend(&at, key);
+            }
+            self.observe_slots(&at, class);
+            return self.template_of(&at, class);
         }
+        let class = if path.is_empty() { class } else { "value" };
+        self.observe_slots(place, class);
+        self.template_of(place, class)
     }
 
     /// The template of a value the instance computed, as the template of
@@ -1665,6 +1788,12 @@ impl<'a> Emitter<'_, '_, 'a> {
             let template = self.template_of(place, class);
             self.operand(template);
         }
+        self.observe_slots(place, class);
+    }
+
+    /// Lists, in the cone being evaluated, the slots an observation of
+    /// `place` with `class` makes.
+    fn observe_slots(&mut self, place: &Place, class: &'static str) {
         match place {
             Place::Slot(root, path) => {
                 let slot = self.slot(root, path, class);
