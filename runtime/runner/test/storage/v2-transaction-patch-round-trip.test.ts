@@ -17,7 +17,7 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import type { Cell } from "../../src/cell.ts";
 import { Runtime } from "../../src/runtime.ts";
 import {
-  markServedEventHandlerTx,
+  markServedWaveRunTx,
   markUiInputBlindWriteTx,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
@@ -988,14 +988,15 @@ describe("v2-transaction", () => {
       expect(await storedValue("readded")).toStrictEqual({ list: changed });
     });
 
-    it("sends a served event handler's head insertion index by index", async () => {
-      // The wave drops each of a served handler's patches that the firing
-      // session's later writes overwrote, which a splice cannot be in part.
+    it("sends a served wave run's head insertion index by index", async () => {
+      // A wave batch carries no read set the store checks, and the wave drops
+      // a served handler's patches one by one, which a splice cannot be in
+      // part.
       const writer = connect();
       await commit(writer, "served", (cell) => cell.set({ list: ["a", "b"] }));
 
       const tx = writer.runtime.edit();
-      markServedEventHandlerTx(tx);
+      markServedWaveRunTx(tx);
       const list = writer.runtime
         .getCell<FabricValue>(space, "served", undefined, tx)
         .key("list");

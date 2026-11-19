@@ -35,7 +35,9 @@ describe("WaveAccumulator", () => {
   const typed: Draft = { name: "Grace", bio: "Admiral" };
 
   beforeEach(async () => {
-    server = newSharedServer();
+    // The server advertises marked splices, so the served runs' array
+    // changes are held to the rules a wave batch meets.
+    server = newSharedServer({ markedSplices: true });
     storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -261,6 +263,64 @@ describe("WaveAccumulator", () => {
       ]);
       expect(outcome.committedEventIds).toEqual(["e-edit"]);
       expect(outcome.requeuedEventIds).toEqual([]);
+    });
+
+    it("commits a served derivation's head insertion into a list", async () => {
+      // A wave batch carries no read set the store checks, so a served run's
+      // array change goes index by index: a marked splice in it would be
+      // refused, and the wave with it.
+      const list = runtime.getCell<string[]>(space, "wave-derived", undefined);
+      const seed = runtime.edit();
+      list.withTx(seed).set(["a", "b", "c"]);
+      expect((await seed.commit().settled).error).toBeUndefined();
+      await server.flushSessions([space]);
+      await storageManager.open(space).pullToServerHead?.();
+      await list.sync();
+
+      const holder = executionLeaseHolder(`service:${space}`);
+      const lease = new ExecutionLeaseCycle({
+        leases: engine.executionLeases,
+        space,
+        holder,
+      });
+      expect(await lease.acquire()).toBe(true);
+      try {
+        const wave = new WaveAccumulator({
+          space,
+          basisSeq: Engine.serverSeq(engine),
+          scopeKeyIdentity: {
+            principal: signer.did(),
+            sessionId: "wave-test-session",
+          },
+          replicaFor: (s) => storageManager.open(s).replica,
+          lease,
+        });
+        runtime.installSealDestination(wave);
+        const derivation = runtime.edit();
+        stampWaveRunContext(derivation, {
+          actionId: "derive-list",
+          kind: "derivation",
+        });
+        const current = list.withTx(derivation).get() as string[];
+        list.withTx(derivation).set(["x", ...current]);
+        expect((await derivation.commit().settled).error).toBeUndefined();
+        runtime.clearSealDestination();
+        const outcome = await wave.commitWave(
+          new EngineWaveCommitSink({
+            engineFor: () => engine,
+            sessionId: holder,
+          }),
+        );
+        await wave.settled();
+
+        expect(outcome.dispositions).toEqual([{ kind: "committed" }]);
+        expect(
+          Engine.readState(engine, { id: list.getAsNormalizedFullLink().id })
+            ?.document,
+        ).toEqual({ value: ["x", "a", "b", "c"] });
+      } finally {
+        await lease.release();
+      }
     });
 
     it("drops an event consequence at an element the firing session's later splice moved", async () => {

@@ -124,7 +124,7 @@ import {
   isReadIgnoredForScheduling,
   isReadMarkedAsAttemptedWrite,
   isServedDerivationTx,
-  isServedEventHandlerTx,
+  isServedWaveRunTx,
   isUiInputBlindWriteTx,
   pendingWriteElisionRead,
   registerCommitRejectionListener,
@@ -4416,15 +4416,15 @@ export class V2StorageTransaction implements IStorageTransaction {
    * overwriting nothing, and would let a delayed handler's write land over
    * the change; it gets the per-index form.
    *
-   * A transaction a serving loop runs an event handler in sends none: the
-   * wave drops each of its patches that the firing session's later writes
-   * overwrote (serving-loop.md §3d), and a splice that both replaces an
-   * element and inserts beside it cannot be dropped in part.
+   * A transaction a serving loop runs in a wave sends none
+   * (`isServedWaveRunTx()`): the wave batch carries no read set the store
+   * checks, and the wave drops an event handler's patches one by one, which
+   * it cannot do to part of a splice.
    */
   #arraySpliceGate(
     space: MemorySpace,
   ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
-    if (isServedEventHandlerTx(this)) return () => false;
+    if (isServedWaveRunTx(this)) return () => false;
     if (this.#branches.get(space)?.replica.markedSplices?.() !== true) {
       return () => false;
     }

@@ -341,24 +341,27 @@ export function isServedDerivationTx(tx: object): boolean {
   return false;
 }
 
-const servedEventHandlerTxs = new WeakSet<object>();
+const servedWaveRunTxs = new WeakSet<object>();
 
 /**
- * Marks a transaction a serving loop runs an event handler in. The wave judges
- * each patch of its commit against the later writes of the session that fired
- * the event, and drops the ones those writes overwrote (serving-loop.md §3d),
- * so its array changes go index by index: a splice that both replaces an
- * element and inserts beside it cannot be dropped in part
- * (`V2StorageTransaction.#arraySpliceGate()`).
+ * Marks a transaction a serving loop runs in a wave: a derivation, an event
+ * handler, or bookkeeping. Its array changes go index by index
+ * (`V2StorageTransaction.#arraySpliceGate()`), for two reasons. The wave
+ * batch its commit is sealed into carries no read set the store checks, so a
+ * marked splice in it would be refused, and the wave with it. And the wave
+ * judges each patch of an event handler's commit against the later writes of
+ * the session that fired the event, dropping the ones those writes overwrote
+ * (serving-loop.md §3d), which it cannot do to part of a splice that both
+ * replaces an element and inserts beside it.
  */
-export function markServedEventHandlerTx(tx: object): void {
-  for (const layer of transactionLayers(tx)) servedEventHandlerTxs.add(layer);
+export function markServedWaveRunTx(tx: object): void {
+  for (const layer of transactionLayers(tx)) servedWaveRunTxs.add(layer);
 }
 
-/** Whether `tx` is one a serving loop runs an event handler in. */
-export function isServedEventHandlerTx(tx: object): boolean {
+/** Whether `tx` is one a serving loop runs in a wave. */
+export function isServedWaveRunTx(tx: object): boolean {
   for (const layer of transactionLayers(tx)) {
-    if (servedEventHandlerTxs.has(layer)) return true;
+    if (servedWaveRunTxs.has(layer)) return true;
   }
   return false;
 }

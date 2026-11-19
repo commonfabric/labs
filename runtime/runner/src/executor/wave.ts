@@ -89,7 +89,7 @@ import {
 } from "../storage/transaction-inspection.ts";
 import {
   markServedDerivationTx,
-  markServedEventHandlerTx,
+  markServedWaveRunTx,
 } from "../storage/reactivity-log.ts";
 import { waveClaimIsWithheld } from "./processed-claim.ts";
 
@@ -342,7 +342,7 @@ export function stampWaveRunContext(
 ): void {
   waveRunContexts.set(tx, context);
   if (context.kind === "derivation") markServedDerivationTx(tx);
-  if (context.kind === "event-handler") markServedEventHandlerTx(tx);
+  markServedWaveRunTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
