@@ -5,6 +5,7 @@ import {
   type AsyncResult,
   FabricUnavailable,
   type HasError,
+  type IsObsolete,
   type IsPending,
   type IsSyncing,
   pattern,
@@ -88,6 +89,35 @@ export default pattern(() => {
         assertion: assert(() =>
           subject.error === "refused" &&
           propValue(findElement(subject[UI], "p"), "role") === "alert"
+        ),
+      },
+      {
+        action: action(() =>
+          request.set(
+            new FabricUnavailable(
+              "obsolete",
+              null,
+              "Use the replacement checklist",
+            ) as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "Use the replacement checklist" &&
+          !subject.pending && subject.items.length === 0 &&
+          textContent(subject[UI]).includes("Use the replacement checklist")
+        ),
+      },
+      {
+        action: action(() =>
+          request.set(new FabricUnavailable("obsolete") as IsObsolete)
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "This checklist output has been retired." &&
+          findElement(subject[UI], "cf-loader") === undefined
         ),
       },
       { action: action(() => request.set({ items: [] })) },

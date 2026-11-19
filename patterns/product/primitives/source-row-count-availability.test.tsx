@@ -8,6 +8,7 @@ import {
   type AsyncResult,
   FabricUnavailable,
   type HasError,
+  type IsObsolete,
   type IsPending,
   type IsSyncing,
   NAME,
@@ -71,6 +72,35 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           findElementByText(count[UI], "cf-alert", "offline") !== undefined
+        ),
+      },
+      {
+        action: action(() =>
+          read.set(
+            new FabricUnavailable(
+              "obsolete",
+              null,
+              "Use the replacement counter",
+            ) as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          !count.pending && count.total === 0 && count.matching === 0 &&
+          count.errorMessage === "Use the replacement counter" &&
+          textContent(count[UI]).includes("Use the replacement counter") &&
+          !textContent(count[UI]).includes("0 of 0")
+        ),
+      },
+      {
+        action: action(() =>
+          read.set(new FabricUnavailable("obsolete") as IsObsolete)
+        ),
+      },
+      {
+        assertion: assert(() =>
+          count.errorMessage === "This row count output has been retired."
         ),
       },
       { action: action(() => read.set({ rows: [{ total: 0, matching: 0 }] })) },

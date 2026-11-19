@@ -6,8 +6,9 @@ type StaticBindingAccessSegment =
   | { readonly kind: "property"; readonly text: string }
   | { readonly kind: "index"; readonly text: string };
 
+/** Returns the runtime key of a statically named property or binding. */
 export function getStaticPropertyNameText(
-  name: ts.PropertyName,
+  name: ts.PropertyName | ts.BindingName,
 ): string | undefined {
   if (ts.isIdentifier(name)) return name.text;
   if (

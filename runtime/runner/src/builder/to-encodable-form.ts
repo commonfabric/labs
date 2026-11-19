@@ -198,8 +198,8 @@ function bindValue(value: unknown, walk: BindingWalk): FabricExecValue {
   if (value instanceof FabricPrimitive) return value;
 
   // Availability markers are runtime-owned atomic control values. Their codec
-  // state is closed over the fixed reason (and frozen FabricError for the
-  // error variant), so preserve them as leaves instead of treating them as an
+  // state contains the frozen reason, errorKind, and message fields, so
+  // preserve them as leaves instead of treating them as an
   // arbitrary FabricInstance container.
   if (isUnavailable(value)) return value;
 

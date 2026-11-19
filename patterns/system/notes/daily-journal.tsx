@@ -7,6 +7,7 @@ import {
   handler,
   hasError,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   llmDialog,
@@ -138,13 +139,16 @@ export type WeeklyRollup = {
 export const WeeklyRollupPresentation = pattern(
   ({ response }: { response: AsyncResult<WeeklyRollup> }) => {
     const weeklyRollup = computed(() =>
-      isPending(response) || isSyncing(response) || hasError(response)
+      isPending(response) || isSyncing(response) || hasError(response) ||
+        isObsolete(response)
         ? undefined
         : resultOf(response)
     );
     const error = computed(() => {
       if (isPending(response) || isSyncing(response)) return "";
-      return hasError(response) ? response.message : "";
+      return hasError(response) || isObsolete(response)
+        ? response.message || "This weekly rollup output has been retired."
+        : "";
     });
     return {
       weeklyRollup,

@@ -52,8 +52,10 @@ weeks later.
 search over profile elements with
 `scope: ["profile"]`. Reads are read-only; writes go only through the
 profile pattern's own owner-protected handlers (seam 7). At zero
-profiles, `#profile` renders the trusted create surface inline and its result
-channel carries an error availability value; scalar targets do the same.
+profiles, an interactive `#profile` wish renders the trusted create surface
+inline and its result channel carries an error availability value; scalar
+targets do the same. A headless wish exposes the error UI instead of the
+interactive create surface.
 Consumers that present the missing-profile UI guard the original result
 channel with `hasError()`. Ordinary consumers use `resultOf(wish.result)` and
 wait. A configured `preferredProfileSpace` selects that profile first and fails

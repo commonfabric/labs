@@ -367,9 +367,11 @@ export function transformLiftAppliedCall(
       path: [originalInputParamName, ...entry.path],
     }))
     : [];
-  const availabilityTypeEntries = mergeAvailabilityCaptureOverrides([
+  const inputAvailabilityTypeEntries = mergeAvailabilityCaptureOverrides([
     ...originalInputAvailabilityEntries,
     ...guardedInputEntries,
+  ]);
+  const captureAvailabilityTypeEntries = mergeAvailabilityCaptureOverrides([
     ...observedCaptureEntries,
     ...guardedCaptureEntries,
   ]);
@@ -555,7 +557,11 @@ export function transformLiftAppliedCall(
     captureTree,
     captureNameMap,
     hadZeroParameters,
-    availabilityOverridesByPath(availabilityTypeEntries),
+    inputAvailabilityTypeEntries.map((entry) => ({
+      ...entry,
+      path: entry.path.slice(1),
+    })),
+    availabilityOverridesByPath(captureAvailabilityTypeEntries),
     context,
   );
   const capabilityAnalysis = getCapabilityAnalysis(
@@ -564,7 +570,10 @@ export function transformLiftAppliedCall(
     state.typeRegistry,
   );
   const inputParamSummary = capabilityAnalysis.firstParameter;
-  if (inputParamSummary && availabilityTypeEntries.length === 0) {
+  if (
+    inputParamSummary && inputAvailabilityTypeEntries.length === 0 &&
+    captureAvailabilityTypeEntries.length === 0
+  ) {
     // Availability policy is evaluated against the complete serialized module
     // argument. Capability shrinking can remove an unused-but-present
     // observed property while the merged input and exact-path policy still

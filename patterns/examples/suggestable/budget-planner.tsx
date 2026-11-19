@@ -1,12 +1,14 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateObject,
   hasError,
-  hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
+  lift,
   NAME,
   observeAvailability,
   pattern,
@@ -37,7 +39,29 @@ export type BudgetOutput = {
   total: number;
   remaining: number;
   pending: boolean;
+
+  /** Terminal generation or retirement guidance, otherwise empty. */
+  error: string;
 };
+
+/** Projects generation outcomes into the budget's loading and message state. */
+export const budgetPresentationState = lift(({
+  topic,
+  request,
+}: { topic: string; request: AsyncResult<{ items: BudgetItem[] }> }) => {
+  if (!topic) return { response: { items: [] }, pending: false, error: "" };
+  if (isPending(request) || isSyncing(request)) {
+    return { response: { items: [] }, pending: true, error: "" };
+  }
+  if (hasError(request) || isObsolete(request)) {
+    return {
+      response: { items: [] },
+      pending: false,
+      error: request.message || "This budget output has been retired.",
+    };
+  }
+  return { response: resultOf(request), pending: false, error: "" };
+});
 
 // ===== Pattern =====
 
@@ -84,18 +108,9 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
       },
       model: "anthropic:claude-haiku-4-5",
     });
-    const observedResponse = observeAvailability(responseRequest);
-    const responseState = computed(() => {
-      if (isPending(observedResponse)) {
-        return { response: { items: [] }, pending: true };
-      }
-      if (
-        hasError(observedResponse) || isSyncing(observedResponse) ||
-        hasSchemaMismatch(observedResponse)
-      ) {
-        return { response: { items: [] }, pending: false };
-      }
-      return { response: resultOf(observedResponse), pending: false };
+    const responseState = budgetPresentationState({
+      topic,
+      request: observeAvailability(responseRequest),
     });
 
     const items = computed(() => responseState.response.items || []);
@@ -118,6 +133,9 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
           </cf-vstack>
 
           <cf-vstack gap="3" style="padding: 1.5rem;">
+            {responseState.error
+              ? <p role="alert">{responseState.error}</p>
+              : null}
             {ifElse(
               responseState.pending,
               <div style="color: var(--cf-theme-color-text-secondary);">
@@ -191,6 +209,7 @@ const BudgetPlanner = pattern<BudgetInput, BudgetOutput>(
       total,
       remaining,
       pending: responseState.pending,
+      error: responseState.error,
     };
   },
 );

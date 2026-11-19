@@ -2666,7 +2666,7 @@ export function wish(
           // re-runs. Keep its scoped instance coalesced until those settle,
           // including when the reporting transaction never reached commit.
           try {
-            await runtime.idle();
+            await runtime.scheduler.idleWithPendingCommits();
           } finally {
             wishFailureUIInFlight.delete(inFlightKey);
           }
@@ -2777,7 +2777,7 @@ export function wish(
       // own bounded re-runs against this doc — then re-derive the error
       // state on a fresh transaction. This wait is why the chain must stay
       // untracked (see the launch site above).
-      await runtime.idle();
+      await runtime.scheduler.idleWithPendingCommits();
       return commitWishFailureUI(
         stateLink,
         message,

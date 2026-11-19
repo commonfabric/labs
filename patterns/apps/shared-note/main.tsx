@@ -15,9 +15,11 @@ import {
   FS,
   handler,
   hasError,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   type PerSession,
   type PerSpace,
@@ -1629,6 +1631,8 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
   ({ title, content, comments, activity }) => {
     const profile = wish<NoteProfile>({ query: "#profile" });
     const profileName = wish<string>({ query: "#profileName" });
+    const observedProfile = observeAvailability(profile.result);
+    const observedProfileName = observeAvailability(profileName.result);
     const participantName = computed(() => {
       if (
         isPending(profileName.result) || isSyncing(profileName.result) ||
@@ -1636,11 +1640,26 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       ) return "";
       return normalizePresenceParticipantName(resultOf(profileName.result));
     });
-    const hasProfile = computed(() =>
-      participantName !== "" &&
-      !isPending(profile.result) && !isSyncing(profile.result) &&
-      !hasError(profile.result)
-    );
+    const hasProfile = computed(() => {
+      if (
+        isPending(observedProfile) || isSyncing(observedProfile) ||
+        hasError(observedProfile) || isObsolete(observedProfile) ||
+        isPending(observedProfileName) || isSyncing(observedProfileName) ||
+        hasError(observedProfileName) || isObsolete(observedProfileName)
+      ) return false;
+      return normalizePresenceParticipantName(resultOf(observedProfileName)) !==
+        "";
+    });
+    const retirementGuidance = computed(() => {
+      if (isObsolete(observedProfile)) {
+        return observedProfile.message || "This profile has been retired.";
+      }
+      if (isObsolete(observedProfileName)) {
+        return observedProfileName.message ||
+          "This profile name has been retired.";
+      }
+      return "";
+    });
     const note = SharedNoteCore({
       content,
       comments,
@@ -1684,6 +1703,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
               </div>
             )}
         </cf-hstack>
+        {retirementGuidance ? <p role="status">{retirementGuidance}</p> : null}
         {note[UI]}
       </cf-vstack>
     );

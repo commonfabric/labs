@@ -21,6 +21,7 @@ import {
   hasError,
   hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -122,13 +123,15 @@ export const SourceRowCountPresentation = pattern<
 
   const total = computed(() =>
     isPending(observedCountRead) || hasError(observedCountRead) ||
-      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead) ||
+      isObsolete(observedCountRead)
       ? 0
       : countValue.rows[0]?.total ?? 0
   );
   const matching = computed(() =>
     isPending(observedCountRead) || hasError(observedCountRead) ||
-      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead)
+      isSyncing(observedCountRead) || hasSchemaMismatch(observedCountRead) ||
+      isObsolete(observedCountRead)
       ? 0
       : countValue.rows[0]?.matching ?? 0
   );
@@ -136,7 +139,9 @@ export const SourceRowCountPresentation = pattern<
     isPending(observedCountRead) || isSyncing(observedCountRead)
   );
   const errorMessage = computed(() =>
-    hasError(observedCountRead) ? observedCountRead.message : ""
+    hasError(observedCountRead) || isObsolete(observedCountRead)
+      ? observedCountRead.message || "This row count output has been retired."
+      : ""
   );
   const queryHasError = computed(() => errorMessage !== "");
 
@@ -144,13 +149,19 @@ export const SourceRowCountPresentation = pattern<
   // the one reading this part exists to rule out — a full table that looks
   // empty. So nothing states a count until the read has settled.
   const summary = computed(() =>
-    pending ? "counting" : `${matching} of ${total}`
+    pending
+      ? "counting"
+      : queryHasError
+      ? "unavailable"
+      : `${matching} of ${total}`
   );
 
   return {
     [NAME]: computed(() =>
       pending
         ? `counting rows in ${table}`
+        : queryHasError
+        ? `row count unavailable in ${table}`
         : `${matching} of ${total} rows in ${table}`
     ),
     [UI]: (

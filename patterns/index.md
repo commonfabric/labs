@@ -1714,6 +1714,7 @@ type ChecklistOutput = {
   topic: string;
   items: ChecklistItem[];
   pending: boolean;
+  error: string;
 };
 ```
 
@@ -1845,6 +1846,7 @@ type BudgetOutput = {
   total: number;
   remaining: number;
   pending: boolean;
+  error: string;
 };
 ```
 

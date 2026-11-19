@@ -40,7 +40,8 @@ states. See [Fetching Data](../capabilities/fetch.md) and
 
 Use `latestComplete()` when continuity is intentional. It waits for its entire
 input to become usable, then keeps the last complete snapshot during later
-pending, error, syncing, or schemaMismatch intervals:
+pending, syncing, obsolete, or error intervals, including errors whose
+`errorKind` is `schemaMismatch`:
 
 ```tsx
 // Shown for illustration only.
@@ -48,8 +49,9 @@ const snapshot = latestComplete({ repo: repoRequest, ticket: ticketRequest });
 ```
 
 This is an atomic join: neither field advances until both current requests are
-usable. Inspect the original requests when the UI also needs the current error
-or loading reason. Unlike `resultOf()`, `latestComplete()` creates a stateful
+usable. Inspect the original requests when the UI also needs the current error,
+loading reason, or obsolete replacement guidance. Unlike `resultOf()`,
+`latestComplete()` creates a stateful
 built-in node.
 
 Availability policy is attached at the exact stable reactive path captured by
@@ -77,8 +79,9 @@ reactive slot starts blank; the rest of the surrounding render is unaffected.
 After a usable value has rendered, a pending replacement keeps the last
 element-rooted subtree visible but dimmed and non-interactive until usable data
 returns. A retained bare text node stays visible but has no element on which to
-apply the pending style or `inert`; it also has no interactive surface. Error,
-syncing, and schemaMismatch values clear the affected prior content. Use
+apply the pending style or `inert`; it also has no interactive surface. Error
+(including `errorKind: "schemaMismatch"`), syncing, and obsolete values clear
+the affected prior content. Use
 guards when the UI should show an explicit loading or failure state instead.
 
 The public pattern type `AsyncResult<T>` is the availability union described

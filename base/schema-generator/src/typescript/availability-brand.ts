@@ -20,10 +20,7 @@ export function isCommonFabricAvailabilityType(
 ): boolean {
   if (
     typeNode && ts.isTypeReferenceNode(typeNode) &&
-    ts.isQualifiedName(typeNode.typeName) &&
-    ts.isIdentifier(typeNode.typeName.left) &&
-    typeNode.typeName.left.text === "__cfHelpers" &&
-    AVAILABILITY_TYPE_NAMES.has(typeNode.typeName.right.text)
+    isSyntheticAvailabilityTypeReference(typeNode)
   ) return true;
   if (
     [type.aliasSymbol, type.getSymbol()].some((symbol) =>
@@ -33,4 +30,14 @@ export function isCommonFabricAvailabilityType(
   ) return true;
   return type.isIntersection() &&
     type.types.some((part) => isCommonFabricAvailabilityType(part, undefined));
+}
+
+/** Recognizes an availability type reference emitted by the transformer. */
+export function isSyntheticAvailabilityTypeReference(
+  node: ts.TypeReferenceNode,
+): boolean {
+  return ts.isQualifiedName(node.typeName) &&
+    ts.isIdentifier(node.typeName.left) &&
+    node.typeName.left.text === "__cfHelpers" &&
+    AVAILABILITY_TYPE_NAMES.has(node.typeName.right.text);
 }

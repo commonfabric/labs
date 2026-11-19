@@ -1,10 +1,12 @@
 import {
+  type AsyncResult,
   computed,
   Default,
   generateText,
   hasError,
   hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -34,25 +36,11 @@ export type DiagramOutput = {
 
 // ===== Pattern =====
 
-/**
- * Generates an ASCII diagram illustrating relationships, flows, or structures.
- * Designed as "suggestion fuel" - a lightweight utility pattern for visual
- * representation of concepts using plain text art.
- */
-const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
-  // An empty prompt holds the request back: `generateText` clears its state
-  // and makes no call until one arrives. A diagram with no topic has nothing
-  // to draw, so the model is asked only once a caller names the subject.
-  const prompt = computed(() =>
-    promptAbout(topic, "Create a clear ASCII diagram illustrating: ")
-  );
-
-  const responseRequest = generateText({
-    system:
-      "You create clear, well-structured ASCII diagrams using box-drawing characters, arrows, and text art. Use ┌─┐│└─┘ for boxes, ──▶ for arrows, and keep diagrams compact but readable. Output ONLY the diagram with no surrounding explanation.",
-    prompt,
-    context,
-  });
+/** Presents a diagram's loading, terminal guidance, and usable content. */
+export const DiagramPresentation = pattern<
+  { topic: string; responseRequest: AsyncResult<string> },
+  DiagramOutput
+>(({ topic, responseRequest }) => {
   const responseState = computed(() => {
     if (!topic) {
       return {
@@ -86,12 +74,21 @@ const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
         error: responseRequest.message,
       };
     }
-    if (isSyncing(responseRequest)) {
+    if (isObsolete(responseRequest)) {
       return {
         response: "",
         pending: false,
+        availability: "obsolete",
+        error: responseRequest.message ||
+          "This diagram output has been retired.",
+      };
+    }
+    if (isSyncing(responseRequest)) {
+      return {
+        response: "",
+        pending: true,
         availability: "syncing",
-        error: "Waiting for synchronized data.",
+        error: "",
       };
     }
     return {
@@ -137,6 +134,20 @@ const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
     availability: responseState.availability,
     error: responseState.error,
   };
+});
+
+/** Generates an ASCII diagram for the supplied subject. */
+const Diagram = pattern<DiagramInput, DiagramOutput>(({ topic, context }) => {
+  const prompt = computed(() =>
+    promptAbout(topic, "Create a clear ASCII diagram illustrating: ")
+  );
+  const responseRequest = generateText({
+    system:
+      "You create clear, well-structured ASCII diagrams using box-drawing characters, arrows, and text art. Use ┌─┐│└─┘ for boxes, ──▶ for arrows, and keep diagrams compact but readable. Output ONLY the diagram with no surrounding explanation.",
+    prompt,
+    context,
+  });
+  return DiagramPresentation({ topic, responseRequest });
 });
 
 export default Diagram;

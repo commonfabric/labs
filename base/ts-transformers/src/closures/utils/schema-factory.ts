@@ -160,6 +160,7 @@ export function createLiftAppliedInputSchema(
   captureTree: Map<string, CaptureTreeNode>,
   captureNameMap: Map<string, string>,
   hadZeroParameters: boolean,
+  inputAvailabilityOverrides: readonly AvailabilityCaptureOverride[],
   availabilityOverrides:
     | ReadonlyMap<string, AvailabilityCaptureOverride>
     | undefined,
@@ -172,14 +173,6 @@ export function createLiftAppliedInputSchema(
 
   // Add type element for original input UNLESS callback had zero parameters
   if (!hadZeroParameters) {
-    const inputAvailabilityOverrides = availabilityOverrides
-      ? [...availabilityOverrides.values()]
-        .filter((override) => override.path[0] === originalInputParamName)
-        .map((override) => ({
-          ...override,
-          path: override.path.slice(1),
-        }))
-      : [];
     // Add type element for original input using the helper function
     let inputTypeNode = expressionToTypeNode(originalInput, context);
     if (inputAvailabilityOverrides.length > 0) {

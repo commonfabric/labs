@@ -73,13 +73,13 @@ export interface ReactiveNowOutput {
   [NAME]: string;
   [UI]: VNode;
 
-  /** The piece's first-load time, "HH:MM:SS" (or "…" before #now resolves). */
+  /** The piece's first-load time, "HH:MM:SS", unavailable until #now resolves. */
   loadedAt: string;
 
-  /** The ticking current time, "HH:MM:SS" (or "…"). */
+  /** The ticking current time, "HH:MM:SS", unavailable until its wish resolves. */
   now: string;
 
-  /** Whole seconds since load, e.g. "12s ago" (or "…"). */
+  /** Whole seconds since load, e.g. "12s ago", unavailable until both times resolve. */
   sinceLoad: string;
 
   /** How many times the tap handler has actually been delivered. */

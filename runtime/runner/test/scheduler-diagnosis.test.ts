@@ -381,6 +381,76 @@ describe("scheduler-diagnosis", () => {
       expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
     });
 
+    for (const ownInstance of ["user:alice", "user:bob"] as const) {
+      it(`compares a readiness transition with own writes in ${ownInstance}`, () => {
+        const failed = {
+          ...input,
+          scope: "user" as const,
+          scopeKey: "user:alice" as const,
+        };
+        const ownWrite = { ...failed, scopeKey: ownInstance };
+        const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+        recordUnavailableRead(tx, failed);
+        const tx2 = fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: failed, value: "loaded" }],
+        );
+        const firstLog = { ...log, writes: [counted, ownWrite] };
+        expect(recheck(() => {}, tx, tx2, firstLog))
+          .toHaveLength(ownInstance === "user:alice" ? 1 : 0);
+      });
+    }
+
+    it("keeps differing writes flagged when an overlapping own write has no instance identity", () => {
+      const failed = {
+        ...input,
+        scope: "user" as const,
+        scopeKey: "user:alice" as const,
+      };
+      const tx = fakeTransaction([{ address: counted, value: 1 }], () => []);
+      recordUnavailableRead(tx, failed);
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: failed, value: "loaded" }],
+      );
+      const firstLog = {
+        ...log,
+        writes: [counted, { ...input, scope: "user" as const }],
+      };
+      expect(recheck(() => {}, tx, tx2, firstLog)).toHaveLength(1);
+    });
+
+    it("does not compare successful reads belonging to different user instances", () => {
+      const scoped = { ...input, scope: "user" as const };
+      const tx = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 1 }],
+          () => [{ address: scoped, value: "alice's value" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "alice" } } },
+      );
+      const tx2 = Object.assign(
+        fakeTransaction(
+          [{ address: counted, value: 2 }],
+          () => [{ address: scoped, value: "bob's value" }],
+        ),
+        { tx: { scopeKeyIdentity: { principal: "bob" } } },
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
+    it("does not use an unidentified scoped read as evidence of external interference", () => {
+      const tx = fakeTransaction(
+        [{ address: counted, value: 1 }],
+        () => [{ address: { ...input, scope: "user" }, value: "before" }],
+      );
+      const tx2 = fakeTransaction(
+        [{ address: counted, value: 2 }],
+        () => [{ address: { ...input, scope: "session" }, value: "after" }],
+      );
+      expect(recheck(() => {}, tx, tx2)).toHaveLength(1);
+    });
+
     it("records a violation when the first run's read values cannot be inspected", () => {
       // With no read values to compare, nothing shows an input moved, so the
       // differing writes stand.

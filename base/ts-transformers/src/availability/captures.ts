@@ -753,9 +753,7 @@ function bindingPathForIdentifier(
   if (ts.isIdentifier(binding)) {
     return binding.text === identifier.text ? { path } : undefined;
   }
-  const elements = ts.isObjectBindingPattern(binding)
-    ? binding.elements
-    : binding.elements.filter(ts.isBindingElement);
+  const elements: readonly ts.ArrayBindingElement[] = binding.elements;
   for (let index = 0; index < elements.length; index++) {
     const element = elements[index];
     if (!element || !ts.isBindingElement(element)) continue;
@@ -779,6 +777,7 @@ function bindingPathForIdentifier(
     if (nested) {
       if (isObjectBinding && isRest) {
         const excluded = elements
+          .filter(ts.isBindingElement)
           .filter((other) => other !== element && !other.dotDotDotToken)
           .map((other) => propertyNameText(other.propertyName ?? other.name));
         return {

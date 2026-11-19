@@ -86,7 +86,8 @@ export function settleOnceInputSyncs(
  * element's per-element result (a predicate boolean for filter, a result value
  * or array for flatMap); `inputElement` is the corresponding input list entry.
  * Append the contribution to `out`, or return "pending" if the element's result
- * has not arrived yet. A present-but-undefined value that the builtin treats as
+ * has not arrived yet, or an unavailable marker to publish that outcome instead
+ * of an aggregate. A present-but-undefined value that the builtin treats as
  * a settled exclusion contributes nothing and is not pending.
  */
 export type ElementContribution = (
@@ -162,8 +163,9 @@ export interface ResumeRepublisherOptions {
  * output is link-shaped and never holds element values to reconcile.
  *
  * On a resume reconcile the durable aggregate is held while the per-element
- * results stream in. Once their docs confirm, the aggregate is rebuilt from the
- * settled results and written. The only per-builtin variation is how each
+ * results stream in. Once their docs confirm, unavailable contributions publish
+ * their marker; otherwise the aggregate is rebuilt from the settled results and
+ * written. The only per-builtin variation is how each
  * element maps to its contribution, supplied as `contribute`; everything else —
  * the element-identity keying, the straggler re-defer, and the convergence
  * bookkeeping — is the same.

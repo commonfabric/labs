@@ -87,20 +87,25 @@ describe("optional-wish-availability", () => {
   let errors: unknown[];
   let observers: (() => void)[];
   let wishQueries: (string | undefined)[];
+  let navigations: unknown[];
 
   beforeEach(() => {
     errors = [];
     observers = [];
     wishQueries = [];
+    navigations = [];
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: StorageManager.emulate({ as: signer }),
+      navigateCallback: (target) => {
+        navigations.push(target);
+      },
       errorHandlers: [(error) => {
         errors.push(error);
       }],
     });
     controlled = new Map();
-    for (const ref of ["wish", "fetchJson", "generateText"]) {
+    for (const ref of ["wish", "fetchJson", "generateText", "generateObject"]) {
       const delegate = runtime.moduleRegistry.getModule(ref).implementation;
       if (typeof delegate !== "function") {
         throw new Error(`Expected the ${ref} builtin.`);
@@ -389,6 +394,72 @@ describe("optional-wish-availability", () => {
     expect(propOf(avatars[0], "src")).toBe("");
   });
 
+  for (const retired of ["profile", "name"] as const) {
+    it(`keeps editing and shows retired ${retired} guidance without enabling chat submission`, async () => {
+      const profile = runtime.getCell(space, "retired chat profile");
+      const name = runtime.getCell(space, "retired chat name");
+      const ownedProfile = await instantiate(
+        "system/profile-home/profile-home.tsx",
+        { initialName: "Ada" },
+        undefined,
+        systemPatternSource("system/profile-home/profile-home.tsx"),
+      );
+      const guidance = `Use the replacement ${retired}.`;
+      await runtime.editWithRetry((tx) => {
+        profile.withTx(tx).set(ownedProfile);
+        name.withTx(tx).set("Ada");
+        (retired === "profile" ? profile : name).withTx(tx)
+          .setRaw(unavailableObsolete(guidance));
+      });
+      controlled.set("#profile", profile);
+      controlled.set("#profileName", name);
+      const chat = await instantiate("examples/profile-group-chat/main.tsx");
+      const note = await instantiate("apps/shared-note/main.tsx", {
+        title: "Donuts",
+        content: "Glaze",
+      });
+      expect(textOf(chat.key("$UI"))).toContain(guidance);
+      expect(textOf(note.key("$UI"))).toContain(guidance);
+      const send = elementsOf(chat.key("$UI"), "cf-button")
+        .find((button) => textOf(button).trim() === "Send");
+      expect(send).toBeDefined();
+      expect(propOf(send!, "disabled")).toBe(true);
+      sendEvent(note.key("appendLine"), { text: "Sprinkles" });
+      await runtime.idle();
+      expect(note.key("content").get()).toBe("Glaze\nSprinkles");
+      await runtime.editWithRetry((tx) => {
+        profile.withTx(tx).set(ownedProfile);
+        name.withTx(tx).set("Ada");
+      });
+      await runtime.idle();
+      expect(textOf(chat.key("$UI"))).not.toContain(guidance);
+      expect(textOf(note.key("$UI"))).not.toContain(guidance);
+      const recoveredSend = elementsOf(chat.key("$UI"), "cf-button")
+        .find((button) => textOf(button).trim() === "Send");
+      expect(propOf(recoveredSend!, "disabled")).toBe(false);
+      expect(chat.key("messages").get()).toEqual([]);
+    });
+  }
+
+  it("presents genuine profile lookup failures separately from no-profile absence", async () => {
+    const profile = runtime.getCell(space, "failed demo profile");
+    const name = runtime.getCell(space, "failed demo name");
+    await runtime.editWithRetry((tx) => {
+      profile.withTx(tx).set({ initialNameApplied: "Ada" });
+      name.withTx(tx).setRaw(unavailableError("Profile name lookup refused"));
+    });
+    controlled.set("#profile", profile);
+    controlled.set("#profileName", name);
+    const demo = await instantiate("examples/shared-profile-demo/main.tsx");
+    expect(textOf(demo.key("$UI"))).toContain("Profile name lookup refused");
+    expect(
+      elementsOf(demo.key("$UI"), "div").some((node) =>
+        propOf(node, "role") === "alert" &&
+        textOf(node).includes("Profile name lookup refused")
+      ),
+    ).toBe(true);
+  });
+
   it("disables joining a roster with a retired profile even when its name remains available", async () => {
     const profile = runtime.getCell(space, "roster viewer profile");
     const name = runtime.getCell(space, "roster viewer name");
@@ -438,11 +509,134 @@ describe("optional-wish-availability", () => {
     expect(textOf(subject.key("$UI"))).toContain("Add glaze");
     expect(textOf(subject.key("$UI"))).not.toContain("Generating summary...");
     await runtime.editWithRetry((tx) =>
+      summary.withTx(tx).setRaw(UNAVAILABLE_SYNCING)
+    );
+    await runtime.idle();
+    expect(textOf(subject.key("$UI"))).toContain("Generating summary...");
+    expect(textOf(subject.key("$UI"))).toContain("Add glaze");
+    await runtime.editWithRetry((tx) =>
       summary.withTx(tx).set("Glaze is available.")
     );
     await runtime.idle();
     expect(textOf(subject.key("$UI"))).toContain("Glaze is available.");
     expect(textOf(subject.key("$UI"))).toContain("Add glaze");
+  });
+
+  it("shows retired note guidance without treating the retired note as absence", async () => {
+    const note = runtime.getCell(space, "wish example note");
+    await runtime.editWithRetry((tx) =>
+      note.withTx(tx).setRaw(
+        unavailableObsolete("Use the replacement note."),
+      )
+    );
+    controlled.set("#note", note);
+    const example = await instantiate(
+      "examples/wish-note-example/wish-note-example.tsx",
+    );
+    expect(textOf(example.key("$UI"))).toContain("Use the replacement note.");
+    await runtime.editWithRetry((tx) =>
+      note.withTx(tx).setRaw(unavailableObsolete())
+    );
+    await runtime.idle();
+    expect(textOf(example.key("$UI"))).toContain(
+      "This note output has been retired.",
+    );
+    await runtime.editWithRetry((tx) =>
+      note.withTx(tx).set({
+        content: "Recovered note",
+        $UI: {
+          type: "vnode",
+          name: "div",
+          props: {},
+          children: ["Recovered view"],
+        },
+      })
+    );
+    await runtime.idle();
+    expect(textOf(example.key("$UI"))).not.toContain("retired");
+    expect(textOf(example.key("$UI"))).toContain("Recovered note");
+  });
+
+  it("registers a navigated backlink without inserting it into the current editor", async () => {
+    const program = await resolveLocalProgram(
+      (resolver) => runtime.harness.resolve(resolver),
+      {
+        main: fromFileUrl(new URL("../system/notes/note.tsx", import.meta.url)),
+        root: fromFileUrl(new URL("../..", import.meta.url)),
+      },
+    );
+    const main = program.main.replace(/[^/]+$/, "backlink-navigation.test.tsx");
+    const contents = `
+      import { pattern, Writable } from "commonfabric";
+      import { handleNewBacklink } from "./note.tsx";
+      import type { MentionablePiece, MinimalPiece } from "./schemas.tsx";
+      export default pattern(({ mentionable, pieceRegistry }: {
+        mentionable: Writable<MentionablePiece[]>;
+        pieceRegistry: Writable<MinimalPiece[]>;
+      }) => ({ create: handleNewBacklink({ mentionable, pieceRegistry }) }));
+    `;
+    const mentionable = runtime.getCell(space, "backlink mentions");
+    const registry = runtime.getCell(space, "backlink registry");
+    const first = runtime.getCell(space, "inserted backlink");
+    const second = runtime.getCell(space, "navigated backlink");
+    const tx = runtime.edit();
+    mentionable.withTx(tx).set([]);
+    registry.withTx(tx).set([]);
+    first.withTx(tx).set({ $NAME: "Inserted", mentioned: [], backlinks: [] });
+    second.withTx(tx).set({ $NAME: "Navigated", mentioned: [], backlinks: [] });
+    const pattern = await runtime.patternManager.compilePattern({
+      ...program,
+      main,
+      files: [...program.files, { name: main, contents }],
+    }, { space, tx });
+    const result = runtime.run(tx, pattern, {
+      mentionable,
+      pieceRegistry: registry,
+    }, runtime.getCell(space, "backlink handler fixture", undefined, tx));
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await result.pull();
+    sendEvent(result.key("create"), {
+      detail: { piece: first, navigate: false },
+    });
+    await runtime.settled();
+    expect(mentionable.get()).toHaveLength(1);
+    expect(registry.get()).toHaveLength(1);
+    expect(navigations).toEqual([]);
+    sendEvent(result.key("create"), {
+      detail: { piece: second, navigate: true },
+    });
+    await runtime.settled();
+    expect(mentionable.get()).toHaveLength(1);
+    expect(registry.get()).toHaveLength(2);
+    expect(navigations).toHaveLength(1);
+    expect(isCell(navigations[0]) && navigations[0].equals(second)).toBe(true);
+  });
+
+  it("keeps photo analysis visibly waiting while extraction inputs synchronize", async () => {
+    const extraction = runtime.getCell(space, "photo aisle extraction");
+    await runtime.editWithRetry((tx) =>
+      extraction.withTx(tx).setRaw(UNAVAILABLE_SYNCING)
+    );
+    controlled.set("generateObject", extraction);
+    const tab = await instantiate("apps/store-mapper/store-mapper.tsx", {
+      aisles: [],
+      uploadedPhotos: [{
+        id: "photo-1",
+        name: "aisles.png",
+        url: "data:image/png;base64,AA==",
+      }],
+      hiddenPhotoIds: [],
+    }, "AislesTab");
+    expect(textOf(tab.key("$UI"))).toContain("Analyzing photo...");
+    await runtime.editWithRetry((tx) =>
+      extraction.withTx(tx).set({
+        aisles: [{ name: "8", products: ["Bread"] }],
+      })
+    );
+    await runtime.idle();
+    expect(textOf(tab.key("$UI"))).not.toContain("Analyzing photo...");
+    expect(textOf(tab.key("$UI"))).toContain("Bread");
   });
 
   it("shows journal retirement guidance beside the retained snapshot and clears it on recovery", async () => {

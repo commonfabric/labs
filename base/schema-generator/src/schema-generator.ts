@@ -3,25 +3,6 @@ import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import { forEachSchema } from "@commonfabric/data-model-schema/schema-walk";
 
-const SYNTHETIC_AVAILABILITY_TYPE_NAMES = new Set([
-  "FabricUnavailable",
-  "FabricUnavailableBase",
-  "IsPending",
-  "HasError",
-  "IsSyncing",
-  "IsObsolete",
-  "HasSchemaMismatch",
-]);
-
-function isSyntheticAvailabilityTypeReference(
-  node: ts.TypeReferenceNode,
-): boolean {
-  return ts.isQualifiedName(node.typeName) &&
-    ts.isIdentifier(node.typeName.left) &&
-    node.typeName.left.text === "__cfHelpers" &&
-    SYNTHETIC_AVAILABILITY_TYPE_NAMES.has(node.typeName.right.text);
-}
-
 import type {
   AsCellEntry,
   JSONValue,
@@ -86,6 +67,7 @@ import {
   unwrapTypeParentheses,
 } from "./typescript/type-node.ts";
 import { unionNodeMembersInOrder } from "./typescript/source-order.ts";
+import { isSyntheticAvailabilityTypeReference } from "./typescript/availability-brand.ts";
 import { resolveWriterBinding } from "./typescript/writer-binding.ts";
 import {
   cutsExpansion,

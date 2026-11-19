@@ -236,11 +236,11 @@ function transactionReadInvariants(
   for (const space of spaces) {
     try {
       for (const detail of getTransactionReadDetails(tx, space)) {
-        // makeAddressKey ignores scope; include it so same id+path reads
-        // under different cell scopes don't collide.
-        const key = `${normalizeCellScope(detail.address.scope)}|${
-          makeAddressKey(detail.address)
-        }`;
+        const scopeKey = availabilityReadScopeKey(tx, detail.address);
+        if (scopeKey === undefined) continue;
+        // The same scoped address belongs to a distinct document for each
+        // principal or session. Compare only reads of the same instance.
+        const key = `${scopeKey}|${makeAddressKey(detail.address)}`;
         invariants.set(key, {
           address: detail.address,
           value: detail.value,
@@ -273,11 +273,23 @@ function readInvariantMovedExternally(
   for (const read of log2.shallowReads) spaces.add(read.space);
   const before = transactionReadInvariants(tx, spaces);
   const after = transactionReadInvariants(tx2, spaces);
-  const coveredByOwnWrites = (address: IMemorySpaceAddress): boolean =>
-    [...log.writes, ...log2.writes].some((write) =>
-      write.space === address.space && write.id === address.id &&
-      normalizeCellScope(write.scope) === normalizeCellScope(address.scope) &&
-      arraysOverlap(write.path, address.path)
+  const coveredByOwnWrites = (
+    address: IMemorySpaceAddress,
+    scopeKey: string | undefined,
+  ): boolean =>
+    ([[tx, log], [tx2, log2]] as const).some(([writer, writes]) =>
+      writes.writes.some((write) => {
+        if (
+          write.space !== address.space || write.id !== address.id ||
+          normalizeCellScope(write.scope) !==
+            normalizeCellScope(address.scope) ||
+          !arraysOverlap(write.path, address.path)
+        ) return false;
+        const writerScopeKey = availabilityReadScopeKey(writer, write);
+        // An unidentified write cannot establish that another instance moved
+        // the input. Keep potential self-caused changes flagged.
+        return writerScopeKey === undefined || writerScopeKey === scopeKey;
+      })
     );
   for (const [key, { address, value }] of after) {
     const previous = before.get(key);
@@ -289,14 +301,16 @@ function readInvariantMovedExternally(
     // nondeterminism, not external interference — both must stay flagged.
     // Scope participates in the match: different scopes are different
     // documents, so a write in another scope cannot have moved this read.
-    if (!coveredByOwnWrites(address)) return true;
+    if (!coveredByOwnWrites(address, availabilityReadScopeKey(tx2, address))) {
+      return true;
+    }
   }
   // A coverage miss cannot contribute a successful value invariant. Its exact
   // address becoming readable is nevertheless an external input transition,
   // unless one of these runs wrote it. Extra reads without that failed-read
   // witness remain evidence of nondeterminism.
   for (const failed of unavailableReadObservations(tx)) {
-    if (coveredByOwnWrites(failed.address)) continue;
+    if (coveredByOwnWrites(failed.address, failed.scopeKey)) continue;
     if (
       unavailableReadObservations(tx2).some((again) =>
         again.scopeKey === failed.scopeKey &&

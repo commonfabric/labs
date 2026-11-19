@@ -19,6 +19,8 @@
  * read a view takes anyway, so neither descends into a child's value; the
  * `required` check does observe each required child's existence, which is a
  * read at that child's path and nothing below it.
+ * Unavailable markers remain atomic control-flow leaves: a non-false schema
+ * preserves them without container-type or required-key checks.
  *
  * Everything below that is checked where the reader touches it. A subtree the
  * reader never reads is never validated — the deliberate cost of not

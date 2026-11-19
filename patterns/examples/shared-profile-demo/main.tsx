@@ -31,8 +31,20 @@ export default pattern(
     const profileName = hasError(profileNameWish.result)
       ? undefined
       : resultOf(profileNameWish.result);
+    const failure = computed(() => {
+      if (
+        hasError(profileWish.result) && profileWish.errorCode !== "no-match"
+      ) {
+        return profileWish.result.message;
+      }
+      if (
+        hasError(profileNameWish.result) &&
+        profileNameWish.errorCode !== "no-match"
+      ) return profileNameWish.result.message;
+      return "";
+    });
     const displayName = computed(() => displayNameFor(profile, profileName));
-    const status = computed(() => statusFor(profileName));
+    const status = computed(() => failure || statusFor(profileName));
     return {
       [NAME]: "Shared Profile Demo",
       [UI]: (
@@ -42,7 +54,9 @@ export default pattern(
               Shared Profile Demo
             </h2>
             <div id="shared-profile-name">{displayName}</div>
-            <div id="shared-profile-status">{status}</div>
+            <div id="shared-profile-status" role={failure ? "alert" : "status"}>
+              {status}
+            </div>
             <div id="shared-profile-wish-ui">{profileWish[UI]}</div>
           </cf-vstack>
         </cf-screen>

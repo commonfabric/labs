@@ -16,6 +16,7 @@ import {
   Writable,
 } from "commonfabric";
 import Chatbot from "../chatbot/chatbot.tsx";
+import { optionalWishText } from "../common-fabric/optional-wish-text.ts";
 import {
   bash,
   calculator,
@@ -142,7 +143,10 @@ export default pattern<OmniboxFABInput>(
     const { entries: summaryEntries } = resultOf(summaryWish.result);
 
     const profile = wish<string>({ query: "#learnedSummary" });
-    const profileText = resultOf(profile.result);
+    const profileText = optionalWishText({
+      response: profile.result,
+      errorCode: profile.errorCode,
+    });
 
     const patternIndexUrl = wish<{ url?: string }>({ query: "#patternIndex" });
     const patternIndexLocation = resultOf(patternIndexUrl.result);

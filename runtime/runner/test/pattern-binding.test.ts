@@ -5,7 +5,18 @@ import {
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
+import {
+  deepFreeze,
+  fabricAwareEqual,
+  isDeepFrozen,
+} from "@commonfabric/data-model";
+import {
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_SYNCING,
+  unavailableError,
+  unavailableMismatch,
+  unavailableObsolete,
+} from "@commonfabric/data-model/availability";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
@@ -93,6 +104,47 @@ describe("pattern-binding", () => {
   });
 
   describe("sendValueToBinding", () => {
+    for (
+      const marker of [
+        UNAVAILABLE_PENDING,
+        UNAVAILABLE_SYNCING,
+        unavailableError("request failed"),
+        unavailableMismatch("different result shape"),
+        unavailableObsolete("Use the replacement output"),
+      ]
+    ) {
+      it(`propagates ${marker.reason} through structured output targets and recovers`, () => {
+        const output = runtime.getCell<{ first: unknown; second: unknown }>(
+          space,
+          "structured unavailable output",
+          undefined,
+          tx,
+        );
+        output.set({ first: 1, second: 2 });
+        const binding = {
+          values: [
+            { $alias: { cell: "result", path: ["first"] } },
+            output.key("second").getAsWriteRedirectLink(),
+          ],
+          literal: "fixed",
+        };
+        sendValueToBinding(tx, output, undefined, binding, marker);
+        expect(fabricAwareEqual(output.key("first").get(), marker)).toBe(true);
+        expect(fabricAwareEqual(output.key("second").get(), marker)).toBe(true);
+        sendValueToBinding(tx, output, undefined, binding, {
+          values: [3, 4],
+          literal: "fixed",
+        });
+        expect(output.get()).toEqual({ first: 3, second: 4 });
+        expect(() =>
+          sendValueToBinding(tx, output, undefined, binding, {
+            values: [3, 4],
+            literal: "changed",
+          })
+        ).toThrow("instead of");
+      });
+    }
+
     it("should send value to a simple binding", () => {
       const testCell = runtime.getCell<{ value: number }>(
         space,

@@ -5,6 +5,7 @@ import {
   type AsyncResult,
   FabricUnavailable,
   type HasError,
+  type IsObsolete,
   type IsPending,
   type IsSyncing,
   pattern,
@@ -101,6 +102,34 @@ export default pattern(() => {
           subject.error === "Invalid rollup format" &&
           textContent(subject[UI]).includes("Invalid rollup format") &&
           findNodeByProp(subject[UI], "role", "alert") !== undefined
+        ),
+      },
+      {
+        action: action(() =>
+          response.set(
+            new FabricUnavailable(
+              "obsolete",
+              null,
+              "Use the replacement rollup",
+            ) as IsObsolete,
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.weeklyRollup === undefined &&
+          subject.error === "Use the replacement rollup" &&
+          textContent(subject[UI]).includes("Use the replacement rollup")
+        ),
+      },
+      {
+        action: action(() =>
+          response.set(new FabricUnavailable("obsolete") as IsObsolete)
+        ),
+      },
+      {
+        assertion: assert(() =>
+          subject.error === "This weekly rollup output has been retired."
         ),
       },
       { action: action(() => response.set(rollup)) },

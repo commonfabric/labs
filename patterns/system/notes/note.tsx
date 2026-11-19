@@ -136,6 +136,7 @@ export const handleNewBacklink = handler<
 >(({ detail }, { mentionable, pieceRegistry }) => {
   // Register the piece so it appears in default-app.
   pieceRegistry.push(detail.piece);
+  if (detail.navigate) return navigateTo(detail.piece);
   mentionable.push(detail.piece);
 });
 

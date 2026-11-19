@@ -7,6 +7,7 @@ import {
   hasError,
   hasSchemaMismatch,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -147,7 +148,8 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     });
     const profileAvailable = computed(() =>
       !hasError(observedProfile) && !isPending(observedProfile) &&
-      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile)
+      !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile) &&
+      !isObsolete(observedProfile)
     );
     // Keep the badge in static JSX. A VNode-producing computed that captures
     // the unavailable profile path is blocked before its fallback can run.
@@ -158,7 +160,23 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
     // profile CELL the send handler requires. Keying only on `#profileName`
     // would enable Send in the window where the name resolves but the `#profile`
     // cell hasn't, and the handler would then silently drop the message.
-    const hasProfile = computed(() => profileAvailable && myName !== "");
+    const hasProfile = computed(() => {
+      if (
+        hasError(observedProfileName) || isPending(observedProfileName) ||
+        isSyncing(observedProfileName) || isObsolete(observedProfileName)
+      ) return false;
+      return profileAvailable && resultOf(observedProfileName) !== "";
+    });
+    const retirementGuidance = computed(() => {
+      if (isObsolete(observedProfile)) {
+        return observedProfile.message || "This profile has been retired.";
+      }
+      if (isObsolete(observedProfileName)) {
+        return observedProfileName.message ||
+          "This profile name has been retired.";
+      }
+      return "";
+    });
 
     const messageCount = messages.length;
 
@@ -203,6 +221,9 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
                 {currentProfileBadge}
               </cf-vstack>
             </cf-hstack>
+            {retirementGuidance
+              ? <p role="status">{retirementGuidance}</p>
+              : null}
 
             {
               /* Roster strip — distinct participants, each a `chip` badge bound

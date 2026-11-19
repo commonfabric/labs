@@ -151,6 +151,8 @@ const response = resultOf(responseRequest);
   ? <cf-loader />
   : hasError(responseRequest)
   ? <div>{responseRequest.message}</div>
+  : isObsolete(responseRequest)
+  ? <div>{responseRequest.message}</div>
   : <cf-markdown>{response}</cf-markdown>}
 ```
 

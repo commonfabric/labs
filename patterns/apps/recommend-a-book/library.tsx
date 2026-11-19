@@ -6,6 +6,7 @@ import {
   computed,
   handler,
   hasError,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -122,7 +123,7 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     canCreateInvitation: computed(() => {
       if (
         isPending(profile.result) || isSyncing(profile.result) ||
-        hasError(profile.result)
+        hasError(profile.result) || isObsolete(profile.result)
       ) return false;
       return resultOf(profile.result).get() !== undefined;
     }),

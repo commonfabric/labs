@@ -5,9 +5,12 @@ import {
   handler,
   hasError,
   ifElse,
+  isObsolete,
   isPending,
+  isSyncing,
   llmDialog,
   NAME,
+  observeAvailability,
   pattern,
   patternTool,
   resultOf,
@@ -28,6 +31,7 @@ import {
   type SummaryIndexEntry,
 } from "../summary-index/summary-index.tsx";
 import SuggestionHistory from "../suggestion-history/suggestion-history.tsx";
+import { optionalWishText } from "../common-fabric/optional-wish-text.ts";
 import { type MentionablePiece } from "../backlinks-index/backlinks-index.tsx";
 
 type SuggestionResult = {
@@ -124,7 +128,10 @@ export default pattern<
 
   // --- LLM state (freeform query path) ---
   const profile = wish<string>({ query: "#learnedSummary" });
-  const profileText = resultOf(profile.result);
+  const profileText = optionalWishText({
+    response: profile.result,
+    errorCode: profile.errorCode,
+  });
 
   const mentionableWish = wish<MentionablePiece[]>({
     query: "#mentionable",
@@ -202,17 +209,23 @@ Use the user context above to personalize your suggestions when relevant.`;
     isPending(dialog.result) || hasError(dialog.result)
   );
   const llmResult = computed(() =>
-    isPending(dialog.result) || hasError(dialog.result)
-      ? undefined
-      : resultOf(dialog.result).cell
+    isPending(dialog.result) ? undefined : resultOf(dialog.result).cell
   );
+  const observedLlmResult = observeAvailability(llmResult);
+  const llmViewState = computed(() => {
+    if (
+      isPending(dialog.result) || isSyncing(dialog.result) ||
+      hasError(dialog.result) || isObsolete(dialog.result)
+    ) return { cell: undefined, available: false };
+    const cell = resultOf(dialog.result).cell;
+    return { cell, available: cell !== undefined };
+  });
 
-  // Reactively select between picker and LLM result. This must be a named
-  // computed variable — the CTS transformer leaves named Cells as-is in the
-  // return object, which lets wish.ts read the result via .get().
+  // The selected mode determines whether the result comes from the picker
+  // or the model's availability-bearing channel.
   const result = computed(() => {
     if (initialResults.length > 0) return pickerResult;
-    return llmResult;
+    return resultOf(observedLlmResult);
   });
 
   // Pre-create VNodes outside the computed so they're stable across
@@ -228,12 +241,12 @@ Use the user context above to personalize your suggestions when relevant.`;
         })}
       />
       <cf-cell-link
-        $cell={llmResult}
-        style={computed(() => (llmResult ? "" : "display:none"))}
+        $cell={llmViewState.cell}
+        style={computed(() => (llmViewState.available ? "" : "display:none"))}
       />
       {ifElse(
-        computed(() => !!llmResult),
-        <cf-render $cell={llmResult} />,
+        llmViewState.available,
+        <cf-render $cell={llmViewState.cell} />,
         undefined,
       )}
       <cf-message-beads

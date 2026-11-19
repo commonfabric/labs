@@ -32,10 +32,12 @@ interface Repo {
 const repoRequest = fetchJson<Repo>({ url: apiUrl });
 const repo = resultOf(repoRequest);
 
-{isPending(repoRequest)
+{isPending(repoRequest) || isSyncing(repoRequest)
   ? <span>Loading...</span>
   : hasError(repoRequest)
   ? <span>Error: {repoRequest.message}</span>
+  : isObsolete(repoRequest)
+  ? <span>{repoRequest.message}</span>
   : <p>{repo.name} ({repo.stargazers_count}★)</p>}
 ```
 

@@ -5,6 +5,7 @@ import {
   generateObject,
   hasError,
   ifElse,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
@@ -51,11 +52,12 @@ export const ChecklistPresentation = pattern<
     if (isPending(observedResponse) || isSyncing(observedResponse)) {
       return { response: { items: [] }, pending: true, error: "" };
     }
-    if (hasError(observedResponse)) {
+    if (hasError(observedResponse) || isObsolete(observedResponse)) {
       return {
         response: { items: [] },
         pending: false,
-        error: observedResponse.message,
+        error: observedResponse.message ||
+          "This checklist output has been retired.",
       };
     }
     return { response: resultOf(observedResponse), pending: false, error: "" };

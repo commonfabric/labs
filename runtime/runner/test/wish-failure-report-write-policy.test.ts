@@ -219,6 +219,7 @@ describe("wish commit-failure reporting", () => {
     withUILink: boolean,
     seedFields: Record<string, unknown> = {},
     afterReport?: (reports: readonly string[]) => Promise<void>,
+    beforeReportSettles?: (reports: readonly string[]) => Promise<void>,
   ) => {
     // Learn the state document's address: it is derived from the space, the
     // pattern and the result cell, so a throwaway runtime names the same one.
@@ -302,6 +303,7 @@ describe("wish commit-failure reporting", () => {
     });
     try {
       await runWish(runtime);
+      if (beforeReportSettles) await beforeReportSettles(reports);
       await settled.promise;
       await runtime.idle();
       if (afterReport) {
@@ -429,13 +431,16 @@ describe("wish commit-failure reporting", () => {
     }
   });
 
-  it("prints each fresh refusal once, including why the report itself threw", async () => {
+  it("coalesces through pending dispositions and prints each fresh refusal once", async () => {
     // A throw out of the report's own transaction is not a refusal the report
     // can retry or name in the document, so the console is the one place the
     // refusal and the throw are both said.
     const stampServerRun = runtime.stampServerRun;
     const prepareTxForCommit = runtime.prepareTxForCommit;
     const reportTransactions = new WeakSet<object>();
+    const disposition = defer<void>();
+    const reportFailed = defer<void>();
+    let heldDisposition = false;
     runtime.stampServerRun = (tx, info) => {
       stampServerRun.call(runtime, tx, info);
       if (info.actionId.startsWith("wish/commit-failure-ui/")) {
@@ -444,6 +449,15 @@ describe("wish commit-failure reporting", () => {
     };
     runtime.prepareTxForCommit = (tx) => {
       if (reportTransactions.has(tx)) {
+        if (!heldDisposition) {
+          heldDisposition = true;
+          storageManager.trackPendingCommit(disposition.promise, () => ({
+            kind: "action-disposition",
+            spaces: [space],
+            spacesOmitted: 0,
+          }));
+        }
+        reportFailed.resolve();
         throw new Error("report preparation crashed");
       }
       return prepareTxForCommit.call(runtime, tx);
@@ -464,6 +478,13 @@ describe("wish commit-failure reporting", () => {
             "fresh-wish-target",
           );
         },
+        async (earlyReports) => {
+          await reportFailed.promise;
+          await runtime.idle();
+          expect(earlyReports.filter((line) => line.includes("Can't report")))
+            .toHaveLength(0);
+          disposition.resolve();
+        },
       );
       const unreported = reports.filter((line) =>
         line.includes("Can't report")
@@ -476,6 +497,7 @@ describe("wish commit-failure reporting", () => {
       expect(value.error).toBeUndefined();
       expect(value.result).toEqual({ name: "Bob" });
     } finally {
+      disposition.resolve();
       runtime.prepareTxForCommit = prepareTxForCommit;
       runtime.stampServerRun = stampServerRun;
     }

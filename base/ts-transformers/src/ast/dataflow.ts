@@ -19,7 +19,10 @@ import {
   isReactiveValueExpression,
   isReactiveValueSymbol,
 } from "./call-kind.ts";
-import { getStableConstAliasInitializer as resolveStableConstAliasInitializer } from "./stable-const-alias.ts";
+import {
+  getStableConstAliasInitializer as resolveStableConstAliasInitializer,
+  getStaticPropertyNameText,
+} from "./stable-const-alias.ts";
 import { classifyOpaquePathTerminalCall } from "../transformers/opaque-roots.ts";
 
 export interface DataFlowScopeParameter {
@@ -180,16 +183,6 @@ export function createDataFlowAnalyzer(
       return undefined;
     }
   };
-
-  const getStaticPropertyNameText = (
-    name: ts.PropertyName | ts.BindingName,
-  ): string | undefined =>
-    ts.isIdentifier(name) ||
-      ts.isStringLiteral(name) ||
-      ts.isNumericLiteral(name) ||
-      ts.isNoSubstitutionTemplateLiteral(name)
-      ? name.text
-      : undefined;
 
   const getStableConstAliasInitializer = (
     symbol: ts.Symbol | undefined,

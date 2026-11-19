@@ -326,10 +326,7 @@ function createMapInstance(
 
     if (isUnavailable(rawList)) {
       resultWithLog.setRawUntyped(rawList, true);
-      for (const entry of elementRuns.values()) {
-        runtime.runner.stop(entry.resultCell);
-      }
-      elementRuns.clear();
+      releaseRemovedElements(runtime, elementRuns, new Set());
       return;
     }
 

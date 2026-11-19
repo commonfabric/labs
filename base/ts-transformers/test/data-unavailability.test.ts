@@ -1908,6 +1908,141 @@ Deno.test("array-rest guard indices map back to source tuple positions", async (
   assertEquals(output.includes('path: ["1", "0"]'), false);
 });
 
+for (
+  const [binding, guarded] of [[", value", "value"], [", ...rest", "rest[0]"]]
+) {
+  Deno.test(`array elisions preserve the source index for ${binding}`, async () => {
+    const output = await transformSource(
+      `
+      import { AsyncResult, hasError, lift, pattern } from "commonfabric";
+      type Repo = { name: string };
+      export default pattern((input: { request: AsyncResult<Repo> }) => ({
+        failed: lift(([${binding}]: [string, AsyncResult<Repo>]) =>
+          hasError(${guarded}))(["head", input.request]),
+      }));
+    `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    assertStringIncludes(
+      output,
+      'unavailableInputPolicy: [{ path: ["1"], reasons: ["error"] }]',
+    );
+    assertEquals(output.includes('path: ["0"]'), false);
+  });
+}
+
+Deno.test("an outer capture named input keeps its schema separate from applied lift input", async () => {
+  const output = await transformSource(
+    `
+    import { AsyncResult, hasError, lift, pattern } from "commonfabric";
+    type Repo = { name: string };
+    export default pattern((root: { request: AsyncResult<Repo>; value: number }) => {
+      const input = root.request;
+      return { value: lift(({ value }: { value: number }) =>
+        hasError(input) ? value : value + 1)({ value: root.value }) };
+    });
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  const lift = collect(parseModule(output), ts.isCallExpression).find((call) =>
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "lift"
+  );
+  if (!lift?.arguments[1]) throw new Error("Expected an explicit lift schema");
+  expect(literalToValue(lift.arguments[1])).toMatchObject({
+    properties: {
+      input: {
+        type: "object",
+        properties: { value: { type: "number" } },
+        required: ["value"],
+      },
+      input_1: { type: "unknown" },
+    },
+  });
+  expect(literalToValue(lift.arguments.at(-1)!)).toMatchObject({
+    unavailableInputPolicy: [{ path: ["input_1"], reasons: ["error"] }],
+  });
+});
+
+Deno.test("applied input and colliding capture guards retain distinct policies", async () => {
+  const output = await transformSource(
+    `
+    import { AsyncResult, hasError, isPending, lift, pattern, resultOf } from "commonfabric";
+    type Repo = { name: string };
+    export default pattern((root: { request: AsyncResult<Repo>; other: AsyncResult<Repo> }) => {
+      const input = root.other;
+      return { value: lift(({ request }: { request: AsyncResult<Repo> }) =>
+        isPending(request) ? "pending" : hasError(input) ? "error" : resultOf(request).name
+      )({ request: root.request }) };
+    });
+  `,
+    { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+  );
+  const lift = collect(parseModule(output), ts.isCallExpression).find((call) =>
+    ts.isPropertyAccessExpression(call.expression) &&
+    call.expression.name.text === "lift"
+  );
+  if (!lift?.arguments[1]) throw new Error("Expected an explicit lift schema");
+  expect(literalToValue(lift.arguments[1])).toMatchObject({
+    properties: {
+      input: {
+        type: "object",
+        properties: {
+          request: {
+            anyOf: expect.arrayContaining([{ $ref: "#/$defs/IsPending" }]),
+          },
+        },
+      },
+      input_1: { type: "unknown" },
+    },
+  });
+  expect(literalToValue(lift.arguments.at(-1)!)).toMatchObject({
+    unavailableInputPolicy: [
+      { path: ["input", "request"], reasons: ["pending"] },
+      { path: ["input_1"], reasons: ["error"] },
+    ],
+  });
+});
+
+for (const index of ["[key: string]", "readonly [key: number]"]) {
+  Deno.test(`availability overrides retain explicit lift ${index} schemas`, async () => {
+    const output = await transformSource(
+      `
+    import { AsyncResult, hasError, lift, pattern } from "commonfabric";
+    type Repo = { name: string };
+    export default pattern((root: {
+      entries: { request: AsyncResult<Repo>; ${index}: AsyncResult<Repo> };
+      lookup: ${index.includes("number") ? "number" : "string"};
+    }) => ({ value: lift((data: {
+      request: AsyncResult<Repo>; ${index}: AsyncResult<Repo>;
+    }) => hasError(data.request) ? "error" : data[root.lookup])(root.entries) }));
+  `,
+      { types: { "commonfabric.d.ts": commonfabricTypes }, typeCheck: true },
+    );
+    const lift = collect(parseModule(output), ts.isCallExpression).find((
+      call,
+    ) =>
+      ts.isPropertyAccessExpression(call.expression) &&
+      call.expression.name.text === "lift"
+    );
+    if (!lift?.arguments[1]) {
+      throw new Error("Expected an explicit lift schema");
+    }
+    expect(lift.typeArguments?.[0]?.getText(parseModule(output))).toContain(
+      index,
+    );
+    expect(literalToValue(lift.arguments[1])).toMatchObject({
+      properties: {
+        entries: {
+          additionalProperties: {
+            anyOf: expect.arrayContaining([{ $ref: "#/$defs/HasError" }]),
+          },
+        },
+      },
+    });
+  });
+}
+
 Deno.test("pending error and success JSX shares one physical async capture", async () => {
   const output = await transformSource(
     `

@@ -57,7 +57,8 @@ export default pattern<{ orders: SqliteDb }>(({ orders }) => {
 ```
 
 The call returns an `AsyncResult<SqliteQueryResult<Row>>`, not the rows alone.
-On success, `resultOf(request)` exposes `{ rows, withheld? }`. `withheld` counts
+On success, `resultOf(request)` exposes `{ rows, withheld?, requestKey? }`.
+`withheld` counts
 the rows a read-time clearance kept from this reader and is absent unless the
 query asked for one. Keep `request` itself for `isPending()` or `hasError()`
 guards; computations which only consume the projected result wait while the

@@ -251,12 +251,13 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
 
   The identity and value views are separate inputs of the pivot, bound to the
   same topics array. Normal unavailable-input preflight checks the narrow
-  mention values before the join writes any rows. A pending, syncing, or error
-  source therefore propagates its native state through the pivot while the
-  durable backlinks remain intact. A usable empty mention list removes edges;
-  recovery recomputes them. Identity deduplication preserves first-occurrence
-  order and omits absent sources. The callback reads these deduplicated handles
-  directly, so duplicates add no extra rows.
+  mention values before the join writes any rows. A pending, syncing, obsolete,
+  or error source therefore propagates its native state through the pivot while
+  the durable backlinks remain intact, including replacement guidance for an
+  obsolete source. A usable empty mention list removes edges; recovery
+  recomputes them. Identity deduplication preserves first-occurrence order and
+  omits absent sources. The callback reads these deduplicated handles directly,
+  so duplicates add no extra rows.
 
   Each topic then does a lookup rather than the join: `backlinksOf` finds the
   pivot row whose topic is itself, and takes that row's `mentionedBy`. Each row

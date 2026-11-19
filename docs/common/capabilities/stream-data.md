@@ -22,17 +22,23 @@ const liveEvent = partialResultOf(request);
 
 return hasError(request)
   ? <p>Stream failed: {request.message}</p>
+  : isObsolete(request)
+  ? <p>{request.message}</p>
   : isSyncing(request)
   ? <p>Waiting for stream inputs</p>
   : isPending(request)
-  ? <p>Live: {liveEvent.data.completed} / {liveEvent.data.total}</p>
+  ? isPending(liveEvent) || isSyncing(liveEvent)
+    ? <p>Waiting for the first event</p>
+    : hasError(liveEvent) || isObsolete(liveEvent)
+    ? <p>{liveEvent.message}</p>
+    : <p>Live: {liveEvent.data.completed} / {liveEvent.data.total}</p>
   : <p>Closed: {finalEvent.data.completed} / {finalEvent.data.total}</p>;
 ```
 
 Both the direct request and partial value begin pending at runtime. Each decoded
-event updates the partial value. A computation consuming `liveEvent` waits for
-the first event; the pending branch above distinguishes an open stream from a
-closed one, rather than making the partial value optional. A syncing request
+event updates the partial value. The pending branch separately guards
+`liveEvent` before reading its fields, so the UI distinguishes an open stream
+waiting for its first event from one already receiving events. A syncing request
 waits for its reactive inputs instead of presenting a closed stream. The direct
 request remains pending until the stream closes cleanly, then becomes the last decoded
 event. A stream which is expected to remain open normally consumes only

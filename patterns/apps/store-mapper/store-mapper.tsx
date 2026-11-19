@@ -16,6 +16,7 @@ import {
   handler,
   hasError,
   isPending,
+  isSyncing,
   NAME,
   pattern,
   resultOf,
@@ -938,19 +939,33 @@ export const AislesTab = pattern<AislesTabInput, TabOutput>(
         },
       });
 
+      const extractionState = computed(() => {
+        if (isPending(extractionRequest) || isSyncing(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: true,
+            error: undefined,
+          };
+        }
+        if (hasError(extractionRequest)) {
+          return {
+            aisles: [] as ExtractedAisle[],
+            pending: false,
+            error: extractionRequest.message,
+          };
+        }
+        return {
+          aisles: resultOf(extractionRequest).aisles || [],
+          pending: false,
+          error: undefined,
+        };
+      });
       return {
         photo,
         photoName: photo.name,
-        extractedAisles: computed(() => {
-          if (isPending(extractionRequest) || hasError(extractionRequest)) {
-            return { aisles: [] as ExtractedAisle[] };
-          }
-          return { aisles: resultOf(extractionRequest).aisles || [] };
-        }),
-        pending: isPending(extractionRequest),
-        error: hasError(extractionRequest)
-          ? extractionRequest.message
-          : undefined,
+        extractedAisles: extractionState,
+        pending: extractionState.pending,
+        error: extractionState.error,
       };
     });
 

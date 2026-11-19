@@ -569,6 +569,12 @@ Exact-path availability overrides retain empty-string keys and statically
 computed property names. Only the selected member widens to include its native
 marker variants; sibling members keep their authored types
 (`type-building.ts`; `type-building-coverage.test.ts`).
+An explicit lift keeps input overrides separate from closure-capture overrides,
+including when the applied input and an outer capture share the authored name
+`input`. Rebuilding a printed input object preserves its semantic index
+signatures and their value schemas. Array-binding elisions preserve source
+positions in guard policies; a rest binding after an elision retains that same
+source offset (`data-unavailability.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
 receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape

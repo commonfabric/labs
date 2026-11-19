@@ -575,6 +575,27 @@ function sendValueToBindingInner<T>(
       { cell: cell.getAsNormalizedFullLink(), binding },
       { meta: ignoreReadForScheduling, schemaRole: "output" },
     );
+  } else if (
+    isUnavailable(value) && !isUnavailable(binding) &&
+    isWalkableObjectOrArray(binding)
+  ) {
+    // A structured output has one unavailable outcome at each dynamic leaf.
+    // Literal leaves constrain usable results; they are not write targets.
+    for (const target of Object.values(binding)) {
+      if (
+        isAliasBinding(target) || isWriteRedirectLink(target) ||
+        (!isUnavailable(target) && isWalkableObjectOrArray(target))
+      ) {
+        sendValueToBindingInner(
+          tx,
+          cell,
+          argumentCellLink,
+          target,
+          value,
+          options,
+        );
+      }
+    }
   } else if (Array.isArray(binding)) {
     if (Array.isArray(value)) {
       for (let i = 0; i < Math.min(binding.length, value.length); i++) {

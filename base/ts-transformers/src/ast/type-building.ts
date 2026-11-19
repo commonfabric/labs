@@ -1960,20 +1960,45 @@ export function applyAvailabilityOverridesToTypeNode(
     // A printed object is indivisible. Build fresh member roots from their
     // semantic types before adding an exact-path availability union.
     base = context.factory.createTypeLiteralNode(
-      printedType.getProperties().map((property) =>
-        context.factory.createPropertySignature(
-          undefined,
-          createPropertyName(property.name, context.factory),
-          isOptionalSymbol(property)
-            ? context.factory.createToken(ts.SyntaxKind.QuestionToken)
-            : undefined,
-          typeToTypeNodeWithRegistry(
-            context.checker.getTypeOfSymbol(property),
-            context,
-            context.state.typeRegistry,
-          ),
-        )
-      ),
+      [
+        ...printedType.getProperties().map((property) =>
+          context.factory.createPropertySignature(
+            undefined,
+            createPropertyName(property.name, context.factory),
+            isOptionalSymbol(property)
+              ? context.factory.createToken(ts.SyntaxKind.QuestionToken)
+              : undefined,
+            typeToTypeNodeWithRegistry(
+              context.checker.getTypeOfSymbol(property),
+              context,
+              context.state.typeRegistry,
+            ),
+          )
+        ),
+        ...context.checker.getIndexInfosOfType(printedType).map((index) =>
+          context.factory.createIndexSignature(
+            index.isReadonly
+              ? [context.factory.createModifier(ts.SyntaxKind.ReadonlyKeyword)]
+              : undefined,
+            [context.factory.createParameterDeclaration(
+              undefined,
+              undefined,
+              "key",
+              undefined,
+              typeToTypeNodeWithRegistry(
+                index.keyType,
+                context,
+                context.state.typeRegistry,
+              ),
+            )],
+            typeToTypeNodeWithRegistry(
+              index.type,
+              context,
+              context.state.typeRegistry,
+            ),
+          )
+        ),
+      ],
     );
   }
 

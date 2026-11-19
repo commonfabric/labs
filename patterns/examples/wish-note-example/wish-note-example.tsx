@@ -1,9 +1,12 @@
 import {
+  computed,
   hasError,
   hasSchemaMismatch,
+  isObsolete,
   isPending,
   isSyncing,
   NAME,
+  observeAvailability,
   pattern,
   resultOf,
   UI,
@@ -14,6 +17,12 @@ import {
 export default pattern<Record<string, never>>((_) => {
   // bf: is this desirable to have to specify [UI] here if you want the UI
   const wishResult = wish<{ content: string; [UI]: VNode }>({ query: "#note" });
+  const observedNote = observeAvailability(wishResult.result);
+  const retirementGuidance = computed(() =>
+    isObsolete(observedNote)
+      ? observedNote.message || "This note output has been retired."
+      : ""
+  );
   const note = hasError(wishResult.result) || isPending(wishResult.result) ||
       isSyncing(wishResult.result) || hasSchemaMismatch(wishResult.result)
     ? undefined
@@ -23,6 +32,7 @@ export default pattern<Record<string, never>>((_) => {
     [NAME]: "Wish tester",
     [UI]: (
       <div>
+        {retirementGuidance ? <p role="status">{retirementGuidance}</p> : null}
         <pre>{note?.content ?? ""}</pre>
         <hr />
         {note}

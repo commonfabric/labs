@@ -1,10 +1,12 @@
 import {
   computed,
   type Default,
+  hasError,
   NAME,
   pattern,
   patternTool,
   type PatternToolResult,
+  resultOf,
   UI,
   type VNode,
   wish,
@@ -69,16 +71,21 @@ const SuggestionHistory = pattern<Input, Output>(() => {
   // read; anything else reads as no entries. The wish asks for entries with
   // every field optional, since one entry missing a field would otherwise
   // fail the whole read and leave no history at all.
-  const { result: entries } = wish<
+  const history = wish<
     Partial<SuggestionHistoryEntry>[] | Default<[]>
   >({
     query: "#suggestions",
   });
-  const allEntries = computed((): SuggestionHistoryEntry[] =>
-    Array.isArray(entries)
-      ? entries.flatMap((entry) => isHistoryEntry(entry) ? [entry] : [])
-      : []
-  );
+  const entries = history.result;
+  const allEntries = computed((): SuggestionHistoryEntry[] => {
+    if (hasError(entries)) {
+      if (history.errorCode === "no-match") return [];
+      return resultOf<SuggestionHistoryEntry[]>(entries);
+    }
+    return resultOf(entries).flatMap((entry) =>
+      isHistoryEntry(entry) ? [entry] : []
+    );
+  });
 
   return {
     [NAME]: "Suggestion History",

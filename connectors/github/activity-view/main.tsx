@@ -5,6 +5,7 @@ import {
   generateText,
   hasError,
   isPending,
+  isSyncing,
   NAME,
   type OpaqueCell,
   pattern,
@@ -237,7 +238,7 @@ export default pattern<GithubActivityInput, GithubActivityOutput>((state) => {
     hasError(summary) ? "" : resultOf(summary)
   );
   const summaryPending = computed(() =>
-    hasError(summary) ? false : isPending(summary)
+    hasError(summary) ? false : isPending(summary) || isSyncing(summary)
   );
 
   const repoName = computed(() => {

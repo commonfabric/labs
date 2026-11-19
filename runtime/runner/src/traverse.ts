@@ -5264,6 +5264,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
             link,
           );
           if (error === undefined) {
+            // A propagated control-flow leaf is not an ambiguous payload
+            // merely because several ordinary branch shapes accept it.
+            if (isUnavailable(val)) return { ok: val };
             matchCount++;
             match = val;
           }
