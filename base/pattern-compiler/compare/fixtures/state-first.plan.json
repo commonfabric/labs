@@ -120,6 +120,7 @@
                     "binding",
                     "mine"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],
@@ -171,6 +172,7 @@
                     "binding",
                     "kept"
                   ],
+                  "handle": true,
                   "slot": 11
                 }
               ],
@@ -219,6 +221,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 13
                 },
                 {
@@ -279,6 +282,7 @@
                     "binding",
                     "label"
                   ],
+                  "handle": true,
                   "slot": 17
                 }
               ],

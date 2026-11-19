@@ -123,12 +123,14 @@
                   "at": [
                     "log"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
                   "at": [
                     "n"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -214,6 +216,7 @@
                     "binding",
                     "kept"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],
@@ -262,6 +265,7 @@
                     "binding",
                     "kept"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],
@@ -313,6 +317,7 @@
                     "binding",
                     "cell"
                   ],
+                  "handle": true,
                   "slot": 10
                 }
               ],

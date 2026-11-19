@@ -262,6 +262,10 @@ pub struct Detail {
     /// The positions whose type is a handle type or a reference type: a
     /// `shape` entry there is made in place (PL §1.1, `Slot.inPlace`).
     pub by_reference: Vec<(String, Vec<Seg>)>,
+    /// The positions whose type is a handle type, or that the body reads
+    /// or writes through as a handle (`ReadInput.handle`, provisional
+    /// decision P31).
+    pub handles_at: Vec<(String, Vec<Seg>)>,
     /// The sites of the writes with a static target through a handle.
     pub side_writes: Vec<SideWrite>,
     /// `Body.outputs`: the result path, whether the reference is `passes`,
@@ -799,6 +803,8 @@ struct Store {
     tested: BTreeSet<PathKey>,
     /// The positions whose type is a handle type or a reference type.
     by_reference: BTreeSet<PathKey>,
+    /// The positions of handle type.
+    handles_at: BTreeSet<PathKey>,
     static_reads: BTreeSet<(usize, u32)>,
     dynamic_reads: BTreeMap<(usize, u32), String>,
     writes: BTreeSet<String>,
@@ -1359,6 +1365,9 @@ impl<'a> Analyzer<'_, '_, 'a> {
             for proj in val.projections() {
                 if !proj.made {
                     self.store.by_reference.insert(proj.key());
+                    if kinds.handle {
+                        self.store.handles_at.insert(proj.key());
+                    }
                 }
             }
         }
@@ -1503,6 +1512,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     _ => Class::Identity,
                 };
                 self.store.by_reference.insert(position.key());
+                self.store.handles_at.insert(position.key());
                 self.observe(&Val::Proj(position), class);
                 crossed = true;
             }
@@ -1517,6 +1527,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 _ => Class::Identity,
             };
             self.store.by_reference.insert(position.key());
+            self.store.handles_at.insert(position.key());
             self.observe(&Val::Proj(position), class);
         }
     }
@@ -3183,8 +3194,10 @@ impl<'a> Analyzer<'_, '_, 'a> {
                     .insert(Class::Value);
                 Val::Computed
             }
-            // Each operand is resolved, and decided on its own.
-            "equals" => {
+            // Each operand is resolved, and decided on its own. `equalsKey`
+            // is what `equals` compares of its operand (provisional
+            // decision P32).
+            "equals" | "equalsKey" => {
                 for argument in arguments {
                     let val = self.eval(argument);
                     self.resolution(&val, true);
@@ -4219,6 +4232,7 @@ impl<'a> Analyzer<'_, '_, 'a> {
                 .collect(),
             label_metadata: store.label_metadata,
             by_reference: store.by_reference.iter().cloned().collect(),
+            handles_at: store.handles_at.iter().cloned().collect(),
             side_writes,
             outputs: store.output_refs.clone(),
             binds: store

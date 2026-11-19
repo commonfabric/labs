@@ -252,6 +252,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -309,6 +310,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 6
                 },
                 {

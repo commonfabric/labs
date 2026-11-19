@@ -218,6 +218,7 @@
                     "binding",
                     "mine"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -225,6 +226,7 @@
                     "binding",
                     "other"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

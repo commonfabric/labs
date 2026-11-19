@@ -131,6 +131,7 @@
                     "binding",
                     "memo"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -184,6 +185,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 14
                 }
               ],
@@ -239,6 +241,7 @@
                     "binding",
                     "hidden"
                   ],
+                  "handle": true,
                   "slot": 17
                 }
               ],

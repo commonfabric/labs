@@ -177,6 +177,7 @@
                     "binding",
                     "card"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -184,6 +185,7 @@
                     "binding",
                     "left"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -252,6 +254,7 @@
                     "binding",
                     "left"
                   ],
+                  "handle": true,
                   "slot": 8
                 },
                 {
@@ -274,6 +277,7 @@
                     "binding",
                     "right"
                   ],
+                  "handle": true,
                   "slot": 11
                 },
                 {
@@ -375,6 +379,7 @@
                     "binding",
                     "kept"
                   ],
+                  "handle": true,
                   "slot": 15
                 },
                 {
@@ -382,6 +387,7 @@
                     "binding",
                     "left"
                   ],
+                  "handle": true,
                   "slot": 16
                 },
                 {

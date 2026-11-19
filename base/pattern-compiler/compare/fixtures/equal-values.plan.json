@@ -51,6 +51,7 @@
                     "binding",
                     "opened"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],

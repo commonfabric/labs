@@ -125,6 +125,7 @@
                     "binding",
                     "log"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],

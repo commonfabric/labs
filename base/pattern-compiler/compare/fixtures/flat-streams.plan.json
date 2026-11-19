@@ -104,6 +104,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {

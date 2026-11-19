@@ -13,6 +13,14 @@
  * module the file already has, so a run that stopped is continued by
  * running it again. A module the file says was started and not finished
  * is recorded as one that ended the process.
+ *
+ * The corpus is the `patterns/` directory of the repository, or, with
+ * `COMPARE_ROOT` set, that of the directory it names, which is also the
+ * root a program's local imports resolve under. `topics/tree.ts` writes
+ * such a directory for Topics. With `COMPARE_TODAY_ROOT` set as well,
+ * today's runtime compiles the module of the same path under the directory
+ * it names, so that the crate's source and today's can differ where
+ * today's declarations refuse what the documents require.
  */
 import { fromFileUrl } from "@std/path";
 
@@ -173,7 +181,11 @@ export type ModuleResult = {
 };
 
 const repository = fromFileUrl(new URL("../../../", import.meta.url));
-const patterns = `${repository}patterns`;
+const root = Deno.env.get("COMPARE_ROOT")?.replace(/\/?$/, "/") ??
+  repository;
+const patterns = `${root}patterns`;
+const todayRoot = Deno.env.get("COMPARE_TODAY_ROOT")?.replace(/\/?$/, "/") ??
+  root;
 
 /**
  * The plans and the value code of the accepted corpus modules, from the
@@ -385,8 +397,8 @@ export const runModule = async (
   try {
     run = await runScenario({
       program: {
-        main: `${patterns}${module.module}`,
-        root: repository,
+        main: `${todayRoot}patterns${module.module}`,
+        root: todayRoot,
         ...(isDefault ? {} : { export: name }),
       },
       plan,

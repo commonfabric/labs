@@ -271,6 +271,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 4
                 }
               ],

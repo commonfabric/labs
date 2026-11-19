@@ -421,6 +421,44 @@ describe("an instance", () => {
       nick: "anon",
     });
   });
+
+  it("hands a body the value where it reads one at a place that another body takes as a handle", async () => {
+    // The place has a slot of class `identity`, which `touch` is handed as
+    // a handle, and one of class `value`, which `named` reads members of
+    // (ES §2.4, "What the argument holds at a path").
+    const instance = new Instance(await artifactOf("value-beside-handle"), {
+      author: { kind: "person", name: "Ann" },
+    });
+
+    expect(instance.result()).toEqual({
+      present: 1,
+      shown: { kind: "person", name: "Ann" },
+    });
+  });
+
+  it("gives two references to one cell one `equalsKey`, and a reference to another cell another", async () => {
+    // Provisional decision P32: `equalsKey` returns what `equals`
+    // compares.
+    const link = (index: number) => ({
+      $link: { doc: ARGUMENT, path: ["pool", `${index}`] },
+    });
+    const instance = new Instance(await artifactOf("equals-key"), {
+      pool: { 0: { name: "a" }, 1: { name: "b" } },
+      items: [link(0), link(1), link(0)],
+    });
+
+    expect((instance.result() as { count: unknown }).count).toBe(2);
+  });
+
+  it("hands a body a handle where it declares one at an array that another body computed whole", async () => {
+    // FA §6.2, "A handle bound to a value the instance computed": the
+    // handle names the document of the output (ruling Z53).
+    const instance = new Instance(await artifactOf("handle-of-computed"), {
+      names: ["a", "b"],
+    });
+
+    expect((instance.result() as { summary: unknown }).summary).toBe("2:a");
+  });
 });
 
 describe("an event", () => {

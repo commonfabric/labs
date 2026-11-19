@@ -192,6 +192,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 3
                 }
               ],
@@ -238,6 +239,7 @@
                     "binding",
                     "task"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -288,6 +290,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 7
                 },
                 {
@@ -295,6 +298,7 @@
                     "binding",
                     "task"
                   ],
+                  "handle": true,
                   "slot": 8
                 }
               ],
@@ -358,6 +362,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 10
                 },
                 {
@@ -365,6 +370,7 @@
                     "binding",
                     "task"
                   ],
+                  "handle": true,
                   "slot": 11
                 }
               ],

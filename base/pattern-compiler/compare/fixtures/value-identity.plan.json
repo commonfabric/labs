@@ -320,6 +320,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 4
                 },
                 {
@@ -327,6 +328,7 @@
                     "binding",
                     "selected"
                   ],
+                  "handle": true,
                   "slot": 5
                 },
                 {
@@ -418,6 +420,7 @@
                     "binding",
                     "stop"
                   ],
+                  "handle": true,
                   "slot": 11
                 }
               ],
@@ -462,6 +465,7 @@
                     "binding",
                     "stop"
                   ],
+                  "handle": true,
                   "slot": 12
                 }
               ],
@@ -512,6 +516,7 @@
                     "binding",
                     "stop"
                   ],
+                  "handle": true,
                   "slot": 13
                 }
               ],
@@ -554,6 +559,7 @@
                     "binding",
                     "open"
                   ],
+                  "handle": true,
                   "slot": 14
                 },
                 {
@@ -607,6 +613,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 21
                 },
                 {
@@ -614,6 +621,7 @@
                     "binding",
                     "tag"
                   ],
+                  "handle": true,
                   "slot": 22
                 }
               ],
@@ -663,6 +671,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 24
                 },
                 {
@@ -685,6 +694,7 @@
                     "binding",
                     "tags"
                   ],
+                  "handle": true,
                   "slot": 27
                 },
                 {
@@ -784,6 +794,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 32
                 },
                 {
@@ -806,6 +817,7 @@
                     "binding",
                     "tags"
                   ],
+                  "handle": true,
                   "slot": 35
                 },
                 {
@@ -912,6 +924,7 @@
                     "binding",
                     "tags"
                   ],
+                  "handle": true,
                   "slot": 39
                 }
               ],

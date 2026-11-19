@@ -152,6 +152,7 @@
                     "binding",
                     "chosen"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -198,6 +199,7 @@
                     "binding",
                     "cleared"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],

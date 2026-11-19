@@ -250,6 +250,7 @@
                   "at": [
                     "items"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -269,6 +270,7 @@
                   "at": [
                     "joined"
                   ],
+                  "handle": true,
                   "slot": 3
                 }
               ],
@@ -330,6 +332,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],
@@ -385,6 +388,7 @@
                     "binding",
                     "seen"
                   ],
+                  "handle": true,
                   "slot": 7
                 }
               ],
@@ -433,6 +437,7 @@
                     "binding",
                     "copied"
                   ],
+                  "handle": true,
                   "slot": 9
                 },
                 {
@@ -440,6 +445,7 @@
                     "binding",
                     "joined"
                   ],
+                  "handle": true,
                   "slot": 10
                 },
                 {
@@ -497,6 +503,7 @@
                     "binding",
                     "joined"
                   ],
+                  "handle": true,
                   "slot": 13
                 }
               ],
@@ -546,6 +553,7 @@
                     "binding",
                     "to"
                   ],
+                  "handle": true,
                   "slot": 15
                 }
               ],
@@ -592,6 +600,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 16
                 }
               ],

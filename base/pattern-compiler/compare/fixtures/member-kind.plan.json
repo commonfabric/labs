@@ -77,6 +77,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {

@@ -91,6 +91,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -688,6 +689,7 @@
                     "binding",
                     "noted"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],

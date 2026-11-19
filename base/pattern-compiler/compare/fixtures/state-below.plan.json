@@ -158,6 +158,7 @@
                     "binding",
                     "draft"
                   ],
+                  "handle": true,
                   "slot": 2
                 }
               ],
@@ -213,6 +214,7 @@
                     "binding",
                     "marks"
                   ],
+                  "handle": true,
                   "slot": 14
                 }
               ],

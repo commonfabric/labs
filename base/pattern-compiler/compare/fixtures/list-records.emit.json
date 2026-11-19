@@ -216,6 +216,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -280,6 +281,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 9
                 }
               ],
@@ -335,6 +337,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 12
                 },
                 {
@@ -404,6 +407,7 @@
                     "binding",
                     "stops"
                   ],
+                  "handle": true,
                   "slot": 15
                 },
                 {
@@ -479,6 +483,7 @@
                     "binding",
                     "names"
                   ],
+                  "handle": true,
                   "slot": 19
                 }
               ],

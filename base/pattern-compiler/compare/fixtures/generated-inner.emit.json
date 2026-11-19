@@ -138,6 +138,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 0
                 }
               ],
@@ -226,6 +227,7 @@
                     "binding",
                     "picked"
                   ],
+                  "handle": true,
                   "slot": 7
                 }
               ],

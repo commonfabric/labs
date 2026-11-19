@@ -125,6 +125,7 @@
                     "binding",
                     "area"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -132,6 +133,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -191,6 +193,7 @@
                     "binding",
                     "center"
                   ],
+                  "handle": true,
                   "slot": 5
                 }
               ],

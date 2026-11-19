@@ -106,6 +106,7 @@
                     "binding",
                     "tags"
                   ],
+                  "handle": true,
                   "slot": 1
                 }
               ],
@@ -161,6 +162,7 @@
                     "binding",
                     "entries"
                   ],
+                  "handle": true,
                   "slot": 4
                 }
               ],

@@ -85,6 +85,7 @@
                     "binding",
                     "drawn"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -92,6 +93,7 @@
                     "binding",
                     "order"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {

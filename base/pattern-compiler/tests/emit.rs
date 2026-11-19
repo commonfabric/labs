@@ -412,7 +412,9 @@ export const P = pattern<{ tag: string }>(({ tag }) => {
         plan["bodies"][0]["reads"],
         json!([
             { "slot": text, "at": ["event", "text"] },
-            { "slot": log, "at": ["binding", "log"] },
+            // The handler declares a handle at `log` (provisional
+            // decision P31).
+            { "slot": log, "at": ["binding", "log"], "handle": true },
         ])
     );
 }

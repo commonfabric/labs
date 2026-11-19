@@ -6,7 +6,7 @@
 use pattern_compiler::footprint::{footprints, Record};
 use pattern_compiler::program::SourceFile;
 
-const PRELUDE: &str = "import { Cell, Stream, Writable, currentPrincipal, eventKey, equals, handler, lift, linksOf, navigateTo, pattern, principalOf, resultOwnerOf, spaceAccess, spaceOf } from \"commonfabric\";\n\
+const PRELUDE: &str = "import { Cell, Stream, Writable, currentPrincipal, eventKey, equals, equalsKey, handler, lift, linksOf, navigateTo, pattern, principalOf, resultOwnerOf, spaceAccess, spaceOf } from \"commonfabric\";\n\
 interface Donut { name: string; price: number; glaze?: string }\n\
 interface Message { body: string; editedAt: number }\n\
 interface Box { label: string; children: Box[] }\n\
@@ -209,6 +209,26 @@ fn equals_decides_the_resolution_of_each_operand_on_its_own() {
         record.reads
     );
     assert_eq!(record.other_dynamic, ["link: event.a, event.b"]);
+}
+
+#[test]
+fn equals_key_resolves_its_operand_as_equals_does() {
+    // Provisional decision P32: `equalsKey(a)` is what `equals` compares
+    // of `a`, so it has the footprint of one operand of `equals`.
+    let record = analyze(
+        "const f = handler<{ a?: Cell<Message> }, { message: Cell<Message>; out: Cell<boolean> }>((event, state) => { state.out.set(equalsKey(state.message) === equalsKey(event.a)); });\n",
+    );
+    assert!(
+        has(&record.reads, "state.message : identity (resolved)"),
+        "{:?}",
+        record.reads
+    );
+    assert!(
+        has(&record.reads, "event.a : identity (resolved)"),
+        "{:?}",
+        record.reads
+    );
+    assert!(record.widenings.is_empty(), "{:?}", record.widenings);
 }
 
 #[test]

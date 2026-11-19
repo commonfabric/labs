@@ -46,12 +46,14 @@
                   "at": [
                     "last"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
                   "at": [
                     "value"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -107,12 +109,14 @@
                   "at": [
                     "seen"
                   ],
+                  "handle": true,
                   "slot": 3
                 },
                 {
                   "at": [
                     "value"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -176,6 +180,7 @@
                   "at": [
                     "counts"
                   ],
+                  "handle": true,
                   "slot": 5
                 },
                 {
@@ -210,6 +215,7 @@
                     "binding",
                     "value"
                   ],
+                  "handle": true,
                   "slot": 9
                 }
               ],

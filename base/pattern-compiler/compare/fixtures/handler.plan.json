@@ -80,6 +80,7 @@
                     "binding",
                     "last"
                   ],
+                  "handle": true,
                   "slot": 1
                 },
                 {
@@ -87,6 +88,7 @@
                     "binding",
                     "log"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {

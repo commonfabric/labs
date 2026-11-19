@@ -255,6 +255,7 @@
                     "binding",
                     "site"
                   ],
+                  "handle": true,
                   "slot": 10
                 }
               ],
@@ -308,6 +309,7 @@
                     "binding",
                     "payload"
                   ],
+                  "handle": true,
                   "slot": 13
                 }
               ],

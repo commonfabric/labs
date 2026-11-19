@@ -135,6 +135,7 @@
                     "binding",
                     "max"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -149,6 +150,7 @@
                     "binding",
                     "step"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -163,6 +165,7 @@
                     "binding",
                     "value"
                   ],
+                  "handle": true,
                   "slot": 4
                 },
                 {
@@ -232,6 +235,7 @@
                     "binding",
                     "step"
                   ],
+                  "handle": true,
                   "slot": 9
                 },
                 {
@@ -652,6 +656,7 @@
                     "binding",
                     "max"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -666,6 +671,7 @@
                     "binding",
                     "step"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -680,6 +686,7 @@
                     "binding",
                     "value"
                   ],
+                  "handle": true,
                   "slot": 4
                 },
                 {
@@ -749,6 +756,7 @@
                     "binding",
                     "step"
                   ],
+                  "handle": true,
                   "slot": 7
                 },
                 {

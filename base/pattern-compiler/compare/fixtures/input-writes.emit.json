@@ -98,6 +98,7 @@
                     "binding",
                     "count"
                   ],
+                  "handle": true,
                   "slot": 0
                 },
                 {
@@ -112,6 +113,7 @@
                     "binding",
                     "items"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {

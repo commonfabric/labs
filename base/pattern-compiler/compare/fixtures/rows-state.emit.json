@@ -317,6 +317,7 @@
                     "binding",
                     "open"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -377,6 +378,7 @@
                     "binding",
                     "item"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],
@@ -965,6 +967,7 @@
                     "binding",
                     "open"
                   ],
+                  "handle": true,
                   "slot": 2
                 },
                 {
@@ -1025,6 +1028,7 @@
                     "binding",
                     "item"
                   ],
+                  "handle": true,
                   "slot": 6
                 }
               ],
