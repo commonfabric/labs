@@ -52,6 +52,9 @@ export interface SpindleView {
   pinnedText: string;
   extraPrompt: string;
   stale: boolean;
+  /** Stale only because a pin above it is: its own parent did not change, so
+   * respinning it cannot help until the stale pin above is respun. */
+  staleAbove: boolean;
   /** Generation runs on its own or was asked for. */
   ready: boolean;
   /** The full prompt, shown to the person. */
@@ -283,8 +286,9 @@ export const boardView = (
       const ready = input.trim() !== "" &&
         (levelIndex === 0 || record.requested);
       const pinned = isPinned(record);
-      const isStale = pinned &&
-        (record.parentHash !== textHash(input) || stale.has(parentOf(path)));
+      const ownStale = pinned && record.parentHash !== textHash(input);
+      const staleAbove = pinned && !ownStale && stale.has(parentOf(path));
+      const isStale = ownStale || staleAbove;
       if (isStale) stale.add(path);
       return {
         path,
@@ -299,6 +303,7 @@ export const boardView = (
         pinnedText: pinned ? record.pinnedText : "",
         extraPrompt: record.extraPrompt,
         stale: isStale,
+        staleAbove,
         ready,
         prompt,
         activePrompt: ready ? prompt : "",
@@ -436,8 +441,12 @@ export const pinsLostByRemovingLevel = (
     spindles.filter((s) => levelOf(s.path) >= levels.length - 1),
   );
 
+/** A branch factor in 1..MAX_BRANCH; anything not a number (the `setBranch`
+ * stream takes whatever a caller sends) counts as 1. */
 export const clampBranch = (branch: number): number =>
-  Math.min(MAX_BRANCH, Math.max(1, Math.round(branch)));
+  Number.isFinite(branch)
+    ? Math.min(MAX_BRANCH, Math.max(1, Math.round(branch)))
+    : 1;
 
 /** Sets a level's branch factor. Lowering it removes the spindles past the
  * new count and everything under them. */
