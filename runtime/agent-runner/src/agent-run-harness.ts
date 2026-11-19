@@ -304,6 +304,12 @@ export const createHarnessAgentRunExecutor = (
     // The record's taxonomy holds no code for a run the information-flow
     // rules stopped, so it records the provider failure it was before.
     if (job.outcome === "failed") {
+      // The record keeps no detail, so the operator's log says why.
+      if (job.errorDetail !== undefined) {
+        options.report?.(
+          `agent run ${runKey} failed (${job.errorCode}): ${job.errorDetail}`,
+        );
+      }
       return {
         ...job,
         errorCode: job.errorCode === CFC_REFUSED
