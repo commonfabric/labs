@@ -2003,7 +2003,12 @@ export class V2StorageTransaction implements IStorageTransaction {
           doc,
           base,
           mergeable.suppress,
-          (arrayPath) => splicesArray(id, scope, arrayPath),
+          // A document with a text change goes index by index: the change
+          // travels as an `apply-op`, an operation of its own on the
+          // document, and the store admits a marked splice only where its
+          // document has no other operation in the commit.
+          (arrayPath) =>
+            textChanges === undefined && splicesArray(id, scope, arrayPath),
           patchedValue,
         );
         if (mergeable.ops.length > 0) {
