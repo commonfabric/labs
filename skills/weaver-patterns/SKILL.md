@@ -71,6 +71,16 @@ step checks before it changes anything.
   undo and can be shared on its own. When `setsrc` refuses because the new
   version does not fit the piece's data, offer a fresh piece or keeping the old
   version; nothing carries data over yet.
+- **Into their Weaver**, once, after the first save: their loom service places
+  the piece on their private **Making** loom, never the loom they have open,
+  which may be shared. `loom command run loom.find --name Making --json` finds
+  it (`loom command run loom.create --title Making --json` makes it the first
+  time), then
+  `loom command run loom.add --loom <loom_id> --ref
+  pattern:<space>/<pieceId> --focus`
+  adds the piece (`cf piece new --json` gives the `pieceId`). Later saves update
+  it in place. Tell them it is on their Making loom, on any device their Weaver
+  runs on.
 - **checkpoint** right after the save that finishes something they asked for:
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a private version,
   the point undo goes back to: one per request, never one per save.
@@ -107,5 +117,5 @@ step checks before it changes anything.
   they share, and how many people use it).
 
 When nothing here does what they ask, say it is not built yet rather than
-improvising links, copies or Weaver deep links. Not built yet, e.g.: putting a
-save straight onto a loom in Weaver, beta and stable channels, links.
+improvising links, copies or Weaver deep links. Not built yet, e.g.: bringing
+the Making loom forward in Weaver by itself, beta and stable channels, links.
