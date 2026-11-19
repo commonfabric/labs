@@ -83,6 +83,13 @@ export class CFCellLink extends BaseElement {
    */
   static newTabReserveAfterMs = NEW_TAB_RESERVE_AFTER_MS;
 
+  /**
+   * How long a released press is kept for the click that ends it. A touch
+   * screen dispatches that click a while after the release; a press no click
+   * follows is let go after this.
+   */
+  static releasedPressHoldMs = 1000;
+
   static override styles = [
     BaseElement.baseStyles,
     css`
@@ -497,10 +504,11 @@ export class CFCellLink extends BaseElement {
   /**
    * Helper for `_onPointerDown()`, which starts resolving a labelled link's
    * target for the press that has begun, and lets the press go once it ends.
-   * The click that ends a press is dispatched after its `pointerup`, in the
-   * same task, so the press is let go a task later: a click that follows
-   * finds it, and a click that comes later does not. Only the pointer that
-   * began the press, `pointerId`, ends it.
+   * Only the pointer that began the press, `pointerId`, ends it. A cancelled
+   * press ends no click and is let go at once. A released one is kept for the
+   * click that ends it, which a mouse dispatches right after its `pointerup`
+   * and a touch screen a while later, and is let go after
+   * `releasedPressHoldMs` if no click comes. A later press replaces it.
    */
   private _beginPress(pointerId: number) {
     const press: LinkPress = {
@@ -515,9 +523,11 @@ export class CFCellLink extends BaseElement {
       if (event.pointerId !== pointerId) return;
       document.removeEventListener("pointerup", end);
       document.removeEventListener("pointercancel", end);
-      setTimeout(() => {
+      const letGo = () => {
         if (this._press === press) this._press = undefined;
-      }, 0);
+      };
+      if (event.type === "pointercancel") letGo();
+      else setTimeout(letGo, CFCellLink.releasedPressHoldMs);
     };
     document.addEventListener("pointerup", end);
     document.addEventListener("pointercancel", end);

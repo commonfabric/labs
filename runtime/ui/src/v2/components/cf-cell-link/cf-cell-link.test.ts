@@ -921,13 +921,11 @@ async function navigatedToOnceSettled(act: () => void): Promise<string[]> {
  * A click a pointer makes, as opposed to one the keyboard makes: it carries
  * the click count in `detail`.
  */
-function pointerClick(init: MouseEventInit = {}): Event {
-  return new MouseEvent("click", {
-    detail: 1,
-    bubbles: true,
-    composed: true,
-    ...init,
-  });
+function pointerClick(init: MouseEventInit = {}, pointerId?: number): Event {
+  const options = { detail: 1, bubbles: true, composed: true, ...init };
+  return pointerId === undefined
+    ? new MouseEvent("click", options)
+    : new PointerEvent("click", { ...options, pointerId });
 }
 
 /** The piece ids navigated to while `act()` runs. */
@@ -1227,6 +1225,60 @@ describe("CFCellLink in a document", () => {
       // points now, not where the cancelled press found it.
       expect(await navigatedToOnceSettled(() => chip(element).click()))
         .toEqual(["of:fid1:topic-222222"]);
+    });
+
+    it("keeps a released touch press for its click, which comes later", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 7));
+      await settle();
+      document.dispatchEvent(pointer("pointerup", 10, 10, 7));
+      // A touch screen's click comes a while after the release.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const opened = await navigatedToOnceSettled(() =>
+        chip(element).dispatchEvent(pointerClick({}, 7))
+      );
+      expect(opened).toEqual(["of:fid1:topic-111111"]);
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("lets a released press go once no click has followed it for a while", async () => {
+      const hold = CFCellLink.releasedPressHoldMs;
+      CFCellLink.releasedPressHoldMs = 0;
+      try {
+        const cell = linkTo(
+          pieceCell("of:fid1:topic-111111"),
+          pieceCell("of:fid1:topic-222222"),
+        );
+        const element = await cellLink({
+          label: "Open",
+          cell,
+          isStatic: true,
+        });
+        await shownText(element);
+
+        chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 1));
+        await settle();
+        document.dispatchEvent(pointer("pointerup", 10, 10, 1));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(
+          await navigatedToOnceSettled(() =>
+            chip(element).dispatchEvent(pointerClick({}, 1))
+          ),
+        ).toEqual(["of:fid1:topic-222222"]);
+      } finally {
+        CFCellLink.releasedPressHoldMs = hold;
+      }
     });
 
     it("drags only what its current press resolved, once that lands", async () => {

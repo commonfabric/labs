@@ -497,6 +497,129 @@ describe("topics-navigation-helpers", () => {
       expect(result.clicks).toEqual(["of:fid1:moved"]);
     });
 
+    it("resolves again a link whose first resolution was superseded by a new source", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        let resolutions = 0;
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          cell: { source: "first" } as unknown,
+          _resolvedCell: undefined as unknown,
+          // The first resolution is overtaken by a new source and, as the
+          // component does for a superseded one, finds nothing; the next
+          // resolves the new source.
+          resolveTarget() {
+            const attempt = resolutions++;
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                if (attempt === 0) {
+                  link.cell = { source: "second" };
+                  resolve(undefined);
+                  return;
+                }
+                link._resolvedCell = {
+                  space: () => "did:key:space",
+                  id: () => "of:fid1:retargeted",
+                  ref: () => ({ scope: "space", path: [] }),
+                };
+                resolve(link._resolvedCell);
+              }, 5)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        button.addEventListener("click", () => {
+          const pieceId = (link._resolvedCell as { id(): string }).id();
+          clicks.push(pieceId);
+          globalThis.dispatchEvent(
+            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+          );
+        });
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks, resolutions }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => { clicks: string[] };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:retargeted");
+      expect(result.clicks).toEqual(["of:fid1:retargeted"]);
+    });
+
+    it("reports the navigation its click made, not one dispatched before it", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        // Some other part of the page navigates while the helper is still
+        // choosing and revalidating, until the click.
+        const noise = setInterval(
+          () =>
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", {
+                detail: { pieceId: "of:fid1:unrelated" },
+              }),
+            ),
+          2,
+        );
+        const pieceId = "of:fid1:clicked";
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          _resolvedCell: undefined as unknown,
+          resolveTarget() {
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = {
+                  space: () => "did:key:space",
+                  id: () => pieceId,
+                  ref: () => ({ scope: "space", path: [] }),
+                };
+                resolve(link._resolvedCell);
+              }, 20)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        button.addEventListener("click", () => {
+          clearInterval(noise);
+          clicks.push(pieceId);
+          globalThis.dispatchEvent(
+            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+          );
+        });
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+
+      expect(returned).toBe("of:fid1:clicked");
+    });
+
     it("revalidates after a surviving link's box settles", async () => {
       await page.evaluate(() => {
         document.body.replaceChildren();

@@ -111,6 +111,9 @@ export async function openInNewTabWhenReady(
     {
       claimReservedTab: () => {
         claimed = true;
+        // Cut from this page before the host has it, as `noopener` would
+        // have cut a tab opened for it.
+        tab.opener = null;
         return tab;
       },
     },

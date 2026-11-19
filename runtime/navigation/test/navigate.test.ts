@@ -241,6 +241,8 @@ describe("navigate", () => {
       }
       expect(tab.location.href).toBe("loom://piece/fid1:pieceX");
       expect(tab.closed).toBe(false);
+      // Cut from this page, as a tab opened with `noopener` is.
+      expect(tab.opener).toBe(null);
     });
 
     it("dispatches the cancellable cf-open-external with the target, reserved tab or not", async () => {

@@ -63,7 +63,14 @@ const markCellLink: MarkLinkPredicate = (
       _name?: string;
       _resolvedCell?: unknown;
       resolveTarget?: () => Promise<unknown>;
-      __activation?: { token: string; target?: unknown; settled: boolean };
+      cell?: unknown;
+      link?: unknown;
+      __activation?: {
+        token: string;
+        target?: unknown;
+        settled: boolean;
+        source?: unknown;
+      };
     };
     if ((link.label ?? link._name) !== targetLabel) continue;
     const chip = link.shadowRoot?.querySelector("cf-chip");
@@ -71,11 +78,20 @@ const markCellLink: MarkLinkPredicate = (
     if (!button || !probe.isRendered(button)) continue;
     if (link.label && link.resolveTarget) {
       const activation = link.__activation;
-      if (activation?.token !== targetToken) {
-        const started: { token: string; target?: unknown; settled: boolean } = {
-          token: targetToken,
-          settled: false,
-        };
+      const source = link.cell ?? link.link;
+      // A resolution that found nothing because the link was given a new
+      // source meanwhile is superseded, not empty: resolve again.
+      if (
+        activation?.token !== targetToken ||
+        (activation.settled && !activation.target &&
+          activation.source !== source)
+      ) {
+        const started: {
+          token: string;
+          target?: unknown;
+          settled: boolean;
+          source?: unknown;
+        } = { token: targetToken, settled: false, source };
         link.__activation = started;
         void link.resolveTarget().then((target) => {
           started.target = target;
@@ -121,7 +137,14 @@ const markCardOpenLink: MarkLinkPredicate = (
       _name?: string;
       _resolvedCell?: unknown;
       resolveTarget?: () => Promise<unknown>;
-      __activation?: { token: string; target?: unknown; settled: boolean };
+      cell?: unknown;
+      link?: unknown;
+      __activation?: {
+        token: string;
+        target?: unknown;
+        settled: boolean;
+        source?: unknown;
+      };
     };
     if ((link.label ?? link._name) !== "Open") continue;
 
@@ -143,11 +166,20 @@ const markCardOpenLink: MarkLinkPredicate = (
     if (!button || !probe.isRendered(button)) continue;
     if (link.label && link.resolveTarget) {
       const activation = link.__activation;
-      if (activation?.token !== targetToken) {
-        const started: { token: string; target?: unknown; settled: boolean } = {
-          token: targetToken,
-          settled: false,
-        };
+      const source = link.cell ?? link.link;
+      // A resolution that found nothing because the link was given a new
+      // source meanwhile is superseded, not empty: resolve again.
+      if (
+        activation?.token !== targetToken ||
+        (activation.settled && !activation.target &&
+          activation.source !== source)
+      ) {
+        const started: {
+          token: string;
+          target?: unknown;
+          settled: boolean;
+          source?: unknown;
+        } = { token: targetToken, settled: false, source };
         link.__activation = started;
         void link.resolveTarget().then((target) => {
           started.target = target;
@@ -205,7 +237,14 @@ const markResolvedCellLink = (
       _name?: string;
       _resolvedCell?: Destination;
       resolveTarget?: () => Promise<unknown>;
-      __activation?: { token: string; target?: unknown; settled: boolean };
+      cell?: unknown;
+      link?: unknown;
+      __activation?: {
+        token: string;
+        target?: unknown;
+        settled: boolean;
+        source?: unknown;
+      };
     };
     const chip = link.shadowRoot?.querySelector("cf-chip");
     const button = chip?.shadowRoot?.querySelector("button");
@@ -233,13 +272,19 @@ const markResolvedCellLink = (
         if (!card || !probe.deepText(card).includes(cardTitle)) continue;
       }
       if (!button || !probe.isRendered(button)) continue;
-      // Resolved for this click and found nothing: not this link.
-      if (activation?.settled) continue;
-      if (activation === undefined) {
-        const started: { token: string; target?: unknown; settled: boolean } = {
-          token: targetToken,
-          settled: false,
-        };
+      // Resolved for this click and found nothing from the source it still
+      // has: not this link. A source given since makes that result stale.
+      const source = link.cell ?? link.link;
+      const superseded = activation?.settled === true &&
+        activation.source !== source;
+      if (activation?.settled && !superseded) continue;
+      if (activation === undefined || superseded) {
+        const started: {
+          token: string;
+          target?: unknown;
+          settled: boolean;
+          source?: unknown;
+        } = { token: targetToken, settled: false, source };
         link.__activation = started;
         void link.resolveTarget!().then((target) => {
           started.target = target;
@@ -379,19 +424,34 @@ async function markResolveAndClick(
     CLICK_TARGET_ATTR,
     LINK_TARGET_ATTR,
   ];
-  await page.evaluate((targetToken: string) => {
+  await page.evaluate((targetToken: string, clickTargetAttribute: string) => {
     const scope = globalThis as typeof globalThis & {
       __topicsNavigations?: Record<string, string>;
     };
     const navigations = scope.__topicsNavigations ??= {};
+    // Only a navigation that follows the click on the marked button is the
+    // click's; one dispatched while the helper revalidates is not.
+    let clicked = false;
+    const onClick = (event: Event) => {
+      const onMarked = event.composedPath().some((node) =>
+        node instanceof Element &&
+        (node.getAttribute(clickTargetAttribute) ?? "").split(/\s+/)
+          .includes(targetToken)
+      );
+      if (!onMarked) return;
+      clicked = true;
+      document.removeEventListener("click", onClick, true);
+    };
+    document.addEventListener("click", onClick, true);
     const capture = (event: Event) => {
+      if (!clicked) return;
       globalThis.removeEventListener("cf-navigate", capture);
       navigations[targetToken] = String(
         (event as CustomEvent<{ pieceId?: unknown }>).detail?.pieceId,
       );
     };
     globalThis.addEventListener("cf-navigate", capture);
-  }, { args: [token] });
+  }, { args: [token, CLICK_TARGET_ATTR] });
   await clickMarked(page, {
     token,
     remark: {
