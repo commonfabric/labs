@@ -1537,6 +1537,14 @@ export type ApplyCommitOptions = {
     principal: string;
     sessionId: SessionId;
   };
+
+  /**
+   * The scope instance each scoped write of a `system`-class commit lands
+   * in, by operation index: how the server's restore of a branch names
+   * every instance it rewrites, having no session to resolve one from.
+   * Refused on any other class.
+   */
+  scopeKeys?: ReadonlyMap<number, string>;
 };
 
 export type AppliedRevision = {
@@ -2455,6 +2463,22 @@ export const close = (engine: Engine): void => {
   engine.database.close();
 };
 
+/** The longest name a branch may carry. */
+export const MAX_BRANCH_NAME_LENGTH = 128;
+
+/**
+ * Creates the branch `name`, forked from `options.parentBranch` (the default
+ * branch when absent) as of `options.forkSeq` (the parent's head when
+ * absent), and returns it. The branch holds what its parent held at the fork
+ * point, shares the parent's revisions up to there, and diverges from its
+ * first own commit. Creating a branch that already exists with the same
+ * parent and fork point returns it unchanged.
+ *
+ * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH} or holds
+ * a control character, when the parent does not exist or is deleted, when
+ * the fork point lies outside the parent's history, or when `name` is taken
+ * by a branch with another parent or fork point, a deleted one included.
+ */
 export const createBranch = (
   engine: Engine,
   name: BranchName,
@@ -2464,16 +2488,40 @@ export const createBranch = (
   } = {},
 ): BranchState =>
   engine.database.transaction((txEngine: Engine) => {
-    if (name === DEFAULT_BRANCH) {
-      return requireBranch(txEngine, DEFAULT_BRANCH);
-    }
-    const existing = getBranch(txEngine, name);
-    if (existing !== null) {
-      return existing;
-    }
     const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
     const parent = requireBranch(txEngine, parentBranch);
     const forkSeq = options.forkSeq ?? parent.headSeq;
+    if (name === DEFAULT_BRANCH) {
+      return parent.name === DEFAULT_BRANCH
+        ? parent
+        : requireBranch(txEngine, DEFAULT_BRANCH);
+    }
+    const existing = getBranch(txEngine, name);
+    if (existing !== null) {
+      if (
+        existing.status !== "active" ||
+        existing.parentBranch !== parentBranch || existing.forkSeq !== forkSeq
+      ) {
+        throw new Error(`branch name is taken: ${name}`);
+      }
+      return existing;
+    }
+    // deno-lint-ignore no-control-regex
+    if (name.length > MAX_BRANCH_NAME_LENGTH || /[\u0000-\u001f]/.test(name)) {
+      throw new Error("branch name is malformed");
+    }
+    if (parent.status !== "active") {
+      throw new Error(`branch is not active: ${parentBranch}`);
+    }
+    const firstSeq = parentBranch === DEFAULT_BRANCH ? 0 : parent.createdSeq;
+    if (
+      !Number.isSafeInteger(forkSeq) || forkSeq < firstSeq ||
+      forkSeq > parent.headSeq
+    ) {
+      throw new Error(
+        `seq ${forkSeq} is out of range for branch ${parentBranch}`,
+      );
+    }
     txEngine.statement("insertBranch").run({
       name,
       parent_branch: parentBranch,
@@ -2484,6 +2532,13 @@ export const createBranch = (
     return requireBranch(txEngine, name);
   }).immediate(engine);
 
+/**
+ * Deletes `branch`: it takes no further commit and
+ * {@link listBranches} reports it as deleted, while its name stays taken and
+ * its history stays readable. Deleting the default branch does nothing.
+ *
+ * @throws When the branch does not exist.
+ */
 export const deleteBranch = (
   engine: Engine,
   branch: BranchName,
@@ -2491,6 +2546,15 @@ export const deleteBranch = (
   requireBranch(engine, branch);
   engine.statement("deleteBranch").run({ branch });
 };
+
+/**
+ * Returns `branch` as the store holds it now, or `null` when there is no
+ * such branch.
+ */
+export const branchState = (
+  engine: Engine,
+  branch: BranchName,
+): BranchState | null => getBranch(engine, branch);
 
 export const listBranches = (engine: Engine): BranchState[] => {
   return (engine.statement("selectBranches").all() as BranchRow[]).map(
@@ -6402,6 +6466,7 @@ const applyCommitTransaction = (
     derivedThrough,
     delegated,
     systemEventActor,
+    scopeKeys,
     allowEmptyOperations,
     elidedVerdicts = false,
   }: ApplyCommitOptions,
@@ -6717,6 +6782,27 @@ const applyCommitTransaction = (
             `"${declared}" (op ${opIndex})`,
         );
       }
+    }
+  }
+  if (scopeKeys !== undefined) {
+    if (commitClass !== "system") {
+      throw new ProtocolError(
+        "explicit scope keys are system-commit admission only",
+      );
+    }
+    for (const [opIndex, scopeKey] of scopeKeys) {
+      const operation = commit.operations[opIndex];
+      if (
+        operation === undefined || operation.op === "sqlite" ||
+        !isScopeKey(scopeKey) ||
+        scopeOfScopeKey(scopeKey) !== normalizeScope(operation.scope)
+      ) {
+        throw new ProtocolError(
+          `system commit rejected: scope_key "${scopeKey}" does not name ` +
+            `an instance of the scope operation ${opIndex} writes`,
+        );
+      }
+      scopeKeyByOpIndex.set(opIndex, scopeKey);
     }
   }
   const hasPreconditions = (commit.preconditions?.length ?? 0) > 0;
