@@ -1,3 +1,10 @@
+/**
+ * Two checkboxes that each toggle a feature on or off, one bound directly to a
+ * cell and one that also runs a handler that logs the change.
+ * Demonstrates two-way binding of `cf-checkbox` with `$checked`, which updates
+ * the `Writable` with no handler, and when to add `oncf-change` for extra
+ * logic.
+ */
 import {
   Default,
   handler,

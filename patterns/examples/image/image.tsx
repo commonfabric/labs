@@ -1,3 +1,8 @@
+/**
+ * Displays an image from a URL with an optional caption beneath it, using
+ * the caption as the piece's name. It is a minimal example of a pattern that
+ * takes `url` and `caption` inputs and conditionally renders with `ifElse`.
+ */
 import {
   computed,
   type Default,
