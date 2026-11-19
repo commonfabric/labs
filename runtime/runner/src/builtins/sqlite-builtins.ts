@@ -1246,9 +1246,11 @@ export function sqliteQuery(
     // A query over an indexed collection looks its members up by the
     // reference they are stored under, so a cell bound as a parameter is
     // bound as that reference.
-    const overCollection =
-      indexedCollectionDescriptorOf(snapshotQueryResult(inputs.db)) !==
-        undefined;
+    // Only the declaration is read off the handle: the handle also names the
+    // member added last, whose fields are no input of this query.
+    const overCollection = indexedCollectionDescriptorOf({
+      index: snapshotQueryResult((inputs.db as { index?: unknown }).index),
+    }) !== undefined;
     let params: WireParams;
     try {
       params = encodeSqliteParams(

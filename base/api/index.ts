@@ -3437,12 +3437,12 @@ export type SqliteDatabaseFunction = {
 };
 
 /**
- * What an indexed collection mirrors of its members, each of which is a cell
- * holding a `T` (docs/features/indexed-collections.md).
+ * What an indexed collection mirrors of one kind of member, each of which is
+ * a cell holding a `T` (docs/features/indexed-collections.md).
  */
 export interface IndexedCollectionOptions<T = unknown> {
   /**
-   * Values mirrored as columns of the `members` table. A column is named for
+   * Values mirrored as columns of the kind's table. A column is named for
    * the member field it mirrors and given the SQLite type it is stored
    * under, or is declared with a type and, as needed, the path of a value
    * nested in the member and the column's label. A value that is absent is
@@ -3452,15 +3452,16 @@ export interface IndexedCollectionOptions<T = unknown> {
 
   /**
    * Member fields holding one reference to another cell, or a list of them.
-   * Each becomes a table of that name holding a `source_cf_link` and a
-   * `target_cf_link` column, with one row per reference. A list names fields
-   * of the member; a map gives each relation the path of a nested field.
+   * Each becomes a table named for the kind and the relation, holding a
+   * `source_cf_link` and a `target_cf_link` column, with one row per
+   * reference. A list names fields of the member; a map gives each relation
+   * the path of a nested field.
    */
   relations?:
     | ReadonlyArray<keyof T & string>
     | Record<string, readonly string[]>;
 
-  /** Secondary indexes over the `members` table, each a list of columns. */
+  /** Secondary indexes over the kind's table, each a list of columns. */
   indexes?: ReadonlyArray<ReadonlyArray<string>>;
 }
 
@@ -3485,39 +3486,21 @@ export interface IndexedColumnSpec {
 
 /**
  * A collection of cells whose membership lives in a SQLite database the
- * runtime keeps current. It is read with `query()` and with nothing else:
- * there is no list of members to read. `add()` and `remove()` change
- * membership inside a handler, and the runtime re-reads a member whenever a
- * document its mirrored fields were read from is written.
- */
-export interface IndexedCollection<T = unknown> extends SqliteDb {
-  /**
-   * Adds `member`, mirroring its declared fields in the caller's
-   * transaction. Adding a member the collection holds refreshes its rows.
-   */
-  add(member: T | AnyCell<T>): void;
-
-  /** Removes `member` and every row mirrored from it. */
-  remove(member: T | AnyCell<T>): void;
-}
-
-/**
- * Declares an indexed collection, which lives at the scope of the space. See
- * {@link IndexedCollection}.
- */
-export type IndexedCollectionFunction = <T = unknown>(
-  options?: IndexedCollectionOptions<T>,
-) => Reactive<IndexedCollection<T>>;
-
-/**
- * An indexed collection with several kinds of member, all mirrored into one
- * database. Each kind has a table named for it, and each of its relations a
- * table named for the kind and the relation, joined by an underscore, so a
- * statement can join one kind's members to another's.
+ * runtime keeps current. Its members come in the kinds it declares. Each kind
+ * has a table named for it, and each of its relations a table named for the
+ * kind and the relation, joined by an underscore, so a statement can join one
+ * kind's members to another's. The collection is read with `query()` and with
+ * nothing else: there is no list of members to read. `add()` and `remove()`
+ * change membership inside a handler, and the runtime re-reads a member
+ * whenever a document its mirrored fields were read from is written.
  */
 export interface IndexedCollections<Kinds = Record<string, unknown>>
   extends SqliteDb {
-  /** Adds `member` as one of `kind`, mirroring its declared fields. */
+  /**
+   * Adds `member` as one of `kind`, mirroring its declared fields in the
+   * caller's transaction. Adding a member the collection holds refreshes its
+   * rows.
+   */
   add<K extends keyof Kinds & string>(
     kind: K,
     member: Kinds[K] | AnyCell<Kinds[K]>,
@@ -3530,7 +3513,10 @@ export interface IndexedCollections<Kinds = Record<string, unknown>>
   ): void;
 }
 
-/** Declares an {@link IndexedCollections}, with a declaration per kind. */
+/**
+ * Declares an {@link IndexedCollections}, which lives at the scope of the
+ * space, with a declaration per kind of member.
+ */
 export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
   kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
 ) => Reactive<IndexedCollections<Kinds>>;
@@ -4459,7 +4445,6 @@ export declare const compileAndRun: CompileAndRunFunction;
 export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
-export declare const indexedCollection: IndexedCollectionFunction;
 export declare const indexedCollections: IndexedCollectionsFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;

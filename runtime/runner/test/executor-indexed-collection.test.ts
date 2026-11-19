@@ -35,8 +35,8 @@ import {
   type Cell,
   type Default,
   handler,
-  indexedCollection,
-  type IndexedCollection,
+  indexedCollections,
+  type IndexedCollections,
   pattern,
   type Stream,
   Writable,
@@ -54,13 +54,13 @@ const Topic = pattern<TopicInput, TopicOutput>(({ title, mentions }) => ({
 }));
 
 type State = {
-  topics: IndexedCollection<TopicOutput>;
+  topics: IndexedCollections<{ topics: TopicOutput }>;
   byTitle: Writable<Record<string, TopicOutput>>;
 };
 
 const add = handler<{ title: string }, State>(({ title }, { topics, byTitle }) => {
   const topic = Topic({ title, mentions: [] });
-  topics.add(topic);
+  topics.add("topics", topic);
   byTitle.key(title).set(topic);
 });
 
@@ -85,20 +85,19 @@ export default pattern<Record<string, never>, {
   rename: Stream<{ from: string; to: string }>;
   mention: Stream<{ from: string; to: string }>;
 }>(() => {
-  const topics = indexedCollection<TopicOutput>({
-    columns: { title: "text" },
-    relations: ["mentions"],
+  const topics = indexedCollections<{ topics: TopicOutput }>({
+    topics: { columns: { title: "text" }, relations: ["mentions"] },
   });
   const byTitle = Writable.of<Record<string, TopicOutput>>({});
   const state = { topics, byTitle };
   return {
     titles: topics.query<{ title: string }>(
-      "SELECT title FROM members ORDER BY title",
+      "SELECT title FROM topics ORDER BY title",
     ),
     mentioningFirst: topics.query<{ title: string }>(
-      "SELECT m.title AS title FROM mentions e JOIN members m " +
+      "SELECT m.title AS title FROM topics_mentions e JOIN topics m " +
         "ON m.member_cf_link = e.source_cf_link WHERE e.target_cf_link = " +
-        "(SELECT member_cf_link FROM members WHERE title = 'first') " +
+        "(SELECT member_cf_link FROM topics WHERE title = 'first') " +
         "ORDER BY m.title",
     ),
     add: add(state),
@@ -256,7 +255,8 @@ describe("executor-indexed-collection", () => {
     const f = await fixture({
       after: (sql) => {
         if (
-          watching && sql.startsWith("SELECT m.title AS title FROM mentions")
+          watching &&
+          sql.startsWith("SELECT m.title AS title FROM topics_mentions")
         ) {
           rerun.resolve();
         }
@@ -294,8 +294,8 @@ describe("executor-indexed-collection", () => {
     // and the second rename is carried into the collection behind it. The
     // other query is not held, so its second re-run returning says the
     // second rename has reached the database.
-    const TITLES = "SELECT title FROM members";
-    const MENTIONING = "SELECT m.title AS title FROM mentions";
+    const TITLES = "SELECT title FROM topics";
+    const MENTIONING = "SELECT m.title AS title FROM topics_mentions";
     const held = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const reruns = [

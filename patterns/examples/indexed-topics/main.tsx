@@ -15,8 +15,8 @@ import {
   computed,
   type Default,
   handler,
-  type IndexedCollection,
-  indexedCollection,
+  type IndexedCollections,
+  indexedCollections,
   NAME,
   type OpaqueCell,
   pattern,
@@ -33,10 +33,13 @@ interface TopicFields {
   mentions: unknown[];
 }
 
+/** The board's collection, whose one kind of member is the topic. */
+type Board = IndexedCollections<{ topics: TopicFields }>;
+
 interface TopicInput {
   title: Writable<string>;
   mentions: Writable<Default<unknown[], []>>;
-  board: IndexedCollection<TopicFields>;
+  board: Board;
 }
 
 /**
@@ -104,7 +107,7 @@ export const Topic = pattern<TopicInput, TopicOutput>(
     // table by this topic's own reference.
     const mentionedBy = board.query<MentioningTopic>(
       "SELECT m.member_cf_link AS topic, m.title AS title " +
-        "FROM mentions e JOIN members m " +
+        "FROM topics_mentions e JOIN topics m " +
         "ON m.member_cf_link = e.source_cf_link " +
         "WHERE e.target_cf_link = :self_cf_link ORDER BY m.title",
       { params: { self_cf_link: self } },
@@ -144,9 +147,9 @@ export interface BoardOutput {
 
 const addTopic = handler<
   { title: string },
-  { topics: IndexedCollection<TopicFields> }
->(({ title }, { topics }) => {
-  topics.add(Topic({ title, mentions: [], board: topics }));
+  { board: Board }
+>(({ title }, { board }) => {
+  board.add("topics", Topic({ title, mentions: [], board }));
 });
 
 // The reference comes from a listing row and is stored as it arrived: nothing
@@ -157,19 +160,21 @@ const selectTopic = handler<
 >(({ topic }, { selected }) => selected.set(topic));
 
 export default pattern<Record<string, never>, BoardOutput>(() => {
-  const topics = indexedCollection<TopicFields>({
-    columns: { title: "text" },
-    relations: ["mentions"],
-    indexes: [["title"]],
+  const board = indexedCollections<{ topics: TopicFields }>({
+    topics: {
+      columns: { title: "text" },
+      relations: ["mentions"],
+      indexes: [["title"]],
+    },
   });
   const selected = new Writable<SelectedTopic | undefined>(undefined);
 
-  const titles = topics.query<ListedTopic>(
-    "SELECT member_cf_link AS topic, title FROM members " +
+  const titles = board.query<ListedTopic>(
+    "SELECT member_cf_link AS topic, title FROM topics " +
       "ORDER BY title LIMIT 100",
   );
-  const counts = topics.query<{ n: number }>(
-    "SELECT count(*) AS n FROM members",
+  const counts = board.query<{ n: number }>(
+    "SELECT count(*) AS n FROM topics",
   );
   const topicCount = computed<number>(() => counts.result?.[0]?.n ?? 0);
   const listed = computed<ListedTopic[]>(() => titles.result ?? []);
@@ -193,7 +198,7 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
     titles,
     topicCount,
     selected,
-    addTopic: addTopic({ topics }),
+    addTopic: addTopic({ board }),
     select: selectTopic({ selected }),
   };
 });

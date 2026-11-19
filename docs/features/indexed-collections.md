@@ -17,14 +17,15 @@ it.
 
 ## Declaring one
 
-`indexedCollection<T>(options)` declares a collection of cells that hold a
-`T`. The declaration is plain data read when the pattern is built.
+`indexedCollections<Kinds>(kinds)` declares a collection whose members come
+in the kinds it names, each kind a set of cells that hold the type `Kinds`
+gives it. The declaration is plain data read when the pattern is built.
 
 ```tsx
 import {
   handler,
-  indexedCollection,
-  type IndexedCollection,
+  indexedCollections,
+  type IndexedCollections,
   pattern,
   type Stream,
 } from "commonfabric";
@@ -35,28 +36,33 @@ interface Donut {
   pairsWith: Donut[];
 }
 
-const stock = handler<
-  { donut: Donut },
-  { donuts: IndexedCollection<Donut> }
->(({ donut }, { donuts }) => donuts.add(donut));
+type Shop = IndexedCollections<{ donuts: Donut }>;
+
+const stock = handler<{ donut: Donut }, { shop: Shop }>(
+  ({ donut }, { shop }) => shop.add("donuts", donut),
+);
 
 export default pattern<Record<string, never>, {
   cheapest: { pending: boolean; result?: { name: string }[] };
   stock: Stream<{ donut: Donut }>;
 }>(() => {
-  const donuts = indexedCollection<Donut>({
-    columns: { name: "text", price: "real" },
-    relations: ["pairsWith"],
-    indexes: [["price"]],
+  const shop = indexedCollections<{ donuts: Donut }>({
+    donuts: {
+      columns: { name: "text", price: "real" },
+      relations: ["pairsWith"],
+      indexes: [["price"]],
+    },
   });
   return {
-    cheapest: donuts.query<{ name: string }>(
-      "SELECT name FROM members ORDER BY price LIMIT 3",
+    cheapest: shop.query<{ name: string }>(
+      "SELECT name FROM donuts ORDER BY price LIMIT 3",
     ),
-    stock: stock({ donuts }),
+    stock: stock({ shop }),
   };
 });
 ```
+
+Each kind declares:
 
 - `columns` names member fields to mirror, each with the SQLite type its
   column is stored under. A column that mirrors a nested value is given a
@@ -71,8 +77,12 @@ A field that is absent, on the member or anywhere along a path, is stored as
 `NULL` or as no reference, so an optional field needs nothing more than its
 name.
 
-The result is a database handle with two more methods. `add(member)` and
-`remove(member)` change membership, and are called inside a handler like
+A kind's table is named for the kind, here `donuts`, and a relation's table
+for the kind and the relation joined by an underscore, here
+`donuts_pairsWith`.
+
+The result is a database handle with two more methods. `add(kind, member)`
+and `remove(kind, member)` change membership, and are called inside a handler like
 `exec()`. `query()` is the database's own, so a typed row lowers to a schema
 the same way.
 
@@ -81,9 +91,8 @@ A collection lives at the scope of its space, and holds cells of that space.
 
 ### Several kinds of member
 
-`indexedCollections(kinds)` declares one database holding several kinds of
-member, so that one statement can join them. Each kind is declared as a
-single collection is, and `add()` and `remove()` take the kind first.
+A collection that declares several kinds holds them in one database, so that
+one statement can join them.
 
 ```tsx
 import {
@@ -132,14 +141,11 @@ export default pattern<Record<string, never>, {
 });
 ```
 
-A kind's table is named for the kind, and a relation's table for the kind and
-the relation joined by an underscore, here `orders_donut`. A collection
-declared with `indexedCollection()` has one kind, named `members`, whose
-relation tables are named for the relation alone.
+The relation `donut` of the kind `orders` is the table `orders_donut`.
 
 ## The tables
 
-`defineIndexedCollection()` in
+`defineIndexedCollections()` in
 `runtime/runner/src/builtins/indexed-collection/definition.ts` derives the
 tables from the declaration:
 
@@ -367,13 +373,18 @@ until the first step has run, and then re-runs.
   costs that lookup.
 - Adding a member costs several database writes, each of which pays the
   per-statement cost of `exec()`.
+- Reading a reference resolves the cell it names, so a member's rows depend
+  on the documents of the cells it refers to. A write to a cell is therefore
+  followed by a re-read of every member that refers to it, which writes
+  nothing when their rows are unchanged but costs time in proportion to how
+  many members refer to that cell.
 - A document in another space that a member's field is read through is not
   followed: writes are heard per space.
 - Result rows are stored as documents, as for any query, so a query bounds its
   rows with `LIMIT`.
 - Removing a member deletes the rows it is the source of. Relation rows that
   point at it from other members stay until those members stop referring to
-  it, and a query that wants only current members joins against `members`.
+  it, and a query that wants only current members joins against the kind's table.
 - Nothing rebuilds a collection whose database was lost: the database is the
   only record of which cells are members. Nothing re-reads members written
   while no runtime was serving their space and whose commits the serving

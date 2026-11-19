@@ -19,9 +19,6 @@ import {
   type TableSchema,
 } from "@commonfabric/memory/sqlite/schema";
 
-/** The one kind, and its table, of a collection declared without kinds. */
-export const MEMBERS_TABLE = "members";
-
 /** Table naming the documents each member's rows were read from. */
 export const MEMBER_DEPS_TABLE = "member_deps";
 
@@ -138,17 +135,6 @@ const RESERVED_TABLES: readonly string[] = [
 ];
 
 /**
- * Derives the tables and the descriptor of a collection with one kind of
- * member. The kind and its table are named `members`, and each relation's
- * table is named for the relation.
- */
-export function defineIndexedCollection(
-  options: IndexedCollectionOptions = {},
-): IndexedCollectionDefinition {
-  return define({ [MEMBERS_TABLE]: options }, (_kind, relation) => relation);
-}
-
-/**
  * Derives the tables and the descriptor of a collection with the kinds of
  * member `kinds` declares. A kind's table is named for the kind, and a
  * relation's table for the kind and the relation, joined by an underscore.
@@ -162,18 +148,17 @@ export function defineIndexedCollections(
       "`indexedCollections()` takes a declaration per kind of member",
     );
   }
-  return define(kinds, (kind, relation) => `${kind}_${relation}`);
+  return define(kinds);
 }
 
 /**
- * Helper for the two `define…()` functions, which derives the tables and the
+ * Helper for `defineIndexedCollections()`, which derives the tables and the
  * descriptor of `kinds`. Throws on a declaration that is not written in the
  * pattern, on a name that is not a plain identifier, on a field declared
  * twice within a kind, and on two tables that would share a name.
  */
 function define(
   kinds: Record<string, IndexedCollectionOptions>,
-  relationTable: (kind: string, relation: string) => string,
 ): IndexedCollectionDefinition {
   const tables: Record<string, TableSchema> = {
     [MEMBER_DEPS_TABLE]: table(
@@ -271,7 +256,7 @@ function define(
         );
       }
       seen.add(name);
-      relationTables[name] = relationTable(kind, name);
+      relationTables[name] = `${kind}_${name}`;
       claim(
         relationTables[name],
         table(
@@ -356,24 +341,13 @@ export function indexedCollectionDescriptorOf(
 }
 
 /**
- * Returns the descriptor of the kind named `kind`, or of the collection's
- * one kind when `kind === undefined`. Throws on a kind the collection does
- * not declare, and on no kind being named where it declares several.
+ * Returns the descriptor of the kind named `kind`. Throws on a kind the
+ * collection does not declare.
  */
 export function indexedKindOf(
   descriptor: IndexedCollectionDescriptor,
-  kind: string | undefined,
+  kind: string,
 ): { kind: string; descriptor: IndexedKindDescriptor } {
-  const names = Object.keys(descriptor.kinds);
-  if (kind === undefined) {
-    if (names.length !== 1) {
-      throw new TypeError(
-        "this indexed collection declares several kinds of member, so " +
-          "`add()` and `remove()` take the kind first",
-      );
-    }
-    return { kind: names[0], descriptor: descriptor.kinds[names[0]] };
-  }
   if (!Object.hasOwn(descriptor.kinds, kind)) {
     throw new TypeError(
       `this indexed collection declares no kind of member \`${kind}\``,

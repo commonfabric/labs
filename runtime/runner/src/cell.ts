@@ -2406,14 +2406,13 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Adds a member to this indexed collection: mirrors its declared fields
-   * into the collection's tables, in this cell's transaction. A collection
-   * with one kind of member takes the member; one with several takes the
-   * kind and then the member. Adding a member the collection already holds
-   * refreshes its rows. Throws outside a transaction, on a receiver that is
-   * not an indexed collection, on a kind it does not declare, and on a
-   * member that is not a cell of the collection's own space.
+   * into the tables of `kind`, in this cell's transaction. Adding a member
+   * the collection already holds refreshes its rows. Throws outside a
+   * transaction, on a receiver that is not an indexed collection, on a kind
+   * it does not declare, and on a member that is not a cell of the
+   * collection's own space.
    */
-  add(kindOrMember: unknown, memberOfKind?: unknown): void {
+  add(kind: string, member: unknown): void {
     const collection = this.#indexedCollectionDescriptor();
     if (collection === undefined || !this.#tx) {
       throw new TypeError(
@@ -2421,13 +2420,8 @@ export class CellImpl<T extends FabricValue>
           "transaction (e.g. inside a handler)",
       );
     }
-    const { kind, descriptor } = indexedKindOf(
-      collection,
-      memberOfKind === undefined ? undefined : String(kindOrMember),
-    );
-    const cell = asBoundCell(
-      memberOfKind === undefined ? kindOrMember : memberOfKind,
-    );
+    const { descriptor } = indexedKindOf(collection, String(kind));
+    const cell = asBoundCell(member);
     if (cell === undefined) {
       throw new TypeError("an indexed collection holds cells only");
     }
@@ -3920,14 +3914,9 @@ export class CellImpl<T extends FabricValue>
       // On an indexed collection, `remove()` takes a member out of it, named
       // as `add()` names one.
       const collection = this.#indexedCollectionDescriptor();
-      const member = asBoundCell(
-        memberOfKind === undefined ? ref : memberOfKind,
-      );
+      const member = asBoundCell(memberOfKind);
       if (collection !== undefined && member !== undefined && this.#tx) {
-        const { kind, descriptor } = indexedKindOf(
-          collection,
-          memberOfKind === undefined ? undefined : String(ref),
-        );
+        const { kind, descriptor } = indexedKindOf(collection, String(ref));
         for (const key of memberKeysOf(member.withTx(this.#tx))) {
           deleteMemberRows(this, kind, descriptor, key);
         }

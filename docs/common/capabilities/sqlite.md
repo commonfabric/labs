@@ -333,8 +333,8 @@ cells in a handler, and ask your questions in SQL.
 import {
   type Cell,
   handler,
-  indexedCollection,
-  type IndexedCollection,
+  indexedCollections,
+  type IndexedCollections,
   pattern,
   type Stream,
 } from "commonfabric";
@@ -345,36 +345,41 @@ interface Donut {
   pairsWith: Donut[];
 }
 
-const stock = handler<
-  { donut: Donut },
-  { donuts: IndexedCollection<Donut> }
->(({ donut }, { donuts }) => donuts.add(donut));
+type Shop = IndexedCollections<{ donuts: Donut }>;
+
+const stock = handler<{ donut: Donut }, { shop: Shop }>(
+  ({ donut }, { shop }) => shop.add("donuts", donut),
+);
 
 export default pattern<{ favorite: Cell<Donut> }, {
   pairedWithFavorite: { pending: boolean; result?: { name: string }[] };
   stock: Stream<{ donut: Donut }>;
 }>(({ favorite }) => {
-  const donuts = indexedCollection<Donut>({
-    columns: { name: "text", price: "real" },
-    relations: ["pairsWith"],
+  const shop = indexedCollections<{ donuts: Donut }>({
+    donuts: {
+      columns: { name: "text", price: "real" },
+      relations: ["pairsWith"],
+    },
   });
   return {
-    pairedWithFavorite: donuts.query<{ name: string }>(
-      "SELECT m.name AS name FROM pairsWith e JOIN members m " +
+    pairedWithFavorite: shop.query<{ name: string }>(
+      "SELECT m.name AS name FROM donuts_pairsWith e JOIN donuts m " +
         "ON m.member_cf_link = e.source_cf_link " +
         "WHERE e.target_cf_link = :favorite_cf_link ORDER BY m.name LIMIT 50",
       { params: { favorite_cf_link: favorite } },
     ),
-    stock: stock({ donuts }),
+    stock: stock({ shop }),
   };
 });
 ```
 
-- The `members` table has one row per member: `member_cf_link`, the member's
+- A collection declares its members by kind. Each kind has a table named for
+  it, here `donuts`, with one row per member: `member_cf_link`, the member's
   own reference, and a column per field in `columns`.
-- Each field in `relations` becomes a table of that name with a
-  `source_cf_link` and a `target_cf_link` column, one row per reference. Both
-  are indexed, so "which members refer to this one" is a lookup.
+- Each field in `relations` becomes a table named for the kind and the field,
+  here `donuts_pairsWith`, with a `source_cf_link` and a `target_cf_link`
+  column, one row per reference. Both are indexed, so "which members refer to
+  this one" is a lookup.
 - A member is identified by its cell reference and by nothing else. Bind a
   cell to a `:name_cf_link` parameter to look one up.
 - To get a member back, select `member_cf_link` into a row field typed as a
@@ -385,7 +390,7 @@ export default pattern<{ favorite: Cell<Donut> }, {
   `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
   field holding one reference as well as a list of them. A field that is
   absent is stored as `NULL`.
-- `add(member)` and `remove(member)` are called in a handler. After `add()`,
+- `add(kind, member)` and `remove(kind, member)` are called in a handler. After `add()`,
   you write to the member and nothing else: the runtime re-reads a member when
   a document its mirrored fields were read from is written.
 - A query over a collection needs no `reactOn`. It re-runs when the collection
@@ -393,8 +398,7 @@ export default pattern<{ favorite: Cell<Donut> }, {
 - A collection can gain columns, relations and indexes later. The runtime
   re-reads every member once to fill them in.
 - To join two kinds of cell in one statement, declare them as kinds of one
-  collection with `indexedCollections({ donuts: { … }, orders: { … } })`, and
-  pass the kind to `add()`: `shop.add("orders", order)`.
+  collection: `indexedCollections({ donuts: { … }, orders: { … } })`.
 - A field stored per user or per session cannot be mirrored, and `add()`
   throws on one. A field whose value carries a label needs a column that
   declares it: `name: { type: "text", ifc: { confidentiality: […] } }`.

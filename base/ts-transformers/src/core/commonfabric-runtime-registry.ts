@@ -359,14 +359,8 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     callKind: "runtime-call",
     reactiveOrigin: true,
   },
-  // `indexedCollection` declares a database the runtime keeps current with
+  // `indexedCollections` declares a database the runtime keeps current with
   // its member cells; like `sqliteDatabase`, it gets no schema injection.
-  {
-    exportName: "indexedCollection",
-    category: "call",
-    callKind: "runtime-call",
-    reactiveOrigin: true,
-  },
   {
     exportName: "indexedCollections",
     category: "call",

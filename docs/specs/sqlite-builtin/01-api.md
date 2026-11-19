@@ -222,7 +222,7 @@ an existing table is additive like adding a table. An index naming a column
 the table does not declare is refused when `table()` is called, and again
 where the statement is generated.
 
-`indexedCollection()` declares a database whose tables the runtime derives
+`indexedCollections()` declares a database whose tables the runtime derives
 and keeps current with a set of member cells; see
 [indexed collections](../../features/indexed-collections.md).
 

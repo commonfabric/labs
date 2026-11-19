@@ -533,11 +533,11 @@ function memberRowsSql(
   const arms = Object.entries(descriptor.kinds).flatMap(([kind, own]) => {
     const selected = `SELECT k FROM selected WHERE kind = '${kind}'`;
     return [
-      `SELECT '${kind}' AS kind, 0 AS part, k AS member, json_array(${
-        own.columns.map(q).join(", ")
-      }) AS value FROM selected JOIN ${q(own.table)} ON ${
+      `SELECT '${kind}' AS kind, 0 AS part, ${
         q(MEMBER_COLUMN)
-      } = k WHERE kind = '${kind}'`,
+      } AS member, json_array(${own.columns.map(q).join(", ")}) AS value FROM ${
+        q(own.table)
+      } WHERE ${q(MEMBER_COLUMN)} IN (${selected})`,
       ...own.relations.map((name, at) =>
         `SELECT '${kind}', ${at + 1}, ${q(SOURCE_COLUMN)}, ${
           q(TARGET_COLUMN)

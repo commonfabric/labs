@@ -11,7 +11,6 @@ import { Identity } from "@commonfabric/identity";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
-  defineIndexedCollection,
   defineIndexedCollections,
   type IndexedCollectionDefinition,
   type IndexedCollectionOptions,
@@ -30,8 +29,8 @@ import {
 type Topic = { title: string; body: string; rank: number; mentions: unknown[] };
 
 type Collection = {
-  add(kindOrMember: unknown, member?: unknown): void;
-  remove(kindOrMember: unknown, member?: unknown): void;
+  add(kind: string, member: unknown): void;
+  remove(kind: string, member: unknown): void;
 };
 
 describe("indexed-collection", () => {
@@ -68,7 +67,7 @@ describe("indexed-collection", () => {
 
   /** Mints the handle of a collection declared by `options`. */
   function declare(options: IndexedCollectionOptions): Promise<void> {
-    return declareAs(defineIndexedCollection(options));
+    return declareAs(defineIndexedCollections({ topics: options }));
   }
 
   /** Mints, or declares again, the handle of the collection `definition`. */
@@ -109,7 +108,7 @@ describe("indexed-collection", () => {
     await commit((tx) => {
       const cell = topic(name, tx);
       cell.set({ title: name, body: "", rank: 0, mentions: [], ...value });
-      collection(tx).add(cell);
+      collection(tx).add("topics", cell);
     });
   }
 
@@ -129,7 +128,7 @@ describe("indexed-collection", () => {
       await declare({ columns: { title: "text", rank: "integer" } });
       await addTopic("a", { rank: 3 });
 
-      expect(await rows("SELECT title, rank FROM members")).toEqual([
+      expect(await rows("SELECT title, rank FROM topics")).toEqual([
         { title: "a", rank: 3 },
       ]);
     });
@@ -138,7 +137,7 @@ describe("indexed-collection", () => {
       await declare({ columns: { title: "text" } });
       await addTopic("a");
 
-      expect(await rows("SELECT member_cf_link FROM members")).toEqual([
+      expect(await rows("SELECT member_cf_link FROM topics")).toEqual([
         { member_cf_link: memberKeyOf(topic("a")) },
       ]);
     });
@@ -148,7 +147,7 @@ describe("indexed-collection", () => {
       await addTopic("a");
       await addTopic("a", { title: "again" });
 
-      expect(await rows("SELECT title FROM members")).toEqual([
+      expect(await rows("SELECT title FROM topics")).toEqual([
         { title: "again" },
       ]);
     });
@@ -161,7 +160,9 @@ describe("indexed-collection", () => {
       const tx = runtime.edit();
       const foreign = runtime.getCell(elsewhere.did(), "far", undefined, tx);
 
-      expect(() => collection(tx).add(foreign)).toThrow("its own space");
+      expect(() => collection(tx).add("topics", foreign)).toThrow(
+        "its own space",
+      );
       tx.abort();
       await runtime.idle();
     });
@@ -178,16 +179,18 @@ describe("indexed-collection", () => {
         "sqlite",
       ) as unknown as Collection;
 
-      expect(() => plain.add(topic("a", tx))).toThrow("indexed collection");
+      expect(() => plain.add("topics", topic("a", tx))).toThrow(
+        "indexed collection",
+      );
       tx.abort();
       await runtime.idle();
     });
   });
 
   describe("relations", () => {
-    const mentioning = "SELECT m.title FROM mentions e JOIN members m " +
+    const mentioning = "SELECT m.title FROM topics_mentions e JOIN topics m " +
       "ON m.member_cf_link = e.source_cf_link WHERE e.target_cf_link = " +
-      "(SELECT member_cf_link FROM members WHERE title = 'target') " +
+      "(SELECT member_cf_link FROM topics WHERE title = 'target') " +
       "ORDER BY m.title";
 
     beforeEach(async () => {
@@ -206,7 +209,7 @@ describe("indexed-collection", () => {
     it("counts a repeated reference once", async () => {
       await addTopic("a", { mentions: [topic("target"), topic("target")] });
 
-      expect(await rows("SELECT count(*) AS n FROM mentions")).toEqual([
+      expect(await rows("SELECT count(*) AS n FROM topics_mentions")).toEqual([
         { n: 1 },
       ]);
     });
@@ -242,10 +245,10 @@ describe("indexed-collection", () => {
       await commit((tx) => {
         const cell = topic("a", tx);
         cell.setRawUntyped({ title: "a", meta: { author: { name: "Ada" } } });
-        collection(tx).add(cell);
+        collection(tx).add("topics", cell);
       });
 
-      expect(await rows("SELECT title, author FROM members")).toEqual([
+      expect(await rows("SELECT title, author FROM topics")).toEqual([
         { title: "a", author: "Ada" },
       ]);
     });
@@ -253,7 +256,7 @@ describe("indexed-collection", () => {
     it("stores `NULL` where the member has nothing at the path", async () => {
       await addTopic("a");
 
-      expect(await rows("SELECT title, author FROM members")).toEqual([
+      expect(await rows("SELECT title, author FROM topics")).toEqual([
         { title: "a", author: null },
       ]);
     });
@@ -267,7 +270,7 @@ describe("indexed-collection", () => {
         })
       );
 
-      expect(await rows("SELECT author FROM members")).toEqual([
+      expect(await rows("SELECT author FROM topics")).toEqual([
         { author: "Grace" },
       ]);
     });
@@ -275,8 +278,8 @@ describe("indexed-collection", () => {
 
   describe("a relation holding one reference", () => {
     const parents = "SELECT c.title AS child, p.title AS parent " +
-      "FROM parent e JOIN members c ON c.member_cf_link = e.source_cf_link " +
-      "JOIN members p ON p.member_cf_link = e.target_cf_link ORDER BY c.title";
+      "FROM topics_parent e JOIN topics c ON c.member_cf_link = e.source_cf_link " +
+      "JOIN topics p ON p.member_cf_link = e.target_cf_link ORDER BY c.title";
 
     beforeEach(async () => {
       await declare({ columns: { title: "text" }, relations: ["parent"] });
@@ -287,7 +290,7 @@ describe("indexed-collection", () => {
       await commit((tx) => {
         const cell = topic("a", tx);
         cell.setRawUntyped({ title: "a", parent: topic("root").getAsLink() });
-        collection(tx).add(cell);
+        collection(tx).add("topics", cell);
       });
 
       expect(await rows(parents)).toEqual([{ child: "a", parent: "root" }]);
@@ -296,7 +299,7 @@ describe("indexed-collection", () => {
     it("stores no row for a member holding no reference", async () => {
       await addTopic("a");
 
-      expect(await rows("SELECT count(*) AS n FROM parent")).toEqual([
+      expect(await rows("SELECT count(*) AS n FROM topics_parent")).toEqual([
         { n: 0 },
       ]);
     });
@@ -368,16 +371,6 @@ describe("indexed-collection", () => {
       ]);
     });
 
-    it("throws when no kind is named", async () => {
-      const tx = runtime.edit();
-
-      expect(() => collection(tx).add(topic("a", tx))).toThrow(
-        "several kinds",
-      );
-      tx.abort();
-      await runtime.idle();
-    });
-
     it("throws on a kind the collection does not declare", async () => {
       const tx = runtime.edit();
 
@@ -395,7 +388,7 @@ describe("indexed-collection", () => {
     // runtime over the same storage.
 
     async function redeclare(options: IndexedCollectionOptions): Promise<void> {
-      await declareAs(defineIndexedCollection(options));
+      await declareAs(defineIndexedCollections({ topics: options }));
       await runtime.dispose({ closeStorage: false });
       runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
@@ -416,7 +409,7 @@ describe("indexed-collection", () => {
       await addTopic("b", { rank: 6 });
       await redeclare({ columns: { title: "text", rank: "integer" } });
 
-      expect(await rows("SELECT title, rank FROM members ORDER BY title"))
+      expect(await rows("SELECT title, rank FROM topics ORDER BY title"))
         .toEqual([{ title: "a", rank: 4 }, { title: "b", rank: 6 }]);
     });
 
@@ -428,7 +421,7 @@ describe("indexed-collection", () => {
 
       expect(
         await rows(
-          "SELECT m.title AS title FROM mentions e JOIN members m " +
+          "SELECT m.title AS title FROM topics_mentions e JOIN topics m " +
             "ON m.member_cf_link = e.source_cf_link",
         ),
       ).toEqual([{ title: "a" }]);
@@ -476,7 +469,7 @@ describe("indexed-collection", () => {
       await labeledTopic("a");
       const tx = runtime.edit();
 
-      expect(() => collection(tx).add(topic("a", tx))).toThrow(
+      expect(() => collection(tx).add("topics", topic("a", tx))).toThrow(
         "does not cover",
       );
       tx.abort();
@@ -492,7 +485,7 @@ describe("indexed-collection", () => {
       await labeledTopic("a");
       const tx = runtime.edit();
 
-      expect(() => collection(tx).add(topic("a", tx))).toThrow(
+      expect(() => collection(tx).add("topics", topic("a", tx))).toThrow(
         "does not cover",
       );
       tx.abort();
@@ -508,19 +501,21 @@ describe("indexed-collection", () => {
       await labeledTopic("a");
       const tx = runtime.edit();
 
-      expect(() => collection(tx).add(topic("a", tx))).not.toThrow();
+      expect(() => collection(tx).add("topics", topic("a", tx))).not.toThrow();
       tx.abort();
       await runtime.idle();
     });
 
     it("declares the column's label on the table the database is created with", () => {
-      const { tables } = defineIndexedCollection({
-        columns: {
-          title: { type: "text", ifc: { confidentiality: ["secret"] } },
+      const { tables } = defineIndexedCollections({
+        topics: {
+          columns: {
+            title: { type: "text", ifc: { confidentiality: ["secret"] } },
+          },
         },
       });
 
-      expect(tables.members.properties.title.ifc).toEqual({
+      expect(tables.topics.properties.title.ifc).toEqual({
         confidentiality: ["secret"],
       });
     });
@@ -542,9 +537,32 @@ describe("indexed-collection", () => {
       const cell = topic("a", tx);
       cell.setRawUntyped({ title: own.getAsLink(), body: "", rank: 0 });
 
-      expect(() => collection(tx).add(cell)).toThrow("stored per user");
+      expect(() => collection(tx).add("topics", cell)).toThrow(
+        "stored per user",
+      );
       tx.abort();
       await runtime.idle();
+    });
+  });
+
+  describe("a column named as the lookup's own columns are", () => {
+    it("follows a write to the member", async () => {
+      await declare({ columns: { kind: "text", k: "integer" } });
+      await commit((tx) => {
+        const cell = runtime.getCell(space, "named", undefined, tx);
+        cell.set({ kind: "first", k: 1 });
+        collection(tx).add("topics", cell);
+      });
+      await commit((tx) =>
+        runtime.getCell(space, "named", undefined, tx).set({
+          kind: "second",
+          k: 2,
+        })
+      );
+
+      expect(await rows("SELECT kind, k FROM topics")).toEqual([
+        { kind: "second", k: 2 },
+      ]);
     });
   });
 
@@ -558,7 +576,7 @@ describe("indexed-collection", () => {
     it("updates the columns it changes", async () => {
       await commit((tx) => topic("a", tx).key("rank").set(7));
 
-      expect(await rows("SELECT title, rank FROM members ORDER BY title"))
+      expect(await rows("SELECT title, rank FROM topics ORDER BY title"))
         .toEqual([{ title: "a", rank: 7 }, { title: "b", rank: 0 }]);
     });
 
@@ -595,9 +613,9 @@ describe("indexed-collection", () => {
         shared.set("first");
         const cell = topic("a", tx);
         cell.setRawUntyped({ title: shared.getAsLink(), body: "", rank: 0 });
-        collection(tx).add(cell);
+        collection(tx).add("topics", cell);
       });
-      expect(await rows("SELECT title FROM members")).toEqual([
+      expect(await rows("SELECT title FROM topics")).toEqual([
         { title: "first" },
       ]);
 
@@ -605,7 +623,7 @@ describe("indexed-collection", () => {
         runtime.getCell<string>(space, "shared", undefined, tx).set("second")
       );
 
-      expect(await rows("SELECT title FROM members")).toEqual([
+      expect(await rows("SELECT title FROM topics")).toEqual([
         { title: "second" },
       ]);
     });
@@ -616,12 +634,12 @@ describe("indexed-collection", () => {
       await declare({ columns: { title: "text" }, relations: ["mentions"] });
       await addTopic("target");
       await addTopic("a", { mentions: [topic("target")] });
-      await commit((tx) => collection(tx).remove(topic("a", tx)));
+      await commit((tx) => collection(tx).remove("topics", topic("a", tx)));
 
-      expect(await rows("SELECT title FROM members")).toEqual([
+      expect(await rows("SELECT title FROM topics")).toEqual([
         { title: "target" },
       ]);
-      expect(await rows("SELECT count(*) AS n FROM mentions")).toEqual([
+      expect(await rows("SELECT count(*) AS n FROM topics_mentions")).toEqual([
         { n: 0 },
       ]);
     });
@@ -649,18 +667,18 @@ describe("indexed-collection", () => {
       await rename.commit().settled;
       await lookedUp.promise;
       const removal = runtime.edit();
-      collection(removal).remove(topic("a", removal));
+      collection(removal).remove("topics", topic("a", removal));
       await removal.commit().settled;
       release.resolve();
       await runtime.settled();
 
-      expect(await rows("SELECT title FROM members")).toEqual([]);
+      expect(await rows("SELECT title FROM topics")).toEqual([]);
     });
 
     it("stops following writes to the removed member", async () => {
       await declare({ columns: { title: "text" } });
       await addTopic("a");
-      await commit((tx) => collection(tx).remove(topic("a", tx)));
+      await commit((tx) => collection(tx).remove("topics", topic("a", tx)));
       const before = await rev();
       await commit((tx) => topic("a", tx).key("title").set("later"));
 
