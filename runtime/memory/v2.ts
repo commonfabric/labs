@@ -1602,7 +1602,7 @@ export type MemoryProtocolFlags = {
   /**
    * Server capability: the server opens sessions on a branch
    * (`SessionDescriptor.branch`) and serves the `branch.*` and
-   * `history.list` requests (04-protocol.md §4.3.12). Absent (an older
+   * `history.list` requests (04-protocol.md §4.3.8). Absent (an older
    * server) parses to false, and a client then sends none of them.
    */
   branches?: boolean;

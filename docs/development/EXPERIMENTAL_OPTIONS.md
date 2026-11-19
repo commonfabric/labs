@@ -1998,6 +1998,13 @@ the per-epic implementation notes).
 >   since such a server would neither validate nor seal it, and
 >   `Runtime.spaceKind()` throws there rather than report a kind as absent. It
 >   is permanent.
+> - **`branches`** is a build-inherent capability, hardwired to `true`. It
+>   advertises that the server opens a session on a branch and serves the
+>   branch and history commands
+>   ([`space-history.md`](../features/space-history.md)). Only the server's
+>   advertisement matters: a client reads it from `hello.ok` and never offers
+>   it, and opens no session on a branch against a server that omits it. It is
+>   permanent.
 > - **`instanceNameMark`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server records a space's instance-naming
 >   mark and admits sessions and commits by it (INV-16 in

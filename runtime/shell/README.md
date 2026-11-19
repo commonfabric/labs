@@ -69,6 +69,15 @@ Embed mode is intended for rendering the shell inside another web view, such as
 an iframe. It removes shell-owned chrome around the pattern, including the
 header, debugger, outer content padding, sidebar, and fab surfaces.
 
+## History
+
+"Toggle history" in the header menu opens a panel listing the steps of the
+viewed space's history. Choosing a step shows the whole shell on a fork of the
+space as that step left it; the panel then offers "Back to now", which discards
+the fork, and "Restore this version", which sets the space to what the fork
+holds. [`space-history.md`](../../docs/features/space-history.md) describes the
+model and what a fork and a restore cover.
+
 Shell navigation preserves embed mode. For example, a pattern calling
 `navigateTo(...)` from a `/.embed/...` URL navigates to another `/.embed/...`
 URL rather than leaving the embedded surface.

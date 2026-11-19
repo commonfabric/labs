@@ -1,0 +1,149 @@
+# Space history
+
+A space's store keeps every commit it has admitted, so a space can be shown as
+it stood at an earlier point, interacted with there, and set back to what it
+held. This document covers how that is put together across the layers: the
+memory server's history and branch commands, the runtime that runs a fork, and
+the shell's history panel.
+
+The storage rules are in
+[`../specs/memory-v2/06-branching.md`](../specs/memory-v2/06-branching.md),
+sections 6.15 to 6.18, and the wire commands in
+[`../specs/memory-v2/04-protocol.md`](../specs/memory-v2/04-protocol.md),
+section 4.3.8. Inspecting a store's history offline, without a server, is the
+state inspector's job; see the `state-inspector` skill.
+
+## The model
+
+Three ideas carry the feature.
+
+**A step.** A space's history is a sequence of commits, each with a `seq`.
+Most are the space's own computation: under server execution, the serving
+loop's `derived` commits. A step begins at a commit something outside that
+computation made, such as an event, an edit or a restore, and runs through the
+commits computing what followed from it. The step's `seq` is its last commit,
+which is the point of history holding the state the step left.
+
+A step is **settled** when the serving loop had computed everything its first
+commit called for before the next step began. The loop records the seq it has
+computed through on each commit it makes (`derivedThrough`), so a step is
+settled when one of its commits carries a `derivedThrough` at or past the
+step's first commit. Where no serving loop commits, each client stores what it
+computes with its own commits, and every step is settled.
+
+**A fork.** Showing an earlier state is not a read-only operation. A running
+piece writes: an interaction as small as switching a tab is state, and a state
+taken between an event and the computation that follows it has that
+computation still to do. So an earlier step is always opened in a fork: a
+branch of the space, forked at the step's `seq`. A fork is cheap to make, since
+a branch shares its parent's revisions up to the fork point, and what happens
+in it stays in it.
+
+**A restore.** Setting a space back is one new commit on the space that writes
+every document the space and the chosen state differ in. Nothing is removed
+from the space's history, so the state a restore replaced is itself a step
+that can be opened or restored.
+
+## Who computes a fork
+
+No serving loop runs a branch. The runtime that opens a fork computes what the
+fork stores, as a client does with server execution off: it runs the fork's
+derivations and handlers itself and commits their writes to the branch. A
+session of a branch is accordingly not client demand, and a commit on a branch
+is not reported to the space's serving loop.
+
+Two consequences follow.
+
+- **An event the serving loop had not delivered at the fork point is not
+  delivered in the fork.** Under server execution an event is appended to a
+  stream's log and the loop runs its handler; a fork's runtime does not drain
+  those logs. A fork of a settled step has none pending. A fork of an unsettled
+  step shows the state before the pending handler ran, which is why the shell
+  marks such a step.
+- **A fork repeats no effect it has not diverged from.** The built-ins that
+  reach outside the space, such as the fetch and language-model built-ins, key
+  their stored result by a hash of their request. A fork inherits both, so its
+  runtime finds the result and sends nothing. Once an interaction in the fork
+  changes a request, the built-in sends the new one, from the fork's runtime,
+  as it would anywhere.
+
+A fork covers one space. A link out of it reaches the other space as that
+space stands now.
+
+## What a restore covers
+
+A restore rewrites the space's documents, in every user's instance of a
+user-scoped one. It leaves alone the access list, session-scoped instances,
+the serving loop's own records (event logs, the watermark, the effect and
+attention indexes), and the SQLite databases a pattern keeps, which are not
+stored as revisions and so have no earlier state to return to. A collaborative
+field in a rewritten document ends its epoch; an open editor starts again from
+the restored text. `06-branching.md` section 6.15 states each of these.
+
+Listing history and forking need the access they read and write with: READ to
+list, WRITE to fork or delete a fork. Restoring needs OWNER. A fork is as
+private as the space: whoever can read the space can read its branches.
+
+## The layers
+
+| Layer          | What it adds                                                                                                     |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Memory engine  | `listCommits()` and `restoreBranch()` in `runtime/memory/v2/history.ts`; `createBranch()` and `deleteBranch()`   |
+| Memory wire    | `branch.create`, `branch.delete`, `branch.list`, `history.list`, `branch.restore`; `SessionDescriptor.branch`    |
+| Runner storage | `Options.branches` on the storage manager; `listHistory()` and the branch methods on a space's provider          |
+| Runner         | `historySteps()` in `runtime/runner/src/history-steps.ts`, which groups commits into steps                       |
+| Runtime client | `spaceHistory()`, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches` |
+| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `forkSpace()`, `restoreSpace()`; `SpaceFork`                                  |
+| Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history` and `restore-history` commands        |
+
+A session is opened on a branch, and the server reads and writes that branch
+for everything the session sends without naming one. That is what lets the
+layers above storage stay unaware of branches: a runtime whose storage manager
+lists a space under `branches` runs that space as the branch holds it, and no
+cell, link or transaction says which branch it is of.
+
+`RuntimeInternals.forkSpace(space, seq)` creates a branch named
+`history:<uuid>` and stands up a second runtime, in a worker of its own, whose
+storage opens the space on that branch with server execution declared off. It
+returns a `SpaceFork` holding that runtime. `SpaceFork.restore()` waits for the
+fork's runtime to settle and sync, restores the space from the branch, and
+ends the fork; `SpaceFork.discard()` ends it without restoring. Ending a fork
+disposes of its runtime and deletes its branch. A runtime whose embedder
+supplied its connection has no worker of its own to stand a second beside, and
+cannot fork.
+
+The branches a runtime opens are part of its security context: a document
+attaching to a runtime asserts them, so a page cannot join a fork's runtime
+believing it is the space's.
+
+## In the shell
+
+"Toggle history" in the header menu opens the history panel for the viewed
+space (`showHistoryView` in the shell's display toggles). The panel lists the
+space's steps, newest first, each with what began it, its `seq` and its time,
+and marks a step that is not settled as in progress.
+
+Choosing a step forks the space there. While a fork is open, the root element
+hands the fork's runtime to everything it renders in place of its own, so the
+whole shell shows the fork: the piece in view, the piece list, navigation
+within the space. The panel then offers two ways out. "Back to now" discards
+the fork. "Restore this version" restores the space from it. Closing the panel,
+moving to another space, or replacing the runtime discards the fork as well.
+
+A fork whose page goes away before discarding it leaves its branch in the
+store. Such a branch holds nothing but what was done in it and is not
+reachable from the space, but the space compaction tool refuses a store with a
+branch that is not deleted (`../plans/compact-space.md`), so an operator
+deletes leftover `history:` branches before compacting.
+
+## What is not here yet
+
+- **Long-lived branches and merging.** A fork is taken to look and to restore
+  from. Branches that live on, that a serving loop runs, and that merge back
+  through a three-way comparison are the design in `06-branching.md` section
+  6.7. Restore is the case of that merge in which the source wins every
+  document, and its commit records the same `merge` metadata a merge would.
+- **History of one piece.** The panel lists the space's steps. A step does not
+  say which piece it touched.
+- **A fork across spaces.** Other spaces a fork links to are read as they
+  stand.

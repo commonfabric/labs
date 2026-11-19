@@ -143,8 +143,12 @@ entity is deleted. An ordinary write may change other paths, but it cannot
 change an active collaborative path. Deliberate release plus replacement may be
 one ordered commit. Reopening the field creates a new epoch.
 
-The current implementation supports only the default branch. Collaborative
-queries, applies, and releases on child branches fail explicitly.
+An epoch belongs to one branch. A fork inherits a field's value and none of
+its epoch: the field is inactive there until an editor on the fork starts an
+epoch from the inherited value. Restoring a space to a point of its history
+ends the epoch of every field in a document the restore rewrites, as deleting
+the document would, and editors start again from the restored value
+([`space-history.md`](space-history.md)).
 
 ## Anchors
 

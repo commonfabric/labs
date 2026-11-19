@@ -8664,7 +8664,7 @@ export class Server {
 
   /**
    * Serves a request about a space's branches or its history
-   * (04-protocol.md §4.3.12): reading either needs the session's READ
+   * (04-protocol.md §4.3.8): reading either needs the session's READ
    * capability, forking or deleting a branch its WRITE capability, and
    * restoring the default branch its OWNER capability.
    */

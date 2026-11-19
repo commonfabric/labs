@@ -124,6 +124,7 @@ If the server accepts the protocol, it returns:
     "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
+    "branches": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
     "syncPartsV1": true,
@@ -478,6 +479,14 @@ server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
 `clientUpdateRequired` marks, and keeps it the same way.
 
+`branches` advertises that the server opens a session on a branch
+(`SessionDescriptor.branch`, section 4.1.2) and serves the branch and history
+commands (section 4.3.8). It is build-inherent, defaults to `false` when
+absent, and only the server advertises it. A client refuses to open a session
+on a branch against a server that does not advertise it, since that server
+would open the session on the default branch and the session would write
+there, and sends such a server none of the commands.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -729,6 +738,17 @@ Rules:
   refuses every later commit to the space from a positional session, and
   revokes the space's positional sessions with the reason `instance-names`.
   INV-16 states the rule
+- a session is of the branch its `session.open` descriptor names in `branch`,
+  and of the default branch when it names none: what the session sends
+  without naming a branch reads and writes that one (`06-branching.md`
+  section 6.16). A value that is not a string refuses the message. A client
+  declares the branch on every open, a resume included, and only to a server
+  advertising `branches`. The server refuses an open on a branch the space
+  does not have, or has deleted, with a `ProtocolError`, after authorization,
+  so a principal the space would refuse learns nothing of its branches; and it
+  refuses a resume that declares another branch than the session's. A session
+  of a branch other than the default is not client demand, as a session
+  declaring `demand: false` is not
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -851,6 +871,7 @@ interface HelloMessage {
     spaceKind?: boolean;
     // INV-16.
     instanceNameMark?: boolean;
+    branches?: boolean;
   };
 }
 
@@ -1834,11 +1855,31 @@ Semantics:
 - a `session.close` naming a session the connection does not hold gets a
   `SessionError`
 
-### 4.3.8 Branch Lifecycle Commands
+### 4.3.8 Branch and History Commands
 
-Branch create / delete / merge lifecycle commands are not currently exposed on
-the v2 wire. The engine already carries branch state internally, but public wire
-commands for that surface remain deferred in this pass.
+A server advertising the `branches` capability serves five session commands
+about a space's branches and its history. `06-branching.md` holds the
+semantics of each; this section holds the wire shape and what each requires
+of the session. Every one carries `requestId`, `space` and `sessionId`, and
+its result carries `serverSeq`.
+
+| Command          | Further fields                       | Result                | Requires |
+| ---------------- | ------------------------------------ | --------------------- | -------- |
+| `branch.create`  | `name`, `parentBranch?`, `forkSeq?`  | `branch: BranchInfo`  | WRITE    |
+| `branch.delete`  | `name`                               |                       | WRITE    |
+| `branch.list`    |                                      | `branches`            | READ     |
+| `history.list`   | `branch?`, `before?`, `limit?`       | `commits`             | READ     |
+| `branch.restore` | `source?`, `sourceSeq?`              | `seq?`                | OWNER    |
+
+- A request the engine refuses, for a name that is taken, a fork point outside
+  the parent's history or a branch that does not exist, gets a `QueryError`
+  carrying the reason.
+- `branch.restore` restores the default branch only. It is serialized with the
+  space's commits, and the documents it writes reach the space's sessions as
+  any commit's do.
+- A client sends none of these to a server that does not advertise `branches`.
+
+Merge commands remain deferred (`06-branching.md` section 6.7).
 
 ### 4.3.9 `session.watch.remove` — Shrink the Session Watch Set
 
@@ -2746,7 +2787,9 @@ entity values remain content-addressed.
 ## 4.10 Branch Parameter
 
 `branch` on read and write commands still determines which branch is being read
-or mutated. If omitted, the default branch is used.
+or mutated. If omitted, the branch the session was opened on is used
+(`SessionDescriptor.branch`, section 4.1.2; `06-branching.md` section 6.16),
+which is the default branch unless the open named another.
 
 ## 4.11 Message Ordering
 

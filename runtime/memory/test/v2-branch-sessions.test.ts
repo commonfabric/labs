@@ -1,6 +1,6 @@
 /**
  * Sessions of a branch, and the branch and history requests
- * (04-protocol.md §4.3.12), through a client over a real server: what a
+ * (04-protocol.md §4.3.8), through a client over a real server: what a
  * session opened on a branch reads, writes and is sent, and what forking,
  * listing and restoring do to the space its other sessions see.
  */

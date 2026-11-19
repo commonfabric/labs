@@ -84,62 +84,61 @@ See `02-storage.md` for the physical table layouts that support this model.
 
 ## 6.3 Branch Creation
 
-A new branch is created from an existing branch at a specific seq.
-
-Branch creation is a **write-class** command even though it does not emit any
-entity revisions. It is serialized with ordinary `/memory/transact` writes, uses
-`localSeq` for replay safety, receives a global `seq`, and records a commit-log
-entry for audit/idempotence.
+A new branch is created from an existing branch at a specific seq, by the
+`branch.create` command (`04-protocol.md` section 4.3.8).
 
 ### 6.3.1 API
 
 ```typescript
 // Shown at module scope.
-interface CreateBranchRequest {
-  localSeq: number; // Session-scoped idempotence key
-  name: BranchName; // Must be unique within the space
-  fromBranch?: BranchName; // Default: default branch
-  atSeq?: number; // Default: headSeq of fromBranch
+interface BranchCreateRequest {
+  name: BranchName; // No other branch of the space has had it
+  parentBranch?: BranchName; // Default: default branch
+  forkSeq?: number; // Default: headSeq of parentBranch
 }
 
-interface CreateBranchResult {
-  branch: Branch;
-  seq: number; // Global seq assigned to this branch-lifecycle write
+interface BranchCreateResult {
+  serverSeq: number;
+  branch: BranchInfo; // See 6.11
 }
 ```
 
 ### 6.3.2 Semantics
 
-When `branch.create({ localSeq, name, fromBranch, atSeq })` is called:
+When `branch.create({ name, parentBranch, forkSeq })` is served:
 
-1. **Validate** that `name` does not already exist (including soft-deleted
-   branches -- names are permanently consumed).
-2. **Resolve the parent branch.** If `fromBranch` is omitted, use the default
-   branch.
-3. **Resolve the fork seq.** If `atSeq` is omitted, use the parent branch's
-   current `headSeq`. If `atSeq` is specified, it must be <= the parent branch's
-   `headSeq`.
-4. **Append a sequenced branch-lifecycle write.** The server assigns a new
-   global `seq`, records a commit-log entry for this successful command, and
-   applies the branch metadata mutation atomically with that log insert.
-5. **Create the `Branch` record:**
+1. **Resolve the parent branch.** If `parentBranch` is omitted, use the default
+   branch. The parent must exist and be active.
+2. **Resolve the fork seq.** If `forkSeq` is omitted, use the parent branch's
+   current `headSeq`. Otherwise it must lie in the parent's history: at most
+   the parent's `headSeq`, and for a parent other than the default branch at
+   least the parent's `createdSeq`.
+3. **Check the name.** A name at most 128 characters long that no branch has
+   had is taken by the new branch. A name an active branch has with the same
+   parent and fork seq returns that branch unchanged, so a repeated request is
+   harmless. Any other use of a taken name is refused, a deleted branch's name
+   included: names are permanently consumed.
+4. **Create the `Branch` record:**
    ```
    Branch {
      name: name,
-     parentBranch: fromBranch,
-     forkSeq: atSeq,
-     createdSeq: seq,
-     headSeq: seq,
+     parentBranch: parentBranch,
+     forkSeq: forkSeq,
+     createdSeq: forkSeq,
+     headSeq: forkSeq,
      createdAt: now(),
      status: "active"
    }
    ```
-6. The new branch starts with the same entity heads as the parent branch at the
+5. The new branch starts with the same entity heads as the parent branch at the
    fork seq. No head records are physically copied -- head resolution falls back
    to the parent (see 6.2.1).
-7. The branch-creation command's own `seq` becomes both `createdSeq` and the
-   initial `headSeq`, because it makes the inherited fork-state visible under
-   the new branch name.
+
+Creating a branch takes no `seq` and records no commit-log entry: the branch
+holds no state of its own until its first commit, which takes the space's next
+`seq` as any commit does. A design that sequences branch creation and deletion
+as write-class commands, each with a commit-log entry, a `localSeq` for replay
+and a `createdSeq` of its own, is planned with the merge workflow (6.7).
 
 ### 6.3.3 Fork from a Fork
 
@@ -179,7 +178,13 @@ For each confirmed read in the commit:
 ```
 
 For normal branch writes, `read.branch` is omitted, so reads validate against
-the target branch's visible state. Merge proposals are the special case: they
+the target branch's visible state. What a branch inherits is part of that
+state: a write its parent made after `read.seq` and at or before the fork seq
+is a later visible write, and conflicts as one of the branch's own does. A
+write the parent made after the fork seq is not visible on the branch and
+conflicts with nothing there. A `patch` on a branch applies over the document
+the branch holds, which for a document the branch has not yet written is the
+one it inherits. Merge proposals are the special case: they
 set `read.branch` explicitly for source/target/base observations. Two branches
 can independently modify the same entity without conflict until a merge is
 attempted.
@@ -286,12 +291,13 @@ Timeline:
 ## 6.7 Merging
 
 Status note: sections 6.1-6.6 describe the branch-scoped visibility model that
-the current rewrite relies on. The merge and lifecycle material from here down
-is target-design guidance, not the current-pass acceptance bar. Public branch
-lifecycle commands on the v2 wire, merge proposal generation/conflict workflow,
-and broader product-facing branch tooling remain deferred; see
-`10-implementation-guidance.md` and `implementation-plan.md` for the current
-implementation authority.
+the current rewrite relies on, and sections 6.9, 6.11 and 6.15-6.18 the branch
+lifecycle, history and restore surface that is implemented. The merge material
+in 6.7 and 6.8, the depth and materialization guidance in 6.13, and the diff
+API in 6.14 are target-design guidance, not the current-pass acceptance bar.
+Merge proposal generation, the conflict workflow, and long-lived branches a
+serving loop runs remain deferred; see `10-implementation-guidance.md` and
+`implementation-plan.md` for the current implementation authority.
 
 Merging integrates changes from a source branch into a target branch. The merge
 operates at the **entity level** -- each entity is considered independently.
@@ -496,22 +502,19 @@ it is reported as a conflict. This is a deliberate simplicity trade-off:
 Branches are soft-deleted. The branch metadata is marked as `status: "deleted"`,
 but the branch record and its revision history remain.
 
-Branch deletion is also a **write-class** command. Like branch creation, it is
-serialized with ordinary writes, uses `localSeq` for replay safety, receives a
-global `seq`, and records a commit-log entry even though it does not emit entity
-revisions.
+A branch is deleted by the `branch.delete` command (`04-protocol.md` section
+4.3.8). Like creation, deletion takes no `seq` and records no commit-log entry.
 
 ### 6.9.1 API
 
 ```typescript
 // Shown at module scope.
-interface DeleteBranchRequest {
-  localSeq: number;
+interface BranchDeleteRequest {
   name: BranchName;
 }
 
-interface DeleteBranchResult {
-  seq: number;
+interface BranchDeleteResult {
+  serverSeq: number;
 }
 ```
 
@@ -526,8 +529,8 @@ interface DeleteBranchResult {
 - a watch set that references a deleted branch returns the current historical
   result as a finite snapshot and then produces no future sync for that branch,
   because the branch can no longer advance.
-- The branch-deletion command's own `seq` does **not** advance `headSeq`,
-  because it changes branch metadata but not the branch-visible entity state.
+- Deleting a branch leaves its `headSeq` where it was.
+- A session cannot be opened on a deleted branch (6.16).
 - The branch name is permanently consumed -- a new branch with the same name
   cannot be created.
 - Revisions committed on the branch remain in the shared revision history. They
@@ -586,26 +589,24 @@ their metadata.
 
 ### 6.11.1 API
 
+`branch.list` (`04-protocol.md` section 4.3.8) returns every branch of the
+space, deleted ones included, since a deleted branch's name stays taken and its
+history stays readable.
+
 ```typescript
 // Shown at module scope.
-interface ListBranchesRequest {
-  includeDeleted?: boolean; // Default: false
-}
-
-interface ListBranchesResult {
+interface BranchListResult {
+  serverSeq: number;
   branches: BranchInfo[];
 }
 
 interface BranchInfo {
   name: BranchName;
-  parentBranch: BranchName;
-  forkSeq: number;
+  parentBranch: BranchName | null; // null for the default branch
+  forkSeq: number | null; // null for the default branch
   createdSeq: number;
   headSeq: number;
-  createdAt: number;
-  status: "active" | "deleted";
-  deletedAt?: number;
-  entityCount?: number; // Number of entities with explicit heads
+  status: string; // "active" or "deleted"
 }
 ```
 
@@ -727,3 +728,136 @@ branches. An entity is **added** if it exists on the source but not at the
 common ancestor or on the target. An entity is **removed** if it exists on the
 target but was deleted on the source. An entity is **modified** if both branches
 have a different head for it compared to the ancestor.
+
+---
+
+## 6.15 Restoring a Branch
+
+`branch.restore` (`04-protocol.md` section 4.3.8) sets the default branch back
+to a state its own history, or another branch's, holds. It is the restricted
+merge in which the source wins every document: no three-way comparison and no
+conflicts.
+
+### 6.15.1 API
+
+```typescript
+// Shown at module scope.
+interface BranchRestoreRequest {
+  source?: BranchName; // Default: default branch
+  sourceSeq?: number; // Default: headSeq of source
+}
+
+interface BranchRestoreResult {
+  serverSeq: number;
+  seq?: number; // The restoring commit, absent when nothing differed
+}
+```
+
+### 6.15.2 Semantics
+
+1. `sourceSeq` must lie in the source's history, as a point-in-time read's
+   `atSeq` must (6.10.1). The source may be deleted.
+2. The server finds the point where the two histories part: the common
+   ancestor branch, at the lower of the seqs the two lineages reach on it.
+   Only documents written on either side above that point can differ.
+3. For each such document, in each scope instance it was written in, the
+   server compares what the default branch holds now with what the source
+   held at `sourceSeq`. Where they differ it emits a `set` of the source's
+   document, or a `delete` where the source holds none.
+4. Those operations land as **one `system`-class commit** on the default
+   branch, at the space's next `seq`. Its stored payload carries `merge`
+   metadata naming the source branch and seq and the common base, which is how
+   a history listing reports it as a restore (6.17).
+5. When nothing differs the server writes nothing and returns no `seq`.
+
+A restore adds to the default branch's history and removes nothing from it:
+the state it replaced stays readable at its seq, and a later restore to that
+seq brings it back.
+
+### 6.15.3 What a Restore Leaves Alone
+
+- **The access list.** Who may read and write a space is not part of the state
+  a point of its history restores.
+- **Session-scoped instances.** The sessions they belonged to are gone.
+- **A serving loop's records** of its own progress through the branch's
+  commits: the event logs (`of:stream-events:` documents), the watermark, and
+  the effect and attention indexes. Those describe what has happened on the
+  branch, which a restore adds to and does not undo. An event the loop has
+  delivered stays delivered, though the restore sets back what its handler
+  wrote.
+- **SQLite databases** a pattern keeps beside its documents. They are not
+  stored as revisions, so no point of history holds an earlier state of one.
+
+### 6.15.4 Collaborative Fields
+
+A document the restore sets may hold a collaborative field some session is
+editing. The restore ends the field's epoch, as a `delete` of the document
+would, and writes the restored value. An editor finds the field inactive on
+its next query and starts a new epoch from the restored value.
+
+---
+
+## 6.16 Sessions of a Branch
+
+A session is opened on one branch: `SessionDescriptor.branch`
+(`04-protocol.md` section 4.1.2), absent for the default branch. Every
+`transact`, `graph.query`, `op.query`, watch spec and `history.list` the
+session sends without naming a branch reads and writes the session's branch,
+so a client that knows nothing of branches runs a space as the branch holds
+it. A message that names a branch, the default branch's empty name included,
+is served on the branch it names.
+
+- The branch must exist and be active when the session opens; an open on any
+  other is refused.
+- A session keeps its branch for life. A resume declaring another is refused,
+  since the session's replica holds one branch's documents.
+- A session of a branch other than the default is never client demand
+  (`docs/specs/server-side-execution/serving-loop.md` section 1), and a
+  commit on such a branch is not reported to the space's serving loop. No
+  serving loop runs a branch: the runtime that opens one computes what the
+  branch stores itself, and commits it as `authored`-class writes.
+
+---
+
+## 6.17 History Listing
+
+`history.list` (`04-protocol.md` section 4.3.8) returns the commits of a
+branch's history without the documents they wrote, newest first: the branch's
+own commits, then those it inherits from each ancestor up to the fork point.
+
+```typescript
+// Shown at module scope.
+interface HistoryListRequest {
+  branch?: BranchName; // Default: the session's branch
+  before?: number; // Only commits below this seq
+  limit?: number; // At most 500, which is also the default
+}
+
+interface CommitSummary {
+  seq: number;
+  branch: BranchName; // The branch the commit landed on
+  class: "authored" | "derived" | "system";
+  createdAt: string; // ISO 8601, UTC
+  actingPrincipal?: string;
+  events: number; // Events the commit appended to streams
+  consequenceOf?: string[]; // Event ids, on a derived commit
+  derivedThrough?: number; // The watermark, on a derived commit
+  restored?: { branch: BranchName; seq: number }; // On a restore
+  writes: number; // Documents the commit wrote
+}
+```
+
+A commit whose payload compaction emptied (`docs/plans/compact-space.md`)
+reports no events and no restore. History below a compaction cut is not
+listed, since its commits are gone.
+
+---
+
+## 6.18 Collaborative Fields on Branches
+
+A collaborative field's epoch, cursor and operation log
+(`docs/features/collaborative-fields.md`) are a branch's own. A fork inherits
+a field's **value**, which the document holds, and none of its epoch: on the
+fork the field is inactive until an editor there starts an epoch from the
+inherited value. Edits on the fork and on its parent then proceed
+independently, each under its own cursors.
