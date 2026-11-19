@@ -34,6 +34,7 @@ export type MemoryEnvironment = Pick<
   | "MEMORY_DOCUMENT_CACHE_BUDGET_BYTES"
   | "MEMORY_DOCUMENT_CACHE_MAX_ENTRIES"
   | "MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES"
+  | "MEMORY_UNTRUSTED_MESSAGE_SLOTS"
 >;
 
 /** A memory server and the handle that closes it with its private listener. */
@@ -222,6 +223,7 @@ export async function openMemory(
     documentCacheMaxEntries: environment.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
+    untrustedMessageSlots: environment.MEMORY_UNTRUSTED_MESSAGE_SLOTS,
   });
   const routedListener = await routerPolicy?.start(server).catch(
     async (error) => {

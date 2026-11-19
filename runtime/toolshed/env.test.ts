@@ -433,3 +433,15 @@ describe("PLAID_ENV", () => {
     expect(() => EnvSchema.parse({ PLAID_ENV: "development" })).toThrow();
   });
 });
+
+Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and takes only a positive integer", () => {
+  expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
+  expect(
+    EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: "10000000" })
+      .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
+  ).toBe(10_000_000);
+  for (const refused of ["0", "-1", "1.5", "lots"]) {
+    expect(() => EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: refused }))
+      .toThrow();
+  }
+});
