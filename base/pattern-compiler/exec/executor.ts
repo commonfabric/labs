@@ -1301,7 +1301,9 @@ export class Host {
     if (run === undefined) {
       throw new Unsupported("a body that has no function");
     }
-    let argument = this.pass(computed);
+    let argument = this.pass(computed, {
+      entries: instance.plan.bodies[body].computed,
+    });
     // An `identity` entry of `Body.computed` is a handle to the reference
     // the cone computed there (ES §2.4, "A handle or a reference from a
     // computed input").
@@ -1470,10 +1472,30 @@ export class Host {
    * it returns holds the reference to the stream, which is stored as a
    * link (ruling Z20).
    */
-  pass(value: unknown): unknown {
-    if (value instanceof Assembled) return this.pass(this.settled(value));
+  pass(
+    value: unknown,
+    /**
+     * The entries of `Body.computed` that the value is narrowed to, and
+     * the path of `value` in the computed value. A stored value at a path
+     * with no `value` entry at or below it is read with the references in
+     * it as stand-ins and not followed (ES §2.4: the computed part is
+     * "narrowed to the entries of `Body.computed`").
+     */
+    narrowed?: { entries: readonly { at: string[]; observes: string }[] },
+    path: readonly string[] = [],
+  ): unknown {
+    if (value instanceof Assembled) {
+      return this.pass(this.settled(value), narrowed, path);
+    }
     if (value instanceof Ref || value instanceof StreamRef) {
-      return this.v(value);
+      const valued = narrowed === undefined ||
+        narrowed.entries.some(({ at, observes }) =>
+          observes === "value" &&
+          at.slice(0, path.length).every((segment, index) =>
+            segment === "*" || segment === path[index]
+          )
+        );
+      return this.v(value, valued ? undefined : SHALLOW);
     }
     // A body that would be handed a value in an error state is not run.
     this.#reading(value);
@@ -1482,17 +1504,28 @@ export class Host {
     }
     // A handle that value code made for a constant stays the handle.
     if (value instanceof Handle) return value;
-    if (Array.isArray(value)) return value.map((member) => this.pass(member));
+    if (Array.isArray(value)) {
+      return value.map((member, index) =>
+        this.pass(member, narrowed, [...path, `${index}`])
+      );
+    }
     if (isRecord(value)) {
       return Object.fromEntries(
         Object.entries(value).map((
           [name, member],
-        ) => [name, this.pass(member)]),
+        ) => [name, this.pass(member, narrowed, [...path, name])]),
       );
     }
     return value;
   }
 }
+
+/**
+ * The schema a stored value is read under where a body observes nothing
+ * of it but its shape or its members' presence: a container whose
+ * references stay references.
+ */
+const SHALLOW: Schema = { type: ["array", "object"], items: {} };
 
 /** A host that holds nothing: for a constant read where no cone runs. */
 class NoHost extends Host {
