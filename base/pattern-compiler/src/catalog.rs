@@ -166,6 +166,15 @@ pub const CATALOG: &[Entry] = &[
         "reported where the receiver's type comes from a declaration; a receiver whose type needs expression inference is not decided",
     ),
     done("pattern-context:self-access", Error),
+    Entry {
+        id: "element-body:result-stored-outside",
+        severity: Some(Error),
+        status: Status::NeedsFootprint(
+            "not reported: needs, for each function body, whether what it stores outside \
+             the collection holds a reference to the result of a pattern call of an \
+             element body",
+        ),
+    },
     part(
         "ses-callback:callable-capture",
         Error,
@@ -499,25 +508,6 @@ pub const CATALOG: &[Entry] = &[
         "reported for a value that is not literal-like; whether the value is assignable to the type is not checked",
     ),
     done("scope:union-member", Error),
-];
-
-/// The entries of the catalog that `language-subset.md` in this tree
-/// does not have, in the order of the table that has them:
-/// `element-body:result-stored-outside` follows
-/// `pattern-context:self-access`, and the two of `ArrayByKey` follow
-/// `scope:union-member`. `tests/catalog.rs` reads the document in this
-/// tree and fails once it has one of these, so that it moves into
-/// [`CATALOG`] and `catalog-ids.txt`.
-pub const PROVISIONAL: &[Entry] = &[
-    Entry {
-        id: "element-body:result-stored-outside",
-        severity: Some(Error),
-        status: Status::NeedsFootprint(
-            "not reported: needs, for each function body, whether what it stores outside \
-             the collection holds a reference to the result of a pattern call of an \
-             element body",
-        ),
-    },
     part(
         "array-by-key:declaration",
         Error,
@@ -531,14 +521,20 @@ pub const PROVISIONAL: &[Entry] = &[
          not a literal, the result of a `filter` or a `map` over an array with a declared \
          key included; an assignment and the argument of a handle method are not checked",
     ),
-    part(
-        "array-by-key:state-without-key",
-        Warning,
-        "reported from the plan, for an array whose elements have a member that the body \
+];
+
+/// The entry of the catalog that `language-subset.md` in this tree does
+/// not have: `array-by-key:state-without-key`, which follows
+/// `array-by-key:mismatch` in the table that has it. `tests/catalog.rs`
+/// reads the document in this tree and fails once it has an entry of this
+/// list, so that the entry moves into [`CATALOG`] and `catalog-ids.txt`.
+pub const PROVISIONAL: &[Entry] = &[part(
+    "array-by-key:state-without-key",
+    Warning,
+    "reported from the plan, for an array whose elements have a member that the body \
          reads; the type does not say whether the array holds plain values in place or \
          references, and the report is made for both",
-    ),
-];
+)];
 
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {

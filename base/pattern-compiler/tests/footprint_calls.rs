@@ -570,7 +570,11 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
             "state.message : identity, shape",
             "state.myProfile : identity (resolved), shape",
             "state.myProfile-> : shape",
-            "state.room : identity",
+            // FA §12.2 has the two calls of `spaceOf` in the right operand
+            // of `||`. The source now throws for an absent link first and
+            // calls `isInRoomOf` unconditionally, so the resolution of
+            // `room` is static.
+            "state.room : identity (resolved)",
         ]
     );
     assert_eq!(
@@ -589,8 +593,9 @@ fn commit_edit_has_the_footprint_of_section_12_3() {
         [
             "labelMetadata",
             "link: event.message, state.message",
+            // No `link: state.room`: its resolution is static (see the
+            // reads above), and is no journaled read.
             "link: state.composer->editing",
-            "link: state.room",
         ]
     );
     assert_eq!(
