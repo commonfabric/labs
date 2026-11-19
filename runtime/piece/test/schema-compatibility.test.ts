@@ -3542,6 +3542,115 @@ describe("piece schema compatibility", () => {
     });
   }
 
+  describe("a comparable handle where none was declared", () => {
+    // The Topics pivot's rows, as a topic's argument declares them: each
+    // row's references were `unknown`, and are now comparable cells.
+    const rows = (reference: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          asCell: ["readonly"],
+          items: {
+            type: "object",
+            properties: {
+              topic: reference,
+              mentionedBy: { type: "array", items: reference },
+            },
+            required: ["topic", "mentionedBy"],
+          },
+        },
+      },
+    });
+
+    it("accepts a comparable handle added where the node declared no cell", () => {
+      for (
+        const comparable of [
+          ["comparable"],
+          [{ kind: "comparable" }],
+          [{ kind: "comparable", scope: undefined }],
+        ]
+      ) {
+        expect(() =>
+          assertSchemaSubset(
+            { type: "unknown" },
+            { type: "unknown", asCell: comparable } as JSONSchema,
+          )
+        ).not.toThrow();
+      }
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(rows({ type: "unknown" }), true),
+          pattern(
+            rows({ type: "unknown", asCell: ["comparable"] }),
+            true,
+          ),
+        )
+      ).not.toThrow();
+    });
+
+    it("still compares every other cell change exactly", () => {
+      for (
+        const [before, after] of [
+          // A comparable handle taken away.
+          [{ asCell: ["comparable"] }, {}],
+          // A comparable handle that names a scope reads another instance.
+          [{}, { asCell: [{ kind: "comparable", scope: "user" }] }],
+          // Another kind beside it, or in place of the one declared.
+          [{}, { asCell: ["comparable", "readonly"] }],
+          [{ asCell: ["cell"] }, { asCell: ["comparable"] }],
+          [{ asCell: ["readonly"] }, { asCell: ["comparable"] }],
+          // Kinds that change what a reader can do with the value.
+          [{}, { asCell: ["readonly"] }],
+          [{}, { asCell: ["cell"] }],
+          [{}, { asCell: ["opaque"] }],
+        ] as const
+      ) {
+        expect(() =>
+          assertSchemaSubset(
+            { type: "unknown", ...before } as JSONSchema,
+            { type: "unknown", ...after } as JSONSchema,
+          )
+        ).toThrow(/asCell changed/);
+      }
+    });
+
+    it("keeps a result's marker exact, whichever way it changes", () => {
+      // A result proof reads from the candidate to the previous contract, the
+      // other way from an argument's, so neither a result gaining a
+      // comparable handle nor one losing it rides the argument's exception.
+      const result = (field: JSONSchema): JSONSchema => ({
+        type: "object",
+        properties: { field },
+        required: ["field"],
+      });
+      const plain: JSONSchema = { type: "string" };
+      const comparable: JSONSchema = { type: "string", asCell: ["comparable"] };
+      for (
+        const [previous, candidate] of [
+          [plain, comparable],
+          [comparable, plain],
+        ]
+      ) {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, result(previous)),
+            pattern(true, result(candidate)),
+          )
+        ).toThrow(/result\.field: asCell changed/);
+      }
+    });
+
+    it("still proves the constraints beside it", () => {
+      expect(() =>
+        assertSchemaSubset(
+          { type: "string" },
+          { type: "number", asCell: ["comparable"] },
+        )
+      ).toThrow(/type string is not accepted by the candidate schema/);
+    });
+  });
+
   describe("semantic extensions on union nodes", () => {
     const a: JSONSchema = {
       type: "object",

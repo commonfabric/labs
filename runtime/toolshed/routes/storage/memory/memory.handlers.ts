@@ -255,6 +255,8 @@ export const MEMORY_SOCKET_SYNC_PARTS: SyncPartLimits = {
 
 /** The part of a memory server that a socket's pipeline talks to. */
 export interface MemorySocketServer {
+  /** The server's options; the write trace reads its slot limit. */
+  readonly options?: { readonly untrustedMessageSlots?: number };
   connect(
     send: (message: ServerMessage, payload?: string) => void,
     syncParts?: SyncPartLimits,
@@ -344,8 +346,11 @@ export const attachMemorySocketPipeline = (
     try {
       // Observation only: receive() owns capability admission. Expand metadata
       // here so compact and inline requests produce the same diagnostic.
+      // Under the server's own slot limit, so that a commit it admits under
+      // a raised one is traced as well.
       const parsed = MemoryServer.parseClientMessage(payload, {
         commitLabelTableV1: true,
+        slotLimit: server.options?.untrustedMessageSlots,
       });
       if (parsed?.type !== "transact") return;
       for (const op of parsed.commit.operations) {
