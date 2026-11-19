@@ -242,6 +242,43 @@ describe("serverExecutionPolicyFromEnv", () => {
     expect(warnings[0]).toContain("SERVER_EXECUTION_CURRENCY_EPOCH");
   });
 
+  it("returns the `skip` mode under the build's epoch where a build is named and the mode is unset, and the mode and epoch the environment names over those", () => {
+    const warnings: string[] = [];
+    const policyWith = (env: Record<string, string>) =>
+      serverExecutionPolicyFromEnv(
+        envOf({ ...env, SERVER_EXECUTION_MAX_OUTSTANDING_EFFECTS: "0" }),
+        (m) => warnings.push(m),
+        { currencyEpoch: "build-9" },
+      );
+    expect(policyWith({})).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "record" })).toEqual({
+      currencyIndex: "record",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "off" })).toEqual({
+      storeReadThrough: true,
+    });
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_EPOCH: "release-7" }))
+      .toEqual({
+        currencyIndex: "skip",
+        currencyEpoch: "release-7",
+        storeReadThrough: true,
+      });
+    expect(warnings).toEqual([]);
+    expect(policyWith({ SERVER_EXECUTION_CURRENCY_INDEX: "true" })).toEqual({
+      currencyIndex: "skip",
+      currencyEpoch: "build-9",
+      storeReadThrough: true,
+    });
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('stays "skip"');
+  });
+
   it("threads the parked-runtime retention knob, the literal 0 included; garbage reads as unset with a warning", () => {
     const warnings: string[] = [];
     const cases: [string, number][] = [
