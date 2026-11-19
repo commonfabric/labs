@@ -895,7 +895,18 @@ result of another per-element construct alike. Elements are grouped by the label
 identifier the hook `labelOf` gives for each position; without it every position
 is a group of its own. The slot of an element of the result of another
 per-element construct is bound to the output of the upstream element that holds
-it. The executor keeps none of this when it is given no hooks.
+it. Value code reports the branch each selector of its cone takes and the key
+each pick it chooses takes (`$h.select` around the test of a conditional
+expression, `&&`, `||`, `??` and an `if` of a block, and `$h.pick` around a
+computed key; `Facts.selector` and `Facts.pick` in `src/emit.rs` say which
+selector or pick the code at a span has), and a record carries `selections` and
+`picks` for those its template reaches. A selector the runtime decides, such as
+the `through` of a scan or the `select` over the keys of a constructed record,
+is not reported. A read through a handle of a handler or a body is reported to
+the hook `read` with the body and the entry of its `Body.handles`
+(`Store.reader`), and a record carries, at each `dynamic` node of kind `handle`,
+the positions the body read through that handle before the write. The executor
+keeps none of this when it is given no hooks.
 
 `compare/runtime-transactions.ts` implements the hooks with the runtime's own
 transactions (`Runtime.edit()`): each read is read through the transaction, each

@@ -45,6 +45,7 @@ import {
   type Name,
   OUTPUT,
   type Position,
+  type ReadThrough,
   recordOfKey,
   Ref,
   rekeyed,
@@ -184,6 +185,11 @@ export type Plan = {
       template?: Template;
     }[];
     envelopes: { kind: string; slot?: number; path?: string[] }[];
+    /**
+     * The handles the body is given: an entry of a slot names the
+     * `identity` slot of the handle (PL §1.1, `Body.handles`).
+     */
+    handles?: { handle?: { slot?: number } }[];
   }[];
   stateCells: {
     name: Name;
@@ -633,12 +639,13 @@ type Bound =
  * were bound to: a cone instance's kept inputs, or the host of the code
  * that is writing. The first of a list that has an entry gives it.
  */
-type Inputs = Pick<ConeInputs, "slots" | "selections" | "picks">;
+type Inputs = Pick<ConeInputs, "slots" | "selections" | "picks" | "dynamic">;
 
 type ConeInputs = {
   slots: Map<number, Bound>;
   selections: Map<number, number>;
   picks: Map<number, string | null>;
+  dynamic: Map<number, Address[]>;
   id?: string;
 };
 
@@ -794,7 +801,11 @@ export class Handle {
 
   get(): unknown {
     if (this.target instanceof StreamRef) return { $stream: true };
-    return this.#typed(this.target, this.declared, this.host?.reads, 0);
+    const target = this.target;
+    return this.instance.readThrough(
+      this,
+      () => this.#typed(target, this.declared, this.host?.reads, 0),
+    );
   }
 
   sample(): unknown {
@@ -1101,6 +1112,11 @@ export class Host {
   readonly selections = new Map<number, number>();
   /** The key each pick chose, as the value code reported it. */
   readonly picks = new Map<number, string | null>();
+  /**
+   * The positions read through the handle each entry of
+   * `Plan.dynamicReads` names, by the entry.
+   */
+  readonly dynamic = new Map<number, Address[]>();
 
   constructor(
     readonly instance: Instance,
@@ -1723,9 +1739,12 @@ export type TransactionHooks = {
 
   /**
    * The transaction in progress read a position of a document: one a
-   * link the read followed was at, or the one the read ended at.
+   * link the read followed was at, or the one the read ended at. `by` is
+   * the body and the entry of its `Body.handles` that a read through a
+   * handle was made through, which a `dynamic` node of a template names
+   * (PL §1.1, `DynamicRead`).
    */
-  read(doc: string, path: readonly string[]): void;
+  read(doc: string, path: readonly string[], by?: ReadThrough): void;
 
   /**
    * The identifier of the label at a position, where the store knows one:
@@ -2534,8 +2553,8 @@ export class Instance {
       this.store.onChange = (change) => this.#changed(change);
       const hooks = options.transactions;
       if (hooks !== undefined) {
-        this.store.onRead = (doc, path) => {
-          if (this.#tx !== undefined) hooks.read(doc, path);
+        this.store.onRead = (doc, path, by) => {
+          if (this.#tx !== undefined) hooks.read(doc, path, by);
         };
       }
     }
@@ -5082,6 +5101,7 @@ export class Instance {
           slots: host.bound,
           selections: host.selections,
           picks: host.picks,
+          dynamic: host.dynamic,
         });
       }
     }
@@ -6954,6 +6974,49 @@ export class Instance {
   }
 
   /**
+   * Runs a read through a handle, attributed to the body being run and
+   * the entry of its `Body.handles` that is the handle (`Store.reader`).
+   * What the read went through is kept, in the host of the body, under
+   * the entry of `Plan.dynamicReads` that names the handle.
+   */
+  readThrough<T>(handle: Handle, run: () => T): T {
+    const invoking = this.#invoking.at(-1);
+    const body = this.#handling ?? invoking?.body;
+    const host = this.#handling === undefined
+      ? invoking?.host
+      : this.#handlerHost;
+    const entry = body === undefined || handle.slot === undefined
+      ? -1
+      : (this.plan.bodies[body].handles ?? []).findIndex((held) =>
+        held.handle?.slot === handle.slot
+      );
+    if (body === undefined || entry < 0) return run();
+    const { store } = this;
+    const outer = store.reader;
+    const reader = { by: { body, handle: entry }, seen: [] };
+    store.reader = reader;
+    try {
+      return run();
+    } finally {
+      store.reader = outer;
+      // An enclosing read through a handle went through these too.
+      if (outer !== undefined) {
+        for (const position of reader.seen) outer.seen.push(position);
+      }
+      const read = (this.plan.dynamicReads ?? []).findIndex((held) => {
+        const why = (held as { why?: { kind?: string } & ReadThrough }).why;
+        return why?.kind === "handle" && why.body === body &&
+          why.handle === entry;
+      });
+      if (read >= 0 && host !== undefined) {
+        const seen = host.dynamic.get(read) ?? [];
+        for (const position of reader.seen) seen.push(position);
+        host.dynamic.set(read, seen);
+      }
+    }
+  }
+
+  /**
    * Runs a sandboxed body of a cone, so that a write it makes through a
    * handle is recorded under the body's write edge (`written`).
    */
@@ -7088,8 +7151,13 @@ export class Instance {
   #noteInputs(cone: number, context: Context, host: Host): void {
     const within = this.collectionsOf(cone);
     const name = this.#coneInstance(cone, this.#keysIn(within, context));
-    const held: ConeInputs = this.#inputs.get(name) ??
-      { slots: new Map(), selections: new Map(), picks: new Map() };
+    const held: ConeInputs = this.#inputs.get(name) ?? {
+      slots: new Map(),
+      selections: new Map(),
+      picks: new Map(),
+      dynamic: new Map(),
+    };
+    for (const [at, read] of host.dynamic) held.dynamic.set(at, read);
     for (const [slot, bound] of host.bound) held.slots.set(slot, bound);
     for (const [at, branch] of host.selections) held.selections.set(at, branch);
     for (const [at, key] of host.picks) held.picks.set(at, key);
@@ -7327,6 +7395,7 @@ export class Instance {
     const elements: Record<number, FoldElements> = {};
     const selections: Record<number, number> = {};
     const picks: Record<number, string | null> = {};
+    const dynamic: Record<number, Address[]> = {};
     // A chain of outputs is as long as the plan is deep; one that is
     // longer than this is a cycle of the plan, and is not followed.
     if (depth < 64) {
@@ -7346,6 +7415,10 @@ export class Instance {
         );
         if (key !== undefined) picks[pick] = key.key ?? null;
       }
+      for (const read of [...reached.dynamic].sort((a, b) => a - b)) {
+        const seen = first((source) => source.dynamic.get(read));
+        if (seen !== undefined) dynamic[read] = [...seen];
+      }
       for (const output of reached.outputs) {
         outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
       }
@@ -7364,6 +7437,7 @@ export class Instance {
       slots,
       ...(Object.keys(selections).length === 0 ? {} : { selections }),
       ...(Object.keys(picks).length === 0 ? {} : { picks }),
+      ...(Object.keys(dynamic).length === 0 ? {} : { dynamic }),
       ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
       ...(Object.keys(elements).length === 0 ? {} : { elements }),
     };
@@ -7517,6 +7591,7 @@ export class Instance {
             slots: writing.host.bound,
             selections: writing.host.selections,
             picks: writing.host.picks,
+            dynamic: writing.host.dynamic,
           }],
         ),
       }];

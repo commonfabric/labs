@@ -25,8 +25,16 @@ class Recorder implements TransactionHooks {
   /** `begin` and `end`, written as `begin <cause>` and `end <committed>`. */
   readonly brackets: string[] = [];
 
-  /** Each read, with the number of brackets before it. */
-  readonly reads: { at: number; doc: string; path: string[] }[] = [];
+  /**
+   * Each read, with the number of brackets before it, and the body and
+   * handle it was made through, where it was made through one.
+   */
+  readonly reads: {
+    at: number;
+    doc: string;
+    path: string[];
+    by?: { body: number; handle: number };
+  }[] = [];
 
   /**
    * Each change, with the number of brackets before it, the cause of the
@@ -65,8 +73,17 @@ class Recorder implements TransactionHooks {
     this.brackets.push(`begin ${cause}`);
   }
 
-  read(doc: string, path: readonly string[]): void {
-    this.reads.push({ at: this.brackets.length, doc, path: [...path] });
+  read(
+    doc: string,
+    path: readonly string[],
+    by?: { body: number; handle: number },
+  ): void {
+    this.reads.push({
+      at: this.brackets.length,
+      doc,
+      path: [...path],
+      ...(by === undefined ? {} : { by }),
+    });
   }
 
   change(
@@ -400,6 +417,36 @@ describe("the selections of a write record", () => {
     const begun = recorder.changed.length;
     instance.writeArgument(["flag"], false);
     expect(selections(begun)).toEqual(new Map([[0, { 0: 1 }], [3, { 3: 1 }]]));
+  });
+});
+
+describe("the reads through a handle", () => {
+  it("are attributed to the body and the handle, and a write record carries them at its `dynamic` node", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("handle-or-undefined"),
+      { item: { title: "t" } },
+      { transactions: recorder },
+    );
+    const begun = recorder.brackets.length;
+    const from = recorder.reads.length;
+    instance.send(bindingOf(instance, "copy"), {});
+
+    // The handler reads `item` through the handle of its body, entry 0
+    // of `Body.handles`, which entry 0 of `Plan.dynamicReads` names.
+    const item = { doc: instance.argument, path: ["item"] };
+    expect(
+      recorder.reads.slice(from).filter(({ by }) => by !== undefined).map((
+        { doc, path, by },
+      ) => ({ doc, path, by })),
+    ).toEqual([{ ...item, by: { body: 0, handle: 0 } }]);
+    const writes = recorder.changed.filter(({ at, cause }) =>
+      at > begun && cause === "event"
+    ).flatMap(({ writes }) => writes ?? []);
+    expect(writes).toMatchObject([{
+      record: { body: 0, write: 0 },
+      dynamic: { 0: [item] },
+    }]);
   });
 });
 

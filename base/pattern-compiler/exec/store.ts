@@ -389,6 +389,12 @@ const samePath = (a: readonly string[], b: readonly string[]): boolean =>
 export const keyFieldsOf = (schema: Schema | undefined): string[] =>
   typeof schema === "object" ? schema.keyFields ?? [] : [];
 
+/**
+ * The body a read is made through a handle of, and the entry of its
+ * `Body.handles` that is the handle.
+ */
+export type ReadThrough = { body: number; handle: number };
+
 /** A reference to a position of a document. */
 export class Ref {
   constructor(
@@ -871,9 +877,25 @@ export class Store {
    * the path: the position of each link the read follows, and the
    * position it ends at. Whoever keeps the documents in a store with a
    * journal of reads, as the runtime's transactions do, records the read
-   * there.
+   * there. `by` is the body and the entry of its `Body.handles` that the
+   * read is made through, while `reader` names one.
    */
-  onRead: ((doc: string, path: readonly string[]) => void) | undefined;
+  onRead:
+    | ((
+      doc: string,
+      path: readonly string[],
+      by?: ReadThrough,
+    ) => void)
+    | undefined;
+
+  /**
+   * The body and the handle of the read being made through a handle, and
+   * each position that read went through so far (PL §1.1,
+   * `DynamicRead`).
+   */
+  reader:
+    | { by: ReadThrough; seen: { doc: string; path: string[] }[] }
+    | undefined;
 
   /**
    * What each change of a transaction in progress replaced, in order,
@@ -1630,7 +1652,7 @@ export class Store {
           };
         }
         reads?.push({ doc, path: at });
-        this.onRead?.(doc, at);
+        this.#read(doc, at);
         const below = rest.reduce(schemaBelow, value.$link.schema);
         // The schema of the first link crossed, where the reference has
         // none of its own, and the default of the last link that
@@ -1728,7 +1750,7 @@ export class Store {
       named_ = [...named_, segment];
     }
     reads?.push({ doc, path: at });
-    this.onRead?.(doc, at);
+    this.#read(doc, at);
     return {
       ref: new Ref(doc, at, schema),
       value,
@@ -1739,6 +1761,13 @@ export class Store {
       given,
       fallback,
     };
+  }
+
+  /** Reports a position a read went through (`onRead`, `reader`). */
+  #read(doc: string, path: string[]): void {
+    const { reader } = this;
+    reader?.seen.push({ doc, path });
+    this.onRead?.(doc, path, reader?.by);
   }
 
   /**
