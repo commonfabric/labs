@@ -7,7 +7,9 @@
  * read or wrote, and parses the file again only once another process has
  * replaced it. A head taken from the file reads its list from the top until it
  * reaches a run it holds, so any head that was whole when it was saved can be
- * taken, however old.
+ * taken, however old. No head taken from the file is known to reach the end of
+ * its list, so a reading that needs runs past the last one held reads one page
+ * further down to find out.
  *
  * Every version of the dashboard reads the file the same way, whichever
  * version wrote it. A run that lacks a field this version reads, or holds one
