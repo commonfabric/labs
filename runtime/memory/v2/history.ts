@@ -13,6 +13,7 @@ import {
   type BranchName,
   type ClientCommit,
   type CommitClass,
+  type CommitSummary,
   decodeMemoryBoundary,
   DEFAULT_BRANCH,
   type EntityId,
@@ -20,33 +21,6 @@ import {
   scopeOfScopeKey,
   type SessionId,
 } from "../v2.ts";
-
-/** One commit of a branch's history, without the documents it wrote. */
-export type CommitSummary = {
-  seq: number;
-
-  /** The branch the commit landed on, which a fork's history inherits from. */
-  branch: BranchName;
-  class: CommitClass;
-
-  /** When the server admitted the commit, as an ISO 8601 UTC time. */
-  createdAt: string;
-
-  /** The user a server-produced authored commit acted for. */
-  actingPrincipal?: string;
-
-  /** How many events the commit appended to streams. */
-  events: number;
-
-  /** The ids of the events whose handler consequences the commit carries. */
-  consequenceOf?: string[];
-
-  /** The point of history the commit restored its branch to. */
-  restored?: { branch: BranchName; seq: number };
-
-  /** How many documents the commit wrote. */
-  writes: number;
-};
 
 /** Which commits {@link listCommits} returns. */
 export type CommitListOptions = {

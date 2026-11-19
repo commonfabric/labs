@@ -1,4 +1,5 @@
 import type {
+  BranchName,
   OpCursor,
   OperationWatchSpec,
   SessionDescriptor,
@@ -9,6 +10,7 @@ import type {
   ViewQuery,
   WatchSpec,
 } from "../v2.ts";
+import { DEFAULT_BRANCH } from "../v2.ts";
 import type { ClientInfo } from "./client-info.ts";
 import {
   type DocumentInterestQuery,
@@ -164,6 +166,13 @@ export type SessionState = {
    * another kind is left out only by the server whose loop it belongs to
    * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
   notDemand?: true;
+
+  /**
+   * The branch the session is of (`SessionDescriptor.branch`), which its
+   * commits, queries and watches read and write when they name none.
+   * Absent for a session of the default branch.
+   */
+  branch?: BranchName;
 
   /** Client report supplied by the latest admitted open. */
   client?: ClientInfo;
@@ -402,6 +411,19 @@ export class SessionRegistry {
         `session ${sessionId} is already bound to ${existing.principal}`,
       );
     }
+    // A session's replica holds one branch's documents, and its watches name
+    // none, so a resume on another branch would re-deliver nothing the
+    // replica lacks.
+    if (
+      existing !== undefined &&
+      (existing.branch ?? DEFAULT_BRANCH) !== (session.branch ?? DEFAULT_BRANCH)
+    ) {
+      throw authorizationError(
+        `session ${sessionId} is of another branch`,
+      );
+    }
+    const onBranch = session.branch !== undefined &&
+      session.branch !== DEFAULT_BRANCH;
     if (
       existing !== undefined &&
       session.sessionToken !== existing.sessionToken &&
@@ -503,10 +525,15 @@ export class SessionRegistry {
         ? { servingBinding: true as const }
         : {}),
       ...(inProcess || session.actingAs === "space-owner" ||
-          session.demand === false
+          session.demand === false || onBranch
         ? { servingOwn: true as const }
         : {}),
-      ...(session.demand === false ? { notDemand: true as const } : {}),
+      // No serving loop runs a branch, so a session of one is demand on
+      // nothing.
+      ...(session.demand === false || onBranch
+        ? { notDemand: true as const }
+        : {}),
+      ...(onBranch ? { branch: session.branch } : {}),
       // Fresh per open, like the binding: the chain THIS open presented.
       ...(capabilityPrincipal !== undefined ? { capabilityPrincipal } : {}),
       ...(chainIssuers !== undefined ? { chainIssuers } : {}),

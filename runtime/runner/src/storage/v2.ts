@@ -42,12 +42,14 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
+  type BranchInfo,
   type BranchName,
   canResolveScopeKey,
   type CellScope,
   type ClientCommit,
   type CommitClass,
   type CommitPrecondition,
+  type CommitSummary,
   commitPreconditionValueHash,
   DEFAULT_BRANCH,
   type DocumentPath,
@@ -1294,6 +1296,15 @@ export interface Options {
   id?: string;
   settings?: IRemoteStorageProviderSettings;
 
+  /**
+   * The branch each space listed here is opened on (the wire
+   * `SessionDescriptor.branch`): the manager's session of such a space reads
+   * and writes that branch, so everything the manager's runtime does in the
+   * space happens there. A space not listed is opened on its default
+   * branch. Fixed for the manager's lifetime.
+   */
+  branches?: Readonly<Record<string, BranchName>>;
+
   /** The event-intent queue's store seam (server-execution v2 Phase 3;
    *  events.md §5; LT9 re-ruled 2026-08-15: PROCESS-LIFETIME — reload
    *  survival is a non-goal this round). Absent = one in-memory store per
@@ -2034,6 +2045,7 @@ export class StorageManager implements IStorageManager {
    * (`setSessionReadCeiling`); undefined on a manager whose sessions read
    * unbounded. */
   #sessionReadCeiling?: SessionReadCeiling;
+  #branches: Readonly<Record<string, BranchName>>;
 
   /** Resume options for a space's manager-wide session that
    * `#createInitializedSession` detached ahead of a bootstrap that then
@@ -2185,6 +2197,7 @@ export class StorageManager implements IStorageManager {
       memoryEventAppendQueueStore();
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
+    this.#branches = { ...options.branches };
     this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
     this.#holdRegistry = (options.createHoldRegistry ??
       ((cleanup) => new FinalizationRegistry(cleanup)))(
@@ -2572,18 +2585,22 @@ export class StorageManager implements IStorageManager {
 
   /**
    * The descriptor fields every session this manager opens carries beyond
-   * its id: the serving binding and the declared read ceiling. One place,
+   * its id: the serving binding, the declared read ceiling, and the branch
+   * `space` is opened on. One place,
    * so a reopen, a resume and a fresh mount all declare the same session.
    */
-  #sessionDescriptorFields(): {
+  #sessionDescriptorFields(space: MemorySpace): {
     actingAs?: "space-owner";
     readCeiling?: SessionReadCeiling;
+    branch?: BranchName;
   } {
+    const branch = this.#branches[space];
     return {
       ...this.#servingActingAs(),
       ...(this.#sessionReadCeiling !== undefined
         ? { readCeiling: this.#sessionReadCeiling }
         : {}),
+      ...(branch !== undefined && branch !== DEFAULT_BRANCH ? { branch } : {}),
     };
   }
 
@@ -2874,7 +2891,7 @@ export class StorageManager implements IStorageManager {
       this.as,
       {
         sessionId: crypto.randomUUID(),
-        ...this.#sessionDescriptorFields(),
+        ...this.#sessionDescriptorFields(space),
       },
     );
     try {
@@ -2962,7 +2979,7 @@ export class StorageManager implements IStorageManager {
           : (_routeGeneration, routeSignal) =>
             this.#createSession(space, signer, {
               sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(),
+              ...this.#sessionDescriptorFields(space),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
@@ -3096,7 +3113,7 @@ export class StorageManager implements IStorageManager {
             ? detached.options
             : {
               sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(),
+              ...this.#sessionDescriptorFields(space),
             },
           routeSignal,
         ),
@@ -3114,7 +3131,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#sessionDescriptorFields(),
+        ...this.#sessionDescriptorFields(space),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,
@@ -5620,6 +5637,37 @@ class Provider
     return this.#followReplacement((replica) => replica.entityIdExists(id));
   }
 
+  listHistory(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]> {
+    return this.#followReplacement((replica) => replica.listHistory(options));
+  }
+
+  listBranches(): Promise<BranchInfo[]> {
+    return this.#followReplacement((replica) => replica.listBranches());
+  }
+
+  createBranch(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo> {
+    return this.#followReplacement((replica) =>
+      replica.createBranch(name, options)
+    );
+  }
+
+  deleteBranch(name: BranchName): Promise<void> {
+    return this.#followReplacement((replica) => replica.deleteBranch(name));
+  }
+
+  restoreBranch(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined> {
+    return this.#followReplacement((replica) =>
+      replica.restoreBranch(options)
+    );
+  }
+
   pullToServerHead(): Promise<void> {
     return this.#followReplacement((replica) => replica.pullToServerHead());
   }
@@ -7533,6 +7581,43 @@ export class SpaceReplica
       return undefined;
     }
     return (await session.entityIdExists(id))?.exists;
+  }
+
+  /** See `IStorageProvider.listHistory`. */
+  async listHistory(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.listHistory(options);
+  }
+
+  /** See `IStorageProvider.listBranches`. */
+  async listBranches(): Promise<BranchInfo[]> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.listBranches();
+  }
+
+  /** See `IStorageProvider.createBranch`. */
+  async createBranch(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.createBranch(name, options);
+  }
+
+  /** See `IStorageProvider.deleteBranch`. */
+  async deleteBranch(name: BranchName): Promise<void> {
+    const { session } = await this.#activeSessionHandle();
+    await session.deleteBranch(name);
+  }
+
+  /** See `IStorageProvider.restoreBranch`. */
+  async restoreBranch(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.restoreBranch(options);
   }
 
   async pullToServerHead(): Promise<void> {

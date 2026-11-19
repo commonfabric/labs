@@ -1599,6 +1599,14 @@ export type MemoryProtocolFlags = {
    */
   instanceNameMark?: boolean;
 
+  /**
+   * Server capability: the server opens sessions on a branch
+   * (`SessionDescriptor.branch`) and serves the `branch.*` and
+   * `history.list` requests (04-protocol.md §4.3.12). Absent (an older
+   * server) parses to false, and a client then sends none of them.
+   */
+  branches?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1661,6 +1669,7 @@ export type WireMemoryProtocolFlags = {
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
+  branches?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1800,6 +1809,19 @@ export type SessionDescriptor = {
    * on the resumes after it.
    */
   invite?: { inviteId: string; code: string };
+
+  /**
+   * The branch the session is of (`06-branching.md` §6.16): every commit,
+   * query and watch the session sends without naming a branch reads and
+   * writes this one, so a runtime that knows nothing of branches runs a
+   * space as the branch holds it. Absent, the default branch. Signed into
+   * the session.open invocation with the rest of this descriptor, declared
+   * afresh on every open, and admitted only by a server advertising
+   * `branches`. A session of a branch other than the default is never
+   * client demand, whatever `demand` says: no serving loop runs a branch,
+   * and the session's own runtime computes what the branch stores.
+   */
+  branch?: BranchName;
 };
 
 /**
@@ -2172,6 +2194,133 @@ export type EntityIdLookupRequest = {
   space: string;
   sessionId: SessionId;
   id: EntityId;
+};
+
+/**
+ * A branch as the server reports it. `forkSeq` is the point of
+ * `parentBranch`'s history the branch holds; both are `null` for the default
+ * branch. `status` is `active`, or `deleted` once the branch takes no more
+ * commits.
+ */
+export type BranchInfo = {
+  name: BranchName;
+  parentBranch: BranchName | null;
+  forkSeq: number | null;
+  createdSeq: number;
+  headSeq: number;
+  status: string;
+};
+
+/** One commit of a branch's history, without the documents it wrote. */
+export type CommitSummary = {
+  seq: number;
+
+  /** The branch the commit landed on, which a fork's history inherits from. */
+  branch: BranchName;
+  class: CommitClass;
+
+  /** When the server admitted the commit, as an ISO 8601 UTC time. */
+  createdAt: string;
+
+  /** The user a server-produced authored commit acted for. */
+  actingPrincipal?: string;
+
+  /** How many events the commit appended to streams. */
+  events: number;
+
+  /** The ids of the events whose handler consequences the commit carries. */
+  consequenceOf?: string[];
+
+  /** The point of history the commit restored its branch to. */
+  restored?: { branch: BranchName; seq: number };
+
+  /** How many documents the commit wrote. */
+  writes: number;
+};
+
+/**
+ * Forks `name` from `parentBranch` (absent, the default branch) as of
+ * `forkSeq` (absent, the parent's head). Needs write access to the space.
+ */
+export type BranchCreateRequest = {
+  type: "branch.create";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+  parentBranch?: BranchName;
+  forkSeq?: number;
+};
+
+export type BranchCreateResult = {
+  serverSeq: number;
+  branch: BranchInfo;
+};
+
+/** Deletes the branch `name`. Needs write access to the space. */
+export type BranchDeleteRequest = {
+  type: "branch.delete";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+};
+
+export type BranchDeleteResult = {
+  serverSeq: number;
+};
+
+/** Lists the space's branches, deleted ones included. */
+export type BranchListRequest = {
+  type: "branch.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+};
+
+export type BranchListResult = {
+  serverSeq: number;
+  branches: BranchInfo[];
+};
+
+/**
+ * Lists the commits of `branch`'s history (absent, the session's branch),
+ * newest first, those below `before` only, and at most `limit` of them.
+ */
+export type HistoryListRequest = {
+  type: "history.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  branch?: BranchName;
+  before?: number;
+  limit?: number;
+};
+
+export type HistoryListResult = {
+  serverSeq: number;
+  commits: CommitSummary[];
+};
+
+/**
+ * Restores the default branch to the state `source` (absent, the default
+ * branch) held as of `sourceSeq` (absent, its head), as one commit on the
+ * default branch. Needs owner access to the space.
+ */
+export type BranchRestoreRequest = {
+  type: "branch.restore";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  source?: BranchName;
+  sourceSeq?: number;
+};
+
+export type BranchRestoreResult = {
+  serverSeq: number;
+
+  /** The restoring commit's seq, absent when nothing differed. */
+  seq?: number;
 };
 
 //
@@ -2889,6 +3038,11 @@ export type ClientMessage =
   | OperationFieldQueryRequest
   | EntityIdListRequest
   | EntityIdLookupRequest
+  | BranchCreateRequest
+  | BranchDeleteRequest
+  | BranchListRequest
+  | HistoryListRequest
+  | BranchRestoreRequest
   | SqliteQueryRequest
   | SqliteRegisterDiskSourceRequest
   | WatchSetRequest
@@ -3154,6 +3308,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's server opens sessions on a branch and
+  // serves the branch and history requests.
+  branches: true,
   // Build-inherent: this build's lifecycle verbs take an origin.
   patternLifecycleOrigins: true,
   // Build-inherent: this build's `setsrc` and `follow` take a scope.
@@ -3241,6 +3398,7 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   servedRequests: true,
   spaceInvites: true,
   instanceNameMark: true,
+  branches: true,
   syncCrossingsV1: true,
   watchRemoveV1: true,
   syncPartsV1: true,
@@ -3343,6 +3501,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: value.instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then opens no
+    // session on a branch and sends no branch or history request.
+    branches: value.branches === true,
     // Absent (an older server) parses to false: a client then sends neither
     // `follow` nor a `setsrc` origin.
     patternLifecycleOrigins: value.patternLifecycleOrigins === true,
@@ -3414,6 +3575,7 @@ export const wireMemoryProtocolFlags = (
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,
+  branches: flags.branches,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

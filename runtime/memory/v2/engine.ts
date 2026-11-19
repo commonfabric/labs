@@ -87,6 +87,7 @@ import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
+  type BranchInfo,
   type BranchName,
   type CellScope,
   type ClientCommit,
@@ -1637,14 +1638,7 @@ export type PutBlobOptions = {
   contentType: string;
 };
 
-export type BranchState = {
-  name: BranchName;
-  parentBranch: BranchName | null;
-  forkSeq: number | null;
-  createdSeq: number;
-  headSeq: number;
-  status: string;
-};
+export type BranchState = BranchInfo;
 
 type HeadRow = {
   seq: number;
@@ -9378,6 +9372,14 @@ const storedEntitySourcesMayContainRef = (
       containsReservedSchemaRefSubstring(baseRow.data);
   }
   if (baseMayContain) return true;
+  // With no base on this branch the pre-state starts from the document the
+  // branch inherits, whose rows this probe does not read.
+  if (
+    !snapshotRow && !baseRow &&
+    requireLineage(engine, branch).parentBranch !== null
+  ) {
+    return true;
+  }
 
   const patches = engine.statement("selectPatches").all({
     branch,
@@ -9637,7 +9639,19 @@ const reconstructPatchedDocument = (
       document = cachedBase?.document ?? decodeStoredDocument(baseRow.data);
       encodedBytes = cachedBase?.weight ?? storedByteLength(baseRow.data);
     } else {
-      document = emptyEntityDocument();
+      // With no base on this branch, the patches were written over the
+      // document the branch inherits, which its parent holds as of the fork
+      // point.
+      const lineage = requireLineage(engine, branch);
+      const inherited = baseRow === undefined && lineage.parentBranch !== null
+        ? readStateForScopeKey(engine, {
+          id,
+          scopeKey,
+          branch: lineage.parentBranch,
+          seq: lineage.forkSeq ?? 0,
+        })?.document
+        : undefined;
+      document = inherited ?? emptyEntityDocument();
       encodedBytes = encodedByteLength(document);
     }
   }

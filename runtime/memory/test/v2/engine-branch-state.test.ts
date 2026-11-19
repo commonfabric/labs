@@ -82,6 +82,45 @@ describe("engine", () => {
       expect(valueAt()).toBe("parent");
     });
 
+    it("returns a fork's patches applied over the document it inherits", () => {
+      const patch = (path: string, value: string, branch: BranchName) =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "patch",
+              id,
+              patches: [{ op: "add", path, value }],
+            }],
+            branch,
+          },
+        }).seq;
+      applyCommit(engine, {
+        sessionId,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{ op: "set", id, value: { value: { kept: "parent" } } }],
+        },
+      });
+      createBranch(engine, "fork");
+      const first = patch("/value/first", "fork", "fork");
+      patch("/value/second", "fork", "fork");
+
+      expect(valueAt({ branch: "fork" })).toEqual({
+        kept: "parent",
+        first: "fork",
+        second: "fork",
+      });
+      expect(valueAt({ branch: "fork", seq: first })).toEqual({
+        kept: "parent",
+        first: "fork",
+      });
+      expect(valueAt()).toEqual({ kept: "parent" });
+    });
+
     it("throws for an unknown branch, and reads the branch once it exists", () => {
       setValue("parent");
 

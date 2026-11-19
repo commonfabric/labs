@@ -28,9 +28,12 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  BranchInfo,
+  BranchName,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
+  CommitSummary,
   DeliveryFailureClass,
   DocumentPath,
   EntityDocument,
@@ -1372,6 +1375,41 @@ export interface IStorageProvider {
 
   /** Test one live space-scoped entity identifier without loading its value. */
   entityIdExists?(id: string): Promise<boolean | undefined>;
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this provider's session is of)
+   * below `options.before`, and at most `options.limit` of them. Rejects
+   * when the server serves no history.
+   */
+  listHistory?(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]>;
+
+  /** Returns the space's branches, deleted ones included. */
+  listBranches?(): Promise<BranchInfo[]>;
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the
+   * default branch) as of `options.forkSeq` (absent, the parent's head).
+   */
+  createBranch?(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo>;
+
+  /** Deletes the branch `name`, which then takes no further commit. */
+  deleteBranch?(name: BranchName): Promise<void>;
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent,
+   * its head). Returns the restoring commit's seq, or `undefined` when the
+   * default branch already held that state.
+   */
+  restoreBranch?(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined>;
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
   sqliteQuery?(
