@@ -91,6 +91,12 @@ the same way.
 A collection lives at the scope of its space, and holds cells of that space.
 `add()` refuses a cell of another space.
 
+A piece the calling handler has just made is set up as the handler's
+transaction ends, after `add()` has read it. Its row is therefore stored with
+its columns unset, and names none of the documents the piece is made of. The
+runtime re-reads every member a handler added once that handler's transaction
+has committed, which fills the row and records what it was read from.
+
 ### Several kinds of member
 
 A collection that declares several kinds holds them in one database, so that
@@ -265,8 +271,10 @@ This is the difference from `reactOn: db` on an ordinary database, where the
 revision is part of the request and every write to the database rewrites the
 result's control state.
 
-A cell bound as a parameter of such a query is bound as the reference its
-member is stored under, so any link to a member looks it up.
+A cell bound to a named `_cf_link` parameter of such a query is bound as the
+reference its member is stored under, so any link to a member looks it up. A
+cell bound anywhere else, positionally included, is refused as it is for any
+database.
 
 ### Getting the member back
 

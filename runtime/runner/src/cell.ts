@@ -108,6 +108,7 @@ import {
   deleteMemberRows,
   type IndexedCollectionWriter,
   memberKeysOf,
+  type MemberRows,
   projectMember,
 } from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
@@ -2445,7 +2446,7 @@ export class CellImpl<T extends FabricValue>
     this.#registerIndexedCollection([
       bound.getAsNormalizedFullLink().id,
       bound.resolveAsCell().getAsNormalizedFullLink().id,
-    ]);
+    ], rows);
   }
 
   /**
@@ -2465,7 +2466,10 @@ export class CellImpl<T extends FabricValue>
    * fields this transaction has not written yet, and the commit carrying them
    * can reach the maintainer before the member's rows exist to be found.
    */
-  #registerIndexedCollection(members: readonly string[] = []): void {
+  #registerIndexedCollection(
+    members: readonly string[] = [],
+    added?: MemberRows,
+  ): void {
     const handle = this.resolveAsCell().getAsNormalizedFullLink();
     const value: unknown = this.getRaw({ lastNode: "value" });
     if (!isSqliteDbRef(value)) return;
@@ -2473,6 +2477,7 @@ export class CellImpl<T extends FabricValue>
     const maintainer = this.#runtime.indexedCollections;
     const durable = () => {
       maintainer.register(handle, id);
+      if (added !== undefined) maintainer.noteAdded(handle.space, id, added);
       maintainer.noteWrites(handle.space, members);
     };
     this.#tx!.addCommitCallback((settledTx, result) => {
@@ -3912,7 +3917,9 @@ export class CellImpl<T extends FabricValue>
     const got = this.get();
     if (!Array.isArray(got)) {
       // On an indexed collection, `remove()` takes a member out of it, named
-      // as `add()` names one.
+      // as `add()` names one: `ref` is the kind, and `memberOfKind` the
+      // member. The signature a pattern compiles against, which requires
+      // both, is `IndexedCollections.remove()`.
       const collection = this.#indexedCollectionDescriptor();
       const member = asBoundCell(memberOfKind);
       if (collection !== undefined && member !== undefined && this.#tx) {

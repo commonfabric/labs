@@ -49,6 +49,13 @@ interface CollectionState {
   /** Ids of documents written since the last drain started. */
   readonly pending: Set<string>;
 
+  /**
+   * Rows of members a handler added since the last drain started, as `add()`
+   * stored them. The next drain re-reads each without asking the database
+   * for it, which may not answer yet for a row written a moment ago.
+   */
+  readonly added: Map<string, MemberRows>;
+
   /** The drain in flight, if any. */
   draining: Promise<void> | undefined;
 
@@ -152,6 +159,21 @@ export class IndexedCollectionMaintainer {
     // Listing the collection is a write, which a serving runtime commits
     // only from a scheduler run.
     this.#runtime.scheduler.queueEvent(collection.stream, { list: id });
+  }
+
+  /**
+   * Reports that a handler's transaction, now committed, added the member
+   * `rows` describes to the collection with database `id`. The member is
+   * re-read: a piece the handler made is set up as its transaction ends,
+   * after `add()` read it, so the rows stored for it hold nothing yet and
+   * name none of the documents the piece is made of.
+   */
+  noteAdded(space: MemorySpace, id: string, rows: MemberRows): void {
+    if (!this.#enabled || this.#disposed) return;
+    const collection = this.#spaceState(space).collections.get(id);
+    if (collection === undefined) return;
+    collection.added.set(rows.member, rows);
+    this.#schedule(collection);
   }
 
   /**
@@ -273,6 +295,7 @@ export class IndexedCollectionMaintainer {
       handle,
       stream,
       pending: new Set(),
+      added: new Map(),
       draining: undefined,
       reconciled: Promise.resolve(),
       cancel: this.#runtime.scheduler.addEventHandler(
@@ -376,7 +399,10 @@ export class IndexedCollectionMaintainer {
   }
 
   #schedule(collection: CollectionState): void {
-    if (collection.draining !== undefined || collection.pending.size === 0) {
+    if (
+      collection.draining !== undefined ||
+      (collection.pending.size === 0 && collection.added.size === 0)
+    ) {
       return;
     }
     const draining = this.#drain(collection).catch((error) => {
@@ -405,6 +431,8 @@ export class IndexedCollectionMaintainer {
     await collection.reconciled;
     const docs = [...collection.pending];
     collection.pending.clear();
+    const added = [...collection.added.values()];
+    collection.added.clear();
     try {
       const opened = await this.#open(collection);
       const provider = this.#runtime.storageManager.open(
@@ -416,12 +444,19 @@ export class IndexedCollectionMaintainer {
         memberRowsSql(opened.descriptor, AFFECTED_MEMBERS_SQL),
         { docs: JSON.stringify(docs) },
       );
-      await this.#reread(
-        collection,
-        groupMemberRows(opened.descriptor, rows),
-      );
+      const members = groupMemberRows(opened.descriptor, rows);
+      const found = new Set(members.map((member) => member.member));
+      for (const rows of added) {
+        if (!found.has(rows.member)) members.push(rows);
+      }
+      await this.#reread(collection, members);
     } catch (error) {
       for (const doc of docs) collection.pending.add(doc);
+      for (const rows of added) {
+        if (!collection.added.has(rows.member)) {
+          collection.added.set(rows.member, rows);
+        }
+      }
       throw error;
     }
   }
