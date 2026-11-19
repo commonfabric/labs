@@ -669,9 +669,8 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     "SELECT count(*) AS n FROM topics",
   );
   const topicCount = computed<number>(() => counted.result?.[0]?.n ?? 0);
-  const hasNoTopics = computed<boolean>(() =>
-    (counted.result?.[0]?.n ?? 0) === 0
-  );
+  // A count that has not arrived yet is not a count of none.
+  const hasNoTopics = computed<boolean>(() => counted.result?.[0]?.n === 0);
 
   // The cards the board shows, already in order, and the strings each
   // renders, derived in one computation.
