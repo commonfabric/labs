@@ -27,6 +27,12 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [Serving a piece's stored outputs while they are current](stored-output-currency.md)
+  keeps a durable record of which stored outputs a serving loop vouched for
+  and what their pieces read, marks the outputs stale through the store when
+  an input changes, and has the demand pass start a piece only when a demanded
+  output is marked or was never recorded, starting stale producers upstream
+  of a demanded piece as well.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the
