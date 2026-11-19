@@ -428,9 +428,10 @@ async function markResolveAndClick(
   // the resolution its press or click makes (a labelled link resolves again
   // when acted on), or, where it makes none, the one this click's choice
   // recorded, or the target an unlabelled link follows. The helper waits for
-  // the navigation to that destination, so another link finishing a lookup
-  // of its own after this click is not taken for this one, and neither is a
-  // navigation dispatched while the helper revalidates.
+  // a navigation to that whole destination (space, piece, scope and path), so
+  // another link finishing a lookup of its own after this click is not taken
+  // for this one, and neither is a navigation dispatched while the helper
+  // revalidates.
   await page.evaluate(
     (
       targetToken: string,
@@ -443,7 +444,12 @@ async function markResolveAndClick(
           resolveTarget?: (...args: unknown[]) => Promise<unknown>;
         };
         resolutions: Promise<unknown>[];
-        navigations: string[];
+        navigations: {
+          space?: string;
+          id?: string;
+          scope: string;
+          path: string[];
+        }[];
       };
       const scope = globalThis as typeof globalThis & {
         __topicsClicks?: Record<string, ClickRecord>;
@@ -491,11 +497,26 @@ async function markResolveAndClick(
       };
       document.addEventListener("pointerdown", onPointerDown, true);
       document.addEventListener("click", onClick, true);
+      // The whole destination, so a navigation to the same piece id in
+      // another space, scope or path is not taken for this click's.
       globalThis.addEventListener("cf-navigate", (event: Event) => {
         if (!record.clicked) return;
-        record.navigations.push(
-          String((event as CustomEvent<{ pieceId?: unknown }>).detail?.pieceId),
-        );
+        const view = (event as CustomEvent<{
+          spaceDid?: unknown;
+          spaceName?: unknown;
+          pieceId?: unknown;
+          pieceScope?: unknown;
+          piecePath?: unknown;
+        }>).detail ?? {};
+        const space = view.spaceDid ?? view.spaceName;
+        record.navigations.push({
+          space: typeof space === "string" ? space : undefined,
+          id: typeof view.pieceId === "string" ? view.pieceId : undefined,
+          scope: typeof view.pieceScope === "string"
+            ? view.pieceScope
+            : "space",
+          path: Array.isArray(view.piecePath) ? view.piecePath.map(String) : [],
+        });
       });
     },
     { args: [token, CLICK_TARGET_ATTR, LINK_TARGET_ATTR] },
@@ -516,46 +537,110 @@ async function markResolveAndClick(
       }).__topicsClicks?.[targetToken]?.clicked === true,
     { args: [token] },
   );
-  const opened = await page.evaluate(async (targetToken: string) => {
-    type Destination = { id(): string };
-    const record = (globalThis as typeof globalThis & {
-      __topicsClicks: Record<string, {
-        link?: HTMLElement & {
-          label?: string;
-          _resolvedCell?: Destination;
-          resolveTarget?: unknown;
-          __activation?: { token: string; target?: unknown };
+  // The click's lookup is tracked in the page and awaited through
+  // `waitForCondition`, so a lookup that never settles fails the wait's bound
+  // instead of holding the helper past it.
+  let settled: ClickOutcome | undefined;
+  try {
+    settled = await waitForCondition(
+      page,
+      (_probe: ProbeApi, targetToken: string) => {
+        type LinkTarget = {
+          space(): string;
+          id(): string;
+          ref(): { scope?: string; path: readonly unknown[] };
         };
-        resolutions: Promise<unknown>[];
-      }>;
-    }).__topicsClicks[targetToken];
-    // A click handler may start its resolution in the same task as the
-    // click; let it.
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const link = record.link;
-    const target = record.resolutions.length > 0
-      ? await record.resolutions[record.resolutions.length - 1]
-      : link?.label && link.resolveTarget
-      ? (link.__activation?.token === targetToken
-        ? link.__activation.target
-        : undefined)
-      : link?._resolvedCell;
-    return (target as Destination | undefined)?.id();
-  }, { args: [token] });
-  if (opened === undefined) {
+        const record = (globalThis as typeof globalThis & {
+          __topicsClicks: Record<string, {
+            link?: HTMLElement & {
+              label?: string;
+              _resolvedCell?: LinkTarget;
+              resolveTarget?: unknown;
+              __activation?: { token: string; target?: unknown };
+            };
+            resolutions: Promise<unknown>[];
+            settling?: Promise<ClickOutcome>;
+          }>;
+        }).__topicsClicks[targetToken];
+        record.settling ??= (async (): Promise<ClickOutcome> => {
+          // A click handler may start its resolution in the same task as the
+          // click; let it.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          const link = record.link;
+          const target = record.resolutions.length > 0
+            ? await record.resolutions[record.resolutions.length - 1]
+            : link?.label && link.resolveTarget
+            ? (link.__activation?.token === targetToken
+              ? link.__activation.target
+              : undefined)
+            : link?._resolvedCell;
+          const cell = target as LinkTarget | undefined;
+          if (!cell) return { destination: null };
+          const ref = cell.ref();
+          return {
+            destination: {
+              space: cell.space(),
+              id: cell.id(),
+              scope: ref.scope ?? "space",
+              path: ref.path.map(String),
+            },
+          };
+        })().catch((error) => ({ error: String(error) }));
+        return record.settling;
+      },
+      { args: [token] },
+    );
+  } catch (cause) {
+    throw new Error(`${description}: the click's lookup never settled`, {
+      cause,
+    });
+  }
+  if (settled && "error" in settled) {
+    throw new Error(
+      `${description}: the click's lookup failed: ${settled.error}`,
+    );
+  }
+  const opened = settled?.destination;
+  if (!opened) {
     throw new Error(`${description} resolved no destination when clicked`);
   }
-  await waitForCondition(
-    page,
-    (_probe: ProbeApi, targetToken: string, destination: string) =>
-      (globalThis as typeof globalThis & {
-        __topicsClicks?: Record<string, { navigations: string[] }>;
-      }).__topicsClicks?.[targetToken]?.navigations.includes(destination) ===
-        true,
-    { args: [token, opened] },
-  );
-  return opened;
+  try {
+    await waitForCondition(
+      page,
+      (_probe: ProbeApi, targetToken: string, expected: Destination) =>
+        (globalThis as typeof globalThis & {
+          __topicsClicks?: Record<string, { navigations: Destination[] }>;
+        }).__topicsClicks?.[targetToken]?.navigations.some((view) =>
+          view.space === expected.space && view.id === expected.id &&
+          view.scope === expected.scope &&
+          view.path.length === expected.path.length &&
+          view.path.every((key, index) => key === expected.path[index])
+        ) === true,
+      { args: [token, opened] },
+    );
+  } catch (cause) {
+    throw new Error(
+      `${description} never navigated to ${opened.id} in ${opened.space}` +
+        (opened.scope === "space" ? "" : ` (${opened.scope} scope)`) +
+        (opened.path.length === 0 ? "" : ` at /${opened.path.join("/")}`),
+      { cause },
+    );
+  }
+  return opened.id;
 }
+
+/** Where a click navigated to: what a `cf-navigate` names, in full. */
+type Destination = {
+  space: string;
+  id: string;
+  scope: string;
+  path: string[];
+};
+
+/** What the clicked link's lookup settled on. */
+type ClickOutcome =
+  | { destination: Destination | null }
+  | { error: string };
 
 /**
  * Click the cell link named `label`, and return the id of the piece the click

@@ -5,7 +5,11 @@
  * does, and the helper reports that.
  */
 
-import { Browser, type Page } from "@commonfabric/integration";
+import {
+  Browser,
+  type Page,
+  withWaitForConditionTimeout,
+} from "@commonfabric/integration";
 import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
@@ -65,7 +69,14 @@ describe("topics-navigation-helpers", () => {
           button.addEventListener("click", () => {
             clicks.push(identity);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: {
+                  spaceDid: space,
+                  pieceId,
+                  ...(scope === "space" ? {} : { pieceScope: scope }),
+                  ...(path.length === 0 ? {} : { piecePath: [...path] }),
+                },
+              }),
             );
           });
           chipRoot.append(button);
@@ -150,7 +161,9 @@ describe("topics-navigation-helpers", () => {
         button.addEventListener("click", () => {
           clicks.push(pieceId);
           globalThis.dispatchEvent(
-            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            new CustomEvent("cf-navigate", {
+              detail: { spaceDid: "did:key:space", pieceId },
+            }),
           );
         });
         chipRoot.append(button);
@@ -210,7 +223,9 @@ describe("topics-navigation-helpers", () => {
           button.addEventListener("click", () => {
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
           chipRoot.append(button);
@@ -279,7 +294,9 @@ describe("topics-navigation-helpers", () => {
           button.addEventListener("click", () => {
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
           chipRoot.append(button);
@@ -342,7 +359,9 @@ describe("topics-navigation-helpers", () => {
           const pieceId = (link._resolvedCell as { id(): string }).id();
           clicks.push(pieceId);
           globalThis.dispatchEvent(
-            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            new CustomEvent("cf-navigate", {
+              detail: { spaceDid: "did:key:space", pieceId },
+            }),
           );
         });
         chipRoot.append(button);
@@ -400,7 +419,9 @@ describe("topics-navigation-helpers", () => {
           button.addEventListener("click", () => {
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
           chipRoot.append(button);
@@ -472,7 +493,9 @@ describe("topics-navigation-helpers", () => {
             const pieceId = (cell as { id(): string }).id();
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
         });
@@ -537,7 +560,9 @@ describe("topics-navigation-helpers", () => {
           const pieceId = (link._resolvedCell as { id(): string }).id();
           clicks.push(pieceId);
           globalThis.dispatchEvent(
-            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            new CustomEvent("cf-navigate", {
+              detail: { spaceDid: "did:key:space", pieceId },
+            }),
           );
         });
         chipRoot.append(button);
@@ -571,7 +596,10 @@ describe("topics-navigation-helpers", () => {
           () =>
             globalThis.dispatchEvent(
               new CustomEvent("cf-navigate", {
-                detail: { pieceId: "of:fid1:unrelated" },
+                detail: {
+                  spaceDid: "did:key:space",
+                  pieceId: "of:fid1:unrelated",
+                },
               }),
             ),
           2,
@@ -602,7 +630,9 @@ describe("topics-navigation-helpers", () => {
           clearInterval(noise);
           clicks.push(pieceId);
           globalThis.dispatchEvent(
-            new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            new CustomEvent("cf-navigate", {
+              detail: { spaceDid: "did:key:space", pieceId },
+            }),
           );
         });
         chipRoot.append(button);
@@ -661,7 +691,10 @@ describe("topics-navigation-helpers", () => {
             () =>
               globalThis.dispatchEvent(
                 new CustomEvent("cf-navigate", {
-                  detail: { pieceId: "of:fid1:earlier" },
+                  detail: {
+                    spaceDid: "did:key:space",
+                    pieceId: "of:fid1:earlier",
+                  },
                 }),
               ),
             10,
@@ -670,7 +703,9 @@ describe("topics-navigation-helpers", () => {
             const pieceId = (cell as { id(): string }).id();
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
         });
@@ -717,7 +752,9 @@ describe("topics-navigation-helpers", () => {
             const pieceId = link._resolvedCell.id();
             clicks.push(pieceId);
             globalThis.dispatchEvent(
-              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+              new CustomEvent("cf-navigate", {
+                detail: { spaceDid: "did:key:space", pieceId },
+              }),
             );
           });
           chipRoot.append(button);
@@ -763,6 +800,107 @@ describe("topics-navigation-helpers", () => {
       expect(result.retargets).toBe(1);
       expect(returned).toBe("of:fid1:first");
       expect(result.clicks).toEqual([returned]);
+    });
+
+    it("fails within the wait's bound, naming the link, when the click's lookup never settles", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        let clicked = false;
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          _resolvedCell: undefined as unknown,
+          // Resolves while the helper chooses the link; the lookup the click
+          // starts never settles, as a cold one that stalls would not.
+          resolveTarget(): Promise<unknown> {
+            if (clicked) return new Promise(() => {});
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = {
+                  space: () => "did:key:space",
+                  id: () => "of:fid1:stalled",
+                  ref: () => ({ scope: "space", path: [] }),
+                };
+                resolve(link._resolvedCell);
+              }, 5)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        // As a cf-cell-link's click does: resolve again, then navigate there.
+        button.addEventListener("click", () => {
+          clicked = true;
+          void link.resolveTarget();
+        });
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+        });
+      });
+
+      const started = performance.now();
+      await expect(
+        withWaitForConditionTimeout(600, () => clickCellLink(page, "Open")),
+      ).rejects.toThrow(`Cell link "Open": the click's lookup never settled`);
+      // The 600 ms bound, with room for the other waits the helper makes and
+      // the failure report's own read of the page.
+      expect(performance.now() - started).toBeLessThan(10_000);
+    });
+
+    it("does not take a navigation to the same piece in another space for the click's", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const pieceId = "of:fid1:clicked";
+        const link = Object.assign(document.createElement("cf-cell-link"), {
+          label: "Open",
+          _resolvedCell: undefined as unknown,
+          resolveTarget() {
+            return new Promise((resolve) =>
+              setTimeout(() => {
+                link._resolvedCell = {
+                  space: () => "did:key:space",
+                  id: () => pieceId,
+                  ref: () => ({ scope: "space", path: [] }),
+                };
+                resolve(link._resolvedCell);
+              }, 5)
+            );
+          },
+        });
+        const linkRoot = link.attachShadow({ mode: "open" });
+        const chip = document.createElement("cf-chip");
+        const chipRoot = chip.attachShadow({ mode: "open" });
+        const button = document.createElement("button");
+        button.textContent = "Open";
+        // The only navigation goes to the resolved piece's id, but in
+        // another space.
+        button.addEventListener("click", () => {
+          globalThis.dispatchEvent(
+            new CustomEvent("cf-navigate", {
+              detail: { spaceDid: "did:key:elsewhere", pieceId },
+            }),
+          );
+        });
+        chipRoot.append(button);
+        linkRoot.append(chip);
+        document.body.append(link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+        });
+      });
+
+      await expect(
+        withWaitForConditionTimeout(600, () => clickCellLink(page, "Open")),
+      ).rejects.toThrow(
+        `Cell link "Open" never navigated to of:fid1:clicked in did:key:space`,
+      );
     });
   });
 });
