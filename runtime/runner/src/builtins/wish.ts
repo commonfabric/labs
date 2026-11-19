@@ -2661,6 +2661,16 @@ export function wish(
       // error surface lands, and the surface still arrives on the doc's
       // ordinary change notification.
       void commitWishFailureUI(link, message, scopeIdentity)
+        .finally(async () => {
+          // A report can throw before the refused action finishes its
+          // re-runs. Keep its scoped instance coalesced until those settle,
+          // including when the reporting transaction never reached commit.
+          try {
+            await runtime.idle();
+          } finally {
+            wishFailureUIInFlight.delete(inFlightKey);
+          }
+        })
         .catch((surfacingError) => {
           // The surfacing must never become a new unhandled failure itself
           // (e.g. a raw write refused on a doc that never materialized).
@@ -2668,9 +2678,6 @@ export function wish(
             `Can't report "${message}" in the surface it belongs to`,
             surfacingError,
           );
-        })
-        .finally(() => {
-          wishFailureUIInFlight.delete(inFlightKey);
         });
     });
   }
