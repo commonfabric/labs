@@ -1,85 +1,91 @@
 ---
 name: weaver-patterns
-description: Make and change patterns for someone's own Weaver from Claude Code, in plain words, with no git, flags or paths. Use when a person (not a labs developer) says "set me up to make patterns for my Weaver", asks to make, change, undo, share or list their patterns, or is working in a labs clone's my-patterns/ folder. Developers deploying patterns from their own checkout want the cf and pattern-deploy skills instead.
+description: Make and change patterns for someone's own Weaver from Claude Code, in plain words. Use when someone asks to set up or make patterns for their Weaver, or works in a labs clone's my-patterns/ folder. Not for developing patterns in labs itself (pattern-dev, pattern-deploy, cf).
 ---
 
 # Patterns for your Weaver
 
-The person you are helping uses Weaver; they are not developing labs. They
-cloned `commonfabric/labs` only to make patterns. Talk in their words (save,
-undo, share, link), never in flags, DIDs, spaces or paths, and run every command
-yourself. When something fails, say what it means for them in one sentence and
-what you are doing about it.
+The person you are helping uses Weaver; they cloned `commonfabric/labs` only to
+make patterns. Talk in their words (save, undo, share), never in flags, DIDs,
+spaces or paths. Run every command yourself, ask before installing anything, and
+when something fails, say what it means for them in one sentence and what you
+are doing about it.
 
-To write the pattern itself, use the `pattern-dev` skill; this one is only the
-loop around it.
+To write the pattern itself, use `pattern-dev`; this skill is the loop around
+it. `cf <command> --help` is the truth for every command below; check it before
+relying on a detail here.
 
 ## Where things live
 
-- **`my-patterns/`** at the root of the labs clone. Git ignores it, so pulling
-  labs never touches the person's work. One folder per pattern:
-  `my-patterns/<name>/`.
-- **`my-patterns/.claude/settings.json`** holds the person's settings as `env`
-  (`CF_API_URL`, `CF_SPACE`, `CF_IDENTITY`), which Claude Code passes to every
-  command, so `cf` needs no flags. It also lists the labs root `CLAUDE.md` in
-  `claudeMdExcludes`, so a session here does not take on labs' developer
-  instructions. Both only apply to a session started in `my-patterns/`; a
-  session started at the labs root has neither.
+- **`my-patterns/`** at the labs root, ignored by git, so pulling labs never
+  touches it. One folder per pattern, `my-patterns/<name>/`.
+- **Each pattern's piece is found by its slug**, `my-<name>`: the first save
+  creates it with `--slug`, every later command names it with `--cell`. Never
+  ask the person for a piece id.
+- **`my-patterns/.claude/settings.json`** carries `CF_API_URL`, `CF_SPACE` and
+  `CF_IDENTITY` as `env`, so no command needs those flags, and lists labs' own
+  `CLAUDE.md` and `.claude/rules/` in `claudeMdExcludes`, so a session here does
+  not take on labs' developer instructions. Claude Code applies both only to a
+  session started in `my-patterns/`, and only once the person trusts the folder.
+  The values are a copy: the person's loom service is the authority, and setup
+  refreshes them.
 - **`my-patterns/CLAUDE.md`** says what the folder is for.
 
 Both files come from this skill's `templates/`.
 
 ## Setup ("set me up")
 
-Run it again whenever something is missing; each step checks before it changes
-anything, and says in a sentence what it did.
+Safe to run again whenever something is missing or a save does not show up; each
+step checks before it changes anything.
 
-1. **`cf` works.** Deno, then `deno task install-cf` from the labs root. Ask
-   before installing anything.
+1. **`cf` runs.** It needs Deno; then `deno task cf` works from anywhere in the
+   clone, with nothing to install on PATH. `cf` below means that.
 2. **`cf` is the person.** `cf` must deploy as the same identity as their
-   Weaver, or what it makes lands where their Weaver cannot see it and the index
-   counts them twice. Never make a new key (`cf id new` makes a stranger). Their
-   loom service says who they are: `GET /config` on it (`http://127.0.0.1:9900`
-   on a default install; `loom status` names the `local-loom` port) gives
-   `identityDid`, and `homeSpace` gives the space and the host panes mount it
-   from. The key file is the one whose `cf id did <file>` equals `identityDid`;
-   `~/.config/commonfabric/identity.key` is where it usually is. If no file
-   matches, or `homeSpace` is missing, stop and say so plainly; do not guess a
-   host or space, since a piece deployed elsewhere never shows up in their
-   panes.
-3. **The person is in the index.** If a `cf pattern` command reports that this
-   identity has not joined, ask for their invite link, have them paste it into
-   the chat, and pipe it in (`cf index join` reads it from stdin, never from the
-   command line). An identity that already joined through Weaver needs nothing.
+   Weaver, or what it makes lands where Weaver cannot see it and the index
+   counts them twice. Never make a key (`cf id new` makes a stranger). Their
+   loom service says who they are: its `GET /config` gives `identityDid`, and
+   `homeSpace` gives the space and the host their panes mount it from
+   (`loom status` names the service's port, e.g. 9900). The key is the file
+   whose `cf id did <file>` equals `identityDid`, usually
+   `~/.config/commonfabric/identity.key`. If no file matches, or `homeSpace` is
+   missing, stop and say so; never guess a host or a space.
+3. **The person is in the index.** If a `cf pattern` command says this machine
+   has not joined, ask them to copy their invite link (not paste it here, which
+   would keep it in the transcript) and run `pbpaste | deno task cf index join`.
+   A Mac whose loom already joined needs nothing.
 4. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
-   `my-patterns/.claude/settings.json` from `templates/`, filling in the API URL
-   and space from `homeSpace`, the key path, and the absolute path of the labs
-   root `CLAUDE.md`. Keep any other settings already there.
-5. **Hand over.** Tell them to start new pattern sessions in `my-patterns/`. In
-   the Claude desktop app,
-   `claude://code/new?folder=<absolute path of my-patterns>` opens one there.
+   `my-patterns/.claude/settings.json` from `templates/`, keeping any other
+   settings already there.
+5. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
+   accepts Claude Code's prompt to trust that folder.
 
 ## The loop
 
-What exists today, in the person's words. Check `cf <command> --help` before
-relying on a detail here; the CLI is the truth.
+- **save** keeps the person's Weaver up to date and nothing else. Check it
+  compiles first (`cf check <entry>`). First save:
+  `cf piece new <entry> --slug my-<name> --no-index-version`; later saves:
+  `cf piece setsrc --cell my-<name> --no-index-version <entry>`. Without
+  `--no-index-version` every save becomes a version in the index, which floods
+  undo and can be shared on its own. When `setsrc` refuses because the new
+  version does not fit the piece's data, offer a fresh piece or keeping the old
+  version; nothing carries data over yet.
+- **checkpoint** right after the save that finishes something they asked for:
+  `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a private version,
+  the point undo goes back to: one per request, never one per save.
+- **undo**: `cf pattern history <entry>` lists the checkpoints;
+  `cf pattern rollback <entry> <version>` writes one back, then save. It refuses
+  when there are edits no version keeps; ask before forcing it, since forcing
+  loses them.
+- **share**: `cf pattern share <entry>`, anonymous. The privacy check may
+  rewrite it into a general version; tell them what changed.
+  `cf pattern
+  unshare` stops it, though a version already shared stays
+  readable by anyone who has it. Putting their name on it is
+  `cf pattern publish`, only when they ask for that.
+- **list**: `cf pattern history` (all of theirs) and `cf pattern mine` (what
+  they share, and how many people use it).
 
-- **save**: first time, `cf piece new <entry>` into their space; after that,
-  `cf piece setsrc` on the same piece. Never save something that does not
-  compile; fix it first. `setsrc` can refuse when the new version does not fit
-  the piece's data: ask whether to start fresh, keep the old version, or carry
-  the data over.
-- **checkpoint**: when a change they asked for is finished and working,
-  `cf pattern checkpoint <entry>` keeps it as a private version, the point
-  **undo** goes back to. One per thing they asked for, not one per save.
-- **undo**: `cf pattern history <entry>` lists the versions;
-  `cf pattern rollback <entry> <version>` restores one, then save again.
-- **share**: `cf pattern share <entry>`. It runs the index's privacy check and
-  may rewrite the pattern into a general version; tell them what changed and
-  why.
-- **list**: `cf pattern history` (everything of theirs the index keeps) and
-  `cf pattern mine` (what they share, and how many people use it).
-
-Not built yet, so say so rather than improvising: opening a pattern by name into
-a folder, remixing someone else's, opening a save straight into Weaver, beta and
-stable channels, and links.
+When nothing here does what they ask, say it is not built yet rather than
+improvising links, copies or Weaver deep links. Not built yet, e.g.: opening a
+pattern by name, remixing someone else's, putting a save straight onto a loom in
+Weaver, beta and stable channels, links.
