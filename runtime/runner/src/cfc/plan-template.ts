@@ -486,9 +486,9 @@ const dependsOnValue = (template: Template): boolean => {
  * `TemplateInstantiationError` where the inputs do not fit the template.
  */
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
-// The label of a compiled pattern's write is instantiated from its template
-// (§8.9.5.3 of the pull request), behind the experimental option
-// `compiledPatterns`, which defaults off.
+// The label of a compiled pattern's write is instantiated from its template,
+// as the pull request's instantiation pseudocode has it, behind the
+// experimental option `compiledPatterns`, which defaults off.
 export const instantiateTemplate = (
   template: Template,
   inputs: TemplateInputs,
