@@ -477,6 +477,79 @@ CREATE TABLE IF NOT EXISTS scheduler_basis (
 CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
   ON scheduler_basis (branch, entity_space, entity, entity_scope_key);
 
+-- Server-execution v2: the currency index
+-- (docs/specs/server-side-execution/serving-loop.md §3b) — which stored
+-- outputs a serving loop vouched for, and what marks them stale. Ids + seqs
+-- ONLY, overwritten in place per piece; never payloads, never per-run
+-- history. The writer and every reader is currency-index.ts. Rows are never
+-- pushed to subscribers and never read at admission.
+--
+-- One row per recorded piece: the raw id of its result document, its mark
+-- (0 clean, 1 a piece that writes one of its inputs is marked, 2 one of its
+-- own rows is behind or the piece was not vouched for), and the epoch of the
+-- build that recorded it.
+CREATE TABLE IF NOT EXISTS currency_piece (
+  branch TEXT    NOT NULL,
+  piece  TEXT    NOT NULL,
+  mark   INTEGER NOT NULL,
+  epoch  TEXT    NOT NULL,
+  PRIMARY KEY (branch, piece)
+);
+-- The pieces that enclose a recorded piece: a demand for one of theirs is a
+-- demand for it.
+CREATE TABLE IF NOT EXISTS currency_under (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  root   TEXT NOT NULL,
+  PRIMARY KEY (branch, piece, root)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_under_root
+  ON currency_under (branch, root);
+-- What a piece read, by document and not by instance, with the seq the piece
+-- saw the document at. derived = 1 names a document some computation writes,
+-- which a piece is only as current as.
+CREATE TABLE IF NOT EXISTS currency_read (
+  branch       TEXT    NOT NULL,
+  piece        TEXT    NOT NULL,
+  entity_space TEXT    NOT NULL,
+  entity       TEXT    NOT NULL,
+  derived      INTEGER NOT NULL,
+  seq          INTEGER NOT NULL,
+  PRIMARY KEY (branch, piece, entity_space, entity)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_read_entity
+  ON currency_read (branch, entity_space, entity);
+-- What a piece writes: the declared write surface of every computation
+-- registered under it (owned = 0), with the seq the document stood at, and
+-- the cells it owns (owned = 1), which are state a write to is no staleness
+-- of.
+CREATE TABLE IF NOT EXISTS currency_write (
+  branch TEXT    NOT NULL,
+  piece  TEXT    NOT NULL,
+  id     TEXT    NOT NULL,
+  owned  INTEGER NOT NULL,
+  seq    INTEGER NOT NULL,
+  PRIMARY KEY (branch, piece, id)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_write_id
+  ON currency_write (branch, id);
+-- The document instances a piece vouches for: each one a live, clean
+-- computation of it wrote.
+CREATE TABLE IF NOT EXISTS currency_vouch (
+  branch    TEXT NOT NULL,
+  piece     TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  PRIMARY KEY (branch, piece, id, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_vouch_instance
+  ON currency_vouch (branch, id, scope_key);
+-- The seq the marks are complete through.
+CREATE TABLE IF NOT EXISTS currency_cursor (
+  branch TEXT    NOT NULL PRIMARY KEY,
+  seq    INTEGER NOT NULL
+);
+
 -- Server-execution v2: the DURABLE half of the outbox
 -- (docs/specs/server-side-execution/serving-loop.md §5, FP1 RULED
 -- 2026-08-03) — pending cross-space event appends. Rows are written
