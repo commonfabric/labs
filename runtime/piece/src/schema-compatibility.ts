@@ -1064,10 +1064,18 @@ function schemaSubsetIssues(
     // describe the label a write produces rather than the policy the store
     // declares. `keywordValuesEqual` applies that reduction, the same one it
     // applies to an `ifc` nested below a composite keyword.
+    //
+    // One `asCell` change is not a break: a node that declared no cell
+    // becoming a comparable one (`addsOnlyComparableHandle`).
     for (const key of SEMANTIC_EXTENSION_KEYS) {
-      if (!keywordValuesEqual(key, source[key], target[key])) {
-        return [issueAt(path, `${key} changed`)];
+      if (keywordValuesEqual(key, source[key], target[key])) continue;
+      if (
+        key === "asCell" &&
+        addsOnlyComparableHandle(source.asCell, target.asCell)
+      ) {
+        continue;
       }
+      return [issueAt(path, `${key} changed`)];
     }
 
     if (
@@ -2655,6 +2663,34 @@ function valueSchemaType(value: unknown): string | undefined {
   if (Array.isArray(value)) return "array";
   return isPlainObject(value) ? "object" : undefined;
 }
+
+/**
+ * Whether `target`'s `asCell` adds a comparable handle where `source`'s node
+ * declared no cell, and nothing else: one bare `"comparable"`, or its object
+ * spelling carrying no scope.
+ *
+ * `comparable` says how a reader receives the value at the node — as a
+ * reference it can compare with `equals` and track — not what is stored there
+ * or what the node accepts, and a comparable handle writes nothing, so every
+ * value the node held reads under it. It is the read-side projection that
+ * `proveRebuiltContracts` (`ops/piece-controller.ts`) already lets a plain
+ * source serve. The other kinds stay compared exactly: a writable `cell` adds
+ * a write-back the proof has to hold the source to, `stream` and `opaque`
+ * change what a reader can do with the value, and a scope changes which
+ * instance it reads.
+ */
+const addsOnlyComparableHandle = (
+  source: unknown,
+  target: unknown,
+): boolean => {
+  if (source !== undefined || !Array.isArray(target) || target.length !== 1) {
+    return false;
+  }
+  const [entry] = target;
+  return entry === "comparable" ||
+    (isPlainObject(entry) && Object.keys(entry).length === 1 &&
+      entry.kind === "comparable");
+};
 
 /**
  * Whether one keyword says the same thing on both sides.

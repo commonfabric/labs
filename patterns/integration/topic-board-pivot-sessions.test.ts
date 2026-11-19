@@ -521,3 +521,89 @@ describe("topic-board-pivot-sessions", () => {
     ).toEqual({ "1": ["Alpha"], "2": ["Beta"] });
   });
 });
+
+/**
+ * What a session that reads one topic's input loads of the other topics. The
+ * pivot's rows reach every topic, so a read that followed a row's references
+ * would load every topic's piece: with the rows declared `unknown`, a fresh
+ * session reading one topic's input held all four. `cf piece call` and
+ * `cf piece step` read a topic's input this way, under the argument schema
+ * its piece links it with.
+ */
+describe("topic-board-pivot-reads", () => {
+  let server: ReturnType<typeof newLoopbackServer>;
+  let opened: Session[];
+
+  beforeEach(() => {
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    opened = [];
+  });
+  afterEach(async () => {
+    for (const { runtime, storage } of opened) {
+      await runtime.dispose();
+      await storage.close();
+    }
+    await server.close();
+  });
+
+  const openSession = async (): Promise<Session> => {
+    const session = await openSessionOn(server);
+    opened.push(session);
+    return session;
+  };
+
+  /**
+   * A board on the current source holding four topics, Beta mentioning Alpha
+   * and Delta mentioning Gamma, with its pivot and index computed.
+   */
+  const boardOfFour = async () => {
+    const writer = await openSession();
+    const board = await writer.pieces.create(
+      await currentSource(writer.runtime),
+      { input: {} },
+    );
+    await writer.runtime.idle();
+    const result = board.getCell() as Cell<Record<string, unknown>>;
+    for (const title of ["Alpha", "Beta", "Gamma", "Delta"]) {
+      await result.key("addTopic").pull();
+      result.key("addTopic").send({ title, agentName: "Fixture" });
+      await writer.runtime.idle();
+    }
+    const [alpha, beta, gamma, delta] = result.asSchema(TOPIC_CELLS).key(
+      "topics",
+    ).get() as unknown as Cell<Record<string, unknown>>[];
+    for (const [source, target] of [[beta, alpha], [delta, gamma]]) {
+      await source.key("mention").pull();
+      source.key("mention").send({ topic: target });
+      await writer.runtime.idle();
+    }
+    await result.key("crossrefs").pull();
+    await result.key("crossrefIndex").pull();
+    await writer.runtime.idle();
+    await writer.pieces.synced();
+    return { writer, alpha, beta, gamma, delta };
+  };
+
+  /** Which of `topics`' pieces `session` holds a document for. */
+  const piecesHeld = (session: Session, topics: Cell<unknown>[]) => {
+    // Without reading through to the server, as `getDocument` does on a miss.
+    const replica = session.runtime.storageManager.open(space)
+      .replica as unknown as { confirmedDocumentSeq(id: string): number };
+    return topics.filter((topic) =>
+      replica.confirmedDocumentSeq(`of:${pieceId(topic)!}`) > 0
+    ).map((topic) => (topic.get() as Titled).title);
+  };
+
+  it("reads a topic's input without loading another topic's piece", async () => {
+    const { alpha, beta, gamma, delta } = await boardOfFour();
+    const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
+    if (argument === undefined) throw new Error("Alpha has no argument link");
+
+    const reader = await openSession();
+    const input = reader.runtime.getCellFromLink<unknown>(argument);
+    await input.sync();
+    await reader.runtime.storageManager.synced();
+
+    expect(piecesHeld(reader, [beta, gamma, delta])).toEqual([]);
+  });
+});

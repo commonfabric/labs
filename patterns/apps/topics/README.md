@@ -266,8 +266,10 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   comparison is of a field nested inside a row, and what lets it is that row's
   declaration — the field is declared a `ComparableCell`, the annotation that
   makes it arrive as something `equals` can follow rather than a value to look
-  at. The published row declares both sides `unknown` instead, so a consumer
-  that only carries the graph onward expands neither.
+  at. The published row declares both sides the same way, so a consumer that
+  only carries the graph onward expands neither: a query walks through a link it
+  reaches under `unknown`, which put every Topic's piece document in each
+  Topic's input sync while the row declared `unknown`.
 
   The pivot works over the board's distinct topics, with distinctness decided by
   the same `equals`: a topic the board lists at two entries, whether as the same
