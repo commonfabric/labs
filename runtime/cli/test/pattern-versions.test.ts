@@ -316,6 +316,72 @@ describe("pattern-versions", () => {
       expect(Object.hasOwn(published[0], "remixedFrom")).toBe(false);
     });
 
+    it("records an agent's deploy as agent work in the history of the piece it was deployed to", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      const outcome = await recordDeployedVersion(
+        deployed({
+          madeBy: "agent",
+          description: "Plans who brings what to the lunch.",
+        }),
+        deps,
+      );
+
+      expect(outcome.status).toBe("recorded");
+      const request = published[0];
+      const piece = deployedPieceRef("did:key:z6Mkspace", "fid1:piece");
+      expect(request.origin).toBe("agent");
+      expect(request.slot).toBe(piece);
+      expect(request.deployedTo).toBe(piece);
+      expect(request.description).toBe("Plans who brings what to the lunch.");
+      expect(request.hashtags).toEqual([]);
+    });
+
+    it("keeps the person's own deploy under its entry file and its own origin", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(deployed(), deps);
+
+      expect(published[0].origin).toBe("self");
+      expect(published[0].slot).not.toBe(
+        deployedPieceRef("did:key:z6Mkspace", "fid1:piece"),
+      );
+    });
+
+    it("credits the pattern a deploy says its source was built from as a remix", async () => {
+      await joinIndex();
+      const { client, published } = stubClient({
+        patterns: { "pat-theirs": { patternId: "pat-theirs", mine: false } },
+      });
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(
+        deployed({ madeBy: "agent", builtFrom: "pat-theirs" }),
+        deps,
+      );
+
+      expect(published[0].remixedFrom).toBe("pat-theirs");
+    });
+
+    it("credits nothing when the pattern a deploy was built from is the person's own", async () => {
+      await joinIndex();
+      const { client, published } = stubClient({
+        patterns: { "pat-mine": { patternId: "pat-mine", mine: true } },
+      });
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(
+        deployed({ madeBy: "agent", builtFrom: "pat-mine" }),
+        deps,
+      );
+
+      expect(Object.hasOwn(published[0], "remixedFrom")).toBe(false);
+    });
+
     it("answers an unreachable index as an outcome rather than throwing", async () => {
       await joinIndex();
       const { client } = stubClient({
@@ -632,6 +698,63 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
 
       await expect(run({ versionEntry: original, indexVersion: false }))
         .rejects.toThrow(/--version-entry/);
+      expect(recorded).toHaveLength(2);
+    });
+
+    it("hands the version recorder who made the source, its description and what it was built from, and refuses them where they cannot apply", async () => {
+      const recorded: DeployedSource[] = [];
+      const run = (more: Record<string, unknown>) =>
+        applyPieceSourceCommandAction(
+          {
+            identity: "/unused/test.key",
+            space: "s",
+            apiUrl: "https://cf.dev",
+            ...more,
+          },
+          entry,
+          {
+            setPieceSourceFromCommand: (_options, _main, deps) => {
+              deps?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
+              });
+              return Promise.resolve({
+                config: { piece: "fid1:p" },
+                update: {
+                  ref: { identity: "pat-1", symbol: "default" },
+                  revisionId: "rev-1",
+                  seq: 7,
+                  refresh: { status: "completed" },
+                },
+              } as never);
+            },
+            recordVersion: (deployed) => {
+              recorded.push(deployed);
+              return Promise.resolve({ status: "skipped", reason: "test" });
+            },
+            render: () => {},
+            warn: () => {},
+            hint: () => {},
+          },
+        );
+
+      await run({
+        madeBy: "agent",
+        versionDescription: " Plans the lunch. ",
+        builtFrom: "pat-theirs",
+      });
+      await run({});
+      expect(recorded.map((d) => [d.madeBy, d.description, d.builtFrom]))
+        .toEqual([
+          ["agent", "Plans the lunch.", "pat-theirs"],
+          [undefined, undefined, undefined],
+        ]);
+
+      await expect(run({ madeBy: "person" })).rejects.toThrow(/--made-by/);
+      await expect(run({ builtFrom: "" })).rejects.toThrow(/non-empty/);
+      await expect(run({ madeBy: "agent", indexVersion: false }))
+        .rejects.toThrow(/--no-index-version/);
       expect(recorded).toHaveLength(2);
     });
 

@@ -1501,6 +1501,15 @@ const VERSION_ENTRY_HELP =
 const NO_INDEX_VERSION_HELP =
   "Keep no version of this deploy in the pattern index, and do not wait on it.";
 
+const MADE_BY_HELP =
+  "Who wrote the source: `agent` for an agent deploying for the person. Its version is kept as agent work, in the history of the piece it is deployed to.";
+
+const VERSION_DESCRIPTION_HELP =
+  "What the kept version says the pattern does, in place of the entry's doc comment.";
+
+const BUILT_FROM_HELP =
+  "The index pattern the source was built from: credited as a remix when it is someone else's.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2551,6 +2560,9 @@ export const piece = targetOptions(
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
+  .option("--made-by <who:string>", MADE_BY_HELP)
+  .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
+  .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2715,6 +2727,9 @@ export const piece = targetOptions(
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
+  .option("--made-by <who:string>", MADE_BY_HELP)
+  .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
+  .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3624,6 +3639,15 @@ export interface PieceCLIOptions {
    * continues, in place of the file deployed.
    */
   versionEntry?: string;
+
+  /** `setsrc` and `new`: who wrote the source (`agent`), for its version. */
+  madeBy?: string;
+
+  /** `setsrc` and `new`: what the kept version says the pattern does. */
+  versionDescription?: string;
+
+  /** `setsrc` and `new`: the index pattern the source was built from. */
+  builtFrom?: string;
   json?: boolean;
 }
 
@@ -5325,6 +5349,52 @@ function versionEntryOf(
 }
 
 /**
+ * What `--made-by`, `--version-description` and `--built-from` say about the
+ * version a deploy keeps.
+ *
+ * @throws ValidationError for a `--made-by` other than `agent`, an empty
+ * value, or any of them beside `--no-index-version`, which keeps no version
+ * for them to describe.
+ */
+function versionFactsOf(
+  options: Pick<
+    PieceCLIOptions,
+    "indexVersion" | "madeBy" | "versionDescription" | "builtFrom"
+  >,
+): Pick<DeployedSource, "madeBy" | "description" | "builtFrom"> {
+  const { madeBy, versionDescription, builtFrom } = options;
+  if (
+    madeBy === undefined && versionDescription === undefined &&
+    builtFrom === undefined
+  ) return {};
+  if (options.indexVersion === false) {
+    throw new ValidationError(
+      "--made-by, --version-description and --built-from describe the version a deploy keeps; --no-index-version keeps none.",
+      { exitCode: 1 },
+    );
+  }
+  if (madeBy !== undefined && madeBy !== "agent") {
+    throw new ValidationError(
+      `--made-by takes \`agent\`, not "${madeBy}"; leave it out for your own source.`,
+      { exitCode: 1 },
+    );
+  }
+  const description = versionDescription?.trim();
+  const from = builtFrom?.trim();
+  if (description === "" || from === "") {
+    throw new ValidationError(
+      "--version-description and --built-from take a non-empty value.",
+      { exitCode: 1 },
+    );
+  }
+  return {
+    ...(madeBy === undefined ? {} : { madeBy }),
+    ...(description === undefined ? {} : { description }),
+    ...(from === undefined ? {} : { builtFrom: from }),
+  };
+}
+
+/**
  * Records no version, for `--no-index-version`: a deploy in a tight edit
  * loop makes no index call and never waits on the index.
  */
@@ -5344,6 +5414,7 @@ function versionRecorder(
   entry: string,
   origin: string | undefined,
   print: (line: string) => void,
+  facts: Pick<DeployedSource, "madeBy" | "description" | "builtFrom"> = {},
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
   settle: () => Promise<VersionOutcome | undefined>;
@@ -5354,6 +5425,7 @@ function versionRecorder(
       pending = record({
         entry,
         ...deployed,
+        ...facts,
         ...(origin === undefined ? {} : { origin }),
       });
     },
@@ -5511,6 +5583,7 @@ export async function newPieceFromCommand(
     versionEntryOf(options, main),
     undefined,
     deps.note ?? note,
+    versionFactsOf(options),
   );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
@@ -5905,6 +5978,7 @@ export async function applyPieceSourceCommandAction(
     versionEntryOf(options, mainPath),
     options.origin,
     deps.warn ?? note,
+    versionFactsOf(options),
   );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand
