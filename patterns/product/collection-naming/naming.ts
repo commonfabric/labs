@@ -34,6 +34,7 @@ import {
   equals,
   lift,
   type ReadonlyCell,
+  type Stream,
   Writable,
 } from "commonfabric";
 
@@ -260,6 +261,15 @@ export function backfillNames(
 }
 
 /**
+ * What `recordNames()` reads of a member: the name it reports, and the verb
+ * that asks it to store one.
+ */
+export interface RecordNameMember {
+  shortName?: string;
+  recordName?: Stream<{ name: string }>;
+}
+
+/**
  * What one `recordNames()` run reports, as three lists of names in filing
  * order. Together they cover every listed member the run could name, which is
  * every position holding an object: a position holding anything else is in none
@@ -341,19 +351,17 @@ export interface RecordNamesResult {
  * and the key writes are one transaction, so a create that lands while this
  * runs serializes with it rather than colliding on a name.
  */
-export function recordNames(
-  members: {
-    // The stored values, for each member's own report of its name, and the
-    // position's cell, for the verb this sends to. The verb is named
-    // structurally because no collection's member type is in scope here.
-    get(): readonly ({ shortName?: string } | undefined)[];
-    key(index: number): {
-      resolveAsCell(): {
-        key(verb: "recordName"): { send(event: { name: string }): void };
-      };
-    };
-  },
-  names: NamesMapCell,
+export function recordNames<
+  A extends readonly (RecordNameMember | undefined)[],
+>(
+  // The stored values, for each member's own report of its name, and the
+  // position's cell, for the verb this sends to. Generic over the
+  // collection's array, whose member type is not in scope here: a cell of a
+  // view of it, `ReadonlyCell<readonly (RecordNameMember | undefined)[]>`,
+  // is what the compiled pattern language would take, and a `ReadonlyCell`
+  // declares no `resolveAsCell()`, which finds the member's own cell.
+  members: Writable<A>,
+  names: Writable<NamesMap>,
 ): RecordNamesResult {
   const map = names.get() ?? {};
   // Every name the namespace holds, to the member it names. A key outside the

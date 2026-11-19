@@ -39,27 +39,28 @@ export interface MentionableRow {
   piece: unknown;
 }
 
+/** What a collection's mention universe reads of a member. */
+export interface MentionableMember {
+  [NAME]?: string | Default<"">;
+  title: string | Default<"">;
+  shortName?: string;
+}
+
 /**
  * Each member's universe row, read once per member. A member whose own
  * `shortName` has produced no value carries the empty name, which is a row no
  * `#42` query matches.
  *
- * Declared structurally, and that is what makes the mid-sync guard a
- * compile-checked read: `get()` on a `ReadonlyCell` is declared to return a
- * value rather than `T | undefined`, so against a cell type omitting the guard
- * type-checks exactly as well as including it. A member with nothing behind it
- * yet — one appended a moment ago, still mid-sync — reads as `undefined` here
- * and gets no row rather than a junk one; the row appears on the next run.
+ * Each cell is declared `ReadonlyCell<MentionableMember | undefined>`, and
+ * that is what makes the mid-sync guard a compile-checked read: its `get()`
+ * returns the value or `undefined`, where `get()` of a cell of the value alone
+ * is declared to return a value, against which omitting the guard type-checks
+ * exactly as well as including it. A member with nothing behind it yet — one
+ * appended a moment ago, still mid-sync — reads as `undefined` here and gets
+ * no row rather than a junk one; the row appears on the next run.
  */
 export function mentionableRowsOf(
-  members: readonly (
-    | {
-      get():
-        | { [NAME]?: string; title?: string; shortName?: string }
-        | undefined;
-    }
-    | undefined
-  )[],
+  members: readonly (ReadonlyCell<MentionableMember | undefined> | undefined)[],
 ): MentionableRow[] {
   const rows: MentionableRow[] = [];
   for (const member of members) {
@@ -106,13 +107,7 @@ export function mentionableRowsOf(
 export const mentionableIndex = lift(
   (
     { members }: {
-      members:
-        | ReadonlyCell<{
-          [NAME]?: string | Default<"">;
-          title: string | Default<"">;
-          shortName?: string;
-        }>[]
-        | Default<[]>;
+      members: ReadonlyCell<MentionableMember>[] | Default<[]>;
     },
   ): MentionableRow[] =>
     // A plain array, read once per member: an element read through the

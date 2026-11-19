@@ -56,7 +56,9 @@ export default pattern(() => {
     topicStateVersion: version,
     createdByName: "Legacy creator",
     createdBy: creator,
+    creatorRead: creator,
     comments,
+    commentsRead: comments,
     commentCount: new Writable(0),
     lastActivityAt: new Writable(0),
     links,
@@ -208,7 +210,9 @@ export default pattern(() => {
       topicStateVersion: oldVersion,
       createdByName: "Old creator",
       createdBy: oldCreator,
+      creatorRead: oldCreator,
       comments: oldComments,
+      commentsRead: oldComments,
       commentCount: new Writable(0),
       lastActivityAt: new Writable(0),
       links: new Writable<TopicLink[]>([]),
@@ -241,6 +245,14 @@ export default pattern(() => {
     kind: "legacy",
   });
   const deferredTitle = new Writable("Before");
+  // A handler leaves an empty thread's author step to the lift, so the
+  // thread holds one comment whose author is already complete.
+  const deferredComments = new Writable<LegacyComment[]>([{
+    authorName: "Commenter",
+    author: { name: "Commenter", kind: "person" },
+    body: "Settled",
+    sentAt: 1,
+  }]);
   const saveWithIncompleteUpgrade = saveProfileTitle({
     ...browserState,
     title: deferredTitle,
@@ -249,14 +261,9 @@ export default pattern(() => {
       topicStateVersion: deferredVersion,
       createdByName: deferredName,
       createdBy: deferredCreator,
-      // A handler leaves an empty thread's author step to the lift, so the
-      // thread holds one comment whose author is already complete.
-      comments: new Writable<LegacyComment[]>([{
-        authorName: "Commenter",
-        author: { name: "Commenter", kind: "person" },
-        body: "Settled",
-        sentAt: 1,
-      }]),
+      creatorRead: deferredCreator,
+      comments: deferredComments,
+      commentsRead: deferredComments,
       commentCount: new Writable(0),
       lastActivityAt: new Writable(0),
       links: new Writable<TopicLink[]>([]),
