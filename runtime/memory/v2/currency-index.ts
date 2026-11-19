@@ -128,6 +128,14 @@ export type CurrencyStored = {
    * `1`, which a loop that runs them records next.
    */
   blockedBy: string[];
+
+  /**
+   * The vouched-for pieces of the batch stored marked `2`, because a commit
+   * above `asOf` that the batch does not name as seen wrote a document of
+   * theirs. A record of one taken at a later quiescent point covers that
+   * commit.
+   */
+  behind: string[];
 };
 
 /** One piece's row, for a caller that inspects the index. */
@@ -499,7 +507,12 @@ export const storeCurrencyRecords = (
   const context = contextFor(engine, batch.space);
   const { branch, statements } = context;
   const seen = new Set(batch.seen);
-  const result: CurrencyStored = { marked: [], falseClean: [], blockedBy: [] };
+  const result: CurrencyStored = {
+    marked: [],
+    falseClean: [],
+    blockedBy: [],
+    behind: [],
+  };
 
   /** The seq a row for `id` takes, and whether that leaves it behind. */
   const standing = new Map<string, { seq: number; behind: boolean }>();
@@ -623,6 +636,7 @@ export const storeCurrencyRecords = (
       for (const { id, scopeKey } of record.vouches) {
         statements.insertVouch.run({ branch, piece, id, scope_key: scopeKey });
       }
+      if (behind && record.vouched) result.behind.push(piece);
       statements.upsertPiece.run({
         branch,
         piece,

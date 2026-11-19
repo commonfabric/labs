@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { selectCurrencyPiece } from "@commonfabric/memory/v2/currency-index";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -45,8 +46,38 @@ const TRIPLER_PROGRAM: RuntimeProgram = {
   }],
 };
 
-/** One demanded document: a watch root, or a document a selector reaches. */
-type Demanded = { link: NormalizedFullLink; root: boolean };
+// A piece that owns a per-session cell with a default, as a draft a viewer
+// types into is.
+const DRAFT_PROGRAM: RuntimeProgram = {
+  main: "/main.tsx",
+  files: [{
+    name: "/main.tsx",
+    contents: [
+      "import { computed, pattern, Writable } from 'commonfabric';",
+      "interface Draft { title: string; members: string }",
+      "const EMPTY_DRAFT: Draft = { title: '', members: '' };",
+      "export default pattern<",
+      "  { n?: number },",
+      "  { draft: Writable<Draft>; echo: string }",
+      ">(() => {",
+      "  const draft = new Writable.perSession<Draft>(EMPTY_DRAFT);",
+      "  return { draft, echo: computed(() => 'echo:' + draft.get().title) };",
+      "});",
+    ].join("\n"),
+  }],
+};
+
+/**
+ * One demanded document: a watch root, or a document a selector reaches, at
+ * the space's instance unless `scopeKey` names another, demanded by the
+ * session `viewer` of alice unless `session` names another of hers.
+ */
+type Demanded = {
+  link: NormalizedFullLink;
+  root: boolean;
+  scopeKey?: ScopeKey;
+  session?: string;
+};
 
 describe("SpaceServer", () => {
   let server: MemoryV2Server.Server;
@@ -84,12 +115,15 @@ describe("SpaceServer", () => {
     // demands them.
     (server as { demandForSpace: unknown }).demandForSpace = () =>
       sessionDemandOf(
-        demanded.map(({ link, root }) => ({
+        demanded.map(({ link, root, scopeKey, session }) => ({
           id: link.id,
-          scope: "space" as const,
-          scopeKey: "space" as const,
+          scope: link.scope ?? "space",
+          scopeKey: scopeKey ?? "space",
           root,
-          identity: { principal: aliceSigner.did(), sessionId: "viewer" },
+          identity: {
+            principal: aliceSigner.did(),
+            sessionId: session ?? "viewer",
+          },
         })),
       );
   });
@@ -158,7 +192,7 @@ describe("SpaceServer", () => {
 
   /** Resolves once the serving loop is at rest with its records stored. */
   const settled = async () => {
-    await host!.spaceServer(space)!.whenQuiescent();
+    await host!.whenQuiescent();
   };
 
   /**
@@ -418,6 +452,81 @@ describe("SpaceServer", () => {
 
         expect(host.stats().currency.rearmed).toBe(1);
         await outIs(15);
+      });
+
+      it("starts a recorded piece, and seeds the session, when a session demands an owned cell it holds no instance of, under `skip`", async () => {
+        host = newHost("skip");
+        const setup = openRuntime(setupSigner);
+        const compiled = await setup.patternManager.compilePattern(
+          DRAFT_PROGRAM,
+          { space },
+        );
+        const argument = setup.getCell<{ n?: number }>(
+          space,
+          "currency draft argument",
+          compiled.argumentSchema,
+        );
+        const result = setup.getCell<{ echo: string }>(
+          space,
+          "currency draft result",
+          compiled.resultSchema,
+        );
+        const tx = setup.edit();
+        argument.withTx(tx).set({ n: 1 });
+        setup.run(tx, compiled, argument, result);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await result.pull();
+        const root = result.getAsNormalizedFullLink();
+        const draft = {
+          ...result.key("draft" as never).resolveAsCell()
+            .getAsNormalizedFullLink(),
+          path: [],
+        } as NormalizedFullLink;
+        setup.runner.stop(result);
+        await setup.idle();
+        await setup.storageManager.synced();
+        await closeLastRuntime();
+        const sessionKey = (session: string) =>
+          resolveScopeKey("session", {
+            principal: aliceSigner.did(),
+            sessionId: session,
+          });
+        const first = [
+          { link: root, root: true },
+          { link: draft, root: false, scopeKey: sessionKey("viewer") },
+        ];
+        await demand(...first);
+        await awaitEach(
+          cycles,
+          () => serves(root) && host!.stats().demand.ownedDefaultSeeds > 0,
+        );
+        await settled();
+        await host.spaceServer(space)!.park("test-park");
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore === 1,
+        );
+        expect(serves(root)).toBe(false);
+        const seeds = host.stats().demand.ownedDefaultSeeds;
+
+        await demand(
+          ...first,
+          { link: root, root: true, session: "second" },
+          {
+            link: draft,
+            root: false,
+            scopeKey: sessionKey("second"),
+            session: "second",
+          },
+        );
+
+        await awaitEach(
+          cycles,
+          () => host!.stats().demand.ownedDefaultSeeds > seeds,
+        );
+        expect(serves(root)).toBe(true);
+        expect(host.stats().currency.rearmed).toBe(1);
       });
 
       it("starts a recorded piece when a session demands an output it never vouched for, under `skip`", async () => {

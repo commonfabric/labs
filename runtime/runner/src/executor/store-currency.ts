@@ -53,6 +53,7 @@ export class StoreCurrency {
   readonly #epoch: string;
   readonly #serviceIdentity: string;
   readonly #stats: ServingLoopStats;
+  readonly #onOwed: () => void;
 
   /** The pieces a later snapshot covers whether or not they change again. */
   readonly #owed = new Set<string>();
@@ -69,9 +70,14 @@ export class StoreCurrency {
   /** Settles once every record handed to `store()` so far has been stored. */
   #stored: Promise<void> = Promise.resolve();
 
+  /** How many calls of `store()` have records still on their way. */
+  #storing = 0;
+
   /**
    * Constructs an instance for the tenure serving `space`, whose records are
-   * stored and whose roots are judged by `server`.
+   * stored and whose roots are judged by `server`. `onOwed` is called when a
+   * stored record leaves a piece owed another snapshot, which only a further
+   * cycle of the loop takes.
    */
   constructor(options: {
     space: MemorySpace;
@@ -80,6 +86,7 @@ export class StoreCurrency {
     epoch: string;
     serviceIdentity: string;
     stats: ServingLoopStats;
+    onOwed: () => void;
   }) {
     this.#space = options.space;
     this.#server = options.server;
@@ -87,11 +94,17 @@ export class StoreCurrency {
     this.#epoch = options.epoch;
     this.#serviceIdentity = options.serviceIdentity;
     this.#stats = options.stats;
+    this.#onOwed = options.onOwed;
   }
 
   /** Settles once every record handed to `store()` so far has been stored. */
   get stored(): Promise<void> {
     return this.#stored;
+  }
+
+  /** Whether records handed to `store()` are still on their way. */
+  get storing(): boolean {
+    return this.#storing > 0;
   }
 
   /** Whether any root is left unloaded on a judgment. */
@@ -154,6 +167,7 @@ export class StoreCurrency {
     const seen = waveSeq === undefined
       ? snapshot.seen
       : [...snapshot.seen, waveSeq];
+    this.#storing += 1;
     this.#stored = this.#stored.then(async () => {
       for (
         let at = 0;
@@ -177,8 +191,13 @@ export class StoreCurrency {
           ]);
         }
         // A piece that keeps one of these marked is recorded next, so that
-        // a producer running here clears what reads it.
-        for (const piece of stored.blockedBy) this.#owed.add(piece);
+        // a producer running here clears what reads it. So is a piece a
+        // commit this settle had not covered left marked: the serving
+        // runtime can hold a frame above the settle's visible input head,
+        // and the next settle covers it.
+        const owed = [...stored.blockedBy, ...stored.behind];
+        for (const piece of owed) this.#owed.add(piece);
+        if (owed.length > 0) this.#onOwed();
         if (stored.marked.length > 0) this.#judgmentOwed = true;
       }
     }).catch((error) => {
@@ -186,6 +205,8 @@ export class StoreCurrency {
         `space ${this.#space}: storing currency records failed`,
         error,
       ]);
+    }).finally(() => {
+      this.#storing -= 1;
     });
   }
 

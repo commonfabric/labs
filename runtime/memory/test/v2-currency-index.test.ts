@@ -250,6 +250,18 @@ describe("currency-index", () => {
       expect(markOf("of:piece")).toBe(2);
     });
 
+    it("names as behind a vouched-for piece it stored marked for a commit above `asOf`, and not one that is not vouched for", () => {
+      const asOf = write("of:a");
+      write("of:a");
+
+      const stored = store(asOf, [
+        record("of:piece", { reads: [input("of:a")] }),
+        record("of:other", { vouched: false, reads: [input("of:a")] }),
+      ]);
+
+      expect(stored.behind).toEqual(["of:piece"]);
+    });
+
     it("stores clean a record whose only commits above `asOf` are ones it saw", () => {
       const asOf = write("of:a");
       const own = write("computed:out");

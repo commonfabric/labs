@@ -99,7 +99,9 @@ When a record is stored, each read and write row takes the document's head
 sequence number if every revision above `as_of` is one the record names as
 seen, and `as_of` otherwise. A row behind its document's head marks the piece
 `2` then and there, so a commit that landed between the snapshot and the
-store is never lost.
+store is never lost. The serving runtime can already hold a commit above the
+settle's visible input head, so a piece stored marked this way is snapshotted
+again by the loop's next cycle, whose settle covers that commit.
 
 A cursor names the sequence number the marks are complete through. Advancing
 it reads the revisions above it (`idx_revision_branch`) and marks `2` every
@@ -264,8 +266,8 @@ For the index, in `runtime/memory/test/`:
    it.
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
-runtimes over `EmulatedStorageManager`. Tests 9 to 13 and 15 exist in
-`space-server-currency.test.ts`; 14 and 16 are still to write:
+runtimes over `EmulatedStorageManager`. Tests 9 to 15 exist in
+`space-server-currency.test.ts`; 16 is still to write:
 
 9. With the index off, nothing is recorded and every start happens as today.
 10. In `record` mode a piece that settles is recorded clean, the next

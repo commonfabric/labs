@@ -1284,6 +1284,11 @@ export class SpaceServer implements TransactionSealDestination {
    * the index (`SpaceServerPolicy.currencyIndex`). */
   #currency: StoreCurrency | undefined;
 
+  /** Wake latch: a stored currency record left a piece owed another
+   * snapshot, which the next cycle's settle takes. Consumed by the next
+   * `#waitForInput()`. */
+  #pendingCurrencyWake = false;
+
   /** Level-converted demand wake (stage B): a session's watch set
    * changed (or a session opened); consumed by the next #waitForInput. */
   #pendingDemandWake = false;
@@ -2251,6 +2256,10 @@ export class SpaceServer implements TransactionSealDestination {
         epoch: this.#options.policy?.currencyEpoch ?? "",
         serviceIdentity: this.#options.serviceIdentity,
         stats: this.#options.stats,
+        onOwed: () => {
+          this.#pendingCurrencyWake = true;
+          this.#feedArrived?.resolve();
+        },
       });
     }
 
@@ -2828,7 +2837,9 @@ export class SpaceServer implements TransactionSealDestination {
     const runtime = this.#runtime;
     return runtime !== undefined && this.#atRest() &&
       runtime.scheduler.isIdleWithPendingCommits() &&
-      !runtime.hasAsyncWorkPending && (this.#outbox?.inflightCount ?? 0) === 0;
+      !runtime.hasAsyncWorkPending &&
+      (this.#outbox?.inflightCount ?? 0) === 0 &&
+      this.#currency?.storing !== true && !this.#pendingCurrencyWake;
   }
 
   /**
@@ -4489,6 +4500,10 @@ export class SpaceServer implements TransactionSealDestination {
       // started as its settle ended at the deadline, which the next settle
       // joins.
       this.#pendingStructureRetryWake = false;
+      return;
+    }
+    if (this.#pendingCurrencyWake) {
+      this.#pendingCurrencyWake = false;
       return;
     }
     if (this.#pendingShadowFlipWake) {
@@ -8785,6 +8800,7 @@ export class SpaceServer implements TransactionSealDestination {
   #nothingOwed(): boolean {
     return this.#demandNoteGeneration === this.#passDemandNoteGen &&
       !this.#pendingDemandWake && !this.#pendingStructureRetryWake &&
+      !this.#pendingCurrencyWake &&
       this.#structureLoadPass === undefined &&
       this.#commitInFlight === undefined && !this.#hasWorkBesidesOwnEchoes();
   }
@@ -8964,6 +8980,7 @@ export class SpaceServer implements TransactionSealDestination {
     this.#rearmSeqsAwaitingFollow.clear();
     this.#pendingStructureRetryWake = false;
     this.#currency = undefined;
+    this.#pendingCurrencyWake = false;
     // Phase 5: foreign engine resolutions die with the tenure, since the
     // memory server may close their engines once it has ended.
     this.#foreignEngines.clear();
