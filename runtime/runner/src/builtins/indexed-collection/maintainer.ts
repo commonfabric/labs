@@ -73,9 +73,6 @@ interface SpaceState {
   /** Settles once the space's registry of collections has been read. */
   loaded: Promise<void> | undefined;
 
-  /** Id of the document holding the registry, once it was asked for. */
-  registryId: string | undefined;
-
   /** Whether the registry needs no reading, or has been read. */
   read: boolean;
 }
@@ -166,18 +163,8 @@ export class IndexedCollectionMaintainer {
     const state = this.#spaceState(space);
     // A space with no collection has nothing to follow. In a serving runtime
     // that is known once the registry has been read; in any other, at once.
-    const written = [...ids];
-    if (
-      this.#runtime.servingPosture && state.read &&
-      written.includes(this.#registryId(space, state))
-    ) {
-      // Another runtime listed a collection after this one read the
-      // registry, so the registry is read again.
-      state.read = false;
-      state.loaded = undefined;
-    }
     if (state.collections.size === 0 && state.read) return;
-    for (const id of written) state.early.add(id);
+    for (const id of ids) state.early.add(id);
     if (state.read) return this.#flush(state);
     // The registry read is not tracked as async work of the runtime: only a
     // drain is, and a space that lists nothing starts none.
@@ -224,7 +211,6 @@ export class IndexedCollectionMaintainer {
         collections: new Map(),
         early: new Set(),
         loaded: undefined,
-        registryId: undefined,
         // Only a serving runtime maintains a collection whose declaring
         // piece it never loaded, so only it has a registry to read.
         read: !this.#runtime.servingPosture,
@@ -232,12 +218,6 @@ export class IndexedCollectionMaintainer {
       this.#spaces.set(space, state);
     }
     return state;
-  }
-
-  /** Returns the id of the document holding the registry of `space`. */
-  #registryId(space: MemorySpace, state: SpaceState): string {
-    state.registryId ??= this.#registryCell(space).getAsNormalizedFullLink().id;
-    return state.registryId;
   }
 
   #registryCell(space: MemorySpace): Cell<Record<string, unknown>> {
