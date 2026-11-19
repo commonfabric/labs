@@ -50,6 +50,8 @@ const linkResolutionProbeMarker: unique symbol = Symbol(
   "linkResolutionProbeMarker",
 );
 
+const labelBasisReadMarker: unique symbol = Symbol("labelBasisReadMarker");
+
 const dereferenceResolutionProbeMarker: unique symbol = Symbol(
   "dereferenceResolutionProbeMarker",
 );
@@ -90,6 +92,22 @@ export const internalVerifierRead: Metadata = {
 export const stableInternalVerifierRead: Metadata = Object.freeze({
   ...ignoreReadForScheduling,
   ...internalVerifierRead,
+});
+
+/**
+ * A verifier read of a document's CFC label that a label the transaction
+ * stores rests on, where the transaction read nothing else of the document
+ * (the observation of `observeLabel` in `cfc/prepare.ts`). Like every
+ * verifier read it adds no flow label and schedules nothing, but it is a
+ * dependency of the commit: the store validates the version read, so a
+ * concurrent change of the label conflicts, and a read of a document the
+ * replica never loaded claims its absence, which the store refuses where
+ * the document exists.
+ */
+export const labelBasisRead: Metadata = Object.freeze({
+  ...ignoreReadForScheduling,
+  ...internalVerifierRead,
+  [labelBasisReadMarker]: true,
 });
 
 /**
@@ -516,6 +534,10 @@ export function isMutableTransactionReadAllowed(meta?: Metadata): boolean {
 
 export function isInternalVerifierRead(meta?: Metadata): boolean {
   return meta?.[internalVerifierReadMarker] === true;
+}
+
+export function isLabelBasisRead(meta?: Metadata): boolean {
+  return meta?.[labelBasisReadMarker] === true;
 }
 
 export function isLinkResolutionProbe(meta?: Metadata): boolean {

@@ -7,12 +7,13 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
 import type { CompiledPlan } from "../src/cfc/compiled-plans.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
@@ -31,6 +32,7 @@ import {
 } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
@@ -40,6 +42,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("cfc-plan-labels");
 const space = signer.did();
@@ -891,6 +894,159 @@ describe("cfc-plan-labels", () => {
         },
       );
       expect(error).toBeDefined();
+    });
+  });
+
+  describe("a label observed from another session's storage", () => {
+    let server: MemoryV2Server.Server;
+    let managers: EmulatedStorageManager[];
+    let runtimes: Runtime[];
+    beforeEach(() => {
+      // Fan-out is manual: a runtime sees another's commit only at
+      // `flushSessions()`, so its replica is stale until then.
+      server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+      managers = [];
+      runtimes = [];
+    });
+    afterEach(async () => {
+      for (const runtime of runtimes) await runtime.dispose();
+      for (const manager of managers) await manager.close();
+      await server.close();
+    });
+
+    const session = (): Runtime => {
+      const manager = EmulatedStorageManager.connectTo(server, { as: signer });
+      managers.push(manager);
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { compiledPatterns: true },
+        servingPosture: true,
+      });
+      runtimes.push(runtime);
+      return runtime;
+    };
+
+    /** Writes the document `id` with the one clause `clause` at its root. */
+    const labelSource = async (
+      runtime: Runtime,
+      clause: string,
+      id = "of:src-b",
+    ) => {
+      const tx = runtime.edit();
+      writeSeedEnvelopeDoc(tx, space);
+      seedStoredEnvelope(tx, memoryAddress(id, []), {
+        value: { text: id },
+        cfc: {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: [], label: { confidentiality: [clause] } }],
+          },
+        },
+      });
+      expect(
+        (await tx.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      ).toBeUndefined();
+      await runtime.storageManager.synced();
+    };
+
+    /**
+     * Writes `plan-target/a` in a transaction of `runtime` that reads the
+     * labeled `of:src-a`, which makes it relevant to CFC, and not
+     * `of:src-b`, and records the write bound to `of:src-b`; prepares it,
+     * runs `afterPreparation`, and commits it. Returns the commit's error and
+     * the confidentiality stored at `/a`.
+     */
+    const commitBoundToSource = async (
+      runtime: Runtime,
+      afterPreparation: () => Promise<void> = () => Promise.resolve(),
+    ) => {
+      const seed = runtime.edit();
+      const targetCell = runtime.getCell(space, "plan-target", undefined, seed);
+      targetCell.set({ a: "" });
+      const link = targetCell.getAsNormalizedFullLink();
+      const target: CfcAddress = {
+        space: link.space,
+        id: link.id,
+        scope: "space",
+        path: [],
+      };
+      seed.enrollRuntimeOwnedStore(
+        target,
+        "plan-labels-test",
+        runtimeWritePolicyAuthorization,
+      );
+      expect(
+        (await seed.commit({ holdSyncedUntilCovered: false }).verdict).error,
+      ).toBeUndefined();
+      const identity = runtime.compiledPlans.register(
+        plan,
+        "code",
+        runtimeWritePolicyAuthorization,
+      );
+      await labelSource(runtime, "secret-a", "of:src-a");
+      const tx = runtime.edit();
+      tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+      runtime.getCell(space, "plan-target", undefined, tx).key("a").set("x");
+      tx.recordCfcWritePolicyInput(
+        planWrite(identity, { ...target, path: ["a"] }, 0, address("of:src-b")),
+        runtimeWritePolicyAuthorization,
+      );
+      runtime.prepareTxForCommit(tx);
+      await afterPreparation();
+      const { error } = await tx.commit({ holdSyncedUntilCovered: false })
+        .verdict;
+      const reader = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(reader, {
+          space,
+          id: target.id,
+          scope: "space",
+          type: "application/json",
+        });
+        const stored = (metadata?.labelMap.entries ?? []).find((entry) =>
+          entry.origin === "derived" && entry.observes === "value" &&
+          entry.path.join("/") === "a"
+        );
+        return { error, stored: stored?.label.confidentiality };
+      } finally {
+        reader.abort();
+      }
+    };
+
+    it("conflicts where the label a slot observed changes after the preparation and before the store validates the commit", async () => {
+      const writer = session();
+      const other = session();
+      await labelSource(other, "secret-b");
+      // The writer's replica holds `of:src-b` under `secret-b`.
+      await writer.getCellFromLink({
+        space,
+        id: "of:src-b",
+        path: [],
+        scope: "space",
+      }).sync();
+      const { error } = await commitBoundToSource(
+        writer,
+        // Another session relabels the source; the writer does not hear of
+        // it before its commit reaches the store.
+        () => labelSource(other, "secret-d"),
+      );
+      expect(error?.name).toBe("ConflictError");
+    });
+
+    it("never stores the label of a document the writer has not loaded as if it had none", async () => {
+      const writer = session();
+      const other = session();
+      await labelSource(other, "secret-b");
+      // The writer never loads `of:src-b`.
+      const { error, stored } = await commitBoundToSource(writer);
+      if (error === undefined) {
+        expect(stored).toContain("secret-b");
+      } else {
+        expect(stored ?? []).toEqual([]);
+      }
     });
   });
 

@@ -126,6 +126,7 @@ import {
   isReadMarkedAsAttemptedWrite,
   isSchedulerDependencyRead,
   isWriteDestinationRead,
+  labelBasisRead,
   stableInternalVerifierRead,
 } from "../storage/reactivity-log.ts";
 import {
@@ -5122,14 +5123,19 @@ export const planLabelsFor = (
         id: address.id as URI,
         scope: normalizeCellScope(address.scope),
       };
-      // The verifier read of the document's label metadata: journaled, so
-      // the commit validates the version it read, and adding no flow label.
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // The verifier read of the document's label metadata, adding no flow
+      // label, as a dependency of the commit (`labelBasisRead`): the store
+      // validates the version read, so a concurrent change of the label
+      // conflicts, and a document the replica never loaded is claimed
+      // absent, which the store refuses where it exists.
       storedMetadataFor(
         tx,
         document.space,
         document.id,
         document.scope,
         "application/json",
+        labelBasisRead,
       );
       return {
         document,
