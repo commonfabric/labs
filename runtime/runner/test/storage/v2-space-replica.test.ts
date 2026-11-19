@@ -1170,5 +1170,73 @@ describe("SpaceReplica", () => {
         expect(closed.length).toBe(1);
       });
     });
+
+    describe("markedSplices()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `markedSplicesV1` when `advertised`, in the state `state`
+       * leaves it (a connection with no state when it is `undefined`).
+       */
+      const replicaOnConnection = async (
+        state: { now?: MemoryV2Client.ConnectionState },
+        advertised = true,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = await mount();
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                markedSplicesV1: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            if (state.now === undefined) return { session, client: connection };
+            return {
+              session,
+              client: {
+                ...connection,
+                get connectionState() {
+                  return state.now;
+                },
+              },
+            };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` while a connection that advertises the mark is up", async () => {
+        const replica = await replicaOnConnection({ now: "connected" });
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` while the connection reconnects, though its last flags advertise the mark", async () => {
+        const state: { now?: MemoryV2Client.ConnectionState } = {
+          now: "connected",
+        };
+        const replica = await replicaOnConnection(state);
+        state.now = "reconnecting";
+        expect(replica.markedSplices()).toBe(false);
+        state.now = "connected";
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` for a connection that reports no state", async () => {
+        const replica = await replicaOnConnection({});
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` for a live connection that does not advertise the mark", async () => {
+        const replica = await replicaOnConnection({ now: "connected" }, false);
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().markedSplices()).toBe(false);
+      });
+    });
   });
 });

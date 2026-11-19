@@ -117,6 +117,14 @@ export interface SessionConnection {
   readonly serverFlags: MemoryProtocolFlags | null;
 
   /**
+   * The connection's state now. Only while it is `connected` are
+   * `serverFlags` the live handshake's; while it is `reconnecting` they are
+   * still the last connection's. Optional: a connection without it is read as
+   * not connected.
+   */
+  readonly connectionState?: MemoryClient.ConnectionState;
+
+  /**
    * Resolves once every server frame the connection held at the call has
    * been handed to its client.
    */
@@ -1303,6 +1311,11 @@ class SharedSessionConnection implements SessionConnection {
   /** @inheritDoc */
   get serverFlags(): MemoryProtocolFlags | null {
     return this.#client.serverFlags;
+  }
+
+  /** @inheritDoc */
+  get connectionState(): MemoryClient.ConnectionState {
+    return this.#client.connectionState;
   }
 
   /** @inheritDoc */

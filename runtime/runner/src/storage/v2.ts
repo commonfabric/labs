@@ -7549,15 +7549,22 @@ export class SpaceReplica
   }
 
   /**
-   * Whether the server this replica is connected to advertised
-   * `markedSplicesV1` in its handshake. Read from the LIVE client of the
-   * last resolved session, as the row-label capability above is: `false`
-   * until a session exists, so a commit built before then goes index by
-   * index, and refreshed by reconnect handshakes, so a server rolled back to
-   * one that does not advertise it gets the per-index form from then on.
+   * Whether the server this replica is connected to advertises
+   * `markedSplicesV1` on the connection that is up now. `false` until a
+   * session exists, and while its connection is down or reconnecting, when
+   * the flags still held are the last connection's: a commit built then goes
+   * index by index, as the server it reaches may not advertise the mark. A
+   * commit built on a live connection that advertises it goes marked, and a
+   * resend of it after a reconnect keeps those bytes, so that the store can
+   * answer a resend of a commit it already took (its replay identity); the
+   * readers-first rollout (`markedSplicesV1` in
+   * docs/development/EXPERIMENTAL_OPTIONS.md) is what makes such a resend
+   * safe on a server that stopped advertising it.
    */
   markedSplices(): boolean {
-    return this.#sessionClient?.serverFlags?.markedSplicesV1 === true;
+    const client = this.#sessionClient;
+    return client?.connectionState === "connected" &&
+      client.serverFlags?.markedSplicesV1 === true;
   }
 
   async registerSqliteDiskSource(
