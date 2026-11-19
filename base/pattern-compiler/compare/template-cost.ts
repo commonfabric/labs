@@ -34,14 +34,26 @@ import { RuntimeTransactions } from "./runtime-transactions.ts";
 
 /**
  * The cases of a `filter` this measures. In the first three the changed
- * element leaves the filtered list; in `map result, kept` it stays, with
- * another value.
+ * element leaves the filtered list; in the cases marked `kept` it stays,
+ * with another value.
  */
 export type Case =
   | "in place"
   | "references"
   | "map result"
+  | "in place, kept"
+  | "references, kept"
   | "map result, kept";
+
+/** Every case, in the order the report lists them. */
+export const CASES: readonly Case[] = [
+  "in place",
+  "references",
+  "map result",
+  "in place, kept",
+  "references, kept",
+  "map result, kept",
+];
 
 /** The figures of one change's commit. */
 export type Figures = {
@@ -124,7 +136,7 @@ export const measure = async (
     }));
     let given: Record<string, unknown>;
     let documents: { id: string; kind: string; value: unknown }[];
-    if (which === "references") {
+    if (which === "references" || which === "references, kept") {
       // Each item a cell of its own under one clause, the argument an
       // array of links to them.
       const schema = {
@@ -176,9 +188,11 @@ export const measure = async (
     resetAllTimingStats();
     const before = runtime.getCfcStats();
     const refused = await around(() => {
+      // The element at position 4 is in the filtered list before the
+      // change.
       if (which === "map result") {
         instance.writeArgument(["items", "4", "title"], "skip");
-      } else if (which === "map result, kept") {
+      } else if (which.endsWith(", kept")) {
         instance.writeArgument(["items", "4", "title"], "changed");
       } else instance.writeArgument(["items", "4", "done"], true);
       return hooks.settled();
@@ -232,14 +246,7 @@ if (import.meta.main) {
   console.log(
     "case\tsize\toption\tpreps\tprepare ms\tinst\tnodes\tslots\tmemo\tlist entries\t* entries\trefused",
   );
-  for (
-    const which of [
-      "in place",
-      "references",
-      "map result",
-      "map result, kept",
-    ] as const
-  ) {
+  for (const which of CASES) {
     for (const size of sizes) {
       for (const enabled of [false, true]) {
         const f = await measure(which, size, enabled);

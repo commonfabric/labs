@@ -28,7 +28,7 @@ import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
-import { type Figures, measure } from "../template-cost.ts";
+import { CASES, type Figures, measure } from "../template-cost.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
   const [{ patterns }] = JSON.parse(
@@ -550,8 +550,8 @@ describe("RuntimeTransactions with labels from templates", () => {
 });
 
 describe("the cost of labels from templates for a `filter`", () => {
-  it("commits a change of one element over plain values in place, over references, and over the result of a `map`, with the same work and stored entries at 20 and at 200 elements", async () => {
-    for (const which of ["in place", "references", "map result"] as const) {
+  it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
+    for (const which of CASES) {
       const [small, large] = [
         await measure(which, 20, true),
         await measure(which, 200, true),

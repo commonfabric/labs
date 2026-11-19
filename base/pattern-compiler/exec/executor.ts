@@ -4456,7 +4456,6 @@ export class Instance {
     }
     const sizes = forms.map(bytesOf);
     for (const size of sizes) sum += size;
-    this.store.spliceAt(this.id, path, start, removed.length, forms);
     const appended = start === unit.keys.length && removed.length === 0;
     spliceIn(unit.keys, start, removed.length, inserted);
     spliceIn(unit.values, start, removed.length, values);
@@ -4477,6 +4476,12 @@ export class Instance {
     } else {
       unit.positions = undefined;
     }
+    // The store reports the splice to the transaction hooks as it makes
+    // it, and the write records of the rows that entered take their
+    // element keys from the unit (`#keysAlong`): the unit holds the new
+    // keys first. A row whose key was formed from its value has another
+    // key after a change of that value, at the same position.
+    this.store.spliceAt(this.id, path, start, removed.length, forms);
     unit.sum += sum;
     this.#touched.add(unit);
     const rows = this.#touchedRows.get(unit) ?? new Set();
