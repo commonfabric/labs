@@ -421,7 +421,10 @@ export const checkWrites = (
         address.path,
         {
           shape: observes,
-          nonRecursive: false,
+          // A `shape` and an `identity` slot observe their own position,
+          // and a `value` slot the position and what is below it (PL
+          // §2.2), as the runtime resolves the read the adapter journaled.
+          nonRecursive: observes !== "value",
           coveredByTrace: false,
           machinery: false,
           declaredOnward: undefined,
