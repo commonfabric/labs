@@ -30,6 +30,10 @@ import {
 } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  HIFI_SYSTEM,
+  REWRITE_SYSTEM,
+} from "../showcase/inductor/lofi/induction.ts";
 
 const signer = await Identity.fromPassphrase("optional wish availability");
 const space = signer.did();
@@ -128,9 +132,7 @@ describe("optional-wish-availability", () => {
           const { query, system } = inputs.asSchema<
             { query?: string; system?: string }
           >(schema).get();
-          const generationKey = system?.includes("careful labeller")
-            ? `${ref}:hifi`
-            : `${ref}:rewrite`;
+          const generationKey = `${ref}:${system}`;
           if (ref === "wish") wishQueries.push(query);
           const isControlled = ref === "wish"
             ? query !== undefined &&
@@ -660,8 +662,8 @@ describe("optional-wish-availability", () => {
         unavailableObsolete("Use the replacement rewrite model."),
       );
     });
-    controlled.set("generateObject:hifi", labels);
-    controlled.set("generateObject:rewrite", rewrite);
+    controlled.set(`generateObject:${HIFI_SYSTEM}`, labels);
+    controlled.set(`generateObject:${REWRITE_SYSTEM}`, rewrite);
     const inductor = await instantiate(
       "showcase/inductor/lofi/lofi-inductor.tsx",
       {

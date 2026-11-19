@@ -359,8 +359,7 @@ export default pattern<LofiInductorInput, LofiInductorOutput>(
     // picks only when no model is given.
     const hifiModelName = computed(() => hifiModel.get() || undefined);
 
-    // Each model call becomes pending when its prompt changes, so grading
-    // receives only usable labels for the current request.
+    // Grading counts a label only when the model call has a usable answer.
     const hifi = items.map((item) => {
       const prompt = computed(() => buildHifiPrompt(goal.get(), item));
       const request = generateObject<HifiAnswer>({
