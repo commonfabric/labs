@@ -74,15 +74,18 @@ export type Template =
   | {
     readonly op: "pick";
     readonly pick: TemplateIndex;
-    readonly from:
-      | { readonly collection: TemplateIndex }
-      | { readonly container: TemplateIndex }
-      | { readonly output: TemplateIndex; readonly site?: TemplateIndex };
+    readonly from: PickSource;
     readonly choice: Template;
     readonly body: Template;
   }
   /** Reads whose addresses are known only at run time. */
   | { readonly op: "dynamic"; readonly reads: TemplateIndex };
+
+/** What a `pick` chooses from. */
+export type PickSource =
+  | { readonly collection: TemplateIndex }
+  | { readonly container: TemplateIndex }
+  | { readonly output: TemplateIndex; readonly site?: TemplateIndex };
 
 /** What computed a derived value: a sandboxed body, or expression code. */
 export type DerivedBy =
@@ -164,9 +167,9 @@ export interface TemplateInputs {
 
   /**
    * Every child a choice point can choose from, for the bound of a choice
-   * that was not reported.
+   * that was not reported. `from` is what the `pick` node chooses from.
    */
-  children(pick: TemplateIndex): ElementInputs;
+  children(pick: TemplateIndex, from: PickSource): ElementInputs;
 
   /** The label of the membership a collection iterates. */
   membership(collection: TemplateIndex): InternedLabel;
@@ -560,7 +563,7 @@ const node = (
           choice,
           eachElement(
             template.body,
-            inputs.children(template.pick),
+            inputs.children(template.pick, template.from),
             table,
             work,
           ),

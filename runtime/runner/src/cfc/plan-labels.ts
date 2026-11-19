@@ -1,0 +1,592 @@
+/**
+ * The pre-pass of the commit preparation that instantiates the label of each
+ * path a compiled pattern's write covers (`instantiatePlanLabels`). It runs
+ * before the persist loop, because a slot bound to an address this
+ * transaction wrote takes the label staged there, which a loop over targets
+ * cannot give in order.
+ *
+ * The executor's report narrows a label and cannot invent one: every address
+ * a slot is bound to must be one the transaction journaled a read of in the
+ * slot's class (or wrote, for a staged label), every target must be a path
+ * the transaction wrote, and each instantiated confidentiality must be a
+ * subset of the transaction join's. A violation refuses the commit.
+ */
+
+import type { FabricValue } from "@commonfabric/api";
+import type { CfcAtom } from "@commonfabric/api/cfc";
+import { hashStringOf } from "@commonfabric/data-model";
+import {
+  cfcCanonicalClauseDigest,
+} from "@commonfabric/memory/v2/cfc-clause-identity";
+import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+
+import { encodePointer } from "../../../memory/v2/path.ts";
+import { normalizeCellScope } from "../scope.ts";
+import type { MediaType } from "../storage/interface.ts";
+import { canonicalizeLogicalPath } from "./canonical.ts";
+import type { CompiledPlan, CompiledPlanRegistry } from "./compiled-plans.ts";
+import { mintTransformedBy } from "./input-witness.ts";
+import {
+  type ObservationLabelResolver,
+  type ObservationProfile,
+  type ObservedDocument,
+  observedDocumentKey,
+} from "./observation-label.ts";
+import type { ReadObservationShape } from "./observation-classes.ts";
+import {
+  type DerivedBy,
+  type ElementInputs,
+  emptyTemplateWork,
+  type Instantiated,
+  instantiateTemplate,
+  type InternedLabel,
+  NEUTRAL,
+  type Template,
+  type TemplateInputs,
+  TemplateInstantiationError,
+  type TemplateWork,
+} from "./plan-template.ts";
+import {
+  type CfcAddress,
+  type CfcPreparationWork,
+  type PlanElements,
+  type PlanInputs,
+  type PlanWrite,
+  runtimeWritePolicyAuthorization,
+  type SlotBinding,
+  type WritePolicyInput,
+} from "./types.ts";
+import { verdictReason } from "./verdict-reason.ts";
+
+/** A `plan-write` write-policy input. */
+type PlanWriteInput = Extract<WritePolicyInput, { kind: "plan-write" }>;
+
+/** A journaled read the preparation found for a slot's address. */
+export interface JournaledRead {
+  readonly document: ObservedDocument;
+  readonly type: MediaType;
+  readonly profile: ObservationProfile;
+}
+
+/** What the pre-pass reads of the transaction, supplied by the preparation. */
+export interface PlanLabelEnvironment {
+  readonly registry: CompiledPlanRegistry;
+  readonly resolver: ObservationLabelResolver;
+
+  /**
+   * The journaled read of `address` in the class `observes`, or `undefined`
+   * where the transaction journaled none: a read at the address itself, or a
+   * recursive content read at or above it, or for an address holding `*` a
+   * read at a position the `*` matches.
+   */
+  journaled(
+    address: CfcAddress,
+    observes: ReadObservationShape,
+  ): JournaledRead | undefined;
+
+  /** Whether the transaction wrote `address`, at it or at a path above it. */
+  wrote(address: CfcAddress): boolean;
+
+  /** The transaction's join, which every path not covered keeps. */
+  readonly join: {
+    readonly confidentiality: readonly CfcConfClause[];
+    readonly integrity: readonly CfcAtom[];
+  };
+
+  /** Counts work, as `noteCfcPreparationWork` does. */
+  noteWork?(kind: CfcPreparationWork, count: number): void;
+}
+
+/** The labels of covered paths, and why the commit is refused, if it is. */
+export interface PlanLabels {
+  /**
+   * The label of each covered path, by document key (`observedDocumentKey`)
+   * and then by the encoded canonical path.
+   */
+  readonly byTarget: ReadonlyMap<string, ReadonlyMap<string, InternedLabel>>;
+
+  /** Refusal reasons; the commit is refused when there is any. */
+  readonly reasons: readonly string[];
+}
+
+/** Thrown inside the pre-pass for a report the transaction does not back. */
+class PlanLabelError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PlanLabelError";
+  }
+}
+
+/** The key a covered path is held under in `PlanLabels.byTarget`. */
+export const planLabelPathKey = (path: readonly string[]): string =>
+  encodePointer(canonicalizeLogicalPath(path));
+
+const documentOf = (address: CfcAddress): ObservedDocument => ({
+  space: address.space,
+  id: address.id as ObservedDocument["id"],
+  scope: normalizeCellScope(address.scope),
+});
+
+/**
+ * Instantiates the label of every path the honored `plan-write` inputs cover
+ * (`planWritesByTarget` in `prepare.ts`). Returns no label and a reason for
+ * each report the transaction does not back. Counts the work through
+ * `env.noteWork`.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+// A path a compiled pattern's write covers takes the label instantiated
+// from its template, a subset of the transaction's join, behind the
+// experimental option `compiledPatterns`.
+export const instantiatePlanLabels = (
+  writes: ReadonlyMap<string, readonly PlanWriteInput[]>,
+  env: PlanLabelEnvironment,
+): PlanLabels => {
+  const table = env.registry.labels;
+  const work = emptyTemplateWork();
+  let bounds = 0;
+  const reasons: string[] = [];
+  const join = table.intern({
+    confidentiality: [...env.join.confidentiality],
+    integrity: [...env.join.integrity],
+  });
+  const joinClauses = new Set(
+    join.confidentiality.map((clause) => cfcCanonicalClauseDigest(clause)),
+  );
+  // The write that covers each path, the last one recorded where several do.
+  const covering = new Map<
+    string,
+    { documentKey: string; pathKey: string; input: PlanWriteInput }
+  >();
+  for (const [documentKey, inputs] of writes) {
+    for (const input of inputs) {
+      const pathKey = planLabelPathKey(input.target.path);
+      covering.set(stringKey([documentKey, pathKey]), {
+        documentKey,
+        pathKey,
+        input,
+      });
+    }
+  }
+  const labels = new Map<string, InternedLabel>();
+  const inProgress = new Set<string>();
+  // Per transaction and set of inputs: the label of an `output` or `shared`
+  // node, and the mint of a derivation.
+  const named = new Map<string, Instantiated>();
+
+  /** The label of the covered path at `coveringKey`, instantiated once. */
+  const labelOfCovered = (coveringKey: string): InternedLabel => {
+    const known = labels.get(coveringKey);
+    if (known !== undefined) return known;
+    if (inProgress.has(coveringKey)) {
+      throw new PlanLabelError(
+        "the staged labels of the transaction's writes form a cycle",
+      );
+    }
+    inProgress.add(coveringKey);
+    try {
+      const label = instantiateWrite(covering.get(coveringKey)!.input);
+      labels.set(coveringKey, label);
+      return label;
+    } finally {
+      inProgress.delete(coveringKey);
+    }
+  };
+
+  /** The label staged at an address this transaction wrote. */
+  const stagedLabel = (address: CfcAddress): InternedLabel => {
+    if (!env.wrote(address)) {
+      throw new PlanLabelError(
+        `a slot is bound to /${
+          address.path.join("/")
+        } of ${address.id} as staged, which the transaction did not write`,
+      );
+    }
+    const coveringKey = stringKey([
+      observedDocumentKey(documentOf(address)),
+      planLabelPathKey(address.path),
+    ]);
+    return covering.has(coveringKey) ? labelOfCovered(coveringKey) : join;
+  };
+
+  /** The label one journaled observation of `address` consumed. */
+  const observed = (
+    address: CfcAddress,
+    observes: ReadObservationShape,
+  ): { confidentiality: readonly CfcConfClause[]; integrity: CfcAtom[] } => {
+    const read = env.journaled(address, observes);
+    if (read === undefined) {
+      throw new PlanLabelError(
+        `a slot is bound to /${
+          address.path.join("/")
+        } of ${address.id} in class ${observes}, which the transaction did not read`,
+      );
+    }
+    const label = env.resolver.resolve(
+      read.document,
+      read.type,
+      canonicalizeLogicalPath(address.path),
+      read.profile,
+    ).label;
+    return {
+      confidentiality: (label?.confidentiality ?? []) as CfcConfClause[],
+      integrity: observes === "followRef"
+        ? []
+        : [...(label?.integrity ?? [])] as CfcAtom[],
+    };
+  };
+
+  /**
+   * The label of a slot: the observation at the end of its chain, with the
+   * pointer labels of the link positions before it joined in.
+   */
+  const slotLabel = (binding: SlotBinding): InternedLabel => {
+    if ("staged" in binding) return stagedLabel(binding.staged);
+    const { chain, observes } = binding;
+    if (chain.length === 0) {
+      throw new PlanLabelError("a slot is bound to an empty chain");
+    }
+    const clauses: CfcConfClause[] = [];
+    for (const link of chain.slice(0, -1)) {
+      for (const clause of observed(link, "followRef").confidentiality) {
+        clauses.push(clause);
+      }
+    }
+    const last = observed(chain[chain.length - 1], observes);
+    for (const clause of last.confidentiality) clauses.push(clause);
+    return table.intern({
+      confidentiality: clauses,
+      integrity: last.integrity,
+    });
+  };
+
+  /** Instantiates the template of one write. */
+  const instantiateWrite = (input: PlanWriteInput): InternedLabel => {
+    if (!env.wrote(input.target)) {
+      throw new PlanLabelError(
+        `a plan-write names /${
+          input.target.path.join("/")
+        } of ${input.target.id}, which the transaction did not write`,
+      );
+    }
+    const plan = env.registry.plan(
+      input.compiledPattern,
+      runtimeWritePolicyAuthorization,
+    )!;
+    const { template, kept } = templateOf(plan, input.record);
+    const inputs = inputsFor(plan, input, input, undefined);
+    let label = instantiateTemplate(template, inputs, table, work);
+    if (kept) {
+      // Every kept output carries the atom of its pattern, a neutral one
+      // included.
+      label = table.withIntegrity(
+        label === NEUTRAL ? table.empty : label,
+        mint(input.compiledPattern, { expression: true }, undefined),
+      );
+    }
+    return label === NEUTRAL ? table.empty : label;
+  };
+
+  /** The `TransformedBy` atoms of a derivation, as an integrity label. */
+  const mint = (
+    compiledPattern: string,
+    by: DerivedBy,
+    witnesses: InternedLabel | undefined,
+  ): InternedLabel => {
+    const key = stringKey([
+      "mint",
+      compiledPattern,
+      "body" in by ? String(by.body) : "expression",
+      witnesses?.id ?? "",
+    ]);
+    const known = named.get(key);
+    if (known !== undefined && known !== NEUTRAL) {
+      work.memoHits++;
+      return known;
+    }
+    const minted = table.intern({
+      integrity: mintTransformedBy(
+        "body" in by
+          ? { kind: "compiled", pattern: compiledPattern, body: by.body }
+          : { kind: "compiled", pattern: compiledPattern },
+        witnesses?.integrity,
+      ),
+    });
+    named.set(key, minted);
+    return minted;
+  };
+
+  /**
+   * The `TemplateInputs` of one place: `place` holds its bindings, and an
+   * enclosing place's bindings answer a slot, selection or output it does
+   * not name.
+   */
+  const inputsFor = (
+    plan: CompiledPlan,
+    write: PlanWrite,
+    place: PlanInputs,
+    enclosing: TemplateInputs | undefined,
+  ): TemplateInputs => {
+    const memberships = new Map<number, InternedLabel>();
+    const self: TemplateInputs = {
+      slotLabel: (slot) => {
+        const binding = place.slots[slot];
+        if (binding !== undefined) return slotLabel(binding);
+        if (enclosing !== undefined) return enclosing.slotLabel(slot);
+        throw new TemplateInstantiationError(`slot ${slot} has no binding`);
+      },
+      selection: (selector) =>
+        place.selections?.[selector] ?? enclosing?.selection(selector),
+      elements: (collection) => {
+        const elements = place.elements?.[collection];
+        if (elements !== undefined) {
+          return elementsOf(plan, write, elements, self);
+        }
+        if (enclosing !== undefined) return enclosing.elements(collection);
+        throw new TemplateInstantiationError(
+          `collection ${collection} has no elements reported`,
+        );
+      },
+      chosen: (pick) => {
+        const reported = place.picks?.[pick];
+        if (reported === undefined) return enclosing?.chosen(pick);
+        return {
+          chosen: reported === null
+            ? undefined
+            : inputsFor(plan, write, { slots: reported.slots }, self),
+        };
+      },
+      children: (pick, from) => {
+        if ("collection" in from) return self.elements(from.collection);
+        throw new TemplateInstantiationError(
+          `the choice at pick ${pick} was not reported, and it chooses from no collection`,
+        );
+      },
+      membership: (collection) => {
+        let label = memberships.get(collection);
+        if (label === undefined) {
+          const template = plan.collections[collection]?.membership;
+          if (template === undefined) {
+            throw new TemplateInstantiationError(
+              `collection ${collection} is not in the plan`,
+            );
+          }
+          const result = instantiateTemplate(template, self, table, work);
+          label = result === NEUTRAL ? table.empty : result;
+          memberships.set(collection, label);
+        }
+        return label;
+      },
+      outputLabel: (output, site) => {
+        if (site !== undefined) {
+          throw new TemplateInstantiationError(
+            "an output of a pattern compiled in is not supported",
+          );
+        }
+        const template = plan.outputs[output]?.template;
+        if (template === undefined) {
+          throw new TemplateInstantiationError(
+            `output ${output} is not in the plan`,
+          );
+        }
+        const reported = write.outputs?.[output];
+        return cached(
+          [
+            "output",
+            write.compiledPattern,
+            String(output),
+            ...(reported === undefined
+              ? [writeKey(write), inputsKey(place)]
+              : [inputsKey(reported)]),
+          ],
+          () =>
+            instantiateTemplate(
+              template,
+              reported === undefined
+                ? self
+                : inputsFor(plan, write, reported, undefined),
+              table,
+              work,
+            ),
+        );
+      },
+      sharedLabel: (index) => {
+        const template = plan.templates[index];
+        if (template === undefined) {
+          throw new TemplateInstantiationError(
+            `template ${index} is not in the plan`,
+          );
+        }
+        return cached(
+          [
+            "shared",
+            write.compiledPattern,
+            String(index),
+            writeKey(write),
+            inputsKey(place),
+          ],
+          () => instantiateTemplate(template, self, table, work),
+        );
+      },
+      dynamicLabel: (reads) => {
+        const addresses = place.dynamic?.[reads];
+        if (addresses === undefined) {
+          if (enclosing !== undefined) return enclosing.dynamicLabel(reads);
+          // Not attributed: the transaction's join is the bound.
+          bounds++;
+          return join;
+        }
+        const parts = addresses.map((address) => {
+          const read = observed(address, "value");
+          return table.intern({
+            confidentiality: [...read.confidentiality],
+            integrity: read.integrity,
+          });
+        });
+        return table.combine(parts).label;
+      },
+      mint: (by, witnesses) => mint(write.compiledPattern, by, witnesses),
+      noteBound: () => {
+        bounds++;
+      },
+    };
+    return self;
+  };
+
+  /** The element inputs of a reported collection. */
+  const elementsOf = (
+    plan: CompiledPlan,
+    write: PlanWrite,
+    elements: PlanElements,
+    enclosing: TemplateInputs,
+  ): ElementInputs =>
+    "uniform" in elements
+      ? { uniform: inputsFor(plan, write, elements.uniform, enclosing) }
+      : {
+        groups: elements.groups.map((group) => ({
+          inputs: inputsFor(plan, write, group, enclosing),
+          count: group.count,
+        })),
+      };
+
+  /** The label under `key`, instantiated once per transaction. */
+  const cached = (
+    key: readonly string[],
+    compute: () => Instantiated,
+  ): Instantiated => {
+    const at = stringKey(key);
+    if (named.has(at)) {
+      work.memoHits++;
+      return named.get(at)!;
+    }
+    const result = compute();
+    named.set(at, result);
+    return result;
+  };
+
+  for (const coveringKey of covering.keys()) {
+    try {
+      const label = labelOfCovered(coveringKey);
+      // A template label only narrows: each clause it carries is one the
+      // transaction's join carries.
+      const outside = label.confidentiality.filter((clause) =>
+        !joinClauses.has(cfcCanonicalClauseDigest(clause))
+      );
+      if (outside.length > 0) {
+        throw new PlanLabelError(
+          `the template label of a write carries ${outside.length} clause(s) the transaction's join does not`,
+        );
+      }
+    } catch (error) {
+      if (
+        !(error instanceof PlanLabelError) &&
+        !(error instanceof TemplateInstantiationError)
+      ) {
+        throw error;
+      }
+      const { input } = covering.get(coveringKey)!;
+      reasons.push(verdictReason(
+        `plan-label refused for ${input.target.id} at /${
+          input.target.path.join("/")
+        }: ${error.message}`,
+      ));
+      labels.delete(coveringKey);
+    }
+  }
+  noteWork(env, work, bounds);
+  const byTarget = new Map<string, Map<string, InternedLabel>>();
+  if (reasons.length === 0) {
+    for (const [coveringKey, label] of labels) {
+      const { documentKey, pathKey } = covering.get(coveringKey)!;
+      let paths = byTarget.get(documentKey);
+      if (paths === undefined) {
+        paths = new Map();
+        byTarget.set(documentKey, paths);
+      }
+      paths.set(pathKey, label);
+    }
+  }
+  return { byTarget, reasons };
+};
+
+/** Reports the counts of one pre-pass. */
+const noteWork = (
+  env: PlanLabelEnvironment,
+  work: TemplateWork,
+  bounds: number,
+): void => {
+  if (env.noteWork === undefined) return;
+  env.noteWork("planTemplatesInstantiated", work.instantiations);
+  env.noteWork("planTemplateNodes", work.nodes);
+  env.noteWork("planSlotLabels", work.slotLabels);
+  env.noteWork("planLabelMemoHits", work.memoHits);
+  env.noteWork("planLabelBounds", bounds);
+};
+
+/** The template and keep flag of the plan record a write names. */
+const templateOf = (
+  plan: CompiledPlan,
+  record: PlanWrite["record"],
+): { template: Template; kept: boolean } => {
+  let found: { template: Template; kept: boolean } | undefined;
+  if ("output" in record) {
+    const output = plan.outputs[record.output];
+    found = output && { template: output.template, kept: output.kept === true };
+  } else if ("body" in record) {
+    const edge = plan.bodies[record.body]?.writes[record.write];
+    found = edge && { template: edge.template, kept: false };
+  } else if ("cone" in record) {
+    const edge = plan.cones[record.cone]?.writes[record.write];
+    found = edge && { template: edge.template, kept: false };
+  } else {
+    const first = plan.stateCells[record.stateFirst]?.first;
+    const edge = first && plan.cones[first.cone]?.writes[first.write];
+    found = edge && { template: edge.template, kept: false };
+  }
+  if (found === undefined) {
+    throw new PlanLabelError("a plan-write names a record the plan lacks");
+  }
+  return found;
+};
+
+/** The content key of a place's inputs. */
+const inputsKey = (inputs: object): string =>
+  hashStringOf(inputs as unknown as FabricValue);
+
+/**
+ * The content key of a write's own inputs, without its target and record,
+ * so that two writes with equal inputs share their `output` and `shared`
+ * labels.
+ */
+const writeKey = (write: PlanWrite): string =>
+  inputsKey({
+    slots: write.slots,
+    ...(write.selections === undefined ? {} : { selections: write.selections }),
+    ...(write.picks === undefined ? {} : { picks: write.picks }),
+    ...(write.elements === undefined ? {} : { elements: write.elements }),
+    ...(write.dynamic === undefined ? {} : { dynamic: write.dynamic }),
+    ...(write.outputs === undefined ? {} : { outputs: write.outputs }),
+  });
+
+/** Joins key parts unambiguously. */
+const stringKey = (parts: readonly string[]): string =>
+  parts.map((part) => `${part.length}:${part}`).join("");

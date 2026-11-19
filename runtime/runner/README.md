@@ -100,6 +100,15 @@ counts their three child templates (`shape`, `value`, and `followRef`). These
 counters measure work before final entry coalescing; they do not count distinct
 persisted entries.
 
+`planTemplatesInstantiated`, `planTemplateNodes`, `planSlotLabels`,
+`planLabelMemoHits` and `planLabelBounds` count the work of instantiating
+compiled patterns' label templates at commit (`cfc/plan-labels.ts`), which runs
+only with the experimental option `compiledPatterns` on: templates instantiated,
+counting each body of a `fold` once per group of elements and not once per
+element, template nodes visited, slot labels asked for, labels returned from a
+memo, and selections, choices and prefix folds instantiated as their bound
+because they were not reported.
+
 `inputReadViewsBuilt` and `inputReadViewsReused` count the input-requirement
 verifications of a boundary pass, by whether the pass copied the transaction's
 reads for that verification or reused the copy it held. A written target is

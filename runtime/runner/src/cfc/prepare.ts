@@ -200,9 +200,16 @@ import {
 } from "./minted-integrity.ts";
 import {
   ObservationLabelResolver,
+  type ObservationProfile,
+  type ObservedDocument,
   observedDocumentKey,
   probedSlotPath,
 } from "./observation-label.ts";
+import {
+  instantiatePlanLabels,
+  type JournaledRead,
+  type PlanLabels,
+} from "./plan-labels.ts";
 import { isPrefix, PathPrefixIndex } from "./path-prefix-index.ts";
 import { verdictReason } from "./verdict-reason.ts";
 import {
@@ -4923,6 +4930,110 @@ export const observationLabelResolverFor = (
       return written;
     },
     valuesBefore: (document) => storedValuesAt(tx, document),
+  });
+};
+
+/**
+ * Instantiates the labels of the paths the honored `plan-write` inputs of
+ * `tx` cover (`instantiatePlanLabels`), against `join`, the transaction's
+ * flow join. Returns no labels and no reasons when no input is honored, which
+ * is always the case with the experimental option `compiledPatterns` off.
+ */
+export const planLabelsFor = (
+  tx: IExtendedStorageTransaction,
+  join: {
+    readonly confidentiality: readonly CfcConfClause[];
+    readonly integrity: readonly CfcAtom[];
+  },
+): PlanLabels => {
+  const writes = planWritesByTarget(tx);
+  if (writes.size === 0) return { byTarget: new Map(), reasons: [] };
+  const registry = tx.compiledPlans(runtimeWritePolicyAuthorization)!;
+  // The transaction's flow observations by document, as the join counts
+  // them: a read the write path makes of its own destination is none.
+  const journal = new Map<string, {
+    document: ObservedDocument;
+    type: MediaType;
+    reads: { path: readonly string[]; profile: ObservationProfile }[];
+  }>();
+  forEachFlowObservation(
+    tx,
+    (space, id, scope, type, logicalPath, observation) => {
+      if (observation.writeDestination) return false;
+      const key = targetKey({ space, id, scope });
+      let entry = journal.get(key);
+      if (entry === undefined) {
+        entry = { document: { space, id, scope }, type, reads: [] };
+        journal.set(key, entry);
+      }
+      entry.reads.push({ path: logicalPath, profile: observation });
+      return false;
+    },
+  );
+  const written = new Map<string, readonly (readonly string[])[]>();
+  for (const [key, target] of valueWriteTargets(tx)) {
+    written.set(key, target.paths);
+  }
+  const documentKeyOf = (address: CfcAddress): string =>
+    targetKey({
+      space: address.space,
+      id: address.id as URI,
+      scope: normalizeCellScope(address.scope),
+    });
+  return instantiatePlanLabels(writes, {
+    registry,
+    resolver: observationLabelResolverFor(tx),
+    join,
+    noteWork: (kind, count) => tx.noteCfcPreparationWork?.(kind, count),
+    wrote: (address) => {
+      const path = canonicalizeLogicalPath(address.path);
+      return written.get(documentKeyOf(address))?.some((writtenPath) =>
+        concretePathHasPrefix(path, writtenPath)
+      ) === true;
+    },
+    journaled: (address, observes) => {
+      const entry = journal.get(documentKeyOf(address));
+      if (entry === undefined) return undefined;
+      const path = canonicalizeLogicalPath(address.path);
+      const at = (read: { path: readonly string[] }) =>
+        observes === "followRef" ? probedSlotPath(read.path) : read.path;
+      const found = (profile: ObservationProfile): JournaledRead => ({
+        document: entry.document,
+        type: entry.type,
+        profile,
+      });
+      // A read of the address itself, in the class the slot observes.
+      const exact = entry.reads.find((read) =>
+        read.profile.shape === observes && pathKey(at(read)) === pathKey(path)
+      );
+      if (exact !== undefined) return found(exact.profile);
+      // For an address holding `*`, a read at a position the `*` matches.
+      if (path.includes("*")) {
+        const matched = entry.reads.find((read) =>
+          read.profile.shape === observes &&
+          at(read).length === path.length && isPrefix(path, at(read))
+        );
+        if (matched !== undefined) return found(matched.profile);
+      }
+      // A recursive content read at or above the address observed it too.
+      if (observes === "value") {
+        const covering = entry.reads.find((read) =>
+          read.profile.shape === "value" &&
+          read.profile.nonRecursive !== true &&
+          isPrefix(read.path, path)
+        );
+        if (covering !== undefined) {
+          return found({
+            shape: "value",
+            nonRecursive: false,
+            coveredByTrace: covering.profile.coveredByTrace,
+            machinery: covering.profile.machinery,
+            declaredOnward: undefined,
+          });
+        }
+      }
+      return undefined;
+    },
   });
 };
 
