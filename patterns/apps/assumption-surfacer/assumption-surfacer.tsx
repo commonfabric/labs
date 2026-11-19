@@ -187,25 +187,27 @@ const cleanText = (value: unknown): string =>
   typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
 
 /** One reported assumption made safe to store, or null when it is unusable:
- * no label, or fewer than two distinct alternatives. An assumed index out of
- * range falls back to the first alternative. */
+ * no label, or fewer than two distinct alternatives. The assumed index names
+ * an alternative as reported, so it is followed to that alternative's place
+ * once blanks and repeats are dropped; an index that names nothing kept falls
+ * back to the first alternative. */
 const normalizeOne = (raw: unknown): ReportedAssumption | null => {
   if (!isRecord(raw)) return null;
   const label = cleanText(raw.label);
-  const alternatives = (Array.isArray(raw.alternatives) ? raw.alternatives : [])
-    .map((alt) => cleanText(isRecord(alt) ? alt.value : alt))
+  const reported = (Array.isArray(raw.alternatives) ? raw.alternatives : [])
+    .map((alt) => cleanText(isRecord(alt) ? alt.value : alt));
+  const alternatives = reported
     .filter((alt, i, all) => alt !== "" && all.indexOf(alt) === i)
     .slice(0, MAX_ALTERNATIVES);
   if (label === "" || alternatives.length < 2) return null;
   const index = Number(raw.assumedIndex ?? raw.selectedIndex);
+  const assumed = Number.isInteger(index) ? reported[index] ?? "" : "";
+  const kept = assumed === "" ? -1 : alternatives.indexOf(assumed);
   return {
     label,
     description: cleanText(raw.description),
     alternatives,
-    assumedIndex: Number.isInteger(index) && index >= 0 &&
-        index < alternatives.length
-      ? index
-      : 0,
+    assumedIndex: kept >= 0 ? kept : 0,
   };
 };
 
@@ -218,14 +220,25 @@ export const normalizeReported = (raw: unknown): ReportedAssumption[] =>
 
 /** The record after the assistant reports `reported` for user message `turn`.
  * A label already recorded for the same turn is replaced, not duplicated, so
- * a repeated tool call does not stack cards. */
+ * a repeated tool call does not stack cards, and a reply keeps at most
+ * MAX_PER_REPLY cards however many calls it makes: new labels past that are
+ * dropped. */
 export const withRecorded = (
   existing: readonly Assumption[],
-  reported: readonly ReportedAssumption[],
+  allReported: readonly ReportedAssumption[],
   turn: number,
   about: string,
 ): Assumption[] => {
-  const replaced = new Set(reported.map((r) => r.label.toLowerCase()));
+  const labelsThisTurn = new Set(
+    existing.filter((a) => a.turn === turn).map((a) => a.label.toLowerCase()),
+  );
+  const isReplacement = (r: ReportedAssumption) =>
+    labelsThisTurn.has(r.label.toLowerCase());
+  const replacements = allReported.filter(isReplacement);
+  const room = Math.max(0, MAX_PER_REPLY - labelsThisTurn.size);
+  const fresh = allReported.filter((r) => !isReplacement(r)).slice(0, room);
+  const reported = [...replacements, ...fresh];
+  const replaced = new Set(replacements.map((r) => r.label.toLowerCase()));
   const kept = existing.filter((a) =>
     a.turn !== turn || !replaced.has(a.label.toLowerCase())
   );
