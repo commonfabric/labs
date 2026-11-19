@@ -29,7 +29,10 @@ import {
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { indexedCollectionDescriptorOf } from "./indexed-collection/definition.ts";
-import { memberKeyOf } from "./indexed-collection/maintenance.ts";
+import {
+  maintenanceRevisionCell,
+  memberKeyOf,
+} from "./indexed-collection/maintenance.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -1288,6 +1291,14 @@ export function sqliteQuery(
       ? undefined
       : computeInputHashFromValue({
         rev: (inputs.db as { rev?: number }).rev ?? 0,
+        // The last write maintenance made, which the handle does not
+        // count.
+        maintained: maintenanceRevisionCell(
+          runtime,
+          databaseSpace,
+          db.id,
+          tx,
+        ).get() ?? null,
         reactOn: reactOn ?? null,
       });
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);

@@ -3,6 +3,7 @@ import { getLogger } from "@commonfabric/logger";
 import { isSqliteDbRef, type SqliteDbRef } from "@commonfabric/memory/v2";
 
 import { type Cell, createSqliteWriter } from "../../cell.ts";
+import { waveSettlementOf } from "../../executor/wave.ts";
 import type { NormalizedFullLink } from "../../link-types.ts";
 import type { Runtime } from "../../runtime.ts";
 import type {
@@ -158,7 +159,7 @@ export class IndexedCollectionMaintainer {
     const collection = this.#adopt(space, handle, id);
     // Listing the collection is a write, which a serving runtime commits
     // only from a scheduler run.
-    this.#runtime.scheduler.queueEvent(collection.stream, { list: id });
+    void this.#dispatch(collection, { list: id });
   }
 
   /**
@@ -327,7 +328,11 @@ export class IndexedCollectionMaintainer {
     return { db: toDbRef(value), descriptor };
   }
 
-  /** Queues `event` for `collection` and waits for its transaction to end. */
+  /**
+   * Queues `event` for `collection` and waits for its transaction to end. A
+   * serving runtime commits in waves, and can withdraw a transaction that
+   * ended well: the event is then owed again.
+   */
   async #dispatch(
     collection: CollectionState,
     event: MaintenanceEvent,
@@ -337,9 +342,32 @@ export class IndexedCollectionMaintainer {
       collection.stream,
       event,
       true,
-      () => resolve(),
+      (tx) => {
+        resolve();
+        void waveSettlementOf(tx)?.then((verdict) => {
+          if (verdict.error) this.#owe(collection, event);
+        });
+      },
     );
     await promise;
+  }
+
+  /**
+   * Makes `event`, whose transaction was withdrawn, owed again. Members are
+   * owed through the documents they were read from, so that the drain asks
+   * the database what it holds for them now rather than trusting the rows
+   * the event carried.
+   */
+  #owe(collection: CollectionState, event: MaintenanceEvent): void {
+    if (this.#disposed) return;
+    if (!("members" in event)) {
+      this.#runtime.trackAsyncWork(this.#dispatch(collection, event));
+      return;
+    }
+    for (const rows of event.members) {
+      for (const doc of rows.deps) collection.pending.add(doc);
+    }
+    this.#schedule(collection);
   }
 
   /** Re-reads `members` of `collection`, a batch per transaction. */

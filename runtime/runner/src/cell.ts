@@ -107,8 +107,10 @@ import {
   addMemberRows,
   deleteMemberRows,
   type IndexedCollectionWriter,
+  maintenanceRevisionCell,
   memberKeysOf,
   type MemberRows,
+  nextMaintenanceRevision,
   projectMember,
 } from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
@@ -1430,8 +1432,16 @@ export function createSqliteWriter(
   link: NormalizedFullLink,
   tx: IExtendedStorageTransaction,
 ): IndexedCollectionWriter {
-  return new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+  const writer = new CellImpl(runtime, tx, link, false, undefined, "sqlite");
+  maintenanceWriters.add(writer);
+  return writer;
 }
+
+/**
+ * The handles `createSqliteWriter()` made. Their writes are maintenance's,
+ * marked in the collection's maintenance revision rather than on its handle.
+ */
+const maintenanceWriters = new WeakSet<object>();
 
 /**
  * Mark a cell handle as covered by a document-level sync barrier owned by the
@@ -2397,6 +2407,15 @@ export class CellImpl<T extends FabricValue>
     // object-in-array and would split the handle's inline rule term lists
     // back into per-element linked docs — the split sqliteDatabase stores the
     // handle raw specifically to avoid (a second runtime can't load those).
+    if (maintenanceWriters.has(this)) {
+      // Maintenance writes beside the handlers that add to the collection,
+      // and every one of those reads this handle. Its writes are marked in
+      // a document of their own, so that none of them costs a handler its
+      // commit.
+      maintenanceRevisionCell(this.#runtime, this.space, handle.id, this.#tx)
+        .set(nextMaintenanceRevision());
+      return;
+    }
     const rev = ((handle as { rev?: unknown }).rev as number | undefined) ?? 0;
     (this.withTx(this.#tx) as unknown as Cell<{ rev: number }>).key("rev").set(
       rev + 1,
