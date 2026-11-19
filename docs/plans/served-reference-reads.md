@@ -74,7 +74,12 @@ Read from the code at `c15a766611`; the browser end is verified by the bisect.
    - The start does this for the session it runs in. For a later actor it is
      done "in transactions of their own, before setup consumes the piece's
      other values". The serving loop's arrival seed (`ownedDefaultSeeds`) does
-     it for each demanding pair, including one that arrives after the start.
+     it for each demanding pair whose piece is in the space it serves,
+     including one that arrives after the start. A piece in another space is
+     left to that space's serving loop
+     (`space-server-structure-load-arms.test.ts`, "seeds the defaults a piece
+     in its own space owes, and leaves a piece in another space to that
+     space").
    - That is the stored `{ result: <link to the piece>, value: "" }` shape the
      Topics documents have.
 
@@ -223,7 +228,7 @@ should cause.
    and server, with shared coverage handled as above. A consumer that reads
    nothing behind a reference stops starting pieces; one that reads the
    target's name or fields still demands them.
-3. **2(a), defence in depth** for the pieces that do start, as when a viewer
+3. **2(a), defense in depth** for the pieces that do start, as when a viewer
    opens a Topic: today that writes 9 session documents for the viewer and 9
    for the worker.
 4. **1(c), the long arc,** sequenced with the #9911 ruling.
