@@ -1,3 +1,13 @@
+/**
+ * Two LLM agents get the same task, reading a vendor briefing and emailing a
+ * summary, but the briefing hides instructions to mail an attacker. The unsafe
+ * agent reads the hostile text directly and can be talked into it, while the
+ * safe agent only receives an opaque link and delegates reading to a
+ * higher-clearance sub-agent.
+ * Demonstrates containing prompt injection with CFC labels on tool results and
+ * `llmDialog` observation ceilings, with a model picker and a log of the mail
+ * each agent sent.
+ */
 import {
   type BuiltInLLMMessage,
   Cell,

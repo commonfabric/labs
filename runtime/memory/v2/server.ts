@@ -257,11 +257,11 @@ import { referenceServerMessageSchemaDocuments } from "./sync-cid-references.ts"
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import {
   appendWatchSetPart,
-  halveSyncPart,
+  encodeSyncParts,
+  encodeUnlessTooLong,
   type PartLimits,
   payloadFits,
   serverMessageSync,
-  splitSyncMessage,
   stagedWatchSet,
   type SyncPartSession,
   wholeLimits,
@@ -1532,15 +1532,26 @@ class Connection {
       }
       const prepared = this.#prepare(message);
       const encodeStart = performance.now();
-      const payload = encodeMemoryBoundary(prepared);
-      const fits = payloadFits(payload, wholeLimits(limits));
+      // A sync too long to encode whole is not yet undeliverable: its parts
+      // are encoded alone, and only an entry the engine cannot encode alone
+      // fails, as it would whole.
+      const payload = encodeUnlessTooLong(prepared);
+      const fits = payload !== undefined &&
+        payloadFits(payload, wholeLimits(limits));
       timing.time(encodeStart, "memory", "response", "encode");
       if (fits) {
         this.#transmit(prepared, payload);
         return;
       }
       const splitStart = performance.now();
-      const parts = this.#syncParts(message, prepared, payload, target, limits);
+      const parts = encodeSyncParts(
+        message,
+        prepared,
+        payload,
+        target,
+        limits,
+        (part) => this.#prepare(part),
+      );
       timing.time(splitStart, "memory", "response", "split");
       // The parts go to the transport in one synchronous pass, so that no
       // other message of this connection's comes between them, and only once
@@ -1551,42 +1562,6 @@ class Connection {
     } catch (cause) {
       throw new DeliveryError(cause);
     }
-  }
-
-  /**
-   * Helper for `#send()`, which divides a sync too large for one message into
-   * parts and returns each prepared and encoded. A part cut to its bounds by
-   * its entries can exceed them once it carries its own tables, as can the
-   * whole message when its entries fit one part, so a part that does is
-   * halved until its halves fit, or a half is one entry, which goes as it is.
-   */
-  #syncParts(
-    message: ServerMessage,
-    prepared: ServerMessage,
-    payload: string,
-    target: SyncPartSession,
-    limits: PartLimits,
-  ): [ServerMessage, string][] {
-    const split = splitSyncMessage(message, target, limits, prepared);
-    const queue: {
-      part: ServerMessage;
-      prepared?: ServerMessage;
-      payload?: string;
-    }[] = split.length === 1
-      ? [{ part: message, prepared, payload }]
-      : split.map((part) => ({ part })).reverse();
-    const ready: [ServerMessage, string][] = [];
-    while (queue.length > 0) {
-      const item = queue.pop()!;
-      const partPrepared = item.prepared ?? this.#prepare(item.part);
-      const partPayload = item.payload ?? encodeMemoryBoundary(partPrepared);
-      const halves = payloadFits(partPayload, limits)
-        ? undefined
-        : halveSyncPart(item.part, target);
-      if (halves === undefined) ready.push([partPrepared, partPayload]);
-      else queue.push({ part: halves[1] }, { part: halves[0] });
-    }
-    return ready;
   }
 
   /** Helper for `#send()`, which applies the negotiated table encodings. */
