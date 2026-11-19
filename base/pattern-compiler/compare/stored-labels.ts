@@ -226,11 +226,19 @@ const asEvaluatorAtom = (atom: Atom, patterns: readonly string[]): Atom => {
     inputWitness?: unknown;
   };
   if (type !== TRANSFORMED_BY || identity?.kind !== "compiled") return atom;
+  // The runtime names entry 0 of `Plan.patterns` by the identity it
+  // registered the pattern under, and a pattern compiled in by its entry.
+  const pattern = (identity as { pattern?: unknown }).pattern;
+  const compiledIn = typeof pattern === "string" &&
+    patterns.indexOf(pattern) > 0;
   return {
     type: TRANSFORMED_BY,
     identity: typeof identity.body === "number"
       ? { kind: "body", body: identity.body }
-      : { kind: "pattern", pattern: patterns[0] ?? "unlisted:0" },
+      : {
+        kind: "pattern",
+        pattern: compiledIn ? pattern : patterns[0] ?? "unlisted:0",
+      },
     ...(inputWitness === undefined ? {} : { inputWitness }),
   };
 };

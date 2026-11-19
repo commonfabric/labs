@@ -668,7 +668,9 @@ export type ImplementationIdentity =
   // A compiled pattern the runtime registered, by the identity
   // `CompiledPlanRegistry.register` computed over its plan and value code,
   // and, for a sandboxed body of it, the body's index in the plan. The
-  // `TransformedBy` a template's derivation mints names it.
+  // `TransformedBy` a template's derivation mints names it. For expression
+  // code of a pattern compiled into the registered one, `pattern` is that
+  // pattern's entry of `Plan.patterns` instead.
   | { kind: "compiled"; pattern: string; body?: number };
 
 export type TrustSnapshot = {

@@ -10,6 +10,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
@@ -383,6 +384,53 @@ describe("cfc-plan-labels", () => {
         const labels = planLabelsFor(tx, deriveFlowJoin(tx));
         expect(labels.reasons).toEqual([]);
         expect(confidentialityAt(labels, target, "b")).toEqual(["secret-a"]);
+      });
+    });
+
+    it("mints for expression code of a pattern compiled in the atom of that pattern's entry of the plan's patterns", async () => {
+      // PL §3.2, "The atom of the pattern": "code of a pattern B compiled
+      // into a pattern A mints B's atom", entry `pattern` of
+      // `Plan.patterns`, so the atom is the same in every plan that holds
+      // the code.
+      const compiledIn: CompiledPlan = {
+        ...plan,
+        patterns: ["pattern-a", "pattern-b"],
+        bodies: [{
+          writes: [
+            ...plan.bodies[0].writes,
+            {
+              template: {
+                op: "derive",
+                by: { expression: true, pattern: 1 },
+                inputs: [{ op: "slot", slot: 7 }],
+              },
+            },
+          ],
+        }],
+      };
+      await withSources((runtime, tx, _identity, target) => {
+        const identity = runtime.compiledPlans.register(
+          compiledIn,
+          "code",
+          runtimeWritePolicyAuthorization,
+        );
+        tx.recordCfcWritePolicyInput(
+          planWrite(
+            identity,
+            { ...target, path: ["a"] },
+            7,
+            address("of:src-a"),
+          ),
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        const integrity = labels.byTarget.get(observedDocumentKey(target))
+          ?.get("/a")?.integrity ?? [];
+        expect(integrity).toContainEqual({
+          type: CFC_ATOM_TYPE.TransformedBy,
+          identity: { kind: "compiled", pattern: "pattern-b" },
+        });
       });
     });
 

@@ -22,6 +22,12 @@ import {
  * whole plan is what its identity hashes.
  */
 export interface CompiledPlan {
+  /**
+   * The identity of each pattern whose source the plan holds code of
+   * (`Plan.patterns`): entry 0 is the pattern the plan is compiled from,
+   * the others the patterns compiled into it.
+   */
+  readonly patterns?: readonly string[];
   readonly outputs: readonly {
     readonly template: Template;
     readonly kept?: boolean;

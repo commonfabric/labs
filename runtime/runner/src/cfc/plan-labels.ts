@@ -309,15 +309,39 @@ export const instantiatePlanLabels = (
     return label === NEUTRAL ? table.empty : label;
   };
 
+  /**
+   * The pattern a derivation by expression code mints the atom of (PL §3.2,
+   * "The atom of the pattern"): the registered pattern for entry 0 of
+   * `Plan.patterns`, and for code of a pattern compiled in, that pattern's
+   * entry, so the atom is the same in every plan that holds the code.
+   */
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  const mintedPattern = (compiledPattern: string, by: DerivedBy): string => {
+    if ("body" in by || by.pattern === undefined || by.pattern === 0) {
+      return compiledPattern;
+    }
+    const entry = env.registry.plan(
+      compiledPattern,
+      runtimeWritePolicyAuthorization,
+    )?.patterns?.[by.pattern];
+    if (entry === undefined) {
+      throw new PlanLabelError(
+        `a derivation names entry ${by.pattern} of the plan's patterns, which the plan does not list`,
+      );
+    }
+    return entry;
+  };
+
   /** The `TransformedBy` atoms of a derivation, as an integrity label. */
   const mint = (
     compiledPattern: string,
     by: DerivedBy,
     witnesses: InternedLabel | undefined,
   ): InternedLabel => {
+    const pattern = mintedPattern(compiledPattern, by);
     const key = stringKey([
       "mint",
-      compiledPattern,
+      pattern,
       "body" in by ? String(by.body) : "expression",
       witnesses?.id ?? "",
     ]);
@@ -329,8 +353,8 @@ export const instantiatePlanLabels = (
     const minted = table.intern({
       integrity: mintTransformedBy(
         "body" in by
-          ? { kind: "compiled", pattern: compiledPattern, body: by.body }
-          : { kind: "compiled", pattern: compiledPattern },
+          ? { kind: "compiled", pattern, body: by.body }
+          : { kind: "compiled", pattern },
         witnesses?.integrity,
       ),
     });
