@@ -220,10 +220,12 @@ own to the field, stored in its own space, is refused like any other. A pattern
 asks with `writtenPrincipalOf()`, a host holding a runtime with
 `writtenPrincipalAt()`, and a host holding cell handles with
 `observeWrittenPrincipal()` from `@commonfabric/runtime-client`, beside
-`observeRepresentedPrincipal()` for the owner. With each report, those two
-observers say whether it was read from the current label, or names no principal
-because the worker refuses the cell or the label the handle holds is not
-current. Patterns read a face with `profileFace()` from
+`observeRepresentedPrincipal()` for the owner. Each of those two observers
+passes every report a second argument, a `LabelReading`: `"current"` when the
+report was read from the label the worker delivered with the value, `"refused"`
+when the worker refuses the cell, and `"stale"` when the label the handle holds
+is not that label. Only a `"current"` report can name a principal. Patterns read
+a face with `profileFace()` from
 `patterns/system/profile-face/profile-face.ts`, which compares that principal
 with `profileOwnerOf()`; `cf-profile-badge` compares it with the principal its
 seal shows. So a picture someone other than the owner set, which earlier
