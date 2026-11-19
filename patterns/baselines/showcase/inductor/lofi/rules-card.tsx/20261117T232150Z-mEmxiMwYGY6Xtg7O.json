@@ -1,0 +1,274 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "Judgement": {
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          },
+          "currentF1": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "proposedF1": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "refusals": {
+            "description": "Why each refused rule was refused.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "rules": {
+            "description": "The proposed rules that passed the grammar and the safety check.",
+            "items": {
+              "$ref": "#/$defs/CanonicalRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "accepted",
+          "reason",
+          "rules",
+          "refusals",
+          "currentF1",
+          "proposedF1",
+          "heldOut"
+        ],
+        "type": "object"
+      },
+      "RewriteStatus": {
+        "anyOf": [
+          {
+            "properties": {
+              "missing": {
+                "type": "number"
+              },
+              "status": {
+                "enum": [
+                  "idle"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "labelling": {
+                "type": "number"
+              },
+              "status": {
+                "enum": [
+                  "pending"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "failed"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "reason"
+            ],
+            "type": "object"
+          },
+          {
+            "properties": {
+              "answered": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "judgement": {
+                "$ref": "#/$defs/Judgement"
+              },
+              "status": {
+                "enum": [
+                  "ready"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "status",
+              "judgement",
+              "answered"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuleRef": {
+        "properties": {
+          "rule": {
+            "$ref": "#/$defs/CanonicalRule"
+          }
+        },
+        "required": [
+          "rule"
+        ],
+        "type": "object"
+      },
+      "Summary": {
+        "properties": {
+          "agreementRate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Agreements over labelled items, or null with nothing labelled."
+          },
+          "agreements": {
+            "type": "number"
+          },
+          "heldOut": {
+            "type": "number"
+          },
+          "items": {
+            "type": "number"
+          },
+          "labelled": {
+            "type": "number"
+          },
+          "surprises": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "items",
+          "labelled",
+          "agreements",
+          "surprises",
+          "agreementRate",
+          "heldOut"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "heldOutF1": {
+        "type": "number"
+      },
+      "removeRule": {
+        "$ref": "#/$defs/RuleRef",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "resetRules": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "retryRewrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "rewrite": {
+        "$ref": "#/$defs/RewriteStatus"
+      },
+      "rules": {
+        "items": {
+          "$ref": "#/$defs/CanonicalRule"
+        },
+        "type": "array"
+      },
+      "settleRewrite": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "summary": {
+        "$ref": "#/$defs/Summary"
+      }
+    },
+    "required": [
+      "rules",
+      "heldOutF1",
+      "summary",
+      "rewrite",
+      "settleRewrite",
+      "retryRewrite",
+      "removeRule",
+      "resetRules"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/lofi/rules-card.tsx",
+  "resultSchema": {
+    "description": "The inductor's current rules and the rewrite that may replace them.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
