@@ -388,20 +388,9 @@ describe("topic-board-pivot-contract", () => {
     },
   });
 
-  // NOTE ON WHAT THIS CANNOT SEPARATE, because the distinction is easy to
-  // assume from the wording: every topic here sits at exactly ONE index, so
-  // this case cannot tell the identity check the pivot's join makes when it
-  // leaves a topic out of its own backlinks (`mentionedByEach()` in
-  // `patterns/apps/topics/main.tsx`, which `mentionedBy()` there states pair
-  // by pair) from a check by array position: both pass it. Only a list naming
-  // one topic at two indices separates them, and the board's pivot joins over
-  // the list `distinctByIdentity()` returns, which names each topic once.
-  // `assert_self_mention_inert_through_a_twin` and
-  // `assert_mentioned_by_each_agrees_with_mentioned_by` in
-  // `patterns/apps/topics/topics.test.tsx` hand the two functions a
-  // duplicated list directly. No case here builds a board listing one topic
-  // twice; the "over a board listing one topic twice" group in
-  // `topics-headless-fixture.test.ts` runs the board's lifts over one.
+  // The collection's query leaves a topic out of its own backlinks by
+  // comparing references, so there is no position for the exclusion to be
+  // confused with.
   it("records a self-mention without earning the topic an inbound edge", async () => {
     // Referencing yourself is not being referenced from somewhere else.
     await target.result.set({ topic: target.getCell() }, ["mention"]);
