@@ -10,8 +10,8 @@
  *
  * Ported from jkomoros/community-patterns `redactor.tsx`. Two behaviors are
  * new: stand-ins are chosen deterministically (a computation may not draw
- * randomness), and a stand-in that already occurs in the draft is skipped, so
- * restoring a reply can never overwrite a real mention of it.
+ * randomness), and a stand-in that already occurs in the draft's visible text
+ * is skipped, so restoring a reply can never overwrite a real mention of it.
  */
 
 export type PIICategory =
@@ -55,8 +55,9 @@ export const CATEGORY_LABELS: Record<PIICategory, string> = {
 
 // ---------------------------------------------------------------------------
 // Canonicalization: matching survives case, spacing, punctuation, zero-width
-// characters and look-alike letters, so "J0hn  Smith" or "Јohn" (Cyrillic J)
-// still match "John Smith".
+// characters and look-alike letters, so "JOHN  smith" or "Јohn Smith" (Cyrillic
+// J) still match "John Smith". Digits are not folded into letters ("J0hn" does
+// not match): a 0 stays a digit, so numbers match only as written.
 // ---------------------------------------------------------------------------
 
 const CONFUSABLES: Record<string, string> = {
@@ -127,10 +128,10 @@ export const canonicalize = (
     )
     .filter(({ char }) => !ZERO_WIDTH.has(char) && !SKIPPED.test(char));
   // Positions index code points; map them to string offsets.
-  const offsets = chars.reduce<number[]>(
-    (acc, char) => [...acc, acc[acc.length - 1] + char.length],
-    [0],
-  );
+  const offsets = [0];
+  for (const char of chars) {
+    offsets.push(offsets[offsets.length - 1] + char.length);
+  }
   return {
     canonical: kept.map(({ char }) => char.toLowerCase()).join(""),
     positions: kept.map(({ index }) => offsets[index]),
@@ -156,6 +157,11 @@ const COMMON_MAIL_PROVIDERS = new Set([
   "live",
   "msn",
 ]);
+
+/** A word of a multi-word name that is matched on its own: at least two
+ * characters once canonical, so an initial like "J." is not a needle. */
+const isNamePart = (part: string): boolean =>
+  canonicalize(part).canonical.length >= 2;
 
 /** The shortest part of an email that is matched on its own. */
 const MIN_PART = 4;
@@ -183,7 +189,7 @@ const needlesFor = (entries: readonly PIIEntry[]): Needle[] => {
               value: p,
               partOf: { whole: value, index, count: parts.length },
             }))
-            .filter((p) => p.value.length >= 2)
+            .filter((p) => isNamePart(p.value))
           : []),
       ];
     }
@@ -428,8 +434,11 @@ export const standInFor = (category: PIICategory, n: number): string => {
       return `${FIRST[n % FIRST.length].toLowerCase()}${n + 1}@${
         DOMAINS[n % DOMAINS.length]
       }`;
-    case "phone": // 555-0100 through 555-0199 are reserved for fiction.
-      return `(555) 555-01${String(n % 100).padStart(2, "0")}`;
+    case "phone": { // 555-0100 through 555-0199 are reserved for fiction.
+      const base = `(555) 555-01${String(n % 100).padStart(2, "0")}`;
+      // Past 100 numbers, an extension keeps every stand-in distinct.
+      return n < 100 ? base : `${base} ext. ${Math.floor(n / 100) + 1}`;
+    }
     case "ssn": // Area 900 and above is never issued.
       return `900-${String(Math.floor(n / 9999) % 100).padStart(2, "0")}-${
         String((n % 9999) + 1).padStart(4, "0")
@@ -456,27 +465,30 @@ const poolWord = (pool: readonly string[], n: number): string =>
     }`;
 
 /** Replace every detected value in `text` with a stand-in. The same original
- * always gets the same stand-in within one redaction. Each word of a name gets
- * its own stand-in word (first names from one pool, surnames from another), so
- * "Rivera" alone becomes the surname of "Jordan Rivera"'s stand-in, and no two
- * people share a stand-in word. */
+ * always gets the same stand-in within one redaction. Each distinct word of a
+ * name gets its own stand-in word (first names from one pool, surnames from
+ * another), so "Rivera" alone becomes the surname of "Jordan Rivera"'s
+ * stand-in, and no two different words share a stand-in word.
+ *
+ * The result depends only on the text and on the values that match in it: a
+ * found value that never matches (a vault entry the draft does not mention, or
+ * the unmentioned words of a name) draws no stand-in and changes nothing. */
 export const redact = (
   text: string,
   found: readonly PIIEntry[],
 ): Redaction => {
   const normalized = text.normalize("NFKC");
   const matches = findMatches(normalized, needlesFor(found));
-  // Words that stay visible, and the words of every hidden value: no stand-in
-  // may be one of either, or restoring would rewrite visible text.
+  // Words that stay visible: no stand-in may be one, or restoring would
+  // rewrite visible text. Hidden values are deliberately not consulted, so a
+  // stand-in carries no hint of one; `restore` swaps in one pass, so a
+  // stand-in that happens to equal a hidden word is never swapped twice.
   const visible = matches
     .reduceRight(
       (t, m) => t.slice(0, m.start) + " " + t.slice(m.end),
       normalized,
     );
-  const taken = new Set([
-    ...wordsOf(visible),
-    ...found.flatMap((f) => wordsOf(f.value)),
-  ]);
+  const taken = new Set(wordsOf(visible));
   const visibleLower = foldMarks(visible).toLowerCase();
   const counters: Record<string, number> = {};
   const take = (key: string, make: (n: number) => string): string => {
@@ -495,20 +507,18 @@ export const redact = (
     }
   };
 
-  // A name's stand-in, one word per original word.
-  const nameStandIns = new Map<string, string[]>();
-  const nameFor = (whole: string): string[] => {
-    const key = canonicalize(whole).canonical;
-    const existing = nameStandIns.get(key);
-    if (existing) return existing;
-    const parts = whole.trim().split(/\s+/);
-    const words = parts.map((_, i) =>
-      parts.length > 1 && i === parts.length - 1
-        ? take("last", (n) => poolWord(LAST, n))
-        : take("first", (n) => poolWord(FIRST, n))
-    );
-    nameStandIns.set(key, words);
-    return words;
+  // One stand-in word per distinct name word, drawn when that word first
+  // matches, so a word the draft never mentions draws nothing.
+  const nameWords = new Map<string, string>();
+  const wordFor = (word: string, surname: boolean): string => {
+    const key = canonicalize(word).canonical;
+    const existing = nameWords.get(key);
+    if (existing !== undefined) return existing;
+    const standIn = surname
+      ? take("last", (n) => poolWord(LAST, n))
+      : take("first", (n) => poolWord(FIRST, n));
+    nameWords.set(key, standIn);
+    return standIn;
   };
 
   const byOriginal = new Map<string, Substitution>();
@@ -525,18 +535,25 @@ export const redact = (
   for (const { needle, start, end } of matches) {
     const original = normalized.slice(start, end);
     let standIn: string;
-    if (needle.category === "name") {
-      const whole = needle.partOf?.whole ?? needle.value;
-      const words = nameFor(whole);
-      const parts = whole.trim().split(/\s+/);
+    if (needle.category === "name" && needle.partOf) {
+      const { index, count } = needle.partOf;
+      standIn = add(
+        "name",
+        original,
+        wordFor(needle.value, count > 1 && index === count - 1),
+      );
+    } else if (needle.category === "name") {
+      const whole = needle.value.trim();
+      const parts = whole.split(/\s+/);
+      const words = parts.map((p, i) =>
+        wordFor(p, parts.length > 1 && i === parts.length - 1)
+      );
       // Every form of the name restores: the whole, and each word alone.
-      add("name", whole.trim(), words.join(" "));
+      add("name", whole, words.join(" "));
       parts.forEach((p, i) => {
-        if (parts.length > 1 && p.length >= 2) add("name", p, words[i]);
+        if (parts.length > 1 && isNamePart(p)) add("name", p, words[i]);
       });
-      standIn = needle.partOf
-        ? words[needle.partOf.index]
-        : add("name", original, words.join(" "));
+      standIn = add("name", original, words.join(" "));
     } else {
       standIn = byOriginal.get(needle.canonical)?.standIn ??
         add(
@@ -556,24 +573,28 @@ const escapeRegExp = (s: string): string =>
   s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Put the originals back into a reply: whole words, any case, longest
- * stand-in first. */
+ * stand-in first, in a single pass, so an original that happens to read like
+ * another stand-in is never swapped a second time. */
 export const restore = (
   reply: string,
   substitutions: readonly Substitution[],
-): string =>
-  [...substitutions]
-    .sort((a, b) => b.standIn.length - a.standIn.length)
-    .reduce(
-      (text, s) =>
-        text.replace(
-          new RegExp(
-            `(?<![\\p{L}\\p{N}])${escapeRegExp(s.standIn)}(?![\\p{L}\\p{N}])`,
-            "giu",
-          ),
-          () => s.original,
-        ),
-      reply,
-    );
+): string => {
+  const byStandIn = new Map<string, string>();
+  for (
+    const s of [...substitutions].sort((a, b) =>
+      b.standIn.length - a.standIn.length
+    )
+  ) {
+    const key = s.standIn.toLowerCase();
+    if (s.standIn !== "" && !byStandIn.has(key)) byStandIn.set(key, s.original);
+  }
+  if (byStandIn.size === 0) return reply;
+  const any = [...byStandIn.keys()].map(escapeRegExp).join("|");
+  return reply.replace(
+    new RegExp(`(?<![\\p{L}\\p{N}])(?:${any})(?![\\p{L}\\p{N}])`, "giu"),
+    (m) => byStandIn.get(m.toLowerCase()) ?? m,
+  );
+};
 
 /** Shorter words match too much ordinary text to report. */
 const MIN_LEAK_WORD = 3;

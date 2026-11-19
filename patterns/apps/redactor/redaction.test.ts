@@ -70,6 +70,55 @@ Deno.test("a stand-in reveals nothing about the value it hides", () => {
   );
 });
 
+Deno.test("a vault entry the draft never mentions changes nothing", () => {
+  // The released draft may depend only on what matched: an unmentioned entry,
+  // or the unmentioned surname of a mentioned first name, must not shift any
+  // stand-in, or the release hints at what else the vault holds.
+  const draft = "Jordan asked Sam Ortiz to call 415-867-5309.";
+  const bare = run(draft, [name("Jordan"), name("Sam Ortiz")]).redacted;
+  assertEquals(
+    run(draft, [
+      name("Alice Anderson"),
+      name("Jordan Rivera"),
+      name("Bob Brown"),
+      { category: "phone", value: "(555) 555-0100" },
+      name("Sam Ortiz"),
+    ]).redacted,
+    bare,
+  );
+});
+
+Deno.test("a hidden word that reads like a stand-in restores once", () => {
+  // "Pat Alice"'s stand-in may use "Alice": restoring swaps each stand-in once,
+  // so it cannot turn the restored "Alice" into "Pat" again.
+  const { redacted, substitutions } = run("Pat Alice called.", [
+    name("Pat Alice"),
+  ]);
+  assertEquals(
+    redacted,
+    run("Pat Smith called.", [name("Pat Smith")]).redacted,
+  );
+  assertEquals(restore(redacted, substitutions), "Pat Alice called.");
+});
+
+Deno.test("an initial is not matched on its own", () => {
+  assertEquals(
+    run("Plan J is fine.", [name("John J. Smith")]).redacted,
+    "Plan J is fine.",
+  );
+});
+
+Deno.test("every phone number gets its own stand-in, past the pool", () => {
+  const phones = Array.from(
+    { length: 120 },
+    (_, i) => `415-867-${String(5000 + i)}`,
+  );
+  const draft = phones.join(", ");
+  const { redacted, substitutions } = run(draft, []);
+  assertEquals(new Set(substitutions.map((s) => s.standIn)).size, 120);
+  assertEquals(restore(redacted, substitutions), draft);
+});
+
 Deno.test("a stand-in never collides with text that stays visible", () => {
   const { redacted, substitutions } = run(
     "Ask Jordan Rivera, cc Alice Anderson.",
