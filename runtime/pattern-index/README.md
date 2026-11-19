@@ -52,10 +52,12 @@ adoption and the run step by step. This repository's own patterns sync through
 `.github/workflows/pattern-index-sync.yml`, which runs only while the repository
 variable `PATTERN_INDEX_SYNC` is `on`.
 
-An oversized program's publish refusal reports the server's byte limit in the
-sync summary. The report recognizes only the server's fixed size-error wording
-with a bounded decimal limit; other index response details remain withheld. The
-entry stays failed, and the sync continues with the remaining entries.
+A publish the index refuses for its program's size is listed in the sync summary
+as too large for the index, with the server's byte limit, rather than as failed.
+Like an entry with no description, it does not fail the job, and the sync
+continues with the remaining entries. Only the server's fixed size-error wording
+with a bounded decimal limit is recognized; any other refusal fails the entry,
+and other index response details remain withheld.
 
 ## Loom helper contract
 
