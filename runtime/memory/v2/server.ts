@@ -9716,10 +9716,13 @@ export class Server {
    * `watches`. Each branch's graph releases the roots `watches` no longer
    * name (`releaseTrackedRoots()`) and walks only the roots it adds
    * (`extendTrackedGraph()`), so a root both sets name keeps what it covers
-   * without being walked again. A branch `watches` adds is evaluated whole, a
-   * branch it leaves drops its graph, and a graph whose roots stay the same
-   * is returned as it stands. A moved graph is a clone, so `previous` is
-   * untouched until the caller installs the result.
+   * without being walked again. A branch `watches` adds is evaluated whole,
+   * and a branch it leaves drops its graph. A kept graph first takes the
+   * space's pending dirty batch (`refreshTrackedGraph()`), so it answers as a
+   * whole evaluation would for documents written since the last refresh pass;
+   * one whose roots stay the same, while the space has no pending batch, is
+   * returned as it stands. A moved graph is a clone, so `previous` is untouched until the
+   * caller installs the result.
    */
   #moveWatchGraphs(
     session: SessionState,
@@ -9730,6 +9733,8 @@ export class Server {
   ): Map<string, TrackedGraphState> {
     const graphs = new Map<string, TrackedGraphState>();
     const identity = this.#sessionScopeIdentity(session);
+    const dirtyIds = this.#dirtyDocsBySpace.get(session.space);
+    const dirty = dirtyIds !== undefined && dirtyIds.size > 0;
     for (const [branch, group] of graphWatchesByBranch(watches)) {
       const query = unionQuery(branch, group);
       const existing = previous.get(branch);
@@ -9752,11 +9757,20 @@ export class Server {
       const added = query.roots.filter((_, index) =>
         !existing.roots.has(referrers[index])
       );
-      if (released.length === 0 && added.length === 0) {
+      if (!dirty && released.length === 0 && added.length === 0) {
         graphs.set(branch, existing);
         continue;
       }
       const moved = cloneTrackedGraphState(engine, existing);
+      if (dirty) {
+        const result = refreshTrackedGraph(
+          session.space,
+          engine,
+          moved,
+          dirtyIds,
+        );
+        if (result !== null) foldRootAttribution(attribution, result.stats);
+      }
       if (released.length > 0) {
         const result = releaseTrackedRoots(
           session.space,
