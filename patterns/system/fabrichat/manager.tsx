@@ -757,9 +757,10 @@ const offerEnvelope = (
  * admit, and a transaction's writes are held to the labels of everything it
  * reads, so nothing written here or in this user's records depends on where a
  * profile points. A re-offer, one whose `noticeWaiting` is set, offers nothing
- * to a member the room's roster already lists. A notice of the room for a
- * member it adds to the participants, or finds on the roster, has nothing left
- * to tell them, and is dropped.
+ * to a member the room's roster already lists, and drops their notice of the
+ * room, which has nothing left to tell them. A member it adds to the
+ * participants keeps theirs, since the add is an event of its own that can
+ * fail; `joinRoom` drops it once the roster lists them.
  *
  * It runs as an event of its own, queued by the act that creates or offers
  * the room, so that it reads the room's space once the room's creation has
@@ -774,10 +775,9 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       ? event.room.key("roster").get() ?? []
       : [];
     const profiles: Cell<ChatManagerProfile>[] = [];
-    // The members this offer puts on the room's roster, or finds there, whose
-    // notices of the room have nothing left to tell them.
+    // The members a re-offer finds on the room's roster, whose notices of the
+    // room have nothing left to tell them.
     const joined = new Set<string>();
-    const queued: ChatManagerNotice[] = [];
     for (const { recipient, profiles: named } of event.members ?? []) {
       if (roster.some((profile) => profileOwnerOf(profile) === recipient)) {
         joined.add(recipient);
@@ -785,23 +785,23 @@ const offerRooms = handler<OfferRoomEvent, OfferRoomsState>(
       }
       if ((named ?? []).length === 0) {
         if (event.noticeWaiting !== true) {
-          queued.push(noticeFor(recipient, event.id, event.room));
+          state.outgoingNotices.push(
+            noticeFor(recipient, event.id, event.room),
+          );
         }
         continue;
       }
       state.joinRooms.send({ room: event.room, profile: named[0] });
-      joined.add(recipient);
       for (const profile of named) profiles.push(profile);
     }
-    // A notice is read only when a member here joins, so an offer that
-    // queues notices alone appends them without reading the list.
+    // Only a re-offer reads the roster, and it queues no notice, so the
+    // notices are read only when one is found there.
     const kept = joined.size === 0 ? undefined : withoutNoticesOf(
       (state.outgoingNotices.get() ?? []) as ChatManagerNotice[],
       event.room,
       joined,
     );
-    if (kept !== undefined) state.outgoingNotices.set([...kept, ...queued]);
-    else for (const notice of queued) state.outgoingNotices.push(notice);
+    if (kept !== undefined) state.outgoingNotices.set(kept);
     if (profiles.length === 0) return;
     state.deliverOffers.send({
       offer: offerEnvelope(event.id, space, event.title ?? "", from),
@@ -1092,14 +1092,14 @@ const createRoom = (
  * `counterpart` through the share inbox `profile` points at, by `offerRooms`
  * as a new one is offered, when the room was offered them nothing: a notice
  * for them of the room is still waiting. `offerRooms` adds `profile` to the
- * room's roster and drops the notice, wherever the profile points. A
- * counterpart the room's roster lists has joined the room already, and
- * `offerRooms` offers them nothing and drops the notice, and nothing
- * is offered to one named by no profile. Nothing is offered either when
- * `requestId`, which keys the offer, is longer than a share inbox keeps an
- * offer's `id`, since the inbox would cut it short and could take it for
- * another's. It reads none of the room, which `offerRooms` reads, as the one
- * room its event names.
+ * room's roster, wherever the profile points, and `joinRoom` drops the notice
+ * once the roster lists them. A counterpart the room's roster lists has joined
+ * the room already, and `offerRooms` offers them nothing and drops the
+ * notice, and nothing is offered to one named by no profile. Nothing is
+ * offered either when `requestId`, which keys the offer, is longer than a
+ * share inbox keeps an offer's `id`, since the inbox would cut it short and
+ * could take it for another's. It reads none of the room, which `offerRooms`
+ * reads, as the one room its event names.
  */
 const reofferDirect = (
   state: ManagerActState,

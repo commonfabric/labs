@@ -259,13 +259,15 @@ session that has none is refused.
   attesting its recipient, who then needs no telling, or the room is
   [deleted](../random-space-identities.md#deleting-a-space), as `rooms` tells
   it, which leaves nothing to tell them of. A notice whose recipient has
-  joined is also dropped from what the manager stores, where the manager
-  finds them on the room's roster or puts them there: as an offer adds them to
-  the room's participants, as `openDirect` finds them there before offering
-  the room again, and otherwise, as when another member added them, the next
-  time this user [joins](#joinroomrequestid-string-room-cellchatroomoutput)
-  the room. A notice of a room this user never joins again stays stored, left
-  out of the list, until a client reports it delivered.
+  joined is also dropped from what the manager stores, once the manager finds
+  them on the room's roster: as `openDirect` finds them there before offering
+  the room again, and otherwise, however they joined, an offer of this user's
+  or another member's adding them among the ways, the next time this user
+  [joins](#joinroomrequestid-string-room-cellchatroomoutput) the room. An
+  offer adds its member to the room's participants by an event of its own,
+  which can fail, so the notice stays until the roster lists them. A notice of
+  a room this user never joins again stays stored, left out of the list, until
+  a client reports it delivered.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
   `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose
@@ -377,7 +379,9 @@ outward act when it creates a room, or offers one it finds.
   room that was offered `counterpart` nothing, since a notice for them of it is
   still in `outgoingNotices`, is offered them through `profile`'s inbox, and
   `profile` is added to the room's participants, as for a new room, wherever
-  it points, and the notice is dropped. A room whose roster already lists a
+  it points; once that puts them on the room's roster, `outgoingNotices` leaves
+  the notice out, and the next join of the room drops it. A room whose roster
+  already lists a
   profile attesting `counterpart` is one they have joined, and is offered
   nothing, and the notice is dropped; a room whose notice has been delivered
   is offered nothing either. Nor is a room offered,
