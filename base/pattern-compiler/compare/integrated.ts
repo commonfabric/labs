@@ -39,6 +39,11 @@ import {
   resetAllTimingStats,
 } from "../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
+import {
+  type MemorySpace,
+  recordRelevantSchemaWritePolicyInput,
+} from "../../../runtime/runner/src/cell.ts";
+import { diffAndUpdate } from "../../../runtime/runner/src/data-updating.ts";
 import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../exec/executor.ts";
@@ -208,6 +213,50 @@ const inMemory = (
 };
 
 /**
+ * Writes each input that `argument` has a value for as a cell of its own,
+ * under the schema `inputs` gives it, and returns the argument with a link
+ * to each in its place and the documents the executor is to be given for
+ * them. An input is written as the runner writes the result of a `lift`
+ * (`sendValueToBinding` in `runtime/runner/src/pattern-binding.ts`): with
+ * `diffAndUpdate` and no source of anchor identifiers, so the records of an
+ * array stay in place, as the executor holds them, and not as documents of
+ * their own, as `Cell.set` stores them. The schema is recorded for the write,
+ * which stores the labels it declares. `keeper` keeps each document loaded
+ * from then on (`RuntimeTransactions.entityOf`).
+ */
+export const labeledInputs = async (
+  runtime: Runtime,
+  space: MemorySpace,
+  inputs: Record<string, { schema: unknown }>,
+  argument: Record<string, unknown>,
+  keeper: RuntimeTransactions,
+): Promise<{
+  given: Record<string, unknown>;
+  documents: { id: string; kind: string; value: unknown }[];
+}> => {
+  const tx = runtime.edit();
+  const given = { ...argument };
+  const documents: { id: string; kind: string; value: unknown }[] = [];
+  for (const [name, input] of Object.entries(inputs)) {
+    if (!(name in argument)) continue;
+    const link = runtime.getCell(
+      space,
+      { compareInput: name },
+      input.schema as JSONSchema,
+      tx,
+    ).getAsNormalizedFullLink();
+    recordRelevantSchemaWritePolicyInput(tx, link, input.schema as JSONSchema);
+    diffAndUpdate(runtime, tx, link, argument[name]);
+    keeper.entityOf(link.id);
+    documents.push({ id: link.id, kind: "input", value: argument[name] });
+    given[name] = { $link: { doc: link.id, path: [] } };
+  }
+  const { error } = await tx.commit().settled;
+  if (error !== undefined) throw error;
+  return { given, documents };
+};
+
+/**
  * Runs a module with its documents in the runtime's storage, and returns
  * the figures and what differs from the run in memory.
  */
@@ -228,35 +277,25 @@ const inStorage = async (
     cfcFlowLabels: "persist",
   });
   const differs: string[] = [];
+  const hooks = new RuntimeTransactions(runtime, space);
   try {
     // The inputs as cells of their own, each under a schema with a clause.
     let given = argument;
-    const documents: { id: string; kind: string; value: unknown }[] = [];
+    let documents: { id: string; kind: string; value: unknown }[] = [];
     if (labeled) {
       const inputs = generateInputs(
         artifact.plan as Parameters<typeof generateInputs>[0],
         artifact.schemas as Parameters<typeof generateInputs>[1],
         await scenarioAudience(),
       );
-      const tx = runtime.edit();
-      given = { ...argument };
-      for (const [name, input] of Object.entries(inputs)) {
-        if (!(name in argument)) continue;
-        const cell = runtime.getCell(
-          space,
-          { compareInput: name },
-          input.schema as JSONSchema,
-          tx,
-        );
-        cell.set(argument[name] as never);
-        const id = cell.getAsNormalizedFullLink().id;
-        documents.push({ id, kind: "input", value: argument[name] });
-        given[name] = { $link: { doc: id, path: [] } };
-      }
-      const { error } = await tx.commit().settled;
-      if (error !== undefined) throw error;
+      ({ given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        argument,
+        hooks,
+      ));
     }
-    const hooks = new RuntimeTransactions(runtime, space);
     const measure = async (work: () => void): Promise<Figure> => {
       const before = hooks.counts;
       const began = performance.now();
@@ -314,6 +353,7 @@ const inStorage = async (
     }
     return { arm: { settle, events: figures }, differs };
   } finally {
+    hooks.close();
     await runtime.dispose();
     await storageManager.close();
   }
