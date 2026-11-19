@@ -289,6 +289,31 @@ const FORWARDER_PATTERN = [
   ">(({ target }) => ({ write: forward({ target }) }));",
 ].join("\n");
 
+/**
+ * A piece whose result is the `name` its `source` holds, or `"absent"` while
+ * `source` holds none: the one on the home space, whose `source` is a
+ * document in a space the other toolshed owns.
+ */
+const MIRROR_PATTERN = [
+  "import { lift, pattern } from 'commonfabric';",
+  "",
+  "const nameOf = lift(",
+  "  (input: { absent: string; source?: { name?: string } }) =>",
+  "    input.source?.name ?? input.absent,",
+  ");",
+  "",
+  "export default pattern<{ absent: string; source?: { name?: string } }>(",
+  "  ({ absent, source }) => ({ name: nameOf({ absent, source }) }),",
+  ");",
+].join("\n");
+
+const PROFILE_SCHEMA = {
+  type: "object",
+  properties: { name: { type: "string" } },
+} as const satisfies JSONSchema;
+
+const MIRROR_SCHEMA = { type: "string" } as const satisfies JSONSchema;
+
 const COUNTER_SCHEMA = {
   type: "object",
   properties: { n: { type: "number" } },
@@ -452,6 +477,34 @@ async function stopDeployment(deployment: Deployment): Promise<void> {
 }
 
 /**
+ * Creates and starts a piece on `space`'s owner, over the space's memory
+ * session, as `cf piece new` creates one, and returns its id and result.
+ */
+async function instantiate(
+  manager: StorageManager,
+  runtime: Runtime,
+  space: MemorySpace,
+  contents: string,
+  argument: Record<string, unknown>,
+) {
+  const receipt = await manager.runPatternLifecycle(
+    space,
+    "instantiate",
+    {
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents }],
+      },
+      argument,
+    } as FabricPlainObject,
+  ) as { pieceId: string };
+  const id = entityIdFrom(receipt.pieceId);
+  const piece = runtime.getCellFromEntityId(space, id, [], RESULT_SCHEMA);
+  await piece.sync();
+  return { id, piece };
+}
+
+/**
  * Sends an event to a forwarder on a space toolshed A owns, whose handler
  * sends it on into a counter on a space toolshed B owns, and expects the
  * counter's write to land and the crossing to have gone through the route.
@@ -504,36 +557,25 @@ async function expectForwardedEventServedOnOwner(
     const home = spaces.A;
     const target = spaces.B;
 
-    // Each piece is created and started on its space's owner, over the
-    // space's memory session, as `cf piece new` creates one: the counter
-    // on B first, so the forwarder on A can name its stream.
-    const instantiate = async (
-      space: MemorySpace,
-      contents: string,
-      argument: Record<string, unknown>,
-    ) => {
-      const receipt = await manager.runPatternLifecycle(
-        space,
-        "instantiate",
-        {
-          program: {
-            main: "/main.tsx",
-            files: [{ name: "/main.tsx", contents }],
-          },
-          argument,
-        } as FabricPlainObject,
-      ) as { pieceId: string };
-      const id = entityIdFrom(receipt.pieceId);
-      const piece = runtime.getCellFromEntityId(space, id, [], RESULT_SCHEMA);
-      await piece.sync();
-      return { id, piece };
-    };
-    const counter = await instantiate(target, COUNTER_PATTERN, {
-      value: { n: 0 },
-    });
-    const forwarder = await instantiate(home, FORWARDER_PATTERN, {
-      target: counter.piece.key("write").getAsLink(),
-    });
+    // The counter on B first, so the forwarder on A can name its stream.
+    const counter = await instantiate(
+      manager,
+      runtime,
+      target,
+      COUNTER_PATTERN,
+      {
+        value: { n: 0 },
+      },
+    );
+    const forwarder = await instantiate(
+      manager,
+      runtime,
+      home,
+      FORWARDER_PATTERN,
+      {
+        target: counter.piece.key("write").getAsLink(),
+      },
+    );
     await runtime.editWithRetry((tx) =>
       forwarder.piece.key("write").withTx(tx).send({ n: 7 })
     );
@@ -575,6 +617,111 @@ async function expectForwardedEventServedOnOwner(
   }
 }
 
+/**
+ * Starts a piece on a space toolshed A owns whose computation reads a
+ * document in a user's home space, which toolshed B owns and nobody has
+ * created yet. Then the user's own client creates the space and writes the
+ * document, and the computation's result is expected to follow: A's serving
+ * loop read the space through B while it did not exist, so only B can tell
+ * it what the user later wrote there.
+ */
+async function expectReadOfSpaceCreatedLater(
+  deployment: Deployment,
+): Promise<void> {
+  const alice = await Identity.fromPassphrase(
+    `owner-routing-alice-${crypto.randomUUID()}`,
+  );
+  // A user whose home space toolshed B owns: a DID decides its owner, so
+  // identities are made until one lands there.
+  let voter = await Identity.fromPassphrase(
+    `owner-routing-voter-${crypto.randomUUID()}`,
+  );
+  while (ownerOf(voter.did()) !== "B") {
+    voter = await Identity.fromPassphrase(
+      `owner-routing-voter-${crypto.randomUUID()}`,
+    );
+  }
+  const voterHome = voter.did() as MemorySpace;
+  const experimental = (serverExecution: boolean) => ({
+    ...withServerExecutionDefault(experimentalOptionsFromEnv(Deno.env.get)),
+    serverExecution,
+  });
+  const manager = StorageManager.open({
+    as: alice,
+    memoryHost: deployment.proxy.url,
+  });
+  const runtime = new Runtime({
+    apiUrl: deployment.toolsheds.A.url,
+    experimental: experimental(true),
+    storageManager: manager,
+  });
+  const readerManager = StorageManager.open({
+    as: alice,
+    memoryHost: deployment.proxy.url,
+  });
+  const reader = new Runtime({
+    apiUrl: deployment.toolsheds.A.url,
+    experimental: experimental(false),
+    storageManager: readerManager,
+  });
+  const voterManager = StorageManager.open({
+    as: voter,
+    memoryHost: deployment.proxy.url,
+  });
+  const voterRuntime = new Runtime({
+    apiUrl: deployment.toolsheds.B.url,
+    experimental: experimental(false),
+    storageManager: voterManager,
+  });
+  try {
+    let home = await manager.createSpace({ [alice.did()]: "OWNER" });
+    while (ownerOf(home) !== "A") {
+      home = await manager.createSpace({ [alice.did()]: "OWNER" });
+    }
+    const profile = "owner-routing-profile";
+    const mirror = await instantiate(manager, runtime, home, MIRROR_PATTERN, {
+      absent: "absent",
+      source: runtime.getCell(voterHome, profile, PROFILE_SCHEMA).getAsLink(),
+    });
+    const mirrored = reader.getCellFromEntityId(
+      home,
+      mirror.id,
+      ["name"],
+      MIRROR_SCHEMA,
+    );
+
+    // The computation ran on A over the space nobody has created.
+    await waitForCellValue(
+      reader,
+      mirrored,
+      (value: string | undefined) => value === "absent",
+      { stuckLabel: "the computation's first read of the uncreated space" },
+    );
+
+    // The user's client creates the home space on B, writing its genesis
+    // access list on opening it, then writes the document.
+    await voterRuntime.editWithRetry((tx) =>
+      voterRuntime.getCell(voterHome, profile, PROFILE_SCHEMA).withTx(tx).set(
+        { name: "voter" },
+      )
+    );
+
+    await waitForCellValue(
+      reader,
+      mirrored,
+      (value: string | undefined) => value === "voter",
+      { stuckLabel: "the computation to read the space its user created" },
+    );
+  } finally {
+    await voterRuntime.dispose();
+    await voterManager.close();
+    await reader.dispose();
+    await readerManager.close();
+    await runtime.dispose();
+    await manager.close();
+  }
+}
+
 describe("owner-routing", () => {
   let deployment: Deployment;
 
@@ -588,6 +735,10 @@ describe("owner-routing", () => {
 
   it("serves a run's event into a space owned by the other toolshed on that toolshed alone, routed through the proxy", async () => {
     await expectForwardedEventServedOnOwner(deployment);
+  });
+
+  it("serves a computation over a space the other toolshed owns that its user creates after the computation first reads it", async () => {
+    await expectReadOfSpaceCreatedLater(deployment);
   });
 
   describe("with an identity per toolshed", () => {
@@ -605,6 +756,10 @@ describe("owner-routing", () => {
 
     it("serves a run's event into a space owned by the other toolshed on that toolshed alone", async () => {
       await expectForwardedEventServedOnOwner(deployment);
+    });
+
+    it("serves a computation over a space the other toolshed owns that its user creates after the computation first reads it", async () => {
+      await expectReadOfSpaceCreatedLater(deployment);
     });
   });
 });

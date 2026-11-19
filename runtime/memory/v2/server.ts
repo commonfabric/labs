@@ -4143,6 +4143,32 @@ export class Server {
   }
 
   /**
+   * Binds `session` to the owner `engine`'s copy of its space now names, when
+   * it was opened `actingAs: "space-owner"` by a delegating principal at a
+   * time the space had no owner to bind to, as a space still being created
+   * has none. The binding is the one an open would resolve now. Revoking the
+   * session instead would leave it refused for good when its serving runtime
+   * is in another process: nothing there hears of this access-list commit,
+   * so nothing opens the session again. A session already bound keeps its
+   * owner here, and `#revokeDeauthorizedSessions` revokes it when ownership
+   * moves.
+   */
+  #bindToNewOwner(session: SessionState, engine: Engine.Engine): void {
+    const { principal } = session;
+    if (
+      session.servingBinding !== true ||
+      session.actingPrincipal !== undefined ||
+      session.capabilityPrincipal !== undefined ||
+      principal === undefined || !this.#isDelegatingPrincipal(principal) ||
+      this.#isServicePrincipal(principal)
+    ) {
+      return;
+    }
+    const owner = this.#resolveSpaceOwnerBinding(engine, session.space);
+    if (owner !== undefined) session.actingPrincipal = owner;
+  }
+
+  /**
    * Resolve the acting principal a delegated READ binding stands for
    * (OW31; `SessionDescriptor.actingAs: "space-owner"`): the space's ACL
    * OWNER — the space DID itself when self-owned (every home space),
@@ -4409,12 +4435,14 @@ export class Server {
   /** Evaluate the ACL policy for a message. Returns `null` when the message
    *  may proceed and a typed error when it must be rejected. In `observe`, an
    *  ordinary capability shortfall is counted and logged; invalid ACL state
-   *  still fails closed. */
+   *  still fails closed. `servingBinding` says the message comes from a
+   *  session opened `actingAs: "space-owner"`, or is that open. */
   #authorizeMessageWithEngine(
     engine: Engine.Engine,
     space: string,
     principal: string | undefined,
     requirement: Capability,
+    servingBinding = false,
   ): V2Error | null {
     if (
       this.options.ownsSpace !== undefined && !this.options.ownsSpace(space)
@@ -4441,7 +4469,15 @@ export class Server {
       // document, so its space has history too.
       const operator = principal !== undefined &&
         this.#isServicePrincipal(principal) && Engine.serverSeq(engine) > 0;
-      if (kind !== "valid" && !genesis && !operator) {
+      // Serving: a delegating principal's owner-bound session reads a space
+      // with no history, as every principal may outside Mode A. A serving
+      // runtime can reach a space while its creator is still making it; its
+      // session reads the empty space and binds to the owner the genesis
+      // ACL names (`#bindToNewOwner`). It writes nothing until then.
+      const serving = servingBinding && kind === "missing" &&
+        requirement === "READ" && Engine.serverSeq(engine) === 0 &&
+        principal !== undefined && this.#isDelegatingPrincipal(principal);
+      if (kind !== "valid" && !genesis && !operator && !serving) {
         return toError("AuthorizationError", "Routed memory request denied");
       }
     }
@@ -4541,6 +4577,7 @@ export class Server {
       space,
       principal,
       requirement,
+      session.servingBinding === true,
     );
   }
 
@@ -4833,8 +4870,9 @@ export class Server {
   /**
    * Brings the sessions on `space` up to date after a change to its access
    * list: decides again whether the space's own key is a person's for each,
-   * revokes those the list no longer admits, and notices the admissions it
-   * now allows.
+   * binds the owner-bound sessions that had no owner to bind to
+   * ({@link #bindToNewOwner}), revokes those the list no longer admits, and
+   * notices the admissions it now allows.
    * `writerSessionId` names the session whose commit made the change, as
    * {@link #revokeDeauthorizedSessions} takes it.
    */
@@ -4845,6 +4883,7 @@ export class Server {
   ): void {
     for (const session of this.#sessions.sessionsForSpace(space)) {
       this.#decideOwnKey(session, engine);
+      this.#bindToNewOwner(session, engine);
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
@@ -4984,10 +5023,12 @@ export class Server {
    * neither does one whose peer did not advertise `admissionNotice`.
    *
    * The callers in this file record nothing for a session opened
-   * `actingAs: "space-owner"`. Only a co-hosted serving runtime opens one,
-   * and it already hears of every access-list commit in process
-   * (`noteSpaceAclChanged()`), after which its next load of the space opens
-   * the session again through ordinary admission.
+   * `actingAs: "space-owner"`. Only a serving runtime opens one. An
+   * access-list change that gives its space an owner binds it in place
+   * ({@link #bindToNewOwner}), so a serving runtime in another process,
+   * which hears of no commit here, reads on. One a change does revoke, a
+   * co-hosted serving runtime opens again through ordinary admission once
+   * its host tells it of the commit (`noteSpaceAclChanged()`).
    */
   #awaitAdmission(
     connectionId: string | null,
@@ -6670,15 +6711,22 @@ export class Server {
         connection.consumeSessionOpenChallenge(authContext.challenge);
       }
       // Mode A: a DID with no store here names a space nobody has created
-      // here. Only its own key may create it, and only where `createsSpace`
-      // allows; anyone else is refused before opening the engine would
-      // create the store. `createsSpace` is asked after the existence check,
-      // so a directory change during that wait is seen. The refusal stays
-      // permanent: a retriable one would show which DIDs the directory lists.
+      // here. Its own key may create it, and so may a delegating principal's
+      // owner-bound open: a serving runtime that reaches the space before
+      // its creator does needs a session that will see the space once it is
+      // created, and an empty store is what holds one. Either is admitted
+      // only where `createsSpace` allows; anyone else is refused before
+      // opening the engine would create the store. `createsSpace` is asked
+      // after the existence check, so a directory change during that wait is
+      // seen. The refusal stays permanent: a retriable one would show which
+      // DIDs the directory lists.
       if (
         this.options.requireExplicitAcl === true &&
         !(await this.#spaceStoreExists(message.space)) &&
-        (principal !== message.space ||
+        ((principal !== message.space &&
+          !(message.session.actingAs === "space-owner" &&
+            principal !== undefined &&
+            this.#isDelegatingPrincipal(principal))) ||
           this.options.createsSpace?.(message.space) === false)
       ) {
         throw authorizationError("Routed memory request denied");
@@ -6801,6 +6849,7 @@ export class Server {
         message.space,
         capabilityPrincipal ?? actingPrincipal ?? principal,
         "READ",
+        actingAs === "space-owner",
       );
       if (deny) {
         // No admission wait for a chain, as for the binding: the grant it
