@@ -7,7 +7,8 @@
  *
  * Ported from jkomoros/community-patterns (`prepared-food.tsx`). Tags and
  * ingredients use `cf-tags`, and its `dietaryCompatibility` has the same shape
- * as a recipe's so a planner treats both alike; `dietarySource` is "declared".
+ * as a recipe's so a planner treats both alike; `dietarySource` is "declared" once
+ * something is entered and "none" before.
  */
 import {
   action,
@@ -92,7 +93,7 @@ export interface PreparedFoodOutput {
   requiresReheating: boolean;
   /** The declared tags in the shape a recipe's analysis has. */
   dietaryCompatibility: DietaryCompatibility;
-  /** Always "declared": the tags are what someone entered. */
+  /** "declared" once a tag or main ingredient is entered, else "none". */
   dietarySource: DietarySource;
   /** Add a dietary tag (lowercased; repeats ignored). */
   addDietaryTag: Stream<{ tag: string }>;
@@ -172,6 +173,13 @@ const PreparedFood = pattern<PreparedFoodInput, PreparedFoodOutput>(
         : [],
       primaryIngredients: [...primaryIngredients.get()],
     }));
+
+    // Empty lists mean nobody has said anything yet, not "contains nothing".
+    const dietarySource = computed((): DietarySource =>
+      dietaryTags.get().length || primaryIngredients.get().length
+        ? "declared"
+        : "none"
+    );
 
     const addDietaryTag = action(({ tag }: { tag: string }) => {
       dietaryTags.set(normalizedTags([...dietaryTags.get(), tag]));
@@ -325,7 +333,7 @@ const PreparedFood = pattern<PreparedFoodInput, PreparedFoodOutput>(
       prepTime,
       requiresReheating,
       dietaryCompatibility,
-      dietarySource: "declared",
+      dietarySource,
       addDietaryTag,
     };
   },

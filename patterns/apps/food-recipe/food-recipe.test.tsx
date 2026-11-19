@@ -30,6 +30,7 @@ import {
   ovenRequirements,
   scalarChanges,
   scaleAmount,
+  timingReview,
   withGroupNumber,
   withOvenField,
   wordDiff,
@@ -122,6 +123,25 @@ export default pattern(() => {
       !ovenRequirements([base, cold]).needsOven &&
       ovenRequirements([hot, { ...hot, id: "x" }]).temps.join() === "400";
   });
+  const assert_oven_fields_need_an_oven = assert(() =>
+    withOvenField(base, "duration", "30").oven === undefined &&
+    withOvenField(base, "width", "toggle").oven === undefined
+  );
+  const assert_timing_review_shows_rack = assert(() => {
+    const oven = {
+      temperature: 400,
+      duration: 20,
+      heightSlots: 1,
+      width: "full" as const,
+    };
+    const review = timingReview([{ ...base, oven }], {
+      stepGroups: [{ id: "base", oven: { ...oven, heightSlots: 2 } }],
+    });
+    return review.length === 1 &&
+      review[0].changes.some((c) =>
+        c.field === "Oven" && c.to.includes("rack height 2")
+      );
+  });
   const assert_keeps_repeated_ingredients = assert(() => {
     const butter = { item: "butter", amount: "1/2", unit: "cup" };
     const salt = { item: "salt", amount: "1", unit: "tsp" };
@@ -142,6 +162,18 @@ export default pattern(() => {
     wordDiff("a b c", "a c d").map((c) => `${c.type[0]}${c.word.trim()}`)
       .filter((s) => s.length > 1).join() === "ua,rb,uc,ad"
   );
+  // Long notes compare only the changed middle; a middle too large to
+  // compare falls back to removed-then-added rather than a huge table.
+  const assert_word_diff_long = assert(() => {
+    const words = (n: number, w: string) => Array(n).fill(w).join(" ");
+    const shared = wordDiff(
+      `${words(5000, "a")} old ${words(5000, "a")}`,
+      `${words(5000, "a")} new ${words(5000, "a")}`,
+    ).filter((c) => c.type !== "unchanged").map((c) => c.word).join();
+    const big = wordDiff(words(1000, "x"), words(1000, "y"));
+    return shared === "old,new" &&
+      big[0].type === "removed" && big[big.length - 1].type === "added";
+  });
   const assert_scalar_changes_skip_unchanged = assert(() =>
     scalarChanges({
       name: "Soup",
@@ -279,8 +311,11 @@ export default pattern(() => {
       { assertion: assert_scales_fractions },
       { assertion: assert_nights_clear_minutes },
       { assertion: assert_oven_needs_temperature },
+      { assertion: assert_oven_fields_need_an_oven },
+      { assertion: assert_timing_review_shows_rack },
       { assertion: assert_keeps_repeated_ingredients },
       { assertion: assert_word_diff },
+      { assertion: assert_word_diff_long },
       { assertion: assert_scalar_changes_skip_unchanged },
       { assertion: assert_starts_untitled },
       { action: action_paste_and_extract },

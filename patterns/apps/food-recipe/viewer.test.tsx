@@ -17,7 +17,13 @@ import {
   clickButton,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Viewer, { stepKey } from "./viewer.tsx";
+import Viewer, {
+  groupViews,
+  progressAfterMove,
+  progressAfterRemove,
+  progressWithoutGroup,
+  stepKey,
+} from "./viewer.tsx";
 import type { StepGroup } from "./schemas.tsx";
 
 export default pattern(() => {
@@ -42,6 +48,24 @@ export default pattern(() => {
     ingredients: [{ item: "chicken", amount: "1", unit: "piece" }],
     stepGroups,
   });
+
+  // Moving or deleting a step carries its checkmark with it.
+  const assert_progress_follows_steps = assert(() => {
+    const done = ["p#0", "p#2", "q#1"];
+    return progressAfterMove(done, "p", 0, 1, 3).join() === "p#1,p#2,q#1" &&
+      progressAfterMove(done, "p", 2, 1, 3).join() === done.join() &&
+      progressAfterRemove(done, "p", 1).join() === "p#0,p#1,q#1" &&
+      progressAfterRemove(done, "p", 0).join() === "p#1,q#1" &&
+      progressWithoutGroup(done, "p").join() === "q#1";
+  });
+  // A group that must move straight on still says so.
+  const assert_zero_wait_shown = assert(() =>
+    groupViews(
+      [{ id: "m", name: "Marinate", maxWaitMinutes: 0, steps: [] }],
+      [],
+    )[0]
+      .details.includes("move straight on")
+  );
 
   const assert_shows_recipe = assert(() =>
     view[NAME] === "👨‍🍳 Roast Chicken · Cooking" &&
@@ -84,6 +108,8 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_progress_follows_steps },
+      { assertion: assert_zero_wait_shown },
       { assertion: assert_shows_recipe },
       { action: action_check_step },
       { assertion: assert_one_done },

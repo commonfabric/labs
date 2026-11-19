@@ -12,7 +12,7 @@ import type {
   RecipeCategory,
   StepGroup,
 } from "./schemas.tsx";
-import { RECIPE_CATEGORIES } from "./schemas.tsx";
+import { DIFFICULTIES, RECIPE_CATEGORIES } from "./schemas.tsx";
 
 // ---------------------------------------------------------------------------
 // Scaling
@@ -161,8 +161,11 @@ const DEFAULT_OVEN: OvenNeed = {
 };
 
 /**
- * `group` with one oven field set. A temperature cleared to blank or 0 removes
- * the oven need; any other field fills in the rest from defaults.
+ * `group` with one oven field set. The temperature makes the oven need: set
+ * above 0 it creates one (other fields from defaults), cleared to blank or 0
+ * it removes it. Other fields edit an existing need only; on a group without
+ * one they change nothing, and the editor disables them until a temperature
+ * is set.
  */
 export const withOvenField = (
   group: StepGroup,
@@ -445,7 +448,7 @@ const isCategory = (value: unknown): value is RecipeCategory =>
   (RECIPE_CATEGORIES as readonly unknown[]).includes(value);
 
 const isDifficulty = (value: unknown): value is Difficulty =>
-  value === "easy" || value === "medium" || value === "hard";
+  (DIFFICULTIES as readonly unknown[]).includes(value);
 
 /** The extraction's scalar values that are usable, keyed by field. */
 const usableScalars = (
@@ -616,13 +619,43 @@ export interface DiffChunk {
   word: string;
 }
 
+/** Most cells the LCS table may hold (about 8 MB); past it the differing
+ * middle is shown as one removal and one addition. */
+const MAX_DIFF_CELLS = 1_000_000;
+
 /**
  * A word-level diff from `from` to `to`, by longest common subsequence over
- * words and the whitespace between them.
+ * words and the whitespace between them. The common start and end are matched
+ * first, so an edit to long notes only compares the part that changed; a
+ * changed part too large to compare is shown removed and added whole.
  */
 export const wordDiff = (from: string, to: string): DiffChunk[] => {
   const a = (from || "").split(/(\s+)/).filter((w) => w !== "");
   const b = (to || "").split(/(\s+)/).filter((w) => w !== "");
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (
+    tail < a.length - head && tail < b.length - head &&
+    a[a.length - 1 - tail] === b[b.length - 1 - tail]
+  ) tail++;
+  const unchanged = (words: string[]) =>
+    words.map((word): DiffChunk => ({ type: "unchanged", word }));
+  const midA = a.slice(head, a.length - tail);
+  const midB = b.slice(head, b.length - tail);
+  return [
+    ...unchanged(a.slice(0, head)),
+    ...((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS
+      ? [
+        ...midA.map((word): DiffChunk => ({ type: "removed", word })),
+        ...midB.map((word): DiffChunk => ({ type: "added", word })),
+      ]
+      : lcsDiff(midA, midB)),
+    ...unchanged(a.slice(a.length - tail)),
+  ];
+};
+
+const lcsDiff = (a: string[], b: string[]): DiffChunk[] => {
   // Longest-common-subsequence lengths, suffix-indexed.
   const lcs: number[][] = Array.from(
     { length: a.length + 1 },
@@ -715,8 +748,11 @@ export const timingPrompt = (
 const showMinutes = (n: number | undefined) =>
   n === undefined ? "(none)" : `${n} min`;
 
+/** Every oven field, so a review never hides a change Apply would make. */
 const showOven = (oven: OvenNeed | undefined) =>
-  oven ? `${oven.temperature}°F for ${oven.duration} min` : "(none)";
+  oven
+    ? `${oven.temperature}°F for ${oven.duration} min, rack height ${oven.heightSlots}, ${oven.width} width`
+    : "(none)";
 
 export interface TimingReview {
   id: string;

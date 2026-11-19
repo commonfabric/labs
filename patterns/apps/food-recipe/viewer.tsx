@@ -5,8 +5,9 @@
  * steps; a group is done when all its steps are.
  *
  * `food-recipe.tsx` opens it with the recipe's own cells, so edits to the
- * recipe show here. Progress is kept per step as "groupId#index" and lives
- * with this view, so it survives a reload; "Start over" clears it.
+ * recipe show here. Progress is kept per step as "groupId#index" in the
+ * `done` cell the recipe passes in, so it survives a reload; "Start over" clears it. The
+ * recipe editor remaps it when it moves or deletes a step.
  *
  * Ported from jkomoros/community-patterns (`food-recipe-viewer.tsx`). The
  * original copied the recipe when the view was opened and stored group
@@ -62,7 +63,11 @@ export const groupViews = (
     const details = [
       `⏱️ ${formatTiming(group)}`,
       group.duration ? `📏 ${group.duration} min` : "",
-      group.maxWaitMinutes ? `⏳ can wait ${group.maxWaitMinutes} min` : "",
+      group.maxWaitMinutes === undefined || group.maxWaitMinutes === null
+        ? ""
+        : group.maxWaitMinutes === 0
+        ? "⏳ move straight on"
+        : `⏳ can wait ${group.maxWaitMinutes} min`,
       group.oven
         ? `🔥 ${group.oven.temperature}°F for ${group.oven.duration} min`
         : "",
@@ -94,6 +99,49 @@ export const withGroupToggled = (
   const rest = done.filter((k) => !keys.includes(k));
   return allDone ? rest : [...rest, ...keys];
 };
+
+// Progress names a step by its place in its group, so the recipe editor
+// moves the checkmarks with the steps when it reorders or deletes them.
+
+/** `done` after step `step` of `groupId` swapped places with `step + delta`,
+ * as `moved` does; unchanged when either is outside `stepCount`. */
+export const progressAfterMove = (
+  done: readonly string[],
+  groupId: string,
+  step: number,
+  delta: number,
+  stepCount: number,
+): string[] => {
+  const target = step + delta;
+  if (step < 0 || step >= stepCount || target < 0 || target >= stepCount) {
+    return [...done];
+  }
+  const from = stepKey(groupId, step);
+  const to = stepKey(groupId, target);
+  return done.map((k) => k === from ? to : k === to ? from : k);
+};
+
+/** `done` after step `step` of `groupId` was deleted: its mark goes and the
+ * marks of later steps move up one. */
+export const progressAfterRemove = (
+  done: readonly string[],
+  groupId: string,
+  step: number,
+): string[] => {
+  const prefix = `${groupId}#`;
+  return done.flatMap((k) => {
+    if (!k.startsWith(prefix)) return [k];
+    const i = Number(k.slice(prefix.length));
+    if (i === step) return [];
+    return [i > step ? stepKey(groupId, i - 1) : k];
+  });
+};
+
+/** `done` without any mark on group `groupId`. */
+export const progressWithoutGroup = (
+  done: readonly string[],
+  groupId: string,
+): string[] => done.filter((k) => !k.startsWith(`${groupId}#`));
 
 interface ViewerInput {
   recipeName?: string | Default<"">;

@@ -23,10 +23,19 @@ export const RECIPE_CATEGORIES = [
 
 export type RecipeCategory = typeof RECIPE_CATEGORIES[number];
 
-export type Difficulty = "easy" | "medium" | "hard";
+export const DIFFICULTIES = ["easy", "medium", "hard"] as const;
+
+export type Difficulty = typeof DIFFICULTIES[number];
+
+const titleCase = (value: string) => value[0].toUpperCase() + value.slice(1);
 
 export const CATEGORY_ITEMS = RECIPE_CATEGORIES.map((value) => ({
-  label: value[0].toUpperCase() + value.slice(1),
+  label: titleCase(value),
+  value,
+}));
+
+export const DIFFICULTY_ITEMS = DIFFICULTIES.map((value) => ({
+  label: titleCase(value),
   value,
 }));
 
@@ -56,6 +65,14 @@ export interface OvenNeed {
  * A phase of the recipe that happens at one time: "Night before", "Prep",
  * "Roast", "Finish". It starts either some nights before the meal or some
  * minutes before serving, never both; neither set means unscheduled.
+ *
+ * "Never both" is kept by the writers in recipe-logic.ts, not by this type:
+ * `withGroupNumber` (editing) clears the other field, and `cleanTiming`
+ * (extraction and timing suggestions) keeps only one. A reader that meets
+ * both anyway goes by `nightsBeforeServing` when it is above 0, as
+ * `formatTiming` and the meal planner's oven plan do. Two optional fields
+ * rather than a union keep the shape flat for the timing model's schema
+ * (`TimingSuggestion` mirrors it) and for the meal planner, which reads it.
  *
  * An oven need occupies the oven from the group's start for `oven.duration`
  * minutes, so a planner places it at `minutesBeforeServing` (a night-before
