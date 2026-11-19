@@ -318,7 +318,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "setAvatar"
               ]
@@ -344,7 +344,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "setBio"
               ]
@@ -369,7 +369,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "mutateElements"
               ]
@@ -398,7 +398,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "mutateExternalProfileLinks"
               ]
@@ -427,7 +427,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "setInbox"
               ]
@@ -458,7 +458,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "setName"
               ]
@@ -483,7 +483,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "setPicture"
               ]
@@ -569,7 +569,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/system/profile-home/profile-home.tsx",
-              "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+              "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
               "path": [
                 "publishVerifiedIdentities"
               ]

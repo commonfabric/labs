@@ -43,7 +43,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "setAvatar"
                   ]
@@ -69,7 +69,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "setBio"
                   ]
@@ -94,7 +94,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "mutateElements"
                   ]
@@ -123,7 +123,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "mutateExternalProfileLinks"
                   ]
@@ -152,7 +152,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "setInbox"
                   ]
@@ -183,7 +183,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "setName"
                   ]
@@ -208,7 +208,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "setPicture"
                   ]
@@ -294,7 +294,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/patterns/system/profile-home/profile-home.tsx",
-                  "moduleIdentity": "5_J5OI4wIK9XSV5htssgLYz-3KN-ADA_HoS01sipzHU",
+                  "moduleIdentity": "y6cJPEvhM0mM-Bj48e9OTP-uH5G0b-MC2uUn_Z0IeBo",
                   "path": [
                     "publishVerifiedIdentities"
                   ]
@@ -326,6 +326,14 @@
           "$NAME",
           "$UI"
         ],
+        "type": "object"
+      },
+      "DefaultProfileSlot": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/BackwardsCompatibleProfile"
+          }
+        },
         "type": "object"
       },
       "ExternalIdentityAssertion": {
@@ -455,17 +463,6 @@
               "cell"
             ],
             "description": "The owner's share inbox piece."
-          }
-        },
-        "type": "object"
-      },
-      "ProfileSuggestion": {
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "picture": {
-            "type": "FabricBytes"
           }
         },
         "type": "object"
@@ -619,29 +616,49 @@
       }
     },
     "properties": {
-      "defaultName": {
-        "type": "string"
+      "defaultProfile": {
+        "$ref": "#/$defs/DefaultProfileSlot",
+        "asCell": [
+          "cell"
+        ]
       },
-      "inputId": {
-        "type": "string"
-      },
-      "privateInbox": {
-        "$ref": "#/$defs/ProfileInbox",
-        "description": "Home's private inbox, if the embedder has it, held as a profile holds its\npointer. Each profile this creates is pointed at it, unless the profile\npoints at an inbox already."
-      },
-      "profileSuggestion": {
+      "legacyDefaultProfile": {
         "anyOf": [
           {
             "type": "undefined"
           },
           {
-            "$ref": "#/$defs/ProfileSuggestion"
+            "$ref": "#/$defs/BackwardsCompatibleProfile"
           }
         ],
         "asCell": [
           "cell"
+        ]
+      },
+      "legacyDefaultProfileSpace": {
+        "asCell": [
+          "cell"
         ],
-        "description": "The profile the user's host suggests, which the `#profile` wish hands\nover. Its name starts the field in place of `defaultName`; its picture is\nshown, with a control that removes it, and the profile created takes the\npicture still shown. The user may remove it or choose their own, which\nthe surface records for itself and leaves this suggestion as the host\nstored it; creating a profile leaves the suggestion stored for the host\nto replace, and the wish shows this surface only while the user has no\nprofile."
+        "type": [
+          "string",
+          "undefined"
+        ]
+      },
+      "mru": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile"
+        },
+        "type": "array"
+      },
+      "offersSetDefault": {
+        "default": true,
+        "type": "boolean"
+      },
+      "privateInbox": {
+        "$ref": "#/$defs/ProfileInbox"
       },
       "profiles": {
         "asCell": [
@@ -651,97 +668,33 @@
           "$ref": "#/$defs/BackwardsCompatibleProfile"
         },
         "type": "array"
+      },
+      "retiredProfiles": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile"
+        },
+        "type": "array"
       }
     },
     "required": [
-      "profiles"
+      "profiles",
+      "offersSetDefault",
+      "mru"
     ],
     "type": "object"
   },
-  "pattern": "system/profile-create/profile-create.tsx",
+  "pattern": "system/profile-picker/profile-picker.tsx",
   "resultSchema": {
-    "$defs": {
-      "CreateProfileEvent": {
-        "properties": {
-          "detail": {
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "type": "object"
-          },
-          "key": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "target": {
-            "properties": {
-              "value": {
-                "type": "string"
-              }
-            },
-            "type": "object"
-          }
-        },
-        "type": "object"
-      },
-      "SetProfilePictureEvent": {
-        "properties": {
-          "clear": {
-            "description": "Removes the picture. A host removing it says so outright.",
-            "type": "boolean"
-          },
-          "detail": {
-            "properties": {
-              "bytes": {
-                "type": "FabricBytes"
-              }
-            },
-            "type": "object"
-          },
-          "picture": {
-            "type": "FabricBytes"
-          }
-        },
-        "type": "object"
-      }
-    },
     "properties": {
-      "$NAME": {
-        "type": "string"
-      },
       "$UI": {
         "$ref": "https://commonfabric.org/schemas/vnode.json"
-      },
-      "choosePicture": {
-        "$ref": "#/$defs/SetProfilePictureEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Chooses that picture (ungated: see README.md, \"CFC debt\")."
-      },
-      "createProfile": {
-        "$ref": "#/$defs/CreateProfileEvent",
-        "asCell": [
-          "stream"
-        ]
-      },
-      "removePicture": {
-        "$ref": "#/$defs/SetProfilePictureEvent",
-        "asCell": [
-          "stream"
-        ],
-        "description": "Removes that picture (ungated: see README.md, \"CFC debt\"). The event's\ncontent is ignored."
       }
     },
     "required": [
-      "createProfile",
-      "choosePicture",
-      "removePicture",
-      "$NAME",
       "$UI"
     ],
     "type": "object"
