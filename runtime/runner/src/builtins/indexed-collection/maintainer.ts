@@ -142,7 +142,9 @@ export class IndexedCollectionMaintainer {
       state.loaded = this.#loadRegistry(space, state);
     }
     for (const id of ids) state.early.add(id);
-    void state.loaded.then(() => {
+    // Tracked so that `runtime.settled()` waits for the registry as well as
+    // for the drains this starts.
+    this.#runtime.trackAsyncWork(state.loaded.then(() => {
       if (state.early.size === 0) return;
       const written = [...state.early];
       state.early.clear();
@@ -152,7 +154,7 @@ export class IndexedCollectionMaintainer {
         }
         this.#schedule(collection);
       }
-    });
+    }));
   }
 
   /**

@@ -230,6 +230,38 @@ describe("executor-indexed-collection", () => {
     }
   });
 
+  it("leaves a query result unwritten when a collection write keeps its rows", async () => {
+    const f = await fixture();
+    try {
+      f.result.key("add").send({ title: "first" });
+      f.result.key("add").send({ title: "second" });
+      f.result.key("add").send({ title: "other" });
+      f.result.key("mention").send({ from: "second", to: "first" });
+      await f.titles("mentioningFirst", ["second"]);
+      const { promise: renamed, resolve } = Promise.withResolvers<void>();
+      const seen: string[] = [];
+      const cancel = f.result.key("mentioningFirst").sink((state) => {
+        seen.push(JSON.stringify(state));
+      });
+      const cancelTitles = f.result.key("titles").sink((state) => {
+        if (state?.result?.some((row) => row.title === "renamed")) resolve();
+      });
+      const settledBefore = seen.length;
+
+      // Renaming an uninvolved member rewrites its row, and so re-runs both
+      // queries, while the rows of the second stay what they were.
+      f.result.key("rename").send({ from: "other", to: "renamed" });
+      await renamed;
+
+      expect(seen.slice(settledBefore)).toEqual([]);
+      cancel();
+      cancelTitles();
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("serves the members referring to a member", async () => {
     const f = await fixture();
     try {
