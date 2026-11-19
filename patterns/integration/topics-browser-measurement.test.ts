@@ -101,16 +101,6 @@ describe("topics-browser-measurement", () => {
     }
   }
 
-  /**
-   * The refusal `measureTopicsReads()` gives a sample declared to run nothing
-   * on a served board, whose page runs no lift's module. The declaration
-   * waives the one failure of completing no authored run, which an undeclared
-   * sample on such a board is refused for first, and reaches no further.
-   */
-  const SERVED_BOARD_REFUSAL =
-    "`crossrefTable`'s module `/apps/topics/main.tsx` is not running, but a " +
-    "sample is taken on a page showing the board";
-
   /** Tokens of the samples `page` still holds. */
   async function samplesLeftInPage(
     page: Page = session.page,
@@ -267,9 +257,8 @@ describe("topics-browser-measurement", () => {
             lift.implementation?.split(" =>")[0],
           ]),
         ).toEqual([
-          ["crossrefTable", "({ sources })"],
-          ["crossrefIndexOf", "({ rows })"],
-          ["backlinksOf", "({ table, index, self, shortName })"],
+          ["cardRowsByActivity", "({ rows })"],
+          ["createdByOf", "({ createdBy })"],
         ]);
         expect(
           sample.lifts.filter((lift) =>
@@ -316,11 +305,6 @@ describe("topics-browser-measurement", () => {
           operation: () => Promise.resolve(),
           mayRunNothing: true,
         });
-      if (servedViews) {
-        await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-        expect(await samplesLeftInPage()).toEqual([]);
-        return;
-      }
       const sample = await measure();
 
       checkSample(sample, () => {
@@ -353,12 +337,18 @@ describe("topics-browser-measurement", () => {
             },
             mayRunNothing: true,
           });
+        const sample = await measure();
         if (servedViews) {
-          await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-          expect(await samplesLeftInPage(fresh.page)).toEqual([]);
+          // A served page holds the board's card derivation and completes no
+          // run of it, so the declared sample is taken and records none.
+          checkSample(sample, () => {
+            expect(sample.mayRunNothing).toBe(true);
+            expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+              program.lifts.map(() => 0),
+            );
+          });
           return;
         }
-        const sample = await measure();
 
         checkSample(sample, () => {
           expect(sample.mayRunNothing).toBe(true);
@@ -411,21 +401,16 @@ describe("topics-browser-measurement", () => {
           operation: () => deliverRun(undefined),
           mayRunNothing: true,
         });
-      if (servedViews) {
-        await expect(measureDeclared()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-        expect(await samplesLeftInPage()).toEqual([]);
-      } else {
-        const sample = await measureDeclared();
-        checkSample(sample, () => {
-          expect(sample.runsWithoutSource).toBe(1);
-          // Counted apart for reporting, and still part of `remaining`, which
-          // is every run the sample could not place against a named lift.
-          expect(sample.remaining.runs).toBe(1);
-          expect(sample.lifts.map((lift) => lift.runs)).toEqual(
-            program.lifts.map(() => 0),
-          );
-        });
-      }
+      const sample = await measureDeclared();
+      checkSample(sample, () => {
+        expect(sample.runsWithoutSource).toBe(1);
+        // Counted apart for reporting, and still part of `remaining`, which
+        // is every run the sample could not place against a named lift.
+        expect(sample.remaining.runs).toBe(1);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+          program.lifts.map(() => 0),
+        );
+      });
 
       // The same run undeclared: the waiver is what admits it.
       await expect(

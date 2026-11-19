@@ -92,16 +92,14 @@ const WORKER_RUNS_NOTE =
  */
 export const TOPICS_SOURCE_ROOT = join(import.meta.dirname!, "..");
 
-/** The board's pivot, its index by number, and the per-topic lift that reads
- * them. */
+/** The board's card derivation, and a topic's derivation of who filed it. */
 export const TOPICS_LIFTS: readonly TopicsLift[] = [
-  { name: "crossrefTable", module: "apps/topics/main.tsx", role: "producer" },
   {
-    name: "crossrefIndexOf",
-    module: "apps/topics/crossref-index.ts",
+    name: "cardRowsByActivity",
+    module: "apps/topics/main.tsx",
     role: "producer",
   },
-  { name: "backlinksOf", module: "apps/topics/topic.tsx", role: "consumer" },
+  { name: "createdByOf", module: "apps/topics/topic.tsx", role: "consumer" },
 ];
 
 /** The board's entry module, relative to the program root. */

@@ -4,6 +4,7 @@ import {
   Default,
   handler,
   indexedCollections,
+  lift,
   NAME,
   type OpaqueCell,
   pattern,
@@ -317,6 +318,15 @@ const CARDS_SQL = `
   LIMIT 200`;
 
 /**
+ * The cards of the rows the card query returned. A lift at module scope, so
+ * that its declared parameter is the whole of what it reads, and so that a
+ * measurement can name it.
+ */
+const cardRowsByActivity = lift(
+  ({ rows }: { rows?: CardFields[] }): CardRow[] => cardRowsOf(rows ?? []),
+);
+
+/**
  * One row of the board's reference graph: a topic, and the topics that
  * mention it. Both sides are held as references and never read through.
  */
@@ -432,6 +442,13 @@ export interface CardSource {
   createdAt: number;
 }
 
+/**
+ * What a card is formatted from: a `CardSource` whose topic is declared as
+ * something passed along, so that the derivation over these rows reads no
+ * topic.
+ */
+export type CardFields = Omit<CardSource, "topic"> & { topic: unknown };
+
 /** A row of `MEMBERS_SQL`: a topic's reference, title and number. */
 interface MemberRow {
   topic: OpaqueCell<TopicDemand>;
@@ -454,7 +471,7 @@ interface Rows<Row> {
  * The cards of `rows`, in the order given: each row's strings, formatted as a
  * card shows them, beside the row's topic.
  */
-export function cardRowsOf(rows: readonly CardSource[]): CardRow[] {
+export function cardRowsOf(rows: readonly CardFields[]): CardRow[] {
   return rows.map((row) => ({
     topic: row.topic,
     badge: row.shortName,
@@ -675,7 +692,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // The cards the board shows, already in order, and the strings each
   // renders, derived in one computation.
   const listed = board.query<CardSource>(CARDS_SQL);
-  const cards = computed<CardRow[]>(() => cardRowsOf(listed.result ?? []));
+  const cards = cardRowsByActivity({ rows: listed.result });
 
   // Every topic, in filing order: the references behind `topics` and `index`,
   // and the rows of the mention universe every child's editor autocompletes
