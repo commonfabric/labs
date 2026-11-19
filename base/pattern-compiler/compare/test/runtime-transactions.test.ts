@@ -561,6 +561,8 @@ describe("write records the runtime instantiates with the option on", () => {
     path: readonly string[],
     /** The binding of a handler to send one event to, once settled. */
     binding?: number,
+    /** Changes the artifact before it is run. */
+    edit?: (artifact: Artifact) => void,
   ) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
@@ -574,6 +576,7 @@ describe("write records the runtime instantiates with the option on", () => {
     });
     const id = identifierOf({ test: name });
     const artifact = await artifactOf(name);
+    edit?.(artifact);
     const hooks = new RuntimeTransactions(runtime, space, {
       owner: id,
       artifact,
@@ -666,6 +669,25 @@ describe("write records the runtime instantiates with the option on", () => {
       0,
     );
     expect(refused).toEqual([]);
+  });
+
+  it("gives no write record for an output the plan has no template for, and commits with the transaction's join there", async () => {
+    // The crate emits some kept outputs with no template; the runtime has
+    // nothing to instantiate for them.
+    const { refused, label } = await commitWithOptionOn(
+      "coalesce",
+      { name: "ada" },
+      ["shout"],
+      undefined,
+      (artifact) => {
+        delete (artifact.plan as { outputs: { template?: unknown }[] })
+          .outputs[0].template;
+      },
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:name"',
+    );
   });
 
   it("binds the source slot of the result of a `map` over plain values in place that a selector's branch names from outside the element body, and commits", async () => {

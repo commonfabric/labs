@@ -8016,6 +8016,8 @@ export class Instance {
     if (writing === undefined) return [];
     const keys = writing.instance.contextKeys(writing.host.context);
     return writing.records.flatMap(({ record, template, ...target }) => {
+      // A write edge the plan has no template for has no record either.
+      if (template === undefined) return [];
       let at = path;
       if (target.doc !== undefined) {
         const to = target.path ?? [];
@@ -8105,28 +8107,31 @@ export class Instance {
       };
       expand([...path], output.path.slice(path.length), held, true);
     });
-    return found.map(({ output, at }) => {
-      const record = outputs[output];
-      const stars = record.path.flatMap((segment, index) =>
-        segment === "*" ? [index] : []
-      );
-      const pairs = this.#keysAlong(at, stars);
-      const own = this.#keysFor(record.cone, pairs);
-      const inputs = this.#inputsOf(record.cone, own);
-      const result = this.#inputs.get(RESULT_INPUTS);
-      return {
-        target: { doc, path: at },
-        record: { output },
-        ...this.#inputsFor(
-          record.template,
-          this.collectionsOf(record.cone).map((collection, index) => [
-            collection,
-            own[index],
-          ]),
-          [inputs, result],
-        ),
-      };
-    });
+    // An output the plan has no template for has no record: the path keeps
+    // the label the runtime gives a write it has no record of.
+    return found.filter(({ output }) => outputs[output].template !== undefined)
+      .map(({ output, at }) => {
+        const record = outputs[output];
+        const stars = record.path.flatMap((segment, index) =>
+          segment === "*" ? [index] : []
+        );
+        const pairs = this.#keysAlong(at, stars);
+        const own = this.#keysFor(record.cone, pairs);
+        const inputs = this.#inputsOf(record.cone, own);
+        const result = this.#inputs.get(RESULT_INPUTS);
+        return {
+          target: { doc, path: at },
+          record: { output },
+          ...this.#inputsFor(
+            record.template,
+            this.collectionsOf(record.cone).map((collection, index) => [
+              collection,
+              own[index],
+            ]),
+            [inputs, result],
+          ),
+        };
+      });
   }
 
   /**
