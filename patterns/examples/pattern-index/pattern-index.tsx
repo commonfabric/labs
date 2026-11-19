@@ -1,3 +1,8 @@
+/**
+ * Holds the URL of a pattern index (defaulting to the server's
+ * `/api/patterns/index.md`) in an editable text field and exposes it as the
+ * `url` output so other patterns can find the index.
+ */
 import {
   computed,
   type Default,

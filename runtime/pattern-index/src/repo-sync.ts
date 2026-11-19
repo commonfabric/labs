@@ -71,6 +71,8 @@ export type EntryOutcome =
   | { path: string; status: "public-elsewhere"; patternId: string }
   | { path: string; status: "unchanged"; patternId: string }
   | { path: string; status: "undescribed" }
+  /** The index refused the program as larger than `limit` bytes of source. */
+  | { path: string; status: "oversize"; limit: string }
   | { path: string; status: "failed"; reason: string };
 
 /** A gate verdict with findings, as the newest version of a path carries it. */
@@ -133,24 +135,31 @@ export const programSourceHash = async (
 };
 
 /**
- * Returns a failure's message for a report. A publish's HTTP 400 program-size
- * refusal adds its limit when the entire detail matches the server's fixed
- * wording with one to twelve decimal digits. Other index details stay withheld.
+ * The byte limit a publish's HTTP 400 program-size refusal names, or
+ * `undefined` for any other failure. The entire detail has to match the
+ * server's fixed wording with one to twelve decimal digits.
  */
-export const reasonOf = (error: unknown): string => {
+export const programSizeLimit = (error: unknown): string | undefined => {
   if (
-    error instanceof PatternIndexError && error.fn === "publishPattern" &&
-    error.status === 400
+    !(error instanceof PatternIndexError) || error.fn !== "publishPattern" ||
+    error.status !== 400
   ) {
-    const refusal = /^program exceeds ([0-9]{1,12}) bytes of source$/.exec(
-      error.detail ?? "",
-    );
-    if (refusal !== null && refusal[0] === error.detail) {
-      return `${error.message}: program exceeds ${refusal[1]} bytes of source`;
-    }
+    return undefined;
   }
-  return error instanceof Error ? error.message : String(error);
+  const refusal = /^program exceeds ([0-9]{1,12}) bytes of source$/.exec(
+    error.detail ?? "",
+  );
+  return refusal !== null && refusal[0] === error.detail
+    ? refusal[1]
+    : undefined;
 };
+
+/**
+ * Returns a failure's message for a report. A `PatternIndexError`'s message
+ * leaves out the index's detail, so index details stay withheld.
+ */
+export const reasonOf = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
 
 /**
  * What keeps `plan` from being a {@link RepoSyncPlan}, or `undefined` when
@@ -268,7 +277,10 @@ const gardenerReports = (
  *
  * A refused publish is recorded and the others still run, and a refused
  * withdrawal is recorded beside them; the caller fails the job when
- * {@link syncFailed} says so.
+ * {@link syncFailed} says so. A publish refused only for its program's size
+ * is recorded as oversize, which, like an entry with no description, is
+ * reported and does not fail the job: the fix is in the pattern. The next
+ * sync tries the entry again, since nothing of it was published.
  *
  * @throws PatternIndexError when the index refuses `listRepoHeads`, before
  *   anything is published.
@@ -293,11 +305,12 @@ export const publishPlan = async (
         await publishEntry(entry, headOf.get(entry.path), options, client),
       );
     } catch (error) {
-      outcomes.push({
-        path: entry.path,
-        status: "failed",
-        reason: reasonOf(error),
-      });
+      const limit = programSizeLimit(error);
+      outcomes.push(
+        limit === undefined
+          ? { path: entry.path, status: "failed", reason: reasonOf(error) }
+          : { path: entry.path, status: "oversize", limit },
+      );
     }
   }
   const selected = new Set(plan.selected);
@@ -334,7 +347,8 @@ export const publishPlan = async (
 
 /**
  * Whether the job should fail: some entry could not be synced, or the
- * lineages of lost paths could not be withdrawn.
+ * lineages of lost paths could not be withdrawn. An undescribed or oversize
+ * entry is reported but is not a failure.
  */
 export const syncFailed = (report: RepoSyncReport): boolean =>
   report.withdrawFailure !== undefined ||
@@ -359,13 +373,15 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
   const published = withStatus("published");
   const failed = withStatus("failed");
   const undescribed = withStatus("undescribed");
+  const oversize = withStatus("oversize");
   const lines = [
     `## Pattern index sync: ${report.repository}`,
     "",
     `At \`${report.commit.slice(0, 12)}\`: ${report.entries.length} entries, ` +
     `${published.length} published, ` +
     `${withStatus("unchanged").length} unchanged, ` +
-    `${undescribed.length} without a description, ${failed.length} failed.`,
+    `${undescribed.length} without a description, ` +
+    `${oversize.length} too large for the index, ${failed.length} failed.`,
   ];
   const list = (title: string, note: string, paths: readonly string[]) => {
     if (paths.length === 0) return;
@@ -428,6 +444,13 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
     "Not published: no description",
     "Open each with a `/** ... */` doc comment whose first paragraph says what the pattern does.",
     undescribed.map((entry) => entry.path),
+  );
+  list(
+    "Not published: too large for the index",
+    `The index refuses a program (the entry and everything it imports) over ${
+      [...new Set(oversize.map((entry) => entry.limit))].join(" or ")
+    } bytes of source.`,
+    oversize.map((entry) => entry.path),
   );
   list(
     "Withdrawn",

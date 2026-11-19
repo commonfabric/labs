@@ -1,3 +1,10 @@
+/**
+ * A test page that renders the suggestion system next to the suggestable
+ * utility patterns: two free-text suggestion requests (a counter and a note)
+ * followed by summary, checklist, question, diagram, people list, event list,
+ * and budget planner instances, most given a sample topic and context.
+ */
+
 import { Default, NAME, pattern, UI, Writable } from "commonfabric";
 import Suggestion from "../../system/suggestion/suggestion.tsx";
 import Summary from "../suggestable/summary.tsx";

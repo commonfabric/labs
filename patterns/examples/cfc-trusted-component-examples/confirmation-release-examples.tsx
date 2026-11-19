@@ -1,3 +1,10 @@
+/**
+ * A gallery of four untrusted host patterns that embed reviewed trusted
+ * surfaces for recipient confirmation (finance and customer-support sends) and
+ * redacted release (patient-case text and security-incident notes). Each host
+ * has a decoy button that cannot authorize the protected write; only the
+ * trusted surface can.
+ */
 import {
   computed,
   handler,

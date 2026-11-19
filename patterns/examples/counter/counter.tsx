@@ -1,3 +1,9 @@
+/**
+ * A counter with increment and decrement buttons that also shows the
+ * ordinal of the current value. It demonstrates a module-scope `handler`
+ * bound with context next to a pattern-body `action`, and exposing both as
+ * streams for testing.
+ */
 import {
   action,
   computed,
