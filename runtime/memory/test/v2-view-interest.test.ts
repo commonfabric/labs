@@ -1451,6 +1451,42 @@ describe("view interests", () => {
     expect(replaced.removes.map((entry) => entry.id)).toEqual(["of:support"]);
   });
 
+  for (const namedDirtyDocuments of [true, false]) {
+    it(`delivers pending changes when replacing views with ${namedDirtyDocuments ? "named" : "unnamed"} dirty documents`, async () => {
+      await set([watch("of:ordinary")], [view()]);
+      const [{ handle }] = server.viewInterestsForSpace(space);
+      await server.setViewSelection(space, handle, {
+        generation: 1,
+        delivery: [query("of:support")],
+      });
+      await server.flushSessions();
+      const holdings = await set([watch("of:ordinary")], [view()]);
+      const markDirty = server.markSpaceDirty.bind(server);
+      using _dirty = stub(server, "markSpaceDirty", (space, ids, origin) => {
+        markDirty(space, namedDirtyDocuments ? ids : undefined, origin);
+      });
+      const ids = ["of:ordinary", "of:render", "of:support"];
+      for (const id of ids) {
+        await server.writeDocument(space, id, { label: `${id} updated` });
+      }
+      const replaced = await server.watchSet({
+        type: "session.watch.set",
+        requestId: "pending-changes",
+        space,
+        sessionId,
+        watches: [watch("of:ordinary")],
+        views: [view()],
+        holdings: holdings.upserts.map(({ id, seq }) => ({ id, seq })),
+      });
+      expect(replaced.error).toBeUndefined();
+      expect(replaced.ok?.sync.upserts.map((entry) => entry.id).toSorted())
+        .toEqual(ids);
+      for (const entry of replaced.ok!.sync.upserts) {
+        expect(entry.doc?.value).toEqual({ label: `${entry.id} updated` });
+      }
+    });
+  }
+
   it("walks the root a replacement view adds, and retracts what the root it drops reached", async () => {
     await server.writeDocument(space, "of:screen", {
       child: { "/": { "link@1": { space, id: "of:child", path: [] } } },
