@@ -915,11 +915,14 @@ load, three edits of one topic by a writer outside the board, and three creates
 through `addTopic`, each timed until the board is up to date and the read of its
 result apart, with the facts of the result both arms are compared on. Each topic
 is a document that holds what the board demands of a topic and references to the
-two topics before it, and the board's argument holds a reference to each:
+two topics before it, and the board's argument holds a reference to each. With
+`--v8-flags=--expose-gc` each step also reports the heap in use after a full
+collection, beside a baseline taken before any topic exists. Run one size per
+process, since a process that has run a larger board keeps more heap:
 
 ```sh
-deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts executor 100 1000 2000
-deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts today 100 1000 2000
+deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topics/scale.ts executor 1000
+deno run -A --no-check --v8-flags=--expose-gc base/pattern-compiler/compare/topics/scale.ts today 1000
 ```
 
 ## The parser

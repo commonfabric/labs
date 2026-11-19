@@ -9872,3 +9872,70 @@ today's runtime; the site returns to that form if the declarations change.
      today's declarations and the subset, smaller than the first. The branch of
      this track keeps the forms of notes 551 and 555, since it is based on a
      main branch without #10018.
+563. **Topics at 100, 1,000 and 2,000 topics again, on one source and on a quiet
+     machine, with the heap** (`compare/topics/scale.ts`). Both arms read the
+     Topics source of `patterns/` rewritten to the subset (notes 549 to 559, the
+     change of #10036), at commit `9fc17e146e`, so they run one program; the
+     runs of note 543 ran a patched copy on the executor. One process per arm
+     and size, the arms one after the other, at load averages of 4.4 to 7.3,
+     where those of note 543 were 12 to 134. Today's runtime is in the client
+     posture, as in note 543, and the executor runs in memory. The heap is the
+     heap in use after a full collection (`--v8-flags=--expose-gc`) less a
+     baseline taken once the program is emitted or compiled and before any topic
+     exists: 59.6 MB for the executor and 106.2 MB for today's runtime. The
+     counts of evaluations, actions, commits and documents are those of note 543
+     at every size and step, and so are the facts both arms read of the board
+     after each step.
+
+     | Topics | Step                               | Executor, ms |        Today, ms |
+     | -----: | ---------------------------------- | -----------: | ---------------: |
+     |    100 | load                               |           52 |            1,488 |
+     |    100 | edit of one topic, 3 times         |     17 to 23 |       387 to 423 |
+     |    100 | create, 3 times                    |     44 to 45 |       766 to 838 |
+     |    100 | read of the result after each step |     22 to 26 |         73 to 81 |
+     |  1,000 | load                               |          516 |           12,917 |
+     |  1,000 | edit of one topic, 3 times         |   150 to 153 |   3,290 to 3,494 |
+     |  1,000 | create, 3 times                    |   295 to 316 |   6,313 to 6,683 |
+     |  1,000 | read of the result after each step |   181 to 234 |       662 to 822 |
+     |  2,000 | load                               |        1,421 |           30,001 |
+     |  2,000 | edit of one topic, 3 times         |   299 to 342 |   7,519 to 7,934 |
+     |  2,000 | create, 3 times                    |   633 to 664 | 14,472 to 16,127 |
+     |  2,000 | read of the result after each step |   392 to 468 |   1,580 to 2,335 |
+
+     | Topics | Executor: heap after the load, MB | after the 3 creates | Today: heap after the load, MB | after the 3 creates |
+     | -----: | --------------------------------: | ------------------: | -----------------------------: | ------------------: |
+     |    100 |                               8.0 |                11.4 |                           44.1 |                60.3 |
+     |  1,000 |                              62.7 |                80.4 |                          344.4 |               388.0 |
+     |  2,000 |                             127.6 |               155.9 |                          660.2 |               748.3 |
+
+     - **One change at 1,000 topics: 20 to 23 times less than today.** An edit
+       takes 150 to 153 ms against 3,290 to 3,494 ms, a create 295 to 316 ms
+       against 6,313 to 6,683 ms, and the load 516 ms against 12,917 ms. Note
+       545's ratio of 9 to 13 for an edit was measured under the load of other
+       sessions.
+     - **The cost of one change is still linear in the board on both arms**, as
+       note 544 says: from 100 to 2,000 topics an edit grows 15 to 18 times on
+       the executor and 19 times today, about 0.15 ms per topic on the executor
+       and 3.3 to 4.0 ms today.
+     - **On the executor, reading the board's result costs more than the
+       change.** After an edit at 1,000 topics the read takes 181 to 234 ms and
+       the settle 150 to 153 ms; today the read is a fifth of the settle. The
+       read is a pass over the whole result under its schema, which is the
+       reader's cost and grows with the board on both arms.
+     - **The board keeps about 5 times less heap on the executor:** 62.7 MB
+       against 344.4 MB at 1,000 topics and 127.6 MB against 660.2 MB at 2,000,
+       linear in the board on both arms, about 63 KB per topic on the executor
+       and 330 to 344 KB today. What the executor's 63 KB per topic consists of
+       is not attributed: each topic's document holds a few hundred bytes.
+     - **An edit keeps no heap, a create keeps heap that grows with the board.**
+       After the first edit, which adds 6.5 to 8.7 MB on the executor and 8.8 to
+       19.5 MB today once, an edit adds less than 0.3 MB. A create adds 2.8 to
+       4.7 MB on the executor at 1,000 topics and 5.2 to 7.9 MB at 2,000,
+       consistent with the copy of the board's mention universe in the argument
+       of each created topic (note 548), not attributed further; today the heap
+       after a create moves by -10.9 to 46.1 MB, with no trend that three
+       creates show.
+
+     These remain figures of the executor in memory and of today's runtime in
+     the client posture on emulated storage; the integrated arm and server
+     execution are not run on Topics (note 548).

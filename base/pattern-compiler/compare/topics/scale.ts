@@ -33,6 +33,14 @@
  * Each step also records what the board holds afterwards in a few facts
  * that the two arms are compared on (`facts`).
  *
+ * Run with `--v8-flags=--expose-gc`, each step after its timed part also
+ * records the heap in use after a full collection (`heap`), and the run
+ * first prints a step `baseline` with the heap before any topic exists: the
+ * program is compiled or emitted, and no document is seeded. The heap of a
+ * step less the baseline is what the board and its documents keep. Without
+ * the flag the field is absent. Run one size per process, since a process
+ * that has run a larger board may keep more heap than one that has not.
+ *
  * Both arms run the program of the repository, which the crate emits for
  * the executor and today's runtime compiles.
  */
@@ -111,9 +119,30 @@ export type Step = {
   commits: number;
   documents: number;
   facts: Facts;
+  /** The heap in use after the step and a full collection, in bytes. */
+  heap?: number;
+};
+
+/** A step `baseline`: the heap before any topic exists, in bytes. */
+export type Baseline = {
+  arm: "executor" | "today";
+  size: number;
+  step: "baseline";
+  heap?: number;
 };
 
 const round = (milliseconds: number) => Math.round(milliseconds * 100) / 100;
+
+/**
+ * The heap in use after a full collection, in bytes, or `undefined` when
+ * the process was not started with `--v8-flags=--expose-gc`.
+ */
+const heapAfterCollection = (): number | undefined => {
+  const collect = (globalThis as { gc?: () => void }).gc;
+  if (collect === undefined) return undefined;
+  collect();
+  return Deno.memoryUsage().heapUsed;
+};
 
 /** The facts of a board's result, read as plain values. */
 const factsOf = (result: Record<string, unknown>): Facts => {
@@ -167,8 +196,16 @@ const emitted = async (): Promise<{
   return { board, artifacts: (id) => known.get(id) };
 };
 
-const runExecutor = async (size: number): Promise<Step[]> => {
+const runExecutor = async (
+  size: number,
+): Promise<(Baseline | Step)[]> => {
   const { board, artifacts } = await emitted();
+  const baseline: Baseline = {
+    arm: "executor",
+    size,
+    step: "baseline",
+    heap: heapAfterCollection(),
+  };
   const link = (index: number) => ({
     $link: { doc: `topic-${index}`, path: [] },
   });
@@ -190,7 +227,7 @@ const runExecutor = async (size: number): Promise<Step[]> => {
     JSON.stringify(name).includes("addTopic")
   );
   if (binding < 0) throw new Error("the board has no binding `addTopic`");
-  const steps: Step[] = [];
+  const steps: (Baseline | Step)[] = [baseline];
   let instance: Instance | undefined;
   const measure = (step: string, change: () => void) => {
     const before = instance === undefined
@@ -226,6 +263,7 @@ const runExecutor = async (size: number): Promise<Step[]> => {
         0,
       ),
       facts: factsOf(result),
+      heap: heapAfterCollection(),
     });
   };
   measure("load", () => {
@@ -270,7 +308,7 @@ const count = (name: string): number => {
   return found;
 };
 
-const runToday = async (size: number): Promise<Step[]> => {
+const runToday = async (size: number): Promise<(Baseline | Step)[]> => {
   const signer = await Identity.fromPassphrase(`topics-scale ${size}`);
   const space = signer.did();
   const storageManager = StorageManager.emulate({ as: signer });
@@ -289,7 +327,7 @@ const runToday = async (size: number): Promise<Step[]> => {
       return undefined;
     },
   });
-  const steps: Step[] = [];
+  const steps: (Baseline | Step)[] = [];
   try {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
@@ -300,6 +338,12 @@ const runToday = async (size: number): Promise<Step[]> => {
     );
     const compiled = await runtime.patternManager.compilePattern(program, {
       space,
+    });
+    steps.push({
+      arm: "today",
+      size,
+      step: "baseline",
+      heap: heapAfterCollection(),
     });
     const seed = runtime.edit();
     // deno-lint-ignore no-explicit-any
@@ -366,6 +410,7 @@ const runToday = async (size: number): Promise<Step[]> => {
         commits: count("storage.v2.transaction/commit/commitNative"),
         documents: changed.size,
         facts: facts(),
+        heap: heapAfterCollection(),
       });
     };
     const commit = async (write: (tx: ReturnType<Runtime["edit"]>) => void) => {
