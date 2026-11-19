@@ -1548,6 +1548,33 @@ describe("RuntimeInternals", () => {
     ).toBeUndefined();
   });
 
+  it("declares server execution off for a runtime that opens a space on a branch", async () => {
+    const identity = await Identity.generate({ implementation: "noble" });
+    const session = createSession({ identity, spaceDid: identity.did() });
+    const branches = { [identity.did()]: "fork" };
+
+    const onBranch = createRuntimeClientOptions({
+      session,
+      apiUrl: new URL("http://shell.test/"),
+      experimental: { serverExecution: true, modernCellRep: true },
+      branches,
+    });
+    const onNone = createRuntimeClientOptions({
+      session,
+      apiUrl: new URL("http://shell.test/"),
+      experimental: { serverExecution: true },
+      branches: {},
+    });
+
+    expect(onBranch.branches).toEqual(branches);
+    expect(onBranch.experimental).toEqual({
+      serverExecution: false,
+      modernCellRep: true,
+    });
+    expect(onNone.branches).toBeUndefined();
+    expect(onNone.experimental).toEqual({ serverExecution: true });
+  });
+
   describe("create() forwards host flags to the worker", () => {
     // create() builds the client options and sends the Initialize request; this
     // covers that path end to end and asserts the host flags reach the worker.
@@ -1985,6 +2012,47 @@ describe("RuntimeInternals", () => {
         return Promise.resolve();
       }
     }
+
+    describe("space history", () => {
+      /** A runtime attached over `transport`, as an embedder's page is. */
+      const attached = async (transport: StubTransport) =>
+        await RuntimeInternals.create({
+          identity: await Identity.generate({ implementation: "noble" }),
+          apiUrl: new URL("http://shell.test/"),
+          transport: transport as unknown as RuntimeTransport,
+          attach: true,
+        });
+
+      it("asks the worker for a space's history and for a restore", async () => {
+        const transport = new StubTransport();
+        const runtime = await attached(transport);
+        const space = "did:key:z6Mk-history" as DID;
+        try {
+          await runtime.spaceHistory(space, 7).catch(() => {});
+          await runtime.restoreSpace(space, 3).catch(() => {});
+
+          expect(transport.sent.slice(1)).toEqual([
+            { type: "space:history:list", space, before: 7 },
+            { type: "space:restore", space, seq: 3 },
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("rejects a fork, having no worker of its own to run one in", async () => {
+        const transport = new StubTransport();
+        const runtime = await attached(transport);
+        try {
+          await expect(
+            runtime.forkSpace("did:key:z6Mk-history" as DID, 3),
+          ).rejects.toThrow("cannot fork a space");
+          expect(transport.sent).toHaveLength(1);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
 
     it("attaches over the supplied transport, spawning no worker", async () => {
       const identity = await Identity.generate({ implementation: "noble" });
