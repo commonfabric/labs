@@ -9549,7 +9549,12 @@ the executor. `FA` is `footprint-analysis.md`.
      left out). The counts are those of the second run. "Settle" is from the
      change until the board is up to date; the read of the result after that is
      apart. The executor runs the rewritten program (note 539) in memory,
-     today's runtime the program of the repository on emulated storage.
+     today's runtime the program of the repository on emulated storage in
+     the client posture: a bare `Runtime` resolves server-side execution to
+     off (`getServerExecutionConfig` in `runtime/memory/v2.ts`), so it
+     derives and commits in the client. These are not figures of
+     server-side execution, which a deployment runs and the existing Topics
+     benchmarks measure.
 
      | Topics | Step                       | Executor, first run, ms | Executor, second run, ms |        Today, ms | Executor: evaluations, documents | Today: actions, commits, documents |
      | -----: | -------------------------- | ----------------------: | -----------------------: | ---------------: | -------------------------------: | ---------------------------------: |
