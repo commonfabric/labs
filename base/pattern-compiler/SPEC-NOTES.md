@@ -9840,3 +9840,19 @@ today's runtime; the site returns to that form if the declarations change.
      `dev/factory-outputs/lot-watch/main.tsx`); that is the routine finding
      `pattern-compat --update` records, left until the question above is
      settled.
+561. **The owner accepted the break of note 560** (2026-11-19). An entry in
+     `tasks/pattern-compat-accepted-breaks.ts` forgives the two paths over the
+     12 baselines, with the decision record
+     `docs/history/topics-legacy-author-names-string-break.md`.
+     `deno task pattern-compat --update` then forgave exactly two issues over
+     each of the 12 pairs and recorded four contracts: `topic.tsx`'s, and those
+     of the three patterns that import the rewritten modules. The plain
+     `pattern-compat` passes (327 patterns can be updated from every recorded
+     contract), and so do `check-docs-history-index` and
+     `check-baselines-append-only`. A deployed Topic takes this one update
+     forced; the forced update is not rehearsed. The rewrite of the Topics
+     source, the entry, the record and the four baselines change only
+     `patterns/`, `tasks/` and `docs/history/`, and go to the main branch as a
+     change of their own. `compare/topics/scale.ts` reads Topics from
+     `patterns/`, so the Topics runs need that change on the branch they run
+     from.
