@@ -31,8 +31,6 @@ export interface SavedHead {
   workflow: string | number;
   /** The runs from the newest down, newest first, with none missing. */
   runs: GitHubRun[];
-  /** Whether `runs` reaches the end of the list. */
-  complete: boolean;
   /**
    * How many places nearer the top of the list than its place in `runs` the
    * last run was found, which is less than zero when it was found further
@@ -177,12 +175,11 @@ const isNullableString = (value: unknown): value is string | null =>
  */
 function savedHead(value: unknown, now: number): SavedHead | undefined {
   if (!isObjectNotArray(value)) return undefined;
-  const { repo, workflow, runs, complete, drift, readAt, usedAt, readers } =
-    value;
+  const { repo, workflow, runs, drift, readAt, usedAt, readers } = value;
   if (
     typeof repo !== "string" ||
     !(typeof workflow === "string" || isWhole(workflow, 1)) ||
-    !Array.isArray(runs) || typeof complete !== "boolean" ||
+    !Array.isArray(runs) ||
     !isWhole(drift, -Infinity) || !isPast(readAt, now) ||
     !isPast(usedAt, now) ||
     !Array.isArray(readers)
@@ -208,7 +205,6 @@ function savedHead(value: unknown, now: number): SavedHead | undefined {
     repo,
     workflow,
     runs: kept,
-    complete: whole && complete,
     drift: whole ? drift : 0,
     readAt,
     usedAt,

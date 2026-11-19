@@ -40,7 +40,6 @@ function head(held: GitHubRun[], fields: Partial<SavedHead> = {}): SavedHead {
     repo: "example/repo",
     workflow: "ci.yml",
     runs: held,
-    complete: false,
     drift: 0,
     readAt: NOW - 1_000,
     usedAt: NOW - 1_000,
@@ -96,11 +95,7 @@ describe("RunListFile", () => {
   describe("instance members", () => {
     describe("load()", () => {
       it("returns the heads `save()` wrote", async () => {
-        const saved = head(runs(30, 21), {
-          complete: true,
-          drift: 2,
-          workflow: 1234,
-        });
+        const saved = head(runs(30, 21), { drift: 2, workflow: 1234 });
         await new RunListFile(path).save(() => [saved], 0);
 
         expect(await load(1234)).toEqual(saved);
@@ -171,10 +166,14 @@ describe("RunListFile", () => {
       });
 
       it("ignores fields it does not know", async () => {
+        // An earlier version also kept whether a head reached the end of its
+        // list, which GitHub's short pages could make it believe wrongly.
+
         await write({
           later: true,
           heads: [{
             ...head(runs(30, 21)),
+            complete: true,
             later: [1, 2],
             runs: runs(30, 21).map((held) => ({ ...held, later: "x" })),
           }],
@@ -189,13 +188,13 @@ describe("RunListFile", () => {
         const { display_title: _, ...untitled } = run(27);
         const held = [...runs(30, 28), untitled, ...runs(26, 21)];
         await write({
-          heads: [{ ...head(runs(30, 21), { complete: true }), runs: held }],
+          heads: [{ ...head(runs(30, 21), { drift: 2 }), runs: held }],
         });
 
         const loaded = await loadHead();
 
         expect(ids(loaded.runs)).toEqual([30, 29, 28]);
-        expect(loaded.complete).toBe(false);
+        expect(loaded.drift).toBe(0);
       });
 
       it("cuts a head back above the first run held out of order", async () => {
