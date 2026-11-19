@@ -3528,8 +3528,12 @@ export type SqliteTableFunction = (
   rule?: SqliteRowLabelRule,
   /** CFC Phase 3.b: `{ allowReadClearance: true }` opts the table into
    *  read-time clearance (reader-filtered `db.query({ readClearance: true })`).
-   *  Needs a `rule` — throws at `table()` time without one. */
-  opts?: { allowReadClearance?: boolean },
+   *  Needs a `rule` — throws at `table()` time without one. `indexes`
+   *  declares secondary indexes, each a list of column names in key order. */
+  opts?: {
+    allowReadClearance?: boolean;
+    indexes?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ) => JSONSchema;
 
 /**

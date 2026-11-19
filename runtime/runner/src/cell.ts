@@ -97,6 +97,17 @@ import {
 } from "./builder/types.ts";
 import type { AggregateOperation } from "./builtins/aggregate.ts";
 import { listResultSchema } from "./builtins/list-result-schema.ts";
+import {
+  type IndexedCollectionDescriptor,
+  indexedCollectionDescriptorOf,
+} from "./builtins/indexed-collection/definition.ts";
+import {
+  deleteMemberRows,
+  type IndexedCollectionWriter,
+  memberKeyOf,
+  projectMember,
+  writeMemberRows,
+} from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
 import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
@@ -2375,6 +2386,54 @@ export class CellImpl<T extends FabricValue>
     );
   }
 
+  /**
+   * Adds `member` to this indexed collection: mirrors its declared fields
+   * into the collection's tables, in this cell's transaction. Adding a member
+   * the collection already holds refreshes its rows. Throws outside a
+   * transaction, on a receiver that is not an indexed collection, and on a
+   * member that is not a cell.
+   */
+  add(member: unknown): void {
+    const descriptor = this.#indexedCollectionDescriptor();
+    if (descriptor === undefined || !this.#tx) {
+      throw new TypeError(
+        "`.add()` is only available on an indexed collection, within a " +
+          "transaction (e.g. inside a handler)",
+      );
+    }
+    const cell = asBoundCell(member);
+    if (cell === undefined) {
+      throw new TypeError("an indexed collection holds cells only");
+    }
+    writeMemberRows(
+      this as unknown as IndexedCollectionWriter,
+      descriptor,
+      projectMember(this.#tx, descriptor, cell),
+    );
+    this.#registerIndexedCollection();
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which returns this cell's
+   * collection descriptor, or `undefined` when its value is not the handle
+   * of one.
+   */
+  #indexedCollectionDescriptor(): IndexedCollectionDescriptor | undefined {
+    return indexedCollectionDescriptorOf(this.getRaw({ lastNode: "value" }));
+  }
+
+  /**
+   * Helper for the indexed-collection methods, which makes the collection
+   * known to the runtime's maintainer once this transaction commits.
+   */
+  #registerIndexedCollection(): void {
+    const handle = this.resolveAsCell().getAsNormalizedFullLink();
+    const id = (this.getRaw({ lastNode: "value" }) as { id: string }).id;
+    this.#tx!.addCommitCallback((_tx, result) => {
+      if (!result.error) this.#runtime.indexedCollections.register(handle, id);
+    });
+  }
+
   set(newValue: AnyCellWrapping<T> | T): Cell<T> {
     return this.#set(newValue);
   }
@@ -3800,6 +3859,18 @@ export class CellImpl<T extends FabricValue>
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
+      // On an indexed collection, `remove()` takes a member out of it.
+      const descriptor = this.#indexedCollectionDescriptor();
+      const member = asBoundCell(ref);
+      if (descriptor !== undefined && member !== undefined && this.#tx) {
+        deleteMemberRows(
+          this as unknown as IndexedCollectionWriter,
+          descriptor,
+          memberKeyOf(member.withTx(this.#tx)),
+        );
+        this.#registerIndexedCollection();
+        return;
+      }
       throw new Error("Can't remove from non-array value");
     }
     const array = got as ElemT[];

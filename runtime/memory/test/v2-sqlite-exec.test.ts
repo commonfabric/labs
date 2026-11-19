@@ -28,6 +28,20 @@ describe("engine-side exec", () => {
     db.close();
   });
 
+  it("creates the indexes a table declares", () => {
+    ensureTables(db, {
+      edges: table({ source: "text", target: "text" }, undefined, {
+        indexes: [["target"]],
+      }),
+    });
+    const plan = db.prepare(
+      "EXPLAIN QUERY PLAN SELECT source FROM edges WHERE target = ?",
+    ).all("x") as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(" ")).toContain(
+      "edges__target__idx",
+    );
+  });
+
   it("creates declared tables (additive)", () => {
     // The table exists iff querying it succeeds (sqlite_master is blocked by the
     // guard, which is correct — patterns must not introspect the schema catalog).

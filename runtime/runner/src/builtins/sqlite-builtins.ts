@@ -28,6 +28,7 @@ import {
   ownedStoreLinks,
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
+import { indexedCollectionDescriptorOf } from "./indexed-collection/definition.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -793,8 +794,13 @@ export function sqliteDatabase(
         scope,
       );
       const options = inputsCell.withTx(tx).get() as
-        | { tables?: SqliteDbRef["tables"] }
+        | { tables?: SqliteDbRef["tables"]; index?: unknown }
         | undefined;
+      // An indexed collection is a database whose handle also carries the
+      // descriptor its tables were derived from.
+      const index = indexedCollectionDescriptorOf(
+        snapshotQueryResult(options?.index),
+      );
       // `handle` is a builtin RESULT cell (makeResultCell), and result cells
       // are always `of:`-schemed — the computed kind applies only to derived
       // internal cells — so stripping the entity scheme yields the handle's
@@ -866,6 +872,7 @@ export function sqliteDatabase(
             ...(tables !== undefined && { tables }),
             scope,
             ...(owner !== undefined && { owner }),
+            ...(index !== undefined && { index }),
             // Carry db.exec's write revision forward — dropping it would make
             // this re-derivation look like "new inputs" to every handle hasher.
             ...(typeof prior?.rev === "number" && { rev: prior.rev }),
@@ -883,15 +890,22 @@ export function sqliteDatabase(
         if (result.error) {
           return;
         }
+        const durable = () => {
+          initialized.add(instance);
+          if (index !== undefined) {
+            runtime.indexedCollections.register(
+              handle.getAsNormalizedFullLink(),
+              id,
+            );
+          }
+        };
         const waveSettlement = waveSettlementOf(settledTx);
         if (waveSettlement === undefined) {
-          initialized.add(instance);
+          durable();
           return;
         }
         void waveSettlement.then((waveResult) => {
-          if (!waveResult.error) {
-            initialized.add(instance);
-          }
+          if (!waveResult.error) durable();
         });
       });
     }

@@ -10,7 +10,7 @@ import { isPlainObject } from "@commonfabric/js-values/types";
 import type { SqliteNativeRow } from "../../v2.ts";
 import { assertReadOnly, assertWriteSafe } from "./guard.ts";
 import { columnOrigins } from "./column-origin.ts";
-import { createTableSQL, type TableSchema } from "./schema.ts";
+import { createIndexSQL, createTableSQL, type TableSchema } from "./schema.ts";
 
 // Reserved schema names that may never be used as a pattern-db attach alias.
 const RESERVED_ALIASES = new Set(["main", "temp"]);
@@ -191,7 +191,8 @@ export function runWrite(
 }
 
 /**
- * Additive table reconciliation (Phase 2 V1): create missing tables. Destructive
+ * Additive table reconciliation (Phase 2 V1): create missing tables and their
+ * declared secondary indexes. Destructive
  * or ambiguous changes to existing tables are out of scope and intentionally not
  * applied here; a future migration step handles them (refuse-by-default + opt-in
  * callback — see spec 08-open-questions Q9).
@@ -204,5 +205,8 @@ export function ensureTables(
   if (alias !== undefined) assertSafeAlias(alias);
   for (const [name, schema] of Object.entries(tables)) {
     db.exec(createTableSQL(name, schema, alias));
+    for (const statement of createIndexSQL(name, schema, alias)) {
+      db.exec(statement);
+    }
   }
 }
