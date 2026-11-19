@@ -214,7 +214,7 @@ export class XRootView extends BaseView implements ShellApp {
         ...event,
         unconfirmedWrites: event.unconfirmedWrites === true ||
           this._clientUpdateRequired?.unconfirmedWrites === true ||
-          this.#mainClient?.hasPendingWrites() === true,
+          this.runtime?.hasPendingWrites() === true,
       };
       return;
     }
@@ -246,16 +246,17 @@ export class XRootView extends BaseView implements ShellApp {
   @property()
   accessor keyStore: KeyStore | undefined = undefined;
 
+  /** The client of the runtime this element created. */
+  @state()
+  private accessor runtime: RuntimeClient | undefined = undefined;
+
   /**
    * The runtime `cf-` components act through: that of the open fork while
    * the shell shows one, and otherwise the one this element created.
    */
   @provide({ context: runtimeContext })
   @state()
-  private accessor runtime: RuntimeClient | undefined = undefined;
-
-  /** The client of the runtime this element created. */
-  #mainClient: RuntimeClient | undefined = undefined;
+  private accessor _providedRuntime: RuntimeClient | undefined = undefined;
 
   /** The fork of the viewed space the shell is showing, when it shows one. */
   #fork: SpaceFork | undefined = undefined;
@@ -295,7 +296,7 @@ export class XRootView extends BaseView implements ShellApp {
         this.#dropFork();
         const previous = this.#rt.value;
         if (previous) {
-          this.#mainClient?.off(
+          this.runtime?.off(
             "eventneedsattention",
             this._handleEventNeedsAttention,
           );
@@ -311,8 +312,7 @@ export class XRootView extends BaseView implements ShellApp {
           // Clear the runtime when no app state. The space belongs to the
           // view, and #syncViewSpace has already cleared it for the same
           // change that took the identity away.
-          this.#mainClient = undefined;
-          this.#provideRuntime();
+          this.runtime = undefined;
           this.#telemetry = undefined;
           clearRuntimeDebugGlobals(getCommonfabricGlobal());
           return undefined;
@@ -375,22 +375,20 @@ export class XRootView extends BaseView implements ShellApp {
           // leave the space alone: which space the view addresses does not
           // depend on which runtime creation won.
           rt.dispose().catch(console.error);
-          this.#mainClient = undefined;
-          this.#provideRuntime();
+          this.runtime = undefined;
           clearRuntimeDebugGlobals(getCommonfabricGlobal());
           return;
         }
 
         // Update the provided runtime; `space` is view state, resolved
         // from app.view in willUpdate() independent of the runtime's life.
-        this.#mainClient = rt.runtime();
-        this.#provideRuntime();
-        this.#mainClient.on(
+        this.runtime = rt.runtime();
+        this.runtime.on(
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
         this.#unavailableSpaceRetry = new UnavailableSpaceRetry(
-          this.#mainClient,
+          this.runtime,
         );
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
@@ -400,8 +398,8 @@ export class XRootView extends BaseView implements ShellApp {
         // (e.g. commonfabric.rt.setLoggerLevel("debug")).
         exposeCommonfabricGlobals(
           getCommonfabricGlobal(),
-          this.#mainClient,
-          () => this.#mainClient,
+          this.runtime,
+          () => this.runtime,
           () => this.space as DID,
           () => this.#appView?.settling,
         );
@@ -441,11 +439,11 @@ export class XRootView extends BaseView implements ShellApp {
     // A Lit element can be detached and reattached without rebuilding its
     // worker runtime. Reinstall the live notice listener that disconnect
     // removes; off-first keeps repeated connects idempotent.
-    this.#mainClient?.off(
+    this.runtime?.off(
       "eventneedsattention",
       this._handleEventNeedsAttention,
     );
-    this.#mainClient?.on(
+    this.runtime?.on(
       "eventneedsattention",
       this._handleEventNeedsAttention,
     );
@@ -461,7 +459,7 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   override disconnectedCallback(): void {
-    this.#mainClient?.off(
+    this.runtime?.off(
       "eventneedsattention",
       this._handleEventNeedsAttention,
     );
@@ -491,7 +489,7 @@ export class XRootView extends BaseView implements ShellApp {
    */
   #onBeforeUnload = (event: BeforeUnloadEvent): void => {
     if (
-      this.#mainClient?.hasPendingWrites() ||
+      this.runtime?.hasPendingWrites() ||
       this._clientUpdateRequired?.unconfirmedWrites === true
     ) {
       event.preventDefault();
@@ -538,6 +536,8 @@ export class XRootView extends BaseView implements ShellApp {
       }
       this.#syncViewSpace(this.app);
     }
+    // Every change of the fork changes `_openHistory`, and so passes here.
+    this._providedRuntime = this.#fork?.runtime.runtime() ?? this.runtime;
   }
 
   protected override updated(changedProperties: PropertyValues<this>): void {
@@ -675,7 +675,7 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   async #refreshEventAttention(space: DID, generation: number): Promise<void> {
-    const runtime = this.#mainClient;
+    const runtime = this.runtime;
     if (runtime === undefined) return;
     const owner = Symbol(space);
     const startedAt = this.#eventAttentionMutation;
@@ -684,7 +684,7 @@ export class XRootView extends BaseView implements ShellApp {
       const notices = await runtime.listEventAttention(space);
       if (
         generation !== this.#runtimeGeneration ||
-        runtime !== this.#mainClient ||
+        runtime !== this.runtime ||
         space !== this.space ||
         this.#eventAttentionRefreshOwners.get(space) !== owner
       ) return;
@@ -714,7 +714,7 @@ export class XRootView extends BaseView implements ShellApp {
     } catch (error) {
       if (
         generation === this.#runtimeGeneration &&
-        runtime === this.#mainClient &&
+        runtime === this.runtime &&
         space === this.space &&
         this.#eventAttentionRefreshOwners.get(space) === owner
       ) {
@@ -732,7 +732,7 @@ export class XRootView extends BaseView implements ShellApp {
     notice: EventAttentionNotice,
     action: "retry" | "dismiss",
   ): Promise<void> => {
-    const runtime = this.#mainClient;
+    const runtime = this.runtime;
     if (runtime === undefined) return;
     const key = eventAttentionNoticeKey(notice);
     if (this._resolvingAttention.has(key)) return;
@@ -860,7 +860,6 @@ export class XRootView extends BaseView implements ShellApp {
       }
       this.#fork = fork;
       this._openHistory = { seq, busy: false };
-      this.#provideRuntime();
       await previous?.discard();
     } catch (error) {
       console.error("[RootView] Failed to open history:", error);
@@ -878,7 +877,6 @@ export class XRootView extends BaseView implements ShellApp {
     this._historyError = undefined;
     this.#fork = undefined;
     this._openHistory = undefined;
-    this.#provideRuntime();
     try {
       await fork.discard();
     } catch (error) {
@@ -908,7 +906,6 @@ export class XRootView extends BaseView implements ShellApp {
     if (fork !== this.#fork) return;
     this.#fork = undefined;
     this._openHistory = undefined;
-    this.#provideRuntime();
   }
 
   /** Lets go of the open fork, where there is one, and deletes it. */
@@ -918,15 +915,9 @@ export class XRootView extends BaseView implements ShellApp {
     this._openHistory = undefined;
     if (fork === undefined) return;
     this.#fork = undefined;
-    this.#provideRuntime();
     fork.discard().catch((error) =>
       console.error("[RootView] Failed to discard a fork:", error)
     );
-  }
-
-  /** Points the provided runtime at the open fork's, or else at this one's. */
-  #provideRuntime(): void {
-    this.runtime = this.#fork?.runtime.runtime() ?? this.#mainClient;
   }
 
   /**
