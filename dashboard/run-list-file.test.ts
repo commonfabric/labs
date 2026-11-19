@@ -40,6 +40,7 @@ function head(held: GitHubRun[], fields: Partial<SavedHead> = {}): SavedHead {
     repo: "example/repo",
     workflow: "ci.yml",
     runs: held,
+    complete: false,
     drift: 0,
     readAt: NOW - 1_000,
     usedAt: NOW - 1_000,
@@ -153,6 +154,13 @@ describe("RunListFile", () => {
           .toMatchObject({ name: null, path: null });
       });
 
+      it("writes every head as not known to reach the end of its list", async () => {
+        await new RunListFile(path).save(() => [head(runs(30, 21))], 0);
+
+        expect(JSON.parse(await Deno.readTextFile(path)).heads[0].complete)
+          .toBe(false);
+      });
+
       it("returns only the first line of a run's head commit message", async () => {
         await write({
           heads: [head([
@@ -165,15 +173,17 @@ describe("RunListFile", () => {
           .toEqual([{ message: "Fix it" }, { message: "commit 29" }]);
       });
 
-      it("ignores fields it does not know", async () => {
-        // An earlier version also kept whether a head reached the end of its
-        // list, which GitHub's short pages could make it believe wrongly.
+      it("returns no head as known to reach the end of its list", async () => {
+        await write({ heads: [{ ...head(runs(30, 21)), complete: true }] });
 
+        expect((await loadHead()).complete).toBe(false);
+      });
+
+      it("ignores fields it does not know", async () => {
         await write({
           later: true,
           heads: [{
             ...head(runs(30, 21)),
-            complete: true,
             later: [1, 2],
             runs: runs(30, 21).map((held) => ({ ...held, later: "x" })),
           }],

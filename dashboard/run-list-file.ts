@@ -32,6 +32,12 @@ export interface SavedHead {
   /** The runs from the newest down, newest first, with none missing. */
   runs: GitHubRun[];
   /**
+   * Whether `runs` is known to reach the end of the list, which no head is
+   * taken as: a reading reads on down the list to find out. Every head is
+   * written with it, as false, for the dashboards that read it.
+   */
+  complete: false;
+  /**
    * How many places nearer the top of the list than its place in `runs` the
    * last run was found, which is less than zero when it was found further
    * down.
@@ -205,6 +211,7 @@ function savedHead(value: unknown, now: number): SavedHead | undefined {
     repo,
     workflow,
     runs: kept,
+    complete: false,
     drift: whole ? drift : 0,
     readAt,
     usedAt,

@@ -353,9 +353,9 @@ keep `fabric-wall-run-lists-ci-history.json` and
 `fabric-wall-run-lists-commit-ci-history.json` and
 `fabric-wall-run-lists-commit-ci-gantt.json`. A file holds, for each workflow,
 the runs of its head, the oldest run each reader last read and when, and when
-the top of the list was last read. It does not hold whether the runs reach the
-end of the list, so a reading that needs runs past the last one held reads one
-page further down to see. A
+the top of the list was last read. It records every head as not known to reach
+the end of the list, so a reading that needs runs past the last one held reads
+one page further down to see. A
 run keeps only the first line of its head commit's message, which is the only
 part any view shows, and a run taken from a file that holds more is cut to it. A
 `RunLists` takes a workflow's head from its file whenever it starts holding one,
@@ -401,9 +401,9 @@ held above it make more than zero, and starts the next walk there. A page whose
 runs are not in order of falling id is rejected. The list ends where the count
 of its runs that GitHub sends with each page says it does. GitHub sometimes
 answers with fewer runs than asked for from the middle of the list, so a page
-shorter than asked for that falls short of that count is rejected, as is a page
-without the count. A reading rejected this way keeps the runs it held, and the
-next reading reads the page again.
+shorter than asked for that falls short of that count is rejected, as are a page
+holding runs past the count and a page without it. A reading rejected this way
+keeps the runs it held, and the next reading reads the page again.
 
 A run changes after it is listed: it finishes, or someone starts it again, which
 leaves it in its place in the list. The runs at the top of the list are read

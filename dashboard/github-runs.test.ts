@@ -513,7 +513,7 @@ describe("github-runs", () => {
           const lists = new RunLists();
 
           await expect(read(lists, github, { newest: 100 })).rejects.toThrow(
-            "short of the 300 it counts",
+            "against the 300 it counts",
           );
           const read2 = await read(lists, github, { newest: 100 });
 
@@ -540,7 +540,7 @@ describe("github-runs", () => {
           };
 
           await expect(read(lists, github, { reader: "deep" })).rejects
-            .toThrow("short of the 310 it counts");
+            .toThrow("against the 310 it counts");
           const deep = await read(lists, github, { reader: "deep" });
 
           expect(ids(deep)).toEqual(ids(runs(310, 1)));
@@ -552,7 +552,27 @@ describe("github-runs", () => {
 
           await expect(read(new RunLists(), github)).rejects.toThrow(
             "GitHub listed 0 runs on page 1 of example/repo ci.yml at 20 a " +
-              "page, short of the 30 it counts",
+              "page, against the 30 it counts",
+          );
+        });
+
+        it("rejects a reading given a page holding runs past the count of the list's runs", async () => {
+          const github = new FakeGitHub(runs(30, 1));
+          const request = github.request;
+          github.request = async <T>(
+            path: string,
+            options: GitHubRequestOptions,
+          ): Promise<T> => {
+            const answer = await request<Record<string, unknown>>(
+              path,
+              options,
+            );
+            return { ...answer, total_count: 10 } as T;
+          };
+
+          await expect(read(new RunLists(), github)).rejects.toThrow(
+            "GitHub listed 20 runs on page 1 of example/repo ci.yml at 20 a " +
+              "page, against the 10 it counts",
           );
         });
 
@@ -1761,6 +1781,7 @@ describe("github-runs", () => {
               repo: REPO,
               workflow: WORKFLOW,
               runs: described,
+              complete: false,
               drift: 0,
               readAt: Date.now(),
               usedAt: Date.now(),

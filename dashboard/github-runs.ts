@@ -239,6 +239,7 @@ class Head {
       repo: this.repo,
       workflow: this.workflow,
       runs: this.runs,
+      complete: false,
       drift: this.drift,
       readAt: this.readAt,
       usedAt: this.usedAt,
@@ -288,8 +289,9 @@ class RunList {
    * Reads one page of the unfiltered list, and returns its runs and whether
    * the list ends with them: whether they reach the count of the list's runs
    * GitHub sends with them. Rejects a page out of order, one without the
-   * count, and one shorter than asked for that falls short of the count,
-   * which GitHub sometimes answers from the middle of the list.
+   * count, and one that contradicts the count: one that holds runs past it,
+   * or one shorter than asked for that falls short of it, which GitHub
+   * sometimes answers from the middle of the list.
    */
   async page(
     page: number,
@@ -313,10 +315,13 @@ class RunList {
       );
     }
     const reached = (page - 1) * size + runs.length;
-    if (runs.length < size && reached < total) {
+    if (
+      runs.length > 0 && reached > total ||
+      runs.length < size && reached < total
+    ) {
       throw new Error(
         `GitHub listed ${runs.length} runs on page ${page} of ${this.repo} ` +
-          `${this.workflow} at ${size} a page, short of the ${total} it counts`,
+          `${this.workflow} at ${size} a page, against the ${total} it counts`,
       );
     }
     return { runs, ends: reached >= total };
