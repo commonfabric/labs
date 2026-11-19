@@ -14,6 +14,7 @@
  * declares its one trusted writer.
  */
 import {
+  type Cell,
   computed,
   eventKey,
   handler,
@@ -61,6 +62,24 @@ export interface CatalogCounts {
 }
 
 /**
+ * A link to a Common Fabric profile, opaque on purpose: render it with
+ * `<cf-profile-badge>`, which reads the name and picture from the profile and
+ * shows whether they are the profile owner's own. Never read a name out of it
+ * yourself.
+ */
+export type CatalogProfile = Cell<Record<string, never>>;
+
+/**
+ * One original along a remix's chain: the pattern and its published name, or
+ * `unavailable` for an original the viewer may not see (taken down, say),
+ * which ends the chain and says nothing else about it. A step with no
+ * `patternId` is read as `unavailable`.
+ */
+export type CatalogRemixStep =
+  | { patternId: string; title?: string }
+  | { unavailable: true };
+
+/**
  * One published pattern, as the catalog describes it. Every field but
  * `patternId` and `title` may be absent; a caller shows what is there.
  * `title`, `blurb` and `tags` are written by the pattern's author: render them
@@ -80,6 +99,26 @@ export interface CatalogEntry {
   bucket?: CatalogBucket;
   /** The author's stable pseudonym, not who they are. */
   author?: string;
+  /**
+   * How much other people use the author's other shared patterns, 0 to 9: what
+   * makes an anonymous author worth trusting. Shown beside `author`, never
+   * beside a profile.
+   */
+  authorTier?: number;
+  /**
+   * The Common Fabric profile the author published this pattern under, when
+   * they chose to be named (`cf pattern publish --as`). The name and picture
+   * are read from the profile itself, never carried here. Absent on a pattern
+   * shared anonymously, which shows only `author`.
+   */
+  authorProfile?: CatalogProfile;
+  /**
+   * What this pattern is a remix of, nearest original first: a remix of a
+   * remix lists its whole chain. An original the viewer may not see is
+   * `{unavailable: true}` and ends the chain. Absent when it is not a remix,
+   * or when the index shows it to this viewer as no remix at all.
+   */
+  remixOf?: CatalogRemixStep[];
   /** Present only on the viewer's own entries that others cannot find yet. */
   unlisted?: CatalogUnlisted;
   counts?: CatalogCounts;
@@ -345,6 +384,81 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       ),
       answer,
       getIt,
+    };
+  },
+);
+
+/** What `CatalogByline` takes. */
+export interface CatalogBylineInput {
+  entry: CatalogEntry;
+}
+
+/** What `CatalogByline` returns. */
+export interface CatalogBylineOutput {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+/**
+ * How a remix's chain reads: "Remix of “A”, a remix of “B”". A step without a
+ * title is "an untitled pattern", never its id. The chain stops at the first
+ * step the viewer may not see, or that is not well formed (fail closed), and
+ * says "a pattern that's no longer available" for it.
+ */
+export const remixOfText = (steps: readonly CatalogRemixStep[]): string => {
+  const names: string[] = [];
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (
+      !step || typeof step !== "object" || "unavailable" in step ||
+      typeof step.patternId !== "string" || !step.patternId
+    ) {
+      names.push("a pattern that's no longer available");
+      break;
+    }
+    const title = typeof step.title === "string"
+      ? step.title.split(/\s+/).join(" ").trim()
+      : "";
+    names.push(title ? `“${title}”` : "an untitled pattern");
+  }
+  return names.length === 0 ? "" : `Remix of ${names.join(", a remix of ")}`;
+};
+
+/**
+ * Who made an entry and what it remixes, the way every caller shows it. A
+ * pattern published under a profile shows that profile's badge, which reads
+ * the name and picture from the profile itself; one shared anonymously shows
+ * only its pseudonym. A remix says what it is a remix of, down its chain.
+ */
+export const CatalogByline = pattern<CatalogBylineInput, CatalogBylineOutput>(
+  ({ entry }) => {
+    const remixText = computed(() => remixOfText(entry?.remixOf ?? []));
+    const pseudonym = computed(() => {
+      if (entry?.authorProfile || !entry?.author) return "";
+      const tier = entry?.authorTier;
+      return typeof tier === "number" && Number.isInteger(tier) && tier >= 0 &&
+          tier <= 9
+        ? `${entry.author} · credibility ${tier} of 9`
+        : entry.author;
+    });
+    return {
+      [NAME]: "Byline",
+      [UI]: (
+        <cf-hstack
+          gap="2"
+          wrap
+          style={{
+            alignItems: "center",
+            fontSize: "13px",
+            color: "var(--cf-theme-color-text-secondary)",
+          }}
+        >
+          {entry?.authorProfile
+            ? <cf-profile-badge $profile={entry.authorProfile} size="xs" />
+            : null}
+          {computed(() => pseudonym ? <span>by {pseudonym}</span> : null)}
+          {computed(() => remixText ? <span>{remixText}</span> : null)}
+        </cf-hstack>
+      ),
     };
   },
 );
