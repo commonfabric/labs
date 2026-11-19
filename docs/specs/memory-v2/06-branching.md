@@ -117,7 +117,10 @@ When `branch.create({ name, parentBranch, forkSeq })` is served:
 3. **Check the name.** A name that holds a control character, or that begins
    with `view-demand:` or `view-support:`, is refused: the server keys a
    session's graphs and its sync cache by branch name, and such a name could
-   stand for another branch's entry there. A name at most 128 characters long
+   stand for another branch's entry there. A name that begins with `history:`
+   is reserved for a history fork, which a compaction run deletes when it
+   finds one active (6.17.1); a branch meant to outlive a compaction is named
+   otherwise. A name at most 128 characters long
    that no branch has had is taken by the new branch. A name an active branch
    has returns that branch unchanged when the request names the same parent
    and either the same fork seq or none, so a repeated request is harmless.

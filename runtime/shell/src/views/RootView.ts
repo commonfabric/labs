@@ -11,6 +11,7 @@ import {
   isAppViewEqual,
   isViewingDefaultPatternView,
   navigate,
+  preserveAppViewMode,
 } from "@commonfabric/navigation";
 import {
   type ErrorNotification,
@@ -927,8 +928,14 @@ export class XRootView extends BaseView implements ShellApp {
     this.#fork = undefined;
     this._openHistory = undefined;
     // What was done in the fork is gone with it, a piece reached there
-    // included.
-    this.#leaveForkView();
+    // included, and the view from before the fork may be of a piece the
+    // restored step does not hold. A view that did not move is of what the
+    // fork showed at that step, and stays; any other gives way to the space.
+    const before = this.#viewBeforeFork;
+    this.#viewBeforeFork = undefined;
+    if (before !== undefined && !isAppViewEqual(before, this.app.view)) {
+      navigate(preserveAppViewMode(this.app.view, { spaceDid: fork.space }));
+    }
   }
 
   /**

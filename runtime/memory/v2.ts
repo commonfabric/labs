@@ -34,7 +34,9 @@ export const DEFAULT_BRANCH = "" as const;
  * space: a history fork, named with this prefix and a UUID. A page that goes
  * away with one open leaves the branch active in the store, and nothing but
  * its name says it is one, so compaction takes every active branch whose name
- * starts with this for a leftover history fork and deletes it.
+ * starts with this for a leftover history fork and deletes it. The prefix is
+ * reserved for that use: a branch meant to outlive a compaction is named
+ * otherwise.
  */
 export const HISTORY_FORK_BRANCH_PREFIX = "history:" as const;
 
