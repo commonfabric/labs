@@ -85,10 +85,27 @@ step checks before it changes anything.
   Putting their name on it is
   `cf pattern publish <entry> --as "<profile name>"`, only when they ask for
   that and confirm the name it shows.
+- **open**: getting a pattern into a folder, with commands that already exist.
+  - **One of theirs** they made here is already in `my-patterns/<name>/`. On
+    another Mac, the same path is the same history:
+    `cf pattern history
+    my-patterns/<name>/<entry>` then
+    `cf pattern rollback` to its newest version writes the files into the empty
+    folder. That needs the entry file's name, so keep it `main.tsx`.
+  - **One in their Weaver with no history** (their Weaver's agent made it):
+    `cf piece getsrc --cell <piece> my-patterns/<name>/` gets its source, and
+    their first save keeps it as theirs.
+  - **Someone else's, as a remix**:
+    `cf piece new --from-index <patternId>
+    --slug my-<name>` gives them
+    their own piece of it, then
+    `cf piece getsrc
+    --cell my-<name> my-patterns/<name>/` writes the files.
+    `cf` remembers where that piece came from, so sharing it later credits the
+    original.
 - **list**: `cf pattern history` (all of theirs) and `cf pattern mine` (what
   they share, and how many people use it).
 
 When nothing here does what they ask, say it is not built yet rather than
-improvising links, copies or Weaver deep links. Not built yet, e.g.: opening a
-pattern by name, remixing someone else's, putting a save straight onto a loom in
-Weaver, beta and stable channels, links.
+improvising links, copies or Weaver deep links. Not built yet, e.g.: putting a
+save straight onto a loom in Weaver, beta and stable channels, links.
