@@ -9856,3 +9856,19 @@ today's runtime; the site returns to that form if the declarations change.
      change of their own. `compare/topics/scale.ts` reads Topics from
      `patterns/`, so the Topics runs need that change on the branch they run
      from.
+562. **Since #10018 a `Writable` is assignable to a `ReadonlyCell` in
+     `base/api`, and two of the three sites of notes 551, 553 and 555 take the
+     subset's form.** In #10036, a branch from the main branch at `bab53c61dc`,
+     which has #10018, `isElementOf` takes `ReadonlyCell<readonly unknown[]>`
+     and `profileFace` takes `ReadonlyCell<ProfileFaceFields> | undefined`, with
+     the two key handles unannotated; `deno task cfcheck` passes over all 470
+     pattern files and the crate reports no error for the seven Topics files.
+     `recordNames` keeps the generic `Writable<A>`: a `ReadonlyCell` in
+     `base/api` declares no `resolveAsCell()`, which `recordNames` calls to find
+     each member's own cell, and `cfcheck` refuses it there ("Property
+     'resolveAsCell' does not exist on type 'ReadonlyCell<RecordNameMember |
+     undefined>'"). The crate accepts it, as footprint analysis does (FA §7.1:
+     `h.resolveAsCell()` of any handle `h`). That is a second difference between
+     today's declarations and the subset, smaller than the first. The branch of
+     this track keeps the forms of notes 551 and 555, since it is based on a
+     main branch without #10018.
