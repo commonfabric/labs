@@ -2974,41 +2974,15 @@ export class StorageManager implements IStorageManager {
           this.#forgetDocuments(space, addresses),
         routeState,
         // A session opened in a space released a moment ago waits for the
-        // released one to close.
-        createSession: this.#sessionFactory.supportsAclBootstrap === true
-          ? async (routeGeneration, routeSignal) => {
-            await this.#releasingSessions.get(space);
-            const resume = this.#releasedResumeOf(space);
-            if (resume !== undefined) {
-              this.#detachedSessionResumes.set(space, {
-                options: resume,
-                routeGeneration,
-              });
-            }
-            const opened = await this.#createInitializedSession(
-              space,
-              signer,
-              routeState,
-              routeGeneration,
-              routeSignal,
-            );
-            this.#releasedSessions.delete(space);
-            return opened;
-          }
-          : async (_routeGeneration, routeSignal) => {
-            await this.#releasingSessions.get(space);
-            const opened = await this.#createSession(
-              space,
-              signer,
-              this.#releasedResumeOf(space) ?? {
-                sessionId: this.#sessionId,
-                ...this.#sessionDescriptorFields(),
-              },
-              routeSignal,
-            );
-            this.#releasedSessions.delete(space);
-            return opened;
-          },
+        // released one to close, and resumes it (`#openSession()`).
+        createSession: (routeGeneration, routeSignal) =>
+          this.#openSession(
+            space,
+            signer,
+            routeState,
+            routeGeneration,
+            routeSignal,
+          ),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
@@ -3855,6 +3829,65 @@ export class StorageManager implements IStorageManager {
     for (const key of this.#crossingKicks.keys()) {
       if (key.startsWith(prefix)) this.#crossingKicks.delete(key);
     }
+  }
+
+  /**
+   * Helper for a provider of `space`, which opens its session. A space
+   * released and not yet opened again waits for its released session to
+   * finish closing, and resumes it; the resume is kept until an open of it
+   * succeeds. Any other space opens its session at once, as it always has.
+   */
+  #openSession(
+    space: MemorySpace,
+    signer: Signer,
+    routeState: ProviderRouteState,
+    routeGeneration: number,
+    routeSignal: AbortSignal,
+  ): Promise<OpenedSpaceSession> {
+    const open = (): Promise<OpenedSpaceSession> => {
+      const resume = this.#releasedResumeOf(space);
+      if (this.#sessionFactory.supportsAclBootstrap === true) {
+        if (resume !== undefined) {
+          this.#detachedSessionResumes.set(space, {
+            options: resume,
+            routeGeneration,
+          });
+        }
+        const opened = this.#createInitializedSession(
+          space,
+          signer,
+          routeState,
+          routeGeneration,
+          routeSignal,
+        );
+        return resume === undefined ? opened : this.#afterResume(space, opened);
+      }
+      const opened = this.#createSession(
+        space,
+        signer,
+        resume ?? {
+          sessionId: this.#sessionId,
+          ...this.#sessionDescriptorFields(),
+        },
+        routeSignal,
+      );
+      return resume === undefined ? opened : this.#afterResume(space, opened);
+    };
+    const releasing = this.#releasingSessions.get(space);
+    return releasing === undefined ? open() : releasing.then(open);
+  }
+
+  /**
+   * Helper for `#openSession()`, which forgets the released session of
+   * `space` once `opened`, the open that resumed it, succeeds.
+   */
+  async #afterResume(
+    space: MemorySpace,
+    opened: Promise<OpenedSpaceSession>,
+  ): Promise<OpenedSpaceSession> {
+    const session = await opened;
+    this.#releasedSessions.delete(space);
+    return session;
   }
 
   /**
