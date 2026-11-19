@@ -135,9 +135,9 @@ channel independently of the selected task tools.
   another call is refused and the run continues. Model and tool failures use
   `PROVIDER_FAILURE`.
 - `CFC_REFUSED` means the session's read ceiling withheld a value the run
-  read, and that ended the run: the information-flow rules stopped it, not a
-  failure. The run's state is `failed`; `REFUSED`, with the state `refused`,
-  is a result the boundary would not release.
+  read, and that ended the run: the information-flow rules stopped it, rather
+  than a model or tool. The run's state is `failed`; `REFUSED`, with the state
+  `refused`, is a result the boundary would not release.
 - `run` is a link to the run's `AgentRun` record: its `state`, `stateSince`,
   and, once finished, `outcome`, `usage`, `modelTurns`, and `toolCalls`, for
   a pattern that wants to show progress or cost. Optional `modelResponses`
