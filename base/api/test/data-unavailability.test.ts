@@ -26,6 +26,7 @@ import type {
   HasErrorFunction,
   HasSchemaMismatch,
   HasSchemaMismatchFunction,
+  IsObsolete,
   IsObsoleteFunction,
   IsPending,
   IsPendingFunction,
@@ -81,10 +82,14 @@ function nativeCompatibilityTypecheck(
   const latestIsExact: Equal<LatestCompleteValue<AsyncResult<Repo>>, Repo> =
     true;
   if (isObsolete(accepted)) {
+    accepted.isObsolete?.();
+    // @ts-expect-error Narrowing the reason does not add native methods.
     accepted.isObsolete();
     const guidance: string | null = accepted.message;
     void guidance;
   }
+  const obsoleteIsCompatible: Equal<UnavailableFor<"obsolete">, IsObsolete> =
+    true;
   void currentGuidance;
   void requiredGuidance;
   void concrete;
@@ -92,6 +97,7 @@ function nativeCompatibilityTypecheck(
   void fabricValue;
   void factoryInput;
   void latestIsExact;
+  void obsoleteIsCompatible;
 }
 
 function generationStateTypecheck(): void {

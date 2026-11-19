@@ -26,6 +26,17 @@ describe("pending paint boxes", () => {
     document.body.replaceChildren();
   });
 
+  it("refuses a document without a rendering window before annotating it", () => {
+    const detached = document.implementation.createHTMLDocument("Detached");
+    const container = detached.createElement("div");
+    container.setAttribute("data-cf-pending", "true");
+    expect(() => watchPendingBoxes(container)).toThrow(
+      "Pending presentation requires a document window",
+    );
+    expect(container.hasAttribute("data-cf-pending-box")).toBe(false);
+    expect(container.getAttribute("data-cf-pending")).toBe("true");
+  });
+
   it("walks transparent wrappers, stops at first boxes, and transfers treatment on recovery", async () => {
     const container = document.createElement("div");
     container.innerHTML =

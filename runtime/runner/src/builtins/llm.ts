@@ -3073,6 +3073,9 @@ export function generateObject<T extends Record<string, unknown>>(
                 docs: "",
                 observedConfidentiality: [],
               };
+            // Pulling the inputs and context can select a newer request. Check
+            // at dispatch so a superseded prompt never reaches the provider.
+            if (thisRun !== getRunForExecution()) return;
             logGenerateObject("client-generateObject-start", {
               ...directRequestSummary,
               observedConfidentialityCount: uniqueCfcAtoms([
@@ -3121,6 +3124,7 @@ export function generateObject<T extends Record<string, unknown>>(
 
           return resultPromise
             .then(async (response) => {
+              if (response === undefined) return;
               await runtime.idle();
               if (isWriteStale()) {
                 logGenerateObject(

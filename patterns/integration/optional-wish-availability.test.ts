@@ -121,17 +121,23 @@ describe("optional-wish-availability", () => {
             type: "object",
             properties: {
               query: { type: "string" },
+              system: { type: "string" },
               scope: { type: "array", items: { type: "string" } },
             },
           } as const;
-          const { query } = inputs.asSchema<{ query?: string }>(schema).get();
+          const { query, system } = inputs.asSchema<
+            { query?: string; system?: string }
+          >(schema).get();
+          const generationKey = system?.includes("careful labeller")
+            ? `${ref}:hifi`
+            : `${ref}:rewrite`;
           if (ref === "wish") wishQueries.push(query);
           const isControlled = ref === "wish"
             ? query !== undefined &&
               [...controlled.keys()].some((key) =>
                 key === query || key.startsWith(`${query}:`)
               )
-            : controlled.has(ref);
+            : controlled.has(generationKey) || controlled.has(ref);
           if (!isControlled) return delegate(...args);
           return (tx) => {
             const { query, scope } = inputs.withTx(tx).asSchema<
@@ -140,7 +146,7 @@ describe("optional-wish-availability", () => {
             const result = ref === "wish"
               ? controlled.get(`${query}:${scope?.[0]}`) ??
                 controlled.get(query ?? "")
-              : controlled.get(ref);
+              : controlled.get(generationKey) ?? controlled.get(ref);
             if (result) {
               const value = result.withTx(tx).getRaw();
               sendResult(tx, {
@@ -643,6 +649,57 @@ describe("optional-wish-availability", () => {
       "Use the new classifier model.",
     );
     expect(textOf(classifier.key("$UI"))).toContain("Recovered model");
+  });
+
+  it("adapts native inductor labels and rewrite failures without confusing retirement with loading", async () => {
+    const labels = runtime.getCell(space, "inductor label result");
+    const rewrite = runtime.getCell(space, "inductor rewrite result");
+    await runtime.editWithRetry((tx) => {
+      labels.withTx(tx).setRaw(UNAVAILABLE_SYNCING);
+      rewrite.withTx(tx).setRaw(
+        unavailableObsolete("Use the replacement rewrite model."),
+      );
+    });
+    controlled.set("generateObject:hifi", labels);
+    controlled.set("generateObject:rewrite", rewrite);
+    const inductor = await instantiate(
+      "showcase/inductor/lofi/lofi-inductor.tsx",
+      {
+        goal: "Is this a bill?",
+        items: [{ id: "mail-1", fields: { subject: "Invoice" } }],
+        rewriteAfter: 1,
+      },
+    );
+    expect(inductor.key("rows").key(0).key("hifi").get()).toBeNull();
+    expect(inductor.key("summary").key("labelled").get()).toBe(0);
+    await runtime.editWithRetry((tx) =>
+      labels.withTx(tx).setRaw(
+        unavailableObsolete("Use the replacement label model."),
+      )
+    );
+    await runtime.idle();
+    expect(inductor.key("rows").key(0).key("hifi").get()).toBeNull();
+    expect(inductor.key("summary").key("labelled").get()).toBe(0);
+    await runtime.editWithRetry((tx) =>
+      labels.withTx(tx).set({ label: true, reasoning: "An invoice" })
+    );
+    await runtime.idle();
+    expect(inductor.key("summary").key("labelled").get()).toBe(1);
+    expect(inductor.key("rewrite").get()).toEqual({
+      status: "failed",
+      reason: "the model call failed: Use the replacement rewrite model.",
+    });
+    expect(textOf(inductor.key("$UI"))).toContain(
+      "Use the replacement rewrite model.",
+    );
+    await runtime.editWithRetry((tx) =>
+      rewrite.withTx(tx).set({ rules: [], reasoning: "Recovered" })
+    );
+    await runtime.idle();
+    expect(inductor.key("rewrite").key("status").get()).toBe("ready");
+    expect(textOf(inductor.key("$UI"))).not.toContain(
+      "Use the replacement rewrite model.",
+    );
   });
 
   it("presents genuine profile lookup failures separately from no-profile absence", async () => {

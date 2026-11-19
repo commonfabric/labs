@@ -765,6 +765,33 @@ describe("generation data unavailability", () => {
     expect(rawPartial(generation.state)).toBe(UNAVAILABLE_PENDING);
   });
 
+  it("dispatches only the selected unqueued object request", async () => {
+    const schema = {
+      type: "object",
+      properties: { label: { type: "boolean" } },
+      required: ["label"],
+    } as const;
+    const sent: string[] = [];
+    for (const prompt of ["old goal", "new goal"]) {
+      addMockObjectResponse((request) => {
+        if (request.messages[0]?.content !== prompt) return false;
+        sent.push(prompt);
+        return true;
+      }, { object: { label: true }, id: prompt });
+    }
+
+    const generation = await makeObjectAction({ prompt: "old goal", schema });
+    const tx = invoke(generation.action);
+    generation.inputsCell.withTx(tx).set({ prompt: "new goal", schema });
+    generation.action(tx);
+    tx.prepareCfc();
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.settled();
+
+    expect(sent).toEqual(["new goal"]);
+    expect(rawResult(generation.state)).toEqual({ label: true });
+  });
+
   it("does not publish a stale queued object completion", async () => {
     const firstPrompt = "availability queued object first";
     const secondPrompt = "availability queued object second";

@@ -1,0 +1,475 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "PoolSeal": {
+        "properties": {
+          "jitter": {
+            "description": "The offset's bound `k`: each rule's offset is in `[-k, +k]`.",
+            "type": "number"
+          },
+          "secret": {
+            "description": "The key of each rule's threshold offset.",
+            "type": "string"
+          },
+          "thresholdCenter": {
+            "description": "The threshold a rule has before its offset.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "secret",
+          "thresholdCenter",
+          "jitter"
+        ],
+        "type": "object"
+      },
+      "PrivateContribution": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "properties": {
+          "contributor": {
+            "type": "string"
+          },
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/PrivateRule"
+            },
+            "type": "array"
+          },
+          "seal": {
+            "$ref": "#/$defs/PoolSeal"
+          }
+        },
+        "required": [
+          "contributor",
+          "pseudonym",
+          "rules",
+          "seal"
+        ],
+        "type": "object"
+      },
+      "PrivateRule": {
+        "$ref": "#/$defs/CanonicalRule",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      },
+      "StoredContribution": {
+        "$ref": "#/$defs/PrivateContribution",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "path": [
+                "submitContribution"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "properties": {
+      "contributions": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "One entry per contributor, written only by `submit` and `withdraw`.",
+        "items": {
+          "$ref": "#/$defs/StoredContribution"
+        },
+        "type": "array"
+      },
+      "goal": {
+        "default": "",
+        "description": "The yes-or-no question this pool collects rules for.",
+        "type": "string"
+      },
+      "jitter": {
+        "default": 5,
+        "description": "The bound `k` of each rule's offset, in `[-k, +k]`.",
+        "type": "number"
+      },
+      "thresholdCenter": {
+        "default": 15,
+        "description": "The threshold a rule has before its offset, at least\n`MIN_SEALED_THRESHOLD` (5). The first contribution seals it, with\n`jitter`, narrowed so no rule's threshold is below that floor; the\nrelease never reads it again.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "goal",
+      "thresholdCenter",
+      "jitter",
+      "contributions"
+    ],
+    "type": "object"
+  },
+  "pattern": "showcase/inductor/pool/inductor-pool.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CanonicalRule": {
+        "properties": {
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "description": "A hash of field, label, and canonical pattern: equal keys, equal rules.",
+            "type": "string"
+          },
+          "pattern": {
+            "description": "The canonical pattern, run with the `i` flag.",
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key"
+        ],
+        "type": "object"
+      },
+      "ContributionEvent": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "properties": {
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/PrivateRule"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "pseudonym",
+          "rules"
+        ],
+        "type": "object"
+      },
+      "PoolSeal": {
+        "properties": {
+          "jitter": {
+            "description": "The offset's bound `k`: each rule's offset is in `[-k, +k]`.",
+            "type": "number"
+          },
+          "secret": {
+            "description": "The key of each rule's threshold offset.",
+            "type": "string"
+          },
+          "thresholdCenter": {
+            "description": "The threshold a rule has before its offset.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "secret",
+          "thresholdCenter",
+          "jitter"
+        ],
+        "type": "object"
+      },
+      "PrivateContribution": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "properties": {
+          "contributor": {
+            "type": "string"
+          },
+          "pseudonym": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/PrivateRule"
+            },
+            "type": "array"
+          },
+          "seal": {
+            "$ref": "#/$defs/PoolSeal"
+          }
+        },
+        "required": [
+          "contributor",
+          "pseudonym",
+          "rules",
+          "seal"
+        ],
+        "type": "object"
+      },
+      "PrivateRule": {
+        "$ref": "#/$defs/CanonicalRule",
+        "ifc": {
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        }
+      },
+      "ReleasedRule": {
+        "properties": {
+          "count": {
+            "type": "number"
+          },
+          "field": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "predicts": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "field",
+          "pattern",
+          "predicts",
+          "key",
+          "count"
+        ],
+        "type": "object"
+      },
+      "StoredContribution": {
+        "$ref": "#/$defs/PrivateContribution",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "confidentiality": [
+            {
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "policyDigest": "lAku-p_xz7oVpShwCL-KItYgcyg-ZEtnW25gg8EjLW8",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "poolRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/showcase/inductor/pool/pool-policy.tsx",
+              "moduleIdentity": "-0pWHIdnGTtoz4mQxtWv_Nn-G42v-GKAF4iVrLyOafU",
+              "path": [
+                "submitContribution"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "description": "A #inductorPool: collects lo-fi rules for one goal under per-goal\npseudonyms and releases a rule, with its count, once enough distinct\ncontributors hold it. Lo-fi inductors find one with\n`wish({ query: \"#inductorPool\" })`.",
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "consensus": {
+        "description": "The pool's public result: what `releaseConsensus` computes now, the rules\nat threshold and their counts. The policy releases it, so anyone may read\nit. It is derived, not stored (README.md, \"Workaround: the release is not\nstored\").",
+        "items": {
+          "$ref": "#/$defs/ReleasedRule"
+        },
+        "type": "array"
+      },
+      "contributions": {
+        "description": "The stored contributions, confidential to the pool's policy.",
+        "items": {
+          "$ref": "#/$defs/StoredContribution"
+        },
+        "type": "array"
+      },
+      "goal": {
+        "type": "string"
+      },
+      "jitter": {
+        "type": "number"
+      },
+      "releasedCount": {
+        "description": "How many rules are released.",
+        "type": "number"
+      },
+      "submit": {
+        "$ref": "#/$defs/ContributionEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Contribute the sender's rule set under a pseudonym, replacing any set\nthey gave before."
+      },
+      "thresholdCenter": {
+        "type": "number"
+      },
+      "withdraw": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Take the sender's contribution out, whatever pseudonym it is under."
+      }
+    },
+    "required": [
+      "goal",
+      "thresholdCenter",
+      "jitter",
+      "contributions",
+      "consensus",
+      "releasedCount",
+      "submit",
+      "withdraw",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

@@ -145,11 +145,11 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
       !isSyncing(observedProfile) && !hasSchemaMismatch(observedProfile) &&
       !isObsolete(observedProfile)
     );
-    // Keep the badge in static JSX. A VNode-producing computed that captures
-    // the unavailable profile path is blocked before its fallback can run.
-    const currentProfileBadge = (
-      <cf-profile-badge $profile={myProfile} size="sm" />
-    );
+    // Select static JSX at the pattern boundary so an unavailable profile is
+    // not a dependency of the independent composer and message-list view.
+    const currentProfileBadge = profileAvailable
+      ? <cf-profile-badge $profile={myProfile} size="sm" />
+      : null;
     // Gate the composer on BOTH the name (for the snapshot/label) AND the live
     // profile CELL the send handler requires. Keying only on `#profileName`
     // would enable Send in the window where the name resolves but the `#profile`

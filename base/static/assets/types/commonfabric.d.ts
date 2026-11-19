@@ -682,7 +682,9 @@ export type IsPending = CompatibleUnavailable & { readonly reason: "pending" };
 export type IsSyncing = CompatibleUnavailable & { readonly reason: "syncing" };
 
 /** An output that is no longer served, with optional migration guidance. */
-export type IsObsolete = FabricUnavailable & { readonly reason: "obsolete" };
+export type IsObsolete = CompatibleUnavailable & {
+  readonly reason: "obsolete";
+};
 
 /** A terminal unavailable result with its error kind and message. */
 export type HasError = CompatibleUnavailable & {
