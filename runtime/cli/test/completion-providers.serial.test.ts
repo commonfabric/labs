@@ -308,6 +308,7 @@ const DIRECTIVE_CASES: Array<[string, string, string | undefined]> = [
   ["cf check ", "files", "*.tsx"],
   ["cf test ", "files", "*.tsx"],
   ["cf piece new --datafile ", "files", undefined],
+  ["cf piece new --version-entry ", "files", "*.tsx"],
   ["cf piece new --input-file ", "files", undefined],
   ["cf view ", "files", undefined],
   ["cf exec ", "files", undefined],

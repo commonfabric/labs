@@ -185,6 +185,7 @@ describe("piece new --from-index", () => {
     const option = piece.getCommand("new")?.getOption("from-index");
 
     expect(option?.conflicts).toEqual([
+      "version-entry",
       "main-export",
       "root",
       "repository",
