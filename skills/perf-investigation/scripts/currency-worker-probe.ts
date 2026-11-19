@@ -2,12 +2,14 @@
  * What the currency index does for a served Topics board
  * (docs/plans/stored-output-currency.md, stage 3). Serves a fresh board from
  * a `ServingWorkerPool` the way a toolshed does, files `<topics>` Topics with
- * the index in its `record` mode, and then views the board three times, each
- * from a new session and a new worker, as a restart leaves them: once in
- * `record`, once in `skip`, and once with no index. Each view prints what the
- * serving loop counted, what the index holds, the main-thread time its
- * requests took, the documents the view left in the store, and the worker's
- * heap after a collection.
+ * the index in its `record` mode, and then views the board four times, each
+ * from a new session and a new worker, as a restart leaves them: twice in
+ * `record`, once in `skip`, and once with no index. Nothing demands a Topic
+ * while the board is built, so the first view is the one that records them,
+ * and the second is where `record` judges pieces it holds records of. Each
+ * view prints what the serving loop counted, what the index holds, the
+ * main-thread time its requests took, the documents the view left in the
+ * store, and the worker's heap after a collection.
  *
  *   deno run -A --config deno.jsonc --v8-flags=--expose-gc \
  *     skills/perf-investigation/scripts/currency-worker-probe.ts <topics> [view]
@@ -22,6 +24,7 @@ import { fromFileUrl, toFileUrl } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import type { Engine } from "@commonfabric/memory/v2/engine";
+import { SessionRegistry } from "@commonfabric/memory/v2/server";
 import { type Cell, Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ServingWorkerPool } from "@commonfabric/runner/executor/serving-worker-host";
@@ -54,8 +57,12 @@ const userSigner = await Identity.fromPassphrase("currency worker probe user");
 const space = userSigner.did() as MemorySpace;
 
 const storeDir = await Deno.makeTempDir({ prefix: "currency-worker-probe-" });
+// A closed connection's sessions, and their demand, outlive it for the
+// registry's resume window, so the probe removes them itself between views.
+const sessions = new SessionRegistry();
 const server = newLoopbackServer({
   store: toFileUrl(`${storeDir}/`),
+  sessions,
   delegatingDids: [serviceSigner.did()],
 });
 
@@ -140,6 +147,16 @@ const connect = async (): Promise<Client> => {
 
 const engine: Engine = await server.engineForSpace(space);
 
+/**
+ * Removes every session of the space, once its client and its pool are
+ * closed, so the next view's demand is its own client's alone.
+ */
+const forgetSessions = (): void => {
+  for (const { id } of sessions.sessionsForSpace(space)) {
+    sessions.remove(space, id);
+  }
+};
+
 /** One number read from the store. */
 const scalar = (sql: string): number =>
   (engine.prepare(sql).get({}) as { n: number }).n;
@@ -161,19 +178,28 @@ const storeCounts = () => ({
 
 let pokes = 0;
 
+/** The document each client pokes, which no piece reads. */
+const pokeCells = new Map<Client, Cell<{ n: number }>>();
+
 /**
- * Commits an authored write to a document no piece reads, and resolves once
+ * Commits an authored write to the client's poke document, and resolves once
  * the watermark covers it: one wave cycle, ordered after whatever the loop
- * was going to run.
+ * was going to run. A client pokes one document throughout, so a cycle after
+ * its first changes no session's demand.
  */
 const settleACycle = async (client: Client): Promise<void> => {
   if (Deno.env.get("PROBE_TRACE") === "1") console.error("cycle", pokes + 1);
-  const poke = client.runtime.getCell<{ n: number }>(
-    space,
-    `currency-probe-poke-${++pokes}`,
-    undefined,
-  );
-  await poke.sync();
+  let poke = pokeCells.get(client);
+  if (poke === undefined) {
+    poke = client.runtime.getCell<{ n: number }>(
+      space,
+      `currency-probe-poke-${pokeCells.size + 1}`,
+      undefined,
+    );
+    pokeCells.set(client, poke);
+    await poke.sync();
+  }
+  pokes += 1;
   const tx = client.runtime.edit();
   poke.withTx(tx).set({ n: pokes });
   const committed = await tx.commit().settled;
@@ -187,7 +213,7 @@ const settleACycle = async (client: Client): Promise<void> => {
 
 /**
  * Runs wave cycles until two in a row leave the serving loop's counters and
- * the store's document count where they were, the pokes aside.
+ * the store's document count where they were.
  */
 const settle = async (
   pool: ServingWorkerPool,
@@ -196,12 +222,10 @@ const settle = async (
   const reading = () => {
     const stats = pool.stats();
     return JSON.stringify([
-      // Each cycle's poke is a root of its own, and a change of demand, so
-      // the loop judges every root again and those two counts move with it.
-      { ...stats.currency, judged: 0, servable: 0 },
+      stats.currency,
       stats.demand.ownedDefaultSeeds,
       stats.demand.demandedWriters,
-      scalar(`SELECT COUNT(*) AS n FROM head`) - pokes,
+      scalar(`SELECT COUNT(*) AS n FROM head`),
     ]);
   };
   let last = "";
@@ -266,6 +290,7 @@ console.log(
 );
 await client.dispose();
 await pool.close();
+forgetSessions();
 
 /**
  * Views the board from a new session over a new worker that keeps the index
@@ -279,7 +304,6 @@ const view = async (
   pool = await startPool(mode);
   client = await connect();
   const before = storeCounts();
-  const pokesBefore = pokes;
   const start = performance.now();
   const board = await boardOf(client);
   const cancels: Array<() => void> = [];
@@ -311,9 +335,8 @@ const view = async (
       currency: stats.currency,
       ownedDefaultSeeds: stats.demand.ownedDefaultSeeds,
       demandedWriters: stats.demand.demandedWriters,
-      // Each cycle the settle ran wrote one document of the probe's own.
-      documentsWritten: after.documents - before.documents -
-        (pokes - pokesBefore),
+      // The client's poke document is the probe's own.
+      documentsWritten: after.documents - before.documents - 1,
       sessionDocumentsWritten: after.sessionDocuments - before.sessionDocuments,
       index: {
         pieces: after.pieces,
@@ -337,9 +360,11 @@ const view = async (
   for (const cancel of cancels) cancel();
   await client.dispose();
   await pool.close();
+  forgetSessions();
 };
 
-await view("record", "record");
+await view("record-first", "record");
+await view("record-again", "record");
 await view("skip", "skip");
 await view("off", undefined);
 

@@ -292,8 +292,11 @@ For the index, in `runtime/memory/test/`:
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
 runtimes over `EmulatedStorageManager`. Tests 9 to 15 exist in
-`space-server-currency.test.ts`, 7 and 11 with a client's own watches as
-the demand as well; 16 is still to write:
+`space-server-currency.test.ts`, 10 and 11 with a client's own watches as
+the demand as well. Test 16 exists at the snapshot alone, in
+`runtime/runner/test/scheduler/piece-currency.test.ts`, with the store's half
+in test 6; a serving-loop test with a real debounced computation is still to
+write:
 
 9. With the index off, nothing is recorded and every start happens as today.
 10. In `record` mode a piece that settles is recorded clean, the next

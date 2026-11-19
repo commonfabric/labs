@@ -8,7 +8,10 @@ import {
 import type { CellScope } from "../../src/builder/types.ts";
 import type { SchedulerLivenessState } from "../../src/scheduler/dependency-graph.ts";
 import { newFanOutNodeState } from "../../src/scheduler/fan-out.ts";
-import { NodeRegistry } from "../../src/scheduler/node-record.ts";
+import {
+  NodeRegistry,
+  type NodeStatus,
+} from "../../src/scheduler/node-record.ts";
 import {
   type PieceCurrencyState,
   snapshotPieceCurrency,
@@ -31,8 +34,8 @@ const ALICE: ScopeKeyIdentity = {
 
 describe("piece-currency", () => {
   /**
-   * A snapshot of a piece with one live, clean computation that declares a
-   * write of `computed:out` at `declared`. `instances` are the fan-out
+   * A snapshot of a piece with one live computation, of `status`, that
+   * declares a write of `computed:out` at `declared`. `instances` are the fan-out
    * instances the computation ran at, each resolved under `ALICE`, of which
    * those in `clean` are current; with none, the computation has no fan-out
    * state.
@@ -41,6 +44,7 @@ describe("piece-currency", () => {
     declared: CellScope,
     instances: ScopeKey[] = [],
     clean: ScopeKey[] = instances,
+    status: NodeStatus = "clean",
   ) => {
     const nodes = new NodeRegistry();
     const action: Action & Partial<TelemetryAnnotations> = function writer() {};
@@ -49,7 +53,7 @@ describe("piece-currency", () => {
       pieceRootId: PIECE,
     };
     const node = nodes.register(action, "computation");
-    nodes.setStatus(action, "clean");
+    nodes.setStatus(action, status);
     node.liveRefs = 1;
     if (instances.length > 0) {
       node.fanOut = newFanOutNodeState();
@@ -114,6 +118,13 @@ describe("piece-currency", () => {
       it("is the run's instance and the user slot, for a user write of a run at a session instance", () => {
         expect(vouchesOf("user", [session])).toEqual([session, user].sort());
       });
+    });
+
+    it("reports a piece with a live computation that is invalid as not clean, and vouches for nothing", () => {
+      const taken = snapshotOf("space", [], [], "invalid");
+
+      expect(taken.unvouched).toEqual(["not-clean"]);
+      expect(taken.vouches).toEqual([]);
     });
 
     it("reports a piece whose computation is stale in one instance as not clean, and vouches for nothing", () => {
