@@ -244,6 +244,15 @@ cost of one change does not grow with the length of a list.
   the integrated cost is not clearly below today's, or grows with the size
   of the board, both tracks stop and report before milestone 3. Otherwise
   the scheduler comes next.
+- **Where the prototype track is.** Topics runs on the executor at 100,
+  1,000 and 2,000 topics, from a rewrite of its source that the rulings
+  require, with the facts of the board equal to today's runtime's at every
+  step. In memory, one edit at 1,000 topics costs 285 to 519 ms against
+  3,804 to 4,664 ms for today's runtime in the client posture (server-side
+  execution off), and on both paths the time grows with the board,
+  since the board derives everything with `lift`s over the whole list
+  ([compiled-pattern-language.md](compiled-pattern-language.md), "The corpus
+  of the main branch, and Topics").
 
 ## Milestones
 

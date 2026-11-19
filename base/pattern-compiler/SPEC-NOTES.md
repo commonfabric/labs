@@ -9361,42 +9361,42 @@ Notes 536 on are about emitting the corpus of the main branch at `6e9ff5a381`,
 which the crate did not finish, and about Topics (`patterns/apps/topics/`) on
 the executor. `FA` is `footprint-analysis.md`.
 
-536. **What the body of another module returns was read in the calling
-     module: fixed.** `use_body` hands `returned_origin` a function of the
-     module the body is written in, and `passed_on` resolved a name it returns
-     with `value_def` in the module of the call. The name's reference indexes
-     the tables of its own module, so the lookup read another name, or, where
-     the calling module has fewer references, panicked (`index out of bounds:
-     the len is 460 but the index is 590` in `oxc_index`, on the changes of
-     the main branch under `patterns/system/` taken together). `passed_on`
-     now takes the module of the function, and reads the names of the
-     reactive tier around the call only for a function of the calling
-     module (`tests/plan.rs`,
+536. **What the body of another module returns was read in the calling module:
+     fixed.** `use_body` hands `returned_origin` a function of the module the
+     body is written in, and `passed_on` resolved a name it returns with
+     `value_def` in the module of the call. The name's reference indexes the
+     tables of its own module, so the lookup read another name, or, where the
+     calling module has fewer references, panicked
+     (`index out of bounds:
+     the len is 460 but the index is 590` in
+     `oxc_index`, on the changes of the main branch under `patterns/system/`
+     taken together). `passed_on` now takes the module of the function, and
+     reads the names of the reactive tier around the call only for a function of
+     the calling module (`tests/plan.rs`,
      `what_a_body_of_another_module_returns_is_resolved_in_that_module`).
 537. **Footprint analysis did not finish on
-     `patterns/apps/weekly-calendar/view-walk.ts`: two causes, both fixed.**
-     The module walks a rendered tree with helpers that call each other at
-     several sites, and the walk recurses.
-     - _The number of evaluations was exponential in the depth of calls._
-       With a summary applied by evaluating the callee again (note 65), a
-       helper called at five sites by each of six levels is evaluated five to
-       the sixth times. FA §3.6 has one summary per function. The crate now
-       keeps, for one body, the result of each evaluation of a function
-       written at module scope, under its arguments and whether the call is
-       under a condition, and applies it to a later call with the same
-       arguments where the same functions are being evaluated around it as far
-       as the evaluation depended on them: it enters none of them, the
-       recursion guard cut it off at the same ones, and it reached the bound on
-       nesting in the same way (`Trace` in `src/footprint.rs`). An argument
-       that the body built is compared by its members and by which places
-       share it, and the result shares with the arguments of the later call
-       what it shared with those of the first. An evaluation that adds to a
-       list of the store (a pending write, a write target, an output, a
-       binding) or changes an argument it was given is not kept, so a second
-       call does what it did. A function written inside another reads the
-       frames around the call, and is evaluated at each call as before. The
-       record has the count of evaluations (`Record.evaluations`), which the
-       tests bound.
+     `patterns/apps/weekly-calendar/view-walk.ts`: two causes, both fixed.** The
+     module walks a rendered tree with helpers that call each other at several
+     sites, and the walk recurses.
+     - _The number of evaluations was exponential in the depth of calls._ With a
+       summary applied by evaluating the callee again (note 65), a helper called
+       at five sites by each of six levels is evaluated five to the sixth times.
+       FA §3.6 has one summary per function. The crate now keeps, for one body,
+       the result of each evaluation of a function written at module scope,
+       under its arguments and whether the call is under a condition, and
+       applies it to a later call with the same arguments where the same
+       functions are being evaluated around it as far as the evaluation depended
+       on them: it enters none of them, the recursion guard cut it off at the
+       same ones, and it reached the bound on nesting in the same way (`Trace`
+       in `src/footprint.rs`). An argument that the body built is compared by
+       its members and by which places share it, and the result shares with the
+       arguments of the later call what it shared with those of the first. An
+       evaluation that adds to a list of the store (a pending write, a write
+       target, an output, a binding) or changes an argument it was given is not
+       kept, so a second call does what it did. A function written inside
+       another reads the frames around the call, and is evaluated at each call
+       as before. The record has the count of evaluations
+       (`Record.evaluations`), which the tests bound.
      - _A value could grow without bound._ FA §3.7: "Where a value would exceed
        a fixed number of alternatives ... the analysis widens (W7)". The crate
        had no such bound, and the value that `kids` of `view-walk.ts` returns
@@ -9404,138 +9404,229 @@ the executor. `FA` is `footprint-analysis.md`.
        was 9 MB of text). A function's result of more than 512 nodes, counting
        each alternative, each member of a built value, and a built value once
        however often it is shared, is now `Computed`, each projection it holds
-       is read in full, and the site is counted as W7. The largest result in
-       the rest of the corpus of the main branch has 200 nodes.
-     The output of `emit --corpus` is the same, byte for byte, as before both
-     changes on the corpus of the prototype at `3d33db2e4d` and on the corpus
-     of the main branch without `view-walk.ts`. `view-walk.ts` with the three
-     modules it imports emits in 2.7 s.
-538. **The corpus of the main branch, emitted.** `emit --corpus` on
-     `patterns/` of the main branch at `6e9ff5a381` finishes in 10.4 s (the
-     prototype's corpus: 5.4 s). 432 modules are parsed and 343 accepted, 286
-     of them with a pattern; a plan with no unsupported construct is emitted
-     for 271 of the 286 modules and 365 of 382 patterns. Four tests of
-     `cargo test` fail on the branch before and after these changes, as they
-     did before them: the two of `tests/catalog.rs` (the copy of the
-     identifiers of the specification), `commit_edit_has_the_footprint_of_section_12_3`
-     (`state.room` is now `identity (resolved)`), and
+       is read in full, and the site is counted as W7. The largest result in the
+       rest of the corpus of the main branch has 200 nodes. The output of
+       `emit --corpus` is the same, byte for byte, as before both changes on the
+       corpus of the prototype at `3d33db2e4d` and on the corpus of the main
+       branch without `view-walk.ts`. `view-walk.ts` with the three modules it
+       imports emits in 2.7 s.
+538. **The corpus of the main branch, emitted.** `emit --corpus` on `patterns/`
+     of the main branch at `6e9ff5a381` finishes in 10.4 s (the prototype's
+     corpus: 5.4 s). 432 modules are parsed and 343 accepted, 286 of them with a
+     pattern; a plan with no unsupported construct is emitted for 271 of the 286
+     modules and 365 of 382 patterns. Four tests of `cargo test` fail on the
+     branch before and after these changes, as they did before them: the two of
+     `tests/catalog.rs` (the copy of the identifiers of the specification),
+     `commit_edit_has_the_footprint_of_section_12_3` (`state.room` is now
+     `identity (resolved)`), and
      `the_function_bodies_of_the_room_are_the_records_of_pl_section_6_2`. The
-     first two follow from the design branch merged into this one, the last
-     two from `system/fabrichat/room.tsx` of the main branch.
+     first two follow from the design branch merged into this one, the last two
+     from `system/fabrichat/room.tsx` of the main branch.
 
 539. **The program of Topics is seven files, and the crate accepts it after a
      rewrite that the documents require.** Besides the five files of
-     `apps/topics/` and `product/collection-naming/` the board names, the
-     topic imports `product/collection-naming/allocator.ts` and
-     `system/profile-face/profile-face.ts`; without the last, `profileFace`
-     is a call the emitter does not resolve. With all seven the board had 6
-     type errors, the topic 34, `mentionable.ts` 1, and the topic 72 writes
-     through a handle the emitter cannot name. The crate fixes of notes 540
-     and 541 removed 3 of them. The rest are refused by rulings, and
-     `compare/topics/rewrite.patch` (88 lines added, 105 removed, in six of
-     the files) is the smallest rewrite of the source that removes them;
-     `compare/topics/tree.ts` applies it to a copy of the seven files.
-     After it the crate reports no error, and both patterns emit with no
-     unsupported construct.
-     - _A structural type is not a handle_ (LS §7.5.1, ruling 23 of the
-       open questions): six helpers declare `{ get(): T }` or
-       `{ get(); key() }` and are given cells: `mentionListsOf` and
-       `cardRowsOf` of the board, `isElementOf` of the topic (five calls),
-       `mentionableRowsOf`, `recordNames`, and the namespace
-       (`NamesMapCell` of `allocator.ts`, two calls of `createNamed`).
-       Each declares `ReadonlyCell<T>`, and the namespace `Writable<NamesMap>`.
+     `apps/topics/` and `product/collection-naming/` the board names, the topic
+     imports `product/collection-naming/allocator.ts` and
+     `system/profile-face/profile-face.ts`; without the last, `profileFace` is a
+     call the emitter does not resolve. With all seven the board had 6 type
+     errors, the topic 34, `mentionable.ts` 1, and the topic 72 writes through a
+     handle the emitter cannot name. The crate fixes of notes 540 and 541
+     removed 3 of them. The rest are refused by rulings, and
+     `compare/topics/rewrite.patch` (88 lines added, 105 removed, in six of the
+     files) is the smallest rewrite of the source that removes them;
+     `compare/topics/tree.ts` applies it to a copy of the seven files. After it
+     the crate reports no error, and both patterns emit with no unsupported
+     construct.
+     - _A structural type is not a handle_ (LS §7.5.1, ruling 23 of the open
+       questions): six helpers declare `{ get(): T }` or `{ get(); key() }` and
+       are given cells: `mentionListsOf` and `cardRowsOf` of the board,
+       `isElementOf` of the topic (five calls), `mentionableRowsOf`,
+       `recordNames`, and the namespace (`NamesMapCell` of `allocator.ts`, two
+       calls of `createNamed`). Each declares `ReadonlyCell<T>`, and the
+       namespace `Writable<NamesMap>`.
      - _A cell of a view of `T`_ (LS §7.5): `profileFace` declares
        `Cell<ProfileFaceFields>` and is given a cell of a profile with more
        fields; it reads only, and declares `ReadonlyCell`.
      - _A kind test narrows nothing on a data position typed `unknown`_ (LS
        §7.8, by ruling): the topic reads `createdByName` and a comment's
        `authorName`, both declared `unknown`, after `typeof x === "string"`.
-       Both are declared `string`, as LS §7.8 has for "a key of older data
-       that code reads as a string".
+       Both are declared `string`, as LS §7.8 has for "a key of older data that
+       code reads as a string".
      - _A mapped type_ (`subset-type:mapped`): `StampsRead<K>` is written
        `Readonly<Record<K, number | undefined>>`.
      - _An import of `commonfabric/schema` with no bindings_
        (`module-scope:import-form`) is removed.
-     - _A record built in the body is no place_ (LS §7.5.2): the topic
-       builds `upgrade = { topicStateVersion, createdByName, ... }` and
-       hands it to ten handlers and a `lift` that declare
-       `Writable<TopicUpgradeState>`, and reads it with `upgrade.get()`.
-       Each declares `TopicUpgradeState`, the record of handles, which is
-       bound path by path to the inputs, the handlers' schemas drop
-       `asCell` at `upgrade`, and `upgrade.get()` is `upgrade`. The members
-       of `TopicUpgradeState` hold the types of the inputs they are bound
-       to (`createdBy`, `comments`), since a writable handle holds the type
-       of its place. This is what made the 72 writes nameable: each is
-       through a member of the record, at a static path of the binding's
-       state.
-     Today's runtime does not compile the rewritten source, for two
-     reasons the documents do not cover: `Cell<T>` is not assignable to
-     `ReadonlyCell<T>` in `base/api/index.ts` (`CELL_BRAND` "cell" against
-     "readonly"), where LS §7.5.1 says it is; and the `lift` with an
-     explicit schema argument (`migrateTopicState`) fails its overload
-     once the types change. So the comparison runs the rewritten source on
-     the executor and the source of the repository on today's runtime
-     (`COMPARE_TODAY_ROOT`), which also shows that the rewrite keeps the
-     values.
+     - _A record built in the body is no place_ (LS §7.5.2): the topic builds
+       `upgrade = { topicStateVersion, createdByName, ... }` and hands it to ten
+       handlers and a `lift` that declare `Writable<TopicUpgradeState>`, and
+       reads it with `upgrade.get()`. Each declares `TopicUpgradeState`, the
+       record of handles, which is bound path by path to the inputs, the
+       handlers' schemas drop `asCell` at `upgrade`, and `upgrade.get()` is
+       `upgrade`. The members of `TopicUpgradeState` hold the types of the
+       inputs they are bound to (`createdBy`, `comments`), since a writable
+       handle holds the type of its place. This is what made the 72 writes
+       nameable: each is through a member of the record, at a static path of the
+       binding's state. Today's runtime does not compile the rewritten source,
+       for two reasons the documents do not cover: `Cell<T>` is not assignable
+       to `ReadonlyCell<T>` in `base/api/index.ts` (`CELL_BRAND` "cell" against
+       "readonly"), where LS §7.5.1 says it is; and the `lift` with an explicit
+       schema argument (`migrateTopicState`) fails its overload once the types
+       change. So the comparison runs the rewritten source on the executor and
+       the source of the repository on today's runtime (`COMPARE_TODAY_ROOT`),
+       which also shows that the rewrite keeps the values.
 540. **Crate defects that Topics found, fixed.** Each with a test.
-     - A condition narrowed nothing in the branch where it fails when the
-       other branch assigns the `let` (`if (!target) { target = ... } else
-       if (target.get() ...)`); an assignment in the untaken branch, or in
-       a branch that leaves the block, no longer counts (`tests/narrowing.rs`).
+     - A condition narrowed nothing in the branch where it fails when the other
+       branch assigns the `let`
+       (`if (!target) { target = ... } else
+       if (target.get() ...)`); an
+       assignment in the untaken branch, or in a branch that leaves the block,
+       no longer counts (`tests/narrowing.rs`).
      - A parameter `readonly (T | undefined)[]` bound no type argument, so
-       `distinctByIdentity(Array.from(sources))` was `object[]`; a union of
-       the parameter with `undefined` or `null` now binds it to the
-       argument's element type without those (`tests/inference.rs`).
+       `distinctByIdentity(Array.from(sources))` was `object[]`; a union of the
+       parameter with `undefined` or `null` now binds it to the argument's
+       element type without those (`tests/inference.rs`).
      - A closure that a function of another module calls lost the names it
-       captures from the body: `addTopic` calls `createNamed(names,
+       captures from the body: `addTopic` calls
+       `createNamed(names,
        (allocated) => Topic({ ..., mentionable, boardCrossrefs: pivot }))`,
-       and the action's state had no `mentionable`, so its event failed
-       with "mentionable is not defined". A name is looked up in the frames
-       of its own module below a frame of another, and is a capture when it
-       is written in the body's text and declared outside it
-       (`tests/footprint_calls.rs`). The output of `emit --corpus` on the
-       main branch is the same before and after.
-541. **Provisional decisions P31 and P32.** P31: an entry of `Body.reads`
-     at a position the body declares as a handle has `handle: true`
-     (`docs/plans/compiled-pattern-language.md`, P31). ES §2.4 takes that
-     type from `Slot.schema`, and the crate's slot holds the type of the
-     place, shared by every body that reads the place one way: in Topics
-     `migrateTopicState` declares a handle at `createdBy` and `createdByOf`
-     a value, and the executor handed `createdByOf` a handle. P32:
-     `equalsKey`, which `base/api` exports and `builtin-inventory.md` does
-     not list, is a built-in of tier F with the footprint of one operand of
-     `equals` and the type `string | undefined`.
+       and the action's state had no `mentionable`, so its event failed with
+       "mentionable is not defined". A name is looked up in the frames of its
+       own module below a frame of another, and is a capture when it is written
+       in the body's text and declared outside it (`tests/footprint_calls.rs`).
+       The output of `emit --corpus` on the main branch is the same before and
+       after.
+541. **Provisional decisions P31 and P32.** P31: an entry of `Body.reads` at a
+     position the body declares as a handle has `handle: true`
+     (`docs/plans/compiled-pattern-language.md`, P31). ES §2.4 takes that type
+     from `Slot.schema`, and the crate's slot holds the type of the place,
+     shared by every body that reads the place one way: in Topics
+     `migrateTopicState` declares a handle at `createdBy` and `createdByOf` a
+     value, and the executor handed `createdByOf` a handle. P32: `equalsKey`,
+     which `base/api` exports and `builtin-inventory.md` does not list, is a
+     built-in of tier F with the footprint of one operand of `equals` and the
+     type `string | undefined`.
 542. **Executor defects that Topics found, fixed.** Each with a test in
      `exec/test/`.
-     - An entry at `*` where the body declares a handle (`ReadonlyCell<T>[]`
-       of `crossrefTable`, `cardRowsByActivity` and `mentionableIndex`, and
+     - An entry at `*` where the body declares a handle (`ReadonlyCell<T>[]` of
+       `crossrefTable`, `cardRowsByActivity` and `mentionableIndex`, and
        `Record<string, ReadonlyCell<unknown>>` of `namesTable`) was handed
-       values; each element and each member is now a handle to its
-       position. Without it `namesTable` stored a copy of every topic, and
-       each copy the topics it mentions: 354 documents for one edit at 10
-       topics.
+       values; each element and each member is now a handle to its position.
+       Without it `namesTable` stored a copy of every topic, and each copy the
+       topics it mentions: 354 documents for one edit at 10 topics.
      - An array that a body computed whole is a handle where another body
-       declares one (`crossrefIndexOf({ rows: pivot })`): the handle names
-       the path of the result where the output is kept, or the document of
-       the output.
-     - A cell made under a cause was one cell per cause for the whole
-       instance, so `cardRowsByActivity` and `crossrefTable`, which both
-       make a row with `Writable.for(topic)`, wrote one cell per topic in
-       turn: every edit wrote every row, and the result's rows read the
-       other lift's value. It is now the cell of the cause in the run that
-       makes it (PL §1.3).
-     - A read that follows links gave each position a copy of what it links
-       to, and the mentions of the topics form a graph in which each topic
-       is reached along many paths: loading 20 topics took 12 s, and 40
-       overflowed the stack. A document that two links of one read reach is
-       now given once. A read through a handle or of a slot is made under
-       the declared schema, which leaves out a member the schema does not
-       declare and gives a link at a position typed `unknown` as a
-       reference stand-in (LS §7.8, ES §2.4), and the computed part of a
-       body's argument is narrowed to the entries of `Body.computed`: a
-       stored value at a path with no `value` entry at or below it is read
-       with its references as stand-ins. At 1,000 topics the unnarrowed
-       read of the pivot followed every topic along its mentions and
+       declares one (`crossrefIndexOf({ rows: pivot })`): the handle names the
+       path of the result where the output is kept, or the document of the
+       output.
+     - A cell made under a cause was one cell per cause for the whole instance,
+       so `cardRowsByActivity` and `crossrefTable`, which both make a row with
+       `Writable.for(topic)`, wrote one cell per topic in turn: every edit wrote
+       every row, and the result's rows read the other lift's value. It is now
+       the cell of the cause in the run that makes it (PL §1.3).
+     - A read that follows links gave each position a copy of what it links to,
+       and the mentions of the topics form a graph in which each topic is
+       reached along many paths: loading 20 topics took 12 s, and 40 overflowed
+       the stack. A document that two links of one read reach is now given once.
+       A read through a handle or of a slot is made under the declared schema,
+       which leaves out a member the schema does not declare and gives a link at
+       a position typed `unknown` as a reference stand-in (LS §7.8, ES §2.4),
+       and the computed part of a body's argument is narrowed to the entries of
+       `Body.computed`: a stored value at a path with no `value` entry at or
+       below it is read with its references as stand-ins. At 1,000 topics the
+       unnarrowed read of the pivot followed every topic along its mentions and
        overflowed the stack.
-     - `equalsKey` and `Writable.for` of a reference (keyed by its
-       identity).
+     - `equalsKey` and `Writable.for` of a reference (keyed by its identity).
+543. **Topics at 100, 1,000 and 2,000 topics, on the executor and on today's
+     runtime** (`compare/topics/scale.ts`). Each topic is a document with what
+     the board demands of a topic and references to the two topics before it as
+     its mentions; the namespace holds each number. One run per arm and size, in
+     a process of its own, the arms one after the other. The counts are exact
+     and the times are not: other sessions loaded the machine, at a load average
+     of about 21 for the first executor run (commit `650f425ef3`), 12 to 16 for
+     today's runtime at 100 and 1,000 topics, rising from 12 to 118 during its
+     run at 2,000, and 92 to 134 for the second executor run (commit
+     `aabd1d455a`, which stops a created topic from creating the seeded
+     documents again; the creates of the first run wrote every topic and are
+     left out). The counts are those of the second run. "Settle" is from the
+     change until the board is up to date; the read of the result after that is
+     apart. The executor runs the rewritten program (note 539) in memory,
+     today's runtime the program of the repository on emulated storage.
+
+     | Topics | Step                       | Executor, first run, ms | Executor, second run, ms |        Today, ms | Executor: evaluations, documents | Today: actions, commits, documents |
+     | -----: | -------------------------- | ----------------------: | -----------------------: | ---------------: | -------------------------------: | ---------------------------------: |
+     |    100 | load                       |                     124 |                      148 |            3,028 |                         118, 306 |                      228, 221, 977 |
+     |    100 | edit of one topic, 3 times |                33 to 59 |                 38 to 45 |       579 to 661 |                             8, 2 |                            4, 3, 3 |
+     |    100 | create, 3 times            |                (defect) |               105 to 116 |   1,174 to 1,662 |                           16, 11 |                        27, 18, 153 |
+     |  1,000 | load                       |                     742 |                    1,552 |           18,326 |                      1018, 3,006 |                  2028, 2021, 9,077 |
+     |  1,000 | edit of one topic, 3 times |              285 to 425 |               341 to 519 |   3,804 to 4,664 |                             8, 2 |                            4, 3, 3 |
+     |  1,000 | create, 3 times            |                (defect) |             784 to 1,684 |  8,060 to 10,274 |                           16, 11 |                        27, 18, 153 |
+     |  2,000 | load                       |                   1,719 |                    2,717 |           67,705 |                      2018, 6,006 |                 4028, 4021, 18,077 |
+     |  2,000 | edit of one topic, 3 times |              509 to 528 |             788 to 1,054 | 13,334 to 17,292 |                             8, 2 |                            4, 3, 3 |
+     |  2,000 | create, 3 times            |                (defect) |           1,325 to 1,690 | 25,566 to 57,738 |                           16, 11 |                        27, 18, 153 |
+
+     The facts both arms read of the board after each step are equal at every
+     size and step: the number of topics, of names, of rows of the index, the
+     pivot, the mention universe and the names table, the inbound references of
+     the pivot (197, 1,997 and 3,997), and the first titles of the index.
+544. **First: the cost of one change grows with the board on both paths, because
+     the board is whole-list `lift`s.** Topics derives the cards, the mention
+     pivot, the mention universe, the names table and the pivot's index with
+     `lift`s over the whole list of topics (`cardRowsByActivity`,
+     `crossrefTable`, `mentionableIndex`, `namesTable`, `crossrefIndexOf`), and
+     no per-element construct of the language is involved. An edit of one topic
+     re-runs each of them, and each body's own work is a pass over every topic:
+     a sort, a join of mentions, a group by number. The executor evaluates 8
+     cone instances and writes 2 documents for one edit at every size, which is
+     what the design fixes for a change, and its time is about 0.26 ms per topic
+     for one edit, linear in the board; today's runtime runs 4 scheduler actions
+     and commits 3 documents for one edit at every size, and takes about 4 at
+     1,000 topics and 7 to 9 at 2,000, the last under the load that rose ms per
+     topic. The language keeps a `map`, a `filter` and a `flatMap` up to date
+     per element; a sort, a join and a grouping are no constructs of it, and a
+     `lift` over the list runs whole on any change of it. So for a board written
+     like this one, the claim that one change costs no more on a longer list
+     does not hold on the compiled path either. A board that mapped its topics
+     to its cards would keep the cards per element, and the order, the pivot and
+     the index would still be passes over the board.
+545. **Second: what one change costs at 1,000 topics, against today.** One edit:
+     285 to 425 (341 to 519 in the second run) ms on the executor against 3,804
+     to 4,664 ms today, 9 to 13 times less. One create: 784 to 1,684 ms against
+     8,060 to 10,274 ms. The load: 742 ms (1,552 in the second run) against
+     18,326 ms. From 100 to 2,000 topics the time of an edit grows 13 times on
+     the executor and 23 times today. The executor is the in-memory store: these
+     are lower bounds of the integrated path, which adds the runtime's commits
+     (about 3.3 ms each in milestone 1) and the CFC preparation per commit; with
+     1 commit per edit that does not change the order.
+546. **The values of the generated scenario** (`values-corpus.ts stubbed`, with
+     `COMPARE_TODAY_ROOT`): today's runtime runs the source of the repository,
+     the executor the rewritten one. The board: 64 values compared, 39 equal;
+     the topic: 440 compared, 424 equal. Of the 41 that differ, 33 are one
+     value, the `[UI]` of the stubbed `wish`, which today's stub renders and the
+     executor's stub does not have, found in the board's tree and, through each
+     reference to the created topic, in the topic's tree. The other 8 are
+     `referencedBy` of the topic at each point, absent in today's run and `[]`
+     in the executor's. `crossrefIndexOf` fails once in the executor's run of
+     the board ("Cannot read properties of undefined (reading 'get')") with no
+     value that differs; not looked into. One event is not handled:
+     `submitComment` of the topic calls `profileOwnerOf`, which the executor
+     does not have. The values of the scale runs are compared by the facts of
+     note 543.
+547. **The labels** (`corpus.ts run --stubbed` on the rewritten tree): outputs:
+     53 compared and 5 bounds, 52 tighter and 6 whose atom names the pattern
+     where today's names other code, none looser or incomparable; write edges: 7
+     compared, 3 equal and 4 tighter, none looser. Not compared: 74 write edges
+     of events today's runtime did not commit (10 of 24 events were refused: the
+     handler threw on a generated event, as "unsupported topic state version 3"
+     and "url must be http(s)"), and 41 writes the event's run did not make.
+548. **Not done, and not verified.** The executor's creates still copy the
+     board's mention universe into the argument of each new topic, inline, where
+     the documents store a value passed on unchanged as a reference (ES §2.4):
+     one create stores a document whose size follows the board. The integrated
+     arm (the executor on the runtime's storage) was not run on Topics; that is
+     the integration track's figure. P31 and P32 are provisional. The store's
+     two read rules of note 542 have tests in `exec/test/store-read.test.ts`;
+     the narrowing of the computed part has none of its own and is tested by the
+     Topics run alone. The fix of an instance made by a body re-creating the
+     documents the executor was started with was found by the scale run, and its
+     test was written after the fix and seen to fail without it; so were the
+     tests of the two read rules. Not looked into: why `crossrefIndexOf` fails
+     once in the generated scenario.
