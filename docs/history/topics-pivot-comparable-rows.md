@@ -49,10 +49,12 @@ Topics' piece documents instead: 1,798 and 2,187 documents, two 35 MB responses.
 
 `topic-board-pivot-sessions.test.ts` holds both reads to it. A fresh session
 that reads one of four Topics' input under its piece's argument link holds none
-of the other three pieces; with the rows declared `unknown`, it held all four.
-And a fresh session that reads the pivot through the schema the compiled
-`backlinksOf` declares holds none of the four; with the lift's `mentionedBy`
-declared `unknown[]` again, it held the two Topics that mention another.
+of the other three pieces. A fresh session that reads the pivot through the
+schema the compiled `backlinksOf` declares holds none of the four. The tests run
+the current source only. Reverting the declarations by hand showed what they
+guard: with the rows declared `unknown`, the first read held all four pieces;
+with only the lift's `mentionedBy` declared `unknown[]` again, the second held
+the two Topics that mention another.
 
 ## Why the proof
 

@@ -640,8 +640,9 @@ describe("topic-board-pivot-reads", () => {
 
   it("reads the pivot for a topic's backlinks without loading a topic's piece", async () => {
     // What the lookup's declaration of the rows costs a session that loads
-    // the pivot for it. Declared `unknown`, the `mentionedBy` entries loaded
-    // Beta and Delta, the two topics that mention another.
+    // the pivot for it. With the lift's `mentionedBy` reverted to `unknown[]`
+    // by hand, this read loaded Beta and Delta, the two topics that mention
+    // another.
     const { alpha, beta, gamma, delta } = await boardOfFour();
     const argument = parseLink(alpha.getMetaRaw("argument"), alpha);
     if (argument === undefined) throw new Error("Alpha has no argument link");
