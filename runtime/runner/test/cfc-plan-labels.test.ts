@@ -883,6 +883,57 @@ describe("cfc-plan-labels", () => {
       }
     });
 
+    for (const enabled of [true, false]) {
+      it(
+        `${
+          enabled ? "prepares" : "does not prepare"
+        } a transaction that reads nothing labeled and records an authorized plan-write, with the option ${
+          enabled ? "on" : "off"
+        }`,
+        async () => {
+          await withRuntime(enabled, async (runtime) => {
+            const seed = runtime.edit();
+            const targetCell = runtime.getCell(
+              space,
+              "plan-target",
+              undefined,
+              seed,
+            );
+            targetCell.set({ a: "" });
+            const link = targetCell.getAsNormalizedFullLink();
+            expect((await seed.commit().settled).error).toBeUndefined();
+            const identity = runtime.compiledPlans.register(
+              plan,
+              "code",
+              runtimeWritePolicyAuthorization,
+            );
+            const tx = runtime.edit();
+            runtime.getCell(space, "plan-target", undefined, tx).key("a").set(
+              "x",
+            );
+            tx.recordCfcWritePolicyInput(
+              {
+                kind: "plan-write",
+                target: { space, id: link.id, scope: "space", path: ["a"] },
+                compiledPattern: identity,
+                record: { body: 0, write: 5 },
+                instance: link.id,
+                keys: [],
+                slots: {},
+              },
+              runtimeWritePolicyAuthorization,
+            );
+            expect(tx.getCfcState().relevant).toBe(enabled);
+            runtime.prepareTxForCommit(tx);
+            expect(tx.getCfcState().prepare.status).toBe(
+              enabled ? "prepared" : "unprepared",
+            );
+            expect((await tx.commit().settled).error).toBeUndefined();
+          });
+        },
+      );
+    }
+
     it("refuses the commit for a plan-write recorded after preparation", async () => {
       const { error } = await commitWrites(
         true,

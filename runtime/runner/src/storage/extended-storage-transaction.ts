@@ -2585,6 +2585,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // for exactly the records that arrived with the mark.
     if (runtimeWritePolicyAuthorized(authorization)) {
       this.#runtimeWritePolicyInputs.add(frozen);
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A write of a compiled pattern stores the label of its template, and
+      // every kept output the atom of its pattern, so with labels from
+      // templates on the transaction is prepared whatever it read.
+      if (frozen.kind === "plan-write" && this.#cfcState.planLabels) {
+        this.markCfcRelevant("plan-write");
+      }
       // An authorized marker naming a WHOLE document in the OWNER's own space
       // says the runtime owns that store, for the rest of this transaction.
       // Both tests are the ones enrollment applies: a marker carrying a path
