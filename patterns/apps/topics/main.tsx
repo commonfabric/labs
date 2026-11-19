@@ -16,6 +16,7 @@ import {
   Writable,
 } from "commonfabric";
 
+import { isMemberName } from "../../product/collection-naming/allocator.ts";
 import type { MentionableRow } from "../../product/collection-naming/mentionable.ts";
 import {
   createNamed,
@@ -316,12 +317,99 @@ const CARDS_SQL = `
   LIMIT 200`;
 
 /**
+ * One row of the board's reference graph: a topic, and the topics that
+ * mention it. Both sides are held as references and never read through.
+ */
+export interface TopicCrossrefRow {
+  /** The topic this row is about. */
+  topic: unknown;
+
+  /** The topics that mention it, each once, in filing order. A topic that
+   * mentions itself is not among them. */
+  mentionedBy: unknown[];
+}
+
+/** A {@link TopicCrossrefRow} and the number of the topic it describes. */
+export interface TopicCrossrefNamedRow extends TopicCrossrefRow {
+  /** The number of the topic this row describes, absent for a topic with
+   * none. */
+  name?: string;
+}
+
+/** The rows of the board's reference graph, grouped by topic number. */
+export interface TopicCrossrefIndex {
+  /** Under each number, the rows of the topics that carry it. */
+  byName: Record<string, TopicCrossrefRow[]>;
+}
+
+/**
+ * Every reference between two topics of the board, each pair once, ordered
+ * by the mentioning topic's place in filing order. `target` is the mentioned
+ * topic's reference as text, which is what `MEMBERS_SQL` returns as `key`.
+ */
+const EDGES_SQL = `
+  SELECT e.target_cf_link AS target, e.source_cf_link AS source
+  FROM (
+    SELECT source_cf_link, target_cf_link FROM topics_mentioned
+    UNION
+    SELECT source_cf_link, target_cf_link FROM topics_mentions) e
+  JOIN topics s ON s.member_cf_link = e.source_cf_link
+  JOIN topics t ON t.member_cf_link = e.target_cf_link
+  WHERE e.source_cf_link <> e.target_cf_link
+  ORDER BY s.shortName IS NOT NULL, CAST(s.shortName AS INTEGER), s.createdAt,
+    s.member_cf_link`;
+
+/** A row of `EDGES_SQL`. */
+interface EdgeRow {
+  target: string;
+  source: OpaqueCell<TopicDemand>;
+}
+
+/**
+ * The board's reference graph, one row per topic of `members` and in their
+ * order, from the references `edges` lists.
+ */
+export function crossrefRowsOf(
+  members: readonly MemberRow[],
+  edges: readonly EdgeRow[],
+): TopicCrossrefNamedRow[] {
+  const inbound = new Map<string, unknown[]>();
+  for (const edge of edges) {
+    const sources = inbound.get(edge.target);
+    if (sources === undefined) inbound.set(edge.target, [edge.source]);
+    else sources.push(edge.source);
+  }
+  return members.map((row) => ({
+    topic: row.topic,
+    mentionedBy: inbound.get(row.key) ?? [],
+    ...(row.shortName ? { name: row.shortName } : {}),
+  }));
+}
+
+/**
+ * Groups `rows` by the number each carries. A row with no number, or with a
+ * name that is not a member name (`isMemberName`), is filed nowhere, so no
+ * group can be named by an `Object.prototype` member.
+ */
+export function crossrefIndexOf(
+  rows: readonly TopicCrossrefNamedRow[],
+): TopicCrossrefIndex {
+  const byName: Record<string, TopicCrossrefRow[]> = {};
+  for (const { name, topic, mentionedBy } of rows) {
+    if (typeof name !== "string" || !isMemberName(name)) continue;
+    if (!Object.hasOwn(byName, name)) byName[name] = [];
+    byName[name].push({ topic, mentionedBy });
+  }
+  return { byName };
+}
+
+/**
  * Every topic of the board, in filing order: unnumbered topics by when they
  * were filed, then numbered topics by number. A number is allocated densely
  * at filing, so it is the filing order of every topic that has one.
  */
 const MEMBERS_SQL = `
-  SELECT member_cf_link AS topic,
+  SELECT member_cf_link AS topic, member_cf_link AS key,
     COALESCE(title, '') AS title, COALESCE(shortName, '') AS shortName
   FROM topics
   ORDER BY shortName IS NOT NULL, CAST(shortName AS INTEGER), createdAt,
@@ -346,6 +434,10 @@ export interface CardSource {
 /** A row of `MEMBERS_SQL`: a topic's reference, title and number. */
 interface MemberRow {
   topic: OpaqueCell<TopicDemand>;
+
+  /** The topic's reference as text, which references between topics are
+   * grouped by. */
+  key: string;
   title: string;
   shortName: string;
 }
@@ -435,6 +527,16 @@ export interface TopicsOutput {
 
   /** How many topics the board's collection holds. */
   topicCount: number;
+
+  /** The board's reference graph, one row per topic in filing order: the
+   * topic, and the topics that mention it. Read out of the board's
+   * collection, and derived only for a reader that asks for it: a topic
+   * asks the collection for its own backlinks and does not read this. */
+  crossrefs: TopicCrossrefNamedRow[] | Default<[]>;
+
+  /** `crossrefs` grouped by topic number: under each number, the rows of the
+   * topics carrying it. */
+  crossrefIndex: TopicCrossrefIndex;
 
   /** The full-board survey surface: one bounded row per topic, carrying the
    * scalars a survey reads. A row IS its topic, so a row's own address is the
@@ -594,6 +696,16 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
       shortName: row.shortName,
       piece: row.topic,
     }))
+  );
+  // The reference graph as rows, for a reader that asks for the whole of it.
+  const edges = board.query<EdgeRow>(EDGES_SQL);
+  const crossrefs = computed<TopicCrossrefNamedRow[]>(() =>
+    crossrefRowsOf(members.result ?? [], edges.result ?? [])
+  );
+  const crossrefIndex = computed<TopicCrossrefIndex>(() =>
+    crossrefIndexOf(
+      crossrefRowsOf(members.result ?? [], edges.result ?? []),
+    )
   );
   // Derived once for the whole board, for a caller's reverse lookup by
   // identity; no topic reads it.
@@ -780,6 +892,8 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     // as is decided where the binding is made.
     naming: SEQUENCE_NAMING,
     topicCount,
+    crossrefs,
+    crossrefIndex,
     // The topics themselves, declared through the index's narrow row schema:
     // a row's address is the topic's address, so a survey and a follow-up read
     // name the same document.

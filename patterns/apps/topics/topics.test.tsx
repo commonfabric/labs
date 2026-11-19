@@ -735,6 +735,14 @@ export default pattern(() => {
     board.index?.[2]?.createdBy?.name === "Sol"
   );
 
+  // The graph's rows are grouped by the number each topic carries.
+  const assert_graph_rows_are_filed_by_number = assert(() =>
+    (board.crossrefs ?? []).length === 3 &&
+    board.crossrefs?.[0]?.name === "1" &&
+    board.crossrefIndex?.byName?.["1"]?.length === 1 &&
+    board.crossrefIndex?.byName?.["3"]?.length === 1
+  );
+
   // Pin the persisted navigation contract directly. A cold renderer must see
   // ordinary cf-cell-link destinations, never pattern-owned handler streams —
   // a card addresses the topic's own cell, so the markup survives a reload
@@ -1091,6 +1099,18 @@ export default pattern(() => {
       (keyedTwo.referencedBy ?? []).length === 0 &&
       (keyedThree.referencedBy ?? []).length === 0;
   });
+  // The whole graph as rows, which the board derives for a reader that asks:
+  // one row per topic, each mentioning topic listed once and never itself.
+  const assert_keyed_graph_has_a_row_per_topic = assert(() => {
+    const rows = keyedBoard.crossrefs ?? [];
+    const first = rows.find((row) => equals(row.topic as object, keyedOne));
+    const second = rows.find((row) => equals(row.topic as object, keyedTwo));
+    return rows.length === 3 &&
+      (first?.mentionedBy ?? []).length === 2 &&
+      (second?.mentionedBy ?? []).length === 0 &&
+      // None of the three has a number, so none is filed under one.
+      Object.keys(keyedBoard.crossrefIndex?.byName ?? {}).length === 0;
+  });
   const action_keyed_third_unmentions = action(() => {
     keyedThree.unmention?.send({ topic: keyedOne });
   });
@@ -1274,6 +1294,7 @@ export default pattern(() => {
       { assertion: assert_third_topic },
       { render: board[UI] },
       { assertion: assert_index_tracks_the_board },
+      { assertion: assert_graph_rows_are_filed_by_number },
       { assertion: assert_mention_index_tracks_the_board },
       { action: action_submit_blank_comment_draft },
       { assertion: assert_blank_draft_rejected },
@@ -1309,6 +1330,7 @@ export default pattern(() => {
       { action: action_keyed_board_takes_three },
       { action: action_keyed_mentions },
       { assertion: assert_keyed_topic_lists_its_mentioners },
+      { assertion: assert_keyed_graph_has_a_row_per_topic },
       { action: action_keyed_third_unmentions },
       { assertion: assert_keyed_unmention_drops_one_backlink },
       { render: strangerTopic[UI] },
