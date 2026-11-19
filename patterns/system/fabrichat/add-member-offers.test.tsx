@@ -4,7 +4,8 @@
  * Alice from her message in a lobby, so his manager's people list her. In a
  * group room, an add his manager refuses, made before its catalog lists the
  * room, reads `access-only`. Once it lists the room, and Bob has taken Alice
- * out of the space's access list, the room's picker offers her, and an add of
+ * out of the space's access list, the room's picker shows no one until Bob
+ * opens the add control, and then offers her, and an add of
  * Alice by her chat address alone is offered to her through the inbox her
  * profile points at, joins her to the room's roster, which makes her a member
  * with that profile whom the picker leaves out, and reads `offered`; an add of
@@ -49,6 +50,7 @@ import type { SpaceMember } from "../social-space/member-set.ts";
 import {
   countElements,
   findNodeById,
+  fireClick,
   propValue,
   readValue,
   textContent,
@@ -299,6 +301,14 @@ const pickerOf = (root: unknown): string => {
   }`;
 };
 
+/** How the room's add control's address field and picker are displayed. */
+const formOf = (root: unknown): unknown =>
+  readValue(
+    (propValue(findNodeById(root, "fabrichat-add-member-form"), "style") as {
+      display?: unknown;
+    })?.display,
+  );
+
 /** What the room shows the session about its latest add. */
 const shownOf = (root: unknown): string =>
   textContent(findNodeById(root, "fabrichat-add-member-outcome")).trim();
@@ -430,6 +440,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       kind: CHAT_ROOM_OFFER_KIND,
     });
   });
+  const action_toggle_add = action(() =>
+    fireClick(findNodeById(room[UI], "fabrichat-add-member-toggle"))
+  );
   const held = Writable.of<{ room?: Cell<ChatRoomLink> }>({});
   const action_hold = action(() =>
     held.key("room").set(
@@ -493,8 +506,28 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         trustedUi: revokeGesture,
       },
       { action: action_list_room },
-      // The room's picker offers Alice, whom Bob's people list and the room's
+      // The add control is closed, so the picker shows no one.
+      {
+        assertion: assert(() =>
+          formOf(room[UI]) === "none" && pickerOf(room[UI]) === "none:0"
+        ),
+      },
+      // Opened, its picker offers Alice, whom Bob's people list and the room's
       // space doesn't.
+      { action: action_toggle_add },
+      {
+        assertion: assert(() =>
+          formOf(room[UI]) === "block" && pickerOf(room[UI]) === "block:1"
+        ),
+      },
+      // Closed again, it shows no one, and opened again, it offers her.
+      { action: action_toggle_add },
+      {
+        assertion: assert(() =>
+          formOf(room[UI]) === "none" && pickerOf(room[UI]) === "none:0"
+        ),
+      },
+      { action: action_toggle_add },
       { assertion: assert(() => pickerOf(room[UI]) === "block:1") },
       // An offer names a group room, and nothing else in its space.
       {

@@ -625,6 +625,19 @@ const commitAddMember = handler<AddMemberEvent, AddMemberState>(
   },
 );
 
+/** What opening or closing the control adding a member is bound to. */
+interface ToggleAddingState {
+  /** Whether the session has the control open. */
+  adding: Writable<boolean>;
+}
+
+/** Opens the control adding a member for the session, or closes it. */
+const toggleAdding = handler<unknown, ToggleAddingState>(
+  (_event, { adding }) => {
+    adding.set(!adding.get());
+  },
+);
+
 /** What the control adding a member to a room needs. */
 export interface AddMemberInput {
   /** One of the room's records, which names the room's space. */
@@ -703,7 +716,8 @@ interface AddCandidate {
 /**
  * Offers an OWNER of a group room's space a way to admit someone else to it,
  * by their chat address, or by picking them from the people the viewer's
- * manager lists who aren't in the room yet.
+ * manager lists who aren't in the room yet. Each session opens the control for
+ * itself, and until it does the control reads none of those people.
  */
 export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
   (
@@ -719,6 +733,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     },
   ) => {
     const latest = new Writable.perSession<LatestAdd | undefined>(undefined);
+    const adding = new Writable.perSession<boolean>(false);
     const offer = offerAddedMember({ room, requests, latest, self, manager });
     const bindings = { room, ownSpace, kind, requests, latest, offer };
     const add = commitAddMember(bindings);
@@ -760,14 +775,25 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     const outcomeDisplay = computed((): ChatDisplay =>
       shown === "" ? "none" : "block"
     );
+    const formDisplayForSession = computed((): PerSession<ChatDisplay> =>
+      adding.get() ? "block" : "none"
+    );
+    const toggleLabelForSession = computed((): PerSession<string> =>
+      adding.get() ? "Close" : "Add people"
+    );
     // Each person the manager lists who isn't a member of the room's space, by
     // the first profile attesting them, with what tells them apart from
-    // another of them under the same name, per user, as the manager's people
-    // are, and no one while the space's members aren't known. The binding's
-    // name is the value's cause, the identity of the document that stores it,
-    // so renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
-      if (members === undefined) return [];
+    // another of them under the same name, and no one while the space's
+    // members aren't known. Only a session with the control open reads them:
+    // the manager draws its people from the roster of every room it lists, so
+    // a view of this room that read them would load all of those rooms. A
+    // person added by address alone is offered the room through those same
+    // people, which under server execution hold only what a runtime of the
+    // viewer's has derived, so the address field opens with the picker. The
+    // binding's name is the value's cause, the identity of the document that
+    // stores it, so renaming it moves its data.
+    const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
+      if (!adding.get() || members === undefined) return [];
       const listed = Object.entries(manager?.people ?? {}).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
@@ -786,8 +812,8 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
         mark: marks[principal] ?? "",
       }));
     });
-    const candidatesDisplay = computed((): ChatDisplay =>
-      candidatesForUser.length === 0 ? "none" : "block"
+    const candidatesDisplayForSession = computed((): PerSession<ChatDisplay> =>
+      candidatesForSession.length === 0 ? "none" : "block"
     );
 
     return {
@@ -798,52 +824,68 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
           hidden
           style={{ display: addDisplayForSession }}
         >
-          <div
-            data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
-            data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
+          <cf-button
+            id="fabrichat-add-member-toggle"
+            size="sm"
+            variant="ghost"
+            onClick={toggleAdding({ adding })}
           >
-            <cf-submit-input
-              data-ui-action={CHAT_ADD_MEMBER_ACTION}
-              inputId="fabrichat-add-member-address"
-              placeholder="Their chat address (did:key:…)"
-              buttonText="Add"
-              onClick={add}
-            />
-          </div>
+            {toggleLabelForSession}
+          </cf-button>
           <div
-            id="fabrichat-add-member-people"
+            id="fabrichat-add-member-form"
             hidden
-            style={{ display: candidatesDisplay }}
+            style={{ display: formDisplayForSession }}
           >
             <cf-vstack gap="1">
-              <cf-text variant="caption">
-                Or add people from your chats:
-              </cf-text>
-              {candidatesForUser.map((candidate) => (
-                <cf-hstack
-                  gap="2"
-                  align="center"
-                  data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
-                  data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
-                >
-                  <cf-profile-badge
-                    variant="chip"
-                    $profile={candidate.profile}
-                  />
-                  <cf-text variant="caption">{candidate.mark}</cf-text>
-                  <cf-button
-                    data-ui-action={CHAT_ADD_MEMBER_ACTION}
-                    size="sm"
-                    variant="ghost"
-                    onClick={commitAddMember({
-                      ...bindings,
-                      picked: candidate.profile,
-                    })}
-                  >
-                    Add
-                  </cf-button>
-                </cf-hstack>
-              ))}
+              <div
+                data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
+                data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
+              >
+                <cf-submit-input
+                  data-ui-action={CHAT_ADD_MEMBER_ACTION}
+                  inputId="fabrichat-add-member-address"
+                  placeholder="Their chat address (did:key:…)"
+                  buttonText="Add"
+                  onClick={add}
+                />
+              </div>
+              <div
+                id="fabrichat-add-member-people"
+                hidden
+                style={{ display: candidatesDisplayForSession }}
+              >
+                <cf-vstack gap="1">
+                  <cf-text variant="caption">
+                    Or add people from your chats:
+                  </cf-text>
+                  {candidatesForSession.map((candidate) => (
+                    <cf-hstack
+                      gap="2"
+                      align="center"
+                      data-ui-pattern={CHAT_ADD_MEMBER_SURFACE}
+                      data-ui-event-integrity={CHAT_ADD_MEMBER_SURFACE}
+                    >
+                      <cf-profile-badge
+                        variant="chip"
+                        $profile={candidate.profile}
+                      />
+                      <cf-text variant="caption">{candidate.mark}</cf-text>
+                      <cf-button
+                        data-ui-action={CHAT_ADD_MEMBER_ACTION}
+                        size="sm"
+                        variant="ghost"
+                        onClick={commitAddMember({
+                          ...bindings,
+                          picked: candidate.profile,
+                        })}
+                      >
+                        Add
+                      </cf-button>
+                    </cf-hstack>
+                  ))}
+                </cf-vstack>
+              </div>
             </cf-vstack>
           </div>
           <div

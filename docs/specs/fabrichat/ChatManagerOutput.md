@@ -270,8 +270,9 @@ session that has none is refused.
   reader can't read, names no one and is left out, and so are this user's own
   profiles. Like a roster, it is a claim, not an access list: a client uses
   it to offer the people to name a new room's members by, through
-  `createGroup`'s `profiles`, and a room's add control the people to add, and
-  `offerRoom` offers a room through it to a member named by principal alone.
+  `createGroup`'s `profiles`, and a room's add control, while a session has
+  it open, the people to add, and `offerRoom` offers a room through it to a
+  member named by principal alone.
 
 ## Reading the list
 
