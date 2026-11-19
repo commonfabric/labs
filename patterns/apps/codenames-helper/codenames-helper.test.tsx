@@ -11,6 +11,7 @@ import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   clickButton,
   findElement,
+  findNodeByProp,
   fireEvent,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
@@ -228,7 +229,16 @@ export default pattern(() => {
   const action_type_word = action(() =>
     helper.setWord.send({ index: 0, word: "apple" })
   );
-  const action_select_first = action(() => helper.tapCard.send({ index: 0 }));
+  // Focusing a card's word input selects the card, as Tab does for a
+  // keyboard user.
+  const action_select_first = action(() =>
+    fireEvent(
+      findNodeByProp(helper[UI], "placeholder", "1"),
+      "oncf-focus",
+      {},
+      "the first card's word input",
+    )
+  );
   const assert_first_selected = assert(() =>
     helper.board[0].word === "APPLE" && helper.selectedIndex === 0
   );
@@ -312,7 +322,8 @@ export default pattern(() => {
     helper.inPlay.red === 8 && helper.inPlay.blue === 7 &&
     helper.selectedIndex === -1
   );
-  const action_undo_reveal = action(() => helper.tapCard.send({ index: 9 }));
+  // A played card is a button: clicking (or Enter on) it toggles the reveal.
+  const action_undo_reveal = action(() => clickButton(helper[UI], "WORD10"));
   const assert_undone = assert(() =>
     !helper.board[9].revealed && helper.inPlay.blue === 8
   );

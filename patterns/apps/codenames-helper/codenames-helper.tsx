@@ -217,6 +217,9 @@ const cardStyle = (owner: Owner, revealed: boolean, selected: boolean) => ({
   alignItems: "center",
   justifyContent: "center",
   cursor: "pointer",
+  // Played cards are buttons: take the page's font, fill the grid cell.
+  font: "inherit",
+  width: "100%",
   background: FILL[owner],
   color: INK[owner],
   opacity: revealed ? "0.25" : "1",
@@ -272,6 +275,7 @@ interface CardView {
   index: number;
   word: string;
   label: string;
+  revealed: boolean;
   style: Record<string, string>;
   inputStyle: Record<string, string>;
 }
@@ -421,6 +425,7 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
         index,
         word: card.word,
         label: card.word || "—",
+        revealed: card.revealed,
         style: cardStyle(card.owner, card.revealed, index === selected),
         inputStyle: wordInputStyle(card.owner),
       }));
@@ -760,31 +765,44 @@ const CodenamesHelper = pattern<CodenamesHelperInput, CodenamesHelperOutput>(
           </div>
 
           <div style={styles.grid}>
-            {cardViews.map((card) => (
-              <div
-                role="button"
-                aria-label={`Card ${card.index + 1}`}
-                style={card.style}
-                onClick={() => tapCard.send({ index: card.index })}
-              >
-                {isSetup
-                  ? (
+            {cardViews.map((card) =>
+              isSetup
+                ? (
+                  // In setup the card holds its word's input, which cannot sit
+                  // inside a button. Focusing the input (by Tab or a click)
+                  // selects the card for coloring, so the keyboard reaches
+                  // it too; a click on the card's edge selects it as well.
+                  <div
+                    style={card.style}
+                    onClick={() => tapCard.send({ index: card.index })}
+                  >
                     <cf-input
                       value={card.word}
                       placeholder={`${card.index + 1}`}
+                      aria-label={`Card ${card.index + 1} word`}
                       timingStrategy="blur"
                       size="sm"
                       style={card.inputStyle}
+                      oncf-focus={() => tapCard.send({ index: card.index })}
                       oncf-change={(e: { detail?: { value?: string } }) =>
                         setWord.send({
                           index: card.index,
                           word: e?.detail?.value ?? "",
                         })}
                     />
-                  )
-                  : <span style={styles.wordLabel}>{card.label}</span>}
-              </div>
-            ))}
+                  </div>
+                )
+                : (
+                  <button
+                    type="button"
+                    aria-pressed={card.revealed}
+                    style={card.style}
+                    onClick={() => tapCard.send({ index: card.index })}
+                  >
+                    <span style={styles.wordLabel}>{card.label}</span>
+                  </button>
+                )
+            )}
           </div>
 
           {isSetup ? setupPanel : playPanel}
