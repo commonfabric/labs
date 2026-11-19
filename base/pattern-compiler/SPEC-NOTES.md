@@ -10001,3 +10001,81 @@ today's runtime; the site returns to that form if the declarations change.
      Not covered: the topics' own instances, their comments and threads, which
      the board does not read; the integrated arm; and server execution, which is
      how the board runs on Estuary.
+565. **Where the heap of the real board goes, on the executor and in today's
+     runtime on the real store** (`scale.ts` with `SCALE_HEAP_SNAPSHOTS`,
+     `compare/topics/board-load.ts`, and
+     `skills/perf-investigation/scripts/heap-removal.ts`, which groups what a
+     load adds by the shortest path that retains it, the self size of each
+     object charged once).
+
+     **The executor's 56 KB a topic** (note 564), from snapshots at the baseline
+     and after the load:
+
+     | What                                                                                                      | KB a topic |
+     | --------------------------------------------------------------------------------------------------------- | ---------: |
+     | the board's rendered tree (the cards: `$UI`, and the memo's children)                                     |         12 |
+     | the store's documents and their part records (`docs`, `parts`)                                            |       11.5 |
+     | what each evaluation read and the registered positions (`#memo.reads`, `#slots`, `#readers`, `addresses`) |         13 |
+     | the serialized value of each memo entry (`stored`)                                                        |        4.5 |
+     | the rows of the derived lists and the rest, under 1 KB each                                               |         15 |
+
+     The load adds 3,295 strings of 1 KB or more, about 4.5 KB each: the
+     serialized `stored` copy of each topic's row, body included. The body
+     strings themselves are the seed's, which both arms read before their
+     baseline, so note 564's sentence that the bodies are not what the heap per
+     topic consists of is wrong: each body is in it once, serialized, and not at
+     all as the string the seed holds.
+
+     **Today's runtime on the real store.** `board-load.ts` loads the board out
+     of a copy of the snapshot of note 564, with the memory server in the same
+     process as `scale.ts` has it, in the client posture:
+
+     | Run                                                  | Heap kept, GB | Resident, GB |
+     | ---------------------------------------------------- | ------------: | -----------: |
+     | `scale.ts --seed`, today's runtime (note 564)        |          1.10 |              |
+     | the board's result read under its schema (`pull`)    |     1.54–1.57 |    5.07–7.16 |
+     | the stored board piece started and settled (`start`) |          2.33 |         7.21 |
+
+     The read alone keeps 482 KB a topic, more than the whole of `scale.ts`'s
+     run of today's runtime with the board's derivations, because a topic of the
+     real board is a piece, whose result document averages about 42 KB of JSON
+     (3,334 documents of the space are over 30 KB; 444,720 documents in all, 321
+     MB of JSON), and the read loads it whole, where the seed holds the nine
+     fields the board demands. By shortest retaining path:
+
+     | What                                                                                                                                             | KB a topic |
+     | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------: |
+     | the client's replica: each topic's whole result document, of which its `internal` 45 and its own rendered page (`$UI`, `children`) 32            |        150 |
+     | the memory server's document cache: the same documents again (`internal` 31, `$UI` 13)                                                           |        108 |
+     | the memory server's sessions: the tracking graphs (`trackedBy` 39, `tracksOf` 14, the rest 13) and a third copy of each document (`entities` 35) |        108 |
+     | `deepFrozenCache`                                                                                                                                |         82 |
+     | hash and key caches and the rest                                                                                                                 |         34 |
+
+     The board shows neither a topic's `internal` nor its page, and both are
+     read and held three times. Starting the board adds its derivations, 0.79 GB
+     more. The resident size, 7.16 GB in the `pull` run with snapshots, is 2.8
+     times the heap's capacity (`heapTotal` 2.58 GB), and the memory outside it
+     (`external` 8 MB) is not attributed; the engine's SQLite page cache and
+     memory map are at most 320 MB of it (`engine.ts`). These runs hold the
+     memory server and the client in one process; a deployment holds the server
+     on the toolshed's main thread and the runner in a worker, whose heap after
+     a collection was measured at 5.6 to 7.0 GB for this board on rapids with
+     server execution and view-scoped replication.
+
+     So the difference between the executor's 183 MB and a runner's 6 to 7 GB is
+     mostly not what the two paths do with the same data: the runs of notes 563
+     and 564 give both arms documents of the demanded fields alone. A runner
+     reads each topic's whole document, holds it in the replica, and in one
+     process the memory server holds it twice more. The executor on the
+     runtime's storage (the integrated arm, milestone 2) would read what that
+     storage delivers, so its figure on the real store is not measured here; the
+     design's part documents are what would let a read of a topic's nine fields
+     load those alone.
+
+     `node:v8`'s `writeHeapSnapshot()` wrote 442 GB in six minutes for today's
+     runtime at 1.2 GB of heap, and was stopped; the inspector's snapshot
+     (`heap-snapshot.ts`) of the 1.76 GB heap is 3.96 GB. The heap tools kept a
+     `Map` per string and per node, which a heap of more than 16.7 million
+     WeakMap pairs overflows; these runs used them with typed arrays in place of
+     the two maps, a change to `skills/perf-investigation/scripts/` that goes to
+     the main branch on its own.

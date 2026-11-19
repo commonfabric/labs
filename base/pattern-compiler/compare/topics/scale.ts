@@ -50,6 +50,8 @@
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
+// deno-lint-ignore no-external-import -- Deno writes a heap snapshot through this Node builtin alone.
+import v8 from "node:v8";
 
 import {
   getTimingStatsBreakdown,
@@ -171,15 +173,33 @@ export type Baseline = {
 
 const round = (milliseconds: number) => Math.round(milliseconds * 100) / 100;
 
+/** The steps after which `SCALE_HEAP_SNAPSHOTS` asks for a heap snapshot. */
+const SNAPSHOT_STEPS = new Set(["baseline", "load", "create 2"]);
+
 /**
  * The heap in use after a full collection, in bytes, or `undefined` when
- * the process was not started with `--v8-flags=--expose-gc`.
+ * the process was not started with `--v8-flags=--expose-gc`. With
+ * `SCALE_HEAP_SNAPSHOTS` naming a directory, the baseline, the load and the
+ * last create also write a V8 heap snapshot there, as
+ * `<arm>-<size>-<step>.heapsnapshot`, for the heap tools of
+ * `skills/perf-investigation/scripts/`.
  */
-const heapAfterCollection = (): number | undefined => {
+const heapAfterCollection = (
+  arm: string,
+  size: number,
+  step: string,
+): number | undefined => {
   const collect = (globalThis as { gc?: () => void }).gc;
   if (collect === undefined) return undefined;
   collect();
-  return Deno.memoryUsage().heapUsed;
+  const heap = Deno.memoryUsage().heapUsed;
+  const directory = Deno.env.get("SCALE_HEAP_SNAPSHOTS");
+  if (directory !== undefined && SNAPSHOT_STEPS.has(step)) {
+    v8.writeHeapSnapshot(
+      `${directory}/${arm}-${size}-${step.replace(" ", "-")}.heapsnapshot`,
+    );
+  }
+  return heap;
 };
 
 /** The facts of a board's result, read as plain values. */
@@ -243,7 +263,7 @@ const runExecutor = async (
     arm: "executor",
     size,
     step: "baseline",
-    heap: heapAfterCollection(),
+    heap: heapAfterCollection("executor", size, "baseline"),
   };
   const link = (index: number) => ({
     $link: { doc: `topic-${index}`, path: [] },
@@ -299,7 +319,7 @@ const runExecutor = async (
         0,
       ),
       facts: factsOf(result),
-      heap: heapAfterCollection(),
+      heap: heapAfterCollection("executor", size, step),
     });
   };
   measure("load", () => {
@@ -382,7 +402,7 @@ const runToday = async (
       arm: "today",
       size,
       step: "baseline",
-      heap: heapAfterCollection(),
+      heap: heapAfterCollection("today", size, "baseline"),
     });
     const seed = runtime.edit();
     // Every cell exists before any is set, since a topic may mention one
@@ -453,7 +473,7 @@ const runToday = async (
         commits: count("storage.v2.transaction/commit/commitNative"),
         documents: changed.size,
         facts: facts(),
-        heap: heapAfterCollection(),
+        heap: heapAfterCollection("today", size, step),
       });
     };
     const commit = async (write: (tx: ReturnType<Runtime["edit"]>) => void) => {

@@ -936,6 +936,14 @@ deno run -A --no-check base/pattern-compiler/compare/topics/board-seed.ts <did>.
 deno run -A --no-check --v8-flags=--expose-gc,--max-old-space-size=8192 base/pattern-compiler/compare/topics/scale.ts executor --seed seed.json
 ```
 
+With `SCALE_HEAP_SNAPSHOTS=<dir>`, `scale.ts` also writes a V8 heap snapshot at
+the baseline, after the load and after the last create, for the heap tools of
+`skills/perf-investigation/scripts/`. `compare/topics/board-load.ts` loads the
+same snapshot in today's runtime as a runner would, reading the board's result
+(`pull`) or starting the stored board piece (`start`), and reports the memory it
+keeps; with `BOARD_LOAD_HOLD` set it waits for `SIGUSR2` at each measuring
+point, so that an inspector snapshot can be taken there.
+
 ## The parser
 
 The crate parses with the [`oxc`](https://oxc.rs) crates and does not tokenize
