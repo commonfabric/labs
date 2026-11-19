@@ -2045,15 +2045,20 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #ambientReadMeta?: Metadata;
 
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T {
+    using _scope = this.enterAmbientReadMeta(meta);
+    return fn();
+  }
+
+  enterAmbientReadMeta(meta: Metadata): Disposable {
     const previous = this.#ambientReadMeta;
     this.#ambientReadMeta = previous === undefined
       ? meta
       : { ...previous, ...meta };
-    try {
-      return fn();
-    } finally {
-      this.#ambientReadMeta = previous;
-    }
+    return {
+      [Symbol.dispose]: () => {
+        this.#ambientReadMeta = previous;
+      },
+    };
   }
 
   #withAmbientReadMeta(options?: IReadOptions): IReadOptions | undefined {
@@ -5233,6 +5238,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T {
     return this.#wrapped.runWithAmbientReadMeta(meta, fn);
+  }
+
+  enterAmbientReadMeta(meta: Metadata): Disposable {
+    return this.#wrapped.enterAmbientReadMeta(meta);
   }
 
   markLazyMaterialize(enabled = true): void {

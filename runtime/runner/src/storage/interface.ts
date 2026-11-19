@@ -2807,6 +2807,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
 
+  /**
+   * Merge `meta` into every read issued until the returned scope is disposed
+   * (explicit per-read meta wins), as `runWithAmbientReadMeta()` does for the
+   * reads its function issues. Scopes nest: each is disposed before the scope
+   * it was entered within.
+   */
+  enterAmbientReadMeta(meta: Metadata): Disposable;
+
   markCfcRelevant(reason?: string): void;
 
   /**
