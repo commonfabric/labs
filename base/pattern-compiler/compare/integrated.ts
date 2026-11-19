@@ -15,7 +15,10 @@
  * - `labeled`: the same, with each input a cell of its own whose schema
  *   declares a clause, as today's harness writes an input, and the
  *   argument a link to each. A transaction that reads one is relevant to
- *   Contextual Flow Control, and its commit runs the preparation.
+ *   Contextual Flow Control, and its commit runs the preparation. The
+ *   runtime serves the space and has the experimental option
+ *   `compiledPatterns` on, so the paths the executor's write records cover
+ *   store the labels of their templates.
  *
  * The storage is the runtime's emulated storage, as in every run of today's
  * runtime this comparison makes. A figure of `plain` and `labeled` is from
@@ -271,14 +274,20 @@ const inStorage = async (
   const identity = await signer();
   const space = identity.did();
   const storageManager = StorageManager.emulate({ as: identity });
+  // The labeled arm stores labels from templates: the experimental option
+  // `compiledPatterns` on, in a runtime that serves the space.
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
     storageManager,
     cfcFlowLabels: "persist",
+    ...(labeled
+      ? { experimental: { compiledPatterns: true }, servingPosture: true }
+      : {}),
   });
   const differs: string[] = [];
   const hooks = new RuntimeTransactions(runtime, space, {
     owner: options.id,
+    artifact,
   });
   try {
     // The inputs as cells of their own, each under a schema with a clause.

@@ -8,12 +8,16 @@ import {
 } from "../../../logger/src/logger.ts";
 import type { JSONSchema } from "../../../../runtime/runner/src/builder/types.ts";
 import type { MemorySpace } from "../../../../runtime/runner/src/cell.ts";
+import {
+  consumedEntriesForRead,
+  labelForConsumedEntries,
+} from "../../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { identifierOf, isLink, Ref, Store } from "../../exec/store.ts";
-import { inputClause } from "../generate.ts";
+import { generateInputs, inputClause } from "../generate.ts";
 import { scenarioAudience } from "../harness.ts";
 import { labeledInputs } from "../integrated.ts";
 import { RuntimeTransactions } from "../runtime-transactions.ts";
@@ -377,5 +381,111 @@ describe("RuntimeTransactions", () => {
     } finally {
       read.abort();
     }
+  });
+});
+
+describe("RuntimeTransactions with labels from templates", () => {
+  /**
+   * The labels stored on the result of `briefing.tsx` at `climate`,
+   * `briefing` and the `[UI]` text, run over labeled inputs with the
+   * experimental option `compiledPatterns` as `enabled` says: for each, the
+   * clauses of the label a value read there consumes, as text, and whether
+   * that label carries the atom of a compiled pattern.
+   */
+  const briefing = async (enabled: boolean) => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: enabled },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: "briefing" });
+    const artifact = await artifactOf("briefing");
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const inputs = generateInputs(
+        artifact.plan as Parameters<typeof generateInputs>[0],
+        artifact.schemas as Parameters<typeof generateInputs>[1],
+        await scenarioAudience(),
+      );
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        { secret: "s", city: "Paris" },
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        // The label a value read at the path consumes.
+        const at = (path: readonly string[]) => {
+          const label = metadata === undefined
+            ? undefined
+            : labelForConsumedEntries(
+              consumedEntriesForRead(metadata, path, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              path,
+              false,
+            );
+          return {
+            clauses: JSON.stringify(label?.confidentiality ?? []),
+            atom: (label?.integrity ?? []).some((atom) =>
+              JSON.stringify(atom).includes('"kind":"compiled"')
+            ),
+          };
+        };
+        return {
+          climate: at(["climate"]),
+          briefing: at(["briefing"]),
+          text: at(["$UI", "children", "1"]),
+        };
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("stores at each output the label of its template, with the pattern's atom, with the option on", async () => {
+    const { climate, briefing: both, text } = await briefing(true);
+    expect(climate.clauses).toContain('"input:city"');
+    expect(climate.clauses).not.toContain("demo-secret");
+    // The text holds the reference to `city`, whose template observes the
+    // reference's identity and not the content it points to.
+    expect(text.clauses).toBe("[]");
+    expect(both.clauses).toContain('"input:city"');
+    expect(both.clauses).toContain("demo-secret");
+    expect([climate.atom, both.atom, text.atom]).toEqual([true, true, true]);
+  });
+
+  it("stores the transaction's join at each output with the option off", async () => {
+    const { climate, text } = await briefing(false);
+    expect(climate.clauses).toContain("demo-secret");
+    expect(text.clauses).toContain("demo-secret");
+    expect(climate.atom).toBe(false);
   });
 });

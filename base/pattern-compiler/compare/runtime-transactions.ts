@@ -15,6 +15,15 @@
  * documents it holds in memory, and the storage holds the same documents
  * (`RuntimeTransactions.stored()`).
  *
+ * With the runtime's experimental option `compiledPatterns` on, the runtime
+ * serving (`servingPosture`) and the artifact given, the adapter registers the compiled pattern with the
+ * runtime (`CompiledPlanRegistry`) and records each write record the
+ * executor gives with a change as an authorized `plan-write` write-policy
+ * input, so that the paths the records cover store the labels their
+ * templates instantiate to. It answers the executor's `labelOf` with the
+ * identifier of the label a value read of the position consumes, interned
+ * in the runtime's label table.
+ *
  * A document of the executor is the entity `of:<identifier>` of the space,
  * and a link the executor stores is written as the runtime's link to that
  * entity (`createSigilLinkFromParsedLink()`). A path of a link that crosses
@@ -40,15 +49,42 @@ import {
   type MemorySpace,
   recordRelevantSchemaWritePolicyInput,
 } from "../../../runtime/runner/src/cell.ts";
+import type { CompiledPlan } from "../../../runtime/runner/src/cfc/compiled-plans.ts";
+import {
+  consumedEntriesForRead,
+  labelForConsumedEntries,
+} from "../../../runtime/runner/src/cfc/consumed-label.ts";
+import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runtime-owned-stores.ts";
-import { runtimeWritePolicyAuthorization } from "../../../runtime/runner/src/cfc/types.ts";
+import {
+  type CfcAddress,
+  type CfcMetadata,
+  type PlanElements,
+  type PlanInputs as RuntimePlanInputs,
+  runtimeWritePolicyAuthorization,
+  type SlotBinding as RuntimeSlotBinding,
+  type SlotBindings as RuntimeSlotBindings,
+} from "../../../runtime/runner/src/cfc/types.ts";
+import { readMaybeLink } from "../../../runtime/runner/src/link-resolution.ts";
 import type { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type {
   IExtendedStorageTransaction,
   TransactionCommitReceipt,
 } from "../../../runtime/runner/src/storage/interface.ts";
-import type { Transaction, TransactionHooks } from "../exec/executor.ts";
+import type {
+  Artifact,
+  Transaction,
+  TransactionHooks,
+} from "../exec/executor.ts";
+import type {
+  Address,
+  FoldElements,
+  PlanInputs,
+  PlanWrite,
+  SlotBinding,
+  SlotBindings,
+} from "../exec/plan-write.ts";
 import { isLink, type Schema, type Store } from "../exec/store.ts";
 
 /** What the runtime's transactions were given, counted. */
@@ -92,6 +128,16 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #documents = new Set<string>();
   /** The document of the executor that each entity holds. */
   readonly #byEntity = new Map<string, string>();
+  /**
+   * The identity the runtime registered the compiled pattern under, where
+   * the runtime's option `compiledPatterns` is on and the artifact was
+   * given; write records are recorded only then.
+   */
+  readonly #compiledPattern: string | undefined;
+  /** The paths the transaction in progress wrote, by document. */
+  readonly #written = new Map<string, (readonly string[])[]>();
+  /** The stored labels of each document `labelOf` read, per transaction. */
+  readonly #metadata = new Map<string, CfcMetadata | undefined>();
 
   /**
    * Constructs an instance which keeps the documents in `space` of
@@ -108,11 +154,27 @@ export class RuntimeTransactions implements TransactionHooks {
        * enrolls the stores of a piece it sets up.
        */
       owner?: string;
+      /**
+       * The compiled pattern the executor runs. With the runtime's option
+       * `compiledPatterns` on, it is registered with the runtime and the
+       * executor's write records are recorded with each write.
+       */
+      artifact?: Artifact;
     } = {},
   ) {
     this.#runtime = runtime;
     this.#space = space;
     this.#owner = options.owner;
+    this.#compiledPattern = options.artifact === undefined ||
+        !runtime.experimental.compiledPatterns || !runtime.servingPosture
+      ? undefined
+      : runtime.compiledPlans.register(
+        // The plan as the crate emits it carries every member the
+        // runtime reads.
+        options.artifact.plan as unknown as CompiledPlan,
+        JSON.stringify(options.artifact.code),
+        runtimeWritePolicyAuthorization,
+      );
     // The replica drops a document that nothing holds or reads at its next
     // release pass (`releaseUnreadDocuments()`), and a read through a
     // transaction does not load it again: it reads the document as absent
@@ -152,6 +214,8 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#cause = cause;
     this.#tx = this.#runtime.edit();
     this.#read.clear();
+    this.#written.clear();
+    this.#metadata.clear();
   }
 
   /** @inheritDoc */
@@ -161,7 +225,49 @@ export class RuntimeTransactions implements TransactionHooks {
     if (this.#read.has(text)) return;
     this.#read.add(text);
     this.#counts.reads += 1;
-    tx.readValueOrThrow(this.#address(doc, path));
+    const address = this.#address(doc, path);
+    const value = tx.readValueOrThrow(address);
+    // A slot's chain names each link position the read crossed, which the
+    // label of the slot takes as a reference-identity observation: the probe
+    // that link resolution journals.
+    if (this.#compiledPattern !== undefined && isPrimitiveCellLink(value)) {
+      readMaybeLink(tx, address);
+    }
+  }
+
+  /** @inheritDoc */
+  labelOf(doc: string, path: readonly string[]): string | undefined {
+    if (this.#compiledPattern === undefined) return undefined;
+    const table = this.#runtime.compiledPlans.labels;
+    if (!this.#metadata.has(doc)) {
+      const tx = this.#tx ?? this.#runtime.edit();
+      try {
+        this.#metadata.set(
+          doc,
+          readStoredCfcMetadata(tx, {
+            space: this.#space,
+            id: this.entityOf(doc),
+            scope: "space",
+          }),
+        );
+      } finally {
+        if (tx !== this.#tx) tx.abort();
+      }
+    }
+    const metadata = this.#metadata.get(doc);
+    if (metadata === undefined) return table.empty.id;
+    const label = labelForConsumedEntries(
+      consumedEntriesForRead(metadata, path, {
+        nonRecursive: false,
+        consumes: "value",
+      }),
+      path,
+      false,
+    );
+    return table.intern({
+      confidentiality: [...label?.confidentiality ?? []],
+      integrity: [...label?.integrity ?? []],
+    }).id;
   }
 
   /** @inheritDoc */
@@ -170,9 +276,13 @@ export class RuntimeTransactions implements TransactionHooks {
     path: readonly string[],
     store: Store,
     schema?: Schema,
+    writes?: readonly PlanWrite[],
   ): void {
     const tx = this.#open();
     this.#counts.writes += 1;
+    const written = this.#written.get(doc) ?? [];
+    written.push([...path]);
+    this.#written.set(doc, written);
     const document = store.docs.get(doc);
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
@@ -217,6 +327,127 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#address(doc, path),
       schema as JSONSchema | undefined,
     );
+    if (this.#compiledPattern === undefined) return;
+    for (const write of writes ?? []) {
+      // The runtime's mark: this adapter stands in for the runner, which
+      // records what its own code computed.
+      tx.recordCfcWritePolicyInput(
+        {
+          kind: "plan-write",
+          ...this.#inputs(write),
+          target: this.#cfcAddress(write.target),
+          compiledPattern: this.#compiledPattern,
+          record: write.record,
+          instance: write.instance,
+          keys: write.keys,
+        },
+        runtimeWritePolicyAuthorization,
+      );
+    }
+  }
+
+  /** The inputs of one place of a write record, as the runtime reads them. */
+  #inputs(place: PlanInputs): RuntimePlanInputs {
+    const entries = <T, U>(
+      record: Record<number, T> | undefined,
+      as: (value: T) => U,
+    ): Record<number, U> | undefined =>
+      record === undefined ? undefined : Object.fromEntries(
+        Object.entries(record).map(([index, value]) => [index, as(value)]),
+      );
+    return {
+      slots: this.#slots(place.slots),
+      ...(place.selections === undefined
+        ? {}
+        : { selections: place.selections }),
+      ...(place.picks === undefined ? {} : {
+        picks: entries(
+          place.picks,
+          (chosen) =>
+            chosen === null ? null : { slots: this.#slots(chosen.slots) },
+        ),
+      }),
+      ...(place.elements === undefined ? {} : {
+        elements: entries(
+          place.elements,
+          (elements) => this.#elements(elements),
+        ),
+      }),
+      ...(place.dynamic === undefined ? {} : {
+        dynamic: entries(
+          place.dynamic,
+          (addresses) => addresses.map((address) => this.#cfcAddress(address)),
+        ),
+      }),
+      ...(place.outputs === undefined ? {} : {
+        outputs: entries(place.outputs, (inputs) => this.#inputs(inputs)),
+      }),
+    };
+  }
+
+  /** The elements of a fold, as the runtime reads them. */
+  #elements(elements: FoldElements): PlanElements {
+    return "uniform" in elements
+      ? { uniform: this.#inputs(elements.uniform) }
+      : {
+        groups: elements.groups.map(({ count, ...inputs }) => ({
+          ...this.#inputs(inputs),
+          count,
+        })),
+      };
+  }
+
+  /**
+   * The bindings of slots, as the runtime reads them. A plan's class
+   * `identity` is the runtime's `followRef`. A slot whose position the
+   * transaction in progress wrote takes the label staged there.
+   */
+  #slots(slots: SlotBindings): RuntimeSlotBindings {
+    return Object.fromEntries(
+      Object.entries(slots).map(([slot, binding]) => [
+        slot,
+        this.#binding(binding),
+      ]),
+    );
+  }
+
+  /** Helper for `#slots()`, for one binding. */
+  #binding(binding: SlotBinding): RuntimeSlotBinding {
+    if ("output" in binding) return { output: binding.output };
+    if ("staged" in binding) {
+      return { staged: this.#cfcAddress(binding.staged) };
+    }
+    const last = binding.chain.at(-1);
+    if (last !== undefined && this.#wrote(last)) {
+      return { staged: this.#cfcAddress(last) };
+    }
+    return {
+      chain: binding.chain.map((address) => this.#cfcAddress(address)),
+      observes: binding.observes === "identity"
+        ? "followRef"
+        : binding.observes as "value" | "shape",
+    };
+  }
+
+  /**
+   * Whether the transaction in progress wrote `address`, at its path or
+   * above it.
+   */
+  #wrote({ doc, path }: Address): boolean {
+    return (this.#written.get(doc) ?? []).some((written) =>
+      written.length <= path.length &&
+      written.every((segment, index) => segment === path[index])
+    );
+  }
+
+  /** The runtime's address of a position of a document of the executor. */
+  #cfcAddress({ doc, path }: Address): CfcAddress {
+    return {
+      space: this.#space,
+      id: this.entityOf(doc),
+      scope: "space",
+      path: [...path],
+    };
   }
 
   /** @inheritDoc */

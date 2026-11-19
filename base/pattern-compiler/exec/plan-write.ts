@@ -23,15 +23,16 @@ export type Address = { doc: string; path: readonly string[] };
  * ran. `chain` holds each position the read went through, the links it
  * crossed first and the slot's own position last, and `observes` the
  * slot's observation class. `output` stands for the value of an entry of
- * `Plan.outputs` for the element keys given: the slot of an element of the
- * result of another per-element construct, which has no stored address,
- * reads that output of the upstream element. A path may hold `*` at the
- * position of an element, in the bindings of the `uniform` form.
+ * `Plan.outputs`, whose inputs `outputs` of the same place or of an
+ * enclosing one reports: the slot of an element of the result of another
+ * per-element construct, which has no stored address, reads that output of
+ * the upstream element. A path may hold `*` at the position of an element,
+ * in the bindings of the `uniform` form.
  */
 export type SlotBinding =
   | { chain: Address[]; observes: string }
   | { staged: Address }
-  | { output: number; keys: [number, string][] };
+  | { output: number };
 
 /** The bindings of the slots a template reaches, by the slot's index. */
 export type SlotBindings = Record<number, SlotBinding>;
@@ -47,23 +48,35 @@ export type PlanRecord =
   /** The first value of a state cell, by `StateCell.first`. */
   | { stateFirst: number };
 
-/** One group of the elements of a `fold` (provisional decision P31). */
-export type ElementGroup = {
-  /** The bindings of one element of the group. */
-  bindings: SlotBindings;
-  /** The branch each selector of the body took for that element. */
+/** What the template of one place is instantiated with. */
+export type PlanInputs = {
+  /** The binding of each slot the template reaches outside a `fold`. */
+  slots: SlotBindings;
+  /** The branch taken at each selector; an absent one is not reported. */
   selections?: Record<number, number>;
-  /** The key each pick of the body chose for that element. */
-  picks?: Record<number, string | null>;
-  /** The inputs of the outputs the bindings name, for that element. */
-  outputs?: Record<number, NamedOutputInputs>;
+  /**
+   * The child chosen at each pick, with the bindings of the slots of the
+   * pick's body, or `null` where none was chosen; an absent one is not
+   * reported.
+   */
+  picks?: Record<number, { slots: SlotBindings } | null>;
+  /** The elements of each `fold`, by its collection. */
+  elements?: Record<number, FoldElements>;
+  /** The positions read through each entry of `Plan.dynamicReads`. */
+  dynamic?: Record<number, Address[]>;
+  /** The inputs of the cone instance of each output named here. */
+  outputs?: Record<number, PlanInputs>;
+};
+
+/** One group of the elements of a `fold` (provisional decision P31). */
+export type ElementGroup = PlanInputs & {
   /** How many elements have these inputs. */
   count: number;
 };
 
 /** The elements of a `fold`, in one of the two forms of decision P31. */
 export type FoldElements =
-  | { uniform: SlotBindings }
+  | { uniform: PlanInputs }
   | { groups: ElementGroup[] };
 
 /**
@@ -71,23 +84,11 @@ export type FoldElements =
  * of the pattern, the element keys, outermost first, and what each node of
  * the template that needs an input reaches.
  */
-export type NamedOutputInputs = {
+export type NamedOutputInputs = PlanInputs & {
   /** The identifier of the instance, which is that of its result document. */
   instance: string;
   /** The element key of each enclosing collection, outermost first. */
   keys: [number, string][];
-  /** The binding of each slot the template reaches outside a `fold`. */
-  slots: SlotBindings;
-  /** The branch taken at each selector; an absent one is not reported. */
-  selections?: Record<number, number>;
-  /** The key chosen at each pick; an absent one is not reported. */
-  picks?: Record<number, string | null>;
-  /** The elements of each `fold`, by its collection. */
-  elements?: Record<number, FoldElements>;
-  /** The inputs of the cone instance of each output an `output` node names. */
-  outputs?: Record<number, NamedOutputInputs>;
-  /** The positions read through each entry of `Plan.dynamicReads`. */
-  dynamic?: Record<number, Address[]>;
 };
 
 /** The record of one written path (PL §4.1, `PlanWrite` without labels). */
@@ -132,8 +133,8 @@ export type Reached = {
   folds: Map<number, Template>;
   /** The selectors of `select` nodes. */
   selectors: Set<number>;
-  /** The picks of `pick` nodes. */
-  picks: Set<number>;
+  /** The body of each `pick` node, by its pick. */
+  picks: Map<number, Template>;
   /** The entries of `Plan.dynamicReads` that `dynamic` nodes name. */
   dynamic: Set<number>;
 };
@@ -147,7 +148,7 @@ export const reachedBy = (
     outputs: new Set(),
     folds: new Map(),
     selectors: new Set(),
-    picks: new Set(),
+    picks: new Map(),
     dynamic: new Set(),
   },
 ): Reached => {
@@ -171,7 +172,7 @@ export const reachedBy = (
       }
       break;
     case "pick":
-      into.picks.add(template.pick);
+      into.picks.set(template.pick, template.body);
       reachedBy(template.choice, templates, into);
       reachedBy(template.body, templates, into);
       break;
@@ -194,8 +195,9 @@ export const reachedBy = (
 /**
  * Whether the body of a `fold` allows the `uniform` form (provisional
  * decision P31): it has no `select`, `pick`, `fold` or `dynamic` node,
- * with `shared` expanded. It has no `output` node either: the label of a
- * named output can differ by element in a way no `*` path states.
+ * and no `shared` node, whose label the runtime keeps per place. It has no
+ * `output` node either: the label of a named output can differ by element
+ * in a way no `*` path states.
  */
 export const isUniformBody = (
   template: Template | undefined,
@@ -208,8 +210,6 @@ export const isUniformBody = (
       return true;
     case "derive":
       return template.inputs.every((input) => isUniformBody(input, templates));
-    case "shared":
-      return isUniformBody(templates[template.template], templates);
     default:
       return false;
   }

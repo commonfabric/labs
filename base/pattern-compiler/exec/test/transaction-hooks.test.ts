@@ -507,9 +507,11 @@ describe("the elements of a `fold` in a write record", () => {
       expect(writes.get(0)?.elements).toEqual({
         0: {
           uniform: {
-            1: {
-              chain: [{ doc: ARGUMENT, path: ["tags", "*"] }],
-              observes: "value",
+            slots: {
+              1: {
+                chain: [{ doc: ARGUMENT, path: ["tags", "*"] }],
+                observes: "value",
+              },
             },
           },
         },
@@ -518,9 +520,11 @@ describe("the elements of a `fold` in a write record", () => {
       expect(writes.get(2)?.elements).toEqual({
         1: {
           uniform: {
-            4: {
-              chain: [{ doc: ARGUMENT, path: ["items", "*", "done"] }],
-              observes: "value",
+            slots: {
+              4: {
+                chain: [{ doc: ARGUMENT, path: ["items", "*", "done"] }],
+                observes: "value",
+              },
             },
           },
         },
@@ -537,7 +541,7 @@ describe("the elements of a `fold` in a write record", () => {
       const open = writes.get(2)?.elements?.[1];
       expect(open).toMatchObject({
         groups: [{
-          bindings: {
+          slots: {
             4: {
               chain: [{
                 doc: ARGUMENT,
@@ -553,7 +557,7 @@ describe("the elements of a `fold` in a write record", () => {
       const loud = writes.get(6)?.elements?.[3];
       expect(loud).toMatchObject({
         groups: [{
-          bindings: { 7: { output: 5, keys: [[2, expect.any(String)]] } },
+          slots: { 7: { output: 5 } },
           outputs: {
             5: {
               slots: {

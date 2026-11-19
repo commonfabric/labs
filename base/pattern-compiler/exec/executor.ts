@@ -66,6 +66,7 @@ import {
   type FoldElements,
   isUniformBody,
   type NamedOutputInputs,
+  type PlanInputs,
   type PlanRecord,
   type PlanWrite,
   reachedBy,
@@ -7352,7 +7353,7 @@ export class Instance {
   #bindingOf(
     slot: number,
     bound: Bound,
-    outputs: Record<number, NamedOutputInputs>,
+    outputs: Record<number, PlanInputs>,
     depth: number,
   ): SlotBinding {
     if ("upstream" in bound) {
@@ -7363,7 +7364,7 @@ export class Instance {
       );
       if (output !== undefined) {
         outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
-        return { output, keys };
+        return { output };
       }
       return { chain: [], observes: this.plan.slots[slot].observes };
     }
@@ -7391,29 +7392,40 @@ export class Instance {
     const templates = this.plan.templates ?? [];
     const reached = reachedBy(template, templates);
     const slots: SlotBindings = {};
-    const outputs: Record<number, NamedOutputInputs> = {};
+    const outputs: Record<number, PlanInputs> = {};
     const elements: Record<number, FoldElements> = {};
     const selections: Record<number, number> = {};
-    const picks: Record<number, string | null> = {};
+    const picks: Record<number, { slots: SlotBindings } | null> = {};
     const dynamic: Record<number, Address[]> = {};
     // A chain of outputs is as long as the plan is deep; one that is
     // longer than this is a cycle of the plan, and is not followed.
     if (depth < 64) {
-      for (const slot of [...reached.slots].sort((a, b) => a - b)) {
-        const bound = first((source) => source.slots.get(slot));
-        if (bound !== undefined) {
-          slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
+      const bindingsOf = (reaching: Iterable<number>, into: SlotBindings) => {
+        for (const slot of [...reaching].sort((a, b) => a - b)) {
+          const bound = first((source) => source.slots.get(slot));
+          if (bound !== undefined) {
+            into[slot] = this.#bindingOf(slot, bound, outputs, depth);
+          }
         }
-      }
+        return into;
+      };
+      bindingsOf(reached.slots, slots);
       for (const selector of [...reached.selectors].sort((a, b) => a - b)) {
         const branch = first((source) => source.selections.get(selector));
         if (branch !== undefined) selections[selector] = branch;
       }
-      for (const pick of [...reached.picks].sort((a, b) => a - b)) {
+      // The slots of a pick's body are bound to the child the value code
+      // chose, which is the child it read.
+      for (
+        const [pick, body] of [...reached.picks].sort(([a], [b]) => a - b)
+      ) {
         const key = first((source) =>
           source.picks.has(pick) ? { key: source.picks.get(pick) } : undefined
         );
-        if (key !== undefined) picks[pick] = key.key ?? null;
+        if (key === undefined) continue;
+        picks[pick] = key.key === null || key.key === undefined
+          ? null
+          : { slots: bindingsOf(reachedBy(body, templates).slots, {}) };
       }
       for (const read of [...reached.dynamic].sort((a, b) => a - b)) {
         const seen = first((source) => source.dynamic.get(read));
@@ -7499,6 +7511,7 @@ export class Instance {
       const array = this.#arrayChain(name);
       const [first] = table?.byKey.keys() ?? [];
       const uniform: SlotBindings = {};
+      const outputs: Record<number, PlanInputs> = {};
       for (const slot of [...reached.slots].sort((a, b) => a - b)) {
         const record = this.plan.slots[slot];
         if (
@@ -7520,23 +7533,25 @@ export class Instance {
           : sourcesFor(first).map((source) => source?.slots.get(slot))
             .find((found) => found !== undefined);
         if (bound !== undefined) {
-          uniform[slot] = this.#bindingOf(slot, bound, {}, depth);
+          uniform[slot] = this.#bindingOf(slot, bound, outputs, depth);
         }
       }
-      return { uniform };
+      return {
+        uniform: {
+          slots: uniform,
+          ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
+        },
+      };
     }
     const groups = [...table?.groups.values() ?? []].map((members) => {
       const [key] = members;
-      const inputs = this.#inputsFor(body, keysOf(key), sourcesFor(key), depth);
-      return {
-        bindings: inputs.slots,
-        ...(inputs.selections === undefined
-          ? {}
-          : { selections: inputs.selections }),
-        ...(inputs.picks === undefined ? {} : { picks: inputs.picks }),
-        ...(inputs.outputs === undefined ? {} : { outputs: inputs.outputs }),
-        count: members.size,
-      };
+      const {
+        instance: _instance,
+        keys: _keys,
+        elements: _elements,
+        ...inputs
+      } = this.#inputsFor(body, keysOf(key), sourcesFor(key), depth);
+      return { ...inputs, count: members.size };
     });
     return { groups };
   }
