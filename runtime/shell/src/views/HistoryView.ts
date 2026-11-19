@@ -216,11 +216,13 @@ export class XHistoryView extends BaseView {
         </p>
         <div class="actions">
           <cf-button
+            id="history-back"
             variant="outline"
             ?disabled="${open.busy}"
             @click="${() => this.command({ type: "close-history" })}"
           >Back to now</cf-button>
           <cf-button
+            id="history-restore"
             ?disabled="${open.busy}"
             @click="${() => this.command({ type: "restore-history" })}"
           >Restore this version</cf-button>
@@ -229,12 +231,18 @@ export class XHistoryView extends BaseView {
     `;
   }
 
-  #renderStep(step: HistoryStep) {
+  /**
+   * Renders one step. `eventIndex` counts the `event` steps listed before
+   * this one, which gives a test a stable way to name such a step.
+   */
+  #renderStep(step: HistoryStep, eventIndex: number) {
     const current = this.open?.seq === step.seq;
     return html`
       <li>
         <button
           class="step"
+          data-kind="${step.kind}"
+          data-event-index="${step.kind === "event" ? eventIndex : nothing}"
           aria-current="${current ? "true" : "false"}"
           ?disabled="${this.open?.busy === true}"
           @click="${() =>
@@ -251,6 +259,7 @@ export class XHistoryView extends BaseView {
 
   override render() {
     const failed = this.#list.status === TaskStatus.ERROR;
+    let events = 0;
     return html`
       <header>
         <h2>History</h2>
@@ -277,7 +286,9 @@ export class XHistoryView extends BaseView {
         `
         : nothing}
       <ol aria-label="Steps of this space's history">
-        ${this._steps.map((step) => this.#renderStep(step))}
+        ${this._steps.map((step) =>
+          this.#renderStep(step, step.kind === "event" ? events++ : events)
+        )}
         ${this._next === undefined ? nothing : html`
           <li>
             <button
