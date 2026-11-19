@@ -16,6 +16,8 @@ import {
   labelForConsumedEntries,
 } from "../../../../runtime/runner/src/cfc/consumed-label.ts";
 import { readStoredCfcMetadata } from "../../../../runtime/runner/src/cfc/metadata.ts";
+import { parseLink } from "../../../../runtime/runner/src/link-utils.ts";
+import type { NormalizedFullLink } from "../../../../runtime/runner/src/link-types.ts";
 import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import {
@@ -622,7 +624,47 @@ describe("write records the runtime instantiates with the option on", () => {
             path,
             false,
           );
-        return { refused, label };
+        // The clauses a reader of `path` observes: those stored at the
+        // position, and where a link is stored at it or above it, those at
+        // the link and at the position the link leads to, followed in turn.
+        const through: unknown[] = [];
+        let at: NormalizedFullLink | undefined = {
+          space,
+          id: hooks.entityOf(instance.id),
+          path: [...path],
+          scope: "space",
+        };
+        for (let hop = 0; at !== undefined && hop < 8; hop++) {
+          let value: unknown = read.readValueOrThrow({ ...at, path: [] });
+          let reached = 0;
+          while (
+            reached < at.path.length && parseLink(value, at) === undefined
+          ) {
+            value = (value as Record<string, unknown> | undefined)?.[
+              at.path[reached]
+            ];
+            reached++;
+          }
+          const position = at.path.slice(0, reached);
+          const stored = readStoredCfcMetadata(read, at);
+          if (stored !== undefined) {
+            through.push(
+              ...labelForConsumedEntries(
+                consumedEntriesForRead(stored, position, {
+                  nonRecursive: false,
+                  consumes: "value",
+                }),
+                position,
+                false,
+              )?.confidentiality ?? [],
+            );
+          }
+          const link: NormalizedFullLink | undefined = parseLink(value, at);
+          at = link === undefined
+            ? undefined
+            : { ...link, path: [...link.path, ...at.path.slice(reached)] };
+        }
+        return { refused, label, through };
       } finally {
         read.abort();
       }
@@ -734,6 +776,53 @@ describe("write records the runtime instantiates with the option on", () => {
       '"input:names"',
     );
   });
+  for (
+    const [fixture, argument, path, source] of [
+      ["pass-through", { secret: "s", flag: true }, ["whole"], "secret"],
+      [
+        "pass-through",
+        { secret: "s", flag: true },
+        ["member", "inner"],
+        "secret",
+      ],
+      ["pass-through", { secret: "s", flag: true }, ["element", "0"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["chosen"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["parameter"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["lifted"], "secret"],
+      ["pass-through", { secret: "s", flag: true }, ["fromLift"], "secret"],
+      ...([
+        [["chosenList", "0"], "list"],
+        [["chosenBox", "a"], "box"],
+        [["spreadList", "0"], "list"],
+        [["member"], "box"],
+        [["element"], "list"],
+        [["mapped", "0"], "list"],
+        [["local", "a"], "box"],
+      ] as const).map(([path, source]) =>
+        [
+          "pass-through-containers",
+          { list: ["s"], box: { a: "s" }, flag: true, other: ["o"] },
+          path,
+          source,
+        ] as const
+      ),
+    ] as const
+  ) {
+    it(
+      `stores the clause of \`${source}\` that value code passes on, at \`${
+        path.join(".")
+      }\` of \`${fixture}\` or at the position the link stored there leads to`,
+      async () => {
+        const { refused, through } = await commitWithOptionOn(
+          fixture,
+          argument,
+          path,
+        );
+        expect(refused).toEqual([]);
+        expect(JSON.stringify(through)).toContain(`"input:${source}"`);
+      },
+    );
+  }
 });
 
 describe("the cost of labels from templates for a `filter`", () => {

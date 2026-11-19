@@ -4851,3 +4851,27 @@ fn the_plan_of_a_pattern_called_at_two_sites_per_level_is_linear_in_the_depth() 
         );
     }
 }
+
+#[test]
+fn what_a_statement_body_returns_is_its_value() {
+    // The value code of a `computed` with a statement body reads what it
+    // returns, so it stores a copy and not a reference: the template is
+    // the `value` of the place returned. An `identity` slot there leaves
+    // the label of the copied content out (PL §3.5, the operand passed
+    // on is its `value` where it is a scalar or a plain container in
+    // place).
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ box: { a: string } }>(({ box }) => {
+  const local = computed(() => {
+    const held = box;
+    return held;
+  });
+  return { local };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let local = interim_template(&plan, "local");
+    assert_eq!(local, "[argument box : value]");
+}

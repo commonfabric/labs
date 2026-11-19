@@ -2124,10 +2124,15 @@ impl<'a> Emitter<'_, '_, 'a> {
                         return returned;
                     }
                 }
+                // The value code of a statement body reads what it
+                // returns (`$h.v` of `src/emit.rs`), so the result is a
+                // copy, and its template is the `value` of the place
+                // returned, not the `identity` slot of a reference
+                // (PL §3.5, a branch that passes an operand on).
                 Statement::ReturnStatement(statement) => {
                     return Ok(match &statement.argument {
                         Some(argument) => {
-                            self.one("identity", |emitter| emitter.eval(argument, "branch"))
+                            self.one("value", |emitter| emitter.eval(argument, "branch"))
                                 .1
                         }
                         None => Some(json!({ "op": "const" })),
