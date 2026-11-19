@@ -236,7 +236,9 @@ currency. The existing overlay and retirement rules below still apply.
   same holds for an argument that did not resolve because a document it
   reads is in transit. Such a run runs again once the loads of those
   documents have settled, whatever they find, since a document that
-  arrives absent changes nothing its reads could see. Everywhere else
+  arrives absent changes nothing its reads could see. A document whose
+  load fails is no longer in transit, so the run after the failure
+  clears the result rather than asking for the load again. Everywhere else
   the disposal is as above: a refusal over an input that has arrived
   clears the result, as the [2026-09-14 derived-state correction
   decision](../../history/development/2026-09-14-derived-state-correction.md)

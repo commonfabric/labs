@@ -170,12 +170,17 @@ describe("refused-run-keeps-result", () => {
   /**
    * Starts the piece on a cold runtime with its input space held, subscribes
    * to `out`, and waits for the runtime to settle with the input still out of
-   * reach. Returns the runtime, its result cell, and what its subscription has
-   * seen.
+   * reach. `prepare`, when given, is handed the runtime's storage before the
+   * piece starts. Returns the runtime, its result cell, and what its
+   * subscription has seen.
    */
-  const startCold = async (compiled: { resultSchema?: unknown }) => {
+  const startCold = async (
+    compiled: { resultSchema?: unknown },
+    prepare?: (storage: EmulatedStorageManager) => void,
+  ) => {
     inputSpaceHeld = Promise.withResolvers<void>();
     const cold = open();
+    prepare?.(opened.at(-1)!.storage);
     const coldResult = cold.getCell<Record<string, unknown>>(
       space,
       "result",
@@ -322,6 +327,61 @@ describe("refused-run-keeps-result", () => {
     const after = await storedValues(outId);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after.at(-1)).toContain("Undefined");
+    cancel();
+  });
+
+  it("clears a result it kept through its input's transit once the input's load fails, and asks for the load once", async () => {
+    // Every load of the input space's documents on the cold runtime fails
+    // once the case lets it, while the space stays out of reach. A failed
+    // load leaves the input unexamined, so a run that kept the result and
+    // asked for the load again would do so after every failure. The case
+    // counts the loads the runner asks for, of the input's whole document
+    // with no schema, apart from the schema-shaped ones the piece's start
+    // asks for.
+
+    const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+    warm.runner.stop(result);
+    await rename(warm, ref, "def");
+    const before = await storedValues(outId);
+
+    const failure = Promise.withResolvers<never>();
+    failure.promise.catch(() => {});
+    let inputLoads = 0;
+    const secondLoad = Promise.withResolvers<"asked again">();
+    const { cold, coldResult, cancel } = await startCold(
+      compiled,
+      (storage) => {
+        const syncCell = storage.syncCell.bind(storage);
+        storage.syncCell = (cell, options) => {
+          const link = cell.getAsNormalizedFullLink();
+          if (link.space !== inputSpace) return syncCell(cell, options);
+          if (link.schema === undefined) {
+            inputLoads += 1;
+            if (inputLoads > 1) secondLoad.resolve("asked again");
+          }
+          return failure.promise;
+        };
+      },
+    );
+    expect(outRuns(cold)).toBe(1);
+    expect(inputLoads).toBe(1);
+    expect(coldResult.key("out").get()).toBe("out:abc");
+    const cleared = Promise.withResolvers<"cleared">();
+    const cancelCleared = coldResult.key("out").sink((value) => {
+      if (value === undefined) cleared.resolve("cleared");
+    });
+
+    failure.reject(new Error("Document load failed"));
+    expect(await Promise.race([cleared.promise, secondLoad.promise]))
+      .toBe("cleared");
+    await cold.idle();
+    expect(outRuns(cold)).toBe(2);
+    expect(inputLoads).toBe(1);
+    await cold.storageManager.synced();
+    const after = await storedValues(outId);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.at(-1)).toContain("Undefined");
+    cancelCleared();
     cancel();
   });
 

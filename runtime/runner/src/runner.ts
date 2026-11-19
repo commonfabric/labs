@@ -134,6 +134,7 @@ import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
+import { documentLoad } from "./document-readiness.ts";
 import { type EntityKind, entityKindOfIdString } from "./entity-kind.ts";
 import { inSpaceRootCause } from "./in-space-root-cause.ts";
 import {
@@ -3108,6 +3109,14 @@ export class Runner {
     `${MemorySpace}/${ScopeKey}/${URI}`,
     Cancel
   >();
+
+  /**
+   * For each action, the documents whose load, asked for by a run of it kept
+   * in transit (`#keepsResultInTransit()`), failed. Such a document is no
+   * longer on its way, so a later run refused for it clears its result rather
+   * than keeping it and asking for the load again.
+   */
+  readonly #failedTransitLoads = new WeakMap<Action, Set<string>>();
 
   /**
    * Tombstones for `#sessionPatternPointers` entries dropped by _capacity
@@ -14732,6 +14741,9 @@ export class Runner {
    * writes, already holds a value. When it does, `action` runs again once the
    * loads of those documents have settled, whatever they find, since a
    * document that arrives absent changes no value the run's reads could see.
+   * A document whose load failed is no longer in transit
+   * (`#failedTransitLoads`), so the run after a failure clears the result
+   * instead of asking for the load again.
    */
   #keepsResultInTransit(
     action: Action,
@@ -14739,30 +14751,42 @@ export class Runner {
     writes: readonly NormalizedFullLink[],
     links?: readonly NormalizedFullLink[],
   ): boolean {
-    const absences = this.#transitAbsences(tx, links);
-    if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
-    const identity = tx.tx.scopeKeyIdentity ?? this.#runtime.scopeKeyIdentity;
-    const manager = this.#runtime.storageManager;
-    // Each load is asked for here, so that an absence no read has asked the
-    // store about yet settles too.
-    const loads = absences.map((absence) =>
-      this.#runtime.getCellFromLink({
-        space: absence.space,
-        id: absence.id,
-        path: [],
-        scope: absence.scope,
-      }).sync()
+    const identity = tx.tx.scopeKeyIdentity;
+    const keyIdentity = identity ?? this.#runtime.scopeKeyIdentity;
+    const failed = this.#failedTransitLoads.get(action);
+    const absences = this.#transitAbsences(tx, links).filter((absence) =>
+      !failed?.has(entityKey(absence, keyIdentity))
     );
-    const keys = absences.map((absence) => entityKey(absence, identity));
+    if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
+    // Each load is asked for here, under the run's own scope identity, so
+    // that an absence no read has asked the store about yet settles too.
+    const loads = absences.map((absence) =>
+      documentLoad(
+        this.#runtime,
+        this.#runtime.getCellFromLink({
+          space: absence.space,
+          id: absence.id,
+          path: [],
+          scope: absence.scope,
+        }),
+        identity,
+      ).catch(() => {
+        let keys = this.#failedTransitLoads.get(action);
+        if (keys === undefined) {
+          keys = new Set();
+          this.#failedTransitLoads.set(action, keys);
+        }
+        keys.add(entityKey(absence, keyIdentity));
+      })
+    );
     // Not a task the scheduler waits on to be idle: the run has finished, and
     // what follows is a new run, as a change arriving on the change channel
     // would start. Document readiness's re-arm is not one either
     // (`createDocumentReadiness()`), though it registers its load with
     // `trackUntilSettled()`, which `synced()` and `Cell.pull()` wait on.
-    void Promise.allSettled([
-      ...loads,
-      manager.loadsSettled?.(keys) ?? Promise.resolve(),
-    ]).then(() => this.#runtime.scheduler.invalidateAction(action));
+    void Promise.all(loads).then(() =>
+      this.#runtime.scheduler.invalidateAction(action)
+    );
     return true;
   }
 
