@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "../v2/engine.ts";
 import {
+  EngineObjectManager,
   releaseTrackedRoots,
   rootReferrersOf,
   trackGraph,
@@ -29,12 +30,8 @@ const userRoot = (id: string, child: string) => ({
 
 describe("v2-track-explicit-instances", () => {
   // One walk visits Alice's user instance of `of:root` and then the
-  // session's own, and each instance's links are attributed to the
-  // instance holding them: the second visit, being the session's own,
-  // takes down the override the first installed. The two are walked under
-  // selectors of their own: the walk of Alice's instance records the root
-  // under the session's own key as well, which under one selector would
-  // cover the session's own instance and leave it unwalked.
+  // session's own, under selectors of their own, and each instance's links
+  // are attributed to the instance holding them.
 
   const roots = [
     {
@@ -169,6 +166,131 @@ describe("v2-track-explicit-instances", () => {
         },
       }]);
     });
+
+    it("delivers what the session's own instance reaches when it follows another instance under one selector", async () => {
+      // Alice's instance, named explicitly, and then the session's own are
+      // walked under one selector, so the walk of Alice's instance records
+      // only Alice's instance under it.
+
+      await withTrackedInstances((_engine, tracked) => {
+        expect(
+          [...tracked.state.entities.values()].map((entity) => entity.id)
+            .toSorted(),
+        ).toEqual(["of:root", "of:root", "of:x", "of:y"]);
+      }, [roots[0], { ...roots[1], selector: roots[0].selector }]);
+    });
+
+    it("reaches the session's own instance through a link inside another instance's walk", async () => {
+      // Alice's instance of `of:root` links to `of:root` in the user scope,
+      // which a walk reads as the session's own instance, under the schema
+      // Alice's instance is walked under.
+
+      const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+      const engine = await open({ url: toFileUrl(path) });
+      try {
+        applyCommit(engine, {
+          ...alice,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [
+              {
+                op: "set",
+                id: "of:root",
+                scope: "user",
+                value: {
+                  value: {
+                    child: link("of:x"),
+                    next: {
+                      "/": {
+                        "link@1": {
+                          id: "of:root",
+                          path: [],
+                          space,
+                          scope: "user",
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+              { op: "set", id: "of:x", value: { value: { name: "x" } } },
+              { op: "set", id: "of:y", value: { value: { name: "y" } } },
+            ],
+          },
+        });
+        applyCommit(engine, {
+          ...service,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [userRoot("of:root", "of:y")],
+          },
+        });
+        const tracked = trackGraph(
+          space,
+          engine,
+          {
+            roots: [{
+              id: "of:root",
+              scope: "user",
+              entityScopeKey: aliceKey,
+              selector: {
+                path: [],
+                schema: {
+                  $ref: "#/$defs/Node",
+                  $defs: {
+                    Node: {
+                      type: "object",
+                      properties: {
+                        child: { type: "object" },
+                        next: { $ref: "#/$defs/Node" },
+                      },
+                    },
+                  },
+                },
+              },
+            }],
+          },
+          undefined,
+          service,
+        );
+
+        expect(
+          [...tracked.state.entities.values()].map((entity) => entity.id)
+            .toSorted(),
+        ).toEqual(["of:root", "of:root", "of:x", "of:y"]);
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+  });
+
+  describe("EngineObjectManager.load()", () => {
+    it("names the instance on a loaded address only where it is not the manager's own", async () => {
+      // The session's own instance is loaded first under its explicit key,
+      // and then as the session's own, and both name it the same way.
+
+      await withTrackedInstances((engine) => {
+        const manager = new EngineObjectManager(
+          engine,
+          "",
+          service.principal,
+          service.sessionId,
+        );
+        const scopeKeyOf = (scopeKey?: typeof aliceKey | typeof serviceKey) =>
+          manager.load({
+            id: "of:root",
+            scope: "user",
+            ...(scopeKey === undefined ? {} : { scopeKey }),
+          })?.address.scopeKey;
+
+        expect(scopeKeyOf(serviceKey)).toBeUndefined();
+        expect(scopeKeyOf()).toBeUndefined();
+        expect(scopeKeyOf(aliceKey)).toBe(aliceKey);
+      });
+    });
   });
 
   describe("releaseTrackedRoots()", () => {
@@ -188,9 +310,8 @@ describe("v2-track-explicit-instances", () => {
           [...tracked.state.entities.values()].map((entity) => entity.id)
             .toSorted(),
         ).toEqual(["of:root", "of:y"]);
-        // The traversal of Alice's instance recorded the root under the
-        // session's own key as well, attributed to Alice's instance, so
-        // that record went with it.
+        // The session's own instance keeps the record its own walk made,
+        // and the walk of Alice's instance made none under its key.
         expect(
           [...tracked.state.tracker.values(`${space}/${serviceKey}/of:root`)]
             .map((selector) => selector.schema),

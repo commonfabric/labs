@@ -16,11 +16,7 @@
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import type {
-  CellScope,
-  ScopeKey,
-  ScopeKeyIdentity,
-} from "@commonfabric/memory/v2";
+import type { CellScope, ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { JSONSchema } from "./builder/types.ts";
@@ -35,6 +31,7 @@ import {
   createSchemaMemo,
   createTraversalContext,
   getAtPath,
+  getTrackerKey,
   type IAttestation,
   type IMemorySpaceValueAttestation,
   loadLabelSchemaDoc,
@@ -49,6 +46,7 @@ import {
   type SchemaPathSelector,
   schemaTrackerCoversSelector,
   schemaTrackerKey,
+  type SourceDocument,
   type TrackedAttribution,
   type TraversalContext,
 } from "./traverse.ts";
@@ -237,13 +235,6 @@ export class GraphQueryWalk {
   readonly #memo: SchemaMemo;
   readonly stats: GraphQueryWalkStats;
 
-  /** identity-derived key → the caller-supplied key a visit recorded
-   * under (a query root naming an explicit scope INSTANCE — protocol.md
-   * §2's read row). Miss attribution consults this so a miss recorded
-   * from inside such a root attributes to the key the refresh will
-   * later release, not to a session-resolved key nothing ever walks. */
-  readonly #keyOverrides = new Map<string, string>();
-
   readonly #onTrackedDoc: GraphQueryWalkOptions["onTrackedDoc"];
 
   /**
@@ -259,7 +250,6 @@ export class GraphQueryWalk {
     string,
     {
       record: string;
-      docKey: string;
       depth: number;
       position: object | undefined;
     }[]
@@ -292,40 +282,33 @@ export class GraphQueryWalk {
     const { space, identity, onMissedDoc, onCrossing, onTrackedDoc } = options;
     this.#onTrackedDoc = onTrackedDoc;
     // A referrer arrives as an address; its attribution key is its tracker
-    // key, overridden to the explicit-instance key a root was recorded
-    // under (`#keyOverrides`), as a miss's referrer is. A document reports
-    // once per link it holds, so its tracker key is kept per document. The
-    // override is read on every report: one walk visits every explicit
-    // instance of a root in turn, and each visit records its own.
+    // key, which names the instance the address names where it names one.
+    // A document reports once per link it holds, so its tracker key is kept
+    // per document.
     const sourceKeys = new Map<string, string>();
-    const trackerKeyOf = (source: { id: string; scope?: CellScope }) => {
-      const cacheKey = `${source.scope ?? ""}\0${source.id}`;
+    const trackerKeyOf = (source: SourceDocument) => {
+      const cacheKey = `${source.scopeKey ?? ""}\0${
+        source.scope ?? ""
+      }\0${source.id}`;
       let sourceKey = sourceKeys.get(cacheKey);
       if (sourceKey === undefined) {
-        sourceKey = schemaTrackerKey(space, source.id, source.scope, identity);
+        sourceKey = getTrackerKey({ ...source, space }, identity);
         sourceKeys.set(cacheKey, sourceKey);
       }
       return sourceKey;
     };
     const referrerKeyOf = (
-      source: { id: string; scope?: CellScope } | undefined,
-    ): string | undefined => {
-      if (source === undefined) return undefined;
-      const sourceKey = trackerKeyOf(source);
-      return this.#keyOverrides.get(sourceKey) ?? sourceKey;
-    };
+      source: SourceDocument | undefined,
+    ): string | undefined =>
+      source === undefined ? undefined : trackerKeyOf(source);
     // The entry of the record a source's document is being walked under,
     // if any.
-    const walkingOf = (source: { id: string; scope?: CellScope }) => {
-      const sourceKey = trackerKeyOf(source);
-      return this.#walkingEntryOf(
-        this.#keyOverrides.get(sourceKey) ?? sourceKey,
-      );
-    };
+    const walkingOf = (source: SourceDocument) =>
+      this.#walkingEntryOf(trackerKeyOf(source));
     // What a source reaches is attributed to that record, or to the
     // document where no record of it was entered.
     const referrerOf = (
-      source: { id: string; scope?: CellScope } | undefined,
+      source: SourceDocument | undefined,
     ): string | undefined =>
       source === undefined
         ? undefined
@@ -345,7 +328,7 @@ export class GraphQueryWalk {
     // its own root precedes every position and is not one of them.
     const list = (
       made: RecordAttribution,
-      source: { id: string; scope?: CellScope } | undefined,
+      source: SourceDocument | undefined,
       referrer: string | undefined,
     ) => {
       const attributions = attributionsTo(referrer);
@@ -424,9 +407,6 @@ export class GraphQueryWalk {
         referrerKey,
       );
     };
-    // A record is reported under the key the tracker holds it under, the
-    // derived one, so that its attribution names a record that exists; the
-    // override reaches the referrer side alone.
     const attributeTracked = (
       made: TrackedAttribution,
       referrer: string | undefined,
@@ -437,7 +417,7 @@ export class GraphQueryWalk {
     const reportTracked = (
       key: string,
       selector: SchemaPathSelector,
-      source: { id: string; scope?: CellScope } | undefined,
+      source: SourceDocument | undefined,
       kind: "walked" | "covered",
     ): void => {
       const referrer = referrerOf(source);
@@ -448,11 +428,8 @@ export class GraphQueryWalk {
       // position. A walked record other than the one the source is walked
       // under, another document's or another of its own, is the record the
       // walk continues under for as long as the position being traversed
-      // now lasts, if it continues into that document. The traversal's own
-      // record of an explicit instance's root, under the derived key, is the
-      // root's walk, not another.
-      const itself = referrer ===
-        trackedRecordKey(this.#keyOverrides.get(key) ?? key, selector);
+      // now lasts, if it continues into that document.
+      const itself = referrer === trackedRecordKey(key, selector);
       list(made, itself ? undefined : source, referrer);
       if (kind === "walked" && !itself) this.#enter(key, selector);
     };
@@ -489,18 +466,13 @@ export class GraphQueryWalk {
         // attributions inside it, and its range lacks them.
         positionOf: (source) => {
           const entry = walkingOf(source);
-          const docKey = entry?.docKey;
           const attributions = attributionsTo(
             entry?.record ?? referrerKeyOf(source),
           );
           const replayable =
             attributions.outside !== this.#positions.length - 1;
           attributions.outside = undefined;
-          return {
-            made: attributions.made,
-            instance: docKey === trackerKeyOf(source) ? undefined : docKey,
-            replayable,
-          };
+          return { made: attributions.made, replayable };
         },
         // A record the tracker still holds keeps what its own walk reached,
         // so attributing it again stands for walking it; one it no longer
@@ -553,19 +525,15 @@ export class GraphQueryWalk {
     this.stats = options.stats ?? createGraphQueryWalkStats();
   }
 
-  /** Notes that the walk entered `docKey`'s record under `selector`, kept
-   * under the key a referrer in that document resolves to, which is the
-   * explicit instance's when a visit to one is overriding `docKey`. */
+  /** Notes that the walk entered `docKey`'s record under `selector`. */
   #enter(docKey: string, selector: SchemaPathSelector): void {
-    const at = this.#keyOverrides.get(docKey) ?? docKey;
-    let entered = this.#entered.get(at);
+    let entered = this.#entered.get(docKey);
     if (entered === undefined) {
       entered = [];
-      this.#entered.set(at, entered);
+      this.#entered.set(docKey, entered);
     }
     entered.push({
       record: trackedRecordKey(docKey, selector),
-      docKey,
       depth: this.#positions.length,
       position: this.#positions.at(-1),
     });
@@ -595,11 +563,12 @@ export class GraphQueryWalk {
    * named document and the documents reached through link crossings alike
    * — the schema document its `cfc` envelope names.
    *
-   * The document records under `schemaTrackerKey` over the walk's identity
-   * unless the caller passes `docKey`: a caller that named an explicit
-   * scope INSTANCE (protocol.md §2's read row — a query root carrying
-   * `entityScopeKey`) records under THAT instance's key rather than one
-   * resolved from the acting identity.
+   * The document records under the instance its address names
+   * (`IMemoryAddress.scopeKey`), as a query root carrying `entityScopeKey`
+   * names one (protocol.md §2's read row), and otherwise under the one the
+   * walk's identity resolves its scope to. So does every position of the
+   * document the walk reaches, while a link's target resolves under the
+   * walk's identity.
    *
    * The document's own record attributes to `referrer` through
    * `onTrackedDoc` (a watch's root key, for a walk a watch roots); the
@@ -616,25 +585,16 @@ export class GraphQueryWalk {
   visit(
     document: IAttestation,
     selector: SchemaPathSelector,
-    docKey?: `${string}/${ScopeKey}/${string}`,
     referrer?: string,
   ): void {
     const effectiveSelector = selector.schema === undefined
       ? { ...selector, schema: false }
       : selector;
 
-    const derivedKey = schemaTrackerKey(
-      this.#space,
-      document.address.id,
-      document.address.scope,
+    const docKey = getTrackerKey(
+      { ...document.address, space: this.#space },
       this.#identity,
     );
-    docKey ??= derivedKey;
-    // The override stands for the instance this visit walks, and only
-    // while it does: a later visit's walk reaching this document reaches the
-    // session's own instance of it.
-    this.#keyOverrides.clear();
-    if (docKey !== derivedKey) this.#keyOverrides.set(derivedKey, docKey);
     const internedSelector = internPathSelector(effectiveSelector);
     const covering = coveringSelector(
       this.#context.schemaTracker,
@@ -659,10 +619,7 @@ export class GraphQueryWalk {
     this.#entered.clear();
     this.#attributions.clear();
     this.#enter(docKey, covering ?? internedSelector);
-    this.#context.trackedReferrer = {
-      id: document.address.id,
-      scope: document.address.scope,
-    };
+    this.#context.trackedReferrer = document.address;
 
     if (!isObjectNotArray(document.value)) {
       return;

@@ -140,6 +140,14 @@ type ScopedMemorySpaceValueAddress = IMemorySpaceValueAddress & {
   scope: CellScope;
 };
 
+/**
+ * The document a traversal reports something from: its id, its scope, and,
+ * where its address names one, the scope instance (`IMemoryAddress.scopeKey`).
+ */
+export type SourceDocument = Pick<IMemorySpaceAddress, "scope" | "scopeKey"> & {
+  id: string;
+};
+
 const scopedAddressForKey = (
   address: IMemorySpaceValueAddress,
 ): ScopedMemorySpaceValueAddress => ({
@@ -1673,24 +1681,20 @@ export type RecordWalk = {
   readonly positions: object[];
 
   /**
-   * What the walk keeps of a position of `source`'s document: the instance of
-   * the document the record walking it walks, where a visit names one rather
-   * than the acting identity resolving it, and what positions of the
-   * document have attributed in this visit to that record, in order: each
-   * attribution made, and each memoized position a memo hit stood for. The
-   * list only grows during the visit, so what a position stands for is the
-   * range the list gained while the position was traversed. The position's
-   * memoized result keeps that range, so that a record of the document
-   * meeting the position later is attributed the same reach without
-   * traversing it again (`replay()`), unless it is not `replayable`: the
-   * first position of a record whose entry made attributions before the
-   * position began, which the range therefore lacks. A memo key names a
-   * document by its scope, so a position of a named instance is memoized
-   * under its instance as well.
+   * What the walk keeps of a position of `source`'s document: what
+   * positions of the document have attributed in this visit to the record
+   * walking it, in order: each attribution made, and each memoized position
+   * a memo hit stood for. The list only grows during the visit, so what a
+   * position stands for is the range the list gained while the position was
+   * traversed. The position's memoized result keeps that range, so that a
+   * record of the document meeting the position later is attributed the
+   * same reach without traversing it again (`replay()`), unless it is not
+   * `replayable`: the first position of a record whose entry made
+   * attributions before the position began, which the range therefore
+   * lacks.
    */
-  positionOf(source: { id: string; scope?: CellScope }): {
+  positionOf(source: SourceDocument): {
     made: readonly AttributionEntry[];
-    instance: string | undefined;
     replayable: boolean;
   };
 
@@ -1705,7 +1709,7 @@ export type RecordWalk = {
    */
   replay(
     memoized: MemoizedAttributions,
-    source: { id: string; scope?: CellScope },
+    source: SourceDocument,
   ): boolean;
 };
 
@@ -1792,7 +1796,6 @@ type AttributingPosition = {
   source: IMemorySpaceValueAddress;
   made: readonly AttributionEntry[];
   start: number;
-  instance: string | undefined;
   replayable: boolean;
   table: Map<string, MemoizedAttributions>;
 
@@ -1817,14 +1820,13 @@ function attributingPosition(
     table = new Map();
     memoAttributionTables.set(memo, table);
   }
-  const { made, instance, replayable } = records.positionOf(doc.address);
+  const { made, replayable } = records.positionOf(doc.address);
   const { tracker } = context;
   return {
     records,
     source: doc.address,
     made,
     start: made.length,
-    instance,
     replayable,
     table,
     tracker,
@@ -1885,11 +1887,11 @@ function memoized(
 }
 
 /**
- * The part of a memo key naming the scope instance `position` walks, where
- * a visit names one (`RecordWalk.positionOf()`); empty otherwise.
+ * The part of a memo key naming the scope instance `address` names, where
+ * it names one (`IMemoryAddress.scopeKey`); empty otherwise.
  */
-function memoInstanceKey(position: AttributingPosition | undefined): string {
-  return position?.instance === undefined ? "" : "|" + position.instance;
+function memoInstanceKey(address: IMemorySpaceAddress): string {
+  return address.scopeKey === undefined ? "" : "|" + address.scopeKey;
 }
 
 export type TraversalContext = {
@@ -1945,7 +1947,7 @@ export type TraversalContext = {
     /** The document whose link dead-ended (the miss's referrer), when
      * the call site knows it — lets a server-side graph walk attribute
      * the miss so a referrer that changes away retires it. */
-    source?: { id: string; scope?: CellScope },
+    source?: SourceDocument,
   ) => void;
 
   /**
@@ -1965,7 +1967,7 @@ export type TraversalContext = {
   onTrackedDoc?: (
     key: string,
     selector: SchemaPathSelector,
-    source: { id: string; scope?: CellScope } | undefined,
+    source: SourceDocument | undefined,
     kind: "walked" | "covered",
   ) => void;
 
@@ -1974,7 +1976,7 @@ export type TraversalContext = {
    * that constructs the traverser; `onTrackedDoc` receives it as the
    * source. Unset, a root record is reported with no source.
    */
-  trackedReferrer?: { id: string; scope?: CellScope };
+  trackedReferrer?: SourceDocument;
 
   /**
    * Set by a walk that attributes what it reaches to the record — one
@@ -2100,7 +2102,7 @@ export function createTraversalContext(
   onMissingLinkTarget?: (
     link: NormalizedFullLink,
     sourceSpace: MemorySpace,
-    source?: { id: string; scope?: CellScope },
+    source?: SourceDocument,
   ) => void,
   schemaDocsLoaded: Set<string> = new Set<string>(),
   schemaDocsAvailable: Set<string> = new Set<string>(),
@@ -2130,7 +2132,7 @@ export function createDefaultTraversalContext(
   onMissingLinkTarget?: (
     link: NormalizedFullLink,
     sourceSpace: MemorySpace,
-    source?: { id: string; scope?: CellScope },
+    source?: SourceDocument,
   ) => void,
 ): TraversalContext {
   return createTraversalContext(
@@ -2524,13 +2526,12 @@ export abstract class BaseObjectTraverser {
   #dagMemoKey(
     doc: IMemorySpaceValueAttestation,
     itemLink: NormalizedFullLink | undefined,
-    position: AttributingPosition | undefined,
   ): string {
     return (itemLink
       ? addressKey(scopedAddressForKey(doc.address)) + "|" +
         addressKey(itemLink)
       : addressKey(scopedAddressForKey(doc.address))) +
-      memoInstanceKey(position);
+      memoInstanceKey(doc.address);
   }
 
   /** `traverseDAG()`'s work at one position. */
@@ -2561,7 +2562,7 @@ export abstract class BaseObjectTraverser {
     // itemLink must be part of the key because the same data reached through
     // different links produces different query result proxies / cell identities.
     // Skip when defaultValue is provided since it can alter the result.
-    const key = this.#dagMemoKey(doc, itemLink, position);
+    const key = this.#dagMemoKey(doc, itemLink);
     if (defaultValue === undefined) {
       const cached = this.dagMemo.get(key);
       if (cached !== undefined && replayed(position, key)) {
@@ -3130,7 +3131,7 @@ function reportMissingLinkTarget(
   link: NormalizedFullLink,
   selector: SchemaPathSelector | undefined,
   sourceSpace: MemorySpace,
-  source?: { id: string; scope?: CellScope },
+  source?: SourceDocument,
 ): void {
   noteMissingLinkTarget(context, link);
   context.onMissingLinkTarget?.(
@@ -3170,24 +3171,28 @@ export function coverageKind(
   return covering === needed ? "walked" : "covered";
 }
 
-/**
- * Schema-tracker key for an address: one entry per scope INSTANCE
- * (key-vocabulary.md §1 site 6), built from the traversal's acting
- * identity via the shared scope_key constructor.
- */
-function getTrackerKey(
-  address: Pick<IMemorySpaceAddress, "space" | "id" | "scope">,
+/** {@link schemaTrackerKey} for an address. */
+export function getTrackerKey(
+  address: SourceDocument & Pick<IMemorySpaceAddress, "space">,
   identity: ScopeKeyIdentity,
 ): string {
-  return schemaTrackerKey(address.space, address.id, address.scope, identity);
+  return schemaTrackerKey(
+    address.space,
+    address.id,
+    address.scope,
+    identity,
+    address.scopeKey,
+  );
 }
 
 /**
  * Key under which a document's reached selectors are recorded in a schema
  * tracker: `space/scope_key/id`, one entry per scope INSTANCE
- * (key-vocabulary.md §1 site 6), the scope_key resolved from the address's
- * scope and the traversal's acting identity via the shared constructor (an
- * absent scope resolves to `space`, matching how storage defaults one).
+ * (key-vocabulary.md §1 site 6): `scopeKey`, the instance an address names
+ * where it names one (`IMemoryAddress.scopeKey`), else the scope_key
+ * resolved from the address's scope and the traversal's acting identity via
+ * the shared constructor (an absent scope resolves to `space`, matching how
+ * storage defaults one).
  *
  * Every writer of a tracker key builds it here, as does the query side that
  * looks one up (`toDocKey` in `runtime/memory/v2/query.ts`).
@@ -3201,8 +3206,11 @@ export function schemaTrackerKey(
   id: string,
   scope: CellScope | null | undefined,
   identity: ScopeKeyIdentity,
+  scopeKey?: ScopeKey,
 ): `${string}/${ScopeKey}/${string}` {
-  return `${space}/${resolveScopeKey(scope ?? undefined, identity)}/${id}`;
+  return `${space}/${
+    scopeKey ?? resolveScopeKey(scope ?? undefined, identity)
+  }/${id}`;
 }
 
 /**
@@ -3389,10 +3397,13 @@ function followPointer(
       // queries. The reported link carries the selector's target-rooted
       // path (minus its "value" prefix) and schema so the fetch covers the
       // shape this read needs.
-      reportMissingLinkTarget(context, link, selector, doc.address.space, {
-        id: doc.address.id,
-        scope: doc.address.scope,
-      });
+      reportMissingLinkTarget(
+        context,
+        link,
+        selector,
+        doc.address.space,
+        doc.address,
+      );
       // We include the path in the address, so that information is available,
       return [notFound(target), selector];
     } else if (error.name !== "NotFoundError") {
@@ -4912,7 +4923,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         ? schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema)
         : schemaMemoAddressKey(doc.address) + "|" + hashSchema(schema) + "|" +
           schemaMemoLinkKey(link) + "|" + linkCrossingsMemoKey(this.context)) +
-        memoInstanceKey(position);
+        memoInstanceKey(doc.address);
       const cached = memo.get(memoKey);
       if (cached !== undefined && replayed(position, memoKey)) {
         this.schemaMemoHits++;
@@ -5801,7 +5812,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       { space: target.space, id: target.id, scope: target.scope, path: [] },
       { path: target.path, schema: selector.schema },
       doc.address.space,
-      { id: doc.address.id, scope: doc.address.scope },
+      doc.address,
     );
   }
 

@@ -42,9 +42,13 @@ caller keeps them, walks them under a schema, and records what it reached.
 - `GraphQueryWalk` is the walk. Construct one over a manager, a space, a
   schema tracker, and the acting identity the walk's tracker keys resolve
   scoped addresses against; call `visit(document, selector)` for each root.
-  A root that names an explicit scope instance passes its key as `visit`'s
-  third argument, and records under THAT instance rather than one resolved
-  from the acting identity. The walk builds the read-only transaction the
+  A root that names an explicit scope instance is a document whose address
+  names that instance (`scopeKey`), as `EngineObjectManager.load` returns
+  for an address that names one. The walk records the document, and every
+  position of it, under THAT instance rather than one resolved from the
+  acting identity. The target of a link the walk follows resolves under the
+  acting identity, so a link to the root's own id and scope reaches the
+  session's own instance, which is walked in its own right. The walk builds the read-only transaction the
   traverser reads through, carries the pointer-cycle tracker that stops a
   link loop, and loads, for every document it delivers, the schema document
   its `cfc` labels are stated against, which a reader needs in order to
@@ -55,7 +59,8 @@ caller keeps them, walks them under a schema, and records what it reached.
 - `schemaTrackerKey(space, id, scope, identity)` is the key a walk records
   under: one entry per scope INSTANCE, the middle segment the shared
   `scope_key` vocabulary resolved from the scope and the acting identity
-  (key-vocabulary.md §1 sites 5-6). Both packages need to build one —
+  (key-vocabulary.md §1 sites 5-6), or the instance itself where the
+  address names one. Both packages need to build one —
   `memory` to look up what a write invalidated, `runner` to record what a
   traversal reached — so there is one function and both call it, including
   the coverage check in `isLinkedDocumentCovered` for links that declare a
@@ -101,9 +106,9 @@ caller keeps them, walks them under a schema, and records what it reached.
   cycle tracker cut short at a traversal that began outside it
   (`CompoundCycleTracker.openSpan()`). A position enclosing one of those
   hits is then of the same kind. A memo
-  key names a document by its scope, so the positions of a scope instance a
-  visit names explicitly are memoized under that instance as well
-  (`RecordWalk.positionOf()`).
+  key names a document by its scope, and by the instance its address names
+  where it names one, so the positions of an explicitly named instance are
+  memoized apart from those of the session's own.
 - The rest is vocabulary the two sides name in common:
   `MapSetStringToPathSelectors` (the tracker), `schemaTrackerCoversSelector`
   and `coveringSelector` (whether a tracker already covers a selector, and

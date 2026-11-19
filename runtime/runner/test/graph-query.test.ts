@@ -4,6 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import type { JSONSchema, SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { type CellScope, resolveScopeKey } from "@commonfabric/memory/v2";
 
 import {
   type BaseMemoryAddress,
@@ -35,7 +36,9 @@ const keyFor = (id: string) =>
 
 /**
  * Serves documents from a map keyed by tracker key, and records every address
- * a walk asked for.
+ * a walk asked for. An address naming a scope instance is served that
+ * instance, and the document served names it unless it is the test
+ * identity's own, as a storage engine serves one.
  */
 class StubObjectManager implements ObjectStorageManager {
   readonly requested: string[] = [];
@@ -52,6 +55,7 @@ class StubObjectManager implements ObjectStorageManager {
       address.id,
       address.scope,
       TEST_SCOPE_IDENTITY,
+      address.scopeKey,
     );
     this.requested.push(key);
     const value = this.#documents.get(key);
@@ -60,8 +64,18 @@ class StubObjectManager implements ObjectStorageManager {
     }
     // A storage engine names every document it serves with its scope, so
     // that a link inside one resolves in that scope.
+    const { scopeKey, ...rest } = address;
+    const scope = address.scope ?? "space";
     return {
-      address: { ...address, scope: address.scope ?? "space", path: [] },
+      address: {
+        ...rest,
+        scope,
+        ...(scopeKey === undefined ||
+            scopeKey === resolveScopeKey(scope, TEST_SCOPE_IDENTITY)
+          ? {}
+          : { scopeKey }),
+        path: [],
+      },
       value: { value },
     };
   }
@@ -76,8 +90,10 @@ const documentFor = (
   return loaded!;
 };
 
-const linkTo = (id: string, path: string[] = []) => ({
-  "/": { [LINK_V1_TAG]: { id, path } },
+const linkTo = (id: string, path: string[] = [], scope?: CellScope) => ({
+  "/": {
+    [LINK_V1_TAG]: { id, path, ...(scope === undefined ? {} : { scope }) },
+  },
 });
 
 const walkOver = (
@@ -166,7 +182,6 @@ const walkListTwice = (
     walked.walk.visit(
       documentFor(walked.manager, "of:list"),
       selector,
-      undefined,
       "root",
     );
     return { ...walked, reports, misses };
@@ -224,32 +239,69 @@ describe("graph-query", () => {
         ]);
       });
 
-      it("records under the caller's explicit instance key when one is given", () => {
+      it("records the document under the instance its address names", () => {
         // A query root naming an explicit scope instance (protocol.md §2's
-        // read row) records under THAT instance rather than one resolved
-        // from the walk's own identity. Traversal beyond that entry still
-        // resolves under the acting identity — including the traverser's
-        // own read-track of the root document (per-run deep threading is
-        // the Phase 2 fan-out work) — so both keys appear.
+        // read row) records under that instance alone, not under the one
+        // the walk's own identity resolves the scope to, which a visit of
+        // that instance records in turn.
+
+        const bob = "user:did%3Atest%3Abob" as const;
+        const own = schemaTrackerKey(
+          SPACE,
+          "of:root",
+          "user",
+          TEST_SCOPE_IDENTITY,
+        );
         const documents = new Map<string, FabricValue>([
-          [keyFor("of:root"), { title: "Glazed" }],
+          [`${SPACE}/${bob}/of:root`, { title: "Bob's" }],
+          [own, { title: "Alice's" }],
         ]);
         const { manager, schemaTracker, walk } = walkOver(documents);
-        const explicitKey = `${SPACE}/user:did%3Atest%3Abob/of:root` as const;
+        const selector = { path: ["value"], schema: true } as const;
+        const instance = (scopeKey?: typeof bob) =>
+          manager.load({
+            id: "of:root",
+            scope: "user",
+            ...(scopeKey === undefined ? {} : { scopeKey }),
+            type: "application/json",
+          })!;
+
+        walk.visit(instance(bob), selector);
+        expect(trackedKeys(schemaTracker)).toEqual([`${SPACE}/${bob}/of:root`]);
+
+        walk.visit(instance(), selector);
+        expect(trackedKeys(schemaTracker)).toEqual(
+          [`${SPACE}/${bob}/of:root`, own].toSorted(),
+        );
+      });
+
+      it("attributes a missing link target inside a named instance to that instance's record", () => {
+        // Bob's instance of the user-scoped `of:root` links to the absent
+        // `of:absent`; the session's own instance does not exist.
+
+        const bob = "user:did%3Atest%3Abob" as const;
+        const bobKey = `${SPACE}/${bob}/of:root`;
+        const documents = new Map<string, FabricValue>([
+          [bobKey, { gone: linkTo("of:absent", [], "space") }],
+        ]);
+        const referrers: (string | undefined)[] = [];
+        const { manager, walk } = walkOver(documents, {
+          onMissedDoc: (_key, _selector, referrer) => referrers.push(referrer),
+        });
+        const selector = { path: ["value"], schema: true } as const;
 
         walk.visit(
-          documentFor(manager, "of:root"),
-          {
-            path: ["value"],
-            schema: true,
-          } satisfies SchemaPathSelector,
-          explicitKey,
+          manager.load({
+            id: "of:root" as URI,
+            scope: "user",
+            scopeKey: bob,
+            type: "application/json",
+          })!,
+          selector,
+          "root",
         );
 
-        expect(trackedKeys(schemaTracker)).toEqual([
-          keyFor("of:root"),
-          explicitKey,
-        ]);
+        expect(referrers).toEqual([trackedRecordKey(bobKey, selector)]);
       });
 
       it("records a linked document the schema reaches", () => {
@@ -591,7 +643,7 @@ describe("graph-query", () => {
               set.add(referrer);
             },
           });
-          walk.visit(documentFor(manager, "of:x"), selector, undefined, "root");
+          walk.visit(documentFor(manager, "of:x"), selector, "root");
           return recorded;
         };
 
@@ -614,12 +666,25 @@ describe("graph-query", () => {
           ]);
         });
 
-        it("attributes what a document entered again reaches to that record when the root names an explicit instance", () => {
-          // The root's own record is kept under the instance's key, and the
-          // record a link enters under the key the tracker resolves, so a
-          // lookup by either key finds the record walking the document.
+        it("attributes what the session's own instance reaches to its own record when a link inside a named instance enters it", () => {
+          // Bob's instance of the user-scoped `of:x` links to `of:y`, which
+          // links back to `of:x` in the user scope: the session's own
+          // instance, which links on to `of:z`.
 
-          const explicitKey = `${SPACE}/user:did%3Atest%3Abob/of:x` as const;
+          const bob = "user:did%3Atest%3Abob" as const;
+          const bobKey = `${SPACE}/${bob}/of:x`;
+          const ownKey = schemaTrackerKey(
+            SPACE,
+            "of:x",
+            "user",
+            TEST_SCOPE_IDENTITY,
+          );
+          const instances = new Map<string, FabricValue>([
+            [bobKey, { first: linkTo("of:y", [], "space"), tag: "bob" }],
+            [ownKey, { last: linkTo("of:z", [], "space"), tag: "own" }],
+            [keyFor("of:y"), { back: linkTo("of:x", [], "user") }],
+            [keyFor("of:z"), { n: 1 }],
+          ]);
           const inner = {
             type: "object",
             properties: {
@@ -637,24 +702,34 @@ describe("graph-query", () => {
           } satisfies SchemaPathSelector;
           const reports: [string, SchemaPathSelector, string | undefined][] =
             [];
-          const { manager, walk } = walkOver(documents, {
+          const { manager, walk } = walkOver(instances, {
             onTrackedDoc: (key, selector, referrer, kind) => {
               if (kind === "walked") reports.push([key, selector, referrer]);
             },
           });
+          const referrersOf = (key: string) =>
+            reports.filter(([reported, , referrer]) =>
+              reported === key && !referrer?.startsWith(`${key}\0`)
+            ).map(([, , referrer]) => referrer);
 
-          walk.visit(documentFor(manager, "of:x"), outer, explicitKey, "root");
-
-          const entered = reports.filter(([key, , referrer]) =>
-            key === keyFor("of:x") &&
-            referrer?.startsWith(`${keyFor("of:y")}\0`)
+          walk.visit(
+            manager.load({
+              id: "of:x" as URI,
+              scope: "user",
+              scopeKey: bob,
+              type: "application/json",
+            })!,
+            outer,
+            "root",
           );
-          expect(entered).toHaveLength(1);
-          expect(
-            reports.filter(([key]) => key === keyFor("of:z")).map((
-              [, , referrer],
-            ) => referrer),
-          ).toEqual([trackedRecordKey(keyFor("of:x"), entered[0][1])]);
+
+          expect(referrersOf(bobKey)).toEqual(["root"]);
+          const entered = reports.filter(([key]) => key === ownKey);
+          expect(entered.map(([, , referrer]) => referrer?.split("\0")[0]))
+            .toEqual([keyFor("of:y")]);
+          expect(referrersOf(keyFor("of:z"))).toEqual([
+            trackedRecordKey(ownKey, entered[0][1]),
+          ]);
         });
       });
 
@@ -946,7 +1021,6 @@ describe("graph-query", () => {
           walk.visit(
             documentFor(manager, "of:list"),
             selector,
-            undefined,
             "root",
           );
           return attributed;
@@ -990,7 +1064,6 @@ describe("graph-query", () => {
               },
             },
           },
-          undefined,
           "root",
         );
 
@@ -1053,7 +1126,6 @@ describe("graph-query", () => {
               },
             },
           },
-          undefined,
           "root",
         );
 
@@ -1146,7 +1218,6 @@ describe("graph-query", () => {
                 path: ["value"],
                 schema: { $ref: `#/$defs/${def}`, $defs },
               },
-              undefined,
               name,
             );
           }
@@ -1224,7 +1295,6 @@ describe("graph-query", () => {
               },
             },
           },
-          undefined,
           "root",
         );
 

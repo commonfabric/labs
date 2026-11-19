@@ -440,6 +440,9 @@ export class EngineObjectManager implements ObjectStorageManager {
       address: {
         id: address.id as URI,
         scope,
+        // The address names its instance where it is not the manager's
+        // own, so it names the same instance however it was first loaded.
+        ...(scopeKey === this.#scopeKeyFor(scope) ? {} : { scopeKey }),
         type: type as MIME,
         path: [],
       },
@@ -1152,9 +1155,13 @@ const rootDocKey = (
   root: GraphQuery["roots"][number],
   identity: ScopeKeyIdentity,
 ): QueryDocKey =>
-  root.entityScopeKey !== undefined
-    ? `${space}/${root.entityScopeKey}/${root.id}`
-    : toDocKey(space, root.id, root.scope ?? DEFAULT_SCOPE, identity);
+  schemaTrackerKey(
+    space,
+    root.id,
+    root.scope ?? DEFAULT_SCOPE,
+    identity,
+    root.entityScopeKey,
+  );
 
 const entitiesFromTracker = (
   space: string,
@@ -2679,9 +2686,10 @@ export const trackGraph = (
       const rootScope = root.scope ?? DEFAULT_SCOPE;
       // A root naming an explicit instance (protocol.md §2's read row —
       // lease-holder only, admission enforced at the server layer) reads
-      // and tracks THAT instance; traversal beyond the root resolves under
-      // the session identity as today (per-run deep threading is the
-      // Phase 2 fan-out work).
+      // and tracks THAT instance: the loaded document's address names it,
+      // so the walk records the document under it. A link the walk
+      // follows resolves under the session identity (per-run deep
+      // threading is the Phase 2 fan-out work).
       const loaded = manager.load({
         id: root.id,
         scope: rootScope,
@@ -2704,7 +2712,7 @@ export const trackGraph = (
         selector,
       });
       if (loaded !== null) {
-        walk.visit(loaded, selector, rootKey, referrer);
+        walk.visit(loaded, selector, referrer);
       } else {
         schemaTracker.add(rootKey, selector);
         tracked(rootKey, selector, referrer, "walked");
@@ -3223,14 +3231,13 @@ const evaluateTrackedDocument = (
   onTrackedDoc?: TrackedRecorder,
   referrer?: string,
 ): void => {
-  const docKey: QueryDocKey = address.scopeKey !== undefined
-    ? `${space}/${address.scopeKey}/${address.id}`
-    : toDocKey(
-      space,
-      address.id,
-      address.scope ?? DEFAULT_SCOPE,
-      identityOf(manager),
-    );
+  const docKey: QueryDocKey = schemaTrackerKey(
+    space,
+    address.id,
+    address.scope ?? DEFAULT_SCOPE,
+    identityOf(manager),
+    address.scopeKey,
+  );
   const startedAt = performance.now();
   const readsBefore = manager.readCount;
   let outcome = "failed";
@@ -3258,7 +3265,7 @@ const evaluateTrackedDocument = (
       memo: sharedMemo,
       stats,
     });
-    walk.visit(loaded, selector, docKey, referrer);
+    walk.visit(loaded, selector, referrer);
     outcome = "present";
   } finally {
     refreshTiming.timeDetailed(
