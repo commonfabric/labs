@@ -100,6 +100,12 @@ export interface CatalogEntry {
   /** The author's stable pseudonym, not who they are. */
   author?: string;
   /**
+   * How much other people use the author's other shared patterns, 0 to 9: what
+   * makes an anonymous author worth trusting. Shown beside `author`, never
+   * beside a profile.
+   */
+  authorTier?: number;
+  /**
    * The Common Fabric profile the author published this pattern under, when
    * they chose to be named (`cf pattern publish --as`). The name and picture
    * are read from the profile itself, never carried here. Absent on a pattern
@@ -426,9 +432,14 @@ export const remixOfText = (steps: readonly CatalogRemixStep[]): string => {
 export const CatalogByline = pattern<CatalogBylineInput, CatalogBylineOutput>(
   ({ entry }) => {
     const remixText = computed(() => remixOfText(entry?.remixOf ?? []));
-    const pseudonym = computed(() =>
-      entry?.authorProfile ? "" : (entry?.author ?? "")
-    );
+    const pseudonym = computed(() => {
+      if (entry?.authorProfile || !entry?.author) return "";
+      const tier = entry?.authorTier;
+      return typeof tier === "number" && Number.isInteger(tier) && tier >= 0 &&
+          tier <= 9
+        ? `${entry.author} · credibility ${tier} of 9`
+        : entry.author;
+    });
     return {
       [NAME]: "Byline",
       [UI]: (

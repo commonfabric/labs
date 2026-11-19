@@ -62,16 +62,18 @@ never shows it to anyone else.
 
 An entry whose author chose to be named (`cf pattern publish --as`) also carries
 `authorProfile`, a link to that Common Fabric profile; one shared anonymously
-carries only the pseudonym. A remix carries `remixOf`, the originals it was made
-from, nearest first; a step the viewer may not see is `{unavailable: true}` and
-ends the chain. `CatalogByline` shows both the way every caller should: the
-profile's badge, which reads the name and picture from the profile itself (so a
-host never carries a name, and a renamed profile shows at once), or else the
-pseudonym; then "Remix of “Habit tracker”, a remix of …", stopping at the first
-step the viewer may not see. A step with no title reads "an untitled pattern",
-never its id, and the step that ends the chain reads "a pattern that's no longer
-available". A caller that cannot mount `CatalogByline` (a native client) follows
-these same rules.
+carries only the pseudonym and its `authorTier` (0 to 9: how much others use the
+author's other shared patterns), shown as "credibility 4 of 9" beside the
+pseudonym and never beside a profile. A remix carries `remixOf`, the originals
+it was made from, nearest first; a step the viewer may not see is
+`{unavailable: true}` and ends the chain. `CatalogByline` shows both the way
+every caller should: the profile's badge, which reads the name and picture from
+the profile itself (so a host never carries a name, and a renamed profile shows
+at once), or else the pseudonym; then "Remix of “Habit tracker”, a remix of …",
+stopping at the first step the viewer may not see. A step with no title reads
+"an untitled pattern", never its id, and the step that ends the chain reads "a
+pattern that's no longer available". A caller that cannot mount `CatalogByline`
+(a native client) follows these same rules.
 
 ## Implementing it
 

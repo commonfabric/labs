@@ -141,6 +141,7 @@ export default pattern(() => {
       patternId: "habit-2",
       title: "Habit tracker",
       author: "a-3kf9q2xxxxx",
+      authorTier: 4,
       remixOf: [
         { patternId: "habit-1", title: "Habit   tracker\n" },
         { patternId: "log-1" },
@@ -154,6 +155,7 @@ export default pattern(() => {
       patternId: "habit-3",
       title: "Habit tracker",
       author: "a-7hh2m0xxxxx",
+      authorTier: 6,
       authorProfile: samProfile,
     },
   });
@@ -210,12 +212,12 @@ export default pattern(() => {
   });
 
   const assert_anonymous_shows_pseudonym_only = assert(() =>
-    hasText(anonymous[UI], "by a-3kf9q2xxxxx") &&
+    hasText(anonymous[UI], "by a-3kf9q2xxxxx · credibility 4 of 9") &&
     countElements(anonymous[UI], "cf-profile-badge") === 0
   );
   const assert_named_shows_profile_not_pseudonym = assert(() =>
     countElements(named[UI], "cf-profile-badge") === 1 &&
-    !hasText(named[UI], "a-7hh2m0xxxxx")
+    !hasText(named[UI], "a-7hh2m0xxxxx") && !hasText(named[UI], "credibility")
   );
   const assert_remix_chain_stops_at_what_viewer_cannot_see = assert(() =>
     hasText(
