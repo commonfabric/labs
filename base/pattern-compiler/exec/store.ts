@@ -29,6 +29,7 @@ export type Schema = boolean | {
   default?: unknown;
   properties?: Record<string, Schema>;
   items?: Schema;
+  additionalProperties?: Schema;
   asCell?: unknown;
 
   /** The variants of a union. */
@@ -113,6 +114,29 @@ export const linkedSchema = <S>(document: S): S => {
 };
 
 /** The schema of a member of what a schema describes. */
+/**
+ * Whether a schema says nothing of what a position holds, as `unknown`
+ * does: a link there is a reference that is not read (LS §7.8).
+ */
+const unread = (schema: Schema | undefined): boolean =>
+  schema === true ||
+  (typeof schema === "object" &&
+    ["type", "properties", "items", "anyOf", "oneOf", "allOf", "$ref", "enum"]
+      .every((keyword) => !(keyword in schema)) &&
+    !("const" in schema));
+
+/**
+ * The variant of a union that describes a container, for a read under the
+ * union: the first that declares members or elements.
+ */
+const containerOf = (schema: Schema | undefined): Schema | undefined =>
+  typeof schema === "object" && schema.anyOf !== undefined
+    ? schema.anyOf.find((variant) =>
+      typeof variant === "object" &&
+      (variant.properties !== undefined || variant.items !== undefined)
+    ) ?? schema
+    : schema;
+
 export const schemaBelow = (
   schema: Schema | undefined,
   segment: string,
@@ -1865,19 +1889,44 @@ export class Store {
    * it elsewhere stores the value. A member that is a link is the value
    * of its cell and carries that cell's address, as without `copies`.
    */
-  read(ref: Ref, reads?: Position[], copies = false): unknown {
-    return this.#deep(ref, reads, new Set(), copies);
+  /**
+   * What is stored at `ref`, with the links in it followed. With `bound`,
+   * the read is made under that schema, as a read through a handle is
+   * (LS §7.8, ES §2.4): a member of a record that the schema does not
+   * declare is left out, and a link at a position the schema types
+   * `unknown` is given as a reference stand-in, an object with no member
+   * that carries the address, and not followed.
+   */
+  read(ref: Ref, reads?: Position[], copies = false, bound?: Schema): unknown {
+    const outer = this.#reached;
+    this.#reached = new Map();
+    try {
+      return this.#deep(ref, reads, new Set(), copies, bound);
+    } finally {
+      this.#reached = outer;
+    }
   }
+
+  /**
+   * What the read under way gave for each document it followed a link
+   * to, by the schema it was read under. A document that two links of
+   * one read lead to is given once, as one value, so that a read of
+   * references that share their targets follows each target once.
+   */
+  #reached: Map<Schema | undefined, Map<string, unknown>> | undefined;
 
   #deep(
     ref: Ref,
     reads: Position[] | undefined,
     open: Set<string>,
     copies: boolean,
+    bound?: Schema,
   ): unknown {
     const located = this.locate(ref, true, reads);
     const id = this.addressText(located.ref);
     if (open.has(id)) return undefined;
+    const reached = this.#reached?.get(bound);
+    if (reached?.has(id)) return reached.get(id);
     if (located.value === undefined && isStreamSchema(located.ref.schema)) {
       return { $stream: true };
     }
@@ -1895,10 +1944,11 @@ export class Store {
           located.named,
           copies,
           copied,
-          located.ref.schema,
+          bound ?? located.ref.schema,
           located.given,
+          bound !== undefined,
         ),
-      located.ref.schema,
+      bound ?? located.ref.schema,
       (from, to) => {
         const address = this.addresses.get(from);
         if (address !== undefined) this.addresses.set(to, address);
@@ -1909,6 +1959,10 @@ export class Store {
     if (typeof value === "object" && value !== null) {
       if (copied) this.copies.add(value);
       else this.addresses.set(value, located.named);
+    }
+    if (this.#reached !== undefined) {
+      if (!this.#reached.has(bound)) this.#reached.set(bound, new Map());
+      this.#reached.get(bound)!.set(id, value);
     }
     return value;
   }
@@ -1935,10 +1989,24 @@ export class Store {
      * keys are formed with those this schema declares (ruling Z52).
      */
     given?: Schema,
+    /** Whether the read is made under `shape` (`read()`, `bound`). */
+    bounded = false,
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
-      return this.#deep(new Ref(doc, path, schema), reads, open, copies);
+      const target = new Ref(doc, path, schema);
+      if (bounded && unread(shape)) {
+        const standIn = Object.freeze({});
+        this.addresses.set(standIn, target);
+        return standIn;
+      }
+      return this.#deep(
+        target,
+        reads,
+        open,
+        copies,
+        bounded ? shape ?? {} : undefined,
+      );
     }
     if (isStream(value)) return { $stream: true };
     const here = new Ref(at.doc, at.path);
@@ -1951,7 +2019,8 @@ export class Store {
           typeof member === "object" && member !== null && !isLink(member) &&
           !isStream(member)
         );
-      const items = typeof shape === "object" ? shape.items : undefined;
+      const outer = bounded ? containerOf(shape) : shape;
+      const items = typeof outer === "object" ? outer.items : undefined;
       const copy = value.map((member, index) =>
         this.#copy(
           member,
@@ -1960,8 +2029,9 @@ export class Store {
           here.key(`${index}`),
           copies,
           copies,
-          items,
+          bounded ? items ?? {} : items,
           typeof given === "object" ? given.items : undefined,
+          bounded,
         )
       );
       if (containers) {
@@ -1986,8 +2056,15 @@ export class Store {
       return copy;
     }
     if (isRecord(value)) {
+      const outer = bounded ? containerOf(shape) : shape;
+      const declared = bounded && typeof outer === "object" &&
+          outer.properties !== undefined && !outer.additionalProperties
+        ? outer.properties
+        : undefined;
       const copy = Object.fromEntries(
-        Object.entries(value).map((
+        Object.entries(value).filter(([name]) =>
+          declared === undefined || Object.hasOwn(declared, name)
+        ).map((
           [name, member],
         ) => [
           name,
@@ -1998,8 +2075,9 @@ export class Store {
             here.key(name),
             copies,
             copied,
-            schemaBelow(shape, name),
+            bounded ? schemaBelow(outer, name) ?? {} : schemaBelow(shape, name),
             schemaBelow(given, name),
+            bounded,
           ),
         ]),
       );

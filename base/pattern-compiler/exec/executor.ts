@@ -702,7 +702,9 @@ export class Handle {
   ): unknown {
     const { store } = this.instance;
     // A plain value in place that the body reads is a copy (ruling Z25).
-    if (!declaresHandle(schema, depth)) return store.read(ref, reads, true);
+    if (!declaresHandle(schema, depth)) {
+      return store.read(ref, reads, true, schema);
+    }
     const located = store.locate(ref, true, reads);
     const member = (segment: string, at: Ref) => {
       const below = schemaBelow(schema, segment);
@@ -1019,7 +1021,7 @@ export class Host {
       // stream that is an input of the pattern").
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    return withDefaults(this.v(found), schema);
+    return withDefaults(this.v(found, schema), schema);
   }
 
   /**
@@ -1226,11 +1228,17 @@ export class Host {
     return seen;
   }
 
-  /** A value with every reference in it replaced by what it refers to. */
-  v(value: unknown): unknown {
+  /**
+   * A value with every reference in it replaced by what it refers to.
+   * With `bound`, a stored value is read under that schema
+   * (`Store.read`).
+   */
+  v(value: unknown, bound?: Schema): unknown {
     if (value instanceof Assembled) return this.v(this.settled(value));
     if (value instanceof Ref) {
-      return this.#reading(this.instance.store.read(value, this.reads));
+      return this.#reading(
+        this.instance.store.read(value, this.reads, false, bound),
+      );
     }
     this.#reading(value);
     if (value instanceof StreamRef) return { $stream: true };
