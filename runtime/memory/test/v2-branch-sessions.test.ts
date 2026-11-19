@@ -558,16 +558,17 @@ describe("v2-branch-sessions", () => {
       });
     });
 
-    it("sets the default branch to what a fork holds", async () => {
+    it("throws for a source other than the default branch, and leaves the default branch as it was", async () => {
       await set(main, "shared");
       await main.createBranch("fork");
       const fork = await mount("fork");
       await set(fork, "on fork");
       await set(main, "on main");
 
-      await main.restoreBranch({ source: "fork" });
-
-      expect(await valueIn(main)).toBe("on fork");
+      await expect(main.restoreBranch({ source: "fork" })).rejects.toThrow(
+        "a restore is served from the default branch's own history only",
+      );
+      expect(await valueIn(main)).toBe("on main");
     });
 
     it("returns `undefined` when the default branch already holds the state", async () => {

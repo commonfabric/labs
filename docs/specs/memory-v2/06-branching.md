@@ -740,9 +740,17 @@ have a different head for it compared to the ancestor.
 ## 6.15 Restoring a Branch
 
 `branch.restore` (`04-protocol.md` section 4.3.8) sets the default branch back
-to a state its own history, or another branch's, holds. It is the restricted
-merge in which the source wins every document: no three-way comparison and no
-conflicts.
+to a state its own history holds. It is the restricted merge in which the
+source wins every document: no three-way comparison and no conflicts.
+
+The server serves a restore whose source is the default branch, at a
+`sourceSeq` of its own history, and refuses one whose source is another
+branch. The engine's `restoreBranch()` can compute a restore from any branch,
+which is what the semantics below describe, but the server does not expose
+it: a fork is computed by the client that opened it (6.16), so its documents
+and their labels are that client's word, and copying them onto the default
+branch would take a client's computation and labels at face value. Restoring
+with the changes made in a fork is planned as a replay (6.15.5).
 
 ### 6.15.1 API
 
@@ -801,6 +809,27 @@ A document the restore sets may hold a collaborative field some session is
 editing. The restore ends the field's epoch, as a `delete` of the document
 would, and writes the restored value. An editor finds the field inactive on
 its next query and starts a new epoch from the restored value.
+
+### 6.15.5 Restoring from a Fork (Planned)
+
+This section is a pending plan, not current behavior.
+
+A restore that keeps what was done in a fork is done by **replay**. The
+default branch is restored to the fork's fork point, and the events sent in
+the fork are then played back on top of it, so that the space's own
+computation (its serving loop, under server execution) produces the resulting
+state. Commits a client's web components made directly in the fork are
+replayed the same way. Nothing a client computed or labeled in the fork is
+copied.
+
+A fork can then stay in the client's speculative execution phase. Under
+server execution a client sends only events and its web components' commits,
+so a fork holds those back instead of sending them, and a restore replays
+them.
+
+Branches a serving loop runs are then needed only for long-lived branches and
+merging, which stay as planned in 6.7. How an effect that reaches outside the
+space, such as a fetch, behaves when its event is replayed is open.
 
 ---
 

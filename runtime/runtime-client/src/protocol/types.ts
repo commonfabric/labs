@@ -2651,10 +2651,7 @@ export type SpaceRestoreRequest = BaseRequest & {
   /** The space to restore. */
   space: DID;
 
-  /** The branch holding the state to restore; absent, the space itself. */
-  branch?: string;
-
-  /** The point of that history to restore; absent, its newest. */
+  /** The point of the space's history to restore; absent, its newest. */
   seq?: number;
 };
 

@@ -1588,28 +1588,31 @@ A run plans first, read-only, and prints the plan; refuses a store the plan says
 it must not write — one whose schema is behind the engine's, so that opening it
 would migrate it (a table, index or column the engine declares and the store
 lacks, a column declared differently, a legacy table the engine drops), one with
-a second branch, one with no commit 1, one with foreign-key violations, one
-holding more than one ACL document or an ACL document whose value is not an ACL,
-one with a non-empty `-wal` or `-journal` beside it, one another connection
-holds, or a store or result path under a directory a local server serves; then
-opens the store through the engine with an exclusive lock and, in order: inserts
-the compaction commit at the next seq, a `system` commit under the
-`compaction:<run id>` session with the plan as its payload; compacts each
-selected instance in its own transaction — the oldest row the cut keeps becomes
-the base, rewritten as a `set` holding the engine's reconstruction at exactly
-that row if it was a patch, and attributed to the compaction commit whatever its
-op, with the rows and snapshots behind it deleted; hollows the payloads outside
-the window in seq-ranged batches; writes the audit revision on the space's ACL
-document, a whole-document `set` of the document as it stands with a
-`compaction` member beside `value`, when the store has a live one (a space with
-no ACL document gets none, and a tombstoned one is left as it is, since a `set`
-would recreate it); checks the foreign keys and the file's integrity; and writes
-the result with `VACUUM
-INTO` to `--out`, `<store>.compacted.sqlite` beside the
-source by default, never overwriting. A run interrupted anywhere leaves a store
-every reader can use, and running it again resumes it under a second compaction
-commit. The run's own summary follows the plan on stdout; progress goes to
-stderr; `--json` emits the summary as one document.
+an active branch other than the default one and leftover history forks, one with
+no commit 1, one with foreign-key violations, one holding more than one ACL
+document or an ACL document whose value is not an ACL, one with a non-empty
+`-wal` or `-journal` beside it, one another connection holds, or a store or
+result path under a directory a local server serves; then opens the store
+through the engine with an exclusive lock and, in order: deletes every leftover
+history fork — an active branch named `history:…`, left by a page that went away
+with an earlier step of the space open — and inserts the compaction commit at
+the next seq, a `system` commit under the `compaction:<run id>` session with the
+plan as its payload; compacts each selected instance in its own transaction —
+the oldest row the cut keeps becomes the base, rewritten as a `set` holding the
+engine's reconstruction at exactly that row if it was a patch, and attributed to
+the compaction commit whatever its op, with the rows and snapshots behind it
+deleted; hollows the payloads outside the window in seq-ranged batches; writes
+the audit revision on the space's ACL document, a whole-document `set` of the
+document as it stands with a `compaction` member beside `value`, when the store
+has a live one (a space with no ACL document gets none, and a tombstoned one is
+left as it is, since a `set` would recreate it); checks the foreign keys and the
+file's integrity; and writes the result with `VACUUM
+INTO` to `--out`,
+`<store>.compacted.sqlite` beside the source by default, never overwriting. A
+run interrupted anywhere leaves a store every reader can use, and running it
+again resumes it under a second compaction commit. The run's own summary follows
+the plan on stdout; progress goes to stderr; `--json` emits the summary as one
+document.
 
 `cf space compact <result.sqlite> --verify --against <backup.sqlite>` checks a
 result against the store it was compacted from, read-only on both, and exits

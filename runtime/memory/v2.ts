@@ -29,6 +29,15 @@ import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
 
+/**
+ * Prefix of the name of a branch opened to look at an earlier step of a
+ * space: a history fork, named with this prefix and a UUID. A page that goes
+ * away with one open leaves the branch active in the store, and nothing but
+ * its name says it is one, so compaction takes every active branch whose name
+ * starts with this for a leftover history fork and deletes it.
+ */
+export const HISTORY_FORK_BRANCH_PREFIX = "history:" as const;
+
 export type EntityId = string;
 export type BranchName = string;
 export type SessionId = string;

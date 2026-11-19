@@ -351,13 +351,26 @@ Each is something a reader relies on today, with the code that relies on it.
 - **I7 — everything that is not revision history is untouched**: `head`
   addresses, `op_*` tables, `scheduler_basis`, `execution_outbox`,
   `blob_store`, `branch`, `execution_lease`, and every table a pattern created
-  through the SQLite builtin.
+  through the SQLite builtin. The one change to `branch` beyond the default
+  branch's `head_seq` is the status of a leftover history fork, which I8
+  deletes.
 - **I8 — the default branch is the only branch.** A forked branch reads its
   parent's rows at `min(seq, forkSeq)`; a base materialized at a head past the
   fork would be invisible to it, and the parent rows it read would be gone.
-  Compaction refuses a store with any non-deleted non-default branch rather
-  than reasoning about forks; the Topics space has one branch row, the
-  default.
+  Compaction keeps no active fork rather than reasoning about forks. A
+  history fork is the one kind it removes itself: the shell opens an earlier
+  step of a space in a branch named `history:<uuid>`
+  (`HISTORY_FORK_BRANCH_PREFIX`), and a page that goes away with one open
+  leaves the branch active, holding nothing but what was done in it and
+  reachable from nowhere. The run deletes every active branch so named,
+  through the engine's `deleteBranch`, in the transaction that inserts the
+  compaction commit and before it removes a row. A deleted branch keeps its
+  row and its name, takes no commit, and opens no session, so nothing reads
+  the parent rows it shared; and the engine's compaction floor, the
+  compaction commit's seq, refuses any new fork or restore below it. A store
+  with any other active non-default branch is refused. The run reads the
+  branches again under its lock, so a branch created after the plan is
+  deleted or refused the same way. The Topics space has one branch row, the default.
 - **I9 — compacted history is never mistaken for absence.** This one is an
   engine invariant, not a tool invariant, and it must ship before any store
   is compacted. The identity exemption of the commit model
@@ -520,8 +533,9 @@ The dry-run report, printed before any write and by `--dry-run` alone:
   Topics store, where every commit's refs are null);
 - the ten instances contributing the most rows, with their head seq and op;
 - the seq the compaction commit would take, and the preconditions checked:
-  one branch, no foreign-key violations, `op_*` rows referencing no commit
-  whose payload would be hollowed.
+  one branch besides any leftover history forks, which it names as the
+  branches a run deletes (I8), no foreign-key violations, `op_*` rows
+  referencing no commit whose payload would be hollowed.
 
 Bytes in the report are stored lengths, not the file-size reduction; the
 file shrinks only when `VACUUM INTO` writes the result.

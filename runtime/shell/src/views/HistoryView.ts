@@ -220,8 +220,9 @@ export class XHistoryView extends BaseView {
       <section class="open" role="status">
         <p>
           Showing this space as it stood at #${open.seq}. Changes you make
-          to it here are kept apart from the space until you restore them.
-          Other spaces are not kept apart.
+          to it here are kept apart from the space and are not kept:
+          restoring sets the space back to this point. Other spaces are not
+          kept apart.
         </p>
         <div class="actions">
           <cf-button

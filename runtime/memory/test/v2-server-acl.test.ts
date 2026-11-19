@@ -5484,12 +5484,93 @@ describe("v2-server-acl", () => {
             ...address,
           })).ok,
         );
+        const history = await request<{ commits: { seq: number }[] }>(
+          writer.harness,
+          { type: "history.list", ...address },
+        );
+        expectExists(history.ok);
+        const restore = await request(writer.harness, {
+          type: "branch.restore",
+          sourceSeq: history.ok.commits[0].seq,
+          ...address,
+        });
+        expect(restore.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns `AuthorizationError` for a writer's restore naming another branch", async () => {
+      // Authorization is decided before the source is looked at, so a writer
+      // learns nothing about which sources a restore is served from.
+
+      const { server, writer } = await serve(
+        "memory://acl-branch-writer-source",
+      );
+      try {
+        const address = { sessionId: writer.sessionId };
+        expectExists(
+          (await request(writer.harness, {
+            type: "branch.create",
+            name: "fork",
+            ...address,
+          })).ok,
+        );
+
         const restore = await request(writer.harness, {
           type: "branch.restore",
           source: "fork",
           ...address,
         });
+
         expect(restore.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns `QueryError` for an owner's restore naming another branch, and leaves the value as it was", async () => {
+      const { server, owner } = await serve(
+        "memory://acl-branch-owner-source",
+      );
+      try {
+        const address = { sessionId: owner.sessionId };
+        expectExists(
+          (await request(owner.harness, {
+            type: "branch.create",
+            name: "fork",
+            ...address,
+          })).ok,
+        );
+        expectExists(
+          (await transactSet(
+            owner.harness,
+            space,
+            owner.sessionId,
+            "of:doc",
+            "second",
+            2,
+          )).ok,
+        );
+
+        const restore = await request(owner.harness, {
+          type: "branch.restore",
+          source: "fork",
+          ...address,
+        });
+
+        expect(restore.error).toMatchObject({
+          name: "QueryError",
+          message:
+            "a restore is served from the default branch's own history only",
+        });
+        const kept = await graphQuery(
+          owner.harness,
+          space,
+          owner.sessionId,
+          "of:doc",
+        );
+        expect(kept.ok?.entities[0]?.document?.value).toBe("second");
       } finally {
         await server.close();
       }

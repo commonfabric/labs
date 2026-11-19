@@ -894,8 +894,9 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   /**
-   * Restores the viewed space to the state the open fork holds, and returns
-   * to the space as it then stands.
+   * Restores the viewed space to the point of its history the open fork was
+   * taken at, and returns to the space as it then stands. What was done in
+   * the fork is not carried over.
    */
   async restoreHistory(): Promise<void> {
     const fork = this.#fork;
@@ -925,8 +926,9 @@ export class XRootView extends BaseView implements ShellApp {
     if (this._openHistory !== restoring) return;
     this.#fork = undefined;
     this._openHistory = undefined;
-    // What the fork held is in the space now, the piece in view included.
-    this.#viewBeforeFork = undefined;
+    // What was done in the fork is gone with it, a piece reached there
+    // included.
+    this.#leaveForkView();
   }
 
   /**

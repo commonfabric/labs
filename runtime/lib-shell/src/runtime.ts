@@ -944,6 +944,8 @@ export class RuntimeInternals extends EventTarget {
         "a runtime whose embedder supplied its connection cannot fork a space",
       );
     }
+    // The prefix is the memory package's `HISTORY_FORK_BRANCH_PREFIX`, by
+    // which a compaction knows a leftover fork it may delete.
     const branch = `history:${crypto.randomUUID()}`;
     await this.#client.createSpaceBranch({ space, name: branch, forkSeq: seq });
     let runtime: RuntimeInternals;
@@ -1307,9 +1309,10 @@ export class RuntimeInternals extends EventTarget {
 /**
  * A fork of a space: a branch that holds the space's documents as they stood
  * at one point of its history, and a runtime that runs it there. What that
- * runtime writes to the space's documents stays in the fork, which is then
- * either restored into the space or discarded. What it writes to another
- * space lands there, and the requests its effects send are real.
+ * runtime writes to the space's documents stays in the fork and ends with
+ * it, whether the space is restored to the fork's point of history or the
+ * fork is discarded. What it writes to another space lands there, and the
+ * requests its effects send are real.
  */
 export class SpaceFork {
   readonly #space: DID;
@@ -1361,20 +1364,21 @@ export class SpaceFork {
   }
 
   /**
-   * Restores the space to the state the fork holds now, as one new step of
-   * the space's history, and ends the fork. Returns the seq of that step, or
-   * `undefined` when the space already held the state.
+   * Restores the space to the point of its history the fork was taken at,
+   * as one new step of that history, and ends the fork. What was done in the
+   * fork is not carried into the space: a fork is computed by the client
+   * that opened it, and the space takes its state from its own history.
+   * Returns the seq of the new step, or `undefined` when the space already
+   * held the state.
    *
    * @throws When the principal is not an owner of the space. The fork is
    * then left as it was.
    */
   async restore(): Promise<number | undefined> {
     if (this.#ended) throw new Error("the fork has ended");
-    await this.#runtime.idle();
-    await this.#runtime.synced(this.#space);
     const seq = await this.#origin.restoreSpace({
       space: this.#space,
-      branch: this.#branch,
+      seq: this.#seq,
     });
     // The space is restored whatever becomes of the fork's own teardown,
     // which a later `discard()` tries again.

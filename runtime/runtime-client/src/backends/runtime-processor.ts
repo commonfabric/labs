@@ -4530,7 +4530,6 @@ export class RuntimeProcessor {
     request: SpaceRestoreRequest,
   ): Promise<SpaceRestoreResponse> {
     const seq = await this.#historyProvider(request.space).restoreBranch({
-      ...(request.branch !== undefined ? { source: request.branch } : {}),
       ...(request.seq !== undefined ? { sourceSeq: request.seq } : {}),
     });
     return seq === undefined ? {} : { seq };

@@ -1886,9 +1886,11 @@ its result carries `serverSeq`.
   or that begins with `view-demand:` or `view-support:`.
 - `history.list` reports a commit as a restore (`restored`) only when it is a
   `system` commit.
-- `branch.restore` restores the default branch only. It is serialized with the
-  space's commits, and the documents it writes reach the space's sessions as
-  any commit's do.
+- `branch.restore` restores the default branch only, and only from its own
+  history: the server refuses a `source` other than the default branch with a
+  `QueryError`, after the OWNER check (`06-branching.md` section 6.15). It is
+  serialized with the space's commits, and the documents it writes reach the
+  space's sessions as any commit's do.
 - A client sends none of these to a server that does not advertise `branches`.
 
 Merge commands remain deferred (`06-branching.md` section 6.7).

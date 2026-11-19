@@ -8795,6 +8795,20 @@ export class Server {
             }),
           });
         case "branch.restore": {
+          // A branch other than the default is computed by the client that
+          // opened it, so its documents and their labels are that client's
+          // word, which a restore would write onto the default branch. Only
+          // the default branch's own history is restored from until the
+          // specification rules on what a restore may admit (the ruling
+          // request is in the description of labs pull request 10022).
+          if (
+            message.source !== undefined && message.source !== DEFAULT_BRANCH
+          ) {
+            throw new Error(
+              "a restore is served from the default branch's own history " +
+                "only",
+            );
+          }
           const commit = await this.#restoreDefaultBranch(
             message.space,
             message,

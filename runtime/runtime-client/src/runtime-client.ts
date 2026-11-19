@@ -1935,17 +1935,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   /**
    * Restores `options.space` to the state the point `options.seq` of its
-   * history held, or the state `options.branch` holds, as one new commit of
-   * the space's history. Only an owner of the space may. Returns the seq of
-   * that commit, or `undefined` when the space already held the state.
+   * history held, as one new commit of the space's history. Only an owner
+   * of the space may. Returns the seq of that commit, or `undefined` when
+   * the space already held the state.
    */
   async restoreSpace(
-    options: { space: DID; branch?: string; seq?: number },
+    options: { space: DID; seq?: number },
   ): Promise<number | undefined> {
     const response = await this.#conn.request<RequestType.SpaceRestore>({
       type: RequestType.SpaceRestore,
       space: options.space,
-      ...(options.branch !== undefined ? { branch: options.branch } : {}),
       ...(options.seq !== undefined ? { seq: options.seq } : {}),
     });
     return response.seq;

@@ -681,32 +681,12 @@ All write steps happen inside a single database transaction.
 
 ```typescript
 // Shown at module scope.
-type BranchLifecycleWrite =
-  | {
-    cmd: "/memory/branch/create";
-    args: {
-      localSeq: number;
-      name: BranchId;
-      fromBranch?: BranchId;
-      atSeq?: number;
-    };
-  }
-  | {
-    cmd: "/memory/branch/delete";
-    args: {
-      localSeq: number;
-      name: BranchId;
-    };
-  };
-
-type WritePayload = ClientCommit | BranchLifecycleWrite;
-
 interface CommitLogEntry {
   seq: number;
   branch: BranchId;
   sessionId: SessionId;
   localSeq: number;
-  original: WritePayload;
+  original: ClientCommit;
   resolution: {
     seq: number;
     resolvedPendingReads?: Array<{
@@ -718,6 +698,10 @@ interface CommitLogEntry {
   authorizationRef: Reference | null;
 }
 ```
+
+Every entry holds a client commit. Creating or deleting a branch takes no
+`seq` and appends no entry: it changes the branch's own record only
+(`06-branching.md` §6.3.2 and §6.9).
 
 The semantic JSON write path is keyed by `seq`, not by commit hash. The
 content-addressed UCAN envelope is reserved for a later signed-write pass.

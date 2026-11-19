@@ -2408,7 +2408,7 @@ describe("RuntimeInternals", () => {
     const space = "did:key:z6Mk-lib-shell-space-fork" as DID;
 
     /**
-     * A fork on the branch `fork-branch` whose collaborators append what
+     * A fork on the branch `fork-branch`, taken at seq 7, whose collaborators append what
      * they are asked to `log`, and reject the requests named in `failing`.
      */
     function forked(failing: Set<string> = new Set()) {
@@ -2423,8 +2423,12 @@ describe("RuntimeInternals", () => {
         deleteSpaceBranch: (options: { space: DID; name: string }) =>
           asked(`delete ${options.name} of ${options.space}`, undefined),
         restoreSpace: (
-          options: { space: DID; branch?: string; seq?: number },
-        ) => asked(`restore ${options.branch} into ${options.space}`, 42),
+          options: { space: DID; seq?: number },
+        ) => {
+          // The whole request is logged, so that a member beyond `space` and
+          // `seq` shows in the comparison.
+          return asked(`restore ${JSON.stringify(options)}`, 42);
+        },
       });
       const runtime = new RuntimeInternals(asRuntimeClient(
         Object.assign(new MockRuntimeClient(), {
@@ -2444,7 +2448,7 @@ describe("RuntimeInternals", () => {
     }
 
     const deletion = `delete fork-branch of ${space}`;
-    const restoration = `restore fork-branch into ${space}`;
+    const restoration = `restore ${JSON.stringify({ space, seq: 7 })}`;
 
     describe("instance members", () => {
       describe("runtime", () => {
@@ -2510,18 +2514,21 @@ describe("RuntimeInternals", () => {
       });
 
       describe("restore()", () => {
-        it("waits for the fork's runtime to go idle and sync, then restores the space from the branch, then ends the fork", async () => {
+        it("restores the space to the seq the fork was taken at, naming no branch, then ends the fork", async () => {
           const { fork, log } = forked();
 
           expect(await fork.restore()).toBe(42);
 
-          expect(log).toEqual([
-            "fork idle",
-            `fork synced ${space}`,
-            restoration,
-            deletion,
-            "fork dispose",
-          ]);
+          expect(log).toEqual([restoration, deletion, "fork dispose"]);
+        });
+
+        it("sends the restore before the call returns, with the fork's runtime neither idled nor synced", async () => {
+          const { fork, log } = forked();
+
+          const restoring = fork.restore();
+
+          expect(log).toEqual([restoration]);
+          await restoring;
         });
 
         it("rejects with the restore's refusal and leaves the fork's branch and runtime", async () => {
@@ -2531,11 +2538,7 @@ describe("RuntimeInternals", () => {
               `${restoration} failed`,
             );
 
-            expect(log).toEqual([
-              "fork idle",
-              `fork synced ${space}`,
-              restoration,
-            ]);
+            expect(log).toEqual([restoration]);
           } finally {
             await runtime.dispose();
           }

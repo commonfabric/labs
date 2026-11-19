@@ -113,7 +113,11 @@ describe("space history", () => {
     await waitForCounter(page, "3rd");
   });
 
-  it("restores the space to what a fork holds", async () => {
+  it("restores the space to the step a fork shows, without what was done in the fork", async () => {
+    // The fork is taken to "0th", which neither the step ("1st") nor the
+    // space ("3rd") holds, so the text after the restore says which of the
+    // three the space was set to.
+
     const { page, first } = await openCountedToThree();
 
     await openStep(page, first);
@@ -125,9 +129,9 @@ describe("space history", () => {
     await page.waitForSelector('.step[data-kind="restore"]', {
       strategy: "pierce",
     });
-    await waitForCounter(page, "0th");
+    await waitForCounter(page, "1st");
 
     await clickCfButton(page, "#counter-increment");
-    await waitForCounter(page, "1st");
+    await waitForCounter(page, "2nd");
   });
 });

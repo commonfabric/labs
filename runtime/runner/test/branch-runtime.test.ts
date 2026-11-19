@@ -203,14 +203,14 @@ describe("branch-runtime", () => {
       expect(forked.key("doubled").get()).toBe(2022);
       expect(doubled.get()).toBe(222);
 
-      await provider.restoreBranch!({ source: "fork" });
-      await waitForCellValue(client, doubled, (value) => value === 2022, {
+      await provider.restoreBranch!({ sourceSeq: forkSeq });
+      await waitForCellValue(client, doubled, (value) => value === 22, {
         stuckLabel: "the restored state",
       });
-      expect(result.key("count").get()).toBe(1011);
+      expect(result.key("count").get()).toBe(11);
 
       result.key("add").send({ by: 1 });
-      await waitForCellValue(client, doubled, (value) => value === 2024, {
+      await waitForCellValue(client, doubled, (value) => value === 24, {
         stuckLabel: "an event after the restore",
       });
       cancel();

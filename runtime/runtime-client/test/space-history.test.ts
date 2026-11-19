@@ -150,7 +150,7 @@ describe("space-history", () => {
   });
 
   describe("createSpaceBranch()", () => {
-    it("forks a branch that a restore can name", async () => {
+    it("forks a branch at a step, which a restore to that step leaves the space holding", async () => {
       await write("first");
       const { steps: [first] } = await client.spaceHistory({ space });
       await write("second");
@@ -160,7 +160,7 @@ describe("space-history", () => {
         name: "fork",
         forkSeq: first.seq,
       });
-      await client.restoreSpace({ space, branch: "fork" });
+      await client.restoreSpace({ space, seq: first.seq });
 
       await storedBecomes("first");
     });
@@ -204,22 +204,6 @@ describe("space-history", () => {
 
       await expect(client.createSpaceBranch({ space, name: "fork", forkSeq }))
         .rejects.toThrow("branch name is taken: fork");
-    });
-
-    it("leaves the branch's state for a restore to name", async () => {
-      await write("first");
-      const { steps: [first] } = await client.spaceHistory({ space });
-      await write("second");
-      await client.createSpaceBranch({
-        space,
-        name: "fork",
-        forkSeq: first.seq,
-      });
-
-      await client.deleteSpaceBranch({ space, name: "fork" });
-      await client.restoreSpace({ space, branch: "fork" });
-
-      await storedBecomes("first");
     });
   });
 });

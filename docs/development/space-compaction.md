@@ -31,7 +31,8 @@ The tool is `cf space compact`, described in
 things about it decide the shape of everything below. It rewrites a store in
 place and writes the result as a fresh file, so it runs against a **copy of
 the backup**, never the backup and never a served file. It **refuses** a store
-whose schema the engine would migrate on opening, a store with a second branch,
+whose schema the engine would migrate on opening, a store with an active branch
+other than the default one and leftover history forks (which it deletes),
 foreign-key violations, more than one ACL document, a `-wal` or `-journal`
 beside it that is not empty, or one another connection holds, and a result
 path that exists or sits in a served directory, so a refusal is a
