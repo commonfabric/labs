@@ -460,6 +460,17 @@ describe("an instance", () => {
     expect((instance.result() as { summary: unknown }).summary).toBe("2:a");
   });
 
+  it("gives two bodies that make a cell under one cause a cell each", async () => {
+    // PL §1.3: the cell is named by the cause and by the run that makes it.
+    const instance = new Instance(await artifactOf("cause-per-body"), {
+      name: "n",
+    });
+    // Both cells are read again after both bodies ran.
+    instance.writeArgument(["name"], "m");
+
+    expect(instance.result()).toEqual({ a: "first m", b: "second m" });
+  });
+
   it("hands a body a handle at each member of a record where it declares one at `*`", async () => {
     // ES §2.4: "An entry whose `at` holds `*` is placed at each child the
     // path reaches". Two members link to one cell.

@@ -6695,6 +6695,11 @@ export class Instance {
    * `keyed` is the body and the element keys of the run of a `lift` or
    * a `computed`.
    */
+  /** The cause of the run of a body under way (`during()`). */
+  get runningCause(): FabricValue | undefined {
+    return this.#running?.cause;
+  }
+
   during<T>(cause: FabricValue, run: () => T, keyed?: KeyedRun): T {
     const outer = this.#running;
     this.#running = {
@@ -7373,10 +7378,12 @@ const commonfabric = (instance: Instance): unknown => {
     equals: (a: unknown, b: unknown) => instance.same(a, b),
     of: (value: unknown) => instance.createCell(value),
     // A cell a body makes under a cause is the same cell for the same
-    // cause (PL §1.3). A cause that is a reference is its identity.
+    // cause in the same run (PL §1.3). A cause that is a reference is its
+    // identity.
     for: (cause: unknown) => {
-      const key = instance.equalsKey(cause) ?? JSON.stringify(cause) ??
-        "undefined";
+      const key = `${JSON.stringify(instance.runningCause ?? null)}\n${
+        instance.equalsKey(cause) ?? JSON.stringify(cause) ?? "undefined"
+      }`;
       const made = caused.get(key) ?? instance.createCell(undefined);
       caused.set(key, made);
       return made;
