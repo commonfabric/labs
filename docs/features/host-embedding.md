@@ -42,6 +42,7 @@ weeks later.
 | 11 | Native reviewed acts count as trusted gestures | policy record | `runner` | n/a | `runner/test/cfc-ui-contract.test.ts`; `runner/test/builder/space-access-change.test.ts`; `runner/test/executor-space-access-change.test.ts`; `runtime-client/test/send-reviewed.test.ts`. Not yet met for `UiPromptSlot` and `UiDisclosure` contracts |
 | 12 | Bringing up the user's Home | host obligation | `runtime-client`, `piece` | available | `runtime-client/test/backends/runtime-processor.test.ts` — `ensuring an existing Home only`; `runtime-client/test/runtime-client.test.ts` — `ensureHomePatternRunning()` |
 | 13 | Opting a runtime in to a client-side experimental option | host option | `runner`, `shell` | available, not bound | `runner/test/experimental-options.test.ts` — `constructing Runtime declares whether it takes schema documents by reference`; `shell/test/host-toggles.test.ts` — `runtimeExperimentalHostFlags` |
+| 14 | Host facts | API | `api`, `schema-generator`, `runner`, `piece`, `toolshed`, `cli` | available, not bound | `schema-generator/test/host-fact.test.ts` — `host fact schemas`; `runner/test/fill-host-facts.test.ts` — `fillHostFacts()`; `piece/test/served-lifecycle.test.ts` — `fills the argument properties the pattern marks with the host facts it is given`; `cli/test/new-piece-host-facts.test.ts` |
 
 ---
 
@@ -803,6 +804,44 @@ a page, and a deployment's posture does not carry a client-side option.
 
 ---
 
+## 14. Host facts
+
+Some things about a piece only the host that creates it knows: which loom it is
+placed on, say. One piece can sit on several of a host's surfaces, and a
+surface holds links to pieces it does not start, so there is no one place a
+running piece could ask, and no wish target answers it. The fact belongs to the
+act of creating the piece, so it travels with that act.
+
+A pattern declares the fact it wants as an argument property typed
+`HostFact<T, K>` (`base/api/index.ts`): `loomId: HostFact<string, "loom.id">`
+wants the fact `loom.id`, a string. The schema generator writes the key into the
+property's schema as `hostFact: "loom.id"`. At runtime the value is a plain
+`T`. A fact that may be missing is an optional property,
+`loomId?: HostFact<string, "loom.id">`; a default goes around the fact,
+`Default<HostFact<string, "loom.id">, "">`. One value names one fact.
+
+A host passes the facts it knows as `hostFacts`, a map from key to a scalar
+value, with the creation: `newPiece()` / `newPieceWithReceipt()`,
+`PiecesController.create()`, the `instantiate` lifecycle verb, and
+`cf piece new --host-fact <key>=<value>` (repeatable). Creation fills each
+top-level argument property the compiled pattern marks from the fact its key
+names (`fillHostFacts()` in `runtime/runner/src/runner-utils.ts`):
+
+- An `argument` value the creator writes for the property is kept.
+- A fact no property is marked with is not used, so a host may always send
+  every fact it knows.
+- A marked property whose fact the host does not send stays absent, and takes
+  its default as any absent property does.
+
+Only creation reads `hostFact`. To the piece compatibility checker it is a
+descriptive annotation, so a pattern update adds or removes it freely, and a
+piece that is updated keeps the argument it was created with.
+
+A fact is an ordinary write by the piece's creator: it carries no label beyond
+what any argument the creator writes carries.
+
+---
+
 ## Summary for embedders
 
 Provide `runtimeContext` + `spaceContext`. Once the runtime is ready,
@@ -813,7 +852,8 @@ wishes `#profile`. Listen for `cf-navigate` (both shapes) and
 `cf-open-external` on `globalThis`. Deep-import the
 guarded-define components into one bundle. If you persist profile data
 outside the runtime, gate it on `getCfcLabel` failing closed on
-non-public labels. Pin through `addPiece` (owner-gated,
+non-public labels. Hand a piece what only you know about where you create it
+as host facts. Pin through `addPiece` (owner-gated,
 headless-friendly); create through the trusted `ProfileCreate` surface
 (gesture-gated). Every one of those sentences is a tested seam above —
 if one breaks, a labs CI job is what tells you.
