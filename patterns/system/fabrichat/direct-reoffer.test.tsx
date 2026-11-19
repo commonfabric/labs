@@ -481,10 +481,10 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       // Naming Alice's profile lists the room the first start created again,
-      // and offers it to her. Her notice stays, should the offer not be sent,
-      // and is no longer listed once the offer puts her on the room's roster.
-      // It takes no gesture: the start that created the room, and granted her
-      // access, was one.
+      // and offers it to her. The offer puts her on the room's roster, so her
+      // notice, with nothing left to tell her, is dropped. It takes no
+      // gesture: the start that created the room, and granted her access, was
+      // one.
       {
         action: manager.openDirect,
         event: {
@@ -499,7 +499,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
           return outcome?.status === "done" &&
             equals(outcome.entry?.room, aliceRoom.key("room")) &&
             outcome.delivery === undefined && manager.rooms.length === 3 &&
-            noticeIdsFor(notices, setup.aliceDid).length === 1 &&
+            noticeIdsFor(notices, setup.aliceDid).length === 0 &&
             !manager.outgoingNotices.some((notice) =>
               notice.recipient === setup.aliceDid.get()
             );
@@ -517,8 +517,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         ),
       },
       // Carol has joined her room, and Dave's profile points at no inbox, so
-      // neither is sent anything, and each keeps the notice their room's
-      // creation queued.
+      // neither is sent anything. Carol is on her room's roster, and naming
+      // Dave's profile puts him on his, wherever it points, so the notice each
+      // room's creation queued is dropped.
       {
         action: manager.openDirect,
         event: {
@@ -541,22 +542,17 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         assertion: assert(() =>
           requests.get()["d-carol-again"]?.status === "done" &&
           requests.get()["d-dave-again"]?.status === "done" &&
-          noticeIdsFor(notices, setup.carolDid).join() ===
-            JSON.stringify([setup.carolDid.get(), "d-carol"]) &&
-          noticeIdsFor(notices, setup.daveDid).join() ===
-            JSON.stringify([setup.daveDid.get(), "d-dave"])
+          noticeIdsFor(notices, setup.carolDid).length === 0 &&
+          noticeIdsFor(notices, setup.daveDid).length === 0
         ),
       },
-      // Carol is on her room's roster, and naming Dave's profile put him on
-      // his, wherever it points, so the manager lists no notice for either,
-      // though it still holds both.
+      // The manager lists no notice for either.
       {
         assertion: assert(() => {
           const listed = manager.outgoingNotices.map((notice) =>
             notice.recipient
           );
-          return noticeIdsFor(notices, setup.daveDid).length === 1 &&
-            !listed.includes(setup.carolDid.get()) &&
+          return !listed.includes(setup.carolDid.get()) &&
             !listed.includes(setup.daveDid.get());
         }),
       },
@@ -574,7 +570,7 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           requests.get()["d-alice-thrice"]?.status === "done" &&
-          notices.get().length === 3
+          notices.get().length === 0
         ),
       },
       // A room whose notice for her a client has delivered has none waiting,
