@@ -196,9 +196,6 @@ export class XHistoryView extends BaseView {
   });
 
   protected override willUpdate(changed: PropertyValues<this>): void {
-    // The list is the newest history again after anything that adds to it
-    // elsewhere: another space or runtime, or a fork opened, closed or
-    // restored.
     const moved = changed.has("rt") || changed.has("space");
     // The steps of another space name points of a history this space does
     // not have, so none is left to choose while its own are listed.
@@ -206,7 +203,10 @@ export class XHistoryView extends BaseView {
       this._steps = [];
       this._next = undefined;
     }
-    if (moved || (changed.has("open") && this.open?.busy !== true)) {
+    // Returning from a fork, by discarding it or restoring from it, is what
+    // can have added to the space's history; opening one adds nothing, and
+    // keeps the stretch the open step was chosen from.
+    if (moved || (changed.has("open") && this.open === undefined)) {
       void this.#list.run([undefined]);
     }
   }

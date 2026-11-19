@@ -963,6 +963,20 @@ function isDeclaredTable(
   return false;
 }
 
+/**
+ * Returns why a session may not create a branch named `name`, or `undefined`
+ * when it may. The server keys a session's graphs and its sync cache by
+ * branch name, so a name that carries a control character, or that begins
+ * as one of those keys does, could stand for another branch's entry there.
+ */
+const refusedBranchName = (name: string): string | undefined =>
+  // deno-lint-ignore no-control-regex
+  /[\u0000-\u001f\u007f]/.test(name)
+    ? "a branch name holds no control character"
+    : name.startsWith("view-demand:") || name.startsWith("view-support:")
+    ? "a branch name does not begin with `view-demand:` or `view-support:`"
+    : undefined;
+
 const respondTypedError = <Result>(
   requestId: string,
   error: V2Error,
@@ -8658,7 +8672,6 @@ export class Server {
           ...message,
           query: { ...message.query, branch: message.query.branch ?? branch },
         };
-      case "session.watch.set":
       case "session.watch.add":
         return {
           ...message,
@@ -8666,6 +8679,23 @@ export class Server {
             ...watch,
             query: { ...watch.query, branch: watch.query.branch ?? branch },
           })),
+        };
+      case "session.watch.set":
+        return {
+          ...message,
+          watches: message.watches.map((watch) => ({
+            ...watch,
+            query: { ...watch.query, branch: watch.query.branch ?? branch },
+          })),
+          // A view names no branch on the wire, so it is of the session's.
+          ...(message.views !== undefined
+            ? {
+              views: message.views.map((view) => ({
+                ...view,
+                query: { ...view.query, branch },
+              })),
+            }
+            : {}),
         };
       case "history.list":
         return { ...message, branch: message.branch ?? branch };
@@ -8757,6 +8787,8 @@ export class Server {
       });
       switch (message.type) {
         case "branch.create": {
+          const refused = refusedBranchName(message.name);
+          if (refused !== undefined) throw new Error(refused);
           const branch = Engine.createBranch(engine, message.name, {
             parentBranch: message.parentBranch,
             forkSeq: message.forkSeq,

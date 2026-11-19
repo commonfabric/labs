@@ -99,20 +99,24 @@ LIMIT :limit
 /**
  * Helper for {@link listCommits}, which reads what a commit's stored payload
  * says of the events it appended and the restore it made. A payload that
- * compaction emptied says neither.
+ * compaction emptied says neither. Only a `system` commit is a restore:
+ * a client's commit is stored as the client sent it, `merge` included, and
+ * what it says there is the client's word.
  */
 const payloadSummary = (
   original: string,
+  commitClass: CommitClass,
 ): Pick<CommitSummary, "events" | "restored"> => {
-  const payload = decodeTrustedMemoryBoundary<Partial<ClientCommit>>(
+  const payload = decodeTrustedMemoryBoundary<Partial<ClientCommit> | null>(
     original,
   );
-  const merge = payload.merge;
+  const merge = commitClass === "system" ? payload?.merge : undefined;
   return {
-    events: Array.isArray(payload.eventAppends)
+    events: Array.isArray(payload?.eventAppends)
       ? payload.eventAppends.length
       : 0,
-    ...(merge !== undefined
+    ...(typeof merge?.sourceBranch === "string" &&
+        typeof merge.sourceSeq === "number"
       ? { restored: { branch: merge.sourceBranch, seq: merge.sourceSeq } }
       : {}),
   };
@@ -136,7 +140,7 @@ const toCommitSummary = (row: CommitRow): CommitSummary => ({
   ...(row.derived_through !== null
     ? { derivedThrough: row.derived_through }
     : {}),
-  ...payloadSummary(row.original),
+  ...payloadSummary(row.original, row.class),
   writes: row.writes,
 });
 

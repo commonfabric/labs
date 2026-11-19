@@ -1406,8 +1406,12 @@ export class SpaceFork {
     deleted.catch(() => {
       if (this.#deleted === deleted) this.#deleted = undefined;
     });
+    const disposed = this.#disposed ??= this.#runtime.dispose();
+    disposed.catch(() => {
+      if (this.#disposed === disposed) this.#disposed = undefined;
+    });
     try {
-      await (this.#disposed ??= this.#runtime.dispose());
+      await disposed;
     } finally {
       await deleted;
     }

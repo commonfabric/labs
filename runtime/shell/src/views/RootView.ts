@@ -261,6 +261,9 @@ export class XRootView extends BaseView implements ShellApp {
   /** The fork of the viewed space the shell is showing, when it shows one. */
   #fork: SpaceFork | undefined = undefined;
 
+  /** The view the shell was on when the open fork was opened. */
+  #viewBeforeFork: AppView | undefined = undefined;
+
   /** The fork a restore is under way from, which that restore ends. */
   #restoring: SpaceFork | undefined = undefined;
 
@@ -295,15 +298,16 @@ export class XRootView extends BaseView implements ShellApp {
       task: async ([app]: [AppState | undefined], { signal }) => {
         const generation = ++this.#runtimeGeneration;
         this._runtimeLoadErrors = [];
-        // A fork is deleted through the runtime that took it.
-        this.#dropFork();
+        // A fork is deleted through the runtime that took it, so that
+        // runtime is disposed of once the deletion has been answered.
+        const dropped = this.#dropFork();
         const previous = this.#rt.value;
         if (previous) {
           this.runtime?.off(
             "eventneedsattention",
             this._handleEventNeedsAttention,
           );
-          previous.dispose().catch(console.error);
+          dropped.then(() => previous.dispose()).catch(console.error);
         }
         this.#unavailableSpaceRetry?.dispose();
         this.#unavailableSpaceRetry = undefined;
@@ -390,9 +394,7 @@ export class XRootView extends BaseView implements ShellApp {
           "eventneedsattention",
           this._handleEventNeedsAttention,
         );
-        this.#unavailableSpaceRetry = new UnavailableSpaceRetry(
-          this.runtime,
-        );
+        this.#unavailableSpaceRetry = new UnavailableSpaceRetry(this.runtime);
         if (this.space !== undefined) {
           void this.#refreshEventAttention(this.space, generation);
         }
@@ -442,14 +444,8 @@ export class XRootView extends BaseView implements ShellApp {
     // A Lit element can be detached and reattached without rebuilding its
     // worker runtime. Reinstall the live notice listener that disconnect
     // removes; off-first keeps repeated connects idempotent.
-    this.runtime?.off(
-      "eventneedsattention",
-      this._handleEventNeedsAttention,
-    );
-    this.runtime?.on(
-      "eventneedsattention",
-      this._handleEventNeedsAttention,
-    );
+    this.runtime?.off("eventneedsattention", this._handleEventNeedsAttention);
+    this.runtime?.on("eventneedsattention", this._handleEventNeedsAttention);
     this.addEventListener(SHELL_COMMAND, this.onCommand);
     document.addEventListener(
       "theme-preference-changed",
@@ -462,10 +458,7 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   override disconnectedCallback(): void {
-    this.runtime?.off(
-      "eventneedsattention",
-      this._handleEventNeedsAttention,
-    );
+    this.runtime?.off("eventneedsattention", this._handleEventNeedsAttention);
     this.removeEventListener(SHELL_COMMAND, this.onCommand);
     document.removeEventListener(
       "theme-preference-changed",
@@ -641,7 +634,7 @@ export class XRootView extends BaseView implements ShellApp {
     const previousSpace = this.space;
     this.space = space;
     // A fork is of the space the view was on.
-    this.#dropFork();
+    void this.#dropFork();
     this._eventAttention = [];
     if (previousSpace !== undefined) {
       this.#eventAttentionMutationVersions.delete(previousSpace);
@@ -686,8 +679,7 @@ export class XRootView extends BaseView implements ShellApp {
     try {
       const notices = await runtime.listEventAttention(space);
       if (
-        generation !== this.#runtimeGeneration ||
-        runtime !== this.runtime ||
+        generation !== this.#runtimeGeneration || runtime !== this.runtime ||
         space !== this.space ||
         this.#eventAttentionRefreshOwners.get(space) !== owner
       ) return;
@@ -835,7 +827,10 @@ export class XRootView extends BaseView implements ShellApp {
     next.config[key] = value;
     // The panel is the only way back from a fork, so it takes the fork with
     // it.
-    if (key === "showHistoryView" && !value) this.#dropFork();
+    if (key === "showHistoryView" && !value) {
+      this.#leaveForkView();
+      void this.#dropFork();
+    }
     return this.#commit(next, `set-config ${key}=${value}`);
   }
 
@@ -855,6 +850,7 @@ export class XRootView extends BaseView implements ShellApp {
       this.#fork?.seq === seq
     ) return;
     this._historyError = undefined;
+    const view = this.app.view;
     const opening: OpenHistory = { seq, busy: true };
     this._openHistory = opening;
     const previous = this.#fork;
@@ -878,7 +874,8 @@ export class XRootView extends BaseView implements ShellApp {
     }
     this.#fork = fork;
     this._openHistory = { seq, busy: false };
-    if (previous !== undefined) void this.#discard(previous);
+    if (previous === undefined) this.#viewBeforeFork = view;
+    else void this.#discard(previous);
   }
 
   /** Returns from the open fork to the space as it stands. */
@@ -888,6 +885,7 @@ export class XRootView extends BaseView implements ShellApp {
     this._historyError = undefined;
     this.#fork = undefined;
     this._openHistory = undefined;
+    this.#leaveForkView();
     await this.#discard(fork);
   }
 
@@ -921,18 +919,37 @@ export class XRootView extends BaseView implements ShellApp {
     if (this._openHistory !== restoring) return;
     this.#fork = undefined;
     this._openHistory = undefined;
+    // What the fork held is in the space now, the piece in view included.
+    this.#viewBeforeFork = undefined;
   }
 
-  /** Lets go of the open fork, where there is one, and deletes it. */
-  #dropFork(): void {
+  /**
+   * Lets go of the open fork, where there is one, and deletes it. Resolves
+   * once the deletion has been answered, and rejects never.
+   */
+  #dropFork(): Promise<void> {
     const fork = this.#fork;
     this._historyError = undefined;
     this._openHistory = undefined;
-    if (fork === undefined) return;
+    this.#viewBeforeFork = undefined;
+    if (fork === undefined) return Promise.resolve();
     this.#fork = undefined;
     // A restore under way ends the fork itself, and ending it here would
     // take the branch from under the restore.
-    if (fork !== this.#restoring) void this.#discard(fork);
+    return fork === this.#restoring ? Promise.resolve() : this.#discard(fork);
+  }
+
+  /**
+   * Returns the view to where it was when the fork was opened, where the
+   * view moved while the fork was shown: a piece reached inside a fork may
+   * exist nowhere else.
+   */
+  #leaveForkView(): void {
+    const view = this.#viewBeforeFork;
+    this.#viewBeforeFork = undefined;
+    if (view !== undefined && !isAppViewEqual(view, this.app.view)) {
+      navigate(view);
+    }
   }
 
   /** Ends `fork`, reporting a failure to do so and throwing none. */
