@@ -1537,6 +1537,12 @@ class Connection {
   readonly #inProcess: boolean;
   readonly #leaseHolderInstance: string | undefined;
 
+  /** The most slots a message from this connection's client may stand for. */
+  get #slotLimit(): number {
+    return this.#server.options.untrustedMessageSlots ??
+      MAX_UNTRUSTED_MESSAGE_SLOTS;
+  }
+
   constructor(
     readonly id: string,
     server: Server,
@@ -2078,6 +2084,7 @@ class Connection {
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload, {
       commitLabelTableV1: this.#commitLabelTable,
+      slotLimit: this.#slotLimit,
     });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
@@ -2526,7 +2533,7 @@ class Connection {
         error: toError(
           "MessageTooLargeError",
           "Memory message stands for more than " +
-            `${MAX_UNTRUSTED_MESSAGE_SLOTS} array slots and record members`,
+            `${this.#slotLimit} array slots and record members`,
         ),
       });
       return;
@@ -3785,6 +3792,17 @@ export class Server {
        * instance, see there), held least-recently-used space first. */
       documentCacheTotalBudgetBytes?: number;
 
+      /** The most slots one client message may stand for (default
+       * MAX_UNTRUSTED_MESSAGE_SLOTS in ../v2.ts, which says what a slot
+       * is). It bounds the work one message can cost the server, so a
+       * higher one is for a bounded operation that needs it, such as moving
+       * the source of a holder with thousands of members, whose update
+       * sends one watch per member document. It may only raise the default,
+       * and construction throws for one below it: a direct client sizes the
+       * parts it stages a watch set in by the default, and nothing tells it
+       * of a lower limit, so a set it would send in parts would be refused. */
+      untrustedMessageSlots?: number;
+
       authorizeSessionOpen: (
         message: SessionOpenRequest,
         context: SessionOpenAuthContext,
@@ -3931,6 +3949,16 @@ export class Server {
     ) {
       throw new RangeError(
         "Client retirement is disabled; `minimumClientGeneration` must be `0`",
+      );
+    }
+    if (
+      options.untrustedMessageSlots !== undefined &&
+      !(Number.isSafeInteger(options.untrustedMessageSlots) &&
+        options.untrustedMessageSlots >= MAX_UNTRUSTED_MESSAGE_SLOTS)
+    ) {
+      throw new RangeError(
+        "`untrustedMessageSlots` may only raise the limit: it must be an " +
+          `integer of at least ${MAX_UNTRUSTED_MESSAGE_SLOTS}`,
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
@@ -13466,8 +13494,8 @@ function isSqliteNamedParamEntries(
 /**
  * A client message refused before it was understood, with the id of the
  * request it carried so that the refusal can be answered on that request:
- * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
- * slots, `invalid` for one that decoded but failed metadata expansion or
+ * `oversized` for one standing for more slots than the server admits
+ * (`MAX_UNTRUSTED_MESSAGE_SLOTS` unless it was given another limit), `invalid` for one that decoded but failed metadata expansion or
  * request-shape validation.
  */
 export type RejectedClientMessage = {
@@ -13499,11 +13527,11 @@ export const deleteInapplicableEntries = (
  */
 export const parseClientMessage = (
   payload: string,
-  options: { commitLabelTableV1?: boolean } = {},
+  options: { commitLabelTableV1?: boolean; slotLimit?: number } = {},
 ): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
-    parsed = decodeMemoryBoundary(payload);
+    parsed = decodeMemoryBoundary(payload, options.slotLimit);
   } catch (error) {
     if (error instanceof SlotLimitError) {
       const requestId = error.rootScalar("requestId");

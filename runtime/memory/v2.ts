@@ -3663,18 +3663,30 @@ export const operationBaselineHash = (value: FabricValue): string =>
  * the places its values fill or leave absent, an array counting as its length
  * with holes included and a record as its number of members. It bounds the
  * work that decoding, applying, and re-encoding one message can cost the
- * server, whatever the message's size on the wire.
+ * server, whatever the message's size on the wire. A server may be given
+ * another limit (`untrustedMessageSlots`); this is the default.
  */
 export const MAX_UNTRUSTED_MESSAGE_SLOTS = 1_000_000;
 
-const untrustedMemoryCodec = newDefaultJsonCodecEngine({
-  slotLimit: MAX_UNTRUSTED_MESSAGE_SLOTS,
-});
+/** One decoder per slot limit a decode has asked for. */
+const untrustedMemoryCodecs = new Map<
+  number,
+  ReturnType<typeof newDefaultJsonCodecEngine>
+>();
+
+const untrustedMemoryCodec = (slotLimit: number) => {
+  let codec = untrustedMemoryCodecs.get(slotLimit);
+  if (codec === undefined) {
+    codec = newDefaultJsonCodecEngine({ slotLimit });
+    untrustedMemoryCodecs.set(slotLimit, codec);
+  }
+  return codec;
+};
 
 /**
  * Decodes wire text from an untrusted sender. Text standing for more than
- * {@link MAX_UNTRUSTED_MESSAGE_SLOTS} slots is refused with `SlotLimitError`
- * before any of it is walked.
+ * `slotLimit` slots, {@link MAX_UNTRUSTED_MESSAGE_SLOTS} unless a caller names
+ * another, is refused with `SlotLimitError` before any of it is walked.
  *
  * This is the decoder for anything a client sent. Text the memory system wrote
  * itself -- a stored row, a frame the server sent -- goes through
@@ -3682,8 +3694,12 @@ const untrustedMemoryCodec = newDefaultJsonCodecEngine({
  */
 export const decodeMemoryBoundary = <Value extends FabricValue = FabricValue>(
   source: string,
+  slotLimit: number = MAX_UNTRUSTED_MESSAGE_SLOTS,
 ): Value & FabricValue =>
-  untrustedMemoryCodec.decode(source, memoryLiveEnvironment) as Value;
+  untrustedMemoryCodec(slotLimit).decode(
+    source,
+    memoryLiveEnvironment,
+  ) as Value;
 
 /**
  * Like {@link decodeMemoryBoundary}, except that no slot limit applies: for
