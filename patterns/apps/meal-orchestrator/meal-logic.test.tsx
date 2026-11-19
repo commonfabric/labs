@@ -12,6 +12,7 @@ import {
   type DietDish,
   formatBefore,
   mealBalance,
+  mealMarkdown,
   type OvenEvent,
   ovenEvents,
   ovenLoadProblem,
@@ -165,6 +166,31 @@ export default pattern(() => {
       OVEN,
     ]).warnings.join() === "Gravy (g) comes out 40m after serving."
   );
+
+  // The export keeps every oven problem the panel shows: a late dish, and a
+  // group off the day's timeline.
+  const assert_markdown_keeps_oven_problems = assert(() => {
+    const md = mealMarkdown({
+      name: "Dinner",
+      date: "",
+      time: "18:00",
+      guestCount: 4,
+      recipes: [],
+      preparedFoods: [],
+      guests: [],
+      ovenPlan: planOvens([
+        { name: "Gravy", stepGroups: [ovenGroup("g", 10, 350, 50)] },
+        { name: "Bread", stepGroups: [ovenGroup("dough", undefined, 400, 30)] },
+      ], [OVEN]),
+      notes: "",
+    });
+    return md.includes(
+      "- Warning: Gravy (g) comes out 40m after serving.",
+    ) &&
+      md.includes(
+        "- Not on the timeline: Bread (dough) is not scheduled (set its minutes before serving)",
+      );
+  });
 
   const assert_touching_is_not_overlap = assert(() => {
     // The first comes out at 60 exactly as the second goes in.
@@ -378,6 +404,7 @@ export default pattern(() => {
   return {
     [TESTS]: [
       { assertion: assert_events_and_off_timeline },
+      { assertion: assert_markdown_keeps_oven_problems },
       { assertion: assert_load_rules },
       { assertion: assert_one_oven_conflict },
       { assertion: assert_second_oven_resolves },

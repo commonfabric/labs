@@ -1233,12 +1233,12 @@ interface StoryWeaverOutput {
 ## `apps/smart-rubric/smart-rubric.tsx`
 
 Weigh options against a weighted rubric. Define categorical dimensions (scored
-Excellent / Good / Fair / Poor) and numeric ones (a range mapped onto the same
-0–10 scale, higher or lower is better), weight them, and set each option's
-values; options rank by weighted score. ▲/▼ pins an option at a slot by hand
-while the rest keep ranking by score. Quick Add sends a free-text description to
-`generateObject` and proposes the option's name and values, checked against the
-rubric, for review before adding.
+Excellent / Good / Fair / Poor) and numeric ones (an editable range mapped onto
+the same 0–10 scale, higher or lower is better), weight them, and set each
+option's values; options rank by weighted score. ▲/▼ pins an option at a slot by
+hand while the rest keep ranking by score. Quick Add sends a free-text
+description to `generateObject` and proposes the option's name and values,
+checked against the rubric, for review before adding.
 
 **Keywords:** decision, rubric, scoring, ranking, weights, generateObject, llm
 
@@ -1290,6 +1290,10 @@ interface RubricOutput {
   removeDimension: Stream<{ name: string }>;
   changeWeight: Stream<{ name: string; delta: number }>;
   toggleDirection: Stream<{ name: string }>;
+  // a numeric dimension's range; a bound left out stays, min >= max is refused
+  setRange: Stream<
+    { name: string; min?: number | string; max?: number | string }
+  >;
   selectOption: Stream<{ name: string }>;
   setValue: Stream<
     { option: string; dimension: string; value: string | number }

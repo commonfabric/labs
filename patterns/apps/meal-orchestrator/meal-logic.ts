@@ -964,6 +964,7 @@ ${input.knownProblems.map((p) => `- ${p}`).join("\n") || "(none)"}`;
 // Markdown projection
 // ---------------------------------------------------------------------------
 
+/** The meal as markdown, for the pattern's file projection. */
 export const mealMarkdown = (m: {
   name: string;
   date: string;
@@ -997,10 +998,16 @@ export const mealMarkdown = (m: {
           e.start - e.end
         } min, ${e.oven === null ? "no oven free" : `oven ${e.oven + 1}`}`
       )
-      .concat(
-        m.ovenPlan.conflicts.map((c) => `- Conflict: ${c.dish}: ${c.reason}`),
-      )
     : [];
+  // The problems the oven panel shows, so the export loses none of them.
+  const ovenNotes = m.ovenPlan.conflicts
+    .map((c) => `- Conflict: ${c.dish}: ${c.reason}`)
+    .concat(m.ovenPlan.warnings.map((w) => `- Warning: ${w}`))
+    .concat(
+      m.ovenPlan.offTimeline.map((o) =>
+        `- Not on the timeline: ${o.dish} (${o.step}) is ${o.reason}`
+      ),
+    );
   return [
     `# ${m.name}`,
     "",
@@ -1009,7 +1016,7 @@ export const mealMarkdown = (m: {
     .concat(section("Recipes", m.recipes.map(dish)))
     .concat(section("Prepared foods", m.preparedFoods.map(dish)))
     .concat(section("Dietary needs", needs))
-    .concat(section("Oven plan", oven))
+    .concat(section("Oven plan", oven.concat(ovenNotes)))
     .concat(section("Notes", m.notes.trim() ? [m.notes.trim()] : []))
     .join("\n");
 };

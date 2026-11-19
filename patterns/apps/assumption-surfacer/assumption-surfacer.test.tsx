@@ -146,6 +146,22 @@ export default pattern(() => {
       parsed[0].alternatives.length === 4 &&
       parsed[0].alternatives[1] === "Linux" && parsed[0].assumedIndex === 0;
   });
+  // The assumed index names an alternative as reported: blanks and repeats
+  // dropped before it do not shift it onto a different option.
+  const assert_parse_follows_assumed = assert(() => {
+    const [shifted, dropped] = normalizeReported({
+      assumptions: [
+        {
+          label: "Editor",
+          alternatives: ["", "Vim", "Vim", "Emacs"],
+          assumedIndex: 3,
+        },
+        { label: "Shell", alternatives: ["bash", "", "zsh"], assumedIndex: 1 },
+      ],
+    });
+    return shifted?.alternatives.join() === "Vim,Emacs" &&
+      shifted?.assumedIndex === 1 && dropped?.assumedIndex === 0;
+  });
   // The original's shape: alternatives as { value } and `selectedIndex`.
   const assert_parse_accepts_legacy_shape = assert(() => {
     const parsed = normalizeReported({
@@ -174,6 +190,24 @@ export default pattern(() => {
       again.length === 2 &&
       again.find((a) => a.label === "Language")?.assumedIndex === 2 &&
       later.length === 3 && later[2].id === "a4";
+  });
+  // A second call in the same reply may replace its cards but not add past
+  // three; a later reply starts its own three.
+  const assert_record_caps_reply = assert(() => {
+    const os = { label: "OS", alternatives: ["Mac", "Linux"], assumedIndex: 0 };
+    const editor = { ...os, label: "Editor" };
+    const third = withRecorded(recorded(), [os, editor], 1, "");
+    const swapped = withRecorded(
+      third,
+      [editor, { ...level, assumedIndex: 2 }],
+      1,
+      "",
+    );
+    const next = withRecorded(third, [editor], 2, "");
+    return third.map((a) => a.label).join() === "Language,Skill level,OS" &&
+      swapped.length === 3 &&
+      swapped.find((a) => a.label === "Skill level")?.assumedIndex === 2 &&
+      next.length === 4;
   });
   const assert_verdict_updates = assert(() => {
     const base = recorded();
@@ -429,9 +463,11 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_parse_drops_unusable },
       { assertion: assert_parse_clamps },
+      { assertion: assert_parse_follows_assumed },
       { assertion: assert_parse_accepts_legacy_shape },
       { assertion: assert_parse_rejects_non_object },
       { assertion: assert_record_ids_and_replace },
+      { assertion: assert_record_caps_reply },
       { assertion: assert_verdict_updates },
       { assertion: assert_told_only_when_landed },
       { assertion: assert_verdict_noops },

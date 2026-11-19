@@ -180,12 +180,18 @@ export default pattern(() => {
       next.levels[0].branch === 1 &&
       next.spindles.map((s) => s.path).join() === "0";
   });
+  // `setBranch` is a public stream: a branch that is not a number becomes 1.
+  const assert_branch_not_a_number = assert(() =>
+    withBranch(LEVELS, [], 0, Number("x")).levels[0].branch === 1
+  );
   const assert_stale_carries_down = assert(() => {
     const view = boardView(LEVELS, "new seed", [
       pinned("0", "a", "seed"),
       pinned("0.0", "b", "a"),
     ]);
-    return view[0].spindles[0].stale && view[1].spindles[0].stale;
+    // The child's own parent did not change, so its card points up instead.
+    return view[0].spindles[0].stale && !view[0].spindles[0].staleAbove &&
+      view[1].spindles[0].stale && view[1].spindles[0].staleAbove;
   });
   const assert_remove_level_drops_its_spindles = assert(() => {
     const next = withLastLevelRemoved(LEVELS, [
@@ -359,6 +365,7 @@ export default pattern(() => {
       { assertion: assert_pin_twice_unpins },
       { assertion: assert_respin_drops_pin },
       { assertion: assert_lower_branch_cuts_subtree },
+      { assertion: assert_branch_not_a_number },
       { assertion: assert_stale_carries_down },
       { assertion: assert_remove_level_drops_its_spindles },
       { assertion: assert_story_markdown_lists_pins },

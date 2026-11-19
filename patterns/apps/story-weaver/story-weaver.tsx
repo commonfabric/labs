@@ -824,7 +824,14 @@ const StoryWeaver = pattern<StoryWeaverInput, StoryWeaverOutput>(
           );
           return (
             <div style={{ ...styles.card, marginLeft: "12px" }}>
-              {spindle.stale
+              {spindle.staleAbove
+                ? (
+                  <div style={styles.warning}>
+                    ⚠️ Stale: a pin further up is stale. Respin that one first;
+                    this one's own parent has not changed.
+                  </div>
+                )
+                : spindle.stale
                 ? (
                   <div style={styles.warning}>
                     ⚠️ Stale: the text above changed since this was pinned.
