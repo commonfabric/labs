@@ -246,8 +246,16 @@ const REACH = {
     expected: true,
   },
   branches: {
-    reads: (o) => o.storage.branches,
-    expected: { [federatedSpace]: "reach-branch" },
+    // The listing itself, and the one branch it names as the branch storage
+    // forks every space the listing leaves out on.
+    reads: (o) => ({
+      branches: o.storage.branches,
+      forkBranch: o.storage.forkBranch,
+    }),
+    expected: {
+      branches: { [federatedSpace]: "reach-branch" },
+      forkBranch: "reach-branch",
+    },
   },
 } satisfies Record<keyof Required<InitializationData>, FieldReach>;
 
@@ -256,7 +264,7 @@ const owner: WorkerClient = { id: 0, post: () => true };
 
 /**
  * Drives one initialization the way a worker's own message loop does -- the
- * payload encoded as a transport sends it, the real `RuntimeClients` loop, and
+ * payload `sent` encoded as a transport sends it, the real `RuntimeClients` loop, and
  * the real `RuntimeProcessor.initialize` behind it -- and returns what it
  * built along with its teardown.
  *
@@ -265,7 +273,9 @@ const owner: WorkerClient = { id: 0, post: () => true };
  * answers. The options storage is opened with are recorded, which is the only
  * place one of the fields reaches.
  */
-async function observeWorkerInitialization(): Promise<{
+async function observeWorkerInitialization(
+  sent: InitializationData = SENT,
+): Promise<{
   observed: Observed;
   teardown: () => Promise<void>;
 }> {
@@ -295,7 +305,7 @@ async function observeWorkerInitialization(): Promise<{
         // encode alone hands back the sender's own tree.
         data: structuredClone(
           realmFromFabricValue(
-            { msgId: 0, data: { type: RequestType.Initialize, data: SENT } },
+            { msgId: 0, data: { type: RequestType.Initialize, data: sent } },
           ),
         ),
       }),
@@ -338,5 +348,23 @@ describe("initialization-data-reach", () => {
         expect(reach.reads(observed)).toEqual(reach.expected);
       });
     }
+  });
+
+  describe("what the worker builds from `branches` that name two branches", () => {
+    const otherSpace = "did:key:z6MkInitializationDataReachOther" as DID;
+    const branches = {
+      [federatedSpace]: "reach-branch",
+      [otherSpace]: "other-branch",
+    };
+
+    it("opens storage with the listing and no `forkBranch`", async () => {
+      const two = await observeWorkerInitialization({ ...SENT, branches });
+      try {
+        expect(two.observed.storage.branches).toEqual(branches);
+        expect(two.observed.storage.forkBranch).toBeUndefined();
+      } finally {
+        await two.teardown();
+      }
+    });
   });
 });

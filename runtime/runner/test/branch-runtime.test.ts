@@ -278,6 +278,96 @@ describe("branch-runtime", () => {
     }
   });
 
+  describe("with `forkBranch`, writing to a space its `branches` does not list", () => {
+    let other: MemorySpace;
+
+    /** Connects a runtime that opens `space` on "fork" and forks the rest. */
+    const makeForkingRuntime = (): {
+      runtime: Runtime;
+      manager: EmulatedStorageManager;
+    } => {
+      const manager = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+        branches: { [space]: "fork" },
+        forkBranch: "fork",
+      });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: manager,
+        experimental: { serverExecution: false },
+      });
+      return { runtime, manager };
+    };
+
+    /** Commits `value` to the note in `other`, through `runtime`. */
+    const writeNote = async (runtime: Runtime, value: string) => {
+      const note = runtime.getCell<string>(other, "note");
+      await note.sync();
+      const tx = runtime.edit();
+      note.withTx(tx).set(value);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await runtime.storageManager.synced();
+    };
+
+    /** Reads the note in `other` as `runtime`'s server holds it now. */
+    const readNote = async (runtime: Runtime) => {
+      await runtime.storageManager.synced();
+      const note = runtime.getCell<string>(other, "note");
+      await note.sync();
+      return note.get();
+    };
+
+    /** Each branch of `of` beside the default, with its status. */
+    const forksOf = async (runtime: Runtime, of: MemorySpace) =>
+      (await runtime.storageManager.open(of).listBranches!())
+        .filter((branch) => branch.name !== "")
+        .map(({ name, status }) => [name, status]);
+
+    beforeEach(async () => {
+      other = (await Identity.fromPassphrase("branch runtime other"))
+        .did() as MemorySpace;
+    });
+
+    it("reads that space as it stood at the first open, and leaves what its default branch holds as it was", async () => {
+      const main = makeRuntime();
+      await writeNote(main, "on main");
+      await main.storageManager.open(space).createBranch!("fork");
+      const { runtime: fork, manager } = makeForkingRuntime();
+      try {
+        expect(await readNote(fork)).toBe("on main");
+
+        await writeNote(fork, "on fork");
+
+        expect(await readNote(fork)).toBe("on fork");
+        expect(await readNote(main)).toBe("on main");
+        expect(await forksOf(main, other)).toEqual([["fork", "active"]]);
+      } finally {
+        await fork.dispose({ closeStorage: false });
+        await manager.close();
+      }
+    });
+
+    it("deletes that space's branch when its storage manager closes, and leaves the listed space's branch active", async () => {
+      const main = makeRuntime();
+      await writeNote(main, "on main");
+      await main.storageManager.open(space).createBranch!("fork");
+      const { runtime: fork, manager } = makeForkingRuntime();
+      try {
+        // Opening the listed space is what puts its provider among those
+        // the close walks.
+        await fork.storageManager.open(space).listBranches!();
+        await writeNote(fork, "on fork");
+      } finally {
+        await fork.dispose({ closeStorage: false });
+        await manager.close();
+      }
+
+      expect(await forksOf(main, other)).toEqual([["fork", "deleted"]]);
+      expect(await forksOf(main, space)).toEqual([["fork", "active"]]);
+      expect(await readNote(main)).toBe("on main");
+    });
+  });
+
   it("runs a piece as a fork holds it, and leaves the default branch alone", async () => {
     const main = makeRuntime();
     const result = await startCounter(main);

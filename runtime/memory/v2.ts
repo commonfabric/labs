@@ -1833,6 +1833,17 @@ export type SessionDescriptor = {
    * and the session's own runtime computes what the branch stores.
    */
   branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` from the default branch's head when the
+   * space has no branch of that name, so that a runtime showing a fork of
+   * one space keeps what it writes to every other space apart as well. The
+   * fork is made only for a principal that may write to the space; any
+   * other is given a session of the default branch, to which it can write
+   * nothing. A branch that was deleted is not made again, and the open is
+   * refused as it is without this.
+   */
+  forkBranch?: true;
 };
 
 /**

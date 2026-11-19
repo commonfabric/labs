@@ -861,7 +861,22 @@ wire, and is of the session's branch as well. A message that names a branch,
 the default branch's empty name included, is served on the branch it names.
 
 - The branch must exist and be active when the session opens; an open on any
-  other is refused.
+  other is refused, except as the next rule says.
+- An open carrying `SessionDescriptor.forkBranch` asks the server to make the
+  branch where the space has no branch of that name. When the opening
+  principal may write to the space (WRITE), the server forks the branch from
+  the default branch's head, as a `branch.create` naming no parent and no
+  `forkSeq` does (6.3.2), and opens the session on it. When the principal may
+  not write, the server makes no branch and opens the session on the default
+  branch, where that principal can change nothing. A session resumed after
+  the server opened it on the default branch stays there, whatever its
+  principal may do by then. The name is held to the rules a `branch.create`
+  holds one to (6.3.2), and an open naming a branch those rules refuse is
+  refused. A branch
+  that exists and is active is used as it is, whoever opens it. A deleted
+  branch is not made again: its name is consumed (6.9), and the open is
+  refused. This is how a runtime showing a fork of one space keeps what it
+  writes to every other space on a branch of that space.
 - A commit on a branch other than the default cannot carry a `sqlite`
   operation. A pattern's SQLite database is one file per space and scope, no
   branch holding a copy of it, so the write would land in the space itself.

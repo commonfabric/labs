@@ -1311,8 +1311,9 @@ export class RuntimeInternals extends EventTarget {
  * at one point of its history, and a runtime that runs it there. What that
  * runtime writes to the space's documents stays in the fork and ends with
  * it, whether the space is restored to the fork's point of history or the
- * fork is discarded. What it writes to another space lands there, and the
- * requests its effects send are real.
+ * fork is discarded. What it writes to another space the principal may
+ * write to is kept on a branch of that space in the same way, and ends with
+ * the fork. The requests its effects send are real.
  */
 export class SpaceFork {
   readonly #space: DID;

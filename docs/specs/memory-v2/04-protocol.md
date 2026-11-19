@@ -543,6 +543,9 @@ interface SessionOpenRequest {
     // The branch the session is of (see the rules). Absent means the default
     // branch. Inside the signed descriptor.
     branch?: BranchId;
+    // Present when the server is to fork `branch` where the space has no
+    // branch of that name (see the rules). Inside the signed descriptor.
+    forkBranch?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -752,6 +755,18 @@ Rules:
   refuses a resume that declares another branch than the session's. A session
   of a branch other than the default is not client demand, as a session
   declaring `demand: false` is not
+- an open that names a `branch` and carries `forkBranch: true` asks the server
+  to make that branch where the space has none of the name (`06-branching.md`
+  section 6.16). For a principal that may write to the space, the server
+  forks the branch from the default branch's head and opens the session on
+  it. For a principal that may not, it makes no branch and opens the session
+  on the default branch. An open naming a branch a `branch.create` would
+  refuse the name of (section 4.3.8) is refused. A branch that exists and is
+  active is used as it is, and an open on a deleted branch is refused as it
+  is without `forkBranch`. Any value other than `true` reads as absent. A
+  client carries `forkBranch` on every open of the session, a resume
+  included, so a session the server opened on the default branch resumes
+  there
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts

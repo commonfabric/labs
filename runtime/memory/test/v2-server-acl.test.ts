@@ -5617,6 +5617,181 @@ describe("v2-server-acl", () => {
       }
     });
 
+    describe("a session opened with `branch` and `forkBranch`, for a name the space has no branch of", () => {
+      const forking: SessionDescriptor = { branch: "fork", forkBranch: true };
+
+      /** The names of the space's branches, as `owner` is told them. */
+      const branchNames = async (
+        owner: { harness: Harness; sessionId: string },
+      ): Promise<string[]> => {
+        const listed = await request<{ branches: { name: string }[] }>(
+          owner.harness,
+          { type: "branch.list", sessionId: owner.sessionId },
+        );
+        expectExists(listed.ok);
+        return listed.ok.branches.map((branch) => branch.name).toSorted();
+      };
+
+      it("reads the default branch as it stands for a reader, and the space gains no branch", async () => {
+        const { server, open, owner } = await serve(
+          "memory://acl-fork-open-reader",
+        );
+        try {
+          const reader = await open(CAROL, forking);
+          expectExists(
+            (await transactSet(
+              owner.harness,
+              space,
+              owner.sessionId,
+              "of:doc",
+              "second",
+              2,
+            )).ok,
+          );
+
+          const read = await graphQuery(
+            reader.harness,
+            space,
+            reader.sessionId,
+            "of:doc",
+          );
+
+          expect(read.ok?.entities[0]?.branch).toBe("");
+          expect(read.ok?.entities[0]?.document?.value).toBe("second");
+          expect(await branchNames(owner)).toEqual([""]);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("returns `AuthorizationError` for a reader's write, and leaves the default branch as it was", async () => {
+        const { server, open, owner } = await serve(
+          "memory://acl-fork-open-reader-write",
+        );
+        try {
+          const reader = await open(CAROL, forking);
+
+          const write = await transactSet(
+            reader.harness,
+            space,
+            reader.sessionId,
+            "of:doc",
+            "from the reader",
+            1,
+          );
+
+          expect(write.error?.name).toBe("AuthorizationError");
+          const kept = await graphQuery(
+            owner.harness,
+            space,
+            owner.sessionId,
+            "of:doc",
+          );
+          expect(kept.ok?.entities[0]?.document?.value).toBe("first");
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("resumes for a reader's open of its session that declares the same, and the space gains no branch", async () => {
+        const { server, owner } = await serve(
+          "memory://acl-fork-open-reader-resume",
+        );
+        try {
+          const harness = await connect(server);
+          const first = await openSession(harness, space, CAROL, forking);
+          expectExists(first.ok);
+
+          // A connection's challenge admits one open, so the resume arrives
+          // on another.
+          const again = await openSession(await connect(server), space, CAROL, {
+            ...forking,
+            sessionId: first.ok.sessionId,
+            sessionToken: first.ok.sessionToken,
+          });
+
+          expect(again.ok).toMatchObject({
+            sessionId: first.ok.sessionId,
+            resumed: true,
+          });
+          expect(await branchNames(owner)).toEqual([""]);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("writes to a fork for a writer, and leaves the default branch as it was", async () => {
+        const { server, open, owner } = await serve(
+          "memory://acl-fork-open-writer",
+        );
+        try {
+          const writer = await open(BOB, forking);
+
+          expectExists(
+            (await transactSet(
+              writer.harness,
+              space,
+              writer.sessionId,
+              "of:doc",
+              "on fork",
+              1,
+            )).ok,
+          );
+
+          expect(await branchNames(owner)).toEqual(["", "fork"]);
+          const onFork = await graphQuery(
+            writer.harness,
+            space,
+            writer.sessionId,
+            "of:doc",
+          );
+          expect(onFork.ok?.entities[0]?.branch).toBe("fork");
+          expect(onFork.ok?.entities[0]?.document?.value).toBe("on fork");
+          const onDefault = await graphQuery(
+            owner.harness,
+            space,
+            owner.sessionId,
+            "of:doc",
+          );
+          expect(onDefault.ok?.entities[0]?.document?.value).toBe("first");
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("reads a writer's fork for a reader that opens after the writer", async () => {
+        const { server, open } = await serve(
+          "memory://acl-fork-open-reader-after-writer",
+        );
+        try {
+          const writer = await open(BOB, forking);
+          expectExists(
+            (await transactSet(
+              writer.harness,
+              space,
+              writer.sessionId,
+              "of:doc",
+              "on fork",
+              1,
+            )).ok,
+          );
+
+          const reader = await open(CAROL, forking);
+          const read = await graphQuery(
+            reader.harness,
+            space,
+            reader.sessionId,
+            "of:doc",
+          );
+
+          expect(read.ok?.entities[0]?.branch).toBe("fork");
+          expect(read.ok?.entities[0]?.document?.value).toBe("on fork");
+        } finally {
+          await server.close();
+        }
+      });
+    });
+
     it("returns `ProtocolError` for a write to the access list from a session of a branch, and leaves the list the branch reads as it was", async () => {
       const { server, open, owner } = await serve("memory://acl-branch-acl");
       try {

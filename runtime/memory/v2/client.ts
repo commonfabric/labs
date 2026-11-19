@@ -456,6 +456,12 @@ export type MountOptions = {
    * carried on every reopen. Absent, the default branch.
    */
   branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` when the space has none of that name
+   * (the wire `SessionDescriptor.forkBranch`), carried on every reopen.
+   */
+  forkBranch?: true;
 };
 
 /**
@@ -1263,6 +1269,7 @@ export class Client {
       options.resumeAttempt,
       result.serverBuild,
       options.branch,
+      options.forkBranch,
     );
     this.#spaces.add(session);
     // The server answered the open on a connection the client has since
@@ -3626,6 +3633,7 @@ export class SpaceSession {
   readonly #actingAs?: "space-owner";
   readonly #readCeiling?: SessionReadCeiling;
   readonly #branch?: BranchName;
+  readonly #forkBranch?: true;
   readonly #genesisRoot?: GenesisRoot;
   readonly #spaceKindIntent?: string;
   #declaredSpaceKind?: DeclaredSpaceKind;
@@ -3651,9 +3659,11 @@ export class SpaceSession {
     resumeAttempt = 1,
     serverBuild?: string,
     branch?: BranchName,
+    forkBranch?: true,
   ) {
     this.#client = client;
     this.#branch = branch;
+    this.#forkBranch = forkBranch;
     this.#resumeKey = resumeKey;
     this.#resumeAttempt = resumeAttempt;
     this.#auth = auth;
@@ -5855,6 +5865,7 @@ export class SpaceSession {
         : {}),
       // A reopen without it would move the session to the default branch.
       ...(this.#branch !== undefined ? { branch: this.#branch } : {}),
+      ...(this.#forkBranch === true ? { forkBranch: true as const } : {}),
     };
     const holdings = this.#declaredHoldings();
     const restored = await runWithAbortSignal(

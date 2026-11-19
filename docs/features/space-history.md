@@ -80,11 +80,18 @@ Two consequences follow.
 
 ### What a fork does not contain
 
-A fork is a branch of one space's documents, and three things lie outside it.
+A fork is a branch of the viewed space's documents at the chosen step. Other
+spaces are forked too, though not at that step, and two things lie outside a
+fork altogether.
 
-- **Other spaces.** A link out of a fork reaches the other space as that space
-  stands now, and a write a piece in the fork makes to another space lands in
-  that space.
+- **Other spaces.** A fork's runtime opens every other space on a branch of
+  the same name as the fork's, which the server forks from that space as it
+  stands when the runtime first opens it. What a piece in the fork writes to
+  another space stays on that branch and ends with the fork. Another space is
+  forked at its present state and not as of the viewed step, so a link out of
+  a fork reaches documents from now beside the viewed space's documents from
+  the past. A space the principal cannot write to gets no branch and is read
+  as it stands.
 - **SQLite databases.** A pattern's SQLite database is not stored as
   revisions, so no branch holds a copy of one. A piece in a fork reads the
   database as it stands now, beside documents from the past, and a write to
@@ -118,21 +125,30 @@ private as the space: whoever can read the space can read its branches.
 
 ## The layers
 
-| Layer          | What it adds                                                                                                     |
-| -------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Memory engine  | `listCommits()` and `restoreBranch()` in `runtime/memory/v2/history.ts`; `createBranch()` and `deleteBranch()`   |
-| Memory wire    | `branch.create`, `branch.delete`, `branch.list`, `history.list`, `branch.restore`; `SessionDescriptor.branch`    |
-| Runner storage | `Options.branches` on the storage manager; `listHistory()` and the branch methods on a space's provider          |
-| Runner         | `historySteps()` in `runtime/runner/src/history-steps.ts`, which groups commits into steps                       |
-| Runtime client | `spaceHistory()`, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches` |
-| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `forkSpace()`, `restoreSpace()`; `SpaceFork`                                  |
-| Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history` and `restore-history` commands        |
+| Layer          | What it adds                                                                                                                     |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Memory engine  | `listCommits()` and `restoreBranch()` in `runtime/memory/v2/history.ts`; `createBranch()` and `deleteBranch()`                   |
+| Memory wire    | `branch.create`, `branch.delete`, `branch.list`, `history.list`, `branch.restore`; `SessionDescriptor.branch` and `forkBranch`   |
+| Runner storage | `Options.branches` and `Options.forkBranch` on the storage manager; `listHistory()` and the branch methods on a space's provider |
+| Runner         | `historySteps()` in `runtime/runner/src/history-steps.ts`, which groups commits into steps                                       |
+| Runtime client | `spaceHistory()`, `createSpaceBranch()`, `deleteSpaceBranch()`, `restoreSpace()`; `InitializationData.branches`                  |
+| `lib-shell`    | `RuntimeInternals.spaceHistory()`, `forkSpace()`, `restoreSpace()`; `SpaceFork`                                                  |
+| Shell          | The history panel (`XHistoryView`) and the `open-history`, `close-history` and `restore-history` commands                        |
 
 A session is opened on a branch, and the server reads and writes that branch
 for everything the session sends without naming one. That is what lets the
 layers above storage stay unaware of branches: a runtime whose storage manager
 lists a space under `branches` runs that space as the branch holds it, and no
 cell, link or transaction says which branch it is of.
+
+A storage manager given `Options.forkBranch` opens every space `branches`
+does not list on that branch, with `SessionDescriptor.forkBranch` set. The
+server forks the branch from the space's default branch the first time a
+session asks, for a principal that may write to the space, and opens a
+session of the default branch for one that may not. A worker runtime passes
+the branch as `forkBranch` when every space its `InitializationData.branches`
+lists names the same one. Closing the storage manager deletes the branch in
+each space it opened that way.
 
 `RuntimeInternals.forkSpace(space, seq)` creates a branch named
 `history:<uuid>` and stands up a second runtime, in a worker of its own, whose
@@ -141,8 +157,11 @@ returns a `SpaceFork` holding that runtime. `SpaceFork.restore()` restores the
 space to the `seq` the fork was taken at and ends the fork, without waiting
 for the fork's runtime, since nothing the fork wrote is part of the restore;
 `SpaceFork.discard()` ends it without restoring. Ending a fork disposes of its
-runtime and deletes its branch. A runtime whose embedder supplied its
-connection has no worker of its own to stand a second beside, and cannot fork.
+runtime and deletes its branches: the runtime that took the fork deletes the
+viewed space's branch, and the fork's runtime deletes the branch in every
+other space it opened as its storage closes. A runtime whose embedder
+supplied its connection has no worker of its own to stand a second beside,
+and cannot fork.
 
 The branches a runtime opens are part of its security context: a document
 attaching to a runtime asserts them, so a page cannot join a fork's runtime
@@ -176,9 +195,10 @@ a fork dropped because its own runtime is being replaced still gets its branch
 deleted. A fork is deleted through the root's runtime, so when that runtime is
 replaced, the old one is disposed of once the fork's branch deletion has been
 answered. A fork whose page goes away before ending it leaves its branch in the
-store. Such a branch holds nothing but what was done in it and is not
-reachable from the space. The space compaction tool deletes leftover
-`history:` branches itself before it compacts
+store of the viewed space and of every other space its runtime opened. Such a
+branch holds nothing but what was done in it and is not reachable from its
+space. The space compaction tool deletes a space's leftover `history:`
+branches itself before it compacts that space
 ([`../plans/compact-space.md`](../plans/compact-space.md)).
 
 ## What is not here yet
@@ -196,5 +216,6 @@ reachable from the space. The space compaction tool deletes leftover
   metadata a merge would.
 - **History of one piece.** The panel lists the space's steps. A step does not
   say which piece it touched.
-- **A fork across spaces.** Other spaces a fork links to are read as they
-  stand.
+- **A fork across spaces as of the step.** Another space a fork reaches is
+  forked at its present state rather than at the point of its history that
+  matches the viewed step.

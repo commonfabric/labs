@@ -5138,6 +5138,16 @@ export class RuntimeProcessor {
       );
     }
 
+    // A runtime showing a fork keeps what it writes to every space apart, so
+    // a space the listing leaves out is opened on the listed branch as well,
+    // which the server forks there on the first open.
+    const listedBranches = new Set(
+      Object.values(normalizeBranches(data.branches) ?? {}),
+    );
+    const forkBranch = listedBranches.size === 1
+      ? [...listedBranches][0]
+      : undefined;
+
     const storageManager = StorageManager.open({
       as: identity,
       clientBuild: data.clientBuild ??
@@ -5145,6 +5155,7 @@ export class RuntimeProcessor {
       memoryHost,
       spaceHostMap: data.spaceHostMap,
       ...(data.branches !== undefined ? { branches: data.branches } : {}),
+      ...(forkBranch !== undefined ? { forkBranch } : {}),
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
       // watch-refresh round trips up to a bounded window. Off unless the host
       // set it; the default is strict single-flight.

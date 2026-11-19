@@ -6937,17 +6937,47 @@ export class Server {
       // After authorization, so a principal the space refuses learns nothing
       // of its branches.
       const sessionBranch = message.session.branch;
-      if (
-        sessionBranch !== undefined && sessionBranch !== DEFAULT_BRANCH &&
-        Engine.branchState(engine, sessionBranch)?.status !== "active"
-      ) {
-        return respondTypedError<SessionOpenResult>(
-          message.requestId,
-          toError(
-            "ProtocolError",
-            `The space has no active branch ${JSON.stringify(sessionBranch)}`,
-          ),
-        );
+      let descriptor = message.session;
+      if (sessionBranch !== undefined && sessionBranch !== DEFAULT_BRANCH) {
+        const state = Engine.branchState(engine, sessionBranch);
+        if (state === null && message.session.forkBranch === true) {
+          const refused = refusedBranchName(sessionBranch);
+          if (refused !== undefined) {
+            return respondTypedError<SessionOpenResult>(
+              message.requestId,
+              toError("ProtocolError", refused),
+            );
+          }
+          // The fork keeps apart what the session writes, so only a session
+          // that can write gets one; any other is of the default branch. So
+          // is a session resumed that was given the default branch before:
+          // its replica holds that branch's documents.
+          const resumed = message.session.sessionId === undefined
+            ? undefined
+            : this.#sessions.peek(message.space, message.session.sessionId);
+          const mayWrite = resumed === undefined &&
+            this.#authorizeMessageWithEngine(
+                engine,
+                message.space,
+                capabilityPrincipal ?? actingPrincipal ?? principal,
+                "WRITE",
+                actingAs === "space-owner",
+              ) === null;
+          if (mayWrite) {
+            Engine.createBranch(engine, sessionBranch);
+          } else {
+            const { branch: _branch, ...onDefault } = message.session;
+            descriptor = onDefault;
+          }
+        } else if (state?.status !== "active") {
+          return respondTypedError<SessionOpenResult>(
+            message.requestId,
+            toError(
+              "ProtocolError",
+              `The space has no active branch ${JSON.stringify(sessionBranch)}`,
+            ),
+          );
+        }
       }
       // INV-16's open clauses. After authorization, so a principal the space
       // refuses learns nothing of its mark, and in every ACL mode, since the
@@ -6985,7 +7015,7 @@ export class Server {
       try {
         opened = this.#sessions.open(
           message.space,
-          message.session,
+          descriptor,
           Engine.serverSeq(engine),
           connection.id,
           principal,
@@ -13636,6 +13666,9 @@ const parseDecodedClientMessage = (
         ...(parsed.session.branch === undefined
           ? {}
           : { branch: parsed.session.branch }),
+        ...(parsed.session.forkBranch === true
+          ? { forkBranch: true as const }
+          : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation

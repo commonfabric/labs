@@ -234,7 +234,7 @@ export class XHistoryView extends BaseView {
           Showing this space as it stood at #${open.seq}. Changes you make
           here stay in this view and are discarded when you leave it.
           Restoring sets the space back to this point and does not carry
-          them over. Changes to other spaces are real.
+          them over.
         </p>
         <div class="actions">
           <cf-button

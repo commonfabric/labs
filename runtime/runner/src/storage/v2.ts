@@ -1305,6 +1305,17 @@ export interface Options {
    */
   branches?: Readonly<Record<string, BranchName>>;
 
+  /**
+   * The branch every space not listed in `branches` is opened on, which the
+   * server forks from that space's default branch on the first open (the
+   * wire `SessionDescriptor.forkBranch`). A manager showing a fork of one
+   * space sets this so that what its runtime writes to any other space is
+   * kept apart as well. A space the principal may not write to is opened on
+   * its default branch. Closing the manager deletes the branch in each space
+   * it opened. Fixed for the manager's lifetime.
+   */
+  forkBranch?: BranchName;
+
   /** The event-intent queue's store seam (server-execution v2 Phase 3;
    *  events.md §5; LT9 re-ruled 2026-08-15: PROCESS-LIFETIME — reload
    *  survival is a non-goal this round). Absent = one in-memory store per
@@ -2068,6 +2079,7 @@ export class StorageManager implements IStorageManager {
    * unbounded. */
   #sessionReadCeiling?: SessionReadCeiling;
   #branches: Readonly<Record<string, BranchName>>;
+  #forkBranch: BranchName | undefined;
 
   /** Resume options for a space's manager-wide session that
    * `#createInitializedSession` detached ahead of a bootstrap that then
@@ -2220,6 +2232,7 @@ export class StorageManager implements IStorageManager {
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
     this.#branches = { ...options.branches };
+    this.#forkBranch = options.forkBranch;
     this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
     this.#holdRegistry = (options.createHoldRegistry ??
       ((cleanup) => new FinalizationRegistry(cleanup)))(
@@ -2615,14 +2628,19 @@ export class StorageManager implements IStorageManager {
     actingAs?: "space-owner";
     readCeiling?: SessionReadCeiling;
     branch?: BranchName;
+    forkBranch?: true;
   } {
-    const branch = this.#branches[space];
+    const listed = this.#branches[space];
+    const branch = listed ?? this.#forkBranch;
     return {
       ...this.#servingActingAs(),
       ...(this.#sessionReadCeiling !== undefined
         ? { readCeiling: this.#sessionReadCeiling }
         : {}),
       ...(branch !== undefined && branch !== DEFAULT_BRANCH ? { branch } : {}),
+      ...(listed === undefined && this.#forkBranch !== undefined
+        ? { forkBranch: true as const }
+        : {}),
     };
   }
 
@@ -3286,6 +3304,7 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
+      await this.#deleteForkBranches();
       // allSettled: one rejecting teardown must not release the lease (the
       // finally below) while sibling teardowns are still draining frames.
       const outcomes = await Promise.allSettled(
@@ -3310,6 +3329,23 @@ export class StorageManager implements IStorageManager {
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
+  }
+
+  /**
+   * Helper for `close()`, which deletes the branch `Options.forkBranch` had
+   * the server fork in each space this manager opened. A space the server
+   * forked nothing in refuses the deletion, which is not reported.
+   */
+  async #deleteForkBranches(): Promise<void> {
+    const branch = this.#forkBranch;
+    if (branch === undefined) return;
+    await Promise.allSettled(
+      [...this.#providers].map(([space, provider]) =>
+        this.#branches[space] === undefined
+          ? provider.deleteBranch?.(branch)
+          : undefined
+      ),
+    );
   }
 
   async closeNow(): Promise<void> {

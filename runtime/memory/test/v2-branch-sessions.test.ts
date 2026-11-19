@@ -11,11 +11,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
 import {
   type BranchName,
+  decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
   MEMORY_PROTOCOL,
   resetServerExecutionConfig,
   type ServerMessage,
+  type SessionDescriptor,
   setServerExecutionConfig,
 } from "../v2.ts";
 import {
@@ -30,6 +32,59 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+
+/**
+ * A loopback transport over a real server whose connection can be dropped,
+ * recording the descriptor of every `session.open` the client sends.
+ */
+class DroppableTransport implements Transport {
+  readonly opens: SessionDescriptor[] = [];
+
+  /** Resolved when the client sends its second `session.open`: a reopen. */
+  readonly reopened = Promise.withResolvers<void>();
+  #receiver: (payload: string) => void = () => {};
+  #closeReceiver: (error?: Error) => void = () => {};
+  #connection: ReturnType<Server["connect"]> | null = null;
+  readonly #server: Server;
+
+  constructor(server: Server) {
+    this.#server = server;
+  }
+
+  async send(payload: string): Promise<void> {
+    const message = decodeMemoryBoundary(payload) as {
+      type?: string;
+      session?: SessionDescriptor;
+    };
+    if (message.type === "session.open" && message.session !== undefined) {
+      this.opens.push(message.session);
+      if (this.opens.length === 2) this.reopened.resolve();
+    }
+    this.#connection ??= this.#server.connect((message) =>
+      this.#receiver(encodeMemoryBoundary(message))
+    );
+    await this.#connection.receive(payload);
+  }
+
+  close(): Promise<void> {
+    this.disconnect();
+    return Promise.resolve();
+  }
+
+  setReceiver(receiver: (payload: string) => void): void {
+    this.#receiver = receiver;
+  }
+
+  setCloseReceiver(receiver: (error?: Error) => void): void {
+    this.#closeReceiver = receiver;
+  }
+
+  disconnect(): void {
+    this.#connection?.close();
+    this.#connection = null;
+    queueMicrotask(() => this.#closeReceiver(new Error("disconnect")));
+  }
+}
 
 describe("v2-branch-sessions", () => {
   const SPACE = "did:key:z6Mk-branch-sessions";
@@ -54,6 +109,14 @@ describe("v2-branch-sessions", () => {
     client.mount(
       SPACE,
       branch === undefined ? {} : { branch },
+      testSessionOpenAuthFactory,
+    );
+
+  /** Mounts a session that asks the server to fork `branch` if it is absent. */
+  const mountForking = (branch: BranchName): Promise<SpaceSession> =>
+    client.mount(
+      SPACE,
+      { branch, forkBranch: true },
       testSessionOpenAuthFactory,
     );
 
@@ -405,6 +468,149 @@ describe("v2-branch-sessions", () => {
         );
         expect((await main.listBranches()).map((branch) => branch.name))
           .toEqual([""]);
+      });
+    });
+
+    describe("opened with `forkBranch`", () => {
+      it("is of a branch `listBranches()` lists as forked from the default branch's head, for a name the space has no branch of", async () => {
+        const { seq } = await set(main, "shared");
+
+        const fork = await mountForking("fork");
+
+        expect(await main.listBranches()).toContainEqual({
+          name: "fork",
+          parentBranch: "",
+          forkSeq: seq,
+          createdSeq: seq,
+          headSeq: seq,
+          status: "active",
+        });
+        expect(await valueIn(fork)).toBe("shared");
+      });
+
+      it("writes to that branch and leaves the default branch as it was", async () => {
+        await set(main, "shared");
+        const fork = await mountForking("fork");
+
+        await set(fork, "on fork");
+
+        expect(await valueIn(fork)).toBe("on fork");
+        expect(await valueIn(main)).toBe("shared");
+      });
+
+      it("reads what an earlier session of that name wrote, where the default branch has moved on since", async () => {
+        const { seq } = await set(main, "shared");
+        const first = await mountForking("fork");
+        await set(first, "on fork");
+        await set(main, "on main");
+
+        const second = await mountForking("fork");
+
+        expect(await valueIn(second)).toBe("on fork");
+        expect(
+          (await main.listBranches()).filter((branch) => branch.name !== "")
+            .map(({ name, forkSeq }) => [name, forkSeq]),
+        ).toEqual([["fork", seq]]);
+      });
+
+      it("reads the branch as it stands, for a branch another request made at an earlier point", async () => {
+        const { seq } = await set(main, "before");
+        await set(main, "after");
+        await main.createBranch("fork", { forkSeq: seq });
+
+        const fork = await mountForking("fork");
+
+        expect(await valueIn(fork)).toBe("before");
+      });
+
+      it("rejects for a deleted branch, and leaves it deleted", async () => {
+        await main.createBranch("fork");
+        await main.deleteBranch("fork");
+
+        await expect(mountForking("fork")).rejects.toThrow(
+          'The space has no active branch "fork"',
+        );
+        expect(
+          (await main.listBranches()).map(({ name, status }) => [name, status])
+            .toSorted(),
+        ).toEqual([["", "active"], ["fork", "deleted"]]);
+      });
+
+      it("rejects for a name the server refuses a branch, and the space gains none", async () => {
+        await expect(mountForking("view-demand:fork")).rejects.toThrow(
+          "a branch name must not begin with `view-demand:` or `view-support:`",
+        );
+
+        expect((await main.listBranches()).map((branch) => branch.name))
+          .toEqual([""]);
+      });
+
+      it("rejects for a name of 129 characters, and the space gains no branch", async () => {
+        await expect(mountForking("n".repeat(129))).rejects.toThrow(
+          "branch name is too long",
+        );
+        expect((await main.listBranches()).map((branch) => branch.name))
+          .toEqual([""]);
+        expect(server.sessionSnapshot(SPACE)).toHaveLength(1);
+      });
+
+      it("resumes for an open of its session that declares its branch and `forkBranch`", async () => {
+        const fork = await mountForking("fork");
+
+        const reopened = await client.openSession(SPACE, {
+          sessionId: fork.sessionId,
+          sessionToken: fork.sessionToken,
+          branch: "fork",
+          forkBranch: true,
+        }, testSessionOpenAuthFactory);
+
+        expect(reopened).toMatchObject({
+          sessionId: fork.sessionId,
+          resumed: true,
+        });
+      });
+
+      it("declares its branch and `forkBranch` on the reopen that follows a dropped connection, and reads its branch after it", async () => {
+        await set(main, "shared");
+        const transport = new DroppableTransport(server);
+        const dropped = await connect({ transport });
+        clients.push(dropped);
+        const fork = await dropped.mount(
+          SPACE,
+          { branch: "fork", forkBranch: true },
+          testSessionOpenAuthFactory,
+        );
+        await set(fork, "on fork");
+
+        transport.disconnect();
+        await transport.reopened.promise;
+        await fork.whenRestored();
+
+        expect(
+          transport.opens.map(({ branch, forkBranch }) => [branch, forkBranch]),
+        ).toEqual([["fork", true], ["fork", true]]);
+        expect(await valueIn(fork)).toBe("on fork");
+        expect(await valueIn(main)).toBe("shared");
+      });
+
+      it("declares no `forkBranch` on the reopen of a session mounted without it", async () => {
+        await main.createBranch("fork");
+        const transport = new DroppableTransport(server);
+        const dropped = await connect({ transport });
+        clients.push(dropped);
+        const fork = await dropped.mount(
+          SPACE,
+          { branch: "fork" },
+          testSessionOpenAuthFactory,
+        );
+
+        transport.disconnect();
+        await transport.reopened.promise;
+        await fork.whenRestored();
+
+        expect(
+          transport.opens.map(({ branch, forkBranch }) => [branch, forkBranch]),
+        ).toEqual([["fork", undefined], ["fork", undefined]]);
       });
     });
 

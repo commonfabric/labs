@@ -955,9 +955,14 @@ export type InitializationData = {
   /**
    * The branch each space listed here is opened on: the runtime runs such a
    * space as that branch holds it, and everything it writes there lands on
-   * the branch. A space not listed is opened as it stands. No serving loop
-   * runs a branch, so a runtime given any declares `serverExecution` off and
-   * computes what the branch stores itself.
+   * the branch. Where every listed space names the same branch, a space not
+   * listed is opened on that branch too, forked from the space as it stands
+   * when the runtime first opens it, so that nothing the runtime writes
+   * reaches a space itself; a space the principal may not write to is opened
+   * as it stands. Where the listed spaces name different branches, a space
+   * not listed is opened as it stands. No serving loop runs a branch, so a
+   * runtime given any declares `serverExecution` off and computes what the
+   * branch stores itself.
    */
   branches?: Record<DID, string>;
 
