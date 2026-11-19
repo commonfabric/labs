@@ -108,7 +108,16 @@ export default pattern<Record<string, never>, {
 });
 `;
 
-async function fixture() {
+/**
+ * What a case hears of the serving runtime's queries: `before` is awaited
+ * ahead of each one, and `after` is called once it has returned.
+ */
+type QueryHooks = {
+  before?: (sql: string) => Promise<void> | void;
+  after?: (sql: string) => void;
+};
+
+async function fixture(hooks: QueryHooks = {}) {
   // A database outlives the server that wrote it, so each case gets a space,
   // and with it a database, of its own.
   const owner = await Identity.fromPassphrase(
@@ -131,6 +140,14 @@ async function fixture() {
     // deno-lint-ignore require-await
     createRuntime: async () => {
       const serving = EmulatedStorageManager.connectTo(server, { as: service });
+      const provider = serving.open(space);
+      const query = provider.sqliteQuery!.bind(provider);
+      provider.sqliteQuery = async (handle, sql, ...rest) => {
+        await hooks.before?.(sql);
+        const reply = await query(handle, sql, ...rest);
+        hooks.after?.(sql);
+        return reply;
+      };
       const servingRuntime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager: serving,
@@ -231,33 +248,92 @@ describe("executor-indexed-collection", () => {
   });
 
   it("leaves a query result unwritten when a collection write keeps its rows", async () => {
-    const f = await fixture();
+    // The re-run of the query whose rows stay the same has to be seen to
+    // finish, or its result would be unwritten only because it had not been
+    // written yet.
+    const rerun = Promise.withResolvers<void>();
+    let watching = false;
+    const f = await fixture({
+      after: (sql) => {
+        if (
+          watching && sql.startsWith("SELECT m.title AS title FROM mentions")
+        ) {
+          rerun.resolve();
+        }
+      },
+    });
     try {
       f.result.key("add").send({ title: "first" });
       f.result.key("add").send({ title: "second" });
       f.result.key("add").send({ title: "other" });
       f.result.key("mention").send({ from: "second", to: "first" });
       await f.titles("mentioningFirst", ["second"]);
-      const { promise: renamed, resolve } = Promise.withResolvers<void>();
       const seen: string[] = [];
       const cancel = f.result.key("mentioningFirst").sink((state) => {
         seen.push(JSON.stringify(state));
       });
-      const cancelTitles = f.result.key("titles").sink((state) => {
-        if (state?.result?.some((row) => row.title === "renamed")) resolve();
-      });
       const settledBefore = seen.length;
+      watching = true;
 
       // Renaming an uninvolved member rewrites its row, and so re-runs both
       // queries, while the rows of the second stay what they were.
       f.result.key("rename").send({ from: "other", to: "renamed" });
-      await renamed;
+      await rerun.promise;
+      await f.titles("titles", ["first", "renamed", "second"]);
 
       expect(seen.slice(settledBefore)).toEqual([]);
       cancel();
-      cancelTitles();
       expect(f.errors).toEqual([]);
     } finally {
+      await f.close();
+    }
+  });
+
+  it("serves the rows of the last of two writes made while a re-run was in flight", async () => {
+    // The listing's re-run after the first rename is held at the database,
+    // and the second rename is carried into the collection behind it. The
+    // other query is not held, so its second re-run returning says the
+    // second rename has reached the database.
+    const TITLES = "SELECT title FROM members";
+    const MENTIONING = "SELECT m.title AS title FROM mentions";
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const reruns = [
+      Promise.withResolvers<void>(),
+      Promise.withResolvers<void>(),
+    ];
+    let armed = false;
+    let seen = 0;
+    const f = await fixture({
+      before: async (sql) => {
+        if (armed && sql.startsWith(TITLES)) {
+          armed = false;
+          held.resolve();
+          await release.promise;
+        }
+      },
+      after: (sql) => {
+        if (sql.startsWith(MENTIONING)) reruns[seen++]?.resolve();
+      },
+    });
+    try {
+      f.result.key("add").send({ title: "first" });
+      await f.titles("titles", ["first"]);
+      await f.titles("mentioningFirst", []);
+      seen = 0;
+      armed = true;
+
+      f.result.key("rename").send({ from: "first", to: "once" });
+      await held.promise;
+      await reruns[0].promise;
+      f.result.key("rename").send({ from: "first", to: "twice" });
+      await reruns[1].promise;
+      release.resolve();
+
+      await f.titles("titles", ["twice"]);
+      expect(f.errors).toEqual([]);
+    } finally {
+      release.resolve();
       await f.close();
     }
   });

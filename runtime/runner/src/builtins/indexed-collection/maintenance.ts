@@ -9,10 +9,11 @@
 import type { Cell } from "../../cell.ts";
 import { portableSnapshotId } from "../../data-uri.ts";
 import type { JSONSchema } from "../../builder/types.ts";
+import { createSigilLinkFromParsedLink } from "../../link-utils.ts";
 import type { IExtendedStorageTransaction } from "../../storage/interface.ts";
-import { encodeCellToSigilString } from "../sqlite/cf-link-codec.ts";
 import {
   type IndexedCollectionDescriptor,
+  indexedFieldPath,
   MEMBER_COLUMN,
   MEMBER_DEPS_TABLE,
   MEMBERS_TABLE,
@@ -50,23 +51,43 @@ const RELATION_SCHEMA = {
   items: { asCell: ["cell"] },
 } as const satisfies JSONSchema;
 
-/** Rows per `INSERT`, keeping a statement well under SQLite's bind limit. */
-const INSERT_CHUNK = 400;
-
 /**
  * Returns the reference `cell` is stored and looked up under: the absolute
- * link of the cell it resolves to, so that two links to one cell agree.
+ * link of the cell it resolves to, holding its space, id, scope and path and
+ * nothing else. Two references to one cell therefore agree, whatever each
+ * was reached through and whatever else its link carries.
  */
 export function memberKeyOf(cell: Cell<unknown>): string {
-  return encodeCellToSigilString(cell.resolveAsCell(), portableSnapshotId);
+  return keyOfLink(cell.resolveAsCell());
+}
+
+/**
+ * Returns every reference `cell` may be stored under: the one it resolves to,
+ * and its own where that differs. A member added by the transaction that
+ * created it is stored under its own until its first re-read.
+ */
+export function memberKeysOf(cell: Cell<unknown>): string[] {
+  return [...new Set([memberKeyOf(cell), keyOfLink(cell)])];
+}
+
+/** Helper for the key functions, which encodes the address of `cell`. */
+function keyOfLink(cell: Cell<unknown>): string {
+  const { id, space, scope, path } = cell.getAsNormalizedFullLink();
+  return JSON.stringify(
+    createSigilLinkFromParsedLink(
+      { id: portableSnapshotId(id), space, scope, path },
+      { includeSchema: false },
+    ),
+  );
 }
 
 /**
  * Reads `member`'s mirrored fields through `tx` and returns the rows they
  * amount to. A column field holding anything but a string, a finite number,
  * or a boolean reads as `null`; a boolean reads as `0` or `1`. A relation
- * field holding anything but a list of cell references reads as empty, and a
- * repeated reference counts once. `deps` names every document the reads
+ * field holds a list of cell references, in which a repeated one counts
+ * once, or a single reference, or nothing. A field that is absent, on a
+ * member or anywhere along a nested path, reads as `null` or as empty. `deps` names every document the reads
  * touched, the member's own included.
  */
 export function projectMember(
@@ -77,19 +98,28 @@ export function projectMember(
   const firstRead = countReads(tx);
   const bound = member.withTx(tx);
   const resolved = bound.resolveAsCell();
-  const key = encodeCellToSigilString(resolved, portableSnapshotId);
+  const key = memberKeyOf(resolved);
+  const field = (name: string): Cell<unknown> =>
+    indexedFieldPath(descriptor, name).reduce<Cell<unknown>>(
+      (cell, key) => (cell as Cell<Record<string, unknown>>).key(key),
+      resolved,
+    );
   const values = descriptor.columns.map((name) =>
-    toColumnValue((resolved as Cell<Record<string, unknown>>).key(name).get())
+    toColumnValue(field(name).get())
   );
   const relations = descriptor.relations.map((name) => {
-    const targets = (resolved as Cell<Record<string, unknown>>).key(name)
-      .asSchema(RELATION_SCHEMA).get() as unknown;
-    if (!Array.isArray(targets)) return [];
-    const keys = new Set<string>();
-    for (const target of targets as Cell<unknown>[]) {
-      keys.add(memberKeyOf(target.withTx(tx)));
+    const targets = field(name).asSchema(RELATION_SCHEMA).get() as unknown;
+    if (Array.isArray(targets)) {
+      const keys = new Set<string>();
+      for (const target of targets as Cell<unknown>[]) {
+        keys.add(memberKeyOf(target.withTx(tx)));
+      }
+      return [...keys];
     }
-    return [...keys];
+    // A field that is not a list holds one reference, or nothing.
+    const single = field(name).resolveAsCell();
+    const held = single.getRaw();
+    return held === undefined || held === null ? [] : [memberKeyOf(single)];
   });
   const deps = new Set<string>([
     bound.getAsNormalizedFullLink().id,
@@ -120,60 +150,71 @@ export function sameMemberRows(
 }
 
 /**
- * Writes `rows` over whatever `db` holds for that member. `previous`, when
- * given, is what the tables hold now: a table whose part of it is unchanged
- * is left alone.
+ * Writes `rows` as the rows of a member being added, over whatever `db` holds
+ * for it.
  */
-export function writeMemberRows(
+export function addMemberRows(
   db: IndexedCollectionWriter,
   descriptor: IndexedCollectionDescriptor,
   rows: MemberRows,
-  previous?: MemberRows,
 ): void {
-  if (previous === undefined || !sameList(previous.values, rows.values)) {
-    const columns = [MEMBER_COLUMN, ...descriptor.columns].map(quote);
-    const update = descriptor.columns.length === 0
-      ? "DO NOTHING"
-      : `DO UPDATE SET ${
-        descriptor.columns.map((name) =>
-          `${quote(name)} = excluded.${quote(name)}`
-        ).join(", ")
-      }`;
+  const columns = [MEMBER_COLUMN, ...descriptor.columns].map(quote);
+  db.exec(
+    `INSERT INTO ${quote(MEMBERS_TABLE)} (${columns.join(", ")}) VALUES (${
+      columns.map(() => "?").join(", ")
+    }) ON CONFLICT (${quote(MEMBER_COLUMN)}) ${onConflict(descriptor)}`,
+    [rows.member, ...rows.values],
+  );
+  writeOwnedRows(db, descriptor, rows);
+}
+
+/**
+ * Brings the rows `db` holds for a member up to `rows`, given that it holds
+ * `previous` now: a table whose part is unchanged is left alone. Every
+ * statement applies only while the member's row is there when it commits, so
+ * a member removed since `previous` was read stays removed.
+ */
+export function refreshMemberRows(
+  db: IndexedCollectionWriter,
+  descriptor: IndexedCollectionDescriptor,
+  rows: MemberRows,
+  previous: MemberRows,
+): void {
+  if (
+    descriptor.columns.length > 0 && !sameList(previous.values, rows.values)
+  ) {
     db.exec(
-      `INSERT INTO ${quote(MEMBERS_TABLE)} (${columns.join(", ")}) VALUES (${
-        columns.map(() => "?").join(", ")
-      }) ON CONFLICT (${quote(MEMBER_COLUMN)}) ${update}`,
-      [rows.member, ...rows.values],
+      `UPDATE ${quote(MEMBERS_TABLE)} SET ${
+        descriptor.columns.map((name) => `${quote(name)} = ?`).join(", ")
+      } WHERE ${quote(MEMBER_COLUMN)} = ?`,
+      [...rows.values, rows.member],
     );
   }
-  descriptor.relations.forEach((name, at) => {
-    if (
-      previous !== undefined &&
-      sameSet(previous.relations[at] ?? [], rows.relations[at])
-    ) {
-      return;
-    }
-    replaceRows(
-      db,
-      name,
-      SOURCE_COLUMN,
-      TARGET_COLUMN,
-      rows.member,
-      rows.relations[at],
-      previous === undefined || (previous.relations[at]?.length ?? 0) > 0,
-    );
-  });
-  if (previous === undefined || !sameSet(previous.deps, rows.deps)) {
-    replaceRows(
-      db,
-      MEMBER_DEPS_TABLE,
-      MEMBER_COLUMN,
-      "doc",
-      rows.member,
-      rows.deps,
-      true,
-    );
-  }
+  writeOwnedRows(db, descriptor, rows, previous);
+}
+
+/**
+ * Moves the rows `db` holds under the reference `from` to `rows.member`,
+ * bringing them up to `rows`. Nothing is written unless a member is stored
+ * under `from` when the statements commit.
+ */
+export function moveMemberRows(
+  db: IndexedCollectionWriter,
+  descriptor: IndexedCollectionDescriptor,
+  from: string,
+  rows: MemberRows,
+): void {
+  const columns = [MEMBER_COLUMN, ...descriptor.columns].map(quote);
+  db.exec(
+    `INSERT INTO ${quote(MEMBERS_TABLE)} (${columns.join(", ")}) SELECT ${
+      columns.map(() => "?").join(", ")
+    } WHERE EXISTS (${MEMBER_EXISTS}) ON CONFLICT (${quote(MEMBER_COLUMN)}) ${
+      onConflict(descriptor)
+    }`,
+    [rows.member, ...rows.values, from],
+  );
+  writeOwnedRows(db, descriptor, rows);
+  deleteMemberRows(db, descriptor, from);
 }
 
 /** Deletes every row `db` holds for the member stored under `member`. */
@@ -198,34 +239,77 @@ export function deleteMemberRows(
   );
 }
 
+/** Subquery selecting the row of the member bound as its one parameter. */
+const MEMBER_EXISTS = `SELECT 1 FROM ${quote(MEMBERS_TABLE)} WHERE ${
+  quote(MEMBER_COLUMN)
+} = ?`;
+
+/** Helper for the row writers, which returns a member row's conflict clause. */
+function onConflict(descriptor: IndexedCollectionDescriptor): string {
+  return descriptor.columns.length === 0
+    ? "DO NOTHING"
+    : `DO UPDATE SET ${
+      descriptor.columns.map((name) =>
+        `${quote(name)} = excluded.${quote(name)}`
+      ).join(", ")
+    }`;
+}
+
 /**
- * Helper for `writeMemberRows()`, which replaces the rows of `table` owned by
- * `owner` with one row per entry of `values`.
+ * Helper for the row writers, which replaces the relation and dependency
+ * rows of `rows.member`, leaving alone each table whose part of `previous` is
+ * unchanged. The rows are inserted only while the member's own row exists.
+ */
+function writeOwnedRows(
+  db: IndexedCollectionWriter,
+  descriptor: IndexedCollectionDescriptor,
+  rows: MemberRows,
+  previous?: MemberRows,
+): void {
+  descriptor.relations.forEach((name, at) => {
+    if (
+      previous === undefined ||
+      !sameSet(previous.relations[at] ?? [], rows.relations[at])
+    ) {
+      replaceRows(
+        db,
+        name,
+        SOURCE_COLUMN,
+        TARGET_COLUMN,
+        rows,
+        rows.relations[at],
+      );
+    }
+  });
+  if (previous === undefined || !sameSet(previous.deps, rows.deps)) {
+    replaceRows(db, MEMBER_DEPS_TABLE, MEMBER_COLUMN, "doc", rows, rows.deps);
+  }
+}
+
+/**
+ * Helper for `writeOwnedRows()`, which replaces the rows of `table` owned by
+ * `rows.member` with one row per entry of `values`. The values travel as one
+ * JSON list, so a statement's size does not grow with their number.
  */
 function replaceRows(
   db: IndexedCollectionWriter,
   table: string,
   ownerColumn: string,
   valueColumn: string,
-  owner: string,
+  rows: MemberRows,
   values: readonly string[],
-  mayHoldRows: boolean,
 ): void {
-  if (mayHoldRows) {
-    db.exec(
-      `DELETE FROM ${quote(table)} WHERE ${quote(ownerColumn)} = ?`,
-      [owner],
-    );
-  }
-  for (let start = 0; start < values.length; start += INSERT_CHUNK) {
-    const chunk = values.slice(start, start + INSERT_CHUNK);
-    db.exec(
-      `INSERT INTO ${quote(table)} (${quote(ownerColumn)}, ${
-        quote(valueColumn)
-      }) VALUES ${chunk.map(() => "(?, ?)").join(", ")}`,
-      chunk.flatMap((value) => [owner, value]),
-    );
-  }
+  db.exec(
+    `DELETE FROM ${quote(table)} WHERE ${quote(ownerColumn)} = ?`,
+    [rows.member],
+  );
+  if (values.length === 0) return;
+  db.exec(
+    `INSERT INTO ${quote(table)} (${quote(ownerColumn)}, ${
+      quote(valueColumn)
+    }) SELECT ?, value FROM json_each(?) WHERE EXISTS (${MEMBER_EXISTS})`,
+    [rows.member, JSON.stringify(values), rows.member],
+  );
 }
 
 /** Helper for `projectMember()`, which maps a field value to a column value. */

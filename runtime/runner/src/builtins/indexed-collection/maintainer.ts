@@ -22,12 +22,12 @@ import {
   TARGET_COLUMN,
 } from "./definition.ts";
 import {
-  deleteMemberRows,
   type IndexedColumnValue,
   type MemberRows,
+  moveMemberRows,
   projectMember,
+  refreshMemberRows,
   sameMemberRows,
-  writeMemberRows,
 } from "./maintenance.ts";
 
 const logger = getLogger("indexed-collection");
@@ -102,7 +102,13 @@ export class IndexedCollectionMaintainer {
     this.#subscription = {
       next: (notification: StorageNotification) => {
         if (this.#disposed) return { done: true };
-        if ("changes" in notification) {
+        // A load or a pull brings a document into this runtime without
+        // anything having been written to it.
+        if (
+          notification.type === "commit" ||
+          notification.type === "integrate" ||
+          notification.type === "revert"
+        ) {
           const ids = new Set<string>();
           for (const change of notification.changes) {
             ids.add(change.address.id);
@@ -181,8 +187,16 @@ export class IndexedCollectionMaintainer {
     );
   }
 
-  /** Reads the collections the space's registry lists. */
+  /**
+   * Reads the collections the space's registry lists, in a serving runtime.
+   * A failure leaves the registry unread, so that the next write to the space
+   * reads it again.
+   */
   async #loadRegistry(space: MemorySpace, state: SpaceState): Promise<void> {
+    // Only a serving runtime maintains a collection whose declaring piece it
+    // never loaded. Any other runtime knows a collection from having declared
+    // or written it.
+    if (!this.#runtime.servingPosture) return;
     try {
       const registry = this.#registryCell(space);
       // Asked without loading the document: a space that holds no collection
@@ -194,13 +208,19 @@ export class IndexedCollectionMaintainer {
       const entries = registry.getRaw({ lastNode: "value" });
       if (!isPlainObject(entries)) return;
       for (const [id, link] of Object.entries(entries)) {
-        const sigil = parseCfLinkToSigil(link);
-        if (sigil === null || state.collections.has(id)) continue;
-        const handle = this.#runtime.getCellFromLink(sigil);
-        await handle.sync();
-        this.#adopt(state, handle.getAsNormalizedFullLink(), id);
+        if (state.collections.has(id)) continue;
+        try {
+          const sigil = parseCfLinkToSigil(link);
+          if (sigil === null) continue;
+          const handle = this.#runtime.getCellFromLink(sigil);
+          await handle.sync();
+          this.#adopt(state, handle.getAsNormalizedFullLink(), id);
+        } catch (error) {
+          logger.warn("registry-entry-unreadable", () => [space, id, error]);
+        }
       }
     } catch (error) {
+      state.loaded = undefined;
       logger.warn("registry-load-failed", () => [space, error]);
     }
   }
@@ -261,33 +281,37 @@ export class IndexedCollectionMaintainer {
     this.#runtime.trackAsyncWork(draining);
   }
 
-  /** Carries the pending writes of one collection into its tables. */
+  /**
+   * Carries the pending writes of one collection into its tables. A failure
+   * before the members are known leaves the writes owed, so that the next
+   * drain of this collection asks about them again.
+   */
   async #drain(collection: CollectionState): Promise<void> {
     const docs = [...collection.pending];
     collection.pending.clear();
-    const handle = this.#runtime.getCellFromLink(collection.handle);
-    await handle.sync();
-    const value: unknown = handle.getRaw({ lastNode: "value" });
-    const descriptor = indexedCollectionDescriptorOf(value);
-    if (descriptor === undefined || !isSqliteDbRef(value)) return;
-    const provider = this.#runtime.storageManager.open(collection.handle.space);
-    if (provider.sqliteQuery === undefined) return;
+    let descriptor: IndexedCollectionDescriptor | undefined;
     let members: MemberRows[];
     try {
+      const handle = this.#runtime.getCellFromLink(collection.handle);
+      await handle.sync();
+      const value: unknown = handle.getRaw({ lastNode: "value" });
+      descriptor = indexedCollectionDescriptorOf(value);
+      if (descriptor === undefined || !isSqliteDbRef(value)) return;
+      const provider = this.#runtime.storageManager.open(
+        collection.handle.space,
+      );
+      if (provider.sqliteQuery === undefined) return;
       const { rows } = await provider.sqliteQuery(
         toDbRef(value),
         affectedRowsSql(descriptor),
         { docs: JSON.stringify(docs) },
       );
       members = groupMemberRows(descriptor, rows);
+      await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
     } catch (error) {
-      // The writes stay owed: the next drain of this collection asks about
-      // them again.
       for (const doc of docs) collection.pending.add(doc);
       throw error;
     }
-    if (this.#disposed || members.length === 0) return;
-    await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
     for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
       if (this.#disposed) return;
       const event: MaintenanceEvent = {
@@ -333,16 +357,24 @@ export class IndexedCollectionMaintainer {
     if (descriptor === undefined) return;
     const writer = createSqliteWriter(this.#runtime, handle, tx);
     for (const previous of event.members) {
-      const member = this.#memberCell(previous, tx);
-      const rows = projectMember(tx, descriptor, member);
-      if (rows.member !== previous.member) {
-        // A member added by the transaction that created it was stored
-        // under a reference that has since resolved to another cell. Its
-        // rows move to the reference other members hold to it.
-        deleteMemberRows(writer, descriptor, previous.member);
-        writeMemberRows(writer, descriptor, rows);
-      } else if (!sameMemberRows(previous, rows)) {
-        writeMemberRows(writer, descriptor, rows, previous);
+      // One member that cannot be read leaves the others of its batch to be
+      // written.
+      try {
+        const rows = projectMember(
+          tx,
+          descriptor,
+          this.#memberCell(previous, tx),
+        );
+        if (rows.member !== previous.member) {
+          // A member added by the transaction that created it was stored
+          // under a reference that has since resolved to another cell. Its
+          // rows move to the reference other members hold to it.
+          moveMemberRows(writer, descriptor, previous.member, rows);
+        } else if (!sameMemberRows(previous, rows)) {
+          refreshMemberRows(writer, descriptor, rows, previous);
+        }
+      } catch (error) {
+        logger.warn("member-unreadable", () => [previous.member, error]);
       }
     }
   }

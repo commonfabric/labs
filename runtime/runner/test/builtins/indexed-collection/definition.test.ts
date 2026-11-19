@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import {
   defineIndexedCollection,
   indexedCollectionDescriptorOf,
+  indexedFieldPath,
 } from "../../../src/builtins/indexed-collection/definition.ts";
 
 describe("definition", () => {
@@ -11,7 +12,7 @@ describe("definition", () => {
       const { tables, index } = defineIndexedCollection();
 
       expect(Object.keys(tables).sort()).toEqual(["member_deps", "members"]);
-      expect(index).toEqual({ columns: [], relations: [] });
+      expect(index).toEqual({ columns: [], relations: [], paths: {} });
     });
 
     it("gives the `members` table a column per mirrored field, after the member reference", () => {
@@ -50,6 +51,36 @@ describe("definition", () => {
         ["target_cf_link"],
       ]);
       expect(index.relations).toEqual(["pairsWith"]);
+    });
+
+    it("records the path of a column or relation read from a nested value", () => {
+      const { tables, index } = defineIndexedCollection({
+        columns: {
+          name: "text",
+          bakerName: { type: "text", path: ["baker", "name"] },
+        },
+        relations: { pairsWith: ["menu", "pairsWith"] },
+      });
+
+      expect(tables.members.properties.bakerName.sqlType).toBe("text");
+      expect(index).toEqual({
+        columns: ["name", "bakerName"],
+        relations: ["pairsWith"],
+        paths: {
+          bakerName: ["baker", "name"],
+          pairsWith: ["menu", "pairsWith"],
+        },
+      });
+    });
+
+    it("throws on a nested column or relation given no path", () => {
+      expect(() =>
+        defineIndexedCollection({
+          columns: { name: { type: "text", path: [] } },
+        })
+      ).toThrow("needs a path");
+      expect(() => defineIndexedCollection({ relations: { pairsWith: [] } }))
+        .toThrow("needs a path");
     });
 
     it("throws on a field name that is not an identifier", () => {
@@ -91,6 +122,20 @@ describe("definition", () => {
     });
   });
 
+  describe("indexedFieldPath()", () => {
+    it("returns the field of the same name unless a path was declared", () => {
+      const { index } = defineIndexedCollection({
+        columns: {
+          name: "text",
+          bakerName: { type: "text", path: ["baker", "name"] },
+        },
+      });
+
+      expect(indexedFieldPath(index, "name")).toEqual(["name"]);
+      expect(indexedFieldPath(index, "bakerName")).toEqual(["baker", "name"]);
+    });
+  });
+
   describe("indexedCollectionDescriptorOf()", () => {
     it("returns the descriptor a handle value carries", () => {
       const { index } = defineIndexedCollection({
@@ -101,6 +146,7 @@ describe("definition", () => {
       expect(indexedCollectionDescriptorOf({ id: "x", index })).toEqual({
         columns: ["name"],
         relations: ["pairsWith"],
+        paths: {},
       });
     });
 

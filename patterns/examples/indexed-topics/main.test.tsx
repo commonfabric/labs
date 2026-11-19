@@ -1,62 +1,93 @@
 /**
  * Tests the indexed-topics board: topics added through the board appear in
- * its listing, a mention shows up as the mentioned topic's "mentioned by",
- * and renaming a topic changes both, with nothing written by the pattern to
- * bring the database up to date.
+ * its listing, the listing's reference to a topic selects it, a mention shows
+ * up as the mentioned topic's "mentioned by", and renaming a topic changes
+ * both, with nothing written by the pattern to bring the database up to date.
  *
  * Run: deno task cf test patterns/examples/indexed-topics/main.test.tsx
  */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
-import Board, { type TopicOutput } from "./main.tsx";
+import { action, assert, pattern, TESTS } from "commonfabric";
+import Board from "./main.tsx";
 
 const titles = (rows: { title: string }[] | undefined): string =>
   (rows ?? []).map((row) => row.title).join(",");
 
 export default pattern(() => {
   const board = Board({});
-  const alpha = new Writable<TopicOutput | undefined>(undefined);
 
   return {
     [TESTS]: [
       { assertion: assert(() => board.topicCount === 0) },
 
       { action: action(() => board.addTopic.send({ title: "alpha" })) },
-      { settle: true },
-      { action: action(() => alpha.set(board.latest)) },
       { action: action(() => board.addTopic.send({ title: "beta" })) },
       { settle: true },
-
       { assertion: assert(() => board.topicCount === 2) },
       {
         assertion: assert(() => titles(board.titles.result) === "alpha,beta"),
       },
-      // Nothing mentions alpha yet.
-      {
-        assertion: assert(() => alpha.get()?.mentionedBy.result?.length === 0),
-      },
 
+      // A listing row's reference selects the topic it names.
       {
         action: action(() => {
-          const target = alpha.get();
-          if (target) board.latest?.mention.send({ topic: target });
+          const row = board.titles.result?.find((row) => row.title === "alpha");
+          if (row) board.select.send({ topic: row.topic });
         }),
       },
       { settle: true },
+      { assertion: assert(() => board.selected?.title === "alpha") },
+
+      // Alpha mentions beta, named by beta's listing reference.
+      {
+        action: action(() => {
+          const row = board.titles.result?.find((row) => row.title === "beta");
+          if (row) board.selected?.mention?.send({ topic: row.topic });
+        }),
+      },
+      {
+        action: action(() => {
+          const row = board.titles.result?.find((row) => row.title === "beta");
+          if (row) board.select.send({ topic: row.topic });
+        }),
+      },
+      { settle: true },
+      { assertion: assert(() => board.selected?.title === "beta") },
+      // Reading the result starts beta's query, which the settle then waits
+      // for.
+      {
+        assertion: assert(() => board.selected?.mentionedBy?.pending !== true),
+      },
+      { settle: true },
       {
         assertion: assert(() =>
-          titles(alpha.get()?.mentionedBy.result) === "beta"
+          titles(board.selected?.mentionedBy?.result) === "alpha"
+        ),
+      },
+      // The row holds the mentioning topic as a cell, read here for a field
+      // the collection does not mirror.
+      {
+        assertion: assert(() =>
+          board.selected?.mentionedBy?.result?.[0]?.topic.get().mentions
+            .length === 1
         ),
       },
 
-      // The rename is a write to the topic alone; the collection follows it.
-      { action: action(() => board.latest?.rename.send({ title: "gamma" })) },
+      // Renaming alpha is a write to alpha alone, made through the cell the
+      // row holds. The collection follows it.
+      {
+        action: action(() =>
+          board.selected?.mentionedBy?.result?.[0]?.topic.key("title").set(
+            "gamma",
+          )
+        ),
+      },
       { settle: true },
       {
-        assertion: assert(() => titles(board.titles.result) === "alpha,gamma"),
+        assertion: assert(() => titles(board.titles.result) === "beta,gamma"),
       },
       {
         assertion: assert(() =>
-          titles(alpha.get()?.mentionedBy.result) === "gamma"
+          titles(board.selected?.mentionedBy?.result) === "gamma"
         ),
       },
     ],

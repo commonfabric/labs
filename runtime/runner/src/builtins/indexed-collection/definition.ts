@@ -30,19 +30,30 @@ export const SOURCE_COLUMN = "source_cf_link";
 /** Column of a relation table holding the referenced cell. */
 export const TARGET_COLUMN = "target_cf_link";
 
+/** A column mirroring a value nested inside a member. */
+export interface IndexedColumnAtPath {
+  /** SQLite column type the value is stored under. */
+  type: string;
+
+  /** Keys leading from the member to the value. */
+  path: readonly string[];
+}
+
 /** What a pattern passes to `indexedCollection()`. */
 export interface IndexedCollectionOptions {
   /**
-   * Member fields mirrored as columns of the `members` table, each with the
-   * SQLite column type it is stored under.
+   * Values mirrored as columns of the `members` table. A column is named for
+   * the member field it mirrors and given the SQLite type it is stored
+   * under, or is given a type and the path of a nested value.
    */
-  columns?: Record<string, string>;
+  columns?: Record<string, string | IndexedColumnAtPath>;
 
   /**
-   * Member fields holding references to other cells. Each becomes a table of
-   * that name with one row per reference.
+   * Member fields holding one reference to another cell, or a list of them.
+   * Each becomes a table of that name with one row per reference. A list
+   * names fields; a map gives each relation the path of a nested field.
    */
-  relations?: readonly string[];
+  relations?: readonly string[] | Record<string, readonly string[]>;
 
   /** Secondary indexes over the `members` table, each a list of columns. */
   indexes?: ReadonlyArray<ReadonlyArray<string>>;
@@ -58,6 +69,12 @@ export interface IndexedCollectionDescriptor {
 
   /** Relation fields, in declaration order. */
   relations: string[];
+
+  /**
+   * Where a column or relation is read from, for each one that is not the
+   * member field of its own name.
+   */
+  paths: Record<string, string[]>;
 
   [key: string]: FabricValue;
 }
@@ -89,19 +106,31 @@ export function defineIndexedCollection(
         "not a pattern input or a computed value",
     );
   }
-  const columns = options.columns ?? {};
-  const relations = [...(options.relations ?? [])];
-  for (const name of Object.keys(columns)) {
+  const paths: Record<string, string[]> = {};
+  const columns: Record<string, string> = {};
+  for (const [name, spec] of Object.entries(options.columns ?? {})) {
     assertFieldName(name, "column");
     if (name === MEMBER_COLUMN) {
       throw new TypeError(
         `\`indexedCollection()\`: column \`${name}\` is the member reference`,
       );
     }
-    if (typeof columns[name] !== "string") {
+    const type = typeof spec === "string" ? spec : spec?.type;
+    if (typeof type !== "string") {
       throw new TypeError(
         `\`indexedCollection()\`: column \`${name}\` needs a SQLite type`,
       );
+    }
+    columns[name] = type;
+    if (typeof spec !== "string") paths[name] = toPath(name, spec.path);
+  }
+  const declaredRelations = options.relations ?? [];
+  const relations = Array.isArray(declaredRelations)
+    ? [...declaredRelations as readonly string[]]
+    : Object.keys(declaredRelations);
+  if (!Array.isArray(declaredRelations)) {
+    for (const [name, path] of Object.entries(declaredRelations)) {
+      paths[name] = toPath(name, path);
     }
   }
   const seen = new Set<string>();
@@ -149,7 +178,7 @@ export function defineIndexedCollection(
   }
   return {
     tables,
-    index: { columns: Object.keys(columns), relations },
+    index: { columns: Object.keys(columns), relations, paths },
   };
 }
 
@@ -166,7 +195,44 @@ export function indexedCollectionDescriptorOf(
   if (!isPlainObject(index)) return undefined;
   const { columns, relations } = index;
   if (!isNameList(columns) || !isNameList(relations)) return undefined;
-  return { columns: [...columns], relations: [...relations] };
+  const paths: Record<string, string[]> = {};
+  if (isPlainObject(index.paths)) {
+    for (const [name, path] of Object.entries(index.paths)) {
+      if (
+        Array.isArray(path) && path.length > 0 &&
+        path.every((key) => typeof key === "string")
+      ) {
+        paths[name] = [...path];
+      }
+    }
+  }
+  return { columns: [...columns], relations: [...relations], paths };
+}
+
+/**
+ * Returns the keys leading from a member to the value the column or relation
+ * `name` of `descriptor` mirrors.
+ */
+export function indexedFieldPath(
+  descriptor: IndexedCollectionDescriptor,
+  name: string,
+): readonly string[] {
+  return Object.hasOwn(descriptor.paths, name)
+    ? descriptor.paths[name]
+    : [name];
+}
+
+/** Helper for `defineIndexedCollection()`, which validates one path. */
+function toPath(name: string, path: unknown): string[] {
+  if (
+    !Array.isArray(path) || path.length === 0 ||
+    !path.every((key) => typeof key === "string")
+  ) {
+    throw new TypeError(
+      `\`indexedCollection()\`: \`${name}\` needs a path of one or more keys`,
+    );
+  }
+  return [...path];
 }
 
 /**

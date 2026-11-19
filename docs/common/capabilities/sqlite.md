@@ -376,13 +376,22 @@ export default pattern<{ favorite: Cell<Donut> }, {
   `source_cf_link` and a `target_cf_link` column, one row per reference. Both
   are indexed, so "which members refer to this one" is a lookup.
 - A member is identified by its cell reference and by nothing else. Bind a
-  cell to a `:name_cf_link` parameter to look one up, and type a row field as
-  `Cell<Donut>` to get a member back as a cell.
+  cell to a `:name_cf_link` parameter to look one up.
+- To get a member back, select `member_cf_link` into a row field typed as a
+  cell: `OpaqueCell<Donut>` for a reference you pass along, to a handler or
+  into another query, and `Cell<Donut>` for one you read or write. Mirror the
+  few fields a list needs beside it, and the list never opens a member.
+- A column can mirror a nested value,
+  `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
+  field holding one reference as well as a list of them. A field that is
+  absent is stored as `NULL`.
 - `add(member)` and `remove(member)` are called in a handler. After `add()`,
   you write to the member and nothing else: the runtime re-reads a member when
   a document its mirrored fields were read from is written.
 - A query over a collection needs no `reactOn`. It re-runs when the collection
   changes, and its result changes only when its rows do.
+- Decide what a collection mirrors before it holds members. Adding a column to
+  a collection that already has members is not supported.
 
 Mirror the fields your queries filter, order, or join on, and read the rest
 from the member cell. A column holds a string, a number, or a boolean; any

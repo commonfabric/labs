@@ -4293,20 +4293,34 @@ export type SqliteDatabaseFunction = {
  */
 export interface IndexedCollectionOptions<T = unknown> {
   /**
-   * Member fields mirrored as columns of the `members` table, each with the
-   * SQLite column type it is stored under.
+   * Values mirrored as columns of the `members` table. A column is named for
+   * the member field it mirrors and given the SQLite type it is stored
+   * under, or is given a type and the path of a value nested in the member.
+   * A value that is absent is stored as `NULL`.
    */
-  columns?: { [K in keyof T & string]?: string };
+  columns?: Record<string, string | IndexedColumnAtPath>;
 
   /**
-   * Member fields holding references to other cells. Each becomes a table of
-   * that name holding a `source_cf_link` and a `target_cf_link` column, with
-   * one row per reference.
+   * Member fields holding one reference to another cell, or a list of them.
+   * Each becomes a table of that name holding a `source_cf_link` and a
+   * `target_cf_link` column, with one row per reference. A list names fields
+   * of the member; a map gives each relation the path of a nested field.
    */
-  relations?: ReadonlyArray<keyof T & string>;
+  relations?:
+    | ReadonlyArray<keyof T & string>
+    | Record<string, readonly string[]>;
 
   /** Secondary indexes over the `members` table, each a list of columns. */
-  indexes?: ReadonlyArray<ReadonlyArray<keyof T & string>>;
+  indexes?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/** A column of an indexed collection mirroring a value nested in a member. */
+export interface IndexedColumnAtPath {
+  /** SQLite column type the value is stored under. */
+  type: string;
+
+  /** Keys leading from the member to the value. */
+  path: readonly string[];
 }
 
 /**
@@ -4327,15 +4341,13 @@ export interface IndexedCollection<T = unknown> extends SqliteDb {
   remove(member: T | AnyCell<T>): void;
 }
 
-/** Declares an indexed collection. See {@link IndexedCollection}. */
-export type IndexedCollectionFunction = {
-  <T = unknown>(
-    options?: IndexedCollectionOptions<T>,
-  ): Reactive<IndexedCollection<T>>;
-
-  /** Binds the collection, and so its database file, to a scope. */
-  asScope(scope: CellScope): IndexedCollectionFunction;
-};
+/**
+ * Declares an indexed collection, which lives at the scope of the space. See
+ * {@link IndexedCollection}.
+ */
+export type IndexedCollectionFunction = <T = unknown>(
+  options?: IndexedCollectionOptions<T>,
+) => Reactive<IndexedCollection<T>>;
 
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;

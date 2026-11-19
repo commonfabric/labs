@@ -137,6 +137,19 @@ describe("indexed-collection", () => {
       ]);
     });
 
+    it("throws on a cell of another space", async () => {
+      await declare({ columns: { title: "text" } });
+      const elsewhere = await Identity.fromPassphrase(
+        `indexed-collection-elsewhere-${crypto.randomUUID()}`,
+      );
+      const tx = runtime.edit();
+      const foreign = runtime.getCell(elsewhere.did(), "far", undefined, tx);
+
+      expect(() => collection(tx).add(foreign)).toThrow("its own space");
+      tx.abort();
+      await runtime.idle();
+    });
+
     it("throws on a database that is not an indexed collection", async () => {
       const tx = runtime.edit();
       const handle = runtime.getCell(space, "plain", undefined, tx);
@@ -196,6 +209,80 @@ describe("indexed-collection", () => {
       await commit((tx) => topic("a", tx).key("mentions").set([]));
 
       expect(await rows(mentioning)).toEqual([]);
+    });
+  });
+
+  describe("a column read from a nested value", () => {
+    beforeEach(async () => {
+      await declare({
+        columns: {
+          title: "text",
+          author: { type: "text", path: ["meta", "author", "name"] },
+        },
+      });
+    });
+
+    it("mirrors the value at the path", async () => {
+      await commit((tx) => {
+        const cell = topic("a", tx);
+        cell.setRawUntyped({ title: "a", meta: { author: { name: "Ada" } } });
+        collection(tx).add(cell);
+      });
+
+      expect(await rows("SELECT title, author FROM members")).toEqual([
+        { title: "a", author: "Ada" },
+      ]);
+    });
+
+    it("stores `NULL` where the member has nothing at the path", async () => {
+      await addTopic("a");
+
+      expect(await rows("SELECT title, author FROM members")).toEqual([
+        { title: "a", author: null },
+      ]);
+    });
+
+    it("follows the value once a later write supplies it", async () => {
+      await addTopic("a");
+      await commit((tx) =>
+        topic("a", tx).setRawUntyped({
+          title: "a",
+          meta: { author: { name: "Grace" } },
+        })
+      );
+
+      expect(await rows("SELECT author FROM members")).toEqual([
+        { author: "Grace" },
+      ]);
+    });
+  });
+
+  describe("a relation holding one reference", () => {
+    const parents = "SELECT c.title AS child, p.title AS parent " +
+      "FROM parent e JOIN members c ON c.member_cf_link = e.source_cf_link " +
+      "JOIN members p ON p.member_cf_link = e.target_cf_link ORDER BY c.title";
+
+    beforeEach(async () => {
+      await declare({ columns: { title: "text" }, relations: ["parent"] });
+      await addTopic("root");
+    });
+
+    it("stores one row for the reference", async () => {
+      await commit((tx) => {
+        const cell = topic("a", tx);
+        cell.setRawUntyped({ title: "a", parent: topic("root").getAsLink() });
+        collection(tx).add(cell);
+      });
+
+      expect(await rows(parents)).toEqual([{ child: "a", parent: "root" }]);
+    });
+
+    it("stores no row for a member holding no reference", async () => {
+      await addTopic("a");
+
+      expect(await rows("SELECT count(*) AS n FROM parent")).toEqual([
+        { n: 0 },
+      ]);
     });
   });
 
@@ -275,6 +362,37 @@ describe("indexed-collection", () => {
       expect(await rows("SELECT count(*) AS n FROM mentions")).toEqual([
         { n: 0 },
       ]);
+    });
+
+    it("keeps a member removed while its re-read was being looked up", async () => {
+      await declare({ columns: { title: "text" } });
+      await addTopic("a");
+      // Hold the reply to the maintainer's lookup, so that the removal
+      // commits between the lookup and the re-read it leads to.
+      const provider = storageManager.open(space);
+      const query = provider.sqliteQuery!.bind(provider);
+      const lookedUp = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      provider.sqliteQuery = async (handle, sql, ...rest) => {
+        const reply = await query(handle, sql, ...rest);
+        if (sql.startsWith("WITH affected") && reply.rows.length > 0) {
+          lookedUp.resolve();
+          await release.promise;
+        }
+        return reply;
+      };
+
+      const rename = runtime.edit();
+      topic("a", rename).key("title").set("renamed");
+      await rename.commit().settled;
+      await lookedUp.promise;
+      const removal = runtime.edit();
+      collection(removal).remove(topic("a", removal));
+      await removal.commit().settled;
+      release.resolve();
+      await runtime.settled();
+
+      expect(await rows("SELECT title FROM members")).toEqual([]);
     });
 
     it("stops following writes to the removed member", async () => {

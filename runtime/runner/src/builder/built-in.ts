@@ -242,26 +242,16 @@ export const sqliteDatabase = createNodeFactory({
  * the declaration, and whose handle carries the descriptor the runtime
  * maintains them by. The declaration is read when the pattern is built.
  */
-export const indexedCollection = indexedCollectionOver(sqliteDatabase);
-
-/**
- * Helper for `indexedCollection`, which builds the function declaring a
- * collection as a node of `database`.
- */
-function indexedCollectionOver(
-  database: SqliteDatabaseFunction,
-): IndexedCollectionFunction {
+export const indexedCollection: IndexedCollectionFunction = (options) => {
   // The node's input is the database built-in's, which the descriptor rides
   // beside `tables`.
-  const node = database as (
+  const node = sqliteDatabase as (
     definition: IndexedCollectionDefinition,
   ) => Reactive<SqliteDb>;
-  const declare =
-    ((options?: IndexedCollectionOptions) =>
-      node(defineIndexedCollection(options))) as IndexedCollectionFunction;
-  declare.asScope = (scope) => indexedCollectionOver(database.asScope(scope));
-  return declare;
-}
+  return node(
+    defineIndexedCollection(options as IndexedCollectionOptions),
+  ) as ReturnType<IndexedCollectionFunction>;
+};
 
 // Shares the single `sqliteQuery` node factory with `db.query` (cell.ts) — see
 // builtins/sqlite/query-node.ts — so both construct the same node.

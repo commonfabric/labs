@@ -5,7 +5,10 @@
  * mirrors each topic's title and mentions into a SQLite database, and both
  * the board's listing and each topic's "mentioned by" are queries over it.
  * A topic is identified by its cell reference throughout, in the tables as
- * much as in the pattern.
+ * much as in the pattern, and every query returns that reference beside the
+ * title it mirrors. The listing returns it as an opaque reference, which
+ * selecting a row passes along unread; "mentioned by" returns it as a cell,
+ * through which a field the collection does not mirror is read.
  */
 import {
   type Cell,
@@ -15,6 +18,7 @@ import {
   type IndexedCollection,
   indexedCollection,
   NAME,
+  type OpaqueCell,
   pattern,
   SELF,
   type Stream,
@@ -35,15 +39,43 @@ interface TopicInput {
   board: IndexedCollection<TopicFields>;
 }
 
-/** A row naming one topic. */
-interface TitleRow {
+/**
+ * What the board reads and calls of the topic a listing row selected. Only
+ * the title is required of it: a topic's "mentioned by" is absent until
+ * something asks for it, and a row whose reference did not satisfy its type
+ * would drop out of the result that holds it.
+ */
+export interface SelectedTopic {
+  title: string;
+  mentionedBy?: Rows<MentioningTopic>;
+  mention?: Stream<{ topic: TopicRef }>;
+}
+
+/** A reference to a topic that is passed along without being read. */
+export type TopicRef = OpaqueCell<TopicFields>;
+
+/**
+ * A listing row: the mirrored title, and a reference to the topic that is
+ * handed on without being read.
+ */
+export interface ListedTopic {
+  topic: TopicRef;
   title: string;
 }
 
-/** The settled or pending rows of a query for topic titles. */
-interface TitleRows {
+/**
+ * A "mentioned by" row: the mirrored title, and the mentioning topic as a
+ * cell, through which any field the collection does not mirror is read.
+ */
+export interface MentioningTopic {
+  topic: Cell<TopicFields>;
+  title: string;
+}
+
+/** The settled or pending rows of a query. */
+interface Rows<Row> {
   pending: boolean;
-  result?: TitleRow[];
+  result?: Row[];
   error?: unknown;
 }
 
@@ -52,9 +84,9 @@ export interface TopicOutput {
   [UI]: VNode;
   title: string;
   mentions: unknown[];
-  mentionedBy: TitleRows;
+  mentionedBy: Rows<MentioningTopic>;
   rename: Stream<{ title: string }>;
-  mention: Stream<{ topic: Cell<TopicFields> }>;
+  mention: Stream<{ topic: TopicRef }>;
 }
 
 const renameTopic = handler<{ title: string }, { title: Writable<string> }>(
@@ -62,7 +94,7 @@ const renameTopic = handler<{ title: string }, { title: Writable<string> }>(
 );
 
 const mentionTopic = handler<
-  { topic: Cell<TopicFields> },
+  { topic: TopicRef },
   { mentions: Writable<unknown[]> }
 >(({ topic }, { mentions }) => mentions.push(topic));
 
@@ -70,8 +102,9 @@ export const Topic = pattern<TopicInput, TopicOutput>(
   ({ title, mentions, board, [SELF]: self }) => {
     // Every topic whose `mentions` holds this one, read off the relation
     // table by this topic's own reference.
-    const mentionedBy = board.query<TitleRow>(
-      "SELECT m.title AS title FROM mentions e JOIN members m " +
+    const mentionedBy = board.query<MentioningTopic>(
+      "SELECT m.member_cf_link AS topic, m.title AS title " +
+        "FROM mentions e JOIN members m " +
         "ON m.member_cf_link = e.source_cf_link " +
         "WHERE e.target_cf_link = :self_cf_link ORDER BY m.title",
       { params: { self_cf_link: self } },
@@ -102,23 +135,26 @@ export const Topic = pattern<TopicInput, TopicOutput>(
 export interface BoardOutput {
   [NAME]: string;
   [UI]: VNode;
-  titles: TitleRows;
+  titles: Rows<ListedTopic>;
   topicCount: number;
-  latest: TopicOutput | undefined;
+  selected: SelectedTopic | undefined;
   addTopic: Stream<{ title: string }>;
+  select: Stream<{ topic: TopicRef }>;
 }
 
 const addTopic = handler<
   { title: string },
-  {
-    topics: IndexedCollection<TopicFields>;
-    latest: Writable<TopicOutput | undefined>;
-  }
->(({ title }, { topics, latest }) => {
-  const topic = Topic({ title, mentions: [], board: topics });
-  topics.add(topic);
-  latest.set(topic);
+  { topics: IndexedCollection<TopicFields> }
+>(({ title }, { topics }) => {
+  topics.add(Topic({ title, mentions: [], board: topics }));
 });
+
+// The reference comes from a listing row and is stored as it arrived: nothing
+// here reads the topic it names.
+const selectTopic = handler<
+  { topic: TopicRef },
+  { selected: Writable<SelectedTopic | undefined> }
+>(({ topic }, { selected }) => selected.set(topic));
 
 export default pattern<Record<string, never>, BoardOutput>(() => {
   const topics = indexedCollection<TopicFields>({
@@ -126,16 +162,17 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
     relations: ["mentions"],
     indexes: [["title"]],
   });
-  const latest = new Writable<TopicOutput | undefined>(undefined);
+  const selected = new Writable<SelectedTopic | undefined>(undefined);
 
-  const titles = topics.query<TitleRow>(
-    "SELECT title FROM members ORDER BY title LIMIT 100",
+  const titles = topics.query<ListedTopic>(
+    "SELECT member_cf_link AS topic, title FROM members " +
+      "ORDER BY title LIMIT 100",
   );
   const counts = topics.query<{ n: number }>(
     "SELECT count(*) AS n FROM members",
   );
   const topicCount = computed<number>(() => counts.result?.[0]?.n ?? 0);
-  const listed = computed<TitleRow[]>(() => titles.result ?? []);
+  const listed = computed<ListedTopic[]>(() => titles.result ?? []);
 
   return {
     [NAME]: "Indexed topics",
@@ -144,14 +181,19 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
         <cf-vstack gap="2" style={{ padding: "1rem" }}>
           <cf-label id="topic-count">{topicCount} topics</cf-label>
           <cf-vstack gap="1" id="topic-list">
-            {listed.map((row) => <cf-label>{row.title}</cf-label>)}
+            {listed.map((row) => (
+              <cf-button onClick={selectTopic({ selected })}>
+                {row.title}
+              </cf-button>
+            ))}
           </cf-vstack>
         </cf-vstack>
       </cf-screen>
     ),
     titles,
     topicCount,
-    latest,
-    addTopic: addTopic({ topics, latest }),
+    selected,
+    addTopic: addTopic({ topics }),
+    select: selectTopic({ selected }),
   };
 });

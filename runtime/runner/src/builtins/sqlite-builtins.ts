@@ -29,6 +29,7 @@ import {
   recordRuntimeOwnedStore,
 } from "./runtime-owned-store.ts";
 import { indexedCollectionDescriptorOf } from "./indexed-collection/definition.ts";
+import { memberKeyOf } from "./indexed-collection/maintenance.ts";
 import { resultRowKeys, SQLITE_ROW_SALT } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -92,6 +93,7 @@ import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import {
+  asBoundCell,
   type Cell,
   convertCellsToLinks,
   createCell,
@@ -972,6 +974,24 @@ export function sqliteQueryMemoDecision(options: {
   return "issue";
 }
 
+/**
+ * Returns `params` with every cell bound at its top level replaced by the
+ * reference an indexed collection stores that cell under.
+ */
+function withMemberKeys(params: WireParams): WireParams {
+  const key = (value: unknown): unknown => {
+    const cell = asBoundCell(value);
+    return cell === undefined ? value : memberKeyOf(cell);
+  };
+  if (Array.isArray(params)) return params.map(key) as WireParams;
+  if (isObjectNotArray(params)) {
+    return Object.fromEntries(
+      Object.entries(params).map(([name, value]) => [name, key(value)]),
+    ) as WireParams;
+  }
+  return params;
+}
+
 /** sqliteQuery: reactive server-side read. */
 export function sqliteQuery(
   inputsCell: Cell<any>,
@@ -998,12 +1018,19 @@ export function sqliteQuery(
   const inFlightIssues = new Set<string>();
 
   /**
-   * The collection revision each request target last asked under, for a
-   * query over an indexed collection. Held here rather than in the result:
-   * the revision moves on every write to the collection, and a result that
-   * recorded it would change for its readers when its rows did not.
+   * The collection revision each request target's last completed request
+   * asked under, for a query over an indexed collection. Held here and not in
+   * the result: the revision moves on every write to the collection, and a
+   * result that recorded it would change for its readers when its rows did
+   * not.
    */
-  const refreshTokens = new Map<string, string>();
+  const servedRevisions = new Map<string, string>();
+
+  /** The collection revision each request target's latest run observed. */
+  const wantedRevisions = new Map<string, string>();
+
+  /** The scheduler's handle on this node's action, once it has one. */
+  let registeredAction: Action | undefined;
 
   /** Pending publications, partitioned by result and physical binding instance. */
   const stagings = new Map<
@@ -1216,9 +1243,18 @@ export function sqliteQuery(
       return;
     }
     const linkCols = asCellColumnsFromRowSchema(inputs.rowSchema);
+    // A query over an indexed collection looks its members up by the
+    // reference they are stored under, so a cell bound as a parameter is
+    // bound as that reference.
+    const overCollection =
+      indexedCollectionDescriptorOf(snapshotQueryResult(inputs.db)) !==
+        undefined;
     let params: WireParams;
     try {
-      params = encodeSqliteParams(inputs.sql, inputs.params);
+      params = encodeSqliteParams(
+        inputs.sql,
+        overCollection ? withMemberKeys(inputs.params) : inputs.params,
+      );
     } catch (error) {
       result.withTx(tx).set({
         pending: false,
@@ -1248,14 +1284,12 @@ export function sqliteQuery(
     // A query over an indexed collection follows the collection's write
     // revision without being told to, and keeps that revision out of the
     // request's identity: the request is the same question asked again.
-    const refreshToken =
-      indexedCollectionDescriptorOf(snapshotQueryResult(inputs.db)) ===
-          undefined
-        ? undefined
-        : computeInputHashFromValue({
-          rev: (inputs.db as { rev?: number }).rev ?? 0,
-          reactOn: reactOn ?? null,
-        });
+    const refreshToken = !overCollection
+      ? undefined
+      : computeInputHashFromValue({
+        rev: (inputs.db as { rev?: number }).rev ?? 0,
+        reactOn: reactOn ?? null,
+      });
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);
     const rowSchemaCeiling = snapshotQueryResult(
       (inputs.rowSchema as {
@@ -1403,26 +1437,19 @@ export function sqliteQuery(
       inFlightHere: inFlightIssues.has(effectKey),
       speculativeRun: speculationRunContextOf(tx) !== undefined,
     });
-    // A result asked under an older revision of its collection is asked
-    // again in place: no claim is written, so a settled result changes only
-    // if the rows do. A request still in flight is asked again as well, since
-    // it may have read the database ahead of the write this run follows; its
-    // writeback then steps aside for the later one. A speculative run owns no
-    // query, as for any request.
-    const quietRefresh = decision !== "issue" && refreshToken !== undefined &&
-      refreshTokens.get(effectKey) !== refreshToken &&
-      speculationRunContextOf(tx) === undefined;
-    if (refreshToken !== undefined && (quietRefresh || decision === "issue")) {
-      refreshTokens.set(effectKey, refreshToken);
-      tx.addCommitCallback((_tx, outcome) => {
-        if (outcome.error && refreshTokens.get(effectKey) === refreshToken) {
-          refreshTokens.delete(effectKey);
-        }
-      });
+    // A settled result asked under an older revision of its collection is
+    // asked again in place: no claim is written, so the result changes only
+    // if the rows do. One request per target is out at a time, since that is
+    // what the outbox admits, so a run that finds one in flight records the
+    // revision it wants and leaves the asking to that request's completion.
+    // A speculative run owns no query, as for any request.
+    if (refreshToken !== undefined) {
+      wantedRevisions.set(effectKey, refreshToken);
     }
-    const superseded = () =>
-      refreshToken !== undefined &&
-      refreshTokens.get(effectKey) !== refreshToken;
+    const quietRefresh = decision === "hit" && refreshToken !== undefined &&
+      servedRevisions.get(effectKey) !== refreshToken &&
+      !inFlightIssues.has(effectKey) &&
+      speculationRunContextOf(tx) === undefined;
     if (decision === "hit" && !quietRefresh) {
       // The §4 memo hit (server-execution v2): the committed result records
       // this request hash AND carries a settled result — the stored result
@@ -1430,7 +1457,7 @@ export function sqliteQuery(
       runtime.effectMemoObserver?.({ kind: "hit", id: `sqliteQuery:${hash}` });
       return;
     }
-    if (decision === "dedupe" && !quietRefresh) return;
+    if (decision === "dedupe") return;
     // Forced here, where the request is going out: the flush settles on a
     // transaction of its own, so a label read then would be read from a
     // transaction that has already committed. The settle supplies it to the
@@ -1481,7 +1508,6 @@ export function sqliteQuery(
       // A refresh that never went out left the settled result standing, and
       // the next run asks again.
       if (quietRefresh) {
-        if (!superseded()) refreshTokens.delete(effectKey);
         releaseStaging();
         return;
       }
@@ -1613,9 +1639,7 @@ export function sqliteQuery(
     enqueueSinkRequestPostCommitEffect(
       tx,
       SQLITE_QUERY_SINK,
-      quietRefresh
-        ? `sqliteQuery:${hash}:${refreshToken}`
-        : `sqliteQuery:${hash}`,
+      `sqliteQuery:${hash}`,
       {
         database: { space: databaseSpace, id: db.id },
         sql,
@@ -1698,7 +1722,7 @@ export function sqliteQuery(
               (wtx) => {
                 markEffectCompletion(wtx, effectKey);
                 applyRunIdentity(wtx);
-                if (storedRequestHash(wtx) !== hash || superseded()) return;
+                if (storedRequestHash(wtx) !== hash) return;
                 result.withTx(wtx).set({
                   pending: false,
                   error,
@@ -1930,7 +1954,7 @@ export function sqliteQuery(
                 // Stale-writeback guard: a newer query (different inputs -> different
                 // hash) may have superseded this one while the RPC was in flight.
                 // Only write back if the result cell still records THIS request.
-                if (storedRequestHash(wtx) !== hash || superseded()) {
+                if (storedRequestHash(wtx) !== hash) {
                   return;
                 }
                 const base = result.getAsNormalizedFullLink();
@@ -2117,6 +2141,19 @@ export function sqliteQuery(
           }
         } finally {
           inFlightIssues.delete(effectKey);
+          if (refreshToken !== undefined) {
+            // This request read the collection at the revision its run
+            // observed, or a later one. A run that has observed a different
+            // one since had no request to send while this one was out, so it
+            // is run again to send its own.
+            servedRevisions.set(effectKey, refreshToken);
+            if (
+              wantedRevisions.get(effectKey) !== refreshToken &&
+              registeredAction !== undefined && !cancelled.signal.aborted
+            ) {
+              runtime.scheduler.invalidateAction(registeredAction);
+            }
+          }
         }
       },
       {
@@ -2128,6 +2165,9 @@ export function sqliteQuery(
   };
   return {
     action,
+    onActionRegistered: (registered) => {
+      registeredAction = registered;
+    },
     storeWrites: ownedStoreLinks(runtime, parentCell, [
       resultCellCause("sqliteQuery", cause),
     ]),

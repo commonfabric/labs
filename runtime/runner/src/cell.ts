@@ -103,11 +103,11 @@ import {
   indexedCollectionDescriptorOf,
 } from "./builtins/indexed-collection/definition.ts";
 import {
+  addMemberRows,
   deleteMemberRows,
   type IndexedCollectionWriter,
-  memberKeyOf,
+  memberKeysOf,
   projectMember,
-  writeMemberRows,
 } from "./builtins/indexed-collection/maintenance.ts";
 import { encodeCellToSigilString } from "./builtins/sqlite/cf-link-codec.ts";
 import { sqliteQueryNodeFactory } from "./builtins/sqlite/query-node.ts";
@@ -2422,13 +2422,27 @@ export class CellImpl<T extends FabricValue>
     if (cell === undefined) {
       throw new TypeError("an indexed collection holds cells only");
     }
+    // The collection hears of writes in its own space, so a member elsewhere
+    // would be mirrored once and never followed.
+    if (cell.getAsNormalizedFullLink().space !== this.space) {
+      throw new TypeError(
+        "an indexed collection holds cells of its own space only",
+      );
+    }
     const rows = projectMember(this.#tx, descriptor, cell);
-    writeMemberRows(
-      this,
-      descriptor,
-      rows,
-    );
-    this.#registerIndexedCollection(rows.deps);
+    addMemberRows(this, descriptor, rows);
+    // A piece the calling handler has just made is set up only if something
+    // the handler writes refers to it, and a row is not such a write. The
+    // handle is written by every `exec()` already, so it carries the
+    // reference, of the member added last.
+    (this.withTx(this.#tx) as unknown as Cell<{ latest: unknown }>).key(
+      "latest",
+    ).set(cell);
+    const bound = cell.withTx(this.#tx);
+    this.#registerIndexedCollection([
+      bound.getAsNormalizedFullLink().id,
+      bound.resolveAsCell().getAsNormalizedFullLink().id,
+    ]);
   }
 
   /**
@@ -2443,12 +2457,12 @@ export class CellImpl<T extends FabricValue>
   /**
    * Helper for the indexed-collection methods, which makes the collection
    * known to the runtime's maintainer once this transaction's writes are
-   * durable, and has it re-read the members read from `written`. A member
-   * added in the transaction that creates it can hold fields this
-   * transaction has not written yet, and the commit carrying them can reach
-   * the maintainer before the member's rows exist to be found.
+   * durable, and has it re-read the members whose own documents are
+   * `members`. A member added in the transaction that creates it can hold
+   * fields this transaction has not written yet, and the commit carrying them
+   * can reach the maintainer before the member's rows exist to be found.
    */
-  #registerIndexedCollection(written: readonly string[] = []): void {
+  #registerIndexedCollection(members: readonly string[] = []): void {
     const handle = this.resolveAsCell().getAsNormalizedFullLink();
     const value: unknown = this.getRaw({ lastNode: "value" });
     if (!isSqliteDbRef(value)) return;
@@ -2456,7 +2470,7 @@ export class CellImpl<T extends FabricValue>
     const maintainer = this.#runtime.indexedCollections;
     const durable = () => {
       maintainer.register(handle, id);
-      maintainer.noteWrites(handle.space, written);
+      maintainer.noteWrites(handle.space, members);
     };
     this.#tx!.addCommitCallback((settledTx, result) => {
       if (result.error) return;
@@ -3897,11 +3911,9 @@ export class CellImpl<T extends FabricValue>
       const descriptor = this.#indexedCollectionDescriptor();
       const member = asBoundCell(ref);
       if (descriptor !== undefined && member !== undefined && this.#tx) {
-        deleteMemberRows(
-          this,
-          descriptor,
-          memberKeyOf(member.withTx(this.#tx)),
-        );
+        for (const key of memberKeysOf(member.withTx(this.#tx))) {
+          deleteMemberRows(this, descriptor, key);
+        }
         this.#registerIndexedCollection();
         return;
       }
