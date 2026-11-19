@@ -821,18 +821,31 @@ A restore that keeps what was done in a fork is done by **replay**. The
 default branch is restored to the fork's fork point, and the events sent in
 the fork are then played back on top of it, so that the space's own
 computation (its serving loop, under server execution) produces the resulting
-state. Commits a client's web components made directly in the fork are
-replayed the same way. Nothing a client computed or labeled in the fork is
-copied.
+state. Nothing a client computed or labeled in the fork is copied.
+
+A web component's direct commit becomes an event as part of this work, so
+that everything a fork holds back is an event and a replay has one kind of
+thing to play.
 
 A fork can then stay in the client's speculative execution phase. Under
-server execution a client sends only events and its web components' commits,
-so a fork holds those back instead of sending them, and a restore replays
-them.
+server execution a client then sends only events, so a fork holds those back
+instead of sending them, and a restore replays them.
+
+A replay is held to what the fork showed in three ways:
+
+- **Effects reuse the fork's results.** An effect that reaches outside the
+  space, such as a fetch or a language-model call, stores its result keyed by
+  its request. A replay finds the result the fork stored for the same request
+  and sends nothing; a request the fork never made is sent.
+- **The clock and random seeds are the event's.** A replayed event runs with
+  the clock reading and the seeds its first run had, so a handler that reads
+  either computes what it computed in the fork.
+- **The replayed result is what is shown.** Where a replay still computes
+  something other than the fork did, the space holds the replay's result,
+  and the shell shows that result rather than the fork's.
 
 Branches a serving loop runs are then needed only for long-lived branches and
-merging, which stay as planned in 6.7. How an effect that reaches outside the
-space, such as a fetch, behaves when its event is replayed is open.
+merging, which stay as planned in 6.7.
 
 ---
 
