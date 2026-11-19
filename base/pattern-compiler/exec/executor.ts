@@ -60,6 +60,18 @@ import {
   withDefaults,
 } from "./store.ts";
 import type { PartsOptions, Sealed } from "./parts.ts";
+import {
+  type Address,
+  type FoldElements,
+  isUniformBody,
+  type NamedOutputInputs,
+  type PlanRecord,
+  type PlanWrite,
+  reachedBy,
+  type SlotBinding,
+  type SlotBindings,
+  type Template,
+} from "./plan-write.ts";
 
 /** One step of where a declaration sits (PL §1.1, `WithinStep`). */
 type Step = { element?: number; site?: Name };
@@ -101,6 +113,24 @@ export type Plan = {
      * is reached through data.
      */
     sideWrites?: "static" | "materializer";
+    /**
+     * The write edges of the cone: to the argument of a child, to the
+     * request of an operation, and the first value of a state cell.
+     */
+    writes?: {
+      target: {
+        kind: string;
+        cell?: number;
+        child?: number;
+        of?: { operation?: number };
+        path?: string[];
+      };
+      template?: Template;
+    }[];
+    /** The entries of `Plan.selectors` whose branch the cone decides. */
+    selectors?: number[];
+    /** The entries of `Plan.picks` whose child the cone chooses. */
+    picks?: number[];
   }[];
   outputs: {
     path: string[];
@@ -121,6 +151,8 @@ export type Plan = {
     keyFields?: string[];
     kept: boolean;
     interim?: string;
+    /** The label template of the output (PL §1.1, `Output.template`). */
+    template?: Template;
   }[];
   edges: { from: number; to: number; via: { kind: string; output?: number } }[];
   collections: {
@@ -148,6 +180,8 @@ export type Plan = {
     computed: { at: string[]; observes: string }[];
     writes: {
       target: { kind: string; slot?: number; cell?: number; path?: string[] };
+      /** The label template of the write (PL §1.1, `WriteEdge.template`). */
+      template?: Template;
     }[];
     envelopes: { kind: string; slot?: number; path?: string[] }[];
   }[];
@@ -210,6 +244,19 @@ export type Plan = {
       default?: unknown;
     }[];
   }[];
+  /**
+   * The templates the plan holds at more than one position, each written
+   * once (provisional decision P6): a node of `op` `shared` names one.
+   */
+  templates?: Template[];
+  /** The constraints of the plan (PL §1.1); the executor checks none. */
+  constraints?: unknown[];
+  /** The reads through handles that a `dynamic` node names (PL §1.1). */
+  dynamicReads?: unknown[];
+  /** Each branch selector, with the number of its branches. */
+  selectors?: { arity: number }[];
+  /** Each pick, and what chooses its child: value code or the runtime. */
+  picks?: { chosenBy: string }[];
 };
 
 /**
@@ -565,6 +612,52 @@ const handleVariant = (schema: Schema | undefined): Schema | undefined => {
 /** Brings the instances of a side-writing cone up to date. */
 type Writer = (context: Context) => void;
 
+/**
+ * What an evaluation bound a slot to: the positions its read went through,
+ * and for an `identity` slot the reference it gave, which are turned into
+ * addresses when a write record is made, so that an element that moved
+ * since is found where it stands. The slot of an element of the result of
+ * another per-element construct is bound to that upstream element.
+ */
+type Bound =
+  | { observes: string; at: (Position | Ref)[] }
+  | { upstream: { collection: number; keys: [number, string][] } };
+
+/**
+ * The slots that each cone instance last bound, by the instance's name
+ * (`Instance.#noteInputs`), and the identifier of what those bindings
+ * consumed, formed when a group asks for it.
+ */
+type ConeInputs = { slots: Map<number, Bound>; id?: string };
+
+/**
+ * The groups of the elements of one assembly of a collection that a
+ * `fold` names (provisional decision P31): the group of each element
+ * key, the elements of each group, and the keys of the elements that are
+ * not plain values in place, for which no `*` path stands.
+ */
+type Groups = {
+  byKey: Map<string, string>;
+  groups: Map<string, Set<string>>;
+  notInPlace: Set<string>;
+};
+
+/**
+ * The records of the plan that the writes being made belong to: each with
+ * its template, and the document and path of its target where the record
+ * names one. A record with no `doc` covers whatever is written.
+ */
+type Writing = {
+  instance: Instance;
+  host: Host;
+  records: {
+    record: PlanRecord;
+    template: Template | undefined;
+    doc?: string;
+    path?: readonly string[];
+  }[];
+};
+
 const sameRoot = (a: Root, b: Root): boolean =>
   a.kind === b.kind && a.cell === b.cell && a.collection === b.collection &&
   a.handler === b.handler && a.operation === b.operation &&
@@ -597,6 +690,12 @@ export type Counts = {
   staleByOwnWrite: number;
   /** Evaluations that ended in an error state (PL §5.2). */
   failures: number;
+  /**
+   * Updates of the group of an element of a collection that a `fold`
+   * names, one per evaluation of the element's cone instance and one per
+   * element that leaves (provisional decision P31).
+   */
+  groupUpdates: number;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -764,16 +863,20 @@ export class Handle {
         "a write through a handle to a value the instance holds no address for",
       );
     }
-    this.instance.written(this);
-    this.instance.store.write(
-      this.target,
-      this.instance.detached(
+    const recorded = this.instance.written(this);
+    try {
+      this.instance.store.write(
         this.target,
-        this.instance.anchored(
-          this.instance.stored(this.instance.returned(value)),
+        this.instance.detached(
+          this.target,
+          this.instance.anchored(
+            this.instance.stored(this.instance.returned(value)),
+          ),
         ),
-      ),
-    );
+      );
+    } finally {
+      recorded();
+    }
     return this;
   }
 
@@ -826,19 +929,23 @@ export class Handle {
       : Array.isArray(declared)
       ? structuredClone(declared)
       : [];
-    this.instance.written(this.key("*"));
-    // A record that is pushed gets a document of its own, as a record in
-    // a list that is set does (`Instance.anchored`).
-    const pushed = this.instance.anchored(
-      members.map((member) =>
-        this.instance.stored(this.instance.returned(member))
-      ),
-    ) as unknown[];
-    // An array that is stored is changed in place, as a splice.
-    if (Array.isArray(located.value)) {
-      this.instance.store.splice(this.target, held.length, 0, pushed);
-    } else {
-      this.instance.store.write(this.target, [...held, ...pushed]);
+    const recorded = this.instance.written(this.key("*"));
+    try {
+      // A record that is pushed gets a document of its own, as a record
+      // in a list that is set does (`Instance.anchored`).
+      const pushed = this.instance.anchored(
+        members.map((member) =>
+          this.instance.stored(this.instance.returned(member))
+        ),
+      ) as unknown[];
+      // An array that is stored is changed in place, as a splice.
+      if (Array.isArray(located.value)) {
+        this.instance.store.splice(this.target, held.length, 0, pushed);
+      } else {
+        this.instance.store.write(this.target, [...held, ...pushed]);
+      }
+    } finally {
+      recorded();
     }
   }
 
@@ -885,7 +992,7 @@ export class Handle {
       located.value === undefined &&
       isStreamSchema(located.ref.schema ?? this.declared)
     ) {
-      this.instance.written(this);
+      this.instance.written(this)();
       return;
     }
     this.set(event);
@@ -976,6 +1083,8 @@ export class Host {
    * had been evaluated: the clock, and how many reads it had made.
    */
   demandedAt: { clock: number; reads: number } | undefined;
+  /** What the evaluation bound each slot it read to, by the slot. */
+  readonly bound = new Map<number, Bound>();
 
   constructor(
     readonly instance: Instance,
@@ -1002,6 +1111,7 @@ export class Host {
       ? slot.path.slice(0, -1)
       : slot.path;
     this.demand(slot.root, [...path, ...rest]);
+    const from = this.reads.length;
     const found = this.at(
       instance.rootOf(slot.root, this, [...path, ...rest]),
       [...path, ...rest],
@@ -1015,9 +1125,12 @@ export class Host {
       // A stream that is an input of the pattern is a reference like any
       // other: what passes it on stores a link to its place (ES §2.2, "A
       // stream that is an input of the pattern").
+      instance.bindSlot(this, index, from, found);
       return found instanceof Ref ? found.withSchema(schema) : found;
     }
-    return withDefaults(this.v(found), schema);
+    const value = withDefaults(this.v(found), schema);
+    instance.bindSlot(this, index, from, found);
+    return value;
   }
 
   /**
@@ -1348,7 +1461,16 @@ export class Host {
     }
     const keyed = { body, keys: instance.contextKeys(this.context) };
     return instance.returned(
-      instance.during(instance.runCause(keyed), () => run(argument), keyed),
+      instance.runBody(
+        body,
+        this,
+        () =>
+          instance.during(
+            instance.runCause(keyed),
+            () => run(argument),
+            keyed,
+          ),
+      ),
     );
   }
 
@@ -1565,18 +1687,31 @@ export type TransactionHooks = {
   read(doc: string, path: readonly string[]): void;
 
   /**
+   * The identifier of the label at a position, where the store knows one:
+   * equal labels have one identifier (provisional decision P31). The
+   * executor groups the elements of a `fold` by it; without it, every
+   * position is a group of its own.
+   */
+  labelOf?(doc: string, path: readonly string[]): string | undefined;
+
+  /**
    * The transaction in progress changed a path of a document, which
    * `store` holds as it is after the change. A splice is a change of the
    * array's path, a document that was removed is a change of its root, and
    * a write below a value that held no container is a change of the
    * shortest path whose value it replaced. `schema` is the schema of the
-   * reference the write was made through, where it has one.
+   * reference the write was made through, where it has one. `writes`
+   * holds the record of each path of the plan the change wrote
+   * (`plan-write.ts`): one for a path that one record covers, several for
+   * a change that wrote the paths of several, and none where no record of
+   * the plan covers the path.
    */
   change(
     doc: string,
     path: readonly string[],
     store: Store,
     schema?: Schema,
+    writes?: readonly PlanWrite[],
   ): void;
 
   /**
@@ -1665,6 +1800,13 @@ const holdsErrorState = (value: unknown): ErrorState | undefined => {
   }
   return undefined;
 };
+
+/**
+ * The name the bindings of the evaluation of the result are kept under
+ * (`Instance.#inputs`): the value code of an output that has no value
+ * function of its own runs there.
+ */
+const RESULT_INPUTS = "result";
 
 /** The name that the writes of a handler body are kept under. */
 const HANDLER = "handler";
@@ -1771,6 +1913,7 @@ export class Instance {
     pendingOperations: 0,
     staleByOwnWrite: 0,
     failures: 0,
+    groupUpdates: 0,
   };
   readonly valueOfOutput = new Map<number, number>();
   readonly bodies = new Map<number, (...given: unknown[]) => unknown>();
@@ -2079,12 +2222,16 @@ export class Instance {
     },
   ): void {
     const open = this.#tx;
-    if (open !== undefined || this.#outside) {
-      this.options.transactions?.change(
+    const hooks = this.options.transactions;
+    if (hooks !== undefined && (open !== undefined || this.#outside)) {
+      const path = change.covers ?? change.path;
+      const writes = this.#writesOf(change.doc, path, change.splice);
+      hooks.change(
         change.doc,
-        change.covers ?? change.path,
+        path,
         this.store,
         change.schema,
+        writes.length === 0 ? undefined : writes,
       );
     }
     if (open !== undefined) {
@@ -3041,10 +3188,25 @@ export class Instance {
         // computed, and never a reference: a reference the value
         // function returns is stored as what it resolves to now, so a
         // write to the cell never lands in the input (ruling Z15).
-        this.store.write(
-          new Ref(id, []),
-          this.stored(reader.v(first(reader))),
-        );
+        const value = this.stored(reader.v(first(reader)));
+        const edge = record.first === undefined
+          ? undefined
+          : this.plan.cones[record.first.cone].writes?.[record.first.write];
+        const recorded = this.#recording({
+          instance: this,
+          host: reader,
+          records: [{
+            record: { stateFirst: cell },
+            template: edge?.template,
+            doc: id,
+            path: [],
+          }],
+        });
+        try {
+          this.store.write(new Ref(id, []), value);
+        } finally {
+          recorded();
+        }
       }
     }
     return new Ref(id, []);
@@ -3158,20 +3320,49 @@ export class Instance {
                 again,
               );
             }
-            const instance = new Instance(artifact, argument, {
-              ...this.options,
-              parent: this,
-              id: made,
-            });
+            const recorded = this.#recording(
+              this.#coneWrites(
+                cone,
+                host,
+                argumentOf(made),
+                [],
+                (target) =>
+                  target.kind === "argument" && target.child === child,
+              ),
+            );
+            let instance: Instance;
+            try {
+              instance = new Instance(artifact, argument, {
+                ...this.options,
+                parent: this,
+                id: made,
+              });
+            } finally {
+              recorded();
+            }
             this.root.#instances.set(made, instance);
             this.#children.push(instance);
             held = { child, keys, instance };
             this.#asInstances.set(id, held);
           } else {
-            this.store.write(
-              new Ref(held.instance.argument, []),
-              argument,
+            const recorded = this.#recording(
+              this.#coneWrites(
+                cone,
+                host,
+                held.instance.argument,
+                [],
+                (target) =>
+                  target.kind === "argument" && target.child === child,
+              ),
             );
+            try {
+              this.store.write(
+                new Ref(held.instance.argument, []),
+                argument,
+              );
+            } finally {
+              recorded();
+            }
           }
           return new Ref(held.instance.id, []);
         },
@@ -3266,7 +3457,21 @@ export class Instance {
           }
           const state = new Ref(id, []);
           request = host.whole(request);
-          this.store.write(state.key("request"), this.stored(request));
+          const recorded = this.#recording(
+            this.#coneWrites(
+              cone,
+              host,
+              id,
+              ["request"],
+              (target) => target.kind === "request" &&
+                target.of?.operation === operation,
+            ),
+          );
+          try {
+            this.store.write(state.key("request"), this.stored(request));
+          } finally {
+            recorded();
+          }
           if (record.kind === "wish") {
             this.#resolveWish(state, host.v(request));
           } else if (!this.root.#operations.has(id)) {
@@ -4827,6 +5032,14 @@ export class Instance {
     };
     this.#memo.set(key, entry);
     this.#keep(key, cone, within, context);
+    // The bindings are kept for the write records of a store outside the
+    // executor (`TransactionHooks`), and for nothing else.
+    if (this.root.options.transactions !== undefined) {
+      if (cone !== undefined) this.#noteInputs(cone, context, host);
+      else if (key === "result") {
+        this.#inputs.set(RESULT_INPUTS, { slots: host.bound });
+      }
+    }
     this.#evaluated(slot, entry, host, changed);
     return entry;
   }
@@ -4985,7 +5198,17 @@ export class Instance {
    */
   #drop(collection: number, around: readonly string[], key: string): void {
     const id = this.#name("under", collection, around, key);
+    const table = this.#groups.get(this.#name("assembly", collection, around));
+    if (table?.byKey.has(key)) {
+      this.#leaveGroup(table, key);
+      this.counts.groupUpdates += 1;
+    }
     for (const entry of this.#underKey.get(id) ?? []) {
+      const kept = this.#kept.get(entry);
+      if (kept?.cone !== undefined) {
+        this.#inputs.delete(this.#coneInstance(kept.cone, kept.keys));
+      }
+      this.#groups.delete(entry);
       this.#memo.delete(entry);
       this.#kept.delete(entry);
       this.#tables.delete(entry);
@@ -6644,22 +6867,728 @@ export class Instance {
     return new StreamRef(-1, [key], this.#owner);
   }
 
-  /** Counts a write of the handler being run against its record. */
-  written(handle: Handle): void {
-    if (this.#handling === undefined) return;
-    const body = this.plan.bodies[this.#handling];
+  // ----- write records -----
+
+  /**
+   * Records what an evaluation bound a slot to: the positions that its
+   * read went through since `from`, and for an `identity` slot the
+   * reference the read gave. The slot of an element of the result of
+   * another per-element construct is bound to the upstream element.
+   */
+  bindSlot(host: Host, index: number, from: number, found: unknown): void {
+    if (this.root.options.transactions === undefined) return;
+    const slot = this.plan.slots[index];
+    if (slot.root.kind === "element") {
+      const collection = slot.root.collection ?? -1;
+      const element = host.context.get(collection);
+      const upstream = this.plan.collections[collection]?.source.collection;
+      if (
+        element !== undefined && upstream !== undefined &&
+        !(element.source instanceof Ref) && "entry" in element.source
+      ) {
+        host.bound.set(index, {
+          upstream: {
+            collection: upstream,
+            keys: [
+              ...this.#pairsIn(this.#outerOf(upstream), host.context),
+              [upstream, element.key],
+            ],
+          },
+        });
+        return;
+      }
+    }
+    const at: (Position | Ref)[] = host.reads.slice(from);
+    if (slot.observes === "identity" && found instanceof Ref) at.push(found);
+    const held = host.bound.get(index);
+    if (held !== undefined && "at" in held) {
+      for (const position of at) held.at.push(position);
+      return;
+    }
+    host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * Runs a sandboxed body of a cone, so that a write it makes through a
+   * handle is recorded under the body's write edge (`written`).
+   */
+  runBody<T>(body: number, host: Host, run: () => T): T {
+    this.#invoking.push({ body, host });
+    try {
+      return run();
+    } finally {
+      this.#invoking.pop();
+    }
+  }
+
+  /** The bodies of cones being run, innermost last, each with its host. */
+  readonly #invoking: { body: number; host: Host }[] = [];
+  /** The host of the handler being run, which bound its slots. */
+  #handlerHost: Host | undefined;
+  /** On the root: the records the writes being made belong to. */
+  #writing: Writing | undefined;
+  /** The bindings each cone instance last made, by its name. */
+  readonly #inputs = new Map<string, ConeInputs>();
+  /** The groups of the elements of each assembly a `fold` names. */
+  readonly #groups = new Map<string, Groups>();
+  /** The collections that a `fold` of some template names. */
+  #foldedCollections: Set<number> | undefined;
+  /** The cones of the element body of each collection. */
+  readonly #elementConesOf = new Map<number, number[]>();
+
+  /**
+   * The records of the write edges of a cone that `matches` selects, each
+   * with its target at `base` below the document given.
+   */
+  #coneWrites(
+    cone: number | undefined,
+    host: Host,
+    doc: string,
+    base: readonly string[],
+    matches: (
+      target: NonNullable<Plan["cones"][number]["writes"]>[number]["target"],
+    ) => boolean,
+  ): Writing | undefined {
+    if (cone === undefined) return undefined;
+    const records = (this.plan.cones[cone].writes ?? []).flatMap((
+      { target, template },
+      write,
+    ) =>
+      matches(target)
+        ? [{
+          record: { cone, write },
+          template,
+          doc,
+          path: [...base, ...target.path ?? []],
+        }]
+        : []
+    );
+    return records.length === 0 ? undefined : { instance: this, host, records };
+  }
+
+  /**
+   * On the root: makes the records of the writes being made those given,
+   * and returns what puts back the records there were before.
+   */
+  #recording(writing: Writing | undefined): () => void {
+    const { root } = this;
+    const before = root.#writing;
+    root.#writing = writing;
+    return () => {
+      root.#writing = before;
+    };
+  }
+
+  /** The element key of each of `collections` in a context, as pairs. */
+  #pairsIn(
+    collections: readonly number[],
+    context: Context,
+  ): [number, string][] {
+    return collections.map((collection) => [
+      collection,
+      context.get(collection)?.key ?? "?",
+    ]);
+  }
+
+  /** The name of a cone instance, by the cone and its element keys. */
+  #coneInstance(cone: number, keys: readonly string[]): string {
+    return `${cone}\n${textOf(keys)}`;
+  }
+
+  /** The keys of `pairs` for the collections a cone is within. */
+  #keysFor(cone: number, pairs: readonly [number, string][]): string[] {
+    const byCollection = new Map(pairs);
+    return this.collectionsOf(cone).map((collection) =>
+      byCollection.get(collection) ?? "?"
+    );
+  }
+
+  /** The collections that a `fold` node of the plan names. */
+  #folded(): Set<number> {
+    if (this.#foldedCollections !== undefined) return this.#foldedCollections;
+    const found = new Set<number>();
+    const walk = (value: unknown): void => {
+      if (Array.isArray(value)) {
+        for (const member of value) walk(member);
+      } else if (typeof value === "object" && value !== null) {
+        const node = value as Record<string, unknown>;
+        if (node.op === "fold" && typeof node.collection === "number") {
+          found.add(node.collection);
+        }
+        for (const member of Object.values(node)) walk(member);
+      }
+    };
+    walk(this.plan);
+    this.#foldedCollections = found;
+    return found;
+  }
+
+  /** The cones whose innermost `element` step is a collection. */
+  #elementCones(collection: number): number[] {
+    let cones = this.#elementConesOf.get(collection);
+    if (cones === undefined) {
+      cones = this.plan.cones.flatMap((_, cone) =>
+        this.collectionsOf(cone).at(-1) === collection ? [cone] : []
+      );
+      this.#elementConesOf.set(collection, cones);
+    }
+    return cones;
+  }
+
+  /**
+   * Keeps what an evaluation of a cone instance bound its slots to, and
+   * for the cone of the element body of a collection that a `fold` names,
+   * updates the group of the element.
+   */
+  #noteInputs(cone: number, context: Context, host: Host): void {
+    const within = this.collectionsOf(cone);
+    const name = this.#coneInstance(cone, this.#keysIn(within, context));
+    const held: ConeInputs = this.#inputs.get(name) ?? { slots: new Map() };
+    for (const [slot, bound] of host.bound) held.slots.set(slot, bound);
+    delete held.id;
+    this.#inputs.set(name, held);
+    const collection = within.at(-1);
+    if (collection !== undefined && this.#folded().has(collection)) {
+      this.#regroup(collection, context);
+    }
+  }
+
+  /** The bindings a cone instance last made. */
+  #inputsOf(cone: number, keys: readonly string[]): ConeInputs | undefined {
+    return this.#inputs.get(this.#coneInstance(cone, keys));
+  }
+
+  /**
+   * The identifier of what a cone instance's bindings consumed: the label
+   * identifier of each position each slot was bound to, and for the slot
+   * of an upstream element the identifier of that element's cone
+   * instances. Equal identifiers stand for equal inputs of a template.
+   */
+  #idOf(inputs: ConeInputs): string {
+    if (inputs.id !== undefined) return inputs.id;
+    const parts: string[] = [];
+    const slots = [...inputs.slots].sort(([a], [b]) => a - b);
+    for (const [slot, bound] of slots) {
+      if ("upstream" in bound) {
+        const { collection, keys } = bound.upstream;
+        const ids = this.#elementCones(collection).map((cone) => {
+          const upstream = this.#inputsOf(cone, this.#keysFor(cone, keys));
+          return upstream === undefined ? "" : this.#idOf(upstream);
+        });
+        parts.push(`${slot}<${ids.join("|")}>`);
+        continue;
+      }
+      const labels = this.#addressesOf(bound.at).map(({ doc, path }) =>
+        this.root.options.transactions?.labelOf?.(doc, path) ??
+          JSON.stringify([doc, path])
+      );
+      parts.push(`${slot}:${bound.observes}:${[...new Set(labels)].join(",")}`);
+    }
+    inputs.id = parts.join(";");
+    return inputs.id;
+  }
+
+  /**
+   * Updates the group of the element of `collection` that a context
+   * binds, after its cone instance was evaluated: one update, whatever the
+   * number of elements.
+   */
+  #regroup(collection: number, context: Context): void {
+    const element = context.get(collection);
+    if (element === undefined) return;
+    const around = this.#keysIn(this.#outerOf(collection), context);
+    const name = this.#name("assembly", collection, around);
+    let table = this.#groups.get(name);
+    if (table === undefined) {
+      table = { byKey: new Map(), groups: new Map(), notInPlace: new Set() };
+      this.#groups.set(name, table);
+    }
+    const keys = [...around, element.key];
+    const id = this.#elementCones(collection).map((cone) => {
+      const inputs = this.#inputsOf(cone, keys);
+      return inputs === undefined ? "" : this.#idOf(inputs);
+    }).join("|");
+    this.counts.groupUpdates += 1;
+    const { key } = element;
+    const was = table.byKey.get(key);
+    if (was !== id) {
+      if (was !== undefined) this.#leaveGroup(table, key);
+      table.byKey.set(key, id);
+      const members = table.groups.get(id) ?? new Set();
+      members.add(key);
+      table.groups.set(id, members);
+    }
+    const inPlace = element.source instanceof Ref &&
+      element.source.path.some(isKeySegment);
+    if (inPlace) table.notInPlace.delete(key);
+    else table.notInPlace.add(key);
+  }
+
+  /** Removes an element key from its group. */
+  #leaveGroup(table: Groups, key: string): void {
+    const id = table.byKey.get(key);
+    if (id === undefined) return;
+    table.byKey.delete(key);
+    table.notInPlace.delete(key);
+    const members = table.groups.get(id);
+    members?.delete(key);
+    if (members?.size === 0) table.groups.delete(id);
+  }
+
+  /**
+   * Runs `run` with no read reported to a store outside the executor:
+   * what a write record resolves is no read of the transaction.
+   */
+  #quietly<T>(run: () => T): T {
+    const { store } = this;
+    const reported = store.onRead;
+    store.onRead = undefined;
+    try {
+      return run();
+    } finally {
+      store.onRead = reported;
+    }
+  }
+
+  /**
+   * The addresses of the positions a slot was bound to, each once, in
+   * order: a reference by key is resolved to the position that holds the
+   * key now, and a reference to the links it crosses and its position.
+   */
+  #addressesOf(at: readonly (Position | Ref)[]): Address[] {
+    const found: Address[] = [];
+    const seen = new Set<string>();
+    const add = (doc: string, path: readonly string[]) => {
+      const id = JSON.stringify([doc, path]);
+      if (seen.has(id)) return;
+      seen.add(id);
+      found.push({ doc, path: [...path] });
+    };
+    this.#quietly(() => {
+      for (const position of at) {
+        if (position instanceof Ref || position.keyed !== undefined) {
+          const ref = position instanceof Ref
+            ? position
+            : (position.keyed as { ref: Ref }).ref;
+          // The links crossed, and the position that holds the key now
+          // in the place of the read by key.
+          const crossed: Position[] = [];
+          const located = this.store.locate(ref, false, crossed);
+          for (const { doc, path, keyed } of crossed) {
+            if (keyed === undefined) add(doc, path);
+          }
+          add(located.ref.doc, located.ref.path);
+        } else {
+          add(position.doc, position.path);
+        }
+      }
+    });
+    return found;
+  }
+
+  /**
+   * The output that holds, for an element of the result of the
+   * per-element construct of `collection`, what is at `path` below the
+   * element: the output of the construct's element body at the longest
+   * path above it.
+   */
+  #upstreamOutput(collection: number, path: readonly string[]) {
+    const cone = this.code.values.find((value) =>
+      value.collection === collection
+    )?.cone;
+    const base = this.plan.outputs.find((output) =>
+      output.collection === collection
+    )?.path;
+    if (cone === undefined || base === undefined) return undefined;
+    let best: number | undefined;
+    this.plan.outputs.forEach((output, index) => {
+      if (output.cone !== cone || output.collection !== undefined) return;
+      const rest = output.path.slice(base.length + 1);
+      if (
+        output.path.length <= base.length ||
+        output.path[base.length] !== "*" ||
+        !base.every((segment, at) => output.path[at] === segment) ||
+        !rest.every((segment, at) => segment === path[at])
+      ) return;
+      if (
+        best === undefined ||
+        output.path.length > this.plan.outputs[best].path.length
+      ) best = index;
+    });
+    return best;
+  }
+
+  /**
+   * The binding a write record reports for a slot. The slot of an upstream
+   * element names the output that holds it, and `outputs` gets the inputs
+   * of that output.
+   */
+  #bindingOf(
+    slot: number,
+    bound: Bound,
+    outputs: Record<number, NamedOutputInputs>,
+    depth: number,
+  ): SlotBinding {
+    if ("upstream" in bound) {
+      const { collection, keys } = bound.upstream;
+      const output = this.#upstreamOutput(
+        collection,
+        this.plan.slots[slot].path,
+      );
+      if (output !== undefined) {
+        outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+        return { output, keys };
+      }
+      return { chain: [], observes: this.plan.slots[slot].observes };
+    }
+    return { chain: this.#addressesOf(bound.at), observes: bound.observes };
+  }
+
+  /**
+   * What a template is instantiated with, for the element keys given:
+   * the binding of each slot it reaches, the inputs of each output it
+   * names, and the elements of each `fold`.
+   */
+  #inputsFor(
+    template: Template | undefined,
+    keys: [number, string][],
+    boundOf: (slot: number) => Bound | undefined,
+    depth = 0,
+  ): NamedOutputInputs {
+    const templates = this.plan.templates ?? [];
+    const reached = reachedBy(template, templates);
+    const slots: SlotBindings = {};
+    const outputs: Record<number, NamedOutputInputs> = {};
+    const elements: Record<number, FoldElements> = {};
+    // A chain of outputs is as long as the plan is deep; one that is
+    // longer than this is a cycle of the plan, and is not followed.
+    if (depth < 64) {
+      for (const slot of [...reached.slots].sort((a, b) => a - b)) {
+        const bound = boundOf(slot);
+        if (bound !== undefined) {
+          slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
+        }
+      }
+      for (const output of reached.outputs) {
+        outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
+      }
+      for (const [collection, body] of reached.folds) {
+        elements[collection] = this.#foldElements(
+          collection,
+          body,
+          keys,
+          depth,
+        );
+      }
+    }
+    return {
+      instance: this.id,
+      keys,
+      slots,
+      ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
+      ...(Object.keys(elements).length === 0 ? {} : { elements }),
+    };
+  }
+
+  /** The inputs of the cone instance of an output, for the keys given. */
+  #namedInputs(
+    index: number,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): NamedOutputInputs {
+    const output = this.plan.outputs[index];
+    const own = this.#keysFor(output.cone, pairs);
+    const inputs = this.#inputsOf(output.cone, own);
+    const result = this.#inputs.get(RESULT_INPUTS);
+    return this.#inputsFor(
+      output.template,
+      this.collectionsOf(output.cone).map((collection, at) => [
+        collection,
+        own[at],
+      ]),
+      (slot) => inputs?.slots.get(slot) ?? result?.slots.get(slot),
+      depth,
+    );
+  }
+
+  /**
+   * The elements of a `fold` over a collection, for the keys of the
+   * collections around it (provisional decision P31): one set of bindings
+   * at `*` where the collection is over a stored array whose elements are
+   * all plain values in place and the body allows it, and otherwise the
+   * groups the assembly keeps, each with the bindings of one of its
+   * elements and its count. The work is the number of groups.
+   */
+  #foldElements(
+    collection: number,
+    body: Template,
+    pairs: readonly [number, string][],
+    depth: number,
+  ): FoldElements {
+    const templates = this.plan.templates ?? [];
+    const outer = this.#outerOf(collection);
+    const byCollection = new Map(pairs);
+    const around = outer.map((step) => byCollection.get(step) ?? "?");
+    const name = this.#name("assembly", collection, around);
+    const table = this.#groups.get(name);
+    const reached = reachedBy(body, templates);
+    const cones = this.#elementCones(collection);
+    const boundFor = (key: string) => (slot: number) => {
+      for (const cone of cones) {
+        const bound = this.#inputsOf(cone, [...around, key])?.slots.get(slot);
+        if (bound !== undefined) return bound;
+      }
+      return undefined;
+    };
+    const keysOf = (key: string): [number, string][] => [
+      ...outer.map((step, at): [number, string] => [step, around[at]]),
+      [collection, key],
+    ];
+    if (
+      this.plan.collections[collection].source.slot !== undefined &&
+      isUniformBody(body, templates) && (table?.notInPlace.size ?? 0) === 0
+    ) {
+      const array = this.#arrayChain(name);
+      const [first] = table?.byKey.keys() ?? [];
+      const uniform: SlotBindings = {};
+      for (const slot of [...reached.slots].sort((a, b) => a - b)) {
+        const record = this.plan.slots[slot];
+        if (
+          record.root.kind === "element" &&
+          record.root.collection === collection
+        ) {
+          const last = array.at(-1);
+          uniform[slot] = {
+            chain: last === undefined ? [] : [
+              ...array.slice(0, -1),
+              { doc: last.doc, path: [...last.path, "*", ...record.path] },
+            ],
+            observes: record.observes,
+          };
+          continue;
+        }
+        const bound = first === undefined ? undefined : boundFor(first)(slot);
+        if (bound !== undefined) {
+          uniform[slot] = this.#bindingOf(slot, bound, {}, depth);
+        }
+      }
+      return { uniform };
+    }
+    const groups = [...table?.groups.values() ?? []].map((members) => {
+      const [key] = members;
+      const inputs = this.#inputsFor(body, keysOf(key), boundFor(key), depth);
+      return {
+        bindings: inputs.slots,
+        ...(inputs.outputs === undefined ? {} : { outputs: inputs.outputs }),
+        count: members.size,
+      };
+    });
+    return { groups };
+  }
+
+  /**
+   * The links an assembly crossed to its stored array, and the array's
+   * position last: from the reference it found the array through.
+   */
+  #arrayChain(assembly: string): Address[] {
+    const base = this.#memo.get(assembly)?.rows?.stored?.base;
+    if (base === undefined) return [];
+    const crossed: Position[] = [];
+    this.#quietly(() => this.store.locate(base, true, crossed));
+    return crossed.map(({ doc, path }) => ({ doc, path: [...path] }));
+  }
+
+  /**
+   * On the root: the records of the paths a change wrote. A change of the
+   * result document of an instance writes outputs; another change writes
+   * the records of the writes being made (`#writing`).
+   */
+  #writesOf(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; inserted: number } | undefined,
+  ): PlanWrite[] {
+    const owner = doc === this.id ? this : this.#instances.get(doc);
+    if (owner !== undefined && owner.id === doc) {
+      return owner.#outputWrites(doc, path, splice);
+    }
+    const writing = this.#writing;
+    if (writing === undefined) return [];
+    const keys = writing.instance.contextKeys(writing.host.context);
+    return writing.records.flatMap(({ record, template, ...target }) => {
+      let at = path;
+      if (target.doc !== undefined) {
+        const to = target.path ?? [];
+        const above = to.length <= path.length &&
+          to.every((segment, index) => segment === path[index]);
+        const below = path.length <= to.length &&
+          path.every((segment, index) => segment === to[index]);
+        if (target.doc !== doc || (!above && !below)) return [];
+        if (below) at = to;
+      }
+      return [{
+        target: { doc, path: [...at] },
+        record,
+        ...writing.instance.#inputsFor(
+          template,
+          keys,
+          (slot) => writing.host.bound.get(slot),
+        ),
+      }];
+    });
+  }
+
+  /**
+   * The records of the outputs that a change of the result document at
+   * `path` wrote: the kept output nearest at or above the path, and each
+   * kept output below it, at each position the change wrote. A splice
+   * wrote the positions it inserted.
+   */
+  #outputWrites(
+    doc: string,
+    path: readonly string[],
+    splice: { start: number; inserted: number } | undefined,
+  ): PlanWrite[] {
+    const { outputs } = this.plan;
+    const found: { output: number; at: string[] }[] = [];
+    let nearest: number | undefined;
+    // An interim output is no path of the result document.
+    outputs.forEach((output, index) => {
+      if (
+        output.kept && output.path.length <= path.length &&
+        matchesPath(output.path, path) &&
+        (nearest === undefined ||
+          output.path.length > outputs[nearest].path.length)
+      ) nearest = index;
+    });
+    if (nearest !== undefined) found.push({ output: nearest, at: [...path] });
+    const held = this.store.peek(doc, path);
+    outputs.forEach((output, index) => {
+      if (
+        !output.kept || output.path.length <= path.length ||
+        !matchesPath(output.path.slice(0, path.length), path)
+      ) return;
+      const expand = (
+        at: string[],
+        rest: readonly string[],
+        value: unknown,
+        first: boolean,
+      ): void => {
+        if (rest.length === 0) {
+          if (value !== undefined) found.push({ output: index, at });
+          return;
+        }
+        const [segment, ...more] = rest;
+        if (segment !== "*") {
+          expand(
+            [...at, segment],
+            more,
+            typeof value === "object" && value !== null && !isLink(value)
+              ? (value as Record<string, unknown>)[segment]
+              : undefined,
+            false,
+          );
+          return;
+        }
+        if (!Array.isArray(value)) return;
+        const [start, end] = first && splice !== undefined
+          ? [splice.start, splice.start + splice.inserted]
+          : [0, value.length];
+        for (let position = start; position < end; position++) {
+          expand([...at, `${position}`], more, value[position], false);
+        }
+      };
+      expand([...path], output.path.slice(path.length), held, true);
+    });
+    return found.map(({ output, at }) => {
+      const record = outputs[output];
+      const stars = record.path.flatMap((segment, index) =>
+        segment === "*" ? [index] : []
+      );
+      const pairs = this.#keysAlong(at, stars);
+      const own = this.#keysFor(record.cone, pairs);
+      const inputs = this.#inputsOf(record.cone, own);
+      const result = this.#inputs.get(RESULT_INPUTS);
+      return {
+        target: { doc, path: at },
+        record: { output },
+        ...this.#inputsFor(
+          record.template,
+          this.collectionsOf(record.cone).map((collection, index) => [
+            collection,
+            own[index],
+          ]),
+          (slot) => inputs?.slots.get(slot) ?? result?.slots.get(slot),
+        ),
+      };
+    });
+  }
+
+  /**
+   * The element keys of the rows a path of the result document passes
+   * through, at the positions `stars` names: each from the unit that
+   * stores the rows of a collection there.
+   */
+  #keysAlong(
+    path: readonly string[],
+    stars: readonly number[],
+  ): [number, string][] {
+    const keys: [number, string][] = [];
+    let inside: Map<string, Unit> | undefined = this.#rootUnits;
+    let base = 0;
+    for (const star of stars) {
+      if (star >= path.length) break;
+      const unit: Unit | undefined = inside?.get(
+        JSON.stringify(path.slice(base, star)),
+      );
+      const key = unit?.keys[Number(path[star])];
+      if (unit === undefined || key === undefined) break;
+      keys.push([unit.collection, key]);
+      inside = unit.inside.get(key);
+      base = star + 1;
+    }
+    return keys;
+  }
+
+  /**
+   * Counts a write of the handler being run against its record, and
+   * makes the write edge that covers it, of the handler or of the body of
+   * a cone being run, the record of the writes until the returned
+   * function is called.
+   */
+  written(handle: Handle): () => void {
+    const invoking = this.#invoking.at(-1);
+    const index = this.#handling ?? invoking?.body;
+    const host = this.#handling === undefined
+      ? invoking?.host
+      : this.#handlerHost;
+    if (index === undefined) return () => {};
+    const body = this.plan.bodies[index];
     const covers = (target: { slot?: number; path?: string[] }) =>
       target.slot === handle.slot &&
       (matchesPath(target.path ?? [], handle.below) ||
         matchesPath(handle.below, target.path ?? []));
-    const covered =
-      body.writes.some(({ target }) =>
-        target.kind === "handle" && covers(target)
-      ) || body.envelopes.some((envelope) =>
-        envelope.kind === "handle" && covers(envelope)
-      );
-    if (covered) this.counts.writesCovered += 1;
-    else this.counts.writesNotCovered += 1;
+    const write = body.writes.findIndex(({ target }) =>
+      target.kind === "handle" && covers(target)
+    );
+    if (this.#handling !== undefined) {
+      const covered = write >= 0 ||
+        body.envelopes.some((envelope) =>
+          envelope.kind === "handle" && covers(envelope)
+        );
+      if (covered) this.counts.writesCovered += 1;
+      else this.counts.writesNotCovered += 1;
+    }
+    return this.#recording(
+      write < 0 || host === undefined ? undefined : {
+        instance: this,
+        host,
+        records: [{
+          record: { body: index, write },
+          template: body.writes[write].template,
+        }],
+      },
+    );
   }
 
   /**
@@ -6856,6 +7785,7 @@ export class Instance {
       if (entry?.place === undefined) continue;
       const rest = read.path.slice(entry.path.length);
       const { place } = entry;
+      const from = host.reads.length;
       let found: unknown;
       if (place.slot !== undefined) {
         const bound = this.plan.slots[place.slot];
@@ -6917,6 +7847,7 @@ export class Instance {
       const given = read.observes === "identity"
         ? this.handleOf(found, undefined, slot)
         : host.v(found);
+      this.bindSlot(host, slot, from, found);
       if (this.gives(read.observes, state, read.path)) continue;
       // An entry that yields nothing places nothing: an entry below a
       // path that is absent does not make a container there (ES §2.4,
@@ -6924,7 +7855,33 @@ export class Instance {
       if (given === undefined) continue;
       state = this.placed(state, read.path, given);
     }
-    return this.#run(binding, body, run, event, state);
+    this.#bindEvent(host, body, stream);
+    return this.#run(binding, body, run, event, state, host);
+  }
+
+  /**
+   * Binds each slot of root `event` of a handler's body to the position
+   * of the event in its stream's document: the entry the watermark stands
+   * at, which is the event being handled. An event that no entry of the
+   * document holds binds nothing.
+   */
+  #bindEvent(host: Host, body: number, stream: StreamRef): void {
+    const id = this.root.#streamIdentifier(stream);
+    const held = this.store.docs.get(id)?.value as
+      | { entries?: unknown[]; eventWatermark?: number }
+      | undefined;
+    const at = held?.eventWatermark ?? 0;
+    if (!Array.isArray(held?.entries) || held.entries[at] === undefined) {
+      return;
+    }
+    for (const { slot } of this.plan.bodies[body].reads) {
+      const record = this.plan.slots[slot];
+      if (record.root.kind !== "event") continue;
+      host.bound.set(slot, {
+        observes: record.observes,
+        at: [{ doc: id, path: ["entries", `${at}`, "event", ...record.path] }],
+      });
+    }
   }
 
   /**
@@ -6937,10 +7894,13 @@ export class Instance {
     run: (...given: unknown[]) => unknown,
     event: unknown,
     state: unknown,
+    host?: Host,
   ): Outcome {
     const { root } = this;
     root.#events += 1;
     this.#handling = body;
+    const outer = this.#handlerHost;
+    this.#handlerHost = host;
     // What the body writes is the handler's own (SS §5.6).
     root.#evaluating.push({ instance: this, key: HANDLER });
     try {
@@ -6953,6 +7913,7 @@ export class Instance {
       return { binding, committed: false, error: messageOf(error) };
     } finally {
       this.#handling = undefined;
+      this.#handlerHost = outer;
       root.#evaluating.pop();
     }
     return { binding, committed: true };

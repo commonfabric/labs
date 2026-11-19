@@ -872,6 +872,31 @@ cause `send` and `watermark`. The option `documents` makes documents that exist
 before the instance, outside any transaction, such as the input cells an
 argument links to.
 
+Each change comes with the record of each path of the plan it wrote
+(`exec/plan-write.ts`, the shape of `PlanWrite` in PL §4.1 without labels): the
+record of the plan whose template gives the path's label (an entry of
+`Plan.outputs` for a write of the result, of `Body.writes` for a write through a
+handle, of `Cone.writes` for the argument of a child or the request of an
+operation, and `StateCell.first`), the instance, the element keys, and the
+binding of each slot the template reaches: the positions the read of the slot
+went through when the cone instance, the handler or the body last read it, with
+the slot's observation class. A change of the result at a path above several
+outputs has one record per output and per row written. An `output` node of the
+template is reported with the inputs of the named output, and a `fold` with its
+elements in the two forms of provisional decision P31: one set of bindings whose
+paths hold `*` at the element, for a collection over a stored array whose
+elements are all plain values in place when the body has no `select`, `pick`,
+`fold`, `dynamic` or `output` node; otherwise one group per distinct set of
+element inputs with its count. The groups are kept with the assembly of the
+collection and updated when an element's cone instance is evaluated or the
+element leaves, so a change of one element updates one group whatever the length
+of the list (`Counts.groupUpdates`), over an array of references and over the
+result of another per-element construct alike. Elements are grouped by the label
+identifier the hook `labelOf` gives for each position; without it every position
+is a group of its own. The slot of an element of the result of another
+per-element construct is bound to the output of the upstream element that holds
+it. The executor keeps none of this when it is given no hooks.
+
 `compare/runtime-transactions.ts` implements the hooks with the runtime's own
 transactions (`Runtime.edit()`): each read is read through the transaction, each
 change is written into it as it is made, and the transaction commits with the
