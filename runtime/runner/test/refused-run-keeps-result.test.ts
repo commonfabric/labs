@@ -191,7 +191,7 @@ describe("refused-run-keeps-result", () => {
     const watcherSawNew = Promise.withResolvers<void>();
     const cancelWatcher = watched.key("out").sink((value) => {
       watcherSeen.push(value);
-      if (value === "out:def") watcherSawNew.resolve();
+      if ((value as unknown) === "out:def") watcherSawNew.resolve();
     });
     await watcher.idle();
     await watcher.storageManager.synced();
