@@ -807,21 +807,25 @@ a page, and a deployment's posture does not carry a client-side option.
 ## 14. Host facts
 
 Some things about a piece only the host that creates it knows: which loom it is
-placed on, say. One piece can sit on several of a host's surfaces, and a
+created for, say. One piece can sit on several of a host's surfaces, and a
 surface holds links to pieces it does not start, so there is no one place a
 running piece could ask, and no wish target answers it. The fact belongs to the
-act of creating the piece, so it travels with that act.
+act of creating the piece, so it travels with that act, and what the piece
+holds is the fact as it stood then: `loom.id` is the loom the piece was created
+for, not every loom it is later shown on.
 
 A pattern declares the fact it wants as an argument property typed
-`HostFact<T, K>` (`base/api/index.ts`): `loomId: HostFact<string, "loom.id">`
-wants the fact `loom.id`, a string. The schema generator writes the key into the
-property's schema as `hostFact: "loom.id"`. At runtime the value is a plain
-`T`. A fact that may be missing is an optional property,
-`loomId?: HostFact<string, "loom.id">`; a default goes around the fact,
-`Default<HostFact<string, "loom.id">, "">`. One value names one fact.
+`HostFact<T, K>` (`base/api/index.ts`), where `T` is `string` or a string type:
+`loomId: HostFact<string, "loom.id">` wants the fact `loom.id`. The schema
+generator writes the key into the property's schema as `hostFact: "loom.id"`.
+At runtime the value is a plain string. A fact that may be missing is an
+optional property, `loomId?: HostFact<string, "loom.id">`; a default goes
+around the fact, `Default<HostFact<string, "loom.id">, "">`. A `HostFact`
+written around a union, a `Default` inside the fact included, and a key that is
+not one string literal, are refused when the pattern compiles.
 
-A host passes the facts it knows as `hostFacts`, a map from key to a scalar
-value, with the creation: `newPiece()` / `newPieceWithReceipt()`,
+A host passes the facts it knows as `hostFacts`, a map from key to string, with
+the creation: `newPiece()` / `newPieceWithReceipt()`,
 `PiecesController.create()`, the `instantiate` lifecycle verb, and
 `cf piece new --host-fact <key>=<value>` (repeatable). Creation fills each
 top-level argument property the compiled pattern marks from the fact its key
@@ -832,13 +836,23 @@ names (`fillHostFacts()` in `runtime/runner/src/runner-utils.ts`):
   every fact it knows.
 - A marked property whose fact the host does not send stays absent, and takes
   its default as any absent property does.
+- A mark below the top-level properties is refused, since creation would not
+  fill it.
 
-Only creation reads `hostFact`. To the piece compatibility checker it is a
-descriptive annotation, so a pattern update adds or removes it freely, and a
-piece that is updated keeps the argument it was created with.
+Only creation fills a fact. An update to the pattern does not: a piece created
+before its pattern declared a fact does not gain it, and a piece keeps the fact
+it was created with. A host that needs a piece to hold another value writes the
+argument as it writes any other. To the piece compatibility checker `hostFact`
+is a descriptive annotation, so a pattern update adds or removes it freely.
 
 A fact is an ordinary write by the piece's creator: it carries no label beyond
 what any argument the creator writes carries.
+
+The keys hosts send today:
+
+| Key | Sent by | Value |
+| --- | --- | --- |
+| `loom.id` | Loom, when it deploys a pattern onto a loom | the id of the loom the piece is created for |
 
 ---
 
