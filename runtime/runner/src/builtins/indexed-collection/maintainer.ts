@@ -72,6 +72,9 @@ interface SpaceState {
 
   /** Settles once the space's registry of collections has been read. */
   loaded: Promise<void> | undefined;
+
+  /** Whether the registry needs no reading, or has been read. */
+  read: boolean;
 }
 
 /**
@@ -158,28 +161,39 @@ export class IndexedCollectionMaintainer {
   noteWrites(space: MemorySpace, ids: Iterable<string>): void {
     if (!this.#enabled || this.#disposed) return;
     const state = this.#spaceState(space);
-    if (state.loaded === undefined) {
-      state.loaded = this.#loadRegistry(space, state);
-    }
+    // A space with no collection has nothing to follow. In a serving runtime
+    // that is known once the registry has been read; in any other, at once.
+    if (state.collections.size === 0 && state.read) return;
     for (const id of ids) state.early.add(id);
-    // Tracked so that `runtime.settled()` waits for the registry as well as
-    // for the drains this starts.
-    this.#runtime.trackAsyncWork(state.loaded.then(() => {
-      if (state.early.size === 0) return;
-      const written = [...state.early];
-      state.early.clear();
-      for (const collection of state.collections.values()) {
-        for (const id of written) {
-          if (id !== collection.handle.id) collection.pending.add(id);
-        }
-        this.#schedule(collection);
+    if (state.read) return this.#flush(state);
+    // The registry read is not tracked as async work of the runtime: only a
+    // drain is, and a space that lists nothing starts none.
+    state.loaded ??= this.#loadRegistry(space, state).then((read) => {
+      state.read = read;
+      if (!read) state.loaded = undefined;
+    });
+    void state.loaded.then(() => this.#flush(state));
+  }
+
+  /** Hands the writes held for a space to each of its collections. */
+  #flush(state: SpaceState): void {
+    if (state.early.size === 0 || this.#disposed) return;
+    const written = [...state.early];
+    state.early.clear();
+    for (const collection of state.collections.values()) {
+      for (const id of written) {
+        if (id !== collection.handle.id) collection.pending.add(id);
       }
-    }));
+      this.#schedule(collection);
+    }
   }
 
   /** Stops maintaining. Writes reported afterward are dropped. */
   dispose(): void {
     this.#disposed = true;
+    if (this.#enabled) {
+      this.#runtime.storageManager.unsubscribe?.(this.#subscription);
+    }
     for (const space of this.#spaces.values()) {
       for (const collection of space.collections.values()) collection.cancel();
     }
@@ -189,7 +203,14 @@ export class IndexedCollectionMaintainer {
   #spaceState(space: MemorySpace): SpaceState {
     let state = this.#spaces.get(space);
     if (state === undefined) {
-      state = { collections: new Map(), early: new Set(), loaded: undefined };
+      state = {
+        collections: new Map(),
+        early: new Set(),
+        loaded: undefined,
+        // Only a serving runtime maintains a collection whose declaring
+        // piece it never loaded, so only it has a registry to read.
+        read: !this.#runtime.servingPosture,
+      };
       this.#spaces.set(space, state);
     }
     return state;
@@ -203,25 +224,20 @@ export class IndexedCollectionMaintainer {
   }
 
   /**
-   * Reads the collections the space's registry lists, in a serving runtime.
-   * A failure leaves the registry unread, so that the next write to the space
-   * reads it again.
+   * Reads the collections the space's registry lists, and returns whether it
+   * could. After a failure the next write to the space reads it again.
    */
-  async #loadRegistry(space: MemorySpace, state: SpaceState): Promise<void> {
-    // Only a serving runtime maintains a collection whose declaring piece it
-    // never loaded. Any other runtime knows a collection from having declared
-    // or written it.
-    if (!this.#runtime.servingPosture) return;
+  async #loadRegistry(space: MemorySpace, state: SpaceState): Promise<boolean> {
     try {
       const registry = this.#registryCell(space);
       // Asked without loading the document: a space that holds no collection
       // has no registry, and takes on no watch of one.
       const listed = await this.#runtime.storageManager.open(space)
         .entityIdExists?.(registry.getAsNormalizedFullLink().id);
-      if (listed !== true) return;
+      if (listed !== true) return true;
       await registry.sync();
       const entries = registry.getRaw({ lastNode: "value" });
-      if (!isPlainObject(entries)) return;
+      if (!isPlainObject(entries)) return true;
       for (const [id, link] of Object.entries(entries)) {
         if (state.collections.has(id)) continue;
         try {
@@ -234,9 +250,10 @@ export class IndexedCollectionMaintainer {
           logger.warn("registry-entry-unreadable", () => [space, id, error]);
         }
       }
+      return true;
     } catch (error) {
-      state.loaded = undefined;
       logger.warn("registry-load-failed", () => [space, error]);
+      return false;
     }
   }
 
