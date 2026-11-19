@@ -261,6 +261,9 @@ export class XRootView extends BaseView implements ShellApp {
   /** The fork of the viewed space the shell is showing, when it shows one. */
   #fork: SpaceFork | undefined = undefined;
 
+  /** The fork a restore is under way from, which that restore ends. */
+  #restoring: SpaceFork | undefined = undefined;
+
   /** What the history panel is told of the fork. */
   @state()
   private accessor _openHistory: OpenHistory | undefined = undefined;
@@ -895,14 +898,22 @@ export class XRootView extends BaseView implements ShellApp {
     this._historyError = undefined;
     const restoring: OpenHistory = { seq: fork.seq, busy: true };
     this._openHistory = restoring;
+    this.#restoring = fork;
     try {
       await fork.restore();
     } catch (error) {
       console.error("[RootView] Failed to restore from history:", error);
-      if (this._openHistory !== restoring) return;
+      // A fork let go of while it was restoring was left for the restore to
+      // end, which it did not.
+      if (this._openHistory !== restoring) {
+        void this.#discard(fork);
+        return;
+      }
       this._historyError = describeFailure(error);
       this._openHistory = { seq: fork.seq, busy: false };
       return;
+    } finally {
+      this.#restoring = undefined;
     }
     if (this._openHistory !== restoring) return;
     this.#fork = undefined;
@@ -916,7 +927,9 @@ export class XRootView extends BaseView implements ShellApp {
     this._openHistory = undefined;
     if (fork === undefined) return;
     this.#fork = undefined;
-    void this.#discard(fork);
+    // A restore under way ends the fork itself, and ending it here would
+    // take the branch from under the restore.
+    if (fork !== this.#restoring) void this.#discard(fork);
   }
 
   /** Ends `fork`, reporting a failure to do so and throwing none. */

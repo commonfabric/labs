@@ -2614,7 +2614,7 @@ export type SpaceHistoryListResponse = {
 
   /**
    * The seq to pass as `before` for the steps older than these, absent when
-   * the space's history holds none.
+   * no older steps remain.
    */
   next?: number;
 };

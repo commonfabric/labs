@@ -950,7 +950,16 @@ export class RuntimeInternals extends EventTarget {
     try {
       runtime = await spawn({ [space]: branch });
     } catch (error) {
-      await this.#client.deleteSpaceBranch({ space, name: branch });
+      // The failure to start is what the caller hears of, whatever becomes
+      // of deleting the branch nothing runs.
+      try {
+        await this.#client.deleteSpaceBranch({ space, name: branch });
+      } catch (deleteError) {
+        console.error(
+          `[RuntimeInternals] Failed to delete the branch ${branch}:`,
+          deleteError,
+        );
+      }
       throw error;
     }
     return new SpaceFork(space, branch, seq, runtime, this.#client);
@@ -1280,6 +1289,7 @@ export class RuntimeInternals extends EventTarget {
             clientVersion,
             clientBuild,
             forwardWorkerConsole,
+            patternCoverage,
             concurrentWatchRefresh,
             awaitHealth,
             iframeOuterFrameUrl,
@@ -1308,6 +1318,8 @@ export class SpaceFork {
   readonly #runtime: RuntimeInternals;
   readonly #origin: RuntimeClient;
   #ended = false;
+  #deleted: Promise<void> | undefined;
+  #disposed: Promise<void> | undefined;
 
   /**
    * Constructs the fork of `space` on `branch`, taken at `seq`, which
@@ -1364,7 +1376,8 @@ export class SpaceFork {
       space: this.#space,
       branch: this.#branch,
     });
-    // The space is restored whatever becomes of the fork's own teardown.
+    // The space is restored whatever becomes of the fork's own teardown,
+    // which a later `discard()` tries again.
     try {
       await this.discard();
     } catch (error) {
@@ -1375,19 +1388,26 @@ export class SpaceFork {
 
   /**
    * Ends the fork: deletes its branch and disposes of its runtime. What was
-   * done in it stays in the space's store, unreachable from the space.
+   * done in it stays in the space's store, unreachable from the space. A
+   * call after one that failed to delete the branch tries the deletion
+   * again.
+   *
+   * @throws When the branch could not be deleted or the runtime disposed of.
    */
   async discard(): Promise<void> {
-    if (this.#ended) return;
     this.#ended = true;
     // The delete is sent before anything is awaited, so a caller that is
     // about to dispose of the runtime that took the fork still gets it out.
-    const deleted = this.#origin.deleteSpaceBranch({
+    const deleted = this.#deleted ??= this.#origin.deleteSpaceBranch({
       space: this.#space,
       name: this.#branch,
     });
+    // A deletion that failed is forgotten, so the next call sends another.
+    deleted.catch(() => {
+      if (this.#deleted === deleted) this.#deleted = undefined;
+    });
     try {
-      await this.#runtime.dispose();
+      await (this.#disposed ??= this.#runtime.dispose());
     } finally {
       await deleted;
     }

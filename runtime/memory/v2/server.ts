@@ -2281,6 +2281,37 @@ class Connection {
   }
 
   /**
+   * Like {@link #requireSession}, for a request served on a space's default
+   * branch only, which a session of another branch is refused. The session
+   * is found on this connection first, so only its holder learns its branch.
+   */
+  async #requireDefaultBranchSession(
+    message: Extract<
+      ClientMessage,
+      {
+        type:
+          | "entity-id.list"
+          | "entity-id.exists"
+          | "pattern.lifecycle"
+          | "event.attention.resolve"
+          | "served";
+      }
+    >,
+  ): Promise<boolean> {
+    if (
+      !await this.#requireSession(
+        message.requestId,
+        message.space,
+        message.sessionId,
+      )
+    ) return false;
+    const refusal = this.#server.branchSessionRefusal(message);
+    if (refusal === undefined) return true;
+    this.#send(refusal);
+    return false;
+  }
+
+  /**
    * Helper for {@link #requireSession} and {@link #requireImmediateSession},
    * which returns the handle of the session `sessionId` on `space` when it is
    * open on this connection and its routed authority holds, and otherwise
@@ -2549,12 +2580,6 @@ class Connection {
       return;
     }
 
-    const refusal = this.#server.branchSessionRefusal(parsed);
-    if (refusal !== undefined) {
-      this.#send(refusal);
-      return;
-    }
-
     switch (parsed.type) {
       case "hello":
         this.#send({
@@ -2699,11 +2724,7 @@ class Connection {
         return;
       case "entity-id.list":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -2719,11 +2740,7 @@ class Connection {
         return;
       case "entity-id.exists":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -2994,11 +3011,7 @@ class Connection {
         return;
       case "event.attention.resolve":
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -3014,11 +3027,7 @@ class Connection {
         return;
       case "pattern.lifecycle": {
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }
@@ -3081,11 +3090,7 @@ class Connection {
       }
       case "served": {
         if (
-          !await this.#requireSession(
-            parsed.requestId,
-            parsed.space,
-            parsed.sessionId,
-          )
+          !await this.#requireDefaultBranchSession(parsed)
         ) {
           return;
         }

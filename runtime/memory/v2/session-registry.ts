@@ -160,11 +160,14 @@ export type SessionState = {
    * mode. */
   servingOwn?: true;
 
-  /** Whether the session's latest open declared that it is not demand
-   * (`SessionDescriptor.demand`). Such a session is not client demand on
-   * any server, whoever signed it, where a serving loop's own session of
-   * another kind is left out only by the server whose loop it belongs to
-   * (`isServingSessionOf()`). Fresh per open, in every access-list mode. */
+  /**
+   * Whether the session is not client demand: its latest open declared so
+   * (`SessionDescriptor.demand`), or it is a session of a branch, which no
+   * serving loop runs. Such a session is not client demand on any server,
+   * whoever signed it, where a serving loop's own session of another kind
+   * is left out only by the server whose loop it belongs to
+   * (`isServingSessionOf()`). Fresh per open, in every access-list mode.
+   */
   notDemand?: true;
 
   /**
@@ -297,8 +300,8 @@ const openedEvent = (session: SessionState): SessionLifecycleEvent => ({
 /**
  * Whether the serving loop of `principal` leaves `session` out of client
  * demand: the session is one of that loop's own
- * (`SessionState.servingOwn`, signed by `principal`), or it declared that it
- * is not demand (`SessionState.notDemand`), whoever signed it. A session of
+ * (`SessionState.servingOwn`, signed by `principal`), or it is not
+ * demand (`SessionState.notDemand`), whoever signed it. A session of
  * that principal from a client that made no such declaration, and any
  * session when `principal` is `undefined`, is not left out.
  */

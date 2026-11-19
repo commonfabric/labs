@@ -14,7 +14,7 @@ import {
   type ClientCommit,
   type CommitClass,
   type CommitSummary,
-  decodeMemoryBoundary,
+  decodeTrustedMemoryBoundary,
   DEFAULT_BRANCH,
   type EntityId,
   type Operation,
@@ -104,7 +104,9 @@ LIMIT :limit
 const payloadSummary = (
   original: string,
 ): Pick<CommitSummary, "events" | "restored"> => {
-  const payload = decodeMemoryBoundary<Partial<ClientCommit>>(original);
+  const payload = decodeTrustedMemoryBoundary<Partial<ClientCommit>>(
+    original,
+  );
   const merge = payload.merge;
   return {
     events: Array.isArray(payload.eventAppends)
@@ -125,7 +127,11 @@ const toCommitSummary = (row: CommitRow): CommitSummary => ({
     ? { actingPrincipal: row.acting_principal }
     : {}),
   ...(row.consequence_of !== null
-    ? { consequenceOf: decodeMemoryBoundary<string[]>(row.consequence_of) }
+    ? {
+      consequenceOf: decodeTrustedMemoryBoundary<string[]>(
+        row.consequence_of,
+      ),
+    }
     : {}),
   ...(row.derived_through !== null
     ? { derivedThrough: row.derived_through }
