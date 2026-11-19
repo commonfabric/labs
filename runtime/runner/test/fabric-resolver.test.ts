@@ -367,6 +367,25 @@ describe("FabricAwareResolver", () => {
     expect(await apart.resolveSource(data.name)).toBeUndefined();
   });
 
+  it("lists a directory through the wrapped resolver, and lists nothing where it cannot", async () => {
+    // A wrapper that always offered a listing would hide the wrapped
+    // resolver's lack of one from the build, whose refusal names the module.
+
+    const listing = new FabricAwareResolver(
+      new InMemoryProgram("/main.tsx", { "/assets/glaze.png": "" }),
+      { runtime, space },
+    );
+    const notListing = new FabricAwareResolver({
+      main: () => Promise.resolve({ name: "/main.tsx", contents: "" }),
+      resolveSource: () => Promise.resolve(undefined),
+    }, { runtime, space });
+
+    expect(await listing.listDataFiles?.("/assets")).toEqual([
+      "/assets/glaze.png",
+    ]);
+    expect(notListing.listDataFiles).toBeUndefined();
+  });
+
   it("refuses to mount a 33rd distinct pattern, and still returns those already mounted", async () => {
     const resolver = new FabricAwareResolver(innerProgram(), {
       runtime,

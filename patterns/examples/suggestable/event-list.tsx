@@ -1,3 +1,10 @@
+/**
+ * Lists the events found with `wish` for the `#event` tag in the current space
+ * and the viewer's home space, each shown as a card with title, date, time,
+ * and notes. The list view is exported separately so it can be shown with
+ * any set of events.
+ */
+
 import { computed, NAME, pattern, UI, type VNode, wish } from "commonfabric";
 
 // ===== Types =====

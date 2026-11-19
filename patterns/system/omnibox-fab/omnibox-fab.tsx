@@ -1,3 +1,11 @@
+/**
+ * The floating assistant button at the bottom of the screen. Tapping it opens a
+ * chat that can search the space, run patterns from the pattern index, search
+ * and read the web, do calculations, run shell commands in a sandbox, and
+ * update what it remembers about you, and you can drop a piece onto the button
+ * to pin it to the conversation as context.
+ */
+
 import {
   type BuiltInLLMMessage,
   computed,

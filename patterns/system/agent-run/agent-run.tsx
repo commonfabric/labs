@@ -41,7 +41,8 @@ export type AgentRunErrorCode =
   | "PROVIDER_FAILURE"
   | "RUNNER_LOST"
   | "CANCELLED"
-  | "REFUSED";
+  | "REFUSED"
+  | "CFC_REFUSED";
 
 /**
  * Model usage as the harness reports it. An absent counter stays absent, and

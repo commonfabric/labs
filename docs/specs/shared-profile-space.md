@@ -271,8 +271,10 @@ type SetProfileInboxEvent = {
 `picture` is the profile picture: the bytes of a raster image, in any format
 an HTML `<img>` decodes. No media type is stored with it, because the browser
 determines the format of a raster image from its bytes. A profile with no
-picture holds no `picture` property. The owner sets it through `setPicture`,
-which the profile's edit form drives from an image picked with
+picture holds empty bytes, and a stored profile from before the field had that
+default may hold no `picture` property. Only the owner sets it, through
+`setPicture`, which refuses every other writer. The profile's edit form drives
+`setPicture` from an image picked with
 `<cf-avatar-input>`; that component crops the image to its centered square and
 scales it to 128 pixels on each side, so the bytes stay small enough to store
 inline and to copy into snapshots.

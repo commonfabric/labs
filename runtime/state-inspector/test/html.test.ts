@@ -401,3 +401,31 @@ Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("html explorer: no pass over the log for stale reads when no cell is multi-user", async () => {
+  // The seed's writes all come from one session, so no cell gets a stale-read
+  // analysis and nothing needs the log's read coverage.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-html-" });
+  const dbPath = `${dir}/space.sqlite`;
+  try {
+    seed(dbPath);
+    const space = openSpace(dbPath);
+    try {
+      let scans = 0;
+      const prepare = space.db.prepare.bind(space.db);
+      space.db.prepare = ((sql: string) => {
+        if (sql.includes(`'$.compaction'`)) scans++;
+        return prepare(sql);
+      }) as typeof space.db.prepare;
+
+      const bundle = buildInspectorBundle(space);
+
+      assert(bundle.conflicts.every((c) => !c.multiUser));
+      assertEquals(scans, 0);
+    } finally {
+      space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

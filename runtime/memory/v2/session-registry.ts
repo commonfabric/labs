@@ -175,7 +175,8 @@ export type SessionState = {
   principal?: string;
 
   /** The delegated READ binding (OW31; `SessionDescriptor.actingAs`):
-   * the acting user — the space's ACL owner at open time — this
+   * the acting user — the space's ACL owner at open time, or the owner an
+   * access list first names after an open that found none — this
    * session's READ-class capability decisions resolve as. Never
    * consulted for WRITE/OWNER requirements, the lease-holder read row,
    * or scoped-read identity (those key on `principal`, the envelope).
@@ -198,12 +199,13 @@ export type SessionState = {
   chainIssuers?: readonly string[];
 
   /**
-   * The person this session's activity is attributed to, which its spans
-   * record as `enduser.id`, or `undefined` for a session that stands for no
-   * person. The server decides it when the session opens, and again when a
-   * commit changes the space's access list.
+   * Whether the space's own key is a person's identity on this session's
+   * space, which the person its spans record as `enduser.id` depends on.
+   * The server decides it when the session opens, and again when a commit
+   * changes the space's access list; `undefined` when neither the session's
+   * principal nor its chain names the space's key.
    */
-  person?: string;
+  ownKeyIsPerson?: boolean;
 
   /**
    * Set when the opening connection's client advertised `elidedVerdicts`:

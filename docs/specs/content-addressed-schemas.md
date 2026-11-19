@@ -117,7 +117,9 @@ A schema document is a `cid:` document whose value is a JSON Schema:
 ### Code documents
 
 A code document is a `cid:` document whose value is a string: the authored
-source of one module, or its compiled output. It is the second kind of
+source of one module, its compiled output, or the stored text of a data file,
+which a result document can also link to
+([`iframe-static-assets.md`](./iframe-static-assets.md), part 1). It is the second kind of
 content the `cid:` namespace holds, and the larger.
 
 - **Id**: `cid:<taggedHash>` where the hash is `taggedHashStringOf(code)`,
@@ -143,7 +145,9 @@ content the `cid:` namespace holds, and the larger.
 - **Per space, by the writer**: the compile cache installs a code document
   into the space of every record that links to it, in the same transaction
   as the record, so a piece's code loads from the space the piece lives in
-  and no other space has to be reachable for it. That is a writer's
+  and no other space has to be reachable for it. Setup likewise stages the
+  code document for each data-file string it links from a result projection,
+  in the transaction that writes the projection. That is a writer's
   practice, not a reader's rule: a link that names a code document in
   another space is a valid link, and a reader that follows one verifies
   the resolved string against the linked id exactly as it does within a

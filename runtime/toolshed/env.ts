@@ -350,12 +350,19 @@ export const EnvSchema = z.object({
   // Whether this deployment's memory server advertises `markedSplicesV1`, so
   // that clients send array changes as marked splices: on for "true" or "1",
   // off for "false", "0" or no setting, and any other spelling refuses
-  // startup. Turn it on only
-  // once every serving worker that may read this deployment's rows, a
-  // rollback's included, reads marked splices. See
+  // startup. Turn it on only once every serving worker that may read this
+  // deployment's rows, a rollback's included, reads marked splices. See
   // docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`.
   MEMORY_MARKED_SPLICES: z.enum(["true", "1", "false", "0"]).default(
     "false",
+  ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server stores an admitted commit's reads
+  // as a digest where nothing reads them afterward
+  // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or
+  // "0", and any other spelling refuses startup. Turn it off before rolling
+  // back to a version that predates digest-form rows.
+  MEMORY_STORE_READS_DIGEST: z.enum(["true", "1", "false", "0"]).default(
+    "true",
   ).transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
@@ -399,6 +406,12 @@ export const EnvSchema = z.object({
   // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
   // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),
+
+  // Whether the main thread samples its heap from startup, for the profiles
+  // SIGUSR2 writes (`lib/heap-profiles.ts`). Off by default: the sampler's
+  // inspector session makes Deno hold each worker the main thread starts
+  // about a second for a debugger. The serving workers sample either way.
+  HEAP_PROFILE_MAIN_THREAD: boolFlag(),
 
   // The space this deployment keeps its ingest registry in: channel
   // registrations, their indexes, and Gmail mailbox bindings. Empty means the

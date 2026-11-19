@@ -1,0 +1,2 @@
+{"date": "2026-11-18", "from": {"k": "unit", "s": "tasks", "n": "test-gap > defaultBase() > returns `origin/main` where the checkout has no `upstream/main`"}, "to": {"k": "unit", "s": "tasks", "n": "defaultBase() > returns `origin/main` where the checkout has no `upstream/main`"}}
+{"date": "2026-11-18", "from": {"k": "unit", "s": "tasks", "n": "test-gap > defaultBase() > returns `upstream/main` where the checkout has one"}, "to": {"k": "unit", "s": "tasks", "n": "defaultBase() > returns `upstream/main` where the checkout has one"}}

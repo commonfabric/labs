@@ -60,6 +60,21 @@ Deno.test("MEMORY_MARKED_SPLICES parses strictly: off by default, on only for 't
   expect(() => enabled("on")).toThrow();
 });
 
+Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })
+      .MEMORY_STORE_READS_DIGEST;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  // A misspelled setting must not silently leave the deployment either way.
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
 Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
   // Regression guard for the z.coerce.boolean() footgun: Boolean("false") ===
   // true, which would silently enable telemetry (and, with the all-span
@@ -373,6 +388,15 @@ Deno.test("EXPOSE_GC parses strictly, and only on a development or test server",
     );
     assertEquals(expose({ EXPOSE_GC: "false", ENV }), false);
   }
+});
+
+Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
+  const sample = (env: Record<string, string>) =>
+    EnvSchema.parse(env).HEAP_PROFILE_MAIN_THREAD;
+
+  assertEquals(sample({}), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "false" }), false);
+  assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "true" }), true);
 });
 
 Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {

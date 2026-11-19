@@ -1,3 +1,10 @@
+/**
+ * A writing assistant that asks a language model to write about a topic you
+ * enter, personalizing the result with a summary of the user found through
+ * `wish({ query: "#learnedSummary" })`. It shows the profile text in an
+ * editable `cf-code-editor` and the generated text beneath it.
+ */
+
 import {
   Cell,
   computed,

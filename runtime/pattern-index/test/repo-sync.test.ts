@@ -1,9 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import type {
-  PatternIndexPublishRequest,
-  PatternIndexRepoHead,
+import {
+  PatternIndexError,
+  type PatternIndexPublishRequest,
+  type PatternIndexRepoHead,
 } from "../src/client.ts";
 import {
   findEntries,
@@ -14,9 +15,11 @@ import {
 import {
   type PlannedEntry,
   planProblem,
+  programSizeLimit,
   programSourceHash,
   type PublishClient,
   publishPlan,
+  reasonOf,
   reportMarkdown,
   syncFailed,
 } from "../src/repo-sync.ts";
@@ -461,12 +464,18 @@ describe("repo-sync", () => {
       });
     });
 
-    it("returns a refused publish as failed and still publishes the other entries", async () => {
+    it("returns a publish refused as too large as oversize, not failed, and still publishes the other entries", async () => {
       const { client, published } = fakeIndex();
       const publishPattern = client.publishPattern;
       client.publishPattern = (request) =>
         request.patternId === "id:p/a.tsx"
-          ? Promise.reject(new Error("pattern index publishPattern 429"))
+          ? Promise.reject(
+            new PatternIndexError(
+              "publishPattern",
+              400,
+              "program exceeds 819200 bytes of source",
+            ),
+          )
           : publishPattern(request);
       const report = await publishPlan(
         {
@@ -476,12 +485,88 @@ describe("repo-sync", () => {
         PUBLISH_OPTIONS,
         client,
       );
-      expect(report.entries.map((entry) => entry.status)).toEqual([
-        "failed",
-        "published",
+      expect(report.entries).toEqual([
+        { path: "p/a.tsx", status: "oversize", limit: "819200" },
+        { path: "p/b.tsx", status: "published", patternId: "id:p/b.tsx" },
       ]);
       expect(published.map((request) => request.source?.path)).toEqual([
         "p/b.tsx",
+      ]);
+      expect(syncFailed(report)).toBe(false);
+      const markdown = reportMarkdown(report);
+      expect(markdown).toContain("1 too large for the index, 0 failed.");
+      expect(markdown).toContain(
+        "### Not published: too large for the index",
+      );
+      expect(markdown).toContain("over 819200 bytes of source");
+      expect(markdown).toContain("- `p/a.tsx`");
+      expect(markdown).not.toContain("### Failed");
+    });
+
+    it("returns any other refused publish as failed and still publishes the other entries", async () => {
+      for (
+        const error of [
+          new PatternIndexError("publishPattern", 400, "bad request"),
+          new PatternIndexError(
+            "publishPattern",
+            500,
+            "program exceeds 819200 bytes of source",
+          ),
+          new PatternIndexError("publishPattern", 401),
+          new TypeError("error sending request"),
+        ]
+      ) {
+        const { client, published } = fakeIndex();
+        const publishPattern = client.publishPattern;
+        client.publishPattern = (request) =>
+          request.patternId === "id:p/a.tsx"
+            ? Promise.reject(error)
+            : publishPattern(request);
+        const report = await publishPlan(
+          {
+            entries: [compiled("p/a.tsx"), compiled("p/b.tsx")],
+            selected: ["p/a.tsx", "p/b.tsx"],
+          },
+          PUBLISH_OPTIONS,
+          client,
+        );
+        expect(report.entries.map((entry) => entry.status)).toEqual([
+          "failed",
+          "published",
+        ]);
+        expect(published.map((request) => request.source?.path)).toEqual([
+          "p/b.tsx",
+        ]);
+        expect(syncFailed(report)).toBe(true);
+        expect(reportMarkdown(report)).toContain(
+          `| \`p/a.tsx\` | ${error.message} |`,
+        );
+      }
+    });
+
+    it("returns a sync with an oversize entry and a failed one as failed", async () => {
+      const { client } = fakeIndex();
+      client.publishPattern = (request) =>
+        Promise.reject(
+          request.patternId === "id:p/a.tsx"
+            ? new PatternIndexError(
+              "publishPattern",
+              400,
+              "program exceeds 819200 bytes of source",
+            )
+            : new PatternIndexError("publishPattern", 503),
+        );
+      const report = await publishPlan(
+        {
+          entries: [compiled("p/a.tsx"), compiled("p/b.tsx")],
+          selected: ["p/a.tsx", "p/b.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries.map((entry) => entry.status)).toEqual([
+        "oversize",
+        "failed",
       ]);
       expect(syncFailed(report)).toBe(true);
     });
@@ -598,6 +683,58 @@ describe("repo-sync", () => {
     });
   });
 
+  describe("programSizeLimit()", () => {
+    it("returns the limit of a recognized program-size refusal", () => {
+      const error = new PatternIndexError(
+        "publishPattern",
+        400,
+        "program exceeds 123456 bytes of source",
+      );
+      expect(programSizeLimit(error)).toBe("123456");
+    });
+
+    it("returns `undefined` for every other refusal, near misses included", () => {
+      const sizeRefusal = "program exceeds 819200 bytes of source";
+      for (
+        const error of [
+          new PatternIndexError("publishPattern", 400),
+          new PatternIndexError("publishPattern", 400, "private source text"),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}: secret`,
+          ),
+          new PatternIndexError("publishPattern", 400, `${sizeRefusal}\n`),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}\nsecret`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal}\x1b[31m`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            `${sizeRefusal} | secret`,
+          ),
+          new PatternIndexError(
+            "publishPattern",
+            400,
+            "program exceeds 1234567890123 bytes of source",
+          ),
+          new PatternIndexError("publishPattern", 500, sizeRefusal),
+          new PatternIndexError("listRepoHeads", 400, sizeRefusal),
+        ]
+      ) {
+        expect(programSizeLimit(error)).toBeUndefined();
+        expect(reasonOf(error)).toBe(error.message);
+      }
+    });
+  });
+
   describe("reportMarkdown()", () => {
     it("returns a summary line counting each outcome, and a section per kind", () => {
       const markdown = reportMarkdown({
@@ -608,6 +745,7 @@ describe("repo-sync", () => {
           { path: "p/b.tsx", status: "unchanged", patternId: "B" },
           { path: "p/c.tsx", status: "undescribed" },
           { path: "p/d.tsx", status: "failed", reason: "bad | thing\nhere" },
+          { path: "p/g.tsx", status: "oversize", limit: "819200" },
         ],
         withdrawn: ["p/e.tsx"],
         dormant: ["p/f.tsx"],
@@ -619,7 +757,7 @@ describe("repo-sync", () => {
         }],
       });
       expect(markdown).toContain(
-        "At `0123456789ab`: 4 entries, 1 published, 1 unchanged, 1 without a description, 1 failed.",
+        "At `0123456789ab`: 5 entries, 1 published, 1 unchanged, 1 without a description, 1 too large for the index, 1 failed.",
       );
       expect(markdown).toContain("| `p/d.tsx` | bad \\| thing here |");
       expect(markdown).toContain("| `p/a.tsx` | `A` |");
@@ -629,6 +767,7 @@ describe("repo-sync", () => {
       expect(markdown).toContain("- `p/c.tsx`");
       expect(markdown).toContain("- `p/e.tsx`");
       expect(markdown).toContain("- `p/f.tsx`");
+      expect(markdown).toContain("- `p/g.tsx`");
     });
   });
 });

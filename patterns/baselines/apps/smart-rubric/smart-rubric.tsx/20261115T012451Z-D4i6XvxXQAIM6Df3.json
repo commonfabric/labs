@@ -1,0 +1,687 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "CategoryOption": {
+        "properties": {
+          "label": {
+            "description": "\"Downtown\", \"Excellent\".",
+            "type": "string"
+          },
+          "score": {
+            "description": "Points this label earns before weighting.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "score"
+        ],
+        "type": "object"
+      },
+      "Dimension": {
+        "properties": {
+          "categories": {
+            "description": "The scale of a categorical dimension.",
+            "items": {
+              "$ref": "#/$defs/CategoryOption"
+            },
+            "type": "array"
+          },
+          "higherIsBetter": {
+            "description": "For a numeric dimension: whether a larger number is better (the\ndefault) or worse, as with price.",
+            "type": "boolean"
+          },
+          "multiplier": {
+            "description": "The weight the dimension's score is multiplied by.",
+            "type": "number"
+          },
+          "name": {
+            "description": "Unique within the rubric; option values refer to it by name.",
+            "type": "string"
+          },
+          "numericMax": {
+            "type": "number"
+          },
+          "numericMin": {
+            "type": "number"
+          },
+          "type": {
+            "$ref": "#/$defs/DimensionType"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "multiplier",
+          "categories",
+          "numericMin",
+          "numericMax"
+        ],
+        "type": "object"
+      },
+      "DimensionType": {
+        "enum": [
+          "categorical",
+          "numeric"
+        ]
+      },
+      "OptionValue": {
+        "properties": {
+          "dimensionName": {
+            "type": "string"
+          },
+          "value": {
+            "description": "A category label, or a number within the dimension's range.",
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "dimensionName",
+          "value"
+        ],
+        "type": "object"
+      },
+      "RubricOption": {
+        "properties": {
+          "manualRank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Position set by hand (1 = top), or null to rank by score."
+          },
+          "name": {
+            "description": "Unique within the rubric.",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/$defs/OptionValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "values",
+          "manualRank"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "dimensions": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Dimension"
+        },
+        "type": "array"
+      },
+      "options": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/RubricOption"
+        },
+        "type": "array"
+      },
+      "title": {
+        "asCell": [
+          {
+            "kind": "cell",
+            "scope": "space"
+          }
+        ],
+        "default": "Decision Rubric",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/smart-rubric/smart-rubric.tsx",
+  "resultSchema": {
+    "$defs": {
+      "CategoryOption": {
+        "properties": {
+          "label": {
+            "description": "\"Downtown\", \"Excellent\".",
+            "type": "string"
+          },
+          "score": {
+            "description": "Points this label earns before weighting.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "label",
+          "score"
+        ],
+        "type": "object"
+      },
+      "Dimension": {
+        "properties": {
+          "categories": {
+            "description": "The scale of a categorical dimension.",
+            "items": {
+              "$ref": "#/$defs/CategoryOption"
+            },
+            "type": "array"
+          },
+          "higherIsBetter": {
+            "description": "For a numeric dimension: whether a larger number is better (the\ndefault) or worse, as with price.",
+            "type": "boolean"
+          },
+          "multiplier": {
+            "description": "The weight the dimension's score is multiplied by.",
+            "type": "number"
+          },
+          "name": {
+            "description": "Unique within the rubric; option values refer to it by name.",
+            "type": "string"
+          },
+          "numericMax": {
+            "type": "number"
+          },
+          "numericMin": {
+            "type": "number"
+          },
+          "type": {
+            "$ref": "#/$defs/DimensionType"
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "multiplier",
+          "categories",
+          "numericMin",
+          "numericMax"
+        ],
+        "type": "object"
+      },
+      "DimensionType": {
+        "enum": [
+          "categorical",
+          "numeric"
+        ]
+      },
+      "OptionValue": {
+        "properties": {
+          "dimensionName": {
+            "type": "string"
+          },
+          "value": {
+            "description": "A category label, or a number within the dimension's range.",
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "dimensionName",
+          "value"
+        ],
+        "type": "object"
+      },
+      "QuickAddPreview": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "ready": {
+            "description": "False until a usable answer has arrived.",
+            "type": "boolean"
+          },
+          "reasoning": {
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/$defs/QuickAddValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "ready",
+          "name",
+          "reasoning",
+          "values"
+        ],
+        "type": "object"
+      },
+      "QuickAddStatus": {
+        "enum": [
+          "idle",
+          "pending",
+          "error",
+          "ready"
+        ]
+      },
+      "QuickAddValue": {
+        "properties": {
+          "color": {
+            "description": "The confidence's colour in the preview.",
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "dimensionName": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "dimensionName",
+          "value",
+          "confidence",
+          "color"
+        ],
+        "type": "object"
+      },
+      "RankedOption": {
+        "properties": {
+          "isFirst": {
+            "type": "boolean"
+          },
+          "isLast": {
+            "type": "boolean"
+          },
+          "movedByHand": {
+            "description": "Placed by hand somewhere other than where its score would put it.",
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "description": "1-based place in the displayed ranking.",
+            "type": "number"
+          },
+          "score": {
+            "type": "number"
+          },
+          "scoreLabel": {
+            "description": "The score as shown, one decimal.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "score",
+          "scoreLabel",
+          "position",
+          "isFirst",
+          "isLast",
+          "movedByHand"
+        ],
+        "type": "object"
+      },
+      "RubricOption": {
+        "properties": {
+          "manualRank": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Position set by hand (1 = top), or null to rank by score."
+          },
+          "name": {
+            "description": "Unique within the rubric.",
+            "type": "string"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/$defs/OptionValue"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "values",
+          "manualRank"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$FS": {
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "acceptQuickAdd": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Add the option Quick Add proposed.",
+        "tier": "wrapper"
+      },
+      "addDimension": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Add a dimension; an empty name falls back to the draft, then a default.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "$ref": "#/$defs/DimensionType"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "addOption": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Add an option; an empty name falls back to the draft, then \"Option N\".",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "analyzeQuickAdd": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Send the Quick Add description to the LLM.",
+        "tier": "wrapper"
+      },
+      "changeWeight": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Change a dimension's weight by `delta` (steps of 0.5, 0..10).",
+        "properties": {
+          "delta": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "clearQuickAdd": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "tier": "wrapper"
+      },
+      "dimensions": {
+        "items": {
+          "$ref": "#/$defs/Dimension"
+        },
+        "type": "array"
+      },
+      "dismissQuickAdd": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Cancel a pending call or dismiss its error, keeping the description.",
+        "tier": "wrapper"
+      },
+      "moveOption": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Move an option one place up (-1) or down (+1) in the ranking.",
+        "properties": {
+          "delta": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "options": {
+        "items": {
+          "$ref": "#/$defs/RubricOption"
+        },
+        "type": "array"
+      },
+      "quickAddPreview": {
+        "$ref": "#/$defs/QuickAddPreview"
+      },
+      "quickAddStatus": {
+        "$ref": "#/$defs/QuickAddStatus"
+      },
+      "ranked": {
+        "description": "The options in displayed order, with scores.",
+        "items": {
+          "$ref": "#/$defs/RankedOption"
+        },
+        "type": "array"
+      },
+      "removeDimension": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "removeOption": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "resetManualRanks": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "selectOption": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "selected": {
+        "description": "The selected option's name, or \"\".",
+        "type": "string"
+      },
+      "setValue": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Set an option's value on a dimension.",
+        "properties": {
+          "dimension": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          },
+          "value": {
+            "type": [
+              "number",
+              "string"
+            ]
+          }
+        },
+        "required": [
+          "option",
+          "dimension",
+          "value"
+        ],
+        "type": "object"
+      },
+      "stepValue": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Step an option's numeric value by a tenth of the range (sign of delta).",
+        "properties": {
+          "delta": {
+            "type": "number"
+          },
+          "dimension": {
+            "type": "string"
+          },
+          "option": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "option",
+          "dimension",
+          "delta"
+        ],
+        "type": "object"
+      },
+      "title": {
+        "type": "string"
+      },
+      "toggleDirection": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Flip a numeric dimension between higher-is-better and lower-is-better.",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "title",
+      "options",
+      "dimensions",
+      "ranked",
+      "selected",
+      "quickAddStatus",
+      "quickAddPreview",
+      "addOption",
+      "removeOption",
+      "addDimension",
+      "removeDimension",
+      "changeWeight",
+      "selectOption",
+      "setValue",
+      "stepValue",
+      "moveOption",
+      "resetManualRanks",
+      "analyzeQuickAdd",
+      "acceptQuickAdd",
+      "clearQuickAdd",
+      "dismissQuickAdd",
+      "toggleDirection",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

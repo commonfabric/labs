@@ -1,6 +1,7 @@
 /**
  * Runs an iframe pattern's guest in a Deno test. The guest's `guest.html` is
- * loaded into a simulated document, the guest's source module is evaluated
+ * loaded into a simulated document, with the static assets a test supplies
+ * written in as the host writes them, the guest's source module is evaluated
  * against it as it would be in the frame, and the host end of the bridge
  * serves it the resources a test supplies: in-memory cells, presence rooms,
  * and SQLite databases. The test then drives the document as a person would
@@ -12,6 +13,7 @@
 
 // deno-lint-ignore no-external-import -- Deno's built-in SQLite holds a guest's database in memory.
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { fromFileUrl, join } from "@std/path";
 import {
   CustomEvent as DocumentCustomEvent,
   Event as DocumentEvent,
@@ -26,6 +28,7 @@ import {
   isValidFabricValue,
 } from "@commonfabric/data-model";
 import {
+  type AssetRecord,
   type BridgeCell,
   type BridgePresenceRecord,
   type BridgePresenceRoom,
@@ -33,9 +36,17 @@ import {
   type BridgeResource,
   createFabricBridge,
   FabricBridgeHost,
+  guestDocument,
   IPC,
+  missingAssets,
   presenceResource,
+  toAssetRecord,
 } from "@commonfabric/iframe-sandbox";
+import {
+  dataFileAssets,
+  dataFileUrl,
+  decodeDataFile,
+} from "@commonfabric/text/data-file";
 
 /**
  * Hears every change a guest makes to a resource a test handed it, and every
@@ -480,6 +491,50 @@ export class MemorySqlite {
 }
 
 //
+// Assets
+//
+
+/**
+ * Returns the assets the directory at `directory` holds, as a pattern's
+ * `dataFile.urls()` reads them from that directory: each file directly inside
+ * it whose extension has a media type, other than a hidden file such as
+ * macOS's `._glaze.png`, keyed by its file name without the extension, as a
+ * base64 `data:` URL. A symbolic link to a file counts as the file, and one
+ * that names nothing is left out, as they are for `dataFile.urls()`.
+ *
+ * @throws Error for a file whose name without its extension is not an asset's
+ *   name, and for two files that would share one, as `dataFile.urls()` does.
+ */
+export async function readAssets(directory: URL): Promise<AssetRecord> {
+  const path = fromFileUrl(directory);
+  const names: string[] = [];
+  for await (const entry of Deno.readDir(path)) {
+    const isFile = entry.isFile ||
+      (entry.isSymlink && await linksToFile(join(path, entry.name)));
+    if (isFile) names.push(`./${entry.name}`);
+  }
+  const entries: [string, string][] = [];
+  for (const [name, file] of dataFileAssets(".", names.sort())) {
+    const bytes = await Deno.readFile(join(path, file));
+    entries.push([name, dataFileUrl(decodeDataFile(bytes, file), file)]);
+  }
+  return toAssetRecord(Object.fromEntries(entries));
+}
+
+/**
+ * Helper for `readAssets()`, which returns whether the symbolic link `path`
+ * resolves to a file. One that resolves to nothing is not a file.
+ */
+async function linksToFile(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
+  }
+}
+
+//
 // Pages
 //
 
@@ -765,27 +820,47 @@ const documentGlobals = new Set<string>();
 /**
  * Loads the guest module at `guest` into a document, and serves it
  * `resources` by name. The document is the file `html` names, or `html`
- * itself when it is a string of markup. `globals` are installed beside the
- * document's own: test doubles for what the simulated document lacks, such
- * as an audio engine. `setup` runs once the globals are installed and before
- * the guest loads, for a double that has to go on one of the document's own
- * classes with {@link patchProperty}. A test reads the guest's document
- * through the globals, so one page is open at a time.
+ * itself when it is a string of markup. `assets` are the guest's static
+ * assets, a record from a name to a base64 `data:` URL such as
+ * {@link readAssets} returns, which go into the document as the host puts
+ * them there (`guestDocument()`): each `cf-asset:<name>` is replaced with its
+ * asset's URL, and the record is written in for `fabric.asset()` to read.
+ * `globals` are installed beside the document's own: test doubles for what
+ * the simulated document lacks, such as an audio engine. `setup` runs once the
+ * globals are installed and before the guest loads, for a double that has to
+ * go on one of the document's own classes with {@link patchProperty}. A test
+ * reads the guest's document through the globals, so one page is open at a
+ * time.
+ *
+ * @throws TypeError for `assets` that the host would refuse, naming why
+ *   (`toAssetRecord()`).
+ * @throws Error for a document that refers to an asset `assets` lacks, which
+ *   the host reports as a guest error and loads with the reference left in.
  */
 export async function openGuestPage(options: {
   guest: URL;
   html: URL | string;
+  assets?: AssetRecord;
   resources: Record<string, BridgeResource>;
   globals?: Record<string, unknown>;
   setup?: () => void;
 }): Promise<GuestPage> {
+  const html = typeof options.html === "string"
+    ? options.html
+    : await Deno.readTextFile(options.html);
+  const assets = toAssetRecord(options.assets ?? {});
+  const missing = missingAssets(html, assets);
+  if (missing.length > 0) {
+    const references = missing.map((name) => `\`cf-asset:${name}\``);
+    throw new Error(
+      `The guest's document refers to assets it was not given: ${
+        references.join(", ")
+      }. Pass them to \`openGuestPage()\` as \`assets\`.`,
+    );
+  }
   const window = new Window({ url: "https://guest.invalid/" });
   window.document.open();
-  window.document.write(
-    typeof options.html === "string"
-      ? options.html
-      : await Deno.readTextFile(options.html),
-  );
+  window.document.write(guestDocument(html, undefined, assets));
   window.document.close();
   await window.happyDOM.waitUntilComplete();
 

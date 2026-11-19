@@ -375,14 +375,14 @@ holds it to its tests.
 An iframe pattern's guest (`guest.ts` or `guest.tsx`) runs in the browser, but
 a Deno test can load it as it is.
 `patterns/tools/test-support/iframe-guest.ts` loads the guest's `guest.html`
-into a simulated document, installs that document's globals, evaluates a fresh
-instance of the guest module against it, and serves the guest the resources a
-test supplies through the host end of the real bridge: in-memory cells,
-presence rooms and SQLite databases. The test drives the document as a person
-would and reads back both the document and what the guest wrote. Deno's
-coverage records the guest module like any other, so the lines its tests run
-count as covered. `patterns/examples/iframe-cursor-canvas/guest.test.ts` is the
-worked example.
+into a simulated document, with any static assets the test supplies, installs
+that document's globals, evaluates a fresh instance of the guest module against
+it, and serves the guest the resources a test supplies through the host end of
+the real bridge: in-memory cells, presence rooms and SQLite databases. The test
+drives the document as a person would and reads back both the document and what
+the guest wrote. Deno's coverage records the guest module like any other, so
+the lines its tests run count as covered.
+`patterns/examples/iframe-cursor-canvas/guest.test.ts` is the worked example.
 
 A guest's writes cross the bridge, a message channel, before they reach a test's
 cells, so a check that the guest wrote nothing waits for the page's `settled()`

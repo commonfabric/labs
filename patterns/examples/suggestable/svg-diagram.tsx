@@ -1,3 +1,9 @@
+/**
+ * Asks a language model for an SVG diagram of a topic and draws it with
+ * `cf-svg`. It uses `generateText` and makes no request until a topic is
+ * given.
+ */
+
 import {
   computed,
   Default,

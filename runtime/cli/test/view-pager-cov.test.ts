@@ -166,6 +166,11 @@ function makeFake(opts: FakeOpts = {}) {
       timers.set(id, h);
       return () => timers.delete(id);
     },
+    setSpinnerTimer: (h) => {
+      const id = nextTimer++;
+      timers.set(id, h);
+      return () => timers.delete(id);
+    },
     // Resolve at once: a test drives frames with `fireTimers`, so a real wait
     // here would only stall the run.
     delay: () => Promise.resolve(),
@@ -631,10 +636,14 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   d.env("CF_VIEW_DEFINITELY_UNSET");
   const cancel = d.setTimer(() => {}, 0);
   cancel();
+  d.setSpinnerTimer(() => {})();
   d.onGrammarLoad(() => {})();
   // Setting up a push reads the environment and runs nothing that changes a
   // repository.
-  d.pushIo(() => {}, new AbortController().signal);
+  d.pushIo(
+    { write: () => {}, step: () => () => {} },
+    new AbortController().signal,
+  );
   // Git runs in the repository the viewer runs in, set up by the first call,
   // and an empty relay address names no relay.
   assert(d.git(["--version"])?.startsWith("git version "));
@@ -661,7 +670,7 @@ Deno.test("realPagerDeps: the pull request list and touch-gate's configuration a
     const error = await assertRejects(() =>
       d.touchGate("work").merge(
         { repository: "octo/repo", number: 7, method: "squash", sha: "c0" },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       )
     );

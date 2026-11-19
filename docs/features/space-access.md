@@ -96,8 +96,9 @@ principal, and is `"none"`. A `principal` that is not a well-formed DID throws;
 space names, each with the level its entry grants, as an object whose
 `principals` maps each principal's DID to its level. It is what a pattern reads
 to list a space's members, rather than keeping a list of its own. It lists
-principals, not people: pairing a member with the profile they joined with is
-the pattern's to do, over the participants the space's root lists.
+principals, not people: pairing a member with the profiles they joined with is
+the join [below](#pairing-members-with-their-profiles), over the participants
+the space's root lists.
 
 The list's `"*"` entry is not a member. It admits whoever the list does not
 name, and names no one, so it is reported apart, as `anyone`, and is absent
@@ -124,6 +125,33 @@ refusal, or a readmission runs the computation again, as
 [below](#keeping-the-answer-current) describes. The result carries no label. It
 reads nothing but the access list, so a computation that calls it in a space
 and reads nothing from another can write what it returns into that space.
+
+### Pairing members with their profiles
+
+`joinSpaceMembers(roster, list, ownerOf, keyOf)` joins a member list with a
+roster: one member for each principal `list` names, sorted by DID, with its
+level and the profiles on `roster` whose owner, as `ownerOf` returns it, is that
+principal, each once by `keyOf`, in the order `roster` first lists them. A
+member with none of their own there has none. `anyone` adds no member, a profile
+with no owner, or with one the list does not name, counts toward no one, and the
+result is `undefined` while `list` is. Pattern code passes `profileOwnerOf` and
+`equalsKey`, so a profile counts toward a member exactly when it counts as
+theirs anywhere else. The join reads nothing itself, so it can be called
+wherever its two functions can.
+
+A host joins the same way, from `@commonfabric/runner`, with no frame:
+`spaceMemberListAt(runtime, tx, space)` reads the list `spaceMembers(target)`
+returns, through `tx`, and `spaceMembersAt(runtime, tx, space, roster)` joins it
+with `roster` by `profileOwnerAt()` and the profiles' links. The host loads
+each profile on `roster` and the documents its name links through before
+calling `spaceMembersAt()`, for example with `loadProfileOwnerDocuments()`; a
+profile that is not loaded counts toward no one. The host's reader
+checks no principal: who sees the list is the host's to decide. It returns
+`undefined` where there is no list to read: one not arrived, none at all, one
+that is not a well-formed list, and a space refused as deleted. On a client it
+also returns `undefined` for a space the memory server has refused the
+runtime's session, while a serving runtime, which reads every space as its
+owner, still reads the list then.
 
 ## `"none"` and `undefined`
 

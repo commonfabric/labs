@@ -643,11 +643,13 @@ calls "Esc+" and Terminal calls "Use Option as Meta key".
 Press `i` in a diff to open its file and commit list. The list starts in browse
 mode. Press `/` to filter it by file name, commit hash, or commit subject. In
 browse mode, Space pages through the entries, and `g` and `G` select the first
-and last entry. The `f`, `F`, `E`, `T`, `M`, and `C` file-visibility keys remain
-active. On a commit row, `f` hides all of that commit's files. Pressing it again
-shows them. Each commit row reports its total added and removed lines under the
-selected count policy. The list's summary reports added and removed lines for
-the complete diff and for the files that are currently shown.
+and last entry. Pressing the primary mouse button on an entry selects it, in
+this list and in the list of files that Ctrl-X Ctrl-F opens. The `f`, `F`, `E`,
+`T`, `M`, and `C` file-visibility keys remain active. On a commit row, `f` hides
+all of that commit's files. Pressing it again shows them. Each commit row
+reports its total added and removed lines under the selected count policy. The
+list's summary reports added and removed lines for the complete diff and for the
+files that are currently shown.
 
 Use `<` and `>` to move to the preceding or following commit header in the main
 view or the index list. From within a commit, `<` returns to that commit's
@@ -702,17 +704,31 @@ but fails rather than discard commits on `origin` that the branch has never
 included, even when they have been fetched. A dialog says which branch it pushes
 where, then shows git's output as it arrives, with an Abort button that stops
 the push. Up, Down, Page Up, Page Down, Home, End, and the mouse wheel scroll
-the output, and Left and Right move the focus between the buttons. When color is
-on, each web address in the dialog is a link for terminals that open links. When
-the push ends, the dialog adds how it ended, and two buttons replace Abort.
-Close leaves that summary in the status line. Quit (`Q`) closes the viewer,
-first offering to save any unsaved edits. Git asks nothing on the terminal while
-the viewer holds it; a question such as a key's passphrase goes to the program
-`SSH_ASKPASS` names, and fails when it names none. `P` refuses to push
-`origin`'s default branch, and refuses when `origin` names no default branch
+the output, and Left and Right move the focus between the buttons. When the push
+ends, the dialog adds how it ended, and two buttons replace Abort. Close leaves
+that summary in the status line. Quit (`Q`) closes the viewer, first offering to
+save any unsaved edits. Git asks nothing on the terminal while the viewer holds
+it; a question such as a key's passphrase goes to the program `SSH_ASKPASS`
+names, and fails when it names none. `P` refuses to push `origin`'s default
+branch, and refuses when `origin` names no default branch
 (`git remote set-head origin --auto` finds it). It also refuses a checkout not
 on a branch, and refuses when git started the viewer as its pager for a
 different repository.
+
+The push and land dialogs draw what the viewer says in bright text, and the
+names it mentions, such as a branch, a repository, a commit, or a pull request's
+number, in a second bright color, with a blank line between paragraphs. Each
+line that says what the viewer is doing, such as "Pushing feature to origin...",
+ends in three dots, and the latest step still running also has a spinner after
+them. A line that waits for someone, as the request to touch a security key and
+the wait for a pull request to open or merge do, has neither. Once a step ends,
+it shows a check mark, or a cross when it failed or was aborted; when a step
+fails inside another, such as the touch of a security key while a pull request
+is created, only the step that failed shows the cross. Git's output, the reason
+GitHub gives for refusing a request, and the message touch-gate gives when it
+creates a pull request without naming it are quoted: indented two columns, in
+the dialog's ordinary color. When color is on, each web address and pull request
+number in the dialog is a link for terminals that open links.
 
 When `origin` already has the branch, as git last fetched or pushed it, the
 dialog asks before pushing. It says which commit `origin`'s branch is at, and
@@ -753,17 +769,17 @@ whose changes that branch already has.
 - "Show them in the browser", the default: the viewer opens the page in the
   browser.
 - "Use touch-gate and a security key": the viewer asks a touch-gate server to
-  create the pull request with the token the settings name. The dialog asks, in
-  brighter text, for the named security key to be touched, as "Touch the
-  “carthusian” security key to create a PR.", and the server acts only once it
-  is. As soon as the security key is touched, the dialog says so, before the
-  viewer sends the server the approval. When a security key fails, the summary
-  says what libfido2's error means, as "the security key stopped answering",
-  followed by the tool and the error's name, or else gives what the tool
-  printed. The server's address, its certificate, the secret its clients share,
-  and the registered security keys come from `~/.config/touch-gate`, as the
-  touch-gate project's client keeps them, and the viewer talks to the security
-  key through libfido2's `fido2-token` and `fido2-assert` tools.
+  create the pull request with the token the settings name. The dialog asks for
+  the named security key to be touched, as "Touch the “carthusian” security key
+  to create a PR.", and the server acts only once it is. As soon as the security
+  key is touched, that step is done, and the dialog shows a step that sends the
+  server the approval. When a security key fails, the summary says what
+  libfido2's error means, as "the security key stopped answering", followed by
+  the tool and the error's name, or else gives what the tool printed. The
+  server's address, its certificate, the secret its clients share, and the
+  registered security keys come from `~/.config/touch-gate`, as the touch-gate
+  project's client keeps them, and the viewer talks to the security key through
+  libfido2's `fido2-token` and `fido2-assert` tools.
 
 When creating the pull request with the GitHub API or touch-gate fails, or is
 aborted, the dialog says what went wrong, and a Create PR button (`P`) tries
@@ -831,10 +847,11 @@ request all the same. Quitting once the viewer creates or merges the pull
 request works the same way. Once the screen is restored, it prints the pull
 request's address on the terminal. The address is printed only when the viewer
 quit for it, so a quit after cancelling the save prompt it raised prints
-nothing. With the check box on, the dialog says under its output whether the
-viewer is connecting or watching, or why it is not watching: no relay is set,
-`origin` is not on GitHub, or the connection failed or ended. Closing the dialog
-stops the watch.
+nothing. When the viewer would watch the relay, in the cases above where it
+connects to it, the dialog shows, under how the task ended, a step that connects
+to the relay and then one that waits for the pull request, or says why it is not
+watching: no relay is set, `origin` is not on GitHub, or the connection failed
+or ended. Closing the dialog stops the watch.
 
 The viewer keeps these settings in git's configuration, as the strings
 `cf-view.pullRequestTool` (`link`, `api`, `browser`, or `touch-gate`) and
@@ -2276,6 +2293,7 @@ What the Fabric lane does, in order:
 | hit the model-turn limit                              | `failed`, `LIMIT_REACHED`    |
 | finished without a result satisfying its schema       | `failed`, `INVALID_RESULT`   |
 | failed in the model, a tool, or storage               | `failed`, `PROVIDER_FAILURE` |
+| was stopped by a read the read ceiling withholds      | `failed`, `CFC_REFUSED`      |
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
@@ -3419,13 +3437,13 @@ the same person through chains the root issues:
 `cf index sharing` shows the person's give-to-get setting, the same one their
 loom's settings change, and `cf index sharing on|off` and `--self-built on|off`
 change it. On, which is the default, their patterns are shared anonymously once
-they open them in their loom and they pass the privacy check, and they see what
-others share; off, nothing of theirs is shared on its own (what they shared with
-`cf pattern share` stays shared until `cf pattern unshare`), and search and
-listings show them only patterns published under a name, though a shared pattern
-opened by its id, as an import or `--from-index` does, still works.
-`--self-built` says whether that covers the patterns they build themselves in
-`cf` and Claude Code.
+they have used them in their loom for a day with no newer version and they pass
+the privacy check, and they see what others share; off, nothing of theirs is
+shared on its own (what they shared with `cf pattern share` stays shared until
+`cf pattern unshare`), and search and listings show them only patterns published
+under a name, though a shared pattern opened by its id, as an import or
+`--from-index` does, still works. `--self-built` says whether that covers the
+patterns they build themselves in `cf` and Claude Code.
 
 `cf index whoami` says which member the index sees the identity as. An admin
 admits a key without an invite with `cf index admit <did>`.
@@ -3454,13 +3472,36 @@ remix of it. When this machine never joined an index, a deploy makes no index
 call and says so once. The index write never changes a deploy's outcome: a
 failure is reported in one line and the deploy's exit status stands.
 
+`--no-index-version` on `piece new <file>` and `piece setsrc` keeps no version
+of that deploy and makes no index call to record one, so a deploy in a tight
+edit loop never waits on the index (`--json` reports `skipped`). A
+`--from-index` deploy still reads the index for its source, and keeps no version
+either way.
+
+`--version-entry <path>` on `piece new` and `piece setsrc` keeps the version in
+the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
+of it (a snapshot in a temporary directory), so the copy continues the
+original's history.
+
+`cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
+private version of the entry's lineage, without deploying: the pattern the piece
+points at, with its source, so it is exactly what was deployed. It is shared as
+a deployed version is: by `cf pattern share`, or by the sharing setting once it
+settles. It pairs with `--no-index-version` deploys, keeping one when a change
+is done, and exits 1 with the reason when no version was kept. A checkpoint of a
+source the newest version already has keeps no new one, says so, and exits 0. It
+refuses an entry file whose contents are not what the piece runs (another file,
+or this one edited since its deploy). A piece following an origin keeps no
+version, as a deploy of it does not.
+
 A deploy never shares a version by itself: drafts land many times an hour. The
-index shares a version once it settles, when its owner opens it in a loom, and
-only while their sharing setting (kept by the index; `cf index sharing` and
-Loom's settings change it) covers what they build; the deploy's line says so,
-and `--json` carries it as `version.autoShare: "when_used"`. `cf pattern share`
-shares one at once. The index write follows the deploy's commit and never
-changes its outcome, but the command waits for it before exiting.
+index shares a version once it settles, when its owner has used it in a loom for
+a day with no newer version and it passes the privacy check, and only while
+their sharing setting (kept by the index; `cf index sharing` and Loom's settings
+change it) covers what they build; the deploy's line says so, and `--json`
+carries it as `version.autoShare: "when_used"`. `cf pattern share` shares one at
+once. The index write follows the deploy's commit and never changes its outcome,
+but the command waits for it before exiting.
 
 `cf pattern history` lists the person's lineages; `cf pattern history <entry>`
 lists one entry's versions, newest first, and where each stands.

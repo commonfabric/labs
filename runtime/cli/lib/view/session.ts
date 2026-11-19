@@ -16,6 +16,16 @@ import type {
   ViewMode,
 } from "./model.ts";
 import type { Key, MouseButton } from "./keys.ts";
+import {
+  link,
+  plainText,
+  pullRequest,
+  say,
+  type StepKind,
+  TaskLog,
+  type TaskRow,
+  type TaskText,
+} from "./tasklog.ts";
 import { cpLen } from "./ansi.ts";
 import {
   blameKey,
@@ -28,7 +38,6 @@ import {
   type DialogButton,
   dialogControlAt,
   type DialogField,
-  type DialogLink,
   type DialogRadioButton,
   type DialogState,
   DIFF_MARGIN_WIDTH,
@@ -43,10 +52,10 @@ import {
   labeledDiffMetadataLine,
   type Match,
   overlayBox,
+  overlayLineAt,
   type OverlayState,
   radioButtonAt,
   type ViewState,
-  webAddresses,
 } from "./render.ts";
 import {
   clamp,
@@ -73,10 +82,8 @@ import {
   type DisplayMode,
   displayModeLabel,
   displayWidth,
-  drawnCharacters,
   drawsAsPictures,
   hasNonPrintable,
-  shownCells,
   sourceColumnOf,
 } from "./display.ts";
 import {
@@ -118,7 +125,11 @@ import type {
 import type { DirEntry, FileGateway } from "./filegateway.ts";
 import { LineEdit } from "./lineedit.ts";
 import { PULL_REQUEST_TOOLS, type ViewSettings } from "./settings.ts";
-import type { MergeMethod, MergeRequest } from "./github.ts";
+import {
+  type MergeMethod,
+  type MergeRequest,
+  pullRequestUrl,
+} from "./github.ts";
 import {
   type ActiveWrapMode,
   buildWrapPlan,
@@ -260,25 +271,20 @@ const HORIZONTAL_STEP = 8;
 const MOUSE_WHEEL_STEP = 3;
 
 /** The size of the push dialog's body, before it is shrunk to fit the screen:
- * the 13 lines that pushing a new branch to GitHub typically prints, then a
- * blank line and a summary whose pull request address wraps onto a row of its
- * own, in columns as wide as the widest that GitHub's line offering a pull
- * request needs. */
-const PUSH_ROWS = 16;
+ * the step that pushes, the 13 lines that pushing a new branch to GitHub
+ * typically prints, quoted, a summary whose pull request address wraps onto
+ * a row of its own, and the two steps of watching for the pull request, with
+ * a blank row between each of them, in columns as wide as the widest that
+ * GitHub's line offering a pull request needs, quoted. */
+const PUSH_ROWS = 22;
 const PUSH_COLUMNS = 80;
-
-/** A row of the task dialog's body, and the links on it. */
-interface TaskRow {
-  readonly text: string;
-  readonly links: readonly DialogLink[];
-}
 
 /** How the task dialog names each merge method, as GitHub's merge button
  * does. */
-const MERGE_VERBS: Readonly<Record<MergeMethod, string>> = {
-  squash: "Squash and merge",
-  merge: "Merge",
-  rebase: "Rebase and merge",
+const MERGE_VERBS: Readonly<Record<MergeMethod, TaskText>> = {
+  squash: say`Squash and merge`,
+  merge: say`Merge`,
+  rebase: say`Rebase and merge`,
 };
 
 /** Whether two search matches occupy the same displayed range. */
@@ -542,14 +548,9 @@ export class Session {
   /** The task dialog's title. */
   #taskTitle = "";
 
-  /** The task dialog's output, a line per entry, the last one still being
-   * written. After a carriage return, the next text starts that line over. */
-  #taskLines: string[] = [""];
-  #taskReturned = false;
-
-  /** The indexes in {@link #taskLines} of lines drawn emphasized: what a
-   * request asks of the person, as against the text it quotes. */
-  #taskEmphasized = new Set<number>();
+  /** What the task dialog's tasks have said, and what the programs they ran
+   * wrote. */
+  #taskLog = new TaskLog();
 
   /** The first of the task dialog's rows of output that it shows, or null
    * while it shows the end of the output as the output grows. */
@@ -559,16 +560,18 @@ export class Session {
   #abortTask: (() => void) | null = null;
 
   /** How the task ended, once it has. */
-  #taskSummary = "";
+  #taskSummary: TaskText = [];
 
   /** The label of the button that tries the task again, once it has ended
    * failing in a way that trying again can fix, or "" for none. */
   #taskRetry = "";
 
-  /** What the task dialog says, under the task's output, about watching for
-   * the pull request to open or merge and quitting once it has, with
-   * a newline between its lines, or "" when it says nothing. */
-  #pullRequestWatch = "";
+  /** What the task dialog says, under how the task ended, about watching
+   * for the pull request to open or merge and quitting once it has. */
+  #watchLog = new TaskLog();
+
+  /** How far the spinners of the task dialog's running steps have turned. */
+  #spinnerFrame = 0;
 
   /** The settings dialog's controls, while it is up. */
   #settingsDraft: SettingsDraft | null = null;
@@ -1462,96 +1465,18 @@ export class Session {
     return this.#mode === "taskPrompt";
   }
 
-  /** The task dialog's rows of output, wrapped, followed by how the task
-   * ended; how many of them it shows; what it says about watching for the
-   * pull request under them; and how wide its rows are. */
-  #taskLayout(): {
-    output: Array<TaskRow & { emphasized: boolean }>;
-    rows: number;
-    watch: TaskRow[];
-    columns: number;
-  } {
-    const lines = this.#taskLines.at(-1) === ""
-      ? this.#taskLines.slice(0, -1)
-      : this.#taskLines;
-    const output = [
-      ...lines.map((text, i) => ({
-        text,
-        emphasized: this.#taskEmphasized.has(i),
-      })),
-      ...(this.#taskSummary === "" ? [] : ["", this.#taskSummary]).map((
-        text,
-      ) => ({ text, emphasized: false })),
-    ];
-    // A line wider than the box wraps after its last space that fits, so that
-    // an address no wider than the box stays on one row, and a word wider than
-    // the box is broken. Git pads the lines a server sends with spaces when its
-    // output is not a terminal, and those would wrap onto rows of their own.
-    // Each piece of a web address links to the whole address.
+  /** The task dialog's rows: what the task said and what the programs it
+   * ran wrote, how it ended, and what it says about watching for the pull
+   * request; how many of them it shows at once; and how wide they are. */
+  #taskLayout(): { output: TaskRow[]; rows: number; columns: number } {
     const columns = Math.max(1, Math.min(PUSH_COLUMNS, this.width - 8));
-    const wrap = (line: string): TaskRow[] => {
-      const text = line.trimEnd();
-      const chars = drawnCharacters(text);
-      // The code points before each character, and before the end.
-      const offsets = [0];
-      for (const char of chars) {
-        offsets.push(offsets[offsets.length - 1] + cpLen(char));
-      }
-      const addresses = Array.from(webAddresses(text), (match) => {
-        const from = cpLen(text.slice(0, match.index));
-        return { from, to: from + cpLen(match[0]), url: match[0] };
-      });
-      const rowsOfLine: TaskRow[] = [];
-      let at = 0;
-      const take = (end: number, next: number) => {
-        const first = offsets[at];
-        const last = offsets[end];
-        rowsOfLine.push({
-          text: chars.slice(at, end).join(""),
-          links: addresses.flatMap(({ from, to, url }) =>
-            from < last && to > first
-              ? [{
-                from: Math.max(from, first) - first,
-                to: Math.min(to, last) - first,
-                url,
-              }]
-              : []
-          ),
-        });
-        at = next;
-      };
-      for (;;) {
-        let fit = at;
-        for (let used = 0; fit < chars.length; fit++) {
-          used += shownCells(chars[fit]).length;
-          if (used > columns) break;
-        }
-        if (fit === chars.length) break;
-        // A character wider than the box takes a row of its own.
-        fit = Math.max(at + 1, fit);
-        const space = chars.lastIndexOf(" ", fit);
-        let words = space + 1;
-        while (words > at && /\s/.test(chars[words - 1])) words--;
-        if (space >= at && words > at) take(words, space + 1);
-        else take(fit, fit);
-      }
-      take(chars.length, chars.length);
-      return rowsOfLine;
-    };
-    // The output keeps at least one row, and what the dialog says about the
-    // watch takes as many of the rest as it needs.
-    const total = Math.max(1, Math.min(PUSH_ROWS, this.height - 7));
-    const watch =
-      (this.#pullRequestWatch === ""
-        ? []
-        : ["", ...this.#pullRequestWatch.split("\n")].flatMap(wrap))
-        .slice(0, total - 1);
     return {
-      output: output.flatMap(({ text, emphasized }) =>
-        wrap(text).map((row) => ({ ...row, emphasized }))
+      output: TaskLog.rows(
+        [this.#taskLog, this.#watchLog],
+        columns,
+        this.#spinnerFrame,
       ),
-      rows: total - watch.length,
-      watch,
+      rows: Math.max(1, Math.min(PUSH_ROWS, this.height - 7)),
       columns,
     };
   }
@@ -1575,28 +1500,25 @@ export class Session {
     return Math.max(0, output.length - rows);
   }
 
-  /** The task dialog: as much of the task's output, such as git's, as fits,
-   * then how the task ended, at a fixed size so that it holds still as the
-   * output grows, and under that what it says about watching for the pull
-   * request. It shows the end of the output unless it is scrolled back,
-   * when it holds still as the output grows.
+  /** The task dialog: as much of what the task said and the output of the
+   * programs it ran, such as git's, as fits, then how the task ended and what
+   * it says about watching for the pull request, at a fixed size so that it
+   * holds still as the output grows. It shows the end of the output unless it
+   * is scrolled back, when it holds still as the output grows.
    * Abort stops the task; once it ends, Close takes the dialog down and Quit
    * closes the viewer. */
   #taskDialog(): DialogState {
-    const { output, rows, watch, columns } = this.#taskLayout();
+    const { output, rows, columns } = this.#taskLayout();
     const top = Math.min(
       this.#taskTop ?? output.length,
       Math.max(0, output.length - rows),
     );
-    const shown = output.slice(top, top + rows);
-    const body: TaskRow[] = [...shown];
-    while (body.length < rows) body.push({ text: "", links: [] });
-    for (const row of watch) body.push(row);
+    const body: TaskRow[] = output.slice(top, top + rows);
+    while (body.length < rows) body.push({ text: "", spans: [] });
     return {
       title: this.#taskTitle,
       body: body.map((row) => row.text),
-      links: body.map((row) => row.links),
-      emphasized: shown.flatMap((row, i) => row.emphasized ? [i] : []),
+      spans: body.map((row) => row.spans),
       output: true,
       width: columns,
       buttons: this.#abortTask
@@ -3904,9 +3826,8 @@ export class Session {
     this.#overlayStack = [];
     this.#mode = "taskPrompt";
     this.#taskTitle = title;
-    this.#taskLines = [""];
-    this.#taskEmphasized = new Set();
-    this.#taskSummary = "";
+    this.#taskLog = new TaskLog();
+    this.#taskSummary = [];
     this.continueTask(abort);
   }
 
@@ -3914,70 +3835,82 @@ export class Session {
    * trying again what the last one failed to do. The dialog keeps its output,
    * which goes on from how the last task ended. */
   continueTask(abort: () => void): void {
-    const lines = this.#taskLines.at(-1) === ""
-      ? this.#taskLines.slice(0, -1)
-      : this.#taskLines;
-    this.#taskLines = this.#taskSummary === ""
-      ? [...lines, ""]
-      : [...lines, "", this.#taskSummary, ""];
     this.#taskTop = null;
-    this.#taskReturned = false;
     this.#taskRetry = "";
-    this.#taskSummary = "";
+    this.#taskSummary = [];
     this.#confirmation = null;
-    this.#pullRequestWatch = "";
+    this.#watchLog = new TaskLog();
     this.#pullRequestUrl = null;
     this.#abortTask = abort;
     this.#dialogFocus = -1;
   }
 
-  /** Add a task's output, such as git's, to the task dialog. A carriage
-   * return starts the line over, which is how git redraws a progress report
-   * in place. */
-  appendTaskOutput(text: string, emphasized = false): void {
-    for (const part of text.split(/(\r\n|\n|\r)/)) {
-      if (part === "\r") {
-        this.#taskReturned = true;
-      } else if (part === "\n" || part === "\r\n") {
-        this.#taskLines.push("");
-        this.#taskReturned = false;
-      } else if (part !== "") {
-        const last = this.#taskLines.length - 1;
-        this.#taskLines[last] =
-          (this.#taskReturned ? "" : this.#taskLines[last]) + part;
-        this.#taskReturned = false;
-        if (emphasized) this.#taskEmphasized.add(last);
-      }
-    }
+  /** Add what a program the task runs, such as git, wrote to the task
+   * dialog, quoted. A carriage return starts the line over, which is how git
+   * redraws a progress report in place. */
+  appendTaskOutput(text: string): void {
+    this.#taskLog.quote(text);
+  }
+
+  /** Add `text` to the task dialog as a step of the task, which the function
+   * returned shows is done. A step still running when the task ends shows
+   * that it ended without being done. */
+  beginTaskStep(text: TaskText, kind?: StepKind): () => void {
+    return this.#taskLog.step(text, kind);
   }
 
   /** End the task with `summary`, which the dialog shows under the output
    * and the status line shows once the dialog closes. A `retry` other than
    * "" labels a button that tries the task again. */
-  finishTask(summary: string, retry = ""): void {
+  finishTask(summary: TaskText, retry = ""): void {
+    this.#taskLog.stop();
+    this.#taskLog.say(summary);
     this.#abortTask = null;
     this.#taskSummary = summary;
     this.#taskRetry = retry;
     if (this.#mode === "taskPrompt") this.#dialogFocus = 0;
-    if (this.#pullRequestUrl !== null) this.#announcePullRequestQuit();
+    const url = this.#pullRequestUrl;
+    if (url !== null) this.#announcePullRequestQuit(url);
   }
 
-  /** Have the task dialog say `text` about watching for the pull request,
-   * under the task's output. */
-  setPullRequestWatch(text: string): void {
-    this.#pullRequestWatch = text;
+  /** Add `text` to the task dialog, under how the task ended, as a step of
+   * watching for the pull request, which the function returned shows is
+   * done. */
+  beginWatchStep(text: TaskText, kind?: StepKind): () => void {
+    return this.#watchLog.step(text, kind);
+  }
+
+  /** Have the task dialog say, under how the task ended, that it is not
+   * watching for the pull request, for `reason`, and show each step of
+   * watching still running as having ended without being done. */
+  stopPullRequestWatch(reason: TaskText): void {
+    this.#watchLog.stop();
+    this.#watchLog.say(say`Not watching for the pull request: ${reason}`);
+  }
+
+  /** Whether the task dialog is up with a step running, whose spinner
+   * {@link advanceSpinner} turns. */
+  get taskSpinning(): boolean {
+    return this.taskDialogUp &&
+      TaskLog.spinning([this.#taskLog, this.#watchLog]);
+  }
+
+  /** Turn the spinners of the task dialog's running steps a frame. */
+  advanceSpinner(): void {
+    this.#spinnerFrame++;
   }
 
   /**
    * The pull request at `url` has opened or merged. While the task dialog
-   * is up, have it give the address and say it is quitting, once the task
-   * has ended; otherwise do nothing. {@link completePullRequestQuit} then
-   * quits.
+   * is up, show the watch's running steps done, and have it give the address
+   * and say it is quitting, once the task has ended; otherwise do nothing.
+   * {@link completePullRequestQuit} then quits.
    */
   quitForPullRequest(url: string): void {
     if (this.#mode !== "taskPrompt") return;
     this.#pullRequestUrl = url;
-    if (!this.#abortTask) this.#announcePullRequestQuit();
+    this.#watchLog.complete();
+    if (!this.#abortTask) this.#announcePullRequestQuit(url);
   }
 
   /** Whether the task dialog says it is quitting for the pull request, until
@@ -4045,10 +3978,12 @@ export class Session {
   confirmLand(request: MergeRequest): void {
     // The button's letter is not the `L` that opened the dialog, so that
     // pressing `L` again does not merge.
+    const { repository, number, method, sha } = request;
+    const page = pullRequestUrl(repository, number);
     this.#ask(
-      `${MERGE_VERBS[request.method]} pull request ${request.number} of ` +
-        `${request.repository},\nif its head is still ` +
-        `${request.sha.slice(0, 12)}?`,
+      say`${MERGE_VERBS[method]} pull request ${
+        pullRequest(number, page)
+      } of ${repository},\nif its head is still ${sha.slice(0, 12)}?`,
       { label: "Merge", hotkey: "m" },
       () => {
         this.mergeRequested = request;
@@ -4062,7 +3997,7 @@ export class Session {
    * `question` about it. Push asks the driver to push. Does nothing unless
    * the task is running.
    */
-  confirmPush(question: string): void {
+  confirmPush(question: TaskText): void {
     // The button's letter is not the `P` that opened the dialog, so that
     // pressing `P` again does not push.
     this.#ask(
@@ -4077,11 +4012,12 @@ export class Session {
   /** End the running task by asking `question`, offering `button`, which
    * calls `confirm`, and Cancel. No button is the default, so Enter does
    * nothing until a button has the focus. */
-  #ask(question: string, button: DialogButton, confirm: () => void): void {
+  #ask(question: TaskText, button: DialogButton, confirm: () => void): void {
     if (this.#mode !== "taskPrompt" || !this.#abortTask) return;
     this.#abortTask = null;
     this.#confirmation = { button, confirm };
-    this.appendTaskOutput(`${question}\n`, true);
+    this.#taskLog.stop();
+    this.#taskLog.say(question);
     this.#dialogFocus = -1;
   }
 
@@ -4785,7 +4721,9 @@ export class Session {
    * drawing a button pushed, and puts an input line's cursor where the mouse
    * went down. The mouse coming up on the control it went down on toggles a
    * check box, selects the radio button it comes up on, and activates a
-   * button. The mouse going down or coming up anywhere else does nothing.
+   * button. With no prompt up, the mouse going down on an entry of the file
+   * picker or the jump list selects that entry. The mouse going down or coming
+   * up anywhere else does nothing.
    */
   #handleClick(
     mouse: MouseButton,
@@ -4793,7 +4731,10 @@ export class Session {
     beforeButtonAction?: (pushed: PushedFrame) => void,
   ): void {
     const dialog = this.#promptDialog();
-    if (!dialog) return;
+    if (!dialog) {
+      if (mouse.down) this.#selectListEntryAt(mouse.x, mouse.y);
+      return;
+    }
     const index = dialogControlAt(this, dialog, mouse.x, mouse.y);
     if (index < 0) return;
     const controls = [...(dialog.fields ?? []), ...dialog.buttons];
@@ -4819,6 +4760,22 @@ export class Session {
     } else if (index >= fields) {
       this.#activateButton(dialog, index - fields, beforeButtonAction);
     }
+  }
+
+  /** Selects the entry of the file picker or the jump list drawn at the screen
+   * cell `x`, `y`, when that list is up and shows an entry there. */
+  #selectListEntryAt(x: number, y: number): void {
+    const line = overlayLineAt(this, this.#overlayScroll, x, y);
+    if (line === null) return;
+    if (this.#mode === "filePicker" && line < this.#pickerEntries.length) {
+      this.#pickerSel = line;
+    } else if (this.#mode === "jumpList" && line < this.#jumpEntries.length) {
+      this.#jumpSel = line;
+      this.#scrollJumpToSelection(line);
+    } else {
+      return;
+    }
+    this.#message = "";
   }
 
   /**
@@ -4888,14 +4845,16 @@ export class Session {
    * are unsaved edits. */
   #closeTaskDialog(quit: boolean): void {
     this.#mode = "normal";
-    this.#message = this.#taskSummary;
+    this.#message = plainText(this.#taskSummary);
     if (quit) this.#requestQuit();
   }
 
-  /** Have the task dialog give the address of the pull request that has
-   * opened or merged, and say it is quitting. */
-  #announcePullRequestQuit(): void {
-    this.#pullRequestWatch = `Pull request: ${this.#pullRequestUrl}\nQuitting…`;
+  /** Have the task dialog give `url`, the address of the pull request that
+   * has opened or merged, and say it is quitting, scrolled to its end. */
+  #announcePullRequestQuit(url: string): void {
+    this.#taskTop = null;
+    this.#watchLog.say(say`Pull request: ${link(url)}`);
+    this.#watchLog.step(say`Quitting`);
   }
 
   /** Close the task dialog and quit for the pull request that has opened or
@@ -6413,6 +6372,7 @@ export function helpOverlay(hasMultipleCommits: boolean): {
     ...commitRows,
     ["", ""],
     ["Diff index", ""],
+    ["  click", "select a file or commit"],
     ["  f", "hide / show a file or commit"],
     ["  /", "filter the list"],
     ["  D", "cycle its diff counts"],

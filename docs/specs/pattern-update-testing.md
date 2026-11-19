@@ -120,10 +120,12 @@ repository decides to ship is declared instead, in
   unconditionally are the ones that can least afford it. For those, fixing
   the pattern is the only move.
 
-An already-recorded contract is not re-validated. It was proved when recorded
-and has not changed since, and both the definition validator and the subset
-proof blow up combinatorially on some real schemas — so the steady state, where
-no contract changed, costs nothing beyond the compile.
+An already-recorded contract is not validated on its own. It was validated
+when recorded and has not changed since, and the definition validator blows up
+combinatorially on some real schemas. The subset proof against every other
+baseline still runs each time, and it validates both of the contracts it
+compares, so a pattern with many baselines costs a proof per baseline even when
+no contract changed.
 
 Compatibility is directional by role. Existing invocations must still satisfy
 the candidate argument schema, so a newly required argument needs a default or

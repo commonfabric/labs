@@ -18,6 +18,7 @@ import {
   runServedLifecycleVerb,
   type ServedLifecycleVerbDescriptor,
 } from "@commonfabric/piece/ops";
+import { logUnhandledRejections } from "@commonfabric/runner/sandbox/unhandled-rejections";
 import { serveFromPort } from "@commonfabric/runner/executor/serving-worker-main";
 import { servingWorkerPort } from "@commonfabric/runner/executor/serving-thread";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
@@ -27,6 +28,9 @@ import { selfDirectedFetch } from "@/lib/internal-api-origin.ts";
 
 const fetch = selfDirectedFetch(env);
 
+// The worker serves several spaces, so a rejection that one space's patterns
+// leave unhandled is logged rather than ending the worker.
+logUnhandledRejections();
 serveFromPort(servingWorkerPort(), {
   clientBuild: toolshedClientBuild(),
   runLifecycleVerb: (host, space, verb, identity) =>

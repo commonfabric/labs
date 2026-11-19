@@ -3,6 +3,7 @@
 import type WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { getMemoryProtocolFlags } from "../v2.ts";
@@ -378,4 +379,78 @@ Deno.test("a closed context ID may open again at once", async () => {
     store.close();
     Deno.removeSync(root, { recursive: true });
   }
+});
+
+describe("routed-host", () => {
+  describe("RoutedMemoryHost", () => {
+    describe("constructor", () => {
+      let root: string;
+      let store: RoutedEpochStore;
+      let server: Server | undefined;
+
+      beforeEach(() => {
+        root = Deno.makeTempDirSync();
+        store = new RoutedEpochStore(`${root}/ledger`);
+      });
+
+      afterEach(async () => {
+        await server?.close();
+        server = undefined;
+        store.close();
+        Deno.removeSync(root, { recursive: true });
+      });
+
+      /** Constructs a host over a server whose access list is `acl`. */
+      const construct = async (
+        acl: (router: string) => {
+          delegatingDids?: readonly string[];
+          isDelegatingPeer?: (principal: string) => boolean;
+        },
+      ): Promise<RoutedMemoryHost> => {
+        const [toolshed, router] = await Promise.all(
+          [81, 82].map((seed) =>
+            Identity.fromRaw(new Uint8Array(32).fill(seed))
+          ),
+        );
+        server = new Server({
+          store: new URL(`memory://routed-host-${crypto.randomUUID()}`),
+          acl: { mode: "enforce", ...acl(router.did()) },
+          ownsSpace: () => false,
+          requireExplicitAcl: true,
+          authorizeSessionOpen: () => undefined,
+          sessionOpenAuth: { audience: toolshed.did() },
+        });
+        return new RoutedMemoryHost({
+          server,
+          identity: toolshed,
+          deployment: "fixture",
+          routers: new Map([[router.did(), new Set(["127.0.0.1"])]]),
+          ownership: () => undefined,
+          epochs: store,
+        });
+      };
+
+      it("throws for a router the server lists as a delegating principal", async () => {
+        await expect(construct((router) => ({ delegatingDids: [router] })))
+          .rejects.toThrow();
+      });
+
+      it("throws for a router the server's `isDelegatingPeer` names", async () => {
+        await expect(
+          construct((router) => ({
+            isDelegatingPeer: (principal) => principal === router,
+          })),
+        ).rejects.toThrow();
+      });
+
+      it("constructs a host when the delegating class holds no router", async () => {
+        const host = await construct(() => ({
+          delegatingDids: ["did:key:z6Mk-routed-host-toolshed"],
+          isDelegatingPeer: () => false,
+        }));
+
+        host.close();
+      });
+    });
+  });
 });

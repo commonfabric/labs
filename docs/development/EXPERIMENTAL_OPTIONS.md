@@ -1990,9 +1990,13 @@ the per-epic implementation notes).
 >   chapter's section 4.2.3), and a server splits a sync for such a client on
 >   a connection whose transport bounds its messages: the routed host splits a
 >   sync past the routed frame cap or the bytes a message may take (16 MiB
->   expanded when compressed, 8 MiB as text), in parts of 1 MiB. A direct server advertises it and
->   sends every sync whole. A peer that omits it parses as `false`, and is
->   sent every sync whole. It is permanent.
+>   expanded when compressed, 8 MiB as text), in parts of 1 MiB. The
+>   toolshed's direct memory socket splits a sync larger than the largest
+>   message it still sends compressed (256 MiB), or one too long for the
+>   JavaScript engine to encode whole. Such a sync goes in parts of at most
+>   32 MiB, and an entry larger than 32 MiB goes alone, in a part of its own
+>   (`MEMORY_SOCKET_SYNC_PARTS`). A peer that omits it parses as `false` and
+>   is sent every sync whole. It is permanent.
 > - **`watchSetPartsV1`** is a build-inherent capability, hardwired to
 >   `true`. It advertises that the server applies a `session.watch.set` staged
 >   in parts as one set (the memory protocol chapter's section 4.3.5). Only
@@ -2378,10 +2382,14 @@ the per-epic implementation notes).
   the process's own memory server, whichever process owned the target, so the
   owner learned of them only through the store. With the knob on, the loop
   reaches a space other than the ones it serves through that space's owner: a
-  routed session per target space, open as the service identity on both
+  routed session per target space, open as the process's identity on both
   threads the loop can run on, carries the crossing as a `served` request of
   the memory protocol (the memory protocol chapter's section 4.3.12), and the
-  owner admits it as its own host's call. The outbox's event appends, the
+  owner admits it as its own host's call. The owner admits a sender whose
+  identity is its own, and, behind the memory router, where each toolshed has
+  an identity of its own, a sender the deployment's directory lists as a
+  toolshed (`docs/specs/memory-v2/routed-mode-a.md`, "Toolshed deployment
+  inputs"). The outbox's event appends, the
   pattern-lifecycle handler's registration delivery, and the wave's foreign
   batches and access-list changes go that way. The genesis of a space the
   serving runtime creates takes the same route as a signed `session.open`
@@ -2402,7 +2410,9 @@ the per-epic implementation notes).
   memory server's read row admits a routed service-identity session under the
   read actor's grant.
   [`runtime/runner/integration/owner-routing.test.ts`](../../runtime/runner/integration/owner-routing.test.ts)
-  runs two toolshed processes behind a proxy that routes by space. The
+  runs two toolshed processes behind a proxy that routes by space, once
+  sharing an identity and once with an identity each and a directory that
+  lists both. The
   crossings a process sent through the route are counted by kind under
   `servingLoop.routed` in `/api/health/stats`, zero with the route off, so a
   deployment reads there whether routing carries its crossings.

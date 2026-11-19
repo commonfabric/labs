@@ -6,6 +6,7 @@ import type {
   PatternIndexProgram,
   PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
+import { decodeDataFile } from "@commonfabric/text/data-file";
 import {
   entryHistory,
   historyLines,
@@ -108,8 +109,8 @@ describe("pattern-history", () => {
     const deps: RollbackDeps = {
       client,
       sources: SOURCES,
-      readTextFile: (path) => Deno.readTextFile(path),
-      writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+      readFile: (path) => Deno.readFile(path),
+      writeFile: (path, bytes) => Deno.writeFile(path, bytes),
     };
     return { deps, rollbacks };
   };
@@ -171,6 +172,68 @@ describe("pattern-history", () => {
       expect(rollbacks).toEqual([]);
     });
 
+    it("takes an image on disk as the version holding it, and restores its bytes", async () => {
+      // A source package holds an image as its `data:` URL, and the file on
+      // disk is the image's bytes; the two are one file.
+
+      const glaze = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+      const stored = decodeDataFile(glaze, "/glaze.png");
+      const image = join(dir, "glaze.png");
+      const { deps } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/glaze.png", contents: stored },
+          ],
+        },
+        "ver-2": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V2 },
+            { name: "/glaze.png", contents: stored },
+          ],
+        },
+      });
+      await Deno.writeFile(image, glaze);
+
+      const report = await rollbackEntry(entry, "1", {}, deps);
+
+      expect(report.written.some((path) => path.endsWith("glaze.png")))
+        .toBe(false);
+      expect(await Deno.readFile(image)).toEqual(glaze);
+
+      await Deno.remove(image);
+      await rollbackEntry(entry, "2", { force: true }, deps);
+
+      expect(await Deno.readFile(image)).toEqual(glaze);
+    });
+
+    it("refuses, writing nothing, a version whose image holds no `data:` URL", async () => {
+      // The entry file comes first, so a rollback that encoded each file as
+      // it wrote it would have written the entry before refusing the image.
+
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-1": {
+          main: "/count.tsx",
+          files: [
+            { name: "/count.tsx", contents: V1 },
+            { name: "/glaze.png", contents: "not a data URL" },
+          ],
+        },
+      });
+
+      await expect(rollbackEntry(entry, "1", { force: true }, deps)).rejects
+        .toThrow(
+          "This version's /glaze.png cannot be written as a file (Data file " +
+            "`/glaze.png` does not hold an `image/png` `data:` URL.); nothing " +
+            "was restored.",
+        );
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      await expect(Deno.stat(join(dir, "glaze.png"))).rejects.toThrow();
+      expect(rollbacks).toEqual([]);
+    });
+
     it("refuses a version naming a file outside the pattern's directory, writing nothing", async () => {
       const { deps, rollbacks } = await indexWith(entry, {
         "ver-1": {
@@ -216,7 +279,7 @@ describe("pattern-history", () => {
 
       await expect(rollbackEntry(entry, "1", {}, {
         ...deps,
-        readTextFile: () => Promise.reject(new Deno.errors.PermissionDenied()),
+        readFile: () => Promise.reject(new Deno.errors.PermissionDenied()),
       })).rejects.toThrow("could not be read");
       expect(await Deno.readTextFile(entry)).toBe(V2);
       expect(rollbacks).toEqual([]);
@@ -274,7 +337,7 @@ describe("pattern-history", () => {
 
       await expect(rollbackEntry(entry, "1", {}, {
         ...deps,
-        writeTextFile: () => Promise.reject(new Error("disk full")),
+        writeFile: () => Promise.reject(new Error("disk full")),
       })).rejects.toThrow("disk full");
       expect(rollbacks).toEqual([]);
     });
@@ -306,6 +369,21 @@ describe("pattern-history", () => {
     it("writes over edits no version keeps with force", async () => {
       const { deps } = await indexWith();
       await Deno.writeTextFile(entry, "export default () => 99;\n");
+
+      await rollbackEntry(entry, "1", { force: true }, deps);
+
+      expect(await Deno.readTextFile(entry)).toBe(V1);
+    });
+
+    it("takes a file that is not valid UTF-8 as an edit no version keeps, and writes over it with force", async () => {
+      const { deps } = await indexWith();
+      const unstorable = new Uint8Array([0xff, 0xfe, 0x00]);
+      await Deno.writeFile(entry, unstorable);
+
+      await expect(rollbackEntry(entry, "1", {}, deps)).rejects.toThrow(
+        "edits that no version keeps",
+      );
+      expect(await Deno.readFile(entry)).toEqual(unstorable);
 
       await rollbackEntry(entry, "1", { force: true }, deps);
 

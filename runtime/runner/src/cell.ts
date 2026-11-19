@@ -103,7 +103,10 @@ import { checkSqliteRowLabelWrite } from "./builtins/sqlite/row-label-write.ts";
 import { checkSqliteWriteCeiling } from "./builtins/sqlite/write-ceiling.ts";
 import { type Cancel, isCancel, useCancelGroup } from "./cancel.ts";
 import { ContextualFlowControl, declaredSchemaScope } from "./cfc.ts";
-import { cfcSchemaGivesNoShape } from "./cfc/schema-primitives.ts";
+import {
+  cfcSchemaDeclaresArray,
+  cfcSchemaGivesNoShape,
+} from "./cfc/schema-primitives.ts";
 import {
   cfcAcquisitionViewForDereferenceTraces,
   type CfcLabelView,
@@ -431,13 +434,6 @@ export const recordRelevantSchemaWritePolicyInput = (
   );
 };
 
-/** Whether `schema` declares an array: by type, or by describing items. */
-const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
-  isObjectOrArray(schema) &&
-  (schema.type === "array" ||
-    (Array.isArray(schema.type) && schema.type.includes("array")) ||
-    schema.items !== undefined || schema.prefixItems !== undefined);
-
 /**
  * Whether an item write under a missing parent, which the stored envelope
  * describes as `schema`, writes an item of an array. The storage write creates
@@ -450,7 +446,7 @@ const schemaDeclaresArray = (schema: JSONSchema | undefined): boolean =>
  * the envelope's checks of the member it declares there apply to the write.
  */
 const missingParentIsArray = (schema: JSONSchema | undefined): boolean =>
-  cfcSchemaGivesNoShape(schema) || schemaDeclaresArray(schema);
+  cfcSchemaGivesNoShape(schema) || cfcSchemaDeclaresArray(schema);
 
 /** The kinds of value {@link schemaAdmitsLength} tells apart. */
 type ValueKind = "array" | "string" | "object" | "other";
@@ -538,11 +534,13 @@ const schemaAdmitsLength = (schema: JSONSchema): boolean => {
 /**
  * The schema write-policy input for a write landing at an item of an array:
  * the array itself, with the item's schema as its `items`. A candidate
- * envelope spells each segment of an input's path as a named property, and
- * the stored envelope spells the array as an array, so an input recorded at
- * the index alone could never merge with it — and a claim on the items is
- * declared at `*`, which an input at the array reaches and one at the index
- * would answer for by a type clash instead.
+ * envelope places an index of an input's path as an item of an array only
+ * where the stored envelope declares an array above it, and as a named
+ * property anywhere else. An input recorded at the index of an array the
+ * stored envelope gives no shape, or of one in a document that stores no
+ * envelope yet, would therefore describe the array as an object, in the
+ * envelope the write persists. Recorded at the array, it describes what the
+ * parent holds.
  *
  * The item's schema is the writer's where it holds one, else the stored
  * envelope's at the item — a writer through a bare link answers to the
@@ -2117,7 +2115,7 @@ export class CellImpl<T extends FabricValue>
       // link-resolution's kicks. Ordinary load failures resolve from the
       // replica; the terminal session check below rejects terminal failures.
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 
@@ -4102,7 +4100,7 @@ export class CellImpl<T extends FabricValue>
         // cell as synced and will not start a second load of its own, so keep
         // this promise in the shared settled pool until the first load lands.
         this.#runtime.storageManager.trackUntilSettled(
-          this.#startLoad().catch(() => {}),
+          this.#startLoad(),
         );
       }
       return subscribeToReferencedDocs(
@@ -4135,7 +4133,7 @@ export class CellImpl<T extends FabricValue>
     }
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
     return subscribeToReferencedDocs(
@@ -4170,10 +4168,14 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Starts loading this cell's backing doc for a read that does not wait for
-   * the load, and returns the load's promise.
+   * the load, and returns a promise that settles when the load does. The
+   * promise never rejects: a load that fails is logged, and the read that
+   * started it sees the doc as absent.
    */
-  #startLoad(): Promise<unknown> {
-    return this.#load(true);
+  #startLoad(): Promise<void> {
+    return this.#load(true).then(() => {}, (error: unknown) => {
+      logger.warn("load-failed", "loading a cell failed", this.#link, error);
+    });
   }
 
   /**
@@ -4230,7 +4232,7 @@ export class CellImpl<T extends FabricValue>
   ): Cancel {
     if (!this.#synced) {
       this.#runtime.storageManager.trackUntilSettled(
-        this.#startLoad().catch(() => {}),
+        this.#startLoad(),
       );
     }
 

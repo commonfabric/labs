@@ -57,9 +57,15 @@ function repository() {
     clearEnv: true,
   }).outputSync();
   Deno.mkdirSync(join(work, "sub"));
-  const git = realPushIo({ cwd: work, env, write() {} }).query;
+  const git =
+    realPushIo({ cwd: work, env, write() {}, step: () => () => {} }).query;
   /** The query that runs git in a directory inside the work tree. */
-  const gitInSub = realPushIo({ cwd: join(work, "sub"), env, write() {} })
+  const gitInSub = realPushIo({
+    cwd: join(work, "sub"),
+    env,
+    write() {},
+    step: () => () => {},
+  })
     .query;
   /** What the configuration file of `scope` sets, one `name=value` a line. */
   const file = (scope: "global" | "local") =>
