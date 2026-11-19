@@ -283,6 +283,26 @@ export async function topicAt(
   return new PieceController(board.pieces(), row.resolveAsCell());
 }
 
+/**
+ * Waits until the board's index lists `titles`, in that order. The index is a
+ * query over the board's collection, which follows a topic's fields after the
+ * write that changed them, so a board seeded a moment ago can still list a
+ * topic under the name it had before it was named.
+ */
+export async function topicIndexTitles(
+  board: PieceController,
+  titles: readonly string[],
+): Promise<void> {
+  await waitForCellValue(
+    board.pieces().runtime,
+    topicBoardIndex(board),
+    (rows: readonly { title?: string }[] | undefined) =>
+      rows !== undefined && rows.length === titles.length &&
+      rows.every((row, at) => row?.title === titles[at]),
+    { stuckLabel: "the board's index in filing order" },
+  );
+}
+
 /** A topic read for its title and nothing else. */
 const TITLE_SCHEMA = {
   type: "object",

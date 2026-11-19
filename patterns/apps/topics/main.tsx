@@ -297,9 +297,12 @@ export interface CardRow {
   caption: string;
 }
 
+/** How many cards the board shows at first, and adds per "Show more". */
+const CARD_PAGE = 100;
+
 /**
- * The cards' topics, most recently active first, up to two hundred of them,
- * each with what its card shows. The order is `activityOrderOf()`'s, stated
+ * The cards' topics, most recently active first, as many as the session has
+ * asked to see, each with what its card shows. The order is `activityOrderOf()`'s, stated
  * in SQL, with the topic's reference breaking ties so that the order is
  * total.
  */
@@ -315,7 +318,7 @@ const CARDS_SQL = `
   FROM topics
   ORDER BY CASE WHEN COALESCE(lastActivityAt, 0) > 0 THEN lastActivityAt
     ELSE createdAt END DESC, member_cf_link
-  LIMIT 200`;
+  LIMIT :shown`;
 
 /**
  * The cards of the rows the card query returned. A lift at module scope, so
@@ -658,8 +661,19 @@ function adoptListed(
   return adopted;
 }
 
+/** Shows another page of cards in the session that asked. */
+const showMoreCards = handler<void, { shown: Writable<number> }>(
+  (_, { shown }) => {
+    shown.set(shown.get() + CARD_PAGE);
+  },
+);
+
 export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const newTitle = new Writable.perSession("");
+  // How many cards this session is looking at. A board is read most recent
+  // first, so a session that wants older topics asks for them a page at a
+  // time, and no other session's list grows with it.
+  const shown = new Writable.perSession(CARD_PAGE);
 
   // The board's topics. Membership lives here and nowhere else: every listing
   // below is a query, so none of them reads a topic.
@@ -691,8 +705,12 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
 
   // The cards the board shows, already in order, and the strings each
   // renders, derived in one computation.
-  const listed = board.query<CardSource>(CARDS_SQL);
+  const listed = board.query<CardSource>(CARDS_SQL, { params: { shown } });
   const cards = cardRowsByActivity({ rows: listed.result });
+  const hasMoreCards = computed<boolean>(() =>
+    (counted.result?.[0]?.n ?? 0) > shown.get()
+  );
+  const showMore = showMoreCards({ shown });
 
   // Every topic, in filing order: the references behind `topics` and `index`,
   // and the rows of the mention universe every child's editor autocompletes
@@ -872,6 +890,14 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
                 </cf-hstack>
               </cf-card>
             ))}
+
+            {hasMoreCards
+              ? (
+                <cf-button variant="secondary" onClick={showMore}>
+                  Show more…
+                </cf-button>
+              )
+              : null}
 
             {hasNoTopics
               ? (
