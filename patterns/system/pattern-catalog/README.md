@@ -60,21 +60,34 @@ buckets still send. An `unlisted` entry is one only its author is shown: others
 cannot find it until it is listed, so a caller shows its state to the author and
 never shows it to anyone else.
 
+An entry whose author chose to be named (`cf pattern publish --as`) also carries
+`authorProfile`, a link to that Common Fabric profile; one shared anonymously
+carries only the pseudonym. A remix carries `remixOf`, the originals it was made
+from, nearest first; a step the viewer may not see is `{unavailable: true}` and
+ends the chain. `CatalogByline` shows both the way every caller should: the
+profile's badge, which reads the name and picture from the profile itself (so a
+host never carries a name, and a renamed profile shows at once), or else the
+pseudonym; then "Remix of “Habit tracker”, a remix of …", stopping at the first
+step the viewer may not see.
+
 ## Implementing it
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
 stored under the `GetItRequests` type so the write policy holds, and `host` set
 to an opaque id for the host instance that acts on get requests. Each instance
 mints its own id and never takes one from a copy of another instance's state. It
-answers each `page` request in that request's `result`. It acts only on a
-request that names its own `host`, so a cloned host instance never acts on
-another's requests, and only within a window it chooses by `requestedAt`. It
-answers each request id in `getItRequests` under that id in `getItAnswers`:
-`started` while it works, if it says anything before it is done, then one final
-state (`placed`, `failed` or `cancelled`) that it never changes. `FakeCatalog`
-(`fake-catalog.tsx`) answers from a fixed list of entries, as host `fake-host`
-unless told otherwise, every match in one page with no `next`, and
-`pattern-catalog.test.tsx` pins the behavior through it.
+answers each `page` request in that request's `result`. It sets `authorProfile`
+only from the profile the index says the author published under, and `remixOf`
+only from the chain the index returns to this viewer; when the index says
+neither, the entry carries neither. It acts only on a request that names its own
+`host`, so a cloned host instance never acts on another's requests, and only
+within a window it chooses by `requestedAt`. It answers each request id in
+`getItRequests` under that id in `getItAnswers`: `started` while it works, if it
+says anything before it is done, then one final state (`placed`, `failed` or
+`cancelled`) that it never changes. `FakeCatalog` (`fake-catalog.tsx`) answers
+from a fixed list of entries, as host `fake-host` unless told otherwise, every
+match in one page with no `next`, and `pattern-catalog.test.tsx` pins the
+behavior through it.
 
 ## Not yet settled
 
