@@ -2493,14 +2493,18 @@ the per-epic implementation notes).
   `currency.falseClean` at zero. `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-19.** Implemented, off by default. The index and its
-  marks are covered in `runtime/memory/test/v2-currency-index.test.ts`, and
-  recording, the judgment, and a skipped root's re-arm in
-  `runtime/runner/test/executor/space-server-currency.test.ts`. Not measured
-  on a deployed space.
-- **Path to removal.** Run `record` on a copy of the Topics board, then on a
-  deployed space; turn `skip` on where `falseClean` stays zero; then delete
-  the mode and the unconditional start.
+- **Status on 2026-11-19.** Implemented, and `skip` by default on toolshed.
+  The index and its marks are covered in
+  `runtime/memory/test/v2-currency-index.test.ts`, and recording, the
+  judgment, and a skipped root's re-arm in
+  `runtime/runner/test/executor/space-server-currency.test.ts`. Measured on a
+  synthetic Topics board under a serving worker and on a counter in the
+  browser
+  ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).
+  Not measured on a deployed space or on a copy of the production board.
+- **Path to removal.** Watch `currency.falseClean` on deployed spaces, cut
+  the judgment's cost for each demand row, then delete the mode and the
+  unconditional start.
 
 ### `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`
 

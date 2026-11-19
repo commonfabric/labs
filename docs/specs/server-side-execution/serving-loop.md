@@ -373,7 +373,8 @@ sync. Beneficial (staleness removed), never load-bearing: no client in
 the ruled flows subscribes to setup docs before activation.
 
 **A root the store can serve.** *(AMENDED 2026-11-19; behind
-`SpaceServerPolicy.currencyIndex`, off by default.)* Where the policy keeps
+`SpaceServerPolicy.currencyIndex`, which a toolshed sets to `skip` unless
+SERVER_EXECUTION_CURRENCY_INDEX says otherwise.)* Where the policy keeps
 the currency index (§3b) in its `skip` mode, the demand pass asks the memory
 server, for each root awaiting its first structure load whose piece is not
 running, whether the store can serve it as it stands. A root that is no

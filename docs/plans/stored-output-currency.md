@@ -1,9 +1,11 @@
 # Serving a piece's stored outputs while they are current
 
-Status: In progress. Stages 1, 2 and 4 are built behind
-`SERVER_EXECUTION_CURRENCY_INDEX`, off by default, and have run only against
-test fixtures. Stage 3, the measurement that decides whether `skip` is turned
-on anywhere, is next. Stages 5 to 8 are not started.
+Status: In progress. Stages 1 to 4 are built, and a toolshed runs `skip`
+unless `SERVER_EXECUTION_CURRENCY_INDEX` says otherwise. Stage 3 measured a
+synthetic Topics board and a counter in the browser
+([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
+a deployed space and the production board are not measured. Stages 5 to 8
+are not started.
 
 A serving loop starts a piece whenever a session's demand reaches one of its
 documents, and a fresh serving runtime runs every demanded computation of the
@@ -16,7 +18,7 @@ Two problems motivate it:
 
 - **A start that derives nothing new.** A session that opens a board of
   3,264 Topics starts every Topic to learn that its stored outputs are what it
-  would compute (`served-reference-reads.md`).
+  would compute (`served-reference-reads.md`, which labs #9998 adds).
 - **A stale output nothing recomputes.** Piece A writes document `a`. Piece B
   reads `a` and writes `b`. Piece C reads `b`. A session demands C and nothing
   of B's. The demand pass starts only the pieces that enclose C
@@ -188,11 +190,17 @@ an instance it vouched for again with no input of it changed, the judgment
 was wrong: the count of those is `currency.falseClean`, logged with the
 piece. Whether a piece had been clean is kept with its record, so a mark that
 lands before the next record is stored does not hide it. `skip` acts on the
-judgment, and only with `SERVER_EXECUTION_CURRENCY_EPOCH` set: a record is
-trusted across builds only by the epoch it names, so a serving loop asked to
-skip with no epoch named runs as `record` and logs a warning. `record` runs
-on a real space until `falseClean` stays at zero before `skip` is turned on
-there.
+judgment, and only under an epoch: a record is trusted across builds only by
+the epoch it names, so a serving loop asked to skip with no epoch named runs
+as `record` and logs a warning. A toolshed's epoch is
+`SERVER_EXECUTION_CURRENCY_EPOCH`, or else the commit baked into a compiled
+binary, or else one made up for the process, since a source run's checkout
+can change under the commit it names.
+
+A toolshed runs `skip` by default. `falseClean` is still counted there, for
+each piece that does start, and `SERVER_EXECUTION_CURRENCY_INDEX=record` on a
+deployment starts every piece and counts every judgment that would have been
+wrong.
 
 ## What changes in the specifications
 
@@ -227,8 +235,13 @@ there.
   write rows.** A document written that way reads as an input nothing
   computes.
 - **A view plan names no producers for a piece that is not started**
-  (`viewExecutionNodes`). What a client with view-scoped replication does
-  with that has to be checked in stage 3.
+  (`viewExecutionNodes`). A browser client renders such a piece from the
+  store, checked on a counter in the shell; a pattern whose view depends on
+  a producer's proof has not been checked.
+- **A judgment reads every demand row of the space's sessions**, at about
+  15 µs each on the memory server's thread.
+- **A piece whose output depends on something that is not a read**, such as
+  a clock, is held clean while what it would compute moves.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -244,13 +257,19 @@ there.
    takes snapshots and sends records through the memory server
    (`HostMemoryServer`, the worker port protocol). `record` mode judges each
    root it loads and counts `currency.servable` and `currency.falseClean`.
-3. **Measure.** Run `record` on a copy of the Topics board: the share of
-   roots judged servable for a new viewer and a returning one, `falseClean`,
-   the cost of a judgment at 3,264 Topics, and what a client under
-   view-scoped replication does with a piece that has no producers in its
-   view plan. This decides whether stage 4 is turned on, and whether
-   `served-reference-reads.md` question 1(a) and a narrower arrival seed are
-   still worth building.
+3. **Measure.** Done on a synthetic board of 50 and of 200 Topics under a
+   serving worker, and on a counter in the browser
+   ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).
+   A new viewer of 200 recorded Topics has every Topic judged servable; with
+   `skip` the view takes 1.9 seconds where it took 70, writes no document
+   where it wrote 3,602, and leaves the worker at 51 MB where it held 471.
+   `falseClean` stayed at zero. A browser client renders a piece the server
+   left unstarted, and an event starts it. Two things are still owed. A
+   judgment costs about 15 µs for each demand row the space's sessions hold,
+   on the memory server's thread, which is about 0.7 seconds for a session
+   demanding every instance of a 3,264-Topic board; judging only the rows
+   that changed removes that. And neither a copy of the production board nor
+   a deployed space has been measured.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
 5. **Starting stale producers.** The index lists the marked producers of a
@@ -324,8 +343,10 @@ For stage 5:
 
 ## Related
 
-- `served-reference-reads.md`: the cost this removes for a recorded board, and
-  the two questions stage 3 revisits.
+- `served-reference-reads.md` (labs #9998): the cost this removes for a
+  recorded board. Its question 1(a), a resolution watch that is not demand,
+  and its question 2, a narrower arrival seed, save a start only for a piece
+  the index cannot vouch for.
 - `serving-worker-heap.md`: step 2 (a demanded computation keeps its record and
   not its inputs) and step 3 (release on the last demand) build on the same
   record.
