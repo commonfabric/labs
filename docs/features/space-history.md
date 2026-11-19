@@ -139,7 +139,9 @@ believing it is the space's.
 "Toggle history" in the header menu opens the history panel for the viewed
 space (`showHistoryView` in the shell's display toggles). The panel lists the
 space's steps, newest first, each with what began it, its `seq` and its time,
-and marks a step that is not settled as in progress.
+and marks a step that is not settled as in progress. The list is read when the
+panel opens and again after returning from a fork; it does not follow the
+space live.
 
 Choosing a step forks the space there. While a fork is open, the root element
 hands the fork's runtime to everything it renders in place of its own, so the
@@ -147,10 +149,17 @@ whole shell shows the fork: the piece in view, the piece list, navigation
 within the space. The panel then offers two ways out. "Back to now" discards
 the fork. "Restore this version" restores the space from it. Closing the panel,
 moving to another space, or replacing the runtime discards the fork as well.
+The step that is open cannot be chosen again.
+
+Returning with "Back to now", or by closing the panel, puts the view back
+where it was when the fork was opened, since a piece reached inside a fork may
+exist nowhere else.
 
 Ending a fork deletes its branch first and disposes of its runtime after, so
 a fork dropped because its own runtime is being replaced still gets its branch
-deleted. A fork whose page goes away before ending it leaves its branch in the
+deleted. A fork is deleted through the root's runtime, so when that runtime is
+replaced, the old one is disposed of once the fork's branch deletion has been
+answered. A fork whose page goes away before ending it leaves its branch in the
 store. Such a branch holds nothing but what was done in it and is not
 reachable from the space, but the space compaction tool refuses a store with a
 branch that is not deleted (`../plans/compact-space.md`), so an operator

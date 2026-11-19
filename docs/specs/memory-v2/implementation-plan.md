@@ -87,9 +87,9 @@ memory route.
   Session-id hardening is deferred.
 - Keep blob payload storage content-addressed. The seq rewrite applies to JSON
   entity storage, not blob data.
-- Keep branch-aware reads, writes, and watch scopes where already supported.
-  Defer public branch lifecycle commands, merge proposals, and advanced branch
-  sync.
+- Keep branch-aware reads, writes, and watch scopes, and the public branch
+  lifecycle, history and restore commands (`04-protocol.md` section 4.3.8).
+  Defer merge proposals and advanced branch sync.
 
 ## Phase 0: Spec Maintenance
 

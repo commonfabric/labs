@@ -48,8 +48,8 @@ rewrite. In particular:
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
-- the public one-shot read surfaces are `graph.query`, `entity-id.list`, and
-  `entity-id.exists`
+- the public one-shot read surfaces are `graph.query`, `entity-id.list`,
+  `entity-id.exists`, `history.list`, and `branch.list`
 - watch-set mutations return inline `sync` payloads; a pushed frame retracts a
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
@@ -540,6 +540,9 @@ interface SessionOpenRequest {
     // Present when no one waits on the session's results (see the rules).
     // Absent means the session is demand. Inside the signed descriptor.
     demand?: false;
+    // The branch the session is of (see the rules). Absent means the default
+    // branch. Inside the signed descriptor.
+    branch?: BranchId;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -882,6 +885,11 @@ interface RequestMessage {
     | "graph.query"
     | "entity-id.list"
     | "entity-id.exists"
+    | "branch.create"
+    | "branch.delete"
+    | "branch.list"
+    | "history.list"
+    | "branch.restore"
     | "session.watch.set"
     | "session.watch.add"
     | "session.watch.remove"
@@ -1874,6 +1882,10 @@ its result carries `serverSeq`.
 - A request the engine refuses, for a name that is taken, a fork point outside
   the parent's history or below the store's compaction floor, or a branch
   that does not exist, gets a `QueryError` carrying the reason.
+- `branch.create` refuses, the same way, a name that holds a control character
+  or that begins with `view-demand:` or `view-support:`.
+- `history.list` reports a commit as a restore (`restored`) only when it is a
+  `system` commit.
 - `branch.restore` restores the default branch only. It is serialized with the
   space's commits, and the documents it writes reach the space's sessions as
   any commit's do.

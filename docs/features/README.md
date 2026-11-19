@@ -31,7 +31,6 @@ a line for each new document to the index below.
   previews
 - [`document-release.md`](document-release.md) — when a runtime stops watching
   a document nothing reads, what it drops, and how a later read loads it again
-
 - [`space-history.md`](space-history.md) — listing a space's history as
   steps, opening a step in a fork a second runtime runs, and restoring the
   space from it

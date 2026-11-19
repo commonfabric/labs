@@ -36,7 +36,7 @@ interface Branch {
   name: BranchName; // Unique name within the space
   parentBranch: BranchName; // Branch this was forked from
   forkSeq: number; // Seq at which the fork occurred
-  createdSeq: number; // Seq at which this branch name came into existence
+  createdSeq: number; // First seq of the branch's own history: its forkSeq
   headSeq: number; // Latest seq at which this branch's visible state was updated
   createdAt: number; // Timestamp of branch creation
   status: "active" | "deleted"; // Soft-delete flag
@@ -114,12 +114,15 @@ When `branch.create({ name, parentBranch, forkSeq })` is served:
    the parent's `headSeq`, and for a parent other than the default branch at
    least the parent's `createdSeq`. It must not lie below the store's
    compaction floor (6.17.1).
-3. **Check the name.** A name at most 128 characters long that no branch has
-   had is taken by the new branch. A name an active branch has returns that
-   branch unchanged when the request names the same parent and either the
-   same fork seq or none, so a repeated request is harmless. Any other use of
-   a taken name is refused, a deleted branch's name included: names are
-   permanently consumed.
+3. **Check the name.** A name that holds a control character, or that begins
+   with `view-demand:` or `view-support:`, is refused: the server keys a
+   session's graphs and its sync cache by branch name, and such a name could
+   stand for another branch's entry there. A name at most 128 characters long
+   that no branch has had is taken by the new branch. A name an active branch
+   has returns that branch unchanged when the request names the same parent
+   and either the same fork seq or none, so a repeated request is harmless.
+   Any other use of a taken name is refused, a deleted branch's name included:
+   names are permanently consumed.
 4. **Create the `Branch` record:**
    ```
    Branch {
@@ -194,17 +197,17 @@ attempted.
 ### 6.4.3 Seq Assignment
 
 All branches share the Space's global seq counter (Lamport clock). Every
-write-class command advances the global seq. Branch creation sets both
-`createdSeq` and the initial `headSeq`. Thereafter, entity-state writes
-(`/memory/transact`, including merge materialization) advance `headSeq`, while
-branch deletion does not. This ensures seqs are globally ordered across all
-branches, which is essential for point-in-time queries.
+commit advances the global seq. Branch creation takes no seq: it sets both
+`createdSeq` and the initial `headSeq` to the fork seq (6.3.2). Thereafter,
+entity-state writes (`/memory/transact`, including merge materialization)
+advance `headSeq`, while branch deletion takes no seq and leaves `headSeq`
+where it was. This ensures seqs are globally ordered across all branches,
+which is essential for point-in-time queries.
 
 ```
-branch.create("feature-x"):
-  globalSeq++
-  branch["feature-x"].createdSeq = globalSeq
-  branch["feature-x"].headSeq = globalSeq
+branch.create("feature-x", forkSeq):
+  branch["feature-x"].createdSeq = forkSeq
+  branch["feature-x"].headSeq = forkSeq
 
 entity-state commit on branch "feature-x":
   globalSeq++
@@ -565,15 +568,16 @@ state of the `feature-x` branch as it was at seq 42:
 1. **Seq bounds**: `atSeq` must be within the branch's seq range.
    - For the default branch, any seq from 0 to `headSeq` is valid.
    - For a non-default branch, valid seqs are those in the range
-     `[createdSeq, headSeq]`. A query before `createdSeq` is invalid because the
-     branch name did not exist yet.
+     `[createdSeq, headSeq]`. A branch's `createdSeq` is its fork seq, and a
+     query before it is invalid because the branch holds no state of its own
+     there: that history is the parent's.
 2. **Reconstruction**: the reconstruction algorithm from `05-queries.md` section
    5.5 applies, scoped to the branch. Only facts committed on the branch (or
    inherited from ancestors before fork) with seq <= `atSeq` are considered.
-   Even though the branch may have been created later than `forkSeq`, inherited
-   parent facts are still capped at `forkSeq` when reconstructing the branch's
-   visible state. Because merge results are materialized as ordinary
-   target-branch writes, no extra merge-only read path is required.
+   Inherited parent facts are capped at `forkSeq` when reconstructing the
+   branch's visible state, whatever the parent has committed since. Because
+   merge results are materialized as ordinary target-branch writes, no extra
+   merge-only read path is required.
 
 ### 6.10.2 Interaction with Merge Commits
 
@@ -622,12 +626,12 @@ A pattern can create a branch to develop a new feature without affecting the
 live data:
 
 ```
-1. branch.create({ localSeq: nextLocalSeq(), name: "draft-v2" })
+1. branch.create({ name: "draft-v2" })
 2. commit({ branch: "draft-v2", operations: [...] })  // iterate on design
 3. commit({ branch: "draft-v2", operations: [...] })  // more changes
 4. proposal = merge({ source: "draft-v2", target: "main" })
 5. commit({ localSeq: nextLocalSeq(), ...proposal })   // ship it
-6. branch.delete({ localSeq: nextLocalSeq(), name: "draft-v2" }) // clean up
+6. branch.delete({ name: "draft-v2" }) // clean up
 ```
 
 ### 6.12.2 Undo/Redo via Branching
@@ -636,7 +640,7 @@ Branches provide a natural undo mechanism. Before a risky operation, create a
 branch:
 
 ```
-1. branch.create({ localSeq: nextLocalSeq(), name: "before-migration" }) // save point
+1. branch.create({ name: "before-migration" }) // save point
 2. commit({ operations: [... migration ...] })   // run migration on main
 3. // If migration was wrong:
    merge({ source: "before-migration", target: "main" })  // revert
@@ -650,14 +654,14 @@ back to main.
 An LLM-driven pattern can use branches for speculative exploration:
 
 ```
-1. branch.create({ localSeq: nextLocalSeq(), name: "speculation-1" })
-2. branch.create({ localSeq: nextLocalSeq(), name: "speculation-2" })
+1. branch.create({ name: "speculation-1" })
+2. branch.create({ name: "speculation-2" })
 3. // Run different strategies in parallel on each branch
 4. // Evaluate results
 5. // Merge the winning branch
 6. merge({ source: "speculation-1", target: "main" })
-7. branch.delete({ localSeq: nextLocalSeq(), name: "speculation-1" })
-8. branch.delete({ localSeq: nextLocalSeq(), name: "speculation-2" })
+7. branch.delete({ name: "speculation-1" })
+8. branch.delete({ name: "speculation-2" })
 ```
 
 ### 6.12.4 Collaborative Editing
@@ -665,8 +669,8 @@ An LLM-driven pattern can use branches for speculative exploration:
 Multiple users can work on separate branches and merge their changes:
 
 ```
-1. branch.create({ localSeq: nextLocalSeq(), name: "alice-edits" })
-2. branch.create({ localSeq: nextLocalSeq(), name: "bob-edits" })
+1. branch.create({ name: "alice-edits" })
+2. branch.create({ name: "bob-edits" })
 3. // Alice and Bob work independently
 4. merge({ source: "alice-edits", target: "main" })    // Alice merges first
 5. merge({ source: "bob-edits", target: "main" })      // Bob may hit conflicts
@@ -807,8 +811,9 @@ A session is opened on one branch: `SessionDescriptor.branch`
 `transact`, `graph.query`, `op.query`, watch spec and `history.list` the
 session sends without naming a branch reads and writes the session's branch,
 so a client that knows nothing of branches runs a space as the branch holds
-it. A message that names a branch, the default branch's empty name included,
-is served on the branch it names.
+it. A view interest (`views` on `session.watch.set`) names no branch on the
+wire, and is of the session's branch as well. A message that names a branch,
+the default branch's empty name included, is served on the branch it names.
 
 - The branch must exist and be active when the session opens; an open on any
   other is refused.
@@ -858,8 +863,10 @@ interface CommitSummary {
 }
 ```
 
-A commit whose payload compaction emptied (`docs/plans/compact-space.md`)
-reports no events and no restore.
+A commit is reported as a restore only when it is a `system` commit whose
+payload carries `merge` metadata (6.15.2); the same metadata on a commit of
+another class reports none. A commit whose payload compaction emptied
+(`docs/plans/compact-space.md`) reports no events and no restore.
 
 ### 6.17.1 The Compaction Floor
 
