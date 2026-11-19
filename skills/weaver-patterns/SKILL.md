@@ -38,18 +38,22 @@ Both files come from this skill's `templates/`.
 
 Everything below that asks the person's Common Fabric service something goes
 through `cf fetch`, which signs as them: their service may run on a cloud host
-that answers nothing unsigned. The service's address is `CF_SERVICE_URL`: the
-address their Weaver's settings show for it, or `http://localhost:<port>` when
-it runs on this Mac (`loom status` names the port). A command is
-`echo '<json>' | deno task cf fetch -X POST "$CF_SERVICE_URL/command/<id>"`, the
-JSON being `{"args": {…}, "actor": "user"}`, plus `"context": {"loom_id": "…"}`
-for one that acts on a loom. Its answer's `outputs` holds what it returns;
-`ok: false` with a `reason` is a refusal.
+that answers nothing unsigned. `<service>` below is its address, as their
+Weaver's settings show it, or `http://localhost:<port>` when it runs on this Mac
+(`loom status` names the port); after setup it is `CF_SERVICE_URL`. A command is
+`echo '<json>' | cf fetch -X POST <service>/command/<id>`, the JSON being
+`{"args": {…}}`, plus `"context": {"loom_id": "…"}` for one that acts on a loom.
+Add `"actor": "user"` only where a step below says so: it claims the person is
+acting, which only a command they asked for should carry. An answer looks like
+`{"ok": true, "outputs": {…}}`; a refusal is `ok: false` with a `code` and a
+`reason`, and `cf fetch` exits 1 with the status.
 
 ## Setup ("set me up")
 
 Safe to run again whenever something is missing or a save does not show up; each
-step checks before it changes anything.
+step checks before it changes anything. Until step 6 writes the settings, every
+command names the service and the key itself: `<key>` is
+`~/.config/commonfabric/identity.key`, passed as `-i <key>`.
 
 1. **`cf` runs.** It needs Deno; then `deno task cf` works from anywhere in the
    clone, with nothing to install on PATH. `cf` below means that.
@@ -57,28 +61,29 @@ step checks before it changes anything.
    unless `CF_SERVICE_URL` already holds it.
 3. **`cf` is the person.** `cf` must act as the same identity as their Weaver,
    or what it makes lands where Weaver cannot see it and the index counts them
-   twice. Never make a key (`cf id new` makes a stranger). The key is
-   `~/.config/commonfabric/identity.key`. When it is missing, pair this Mac like
-   any other device of theirs: ask them to open Weaver's Settings > Pair a
-   device and copy the code it shows (not paste it here, which would keep it in
-   the transcript), then run
-   `pbpaste | cf id pair "$CF_SERVICE_URL" ~/.config/commonfabric/identity.key`.
-   Tell them plainly that this Mac now holds their key as a file, which any
-   program they run can read, and that removing the device in Weaver does not
-   take it back. `cf id pair` never replaces a keyfile holding someone else.
-4. **Where their pieces go.** `cf fetch "$CF_SERVICE_URL/config"`: its
+   twice. Never make a key (`cf id new` makes a stranger). When `<key>` is
+   missing, pair this Mac like any other device of theirs: ask them to open
+   Weaver's Settings > Pair a device and copy the code it shows (not paste it
+   here, which would keep it in the transcript), then run
+   `pbpaste | cf id pair <service> <key>`. Tell them plainly that this Mac now
+   holds their key as a file, which any program they run can read, and that
+   removing the device in Weaver does not take it back. (A key of its own,
+   delegated by their service and revocable, would avoid that; nothing issues
+   one yet.) `cf id pair` never replaces a keyfile holding someone else.
+4. **Where their pieces go.** `cf fetch -i <key> <service>/config`: its
    `identityDid` must equal `cf id did <key>`, or stop and say this Mac holds
    someone else's key. `homeSpace` gives the space and the host their panes
    mount it from. If it is missing, stop and say so; never guess a host or a
    space.
 5. **The person is in the index**, as the same member their service is. If
-   `cf index whoami` says this machine has not joined, hand the service's
-   membership to this Mac:
-   `echo '{"actor":"user"}' | cf fetch -X POST "$CF_SERVICE_URL/command/index.chain" | plutil -extract outputs.chain raw -o - - | cf index join --chain -`.
+   `cf index whoami -i <key>` says this machine has not joined, hand the
+   service's membership to this Mac, in one line, so the chain never reaches the
+   transcript and a refusal stops before the join:
+   `chain=$(echo '{"actor":"user"}' | cf fetch -i <key> -X POST <service>/command/index.chain | plutil -extract outputs.chain raw -o - -) && printf '%s' "$chain" | cf index join -i <key> --chain -`.
    Run the same again whenever an index command says the chain lapsed or was
    refused: only the service renews it, and a chain lasts about three months. If
-   the service is not a member either, ask them to copy their invite link and
-   run `pbpaste | cf index join`.
+   the service answers `not-a-member`, it has not joined either: ask them to
+   copy their invite link and run `pbpaste | cf index join -i <key>`.
 6. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
    `my-patterns/.claude/settings.json` from `templates/`, replacing every `<…>`
    placeholder with the value steps 2 to 4 found and the labs root's absolute
@@ -89,22 +94,34 @@ step checks before it changes anything.
 ## The loop
 
 - **save** keeps the person's Weaver up to date and nothing else. Check it
-  compiles first (`cf check <entry>`). First save:
-  `cf piece new <entry> --slug my-<name> --no-index-version`; later saves:
-  `cf piece setsrc --cell my-<name> --no-index-version <entry>`. Without
-  `--no-index-version` every save becomes a version in the index, which floods
-  undo and can be shared on its own. When `setsrc` refuses because the new
-  version does not fit the piece's data, offer a fresh piece or keeping the old
-  version; nothing carries data over yet.
-- **Into their Weaver**, once, after the first save: their service places the
-  piece on their private **Making** loom, never the loom they have open, which
-  may be shared. Run `loom.find` with `{"name": "Making"}` to find it (an answer
-  whose `looms` holds one titled exactly Making), or `loom.create` with
-  `{"title": "Making"}` the first time, then `loom.add` with
+  compiles first (`cf check <entry>`). Which save it is depends on what exists,
+  not on what this session remembers: if `cf piece inspect --cell my-<name>`
+  finds the piece, every save is
+  `cf piece setsrc --cell my-<name> --no-index-version <entry>`; only when it
+  finds none is it the first,
+  `cf piece new <entry> --slug my-<name>
+  --no-index-version`. Never pass
+  `--force` to take a slug: that strands the piece already on their Making loom.
+  Without `--no-index-version` every save becomes a version in the index, which
+  floods undo and can be shared on its own. When `setsrc` refuses because the
+  new version does not fit the piece's data, offer a fresh piece or keeping the
+  old version; nothing carries data over yet.
+- **When a save fails with cf's version note** ("cf is newer than the server"),
+  their service runs an older Common Fabric than this copy of labs. Say so in
+  those words, check out the commit the note names (or the newest release tag at
+  or before it) in this clone, and save again; do not set
+  `CF_SKIP_VERSION_CHECK`.
+- **Into their Weaver**, after the first save, and again whenever their Making
+  loom does not hold the piece: their service places it on their private
+  **Making** loom, never the loom they have open, which may be shared. Run
+  `loom.find` with `{"name": "Making"}`: use the loom titled exactly Making, the
+  most recently used if there are several; if there is none, `loom.create` with
+  `{"title": "Making"}`. Then `loom.add` with
   `{"ref": "pattern:<space>/<pieceId>", "focus": true}` and that loom's
-  `loom_id` as context (`cf piece new --json` gives the `pieceId`). Later saves
-  update it in place. Tell them it is on their Making loom, on any device their
-  Weaver runs on.
+  `loom_id` as context; `cf piece inspect --cell my-<name>` names the `pieceId`.
+  Adding a piece the loom already holds brings it forward rather than adding it
+  twice. Later saves update it in place. Tell them it is on their Making loom,
+  on any device their Weaver runs on.
 - **checkpoint** right after the save that finishes something they asked for:
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a version, the
   point undo goes back to: one per request, never one per save. Like any
