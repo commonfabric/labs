@@ -21,14 +21,24 @@ const waitForCounter = (page: Page, ordinal: string): Promise<void> =>
   );
 
 /**
- * Opens, in the history panel, the step that the `nth` newest event began,
- * counting from zero.
+ * Opens the history panel and returns the seq of the newest step it lists,
+ * which is the point of history holding the space as it stands.
  */
-async function openEventStep(page: Page, nth: number): Promise<void> {
-  const step = await page.waitForSelector(
-    `.step[data-event-index="${nth}"]`,
-    { strategy: "pierce" },
-  );
+async function newestStep(page: Page): Promise<string> {
+  await page.evaluate("globalThis.app.setConfig('showHistoryView', true)");
+  const step = await page.waitForSelector(".step[data-seq]", {
+    strategy: "pierce",
+  });
+  const seq = await step.evaluate((el: Element) => el.getAttribute("data-seq"));
+  if (seq === null) throw new Error("the newest step names no seq");
+  return seq;
+}
+
+/** Opens, in the history panel, the step whose seq is `seq`. */
+async function openStep(page: Page, seq: string): Promise<void> {
+  const step = await page.waitForSelector(`.step[data-seq="${seq}"]`, {
+    strategy: "pierce",
+  });
   await step.click();
 }
 
@@ -53,10 +63,13 @@ describe("space history", () => {
   });
 
   /**
-   * Creates a counter, opens it in the shell, increments it three times from
-   * the page, and opens the history panel. Returns the page.
+   * Creates a counter, opens it in the shell and increments it three times
+   * from the page, opening the history panel after the first. Returns the
+   * page and the seq of the step that left the counter at one. The panel
+   * lists history as it stood when it opened, so that step stays listed
+   * while the space moves on, whichever side computes the space.
    */
-  async function openCountedToThree(): Promise<Page> {
+  async function openCountedToThree(): Promise<{ page: Page; first: string }> {
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),
       {
@@ -77,20 +90,20 @@ describe("space history", () => {
     });
     const page = shell.page();
     await waitForCounter(page, "0th");
-    for (const ordinal of ["1st", "2nd", "3rd"]) {
+    await clickCfButton(page, "#counter-increment");
+    await waitForCounter(page, "1st");
+    const first = await newestStep(page);
+    for (const ordinal of ["2nd", "3rd"]) {
       await clickCfButton(page, "#counter-increment");
       await waitForCounter(page, ordinal);
     }
-    await page.evaluate(
-      "globalThis.app.setConfig('showHistoryView', true)",
-    );
-    return page;
+    return { page, first };
   }
 
   it("shows the piece as an earlier step left it, and returns to now", async () => {
-    const page = await openCountedToThree();
+    const { page, first } = await openCountedToThree();
 
-    await openEventStep(page, 2);
+    await openStep(page, first);
     await waitForCounter(page, "1st");
 
     await clickCfButton(page, "#counter-increment");
@@ -101,9 +114,9 @@ describe("space history", () => {
   });
 
   it("restores the space to what a fork holds", async () => {
-    const page = await openCountedToThree();
+    const { page, first } = await openCountedToThree();
 
-    await openEventStep(page, 2);
+    await openStep(page, first);
     await waitForCounter(page, "1st");
     await clickCfButton(page, "#counter-decrement");
     await waitForCounter(page, "0th");

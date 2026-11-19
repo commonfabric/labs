@@ -251,6 +251,7 @@ export class XHistoryView extends BaseView {
         <button
           class="step"
           data-kind="${step.kind}"
+          data-seq="${step.seq}"
           data-event-index="${step.kind === "event" ? eventIndex : nothing}"
           aria-current="${current ? "true" : "false"}"
           ?disabled="${this.open?.busy === true || current}"
