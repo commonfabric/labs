@@ -1406,10 +1406,9 @@ export class SpaceFork {
     deleted.catch(() => {
       if (this.#deleted === deleted) this.#deleted = undefined;
     });
+    // A runtime is disposed of once: a later call finds it disposed, so
+    // only the branch deletion is what a repeated `discard()` tries again.
     const disposed = this.#disposed ??= this.#runtime.dispose();
-    disposed.catch(() => {
-      if (this.#disposed === disposed) this.#disposed = undefined;
-    });
     try {
       await disposed;
     } finally {

@@ -460,7 +460,7 @@ describe("v2-branch-sessions", () => {
 
       for (const name of ["fo\u0000rk", "fork\n", "\u001ffork", "fork\u007f"]) {
         await expect(main.createBranch(name)).rejects.toThrow(
-          "a branch name holds no control character",
+          "a branch name must not hold a control character",
         );
       }
       expect(await names()).toEqual([""]);
@@ -473,7 +473,7 @@ describe("v2-branch-sessions", () => {
         const name of ["view-demand:", "view-demand:fork", "view-support:"]
       ) {
         await expect(main.createBranch(name)).rejects.toThrow(
-          "a branch name does not begin with `view-demand:` or `view-support:`",
+          "a branch name must not begin with `view-demand:` or `view-support:`",
         );
       }
       expect(await names()).toEqual([""]);

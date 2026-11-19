@@ -972,9 +972,9 @@ function isDeclaredTable(
 const refusedBranchName = (name: string): string | undefined =>
   // deno-lint-ignore no-control-regex
   /[\u0000-\u001f\u007f]/.test(name)
-    ? "a branch name holds no control character"
+    ? "a branch name must not hold a control character"
     : name.startsWith("view-demand:") || name.startsWith("view-support:")
-    ? "a branch name does not begin with `view-demand:` or `view-support:`"
+    ? "a branch name must not begin with `view-demand:` or `view-support:`"
     : undefined;
 
 const respondTypedError = <Result>(

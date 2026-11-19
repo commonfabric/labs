@@ -139,9 +139,10 @@ stream remains the editor's display authority until that read completes. A
 failed refresh leaves the editor read-only and emits `cf-error`.
 
 One collaborative epoch owns a field until it is explicitly released, its
-entity is deleted, or a restore rewrites its document. An ordinary write may change other paths, but it cannot
-change an active collaborative path. Deliberate release plus replacement may be
-one ordered commit. Reopening the field creates a new epoch.
+entity is deleted, or a restore rewrites its document. An ordinary write may
+change other paths, but it cannot change an active collaborative path.
+Deliberate release plus replacement may be one ordered commit. Reopening the
+field creates a new epoch.
 
 An epoch belongs to one branch. A fork inherits a field's value and none of
 its epoch: the field is inactive there until an editor on the fork starts an

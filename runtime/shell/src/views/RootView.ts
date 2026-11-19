@@ -264,8 +264,11 @@ export class XRootView extends BaseView implements ShellApp {
   /** The view the shell was on when the open fork was opened. */
   #viewBeforeFork: AppView | undefined = undefined;
 
-  /** The fork a restore is under way from, which that restore ends. */
-  #restoring: SpaceFork | undefined = undefined;
+  /**
+   * The fork a restore is under way from, which that restore ends, and the
+   * promise that resolves once it has.
+   */
+  #restoring: { fork: SpaceFork; ended: Promise<void> } | undefined = undefined;
 
   /** What the history panel is told of the fork. */
   @state()
@@ -823,14 +826,15 @@ export class XRootView extends BaseView implements ShellApp {
     if (!isAppStateConfigKey(key)) {
       throw new Error(`Invalid config key: ${key}`);
     }
-    const next = clone(this.app);
-    next.config[key] = value;
     // The panel is the only way back from a fork, so it takes the fork with
-    // it.
+    // it. Leaving the fork's view can move the view, so it comes before the
+    // state this change starts from is read.
     if (key === "showHistoryView" && !value) {
       this.#leaveForkView();
       void this.#dropFork();
     }
+    const next = clone(this.app);
+    next.config[key] = value;
     return this.#commit(next, `set-config ${key}=${value}`);
   }
 
@@ -899,7 +903,8 @@ export class XRootView extends BaseView implements ShellApp {
     this._historyError = undefined;
     const restoring: OpenHistory = { seq: fork.seq, busy: true };
     this._openHistory = restoring;
-    this.#restoring = fork;
+    const ended = Promise.withResolvers<void>();
+    this.#restoring = { fork, ended: ended.promise };
     try {
       await fork.restore();
     } catch (error) {
@@ -907,7 +912,7 @@ export class XRootView extends BaseView implements ShellApp {
       // A fork let go of while it was restoring was left for the restore to
       // end, which it did not.
       if (this._openHistory !== restoring) {
-        void this.#discard(fork);
+        await this.#discard(fork);
         return;
       }
       this._historyError = describeFailure(error);
@@ -915,6 +920,7 @@ export class XRootView extends BaseView implements ShellApp {
       return;
     } finally {
       this.#restoring = undefined;
+      ended.resolve();
     }
     if (this._openHistory !== restoring) return;
     this.#fork = undefined;
@@ -935,8 +941,11 @@ export class XRootView extends BaseView implements ShellApp {
     if (fork === undefined) return Promise.resolve();
     this.#fork = undefined;
     // A restore under way ends the fork itself, and ending it here would
-    // take the branch from under the restore.
-    return fork === this.#restoring ? Promise.resolve() : this.#discard(fork);
+    // take the branch from under the restore. The fork is gone once that
+    // restore has ended it.
+    return fork === this.#restoring?.fork
+      ? this.#restoring.ended
+      : this.#discard(fork);
   }
 
   /**
