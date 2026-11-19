@@ -914,6 +914,51 @@ describe("a commit the preparation refuses", () => {
   });
 });
 
+describe("a change that leaves the stored value as it was", () => {
+  it("records no write record, as the storage records no write, and commits", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const doc = identifierOf({ test: "unchanged-write" });
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: doc,
+      artifact: await artifactOf("coalesce"),
+    });
+    try {
+      const store = new Store();
+      store.docs.set(doc, { kind: "result", value: { shout: "A" } });
+      hooks.begin("send");
+      hooks.change(doc, [], store);
+      hooks.end({ committed: true });
+      expect(await hooks.settled()).toEqual([]);
+      // The executor writes `shout` again with the value it holds: the
+      // storage records no write, and a write record for it would name a
+      // path the transaction did not write.
+      hooks.begin("send");
+      hooks.change(doc, ["shout"], store, undefined, [{
+        target: { doc, path: ["shout"] },
+        record: { output: 0 },
+        instance: doc,
+        keys: [],
+        slots: {},
+      }]);
+      hooks.end({ committed: true });
+      expect(await hooks.settled()).toEqual([]);
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
 describe("the cost of labels from templates for a `filter`", () => {
   it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
     for (const which of CASES) {

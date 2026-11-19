@@ -409,6 +409,7 @@ export class RuntimeTransactions implements TransactionHooks {
     written.push([...path]);
     this.#written.set(doc, written);
     const document = store.docs.get(doc);
+    const attempts = tx.getWriteAttemptLog?.().length;
     if (document === undefined) {
       if (!this.#documents.delete(doc)) return;
       tx.writeValueOrThrow(this.#address(doc, []), undefined, {
@@ -454,6 +455,13 @@ export class RuntimeTransactions implements TransactionHooks {
       schema as JSONSchema | undefined,
     );
     if (this.#compiledPattern === undefined) return;
+    // A write of the value the storage holds is no write of the
+    // transaction, and the path keeps the label stored with the value, as
+    // for any unchanged write: its records are not given. A transaction
+    // that keeps no log of its writes gives them all.
+    if (
+      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts
+    ) return;
     for (const write of writes ?? []) {
       const recorded: RecordedPlanWrite = {
         ...this.#inputs(write),
