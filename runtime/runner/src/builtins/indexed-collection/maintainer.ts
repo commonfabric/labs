@@ -36,6 +36,12 @@ const logger = getLogger("indexed-collection");
 /** Members re-read per maintenance transaction. */
 const MEMBERS_PER_EVENT = 50;
 
+/**
+ * How many times in a row a collection's withdrawn maintenance is asked
+ * again before it waits for the next write.
+ */
+const WITHDRAWALS_OWED_AGAIN = 3;
+
 /** Cause of the per-space cell listing the space's indexed collections. */
 const REGISTRY_CAUSE = "indexed-collection-registry";
 
@@ -59,6 +65,9 @@ interface CollectionState {
 
   /** The drain in flight, if any. */
   draining: Promise<void> | undefined;
+
+  /** Maintenance transactions withdrawn since one last landed. */
+  withdrawn: number;
 
   /**
    * Settles once the tables have been brought up to the collection's
@@ -117,6 +126,9 @@ export class IndexedCollectionMaintainer {
   readonly #runtime: Runtime;
   readonly #enabled: boolean;
   readonly #spaces = new Map<MemorySpace, SpaceState>();
+
+  /** Per space, what settles once its last queued event's wave has. */
+  readonly #turns = new Map<MemorySpace, Promise<void>>();
   readonly #subscription: IStorageSubscription;
   #disposed = false;
 
@@ -298,6 +310,7 @@ export class IndexedCollectionMaintainer {
       pending: new Set(),
       added: new Map(),
       draining: undefined,
+      withdrawn: 0,
       reconciled: Promise.resolve(),
       cancel: this.#runtime.scheduler.addEventHandler(
         (tx: IExtendedStorageTransaction, event: MaintenanceEvent) =>
@@ -329,45 +342,68 @@ export class IndexedCollectionMaintainer {
   }
 
   /**
-   * Queues `event` for `collection` and waits for its transaction to end. A
-   * serving runtime commits in waves, and can withdraw a transaction that
-   * ended well: the event is then owed again.
+   * Queues `event` for `collection` and waits for its transaction to end.
+   *
+   * A serving runtime commits in waves. A wave carries the transactions that
+   * ended together, a commit may write one database only, and a wave that is
+   * refused takes every transaction in it along. So the events of a space go
+   * one at a time, each after the wave of the one before has settled, and an
+   * event whose transaction a wave withdrew is owed again.
    */
   async #dispatch(
     collection: CollectionState,
     event: MaintenanceEvent,
   ): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
+    const space = collection.handle.space;
+    const before = this.#turns.get(space);
+    const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
+    this.#turns.set(space, settled);
+    await before;
+    const { promise: ended, resolve: end } = Promise.withResolvers<void>();
     this.#runtime.scheduler.queueEvent(
       collection.stream,
       event,
       true,
       (tx) => {
-        resolve();
-        void waveSettlementOf(tx)?.then((verdict) => {
-          if (verdict.error) this.#owe(collection, event);
+        end();
+        const settlement = waveSettlementOf(tx);
+        if (settlement === undefined) return settle();
+        void settlement.then((verdict) => {
+          settle();
+          if (verdict.error) {
+            this.#owe(collection, event);
+          } else {
+            collection.withdrawn = 0;
+          }
         });
       },
     );
-    await promise;
+    await ended;
   }
 
   /**
    * Makes `event`, whose transaction was withdrawn, owed again. Members are
    * owed through the documents they were read from, so that the drain asks
    * the database what it holds for them now rather than trusting the rows
-   * the event carried.
+   * the event carried. After `WITHDRAWALS_OWED_AGAIN` withdrawals with no
+   * transaction landing between them, what is owed waits for the next write
+   * to the collection: a refusal that repeats is not one to answer by asking
+   * again.
    */
   #owe(collection: CollectionState, event: MaintenanceEvent): void {
     if (this.#disposed) return;
+    const again = ++collection.withdrawn <= WITHDRAWALS_OWED_AGAIN;
+    if (!again) {
+      logger.warn("maintenance-withdrawn", () => [collection.handle.id]);
+    }
     if (!("members" in event)) {
-      this.#runtime.trackAsyncWork(this.#dispatch(collection, event));
+      if (again) void this.#dispatch(collection, event);
       return;
     }
     for (const rows of event.members) {
       for (const doc of rows.deps) collection.pending.add(doc);
     }
-    this.#schedule(collection);
+    if (again) this.#schedule(collection);
   }
 
   /** Re-reads `members` of `collection`, a batch per transaction. */
