@@ -1,10 +1,3 @@
-/**
- * A message that stays private until the viewer holds reader evidence for the
- * space, at which point it is released to that reader.
- * Demonstrates a module-authored direct policy: an exported `exchangeRule`
- * that matches `hasRole` integrity, collected with `exchangeRules` and applied
- * to a field with `Confidential` and `PolicyOf`.
- */
 import {
   type Confidential,
   Default,

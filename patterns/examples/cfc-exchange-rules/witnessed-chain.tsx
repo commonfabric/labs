@@ -1,12 +1,3 @@
-/**
- * A confidential vote chain where ballots are submitted and committed through
- * the pattern's streams, and a tally derived from the committed list is
- * released only if each step was written by the expected code. Forging the
- * committed list, planting a brief, appending a vote, or relaying through
- * another function leaves the tally withheld.
- * Demonstrates nested `inputWitness` requirements in an exchange rule, which
- * name the code that must have produced each step's confidential inputs.
- */
 import {
   type Confidential,
   Default,
