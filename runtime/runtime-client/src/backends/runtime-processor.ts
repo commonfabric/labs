@@ -4485,6 +4485,7 @@ export class RuntimeProcessor {
     request: SpaceHistoryListRequest,
   ): Promise<SpaceHistoryListResponse> {
     const provider = this.#historyProvider(request.space);
+    const served = this.#runtime.experimental.serverExecution === true;
     const commits: CommitSummary[] = [];
     let before = request.before;
     for (;;) {
@@ -4493,7 +4494,7 @@ export class RuntimeProcessor {
         ...(before !== undefined ? { before } : {}),
       });
       for (const commit of page) commits.push(commit);
-      const steps = historySteps(commits);
+      const steps = historySteps(commits, { served });
       const exhausted = page.length < HISTORY_PAGE_COMMITS;
       // A page holding the first commit of no step is the middle of one, so
       // the listing reads on until it has that step whole.

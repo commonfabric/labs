@@ -27,6 +27,15 @@ describe("historySteps()", () => {
       .toEqual([[3, 3, true], [2, 2, true], [1, 1, true]]);
   });
 
+  it("returns a step as not settled when a served space's loop has yet to commit", () => {
+    const steps = historySteps([commit(2, { events: 1 }), commit(1)], {
+      served: true,
+    });
+
+    expect(steps.map(({ seq, settled }) => [seq, settled]))
+      .toEqual([[2, false], [1, false]]);
+  });
+
   it("ends a step at the last commit the serving loop made for it", () => {
     const steps = historySteps([
       derived(5, 3),

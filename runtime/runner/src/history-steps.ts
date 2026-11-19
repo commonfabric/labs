@@ -43,16 +43,31 @@ export type HistoryStep = {
   settled: boolean;
 };
 
+/** What {@link historySteps} is told of the space beyond its commits. */
+export type HistoryStepsOptions = {
+  /**
+   * Whether a serving loop computes what follows from the space's commits.
+   * A stretch of history can hold none of the loop's commits while it has
+   * yet to reach them, so their absence does not say the space is unserved.
+   */
+  served?: boolean;
+};
+
 /**
  * Groups the commits of a branch's history, newest first as a history
  * listing returns them, into the steps they make, newest first. Commits
  * older than the oldest step's first commit belong to a step the listing
  * cut off, and are left out.
  */
-export function historySteps(commits: readonly CommitSummary[]): HistoryStep[] {
-  // Where no commit is a serving loop's, each client computes what follows
-  // from its own commits and stores it with them.
-  const served = commits.some((commit) => commit.class === "derived");
+export function historySteps(
+  commits: readonly CommitSummary[],
+  options: HistoryStepsOptions = {},
+): HistoryStep[] {
+  // Where no serving loop commits, each client computes what follows from
+  // its own commits and stores it with them. A commit of a loop's shows the
+  // space was served, whatever the caller knows of it now.
+  const served = options.served === true ||
+    commits.some((commit) => commit.class === "derived");
   const steps: HistoryStep[] = [];
   let seq: number | undefined;
   let writes = 0;
