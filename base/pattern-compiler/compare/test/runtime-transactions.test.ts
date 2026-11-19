@@ -315,6 +315,48 @@ describe("RuntimeTransactions", () => {
     }
   });
 
+  it("admits into the executor's documents a clause the space does not admit, as into a store the runtime owns", async () => {
+    // `secret` carries "alice" alone, with no alternative the space admits,
+    // and `record` writes it into the state cell `last`. Today's runner
+    // enrolls the stores of a piece, and a clause that does not fit such a
+    // store is declared onto it rather than refused (CFC spec §8.12.5).
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: identifierOf({ test: "runtime-transactions" }),
+    });
+    const { given, documents } = await labeledInputs(
+      runtime,
+      space,
+      {
+        secret: {
+          schema: { type: "string", ifc: { confidentiality: ["alice"] } },
+        },
+      },
+      { secret: "s", note: "n" },
+      hooks,
+    );
+    const instance = new Instance(await artifactOf("handler"), given, {
+      space,
+      id: identifierOf({ test: "runtime-transactions" }),
+      transactions: hooks,
+      documents,
+    });
+    instance.send(bindingOf(instance, "record"), { text: "t", extra: "e" });
+    expect(await hooks.settled()).toEqual([]);
+
+    const last = instance.stateCells().find(({ name }) => name === "last");
+    const read = runtime.edit();
+    try {
+      const metadata = readStoredCfcMetadata(read, {
+        space,
+        id: hooks.entityOf(last!.id),
+        scope: "space",
+      });
+      expect(JSON.stringify(metadata ?? {})).toContain("alice");
+    } finally {
+      read.abort();
+    }
+  });
+
   it("stores no labels on what a handler writes where it read no labeled input", async () => {
     const { hooks, instance } = await started({ secret: "s", note: "n" });
     const before = preparations();

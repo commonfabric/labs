@@ -40,6 +40,8 @@ import {
   type MemorySpace,
   recordRelevantSchemaWritePolicyInput,
 } from "../../../runtime/runner/src/cell.ts";
+import { runtimeOwnedStoreOwnerKey } from "../../../runtime/runner/src/cfc/runtime-owned-stores.ts";
+import { runtimeWritePolicyAuthorization } from "../../../runtime/runner/src/cfc/types.ts";
 import type { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type {
@@ -74,6 +76,11 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #receipts: TransactionCommitReceipt[] = [];
   /** Removes this adapter from the readers of the storage manager. */
   readonly #stopReading: (() => void) | undefined;
+  /**
+   * The document whose instance owns the documents the executor makes: the
+   * result document of the instance the executor was started with.
+   */
+  readonly #owner: string | undefined;
   readonly #counts: RuntimeCounts = {
     committed: 0,
     byCause: {},
@@ -90,9 +97,22 @@ export class RuntimeTransactions implements TransactionHooks {
    * Constructs an instance which keeps the documents in `space` of
    * `runtime`.
    */
-  constructor(runtime: Runtime, space: MemorySpace) {
+  constructor(
+    runtime: Runtime,
+    space: MemorySpace,
+    options: {
+      /**
+       * The identifier of the result document of the instance the executor
+       * is started with. Each document the executor makes is then enrolled
+       * as a store the runtime owns, under that instance, as the runner
+       * enrolls the stores of a piece it sets up.
+       */
+      owner?: string;
+    } = {},
+  ) {
     this.#runtime = runtime;
     this.#space = space;
+    this.#owner = options.owner;
     // The replica drops a document that nothing holds or reads at its next
     // release pass (`releaseUnreadDocuments()`), and a read through a
     // transaction does not load it again: it reads the document as absent
@@ -107,6 +127,16 @@ export class RuntimeTransactions implements TransactionHooks {
   /** What the transactions were given so far. */
   get counts(): Readonly<RuntimeCounts> {
     return { ...this.#counts, byCause: { ...this.#counts.byCause } };
+  }
+
+  /**
+   * Takes a document as one that exists in storage and that the executor did
+   * not make, as an input it is handed: it is kept loaded, a change to it is
+   * written at its path, and it is not enrolled as a store the runtime owns.
+   */
+  external(doc: string): void {
+    this.entityOf(doc);
+    this.#documents.add(doc);
   }
 
   /** Stops keeping the documents of the executor loaded. */
@@ -159,6 +189,7 @@ export class RuntimeTransactions implements TransactionHooks {
         this.#address(doc, []),
         this.#encode(document.value),
       );
+      this.#enroll(tx, doc);
     } else {
       const parent = path.length === 0
         ? undefined
@@ -249,6 +280,31 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The document of the executor that an entity holds. */
   documentOf(entity: string): string {
     return this.#byEntity.get(entity) ?? entity;
+  }
+
+  /**
+   * Enrolls a document the executor made as a store the runtime owns, as
+   * `enrollPieceOwnedStores` in `runtime/runner/src/runner.ts` enrolls the
+   * result, the argument and the internal documents of a piece: a clause
+   * that does not fit the store is then declared onto it rather than refused
+   * (CFC spec §8.12.5). The enrollment outlives the transaction.
+   */
+  #enroll(tx: IExtendedStorageTransaction, doc: string): void {
+    if (this.#owner === undefined) return;
+    const store = this.#address(doc, []);
+    const owner = runtimeOwnedStoreOwnerKey(
+      store,
+      this.#address(this.#owner, []),
+      this.#runtime.scopeKeyIdentity,
+    );
+    if (owner === undefined) return;
+    // The runtime's mark: this adapter stands in for the runner, which
+    // enrolls a piece's stores with it.
+    tx.enrollRuntimeOwnedStore(
+      { ...store, path: [] },
+      owner,
+      runtimeWritePolicyAuthorization,
+    );
   }
 
   /** Helper for the hooks, which gives the transaction in progress. */

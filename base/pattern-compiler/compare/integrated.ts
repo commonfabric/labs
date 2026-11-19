@@ -221,8 +221,8 @@ const inMemory = (
  * `diffAndUpdate` and no source of anchor identifiers, so the records of an
  * array stay in place, as the executor holds them, and not as documents of
  * their own, as `Cell.set` stores them. The schema is recorded for the write,
- * which stores the labels it declares. `keeper` keeps each document loaded
- * from then on (`RuntimeTransactions.entityOf`).
+ * which stores the labels it declares. `keeper` takes each document as one
+ * the executor is handed (`RuntimeTransactions.external`).
  */
 export const labeledInputs = async (
   runtime: Runtime,
@@ -247,7 +247,7 @@ export const labeledInputs = async (
     ).getAsNormalizedFullLink();
     recordRelevantSchemaWritePolicyInput(tx, link, input.schema as JSONSchema);
     diffAndUpdate(runtime, tx, link, argument[name]);
-    keeper.entityOf(link.id);
+    keeper.external(link.id);
     documents.push({ id: link.id, kind: "input", value: argument[name] });
     given[name] = { $link: { doc: link.id, path: [] } };
   }
@@ -277,7 +277,9 @@ const inStorage = async (
     cfcFlowLabels: "persist",
   });
   const differs: string[] = [];
-  const hooks = new RuntimeTransactions(runtime, space);
+  const hooks = new RuntimeTransactions(runtime, space, {
+    owner: options.id,
+  });
   try {
     // The inputs as cells of their own, each under a schema with a clause.
     let given = argument;
