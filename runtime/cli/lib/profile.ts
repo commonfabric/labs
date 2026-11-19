@@ -30,6 +30,7 @@ import {
   orderProfileCandidates,
   profileOwnership,
   sendEvent,
+  transactionFailureMessage,
   writtenPrincipalAt,
 } from "@commonfabric/runner";
 import {
@@ -332,11 +333,7 @@ function throwIfFailed(
   const status = committed.status();
   if (status.status !== "error") return;
   throw new Error(
-    `${doing} failed: ${
-      "message" in status.error
-        ? String(status.error.message)
-        : String(status.error)
-    }`,
+    `${doing} failed: ${transactionFailureMessage(status.error)}`,
   );
 }
 
@@ -356,12 +353,12 @@ export interface ListedProfile {
    * names the person whose profiles these are, and no one else, as the
    * principal it represents, and the picture is the whole of the cell a write
    * to the field lands in, in the profile's space (`writtenPrincipalAt()`).
-   * `false` when there is no picture, for one another principal set, which
-   * anyone can, since a profile's space lets anyone write, and for one stored
-   * without a label. A host showing the picture as the person's face shows it
-   * only where this is `true`. A picture stored before writes to it were
-   * labeled carries no label, so it is `false` until its owner sets it again,
-   * as `setProfilePicture()` does with `keepCurrent`.
+   * `false` when there is no picture, for one another principal set before
+   * only the owner could set one, and for one stored without a label. A host
+   * showing the picture as the person's face shows it only where this is
+   * `true`. A picture stored before writes to it were labeled carries no
+   * label, so it is `false` until its owner sets it again, as
+   * `setProfilePicture()` does with `keepCurrent`.
    */
   pictureByOwner: boolean;
 
@@ -1072,11 +1069,11 @@ export type ProfilePictureConfig =
  * scales them, as the shell's picture picker does to a 128-pixel square, so a
  * caller passes an image of the size it wants shown.
  *
- * With `config.keepCurrent` it sets the picture the profile already stores
- * again, which attests it to the identity making the call. A picture stored
- * before writes to it were labeled carries no label, so it is not attested
- * to its owner (`ListedProfile.pictureByOwner`) until its owner sets it
- * again this way.
+ * Only the profile's owner can set its picture, so `config.identity` must be
+ * the profile's owner. With `config.keepCurrent` it sets the picture the
+ * profile already stores again, which attests it to the owner. A picture stored
+ * without a label is not attested to its owner (`ListedProfile.pictureByOwner`)
+ * until its owner sets it again this way.
  *
  * With `config.clear` it removes the picture, through `setPicture`, and the
  * legacy avatar text, through `setAvatar`, since a profile shows that text
@@ -1087,7 +1084,8 @@ export type ProfilePictureConfig =
  * are not a raster image (`isRasterImage()`), when `config.keepCurrent` is
  * given for a profile with no picture, when the home lists no such profile of
  * the identity's own or has retired it, or when a write fails or does not
- * land.
+ * land, as when `setPicture` refuses an identity that is not the profile's
+ * owner.
  */
 export async function setProfilePicture(
   config: ProfilePictureConfig,
