@@ -636,7 +636,22 @@ process:
   yields few is repeated server work, and a wide frame is transport and
   client-ingest work as well. A refresh carries only `watches` and `upserts`: it
   re-evaluates by dirty document rather than by root, so it has no traversal to
-  attribute, and absent is the honest answer there. A `transact` entry also
+  attribute, and absent is the honest answer there. A watch set evaluated whole,
+  or moved to a view replacement's roots, records an entry per part of the
+  session's graphs it evaluated, and each such entry names the session
+  (`sessionId`, `principal`), the views it held (`views`, whose roots are among
+  the `watches`), the `part` (`demand`, `support`, or `selection` for a planner
+  selection checked before it is accepted), and the `cause`. A request is filed
+  under its own operation with cause `request`. A refresh pass that evaluates a
+  session whole is filed under `session.watch.refresh`, with the reason the
+  session owed that evaluation as the cause: `first-selection` (a view's first
+  planner selection, or the first for a new revision of one), `resume`,
+  `lost-frame`, `failed-pass`, `routed-restore`, `support-replaced` (a
+  selection that dropped a delivered root rebuilds the support part alone), or
+  `unscoped-flush` (a pass that names no dirty documents). A request sent while
+  the session owes a full evaluation is filed under that reason instead of
+  `request`. A planner selection's check is filed under `view.selection`. A
+  `transact` entry also
   carries the commit's operation and read counts, its outcome (`ok`, the error
   name, or `threw` — a slow rejected commit records like a slow applied one),
   and `lockWaitMs`: how long the commit waited for the space publication lock
