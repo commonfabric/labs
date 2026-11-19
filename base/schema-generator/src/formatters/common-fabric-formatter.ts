@@ -64,6 +64,10 @@ import {
   memberValueType,
 } from "../typescript/cfc-carrier.ts";
 import {
+  hostFactCarried,
+  withHostFact,
+} from "../typescript/host-fact-carrier.ts";
+import {
   type CellWrapperKind,
   getCellBrand,
   getCellWrapperInfo,
@@ -585,6 +589,29 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
+
+/**
+ * Reads a host fact's key written as a type parameter as the argument
+ * `context` binds it to, following an argument that is itself a bound
+ * parameter; any other key is read as it is.
+ */
+const boundKeyReader = (
+  context: GenerationContext,
+): (key: ts.Type) => ts.Type =>
+(key) => {
+  let bound = context.boundTypeParameters;
+  let read = key;
+  const seen = new Set<ts.Type>();
+  while (bound && !seen.has(read)) {
+    seen.add(read);
+    const parameter = typeParameterOfType(read);
+    const argument = parameter && bound.arguments.get(parameter);
+    if (!argument) break;
+    read = argument.type;
+    bound = argument.bound;
+  }
+  return read;
+};
 
 /**
  * The innermost payload of `type`, a CFC alias chain's instantiation, or
@@ -1368,6 +1395,13 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   supportsType(type: ts.Type, context: GenerationContext): boolean {
+    if (
+      context.hostFactsRead !== type &&
+      hostFactCarried(type, context.typeChecker, boundKeyReader(context))
+    ) {
+      return true;
+    }
+
     const aliasName = type.aliasSymbol?.name;
     if (scopeForWrapperName(aliasName) !== undefined) {
       return true;
@@ -1460,6 +1494,15 @@ export class CommonFabricFormatter implements TypeFormatter {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
+    const hostFact = context.hostFactsRead !== type &&
+      hostFactCarried(type, context.typeChecker, boundKeyReader(context));
+    if (hostFact) {
+      return withHostFact(
+        this.#formatHostFactPayload(type, hostFact.payload, context),
+        hostFact.key,
+      );
+    }
+
     const n = context.typeNode;
     const resolvedScopeWrapper = resolveScopeWrapperNode(n);
     if (resolvedScopeWrapper) {
@@ -2688,6 +2731,40 @@ export class CommonFabricFormatter implements TypeFormatter {
       )
       ? labels as Record<string, unknown>[]
       : undefined;
+  }
+
+  /**
+   * The value of `type`, an intersection of a host fact carrier and
+   * `payload`, the members that hold the value. One member is read as it is,
+   * with no node: the node names the fact, not its payload. Several, or none,
+   * are read in place, as the intersection reads without its carrier, by the
+   * formatters that read it then (`formatPayloadInPlace()` reads CFC carriers
+   * so).
+   */
+  #formatHostFactPayload(
+    type: ts.Type,
+    payload: readonly ts.Type[],
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    if (payload.length === 1) {
+      return this.#schemaGenerator.formatChildType(
+        payload[0]!,
+        context,
+        undefined,
+      );
+    }
+    const {
+      hintsNode: _,
+      instantiatedAs: __,
+      ...unplaced
+    } = withoutTypeNode(context);
+    const payloadContext: GenerationContext = {
+      ...unplaced,
+      hostFactsRead: type,
+    };
+    return this.supportsType(type, payloadContext)
+      ? this.formatType(type, payloadContext)
+      : this.#schemaGenerator.formatStructure(type, payloadContext);
   }
 
   /**

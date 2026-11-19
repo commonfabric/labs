@@ -400,6 +400,13 @@ export interface GenerationContext {
   carriersRead?: ts.Type;
 
   /**
+   * The type at this position whose host fact carrier the reading holding it
+   * has read, reading the rest of it in place (`hostFactCarried()`). Like the
+   * node, it is not passed on to a child.
+   */
+  hostFactsRead?: ts.Type;
+
+  /**
    * Types whose scope brand the scope wrapper reading them has taken off, read
    * here as its payload: the type the brand was read from, the payload type
    * itself (`scopePayloadType()`) where it is distinct, and each member of it

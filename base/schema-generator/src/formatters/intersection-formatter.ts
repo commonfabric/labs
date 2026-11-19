@@ -23,6 +23,7 @@ import {
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { getArrayElementInfo, resolvePropertyType } from "../type-utils.ts";
 import { isCellType } from "../typescript/cell-brand.ts";
+import { isHostFactCarrier } from "../typescript/host-fact-carrier.ts";
 import { isScopeBrandMember } from "../typescript/scope-brand.ts";
 import { holdsWriterPolicy } from "../typescript/writer-policy.ts";
 import {
@@ -282,11 +283,13 @@ export class IntersectionFormatter implements TypeFormatter {
     // index signatures — they carry only symbol-keyed brand markers. A scope
     // wrapper's brand is one even where the checker defers it as a conditional
     // type, around a type parameter. A CFC metadata carrier holds no part of
-    // the value either: its labels are the CommonFabricFormatter's to read.
+    // the value either: its labels are the CommonFabricFormatter's to read,
+    // and so is a host fact carrier's key.
     const effectiveParts = parts.filter(
       (p) =>
         !this.#isBrandOnlyOrEmpty(p, checker) &&
-        !isScopeBrandMember(p, checker) && !isCfcCarrier(p),
+        !isScopeBrandMember(p, checker) && !isCfcCarrier(p) &&
+        !isHostFactCarrier(p),
     );
 
     // If all parts were brand markers / empty / carriers, as nested CFC

@@ -181,6 +181,9 @@ const DESCRIPTIVE_ANNOTATION_KEYS: ReadonlySet<string> = new Set([
   "deprecated",
   "description",
   "examples",
+  // The host fact a property is filled from at creation (`HostFact<T, K>`).
+  // Only creation reads it, so a pattern update may add or remove it freely.
+  "hostFact",
   // Persisted schemas can carry discovery tags as annotation metadata.
   "tags",
   // Listing-tier extension (`tier: "wrapper"`): a UI affordance outside the

@@ -2063,6 +2063,9 @@ export type JSONSchemaObj = {
 
   // Common Fabric extensions
   readonly scope?: SchemaScope;
+  // The host fact a top-level argument property is filled from when the piece
+  // is created (`HostFact<T, K>`). Validation-neutral: only creation reads it.
+  readonly hostFact?: string;
   // Verb listing mark on stream properties: a UI affordance outside the
   // headless contract (inferred at compile time from session-scoped handler
   // bindings + a void event). Hidden from the default `cf piece verbs`
@@ -4053,6 +4056,29 @@ export type Default<T, V extends T = T> = IsEmptyTuple<T> extends true
     | ([T] extends [null | undefined] ? DefaultMarker<V>
       : T & DefaultMarker<V>)
     | T;
+
+/**
+ * `T`, filled when the piece is created from the host fact `K`: something the
+ * host that creates the piece knows about where it places it, which the
+ * pattern cannot find out for itself, such as the loom it is placed on
+ * (`"loom.id"`). The argument's schema marks the property with
+ * `hostFact: K`, and creation fills it from the facts the host passes
+ * (`docs/features/host-embedding.md`, "Host facts"). An input the creator
+ * writes for the property itself is kept. A fact that may be missing is an
+ * optional property, `loomId?: HostFact<string, "loom.id">`, and a default
+ * goes around the fact, `Default<HostFact<string, "loom.id">, "">`.
+ *
+ * At runtime the value is a plain `T`; the carrier is a phantom.
+ */
+export type HostFact<T extends {}, K extends string> = T & HostFactCarrier<K>;
+
+/**
+ * What `HostFact` intersects its payload with: the fact's key, in a member no
+ * value holds.
+ */
+type HostFactCarrier<K extends string> = {
+  readonly __ct_host_fact__?: K;
+};
 
 /**
  * Marker for partial, recursive object defaults in `T | DeepDefault<V>` schema
