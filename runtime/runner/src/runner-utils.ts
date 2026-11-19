@@ -530,14 +530,11 @@ export function foldStoredArgumentSlots<T>(
 }
 
 /**
- * The facts a host knows about where it creates a piece, by key: the values a
- * pattern's argument properties marked `hostFact` are filled from
- * (`HostFact<T, K>`; `docs/features/host-embedding.md`, "Host facts"). A fact
- * is a scalar, such as an identifier.
+ * The facts a host knows about where it creates a piece, by key: the strings
+ * a pattern's argument properties marked `hostFact` are filled from
+ * (`HostFact<T, K>`; `docs/features/host-embedding.md`, "Host facts").
  */
-export type HostFacts = Readonly<
-  Record<string, string | number | boolean | null>
->;
+export type HostFacts = Readonly<Record<string, string>>;
 
 /**
  * `argument`, a new piece's argument, with each top-level property `schema`
@@ -545,34 +542,111 @@ export type HostFacts = Readonly<
  * already holds is kept, as is a property whose fact `facts` does not hold,
  * which then takes its default as any absent property does. A fact no
  * property is marked with is not used. The result is `argument` itself when
- * nothing was filled.
+ * nothing was filled. Throws for a schema that marks a value below its
+ * top-level properties, which creation would not fill.
  */
 export function fillHostFacts(
   argument: object,
   schema: JSONSchema,
   facts: HostFacts | undefined,
 ): object {
-  if (facts === undefined || !isObjectOrArray(schema)) return argument;
-  const root = schema.$ref ? resolveCfcSchemaRefs(schema, schema) : schema;
+  if (facts === undefined) return argument;
+  const root = resolvedSchema(schema, schema);
   if (!isObjectOrArray(root) || !isObjectOrArray(root.properties)) {
+    if (root !== undefined) refuseNestedHostFacts(root, schema, new Set());
     return argument;
   }
-  const filled: Record<string, string | number | boolean | null> = {};
+  const filled: Record<string, string> = {};
   for (const [name, declared] of Object.entries(root.properties)) {
-    const property = isObjectOrArray(declared) && declared.$ref
-      ? resolveCfcSchemaRefs(declared, schema)
-      : declared;
-    const key = isObjectOrArray(property) ? property.hostFact : undefined;
+    const key = hostFactOf(declared, schema);
     if (
-      typeof key === "string" && Object.hasOwn(facts, key) &&
+      key !== undefined && Object.hasOwn(facts, key) &&
       !Object.hasOwn(argument, name)
     ) {
       filled[name] = facts[key]!;
     }
+    refuseNestedHostFacts(declared, schema, new Set());
   }
   return Object.keys(filled).length === 0
     ? argument
     : { ...argument, ...filled };
+}
+
+/**
+ * `schema` with a `$ref` it holds resolved against `root`, or `undefined`
+ * for a reference that resolves to nothing.
+ */
+const resolvedSchema = (
+  schema: JSONSchema,
+  root: JSONSchema,
+): JSONSchema | undefined =>
+  isObjectOrArray(schema) && schema.$ref
+    ? resolveCfcSchemaRefs(schema, root)
+    : schema;
+
+/** The alternatives `schema` offers, `anyOf` and `oneOf` together. */
+const alternativesOf = (schema: JSONSchema): readonly JSONSchema[] =>
+  isObjectOrArray(schema)
+    ? [...(schema.anyOf ?? []), ...(schema.oneOf ?? [])]
+    : [];
+
+/**
+ * The host fact the property schema `declared` marks, on itself or on one of
+ * its alternatives, as an optional `HostFact` that may be `null` marks its
+ * string alternative; `undefined` where it marks none.
+ */
+function hostFactOf(
+  declared: JSONSchema,
+  root: JSONSchema,
+): string | undefined {
+  const property = resolvedSchema(declared, root);
+  if (!isObjectOrArray(property)) return undefined;
+  if (typeof property.hostFact === "string") return property.hostFact;
+  for (const alternative of alternativesOf(property)) {
+    const resolved = resolvedSchema(alternative, root);
+    if (isObjectOrArray(resolved) && typeof resolved.hostFact === "string") {
+      return resolved.hostFact;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Throws where `schema`, an argument property's schema or the argument's
+ * own, marks a value below it with `hostFact`: creation fills top-level
+ * properties only. `seen` holds the schemas already visited, which a
+ * recursive schema reaches again.
+ */
+function refuseNestedHostFacts(
+  schema: JSONSchema,
+  root: JSONSchema,
+  seen: Set<object>,
+): void {
+  const resolved = resolvedSchema(schema, root);
+  if (!isObjectOrArray(resolved) || seen.has(resolved)) return;
+  seen.add(resolved);
+  const below: JSONSchema[] = [
+    ...Object.values(resolved.properties ?? {}),
+    ...(resolved.items === undefined ? [] : [resolved.items]),
+    ...(resolved.additionalProperties === undefined
+      ? []
+      : [resolved.additionalProperties]),
+  ];
+  for (const child of below) {
+    const key = hostFactOf(child, root);
+    if (key !== undefined) {
+      throw new Error(
+        `The argument schema marks a value below its top-level properties ` +
+          `with the host fact \`${key}\`. Creation fills only a top-level ` +
+          "argument property from a host fact, so declare the `HostFact` " +
+          "there.",
+      );
+    }
+    refuseNestedHostFacts(child, root, seen);
+  }
+  for (const alternative of alternativesOf(resolved)) {
+    refuseNestedHostFacts(alternative, root, seen);
+  }
 }
 
 /**

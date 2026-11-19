@@ -4058,10 +4058,10 @@ export type Default<T, V extends T = T> = IsEmptyTuple<T> extends true
     | T;
 
 /**
- * `T`, filled when the piece is created from the host fact `K`: something the
- * host that creates the piece knows about where it places it, which the
- * pattern cannot find out for itself, such as the loom it is placed on
- * (`"loom.id"`). The argument's schema marks the property with
+ * `T`, a string, filled when the piece is created from the host fact `K`:
+ * something the host that creates the piece knows about where it creates it,
+ * which the pattern cannot find out for itself, such as the loom it is created
+ * for (`"loom.id"`). The argument's schema marks the property with
  * `hostFact: K`, and creation fills it from the facts the host passes
  * (`docs/features/host-embedding.md`, "Host facts"). An input the creator
  * writes for the property itself is kept. A fact that may be missing is an
@@ -4070,7 +4070,7 @@ export type Default<T, V extends T = T> = IsEmptyTuple<T> extends true
  *
  * At runtime the value is a plain `T`; the carrier is a phantom.
  */
-export type HostFact<T extends NonNullable<unknown>, K extends string> =
+export type HostFact<T extends string, K extends string> =
   & T
   & HostFactCarrier<K>;
 

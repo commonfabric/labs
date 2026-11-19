@@ -31,7 +31,9 @@ describe("fillHostFacts()", () => {
   it("leaves a marked property unset when its fact is missing", () => {
     const argument = { title: "Notes" };
 
-    expect(fillHostFacts(argument, PLACED, { "loom.slot": 3 })).toBe(argument);
+    expect(fillHostFacts(argument, PLACED, { "loom.slot": "3" })).toBe(
+      argument,
+    );
     expect(fillHostFacts(argument, PLACED, undefined)).toBe(argument);
   });
 
@@ -58,7 +60,22 @@ describe("fillHostFacts()", () => {
     });
   });
 
-  it("fills only top-level properties", () => {
+  it("fills a property whose mark is on one of its alternatives", () => {
+    const schema: JSONSchema = {
+      type: "object",
+      properties: {
+        loomId: {
+          anyOf: [{ type: "string", hostFact: "loom.id" }, { type: "null" }],
+        },
+      },
+    };
+
+    expect(fillHostFacts({}, schema, { "loom.id": "loom-1" })).toEqual({
+      loomId: "loom-1",
+    });
+  });
+
+  it("throws for a mark below the top-level properties", () => {
     const schema: JSONSchema = {
       type: "object",
       properties: {
@@ -69,6 +86,25 @@ describe("fillHostFacts()", () => {
       },
     };
 
-    expect(fillHostFacts({}, schema, { "loom.id": "loom-1" })).toEqual({});
+    expect(() => fillHostFacts({}, schema, { "loom.id": "loom-1" })).toThrow(
+      "below its top-level properties",
+    );
+  });
+
+  it("returns a nested schema with no mark unchanged", () => {
+    const schema: JSONSchema = {
+      type: "object",
+      properties: {
+        placement: {
+          type: "object",
+          properties: { loomId: { type: "string" } },
+        },
+      },
+    };
+    const argument = {};
+
+    expect(fillHostFacts(argument, schema, { "loom.id": "loom-1" })).toBe(
+      argument,
+    );
   });
 });

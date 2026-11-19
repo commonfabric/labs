@@ -1700,13 +1700,14 @@ export class PiecesController<T = unknown> {
   ): Promise<PieceController<U>> {
     const start = options.start ?? true;
     const pattern = await compileProgram(this, program);
-    const input = options.hostFacts === undefined
-      ? options.input
-      : fillHostFacts(
-        options.input ?? {},
-        pattern.argumentSchema,
-        options.hostFacts,
-      );
+    const given = options.input ?? {};
+    const filled = fillHostFacts(
+      given,
+      pattern.argumentSchema,
+      options.hostFacts,
+    );
+    // Nothing filled leaves the input as the caller gave it, absent included.
+    const input = filled === given ? options.input : filled;
     const piece = await this.runPersistent<U>(
       pattern,
       input,

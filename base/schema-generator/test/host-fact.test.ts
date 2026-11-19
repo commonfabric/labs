@@ -16,7 +16,7 @@ const PRELUDE = `
   type HostFactCarrier<K extends string> = {
     readonly __ct_host_fact__?: K;
   };
-  type HostFact<T extends {}, K extends string> = T & HostFactCarrier<K>;
+  type HostFact<T extends string, K extends string> = T & HostFactCarrier<K>;
 `;
 
 /** The schema of `typeName`, declared in `code` after the prelude. */
@@ -59,16 +59,21 @@ describe("host fact schemas", () => {
     expect(schema.required ?? []).toEqual([]);
   });
 
-  it("marks a fact of a type other than `string`", async () => {
+  it("marks a fact that may be `undefined` or `null`", async () => {
     const schema = await schemaOf(
-      `interface Input { slot: HostFact<number, "loom.slot"> }`,
+      `interface Input {
+        absent: HostFact<string, "loom.id"> | undefined;
+        empty: HostFact<string, "loom.id"> | null;
+      }`,
       "Input",
     );
 
-    expect(schema.properties?.slot).toEqual({
-      type: "number",
-      hostFact: "loom.slot",
-    });
+    expect(JSON.stringify(schema.properties?.absent)).toContain(
+      '"hostFact":"loom.id"',
+    );
+    expect(JSON.stringify(schema.properties?.empty)).toContain(
+      '"hostFact":"loom.id"',
+    );
   });
 
   it("keeps a `Default` written around the fact", async () => {
@@ -110,9 +115,51 @@ describe("host fact schemas", () => {
     );
   });
 
+  it("throws for a fact written around a union of strings", async () => {
+    const code = `interface Input {
+      side: HostFact<"left" | "right", "loom.side">;
+    }`;
+
+    await expect(schemaOf(code, "Input")).rejects.toThrow(
+      "written around a union",
+    );
+  });
+
+  it("throws for a fact written around a `Default`", async () => {
+    const code = `interface Input {
+      loomId: HostFact<Default<string, "">, "loom.id">;
+    }`;
+
+    await expect(schemaOf(code, "Input")).rejects.toThrow(
+      "written around a union",
+    );
+  });
+
+  it("formats a value derived from a fact and another value", async () => {
+    // As a pattern's result derives `loomId ?? "unplaced"`: the carrier comes
+    // along, and no fact is read there.
+    const schema = await schemaOf(
+      `interface Output { label: HostFact<string, "loom.id"> | "unplaced" }`,
+      "Output",
+    );
+
+    expect(JSON.stringify(schema.properties?.label)).toContain('"unplaced"');
+  });
+
+  it("throws for a fact named by anything but one string literal", async () => {
+    const code = `interface Input {
+      loomId: HostFact<string, "loom.id" | "loom.slot">;
+    }`;
+
+    await expect(schemaOf(code, "Input")).rejects.toThrow("not as one string");
+  });
+
   it("leaves a property with no `HostFact` unmarked", async () => {
     const schema = await schemaOf(
-      `interface Input { loomId: string; meta: { __ct_host_fact: string } }`,
+      `interface Input {
+        loomId: string;
+        lookalike: { readonly __ct_host_fact__?: "loom.id" };
+      }`,
       "Input",
     );
 

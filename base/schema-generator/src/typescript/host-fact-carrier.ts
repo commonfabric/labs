@@ -19,7 +19,8 @@ export const HOST_FACT_CARRIER_PROPERTY = "__ct_host_fact__";
  * intersection, is a host fact carrier: the `__ct_host_fact__` member alone,
  * typed as one string literal. `resolve` reads a key written as a type
  * parameter as its argument where a reading binds it. `undefined` for any
- * other member.
+ * other member. Throws for a carrier whose key reads as anything but one
+ * string literal.
  */
 export const hostFactKey = (
   member: ts.Type,
@@ -33,7 +34,15 @@ export const hostFactKey = (
       checker.getTypeOfSymbol(member.getProperties()[0]!),
     ),
   );
-  return declared.isStringLiteral() ? declared.value : undefined;
+  if (!declared.isStringLiteral()) {
+    throw new Error(
+      `A \`HostFact\` names its fact as \`${
+        checker.typeToString(declared)
+      }\`, not as one string. A host fills a value from one fact, so name ` +
+        'it with a string literal, as `HostFact<string, "loom.id">` does.',
+    );
+  }
+  return declared.value;
 };
 
 /**
@@ -47,6 +56,36 @@ export const isHostFactCarrier = (member: ts.Type): boolean => {
   return properties.length === 1 &&
     properties[0]!.name === HOST_FACT_CARRIER_PROPERTY;
 };
+
+/**
+ * Whether `type` is a union of several values, beside `null` and `undefined`,
+ * some of which carry a host fact, as the checker distributes a `HostFact`
+ * written around a union over its members. A fact that may be absent,
+ * `HostFact<…> | undefined`, is one value.
+ */
+export const isHostFactUnion = (type: ts.Type): boolean => {
+  if (!type.isUnion()) return false;
+  const values = type.types.filter((member) =>
+    (member.flags & (ts.TypeFlags.Null | ts.TypeFlags.Undefined)) === 0
+  );
+  return values.length > 1 &&
+    values.some((member) =>
+      member.isIntersection() && member.types.some(isHostFactCarrier)
+    );
+};
+
+/**
+ * The error for a `HostFact` written around a union, which a host cannot fill
+ * from one fact: around a union of string literals, or around a `Default`.
+ */
+export function hostFactUnionError(): Error {
+  return new Error(
+    "A `HostFact` is written around a union of types, such as a union of " +
+      "string literals or a `Default`. A host fact is one string, so write " +
+      "`HostFact<string, K>`, and write a `Default` around the fact: " +
+      '`Default<HostFact<string, "loom.id">, "">`.',
+  );
+}
 
 /**
  * The error for a value marked as two different host facts, `keys`: a host

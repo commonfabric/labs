@@ -921,7 +921,7 @@ export default pattern(() => {
 
     it("fills the argument properties the pattern marks with the host facts it is given", async () => {
       const placed = await instantiate({ program: PLACED_PROGRAM }, undefined, {
-        hostFacts: { "loom.id": "loom-1", "loom.slot": 3 },
+        hostFacts: { "loom.id": "loom-1", "loom.slot": "3" },
       });
       const chosen = await instantiate(
         { program: PLACED_PROGRAM },

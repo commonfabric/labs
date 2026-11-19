@@ -85,10 +85,7 @@ const lifecycleBodies = {
     ...sourceFields,
     requestKey: z.string().min(1).max(256).optional(),
     argument: z.record(z.string(), z.unknown()).optional(),
-    hostFacts: z.record(
-      z.string(),
-      z.union([z.string(), z.number(), z.boolean(), z.null()]),
-    ).optional(),
+    hostFacts: z.record(z.string(), z.string()).optional(),
     repository: z.string().optional(),
     slug: z.string().optional(),
     force: z.boolean().optional(),

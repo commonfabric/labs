@@ -65,6 +65,8 @@ import {
 } from "../typescript/cfc-carrier.ts";
 import {
   hostFactCarried,
+  hostFactUnionError,
+  isHostFactUnion,
   withHostFact,
 } from "../typescript/host-fact-carrier.ts";
 import {
@@ -589,6 +591,28 @@ const PRIMITIVE_KEEPING_LIBRARY_ALIASES: ReadonlySet<string> = new Set([
   "Partial",
   "Required",
 ]);
+
+/**
+ * Whether `type` is a `HostFact` its author wrote around a union
+ * (`isHostFactUnion()`): one reached by the `HostFact` alias, or written as a
+ * `HostFact` reference, rather than a `Default` written around a fact, or a
+ * value derived from a fact and something else, as `loomId ?? ""` is, which
+ * carries the carrier along where no fact is read.
+ */
+const writesHostFactUnion = (
+  type: ts.Type,
+  context: GenerationContext,
+): boolean => {
+  if (!isHostFactUnion(type)) return false;
+  const node = context.typeNode && unwrapTypeParentheses(context.typeNode);
+  return type.aliasSymbol?.name === HOST_FACT_ALIAS_NAME ||
+    (node !== undefined && ts.isTypeReferenceNode(node) &&
+      ts.isIdentifier(node.typeName) &&
+      node.typeName.text === HOST_FACT_ALIAS_NAME);
+};
+
+/** The name of the alias that declares a host fact (`base/api/index.ts`). */
+const HOST_FACT_ALIAS_NAME = "HostFact";
 
 /**
  * Reads a host fact's key written as a type parameter as the argument
@@ -1397,7 +1421,8 @@ export class CommonFabricFormatter implements TypeFormatter {
   supportsType(type: ts.Type, context: GenerationContext): boolean {
     if (
       context.hostFactsRead !== type &&
-      hostFactCarried(type, context.typeChecker, boundKeyReader(context))
+      (writesHostFactUnion(type, context) ||
+        hostFactCarried(type, context.typeChecker, boundKeyReader(context)))
     ) {
       return true;
     }
@@ -1494,6 +1519,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     type: ts.Type,
     context: GenerationContext,
   ): MutableJSONSchema {
+    if (
+      context.hostFactsRead !== type && writesHostFactUnion(type, context)
+    ) {
+      throw hostFactUnionError();
+    }
     const hostFact = context.hostFactsRead !== type &&
       hostFactCarried(type, context.typeChecker, boundKeyReader(context));
     if (hostFact) {
