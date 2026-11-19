@@ -549,8 +549,17 @@ describe("RuntimeTransactions with labels from templates", () => {
   });
 });
 
-describe("a slot of a template that the value code reads for another class", () => {
-  it("binds the `shape` slot of the left operand of `??` to the position its value was read at, and commits", async () => {
+describe("write records the runtime instantiates with the option on", () => {
+  /**
+   * Runs a fixture over labeled inputs with the experimental option
+   * `compiledPatterns` on, and returns the refused commits and the label
+   * stored at `path` of the result document.
+   */
+  const commitWithOptionOn = async (
+    name: string,
+    argument: Record<string, unknown>,
+    path: readonly string[],
+  ) => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
     const storageManager = StorageManager.emulate({ as: signer });
@@ -561,8 +570,8 @@ describe("a slot of a template that the value code reads for another class", () 
       experimental: { compiledPatterns: true },
       servingPosture: true,
     });
-    const id = identifierOf({ test: "coalesce" });
-    const artifact = await artifactOf("coalesce");
+    const id = identifierOf({ test: name });
+    const artifact = await artifactOf(name);
     const hooks = new RuntimeTransactions(runtime, space, {
       owner: id,
       artifact,
@@ -577,7 +586,7 @@ describe("a slot of a template that the value code reads for another class", () 
         runtime,
         space,
         inputs,
-        { name: "ada" },
+        argument,
         hooks,
       );
       const instance = new Instance(artifact, given, {
@@ -586,7 +595,7 @@ describe("a slot of a template that the value code reads for another class", () 
         transactions: hooks,
         documents,
       });
-      expect(await hooks.settled()).toEqual([]);
+      const refused = await hooks.settled();
       const read = runtime.edit();
       try {
         const metadata = readStoredCfcMetadata(read, {
@@ -597,18 +606,14 @@ describe("a slot of a template that the value code reads for another class", () 
         const label = metadata === undefined
           ? undefined
           : labelForConsumedEntries(
-            consumedEntriesForRead(metadata, ["shout"], {
+            consumedEntriesForRead(metadata, path, {
               nonRecursive: false,
               consumes: "value",
             }),
-            ["shout"],
+            path,
             false,
           );
-        // The label of the template is stored: a kept output carries the
-        // atom of its pattern.
-        expect(JSON.stringify(label?.integrity ?? [])).toContain(
-          '"kind":"compiled"',
-        );
+        return { refused, label };
       } finally {
         read.abort();
       }
@@ -617,6 +622,32 @@ describe("a slot of a template that the value code reads for another class", () 
       await runtime.dispose();
       await storageManager.close();
     }
+  };
+
+  it("binds the `shape` slot of the left operand of `??` to the position its value was read at, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "coalesce",
+      { name: "ada" },
+      ["shout"],
+    );
+    expect(refused).toEqual([]);
+    // The label of the template is stored: a kept output carries the atom
+    // of its pattern.
+    expect(JSON.stringify(label?.integrity ?? [])).toContain(
+      '"kind":"compiled"',
+    );
+  });
+
+  it("binds the source slot of the result of a `map` over plain values in place that a selector's branch names from outside the element body, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "collection-output",
+      { names: ["a", "b"] },
+      ["$UI", "children", "0"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:names"',
+    );
   });
 });
 

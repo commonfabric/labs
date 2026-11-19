@@ -7557,6 +7557,33 @@ export class Instance {
     return undefined;
   }
 
+  /**
+   * What the source slot of a collection is bound to where no cone read it:
+   * the stored array the collection's assembly found, for the element keys
+   * of the collections around it. The template of the result of a `map`, an
+   * output with a `collection`, is that slot, which the assembly reads and
+   * no cone instance does.
+   */
+  #sourceBinding(
+    slot: number,
+    byCollection: ReadonlyMap<number, string>,
+    collections: Iterable<number> = this.plan.collections.keys(),
+  ): SlotBinding | undefined {
+    for (const collection of collections) {
+      if (this.plan.collections[collection].source.slot !== slot) continue;
+      const around = this.#outerOf(collection).map((step) =>
+        byCollection.get(step) ?? "?"
+      );
+      const chain = this.#arrayChain(
+        this.#name("assembly", collection, around),
+      );
+      if (chain.length > 0) {
+        return { chain, observes: this.plan.slots[slot].observes };
+      }
+    }
+    return undefined;
+  }
+
   /** The other slots with the root and the path of `slot`, by its index. */
   #slotsAtPosition(slot: number): number[] {
     if (this.#atPosition === undefined) {
@@ -7783,7 +7810,10 @@ export class Instance {
             );
           if (bound !== undefined) {
             into[slot] = this.#bindingOf(slot, bound, outputs, depth);
+            continue;
           }
+          const source = this.#sourceBinding(slot, byCollection);
+          if (source !== undefined) into[slot] = source;
         }
         return into;
       };
@@ -7799,13 +7829,8 @@ export class Instance {
           if (bound !== undefined) {
             slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
           } else if (source !== undefined) {
-            const around = this.#outerOf(source).map((step) =>
-              byCollection.get(step) ?? "?"
-            );
-            slots[slot] = {
-              chain: this.#arrayChain(this.#name("assembly", source, around)),
-              observes: this.plan.slots[slot].observes,
-            };
+            const found = this.#sourceBinding(slot, byCollection, [source]);
+            if (found !== undefined) slots[slot] = found;
           }
         }
       }
