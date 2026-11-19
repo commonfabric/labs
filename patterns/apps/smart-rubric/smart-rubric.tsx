@@ -24,7 +24,9 @@
  *   unknown dimensions are dropped, category labels matched exactly, numbers
  *   clamped to range.
  * - Numeric dimensions can be "lower is better" (rent, commute), which the
- *   original could not express.
+ *   original could not express, and their range is editable: the original
+ *   fixed every UI-made numeric dimension at 0–100, so a rent of $2,100
+ *   clamped to 100.
  * - A ▲/▼ nudge pins only the option moved, at its new slot; the rest keep
  *   ranking by score around it. The original's manual rank froze the order.
  * - Quick Add can be cancelled while it runs and its error dismissed while
@@ -332,6 +334,29 @@ export const withWeightChanged = (
     }
   );
 
+/** Sets a numeric dimension's range. A bound left out (or not a number)
+ * keeps its current value; a range that would not run from low to high is
+ * refused, leaving the dimension as it was. Option values are kept as
+ * entered: one outside the new range scores as its nearer end. */
+export const withRange = (
+  dims: readonly Dimension[],
+  name: string,
+  bounds: {
+    min?: number | string | undefined;
+    max?: number | string | undefined;
+  },
+): Dimension[] =>
+  dims.map((d) => {
+    if (d.name !== name || d.type !== "numeric") return d;
+    const read = (v: number | string | undefined, fallback: number) => {
+      const n = v === undefined || v === "" ? NaN : Number(v);
+      return Number.isFinite(n) ? n : fallback;
+    };
+    const numericMin = read(bounds.min, d.numericMin);
+    const numericMax = read(bounds.max, d.numericMax);
+    return numericMin < numericMax ? { ...d, numericMin, numericMax } : d;
+  });
+
 /** `base`, or `base (2)`, `base (3)`… whichever is not yet taken. */
 export const uniqueName = (base: string, taken: readonly string[]): string => {
   if (!taken.includes(base)) return base;
@@ -499,6 +524,8 @@ interface DimensionView {
   scaleLabel: string;
   isNumeric: boolean;
   directionLabel: string;
+  minText: string;
+  maxText: string;
 }
 
 const formatValue = (value: string | number): string =>
@@ -542,6 +569,8 @@ const dimensionView = (dim: Dimension): DimensionView => ({
   directionLabel: dim.higherIsBetter === false
     ? "Lower is better"
     : "Higher is better",
+  minText: String(dim.numericMin),
+  maxText: String(dim.numericMax),
 });
 
 /** The rubric as markdown, for the filesystem projection. */
@@ -750,6 +779,11 @@ export interface RubricOutput {
   dismissQuickAdd: Stream<void>;
   /** Flip a numeric dimension between higher-is-better and lower-is-better. */
   toggleDirection: Stream<{ name: string }>;
+  /** Set a numeric dimension's range; a bound left out stays, and a range
+   * whose minimum is not below its maximum is refused. */
+  setRange: Stream<
+    { name: string; min?: number | string; max?: number | string }
+  >;
 }
 
 const QUICK_ADD_MODEL = "anthropic:claude-haiku-4-5";
@@ -875,6 +909,14 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
             : d
         ),
       )
+    );
+
+    const setRange = action(
+      ({ name, min, max }: {
+        name: string;
+        min?: number | string;
+        max?: number | string;
+      }) => dimensions.set(withRange(dimensions.get(), name, { min, max })),
     );
 
     const removeDimension = action(({ name }: { name: string }) => {
@@ -1307,7 +1349,38 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
                       ✕
                     </cf-button>
                   </div>
-                  <div style={styles.small}>{dim.scaleLabel}</div>
+                  {dim.isNumeric
+                    ? (
+                      <div style={styles.row}>
+                        <span style={styles.small}>Range</span>
+                        <cf-input
+                          type="number"
+                          size="sm"
+                          aria-label={`Minimum of ${dim.name}`}
+                          value={dim.minText}
+                          timingStrategy="blur"
+                          oncf-change={(e: { detail?: { value?: string } }) =>
+                            setRange.send({
+                              name: dim.name,
+                              min: e?.detail?.value ?? "",
+                            })}
+                        />
+                        <span style={styles.small}>to</span>
+                        <cf-input
+                          type="number"
+                          size="sm"
+                          aria-label={`Maximum of ${dim.name}`}
+                          value={dim.maxText}
+                          timingStrategy="blur"
+                          oncf-change={(e: { detail?: { value?: string } }) =>
+                            setRange.send({
+                              name: dim.name,
+                              max: e?.detail?.value ?? "",
+                            })}
+                        />
+                      </div>
+                    )
+                    : <div style={styles.small}>{dim.scaleLabel}</div>}
                 </div>
               ))}
             </div>
@@ -1315,7 +1388,8 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
           : (
             <div style={styles.hint}>
               No dimensions yet. Categorical ones score Excellent / Good / Fair
-              / Poor; numeric ones map 0–100 onto the same 0–10 scale.
+              / Poor; numeric ones map their range (0–100 until you change it)
+              onto the same 0–10 scale.
             </div>
           )}
       </div>
@@ -1363,6 +1437,7 @@ const SmartRubric = pattern<RubricInput, RubricOutput>(
       clearQuickAdd,
       dismissQuickAdd,
       toggleDirection,
+      setRange,
     };
   },
 );

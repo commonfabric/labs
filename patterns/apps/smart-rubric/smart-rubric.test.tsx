@@ -13,6 +13,8 @@ import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   clickButton,
   clickInRow,
+  findNodeByProp,
+  fireEvent,
   hasText,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
@@ -30,6 +32,7 @@ import SmartRubric, {
   steppedValue,
   uniqueName,
   withOptionMoved,
+  withRange,
   withWeightChanged,
 } from "./smart-rubric.tsx";
 
@@ -56,6 +59,15 @@ export const llmMocks = [
   // the answer.
   { error: "Not answered in this test.", repeat: true },
 ];
+
+/** Commits `value` in the field labelled `label`, as cf-input does on blur. */
+const editRange = (root: unknown, label: string, value: string): void =>
+  fireEvent(
+    findNodeByProp(root, "aria-label", label),
+    "oncf-change",
+    { detail: { value } },
+    `the "${label}" field`,
+  );
 
 const location: Dimension = {
   name: "Location",
@@ -175,6 +187,20 @@ export default pattern(() => {
     steppedValue(rent, 2900, 1) === 3000 &&
     steppedValue(rent, 1000, -1) === 1000
   );
+  // A range is set bound by bound; one that does not run low to high, or a
+  // bound that is not a number, changes nothing.
+  const assert_range_edits = assert(() => {
+    const [, wider] = withRange([location, rent], "Rent", { max: "5000" });
+    const [, lower] = withRange([location, rent], "Rent", { min: 500 });
+    const [, inverted] = withRange([location, rent], "Rent", { min: 4000 });
+    const [, junk] = withRange([location, rent], "Rent", { max: "lots" });
+    const [cat] = withRange([location, rent], "Location", { max: 99 });
+    return wider.numericMin === 1000 && wider.numericMax === 5000 &&
+      lower.numericMin === 500 && lower.numericMax === 3000 &&
+      inverted.numericMin === 1000 && inverted.numericMax === 3000 &&
+      junk.numericMax === 3000 && cat.numericMax === 10 &&
+      dimensionScore(wider, 3000) === 5;
+  });
   const assert_fit_value = assert(() =>
     fitValue(location, "good") === "Good" &&
     fitValue(location, "Superb") === undefined &&
@@ -316,6 +342,22 @@ export default pattern(() => {
     rubric.dimensions[2]?.type === "numeric" &&
     rubric.options.length === 2
   );
+  // A new numeric dimension starts at 0–100; its range fields edit it.
+  const action_set_commute_range = action(() => {
+    editRange(rubric[UI], "Maximum of Commute", "60");
+    editRange(rubric[UI], "Minimum of Commute", "5");
+  });
+  const assert_commute_range = assert(() =>
+    rubric.dimensions[2]?.numericMin === 5 &&
+    rubric.dimensions[2]?.numericMax === 60
+  );
+  const action_invert_commute_range = action(() =>
+    editRange(rubric[UI], "Minimum of Commute", "90")
+  );
+  const assert_inverted_range_refused = assert(() =>
+    rubric.dimensions[2]?.numericMin === 5 &&
+    rubric.dimensions[2]?.numericMax === 60
+  );
   const action_remove_dimension = action(() =>
     rubric.removeDimension.send({ name: "Commute" })
   );
@@ -389,6 +431,7 @@ export default pattern(() => {
       { assertion: assert_unique_names },
       { assertion: assert_weight_steps_and_clamps },
       { assertion: assert_step_from_unset_and_clamps },
+      { assertion: assert_range_edits },
       { assertion: assert_fit_value },
       { assertion: assert_preview_keeps_only_fitting_values },
       { assertion: assert_preview_empty_without_answer },
@@ -416,6 +459,10 @@ export default pattern(() => {
       { action: action_add_dimension },
       { action: action_remove_duplicate },
       { assertion: assert_dimension_added_option_removed },
+      { action: action_set_commute_range },
+      { assertion: assert_commute_range },
+      { action: action_invert_commute_range },
+      { assertion: assert_inverted_range_refused },
       { action: action_remove_dimension },
       { assertion: assert_dimension_removed },
       { action: action_rent_lower_is_better },
