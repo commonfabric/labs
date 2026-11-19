@@ -55,6 +55,7 @@ The current declared contract is:
 | Piece | Verb            | Input                                           | Declared result                |
 | ----- | --------------- | ----------------------------------------------- | ------------------------------ |
 | Board | `addTopic`      | `title`, optional `body`, `agentName`           | created `topic`, `name`        |
+| Board | `adoptTopics`   | `agentName`                                     | `adopted`                      |
 | Board | `backfillNames` | `agentName`                                     | `assigned`, `named`, `pending` |
 | Topic | `addComment`    | `body`, `agentName`                             | appended `comment`             |
 | Topic | `addLink`       | `url`, optional `kind` and `label`, `agentName` | appended `link`                |

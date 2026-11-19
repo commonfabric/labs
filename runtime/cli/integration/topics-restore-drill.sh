@@ -236,7 +236,7 @@ step "verify: byte-exact content, live board link, idempotent rerun"
 # relinks only those. This board is of the same generation as its topic, so
 # every wiring link the topic declares must have been relinked and read back,
 # and none left out for want of a board path.
-for FIELD in mentionable boardCrossrefs boardCrossrefIndex; do
+for FIELD in mentionable board; do
   grep -qx "$FIELD: board link present" "$WORK/restore.log" &&
     ok "restore relinked $FIELD and read it back" ||
     bad "restore log has no '$FIELD: board link present' line"

@@ -282,6 +282,10 @@ if (boardInfos.length === 1) {
     patternIdentity: info.pattern?.identity ?? "",
     argumentId: info.input?.id ?? "",
     topicsLinks: Array.isArray(raw.topics) ? raw.topics as unknown[] : [],
+    names: typeof raw.names === "object" && raw.names !== null &&
+        !Array.isArray(raw.names)
+      ? raw.names as Record<string, unknown>
+      : {},
   };
 }
 
@@ -319,7 +323,8 @@ if (unclassified.size > 0) {
 if (board) {
   console.log(
     `board: ${board.fid} (${board.patternIdentity}), ` +
-      `${board.topicsLinks.length} membership links`,
+      `${board.topicsLinks.length} membership links, ` +
+      `${Object.keys(board.names).length} named topics`,
   );
 } else {
   console.log("board: none selected");
