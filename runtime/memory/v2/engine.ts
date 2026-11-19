@@ -1546,6 +1546,16 @@ export type ApplyCommitOptions = {
    * Refused on any other class.
    */
   scopeKeys?: ReadonlyMap<number, string>;
+
+  /**
+   * Makes each `set` of a `system`-class commit end the collaborative fields
+   * of the document it writes, as a `delete` does, where a `set` otherwise
+   * may not change an active field's value: how the server's restore of a
+   * branch rewrites a document some session is editing. An editor finds the
+   * field inactive and starts it again from the restored value. Refused on
+   * any other class.
+   */
+  releasesOperationFields?: boolean;
 };
 
 export type AppliedRevision = {
@@ -2626,7 +2636,6 @@ export const queryOperationField = (
     after,
   }: OperationFieldQuery,
 ): OperationFieldSnapshot => {
-  assertDefaultOperationBranch(branch);
   validateOperationPath(path);
   if (typeof id !== "string" || id.length === 0) {
     throw new ProtocolError("operation field id is malformed");
@@ -2739,7 +2748,6 @@ export const pruneOperationFieldHistory = (
   }: OperationFieldQuery,
 ): OperationHistoryPruneResult =>
   engine.database.transaction((txEngine: Engine) => {
-    assertDefaultOperationBranch(branch);
     validateOperationPath(path);
     if (typeof id !== "string" || id.length === 0) {
       throw new ProtocolError("operation field id is malformed");
@@ -5276,14 +5284,6 @@ const retainedOperationVersion = (
   return row.version === null ? field.version : row.version - 1;
 };
 
-const assertDefaultOperationBranch = (branch: BranchName): void => {
-  if (branch !== DEFAULT_BRANCH) {
-    throw new ProtocolError(
-      "collaborative operation fields only support the default branch",
-    );
-  }
-};
-
 const decodedIntegratedOperations = (
   epoch: number,
   rows: readonly IntegratedOperationRow[],
@@ -5646,7 +5646,6 @@ const applyOperation = (
   },
 ): { resolution: ApplyOpResolution; revisions: AppliedRevision[] } => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
-  assertDefaultOperationBranch(branch);
   validateApplyOperation(operation);
   if (isStreamEntriesDocId(operation.id)) {
     throw new ProtocolError(
@@ -6220,7 +6219,6 @@ const releaseOperationField = (
   },
 ): void => {
   const { branch, operation, principal, sessionId } = options;
-  assertDefaultOperationBranch(branch);
   validateOperationPath(operation.path);
   if (!validateCursor(operation.cursor)) {
     throw new OpCursorMismatchError(
@@ -6376,7 +6374,7 @@ const releaseEntityOperationFields = (
   engine: Engine,
   options: {
     branch: BranchName;
-    operation: DeleteOperation;
+    operation: DeleteOperation | SetOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
@@ -6460,6 +6458,7 @@ const applyCommitTransaction = (
     delegated,
     systemEventActor,
     scopeKeys,
+    releasesOperationFields = false,
     allowEmptyOperations,
     elidedVerdicts = false,
   }: ApplyCommitOptions,
@@ -6776,6 +6775,12 @@ const applyCommitTransaction = (
         );
       }
     }
+  }
+  if (releasesOperationFields && commitClass !== "system") {
+    throw new ProtocolError(
+      "releasing a written document's operation fields is system-commit " +
+        "admission only",
+    );
   }
   if (scopeKeys !== undefined) {
     if (commitClass !== "system") {
@@ -7900,7 +7905,10 @@ const applyCommitTransaction = (
       });
       continue;
     }
-    if (operation.op === "delete") {
+    if (
+      operation.op === "delete" ||
+      (releasesOperationFields && operation.op === "set")
+    ) {
       releaseEntityOperationFields(engine, {
         branch,
         operation,

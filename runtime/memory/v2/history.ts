@@ -259,9 +259,11 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * loop's records. Returns
  * `undefined`, writing nothing, when the two hold the same documents.
  *
- * @throws When either branch does not exist, when `sourceSeq` lies outside
- * `source`'s history, or when a document to restore holds a collaborative
- * field whose value the restore would change.
+ * A collaborative field of a document the commit sets ends there, and its
+ * editors start it again from the restored value.
+ *
+ * @throws When either branch does not exist, or when `sourceSeq` lies outside
+ * `source`'s history.
  */
 export const restoreBranch = (
   engine: Engine.Engine,
@@ -324,5 +326,6 @@ export const restoreBranch = (
       },
       commitClass: "system",
       scopeKeys,
+      releasesOperationFields: true,
     });
   });

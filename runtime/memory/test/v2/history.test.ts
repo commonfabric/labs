@@ -1,8 +1,9 @@
+import { ChangeSet } from "@codemirror/state";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { type BranchName, resolveScopeKey } from "../../v2.ts";
+import { type BranchName, resolveScopeKey, toValuePath } from "../../v2.ts";
 import {
   applyCommit,
   close,
@@ -10,9 +11,14 @@ import {
   deleteBranch,
   type Engine,
   open,
+  queryOperationField,
   read,
 } from "../../v2/engine.ts";
 import { listCommits, restoreBranch } from "../../v2/history.ts";
+import {
+  CODEMIRROR_CHANGESET_CODEC,
+  operationBaselineHash,
+} from "../../v2/operation-codec.ts";
 
 describe("history", () => {
   const space = "did:key:z6Mk-history-space";
@@ -214,6 +220,57 @@ describe("history", () => {
 
       const scopeKey = resolveScopeKey("user", { principal, sessionId });
       expect(read(engine, { id: "of:mine", scopeKey })?.value).toBe("old");
+    });
+
+    it("ends a collaborative field of a document it sets back", () => {
+      const field = { id: "of:text", path: toValuePath(["body"]) };
+      applyCommit(engine, {
+        sessionId,
+        space,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: field.id,
+            value: { value: { body: "a" } },
+          }],
+        },
+      });
+      const then = set("of:other", "marker");
+      applyCommit(engine, {
+        sessionId,
+        space,
+        commit: {
+          localSeq: ++localSeq,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "apply-op",
+            ...field,
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId: "edit:1",
+            base: null,
+            baselineHash: operationBaselineHash("a"),
+            payload: {
+              updates: [{
+                clientId: "editor",
+                changes: ChangeSet.of({ from: 1, insert: "b" }, 1).toJSON(),
+              }],
+            },
+          }],
+        },
+      });
+      expect(queryOperationField(engine, field)).toMatchObject({
+        active: true,
+        materialized: "ab",
+      });
+
+      restore({ sourceSeq: then });
+
+      expect(queryOperationField(engine, field)).toMatchObject({
+        active: false,
+        materialized: "a",
+      });
     });
 
     it("leaves the space's access list as it is", () => {

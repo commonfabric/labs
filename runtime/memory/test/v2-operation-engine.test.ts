@@ -813,7 +813,7 @@ describe("v2-operation-engine", () => {
     }
   });
 
-  it("rejects collaborative fields on child branches", async () => {
+  it("starts a field on a fork from the value the fork inherits", async () => {
     const { engine, path } = await openTestEngine();
 
     try {
@@ -831,59 +831,56 @@ describe("v2-operation-engine", () => {
       });
       createBranch(engine, "feature");
 
-      expect(() =>
-        queryOperationField(engine, {
-          id: "of:branch",
+      expect(queryOperationField(engine, {
+        id: "of:branch",
+        branch: "feature",
+        path: toValuePath(["body"]),
+      })).toMatchObject({
+        branch: "feature",
+        active: false,
+        materialized: "a",
+      });
+
+      applyCommit(engine, {
+        sessionId: "session:feature",
+        commit: {
           branch: "feature",
-          path: toValuePath(["body"]),
-        })
-      ).toThrow(ProtocolError);
-      expect(() =>
-        applyCommit(engine, {
-          sessionId: "session:feature",
-          commit: {
-            branch: "feature",
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "apply-op",
-              id: "of:branch",
-              path: toValuePath(["body"]),
-              codec: CODEMIRROR_CHANGESET_CODEC,
-              submissionId: "feature:1",
-              base: null,
-              baselineHash: operationBaselineHash("a"),
-              payload: {
-                updates: [{
-                  clientId: "feature",
-                  changes: changes(1, 1, "b"),
-                }],
-              },
-            }],
-          },
-        })
-      ).toThrow(ProtocolError);
-      expect(() =>
-        applyCommit(engine, {
-          sessionId: "session:feature-release",
-          commit: {
-            branch: "feature",
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "release-op-field",
-              id: "of:branch",
-              path: toValuePath(["body"]),
-              codec: CODEMIRROR_CHANGESET_CODEC,
-              cursor: { epoch: 1, version: 1 },
-            }],
-          },
-        })
-      ).toThrow(ProtocolError);
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "apply-op",
+            id: "of:branch",
+            path: toValuePath(["body"]),
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId: "feature:1",
+            base: null,
+            baselineHash: operationBaselineHash("a"),
+            payload: {
+              updates: [{
+                clientId: "feature",
+                changes: changes(1, 1, "b"),
+              }],
+            },
+          }],
+        },
+      });
+
+      expect(queryOperationField(engine, {
+        id: "of:branch",
+        branch: "feature",
+        path: toValuePath(["body"]),
+      })).toMatchObject({
+        active: true,
+        cursor: { epoch: 1, version: 1 },
+        materialized: "ab",
+      });
+      expect(read(engine, { id: "of:branch", branch: "feature" })?.value)
+        .toEqual({ body: "ab" });
+      expect(read(engine, { id: "of:branch" })?.value).toEqual({ body: "a" });
       expect(queryOperationField(engine, {
         id: "of:branch",
         path: toValuePath(["body"]),
-      })).toMatchObject({ active: false, operations: [] });
+      })).toMatchObject({ active: false, materialized: "a" });
     } finally {
       close(engine);
       await Deno.remove(path);
