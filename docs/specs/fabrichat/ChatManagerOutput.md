@@ -267,7 +267,10 @@ session that has none is refused.
   offer adds its member to the room's participants by an event of its own,
   which can fail, so the notice stays until the roster lists them. A notice of
   a room this user never joins again stays stored, left out of the list, until
-  a client reports it delivered.
+  a client reports it delivered. A notice of a room the catalog says is deleted
+  is dropped by the manager's next request naming a room, any room, which
+  reads the catalog already. Until then a runtime deriving the list asks the
+  memory server about that room's space, which opens it.
 - **`people`** holds the people this user shares a room with: for each
   principal, the profiles attesting it, read from the roster of each room in
   `rooms` (see [`ChatRoomOutput`](ChatRoomOutput.md#facts)) and keyed by whose

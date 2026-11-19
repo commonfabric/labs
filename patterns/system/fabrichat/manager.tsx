@@ -2477,10 +2477,12 @@ export const FabriChatManagerCore = pattern<
     // deleted room has nothing to tell them either: no one can open the room,
     // and its roster can't be read. `toldNotices` reads the rooms, and
     // `noticesForUser`, which also reads the catalog, reads none, so that a
-    // change to the catalog reads no notice's room. Per user, as
-    // `roomsForUser` is: the roster is read under the reader's access, and a
-    // profile attests no one to a reader its space refuses. Each binding's
-    // name is its cause, as `roomsForUser`'s is.
+    // change to the catalog reads no notice's room; a room act drops a notice
+    // of a room the catalog says is deleted (`dropDeletedNotices()`), so
+    // `toldNotices` asks after a deleted room's space only until then. Per
+    // user, as `roomsForUser` is: the roster is read under the reader's
+    // access, and a profile attests no one to a reader its space refuses.
+    // Each binding's name is its cause, as `roomsForUser`'s is.
     const linkedNotices = computed((): PerUser<LinkedNotice[]> =>
       ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).map(
         linkedNoticeOf,

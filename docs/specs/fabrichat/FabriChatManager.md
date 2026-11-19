@@ -37,7 +37,12 @@ re-type the links to `ChatRoomLink`, which declares the rosters; nothing else
 reads them. `outgoingNotices` leaves those notices out in a derivation of its
 own, which also leaves out a notice of a room the catalog says is deleted, and
 which reads no room, so that a change to the catalog, such as a new room,
-derives the list again without reading any notice's room. `people`
+derives the list again without reading any notice's room. Since the
+derivation that reads the rooms reads no catalog, it asks the memory server
+whether each notice's room's space is deleted, which opens that space; a
+notice of a room the catalog marks deleted is dropped from what the manager
+stores by its next request naming a room, so that the derivation stops
+meeting it. `people`
 re-types each link where it reads that room's roster, in an instance of its
 own per room whose argument holds the handle, so no list the manager stores
 types a room as more than a handle; a reader that syncs such a list would walk
