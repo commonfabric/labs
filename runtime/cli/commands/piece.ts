@@ -1494,6 +1494,9 @@ const EX_COMP_PIECE = `${EX_COMP} --cell ${EX_PIECE}`;
  */
 const CELL_FLAG = `"--cell" (or "--piece")`;
 
+const VERSION_ENTRY_HELP =
+  "The entry file whose version history this deploy continues, when the file deployed is a copy of it (a snapshot in a temporary directory).";
+
 const NO_INDEX_VERSION_HELP =
   "Keep no version of this deploy in the pattern index, and do not wait on it.";
 
@@ -2527,6 +2530,7 @@ export const piece = targetOptions(
     "Create the piece from this published pattern instead of local source.",
     {
       conflicts: [
+        "version-entry",
         "main-export",
         "root",
         "repository",
@@ -2545,6 +2549,7 @@ export const piece = targetOptions(
     "Base URL of the pattern index --from-index reads.",
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
+  .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2708,6 +2713,7 @@ export const piece = targetOptions(
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
+  .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3611,6 +3617,12 @@ export interface PieceCLIOptions {
 
   /** `setsrc` and `new`: `false` under `--no-index-version`. */
   indexVersion?: boolean;
+
+  /**
+   * `setsrc` and `new`: the entry whose version history the deploy
+   * continues, in place of the file deployed.
+   */
+  versionEntry?: string;
   json?: boolean;
 }
 
@@ -5291,6 +5303,27 @@ export async function recordVersionInIndex(
 }
 
 /**
+ * The entry whose lineage a deploy of `main` continues: `--version-entry`
+ * when given, else `main` itself.
+ *
+ * @throws ValidationError for `--version-entry` beside `--no-index-version`,
+ * which keeps no version to place in a lineage.
+ */
+function versionEntryOf(
+  options: Pick<PieceCLIOptions, "indexVersion" | "versionEntry">,
+  main: string,
+): string {
+  if (options.versionEntry === undefined) return absPath(main);
+  if (options.indexVersion === false) {
+    throw new ValidationError(
+      "--version-entry names the history a version continues; --no-index-version keeps none.",
+      { exitCode: 1 },
+    );
+  }
+  return absPath(options.versionEntry);
+}
+
+/**
  * Records no version, for `--no-index-version`: a deploy in a tight edit
  * loop makes no index call and never waits on the index.
  */
@@ -5475,7 +5508,7 @@ export async function newPieceFromCommand(
   const version = main === undefined ? undefined : versionRecorder(
     options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
-    absPath(main),
+    versionEntryOf(options, main),
     undefined,
     deps.note ?? note,
   );
@@ -5869,7 +5902,7 @@ export async function applyPieceSourceCommandAction(
     options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) =>
         recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
-    absPath(mainPath),
+    versionEntryOf(options, mainPath),
     options.origin,
     deps.warn ?? note,
   );
