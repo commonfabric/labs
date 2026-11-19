@@ -522,6 +522,40 @@ export const Outer = pattern<{ title: string }>(({ title }) => {
 }
 
 #[test]
+fn a_read_through_the_output_of_a_selected_reference_is_a_dynamic_read_of_the_link() {
+    // PL §1.1, `DynamicReads`: "The links followed from a reference: ...
+    // for a call in the reactive tier, one that is an output of the
+    // instance". A cone that reads below the reference another cone's
+    // `select` passed on, and a kept output at a path below it, read
+    // through the link the output stores, which no slot names: each has a
+    // `dynamic` node of kind `link` through that output, which the
+    // executor does not report, so the runtime bounds it by the join of
+    // the transaction.
+    let analysis = program(
+        r#"import { computed, pattern } from "commonfabric";
+export const P = pattern<{ room?: { messages: string[]; name: string }; other: { messages: string[]; name: string } }>(({ room, other }) => {
+  const chosen = room ?? other;
+  const count = chosen.messages.length;
+  const named = computed(() => chosen.name.toUpperCase());
+  return { count, named };
+});
+"#,
+    );
+    let plan = plan_of(&analysis, "P");
+    let reads = plan["dynamicReads"].as_array().expect("dynamicReads");
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0]["why"]["kind"], json!("link"));
+    let chosen = reads[0]["why"]["through"]["output"]
+        .as_u64()
+        .expect("an output");
+    assert_eq!(plan["outputs"][chosen as usize]["path"], json!(["count"]));
+    for name in ["count", "named"] {
+        let template = interim_template(&plan, name);
+        assert!(template.contains("dynamic(link)"), "{name}: {template}");
+    }
+}
+
+#[test]
 fn what_a_body_of_another_module_returns_is_resolved_in_that_module() {
     // A body defined in one module and used in another: the identifiers
     // of what it returns are resolved in the module it is written in.

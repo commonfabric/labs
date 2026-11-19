@@ -1572,10 +1572,16 @@ impl<'a> Emitter<'_, '_, 'a> {
             node["body"] = json!({ "op": "slot", "slot": slot });
             return Some(node);
         }
-        if let Some(passed) = self.values[value].passed.clone() {
+        if !(path.is_empty() && class == "identity") {
             let here = self.cone.is_none_or(|cone| cone == self.values[value].cone);
-            if here && !(path.is_empty() && class == "identity") {
+            if let (Some(passed), true) = (self.values[value].passed.clone(), here) {
                 return self.passed_template(&passed, path, class);
+            }
+            if !here && self.holds_reference(value) {
+                return Some(joined(vec![
+                    self.template_by_reference(value)?,
+                    self.through_output(value),
+                ]));
             }
         }
         let Some(entries) = &self.values[value].entries else {
@@ -1624,6 +1630,57 @@ impl<'a> Emitter<'_, '_, 'a> {
             branches.push(Some(branch));
         }
         select_node(passed.selector, passed.condition.clone(), branches)
+    }
+
+    /// Whether a value can hold a reference it passes on: its template is
+    /// an `identity` slot, a `select` with such a branch, or the output of
+    /// a value that holds one.
+    fn holds_reference(&self, value: usize) -> bool {
+        fn passes(emitter: &Emitter<'_, '_, '_>, template: &Value, depth: u32) -> bool {
+            if depth > 16 {
+                return true;
+            }
+            match template["op"].as_str() {
+                Some("slot") => template["slot"]
+                    .as_u64()
+                    .and_then(|slot| emitter.slots.get(slot as usize))
+                    .is_some_and(|slot| slot.2 == "identity"),
+                Some("select") => template["branches"]
+                    .as_array()
+                    .is_some_and(|branches| branches.iter().any(|b| passes(emitter, b, depth + 1))),
+                Some("shared") => match template["$held"].as_u64() {
+                    Some(held) => HELD_TWICE.with(|known| {
+                        let found = known.borrow().get(held as usize).cloned();
+                        found.is_some_and(|found| passes(emitter, &found, depth + 1))
+                    }),
+                    None => false,
+                },
+                Some("output") => template["$template"]
+                    .as_u64()
+                    .and_then(|other| emitter.values.get(other as usize))
+                    .and_then(|other| other.template.as_ref())
+                    .is_some_and(|other| passes(emitter, other, depth + 1)),
+                _ => false,
+            }
+        }
+        self.values[value]
+            .template
+            .as_ref()
+            .is_some_and(|template| passes(self, template, 0))
+    }
+
+    /// The `dynamic` node of the reads that follow the reference the
+    /// output of `value` holds (PL §1.1, `DynamicReads`, "one that is an
+    /// output of the instance"). A reader in another cone than the
+    /// `select` that chose the reference, or a kept output at a path below
+    /// it, reads through the link the output stores, at addresses no slot
+    /// of the plan names. The executor reports no address for it, so the
+    /// runtime takes the transaction's join as its bound.
+    fn through_output(&mut self, value: usize) -> Value {
+        let reads = self.dynamic(json!({
+            "why": { "kind": "link", "through": { "output": { "$value": value } } },
+        }));
+        json!({ "op": "dynamic", "reads": reads })
     }
 
     /// The template of `place` read at `path` below it with `class`, with
@@ -6284,8 +6341,17 @@ impl<'a> Emitter<'_, '_, 'a> {
 
     fn keep(&mut self, path: &mut Vec<String>, place: &Place) {
         match place {
-            Place::Value(value, _) => {
+            Place::Value(value, below) => {
                 self.values[*value].kept.push(path.clone());
+                // The output is kept at a path below the reference a
+                // `select` passed on: what is stored there is read
+                // through the link.
+                if !below.is_empty() && self.holds_reference(*value) {
+                    let through = self.through_output(*value);
+                    if let Some(template) = self.values[*value].template.take() {
+                        self.values[*value].template = Some(joined(vec![template, through]));
+                    }
+                }
             }
             Place::Record(fields) => {
                 for (name, member) in fields {
