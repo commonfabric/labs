@@ -9423,3 +9423,119 @@ the executor. `FA` is `footprint-analysis.md`.
      first two follow from the design branch merged into this one, the last
      two from `system/fabrichat/room.tsx` of the main branch.
 
+539. **The program of Topics is seven files, and the crate accepts it after a
+     rewrite that the documents require.** Besides the five files of
+     `apps/topics/` and `product/collection-naming/` the board names, the
+     topic imports `product/collection-naming/allocator.ts` and
+     `system/profile-face/profile-face.ts`; without the last, `profileFace`
+     is a call the emitter does not resolve. With all seven the board had 6
+     type errors, the topic 34, `mentionable.ts` 1, and the topic 72 writes
+     through a handle the emitter cannot name. The crate fixes of notes 540
+     and 541 removed 3 of them. The rest are refused by rulings, and
+     `compare/topics/rewrite.patch` (88 lines added, 105 removed, in six of
+     the files) is the smallest rewrite of the source that removes them;
+     `compare/topics/tree.ts` applies it to a copy of the seven files.
+     After it the crate reports no error, and both patterns emit with no
+     unsupported construct.
+     - _A structural type is not a handle_ (LS §7.5.1, ruling 23 of the
+       open questions): six helpers declare `{ get(): T }` or
+       `{ get(); key() }` and are given cells: `mentionListsOf` and
+       `cardRowsOf` of the board, `isElementOf` of the topic (five calls),
+       `mentionableRowsOf`, `recordNames`, and the namespace
+       (`NamesMapCell` of `allocator.ts`, two calls of `createNamed`).
+       Each declares `ReadonlyCell<T>`, and the namespace `Writable<NamesMap>`.
+     - _A cell of a view of `T`_ (LS §7.5): `profileFace` declares
+       `Cell<ProfileFaceFields>` and is given a cell of a profile with more
+       fields; it reads only, and declares `ReadonlyCell`.
+     - _A kind test narrows nothing on a data position typed `unknown`_ (LS
+       §7.8, by ruling): the topic reads `createdByName` and a comment's
+       `authorName`, both declared `unknown`, after `typeof x === "string"`.
+       Both are declared `string`, as LS §7.8 has for "a key of older data
+       that code reads as a string".
+     - _A mapped type_ (`subset-type:mapped`): `StampsRead<K>` is written
+       `Readonly<Record<K, number | undefined>>`.
+     - _An import of `commonfabric/schema` with no bindings_
+       (`module-scope:import-form`) is removed.
+     - _A record built in the body is no place_ (LS §7.5.2): the topic
+       builds `upgrade = { topicStateVersion, createdByName, ... }` and
+       hands it to ten handlers and a `lift` that declare
+       `Writable<TopicUpgradeState>`, and reads it with `upgrade.get()`.
+       Each declares `TopicUpgradeState`, the record of handles, which is
+       bound path by path to the inputs, the handlers' schemas drop
+       `asCell` at `upgrade`, and `upgrade.get()` is `upgrade`. The members
+       of `TopicUpgradeState` hold the types of the inputs they are bound
+       to (`createdBy`, `comments`), since a writable handle holds the type
+       of its place. This is what made the 72 writes nameable: each is
+       through a member of the record, at a static path of the binding's
+       state.
+     Today's runtime does not compile the rewritten source, for two
+     reasons the documents do not cover: `Cell<T>` is not assignable to
+     `ReadonlyCell<T>` in `base/api/index.ts` (`CELL_BRAND` "cell" against
+     "readonly"), where LS §7.5.1 says it is; and the `lift` with an
+     explicit schema argument (`migrateTopicState`) fails its overload
+     once the types change. So the comparison runs the rewritten source on
+     the executor and the source of the repository on today's runtime
+     (`COMPARE_TODAY_ROOT`), which also shows that the rewrite keeps the
+     values.
+540. **Crate defects that Topics found, fixed.** Each with a test.
+     - A condition narrowed nothing in the branch where it fails when the
+       other branch assigns the `let` (`if (!target) { target = ... } else
+       if (target.get() ...)`); an assignment in the untaken branch, or in
+       a branch that leaves the block, no longer counts (`tests/narrowing.rs`).
+     - A parameter `readonly (T | undefined)[]` bound no type argument, so
+       `distinctByIdentity(Array.from(sources))` was `object[]`; a union of
+       the parameter with `undefined` or `null` now binds it to the
+       argument's element type without those (`tests/inference.rs`).
+     - A closure that a function of another module calls lost the names it
+       captures from the body: `addTopic` calls `createNamed(names,
+       (allocated) => Topic({ ..., mentionable, boardCrossrefs: pivot }))`,
+       and the action's state had no `mentionable`, so its event failed
+       with "mentionable is not defined". A name is looked up in the frames
+       of its own module below a frame of another, and is a capture when it
+       is written in the body's text and declared outside it
+       (`tests/footprint_calls.rs`). The output of `emit --corpus` on the
+       main branch is the same before and after.
+541. **Provisional decisions P31 and P32.** P31: an entry of `Body.reads`
+     at a position the body declares as a handle has `handle: true`
+     (`docs/plans/compiled-pattern-language.md`, P31). ES §2.4 takes that
+     type from `Slot.schema`, and the crate's slot holds the type of the
+     place, shared by every body that reads the place one way: in Topics
+     `migrateTopicState` declares a handle at `createdBy` and `createdByOf`
+     a value, and the executor handed `createdByOf` a handle. P32:
+     `equalsKey`, which `base/api` exports and `builtin-inventory.md` does
+     not list, is a built-in of tier F with the footprint of one operand of
+     `equals` and the type `string | undefined`.
+542. **Executor defects that Topics found, fixed.** Each with a test in
+     `exec/test/`.
+     - An entry at `*` where the body declares a handle (`ReadonlyCell<T>[]`
+       of `crossrefTable`, `cardRowsByActivity` and `mentionableIndex`, and
+       `Record<string, ReadonlyCell<unknown>>` of `namesTable`) was handed
+       values; each element and each member is now a handle to its
+       position. Without it `namesTable` stored a copy of every topic, and
+       each copy the topics it mentions: 354 documents for one edit at 10
+       topics.
+     - An array that a body computed whole is a handle where another body
+       declares one (`crossrefIndexOf({ rows: pivot })`): the handle names
+       the path of the result where the output is kept, or the document of
+       the output.
+     - A cell made under a cause was one cell per cause for the whole
+       instance, so `cardRowsByActivity` and `crossrefTable`, which both
+       make a row with `Writable.for(topic)`, wrote one cell per topic in
+       turn: every edit wrote every row, and the result's rows read the
+       other lift's value. It is now the cell of the cause in the run that
+       makes it (PL §1.3).
+     - A read that follows links gave each position a copy of what it links
+       to, and the mentions of the topics form a graph in which each topic
+       is reached along many paths: loading 20 topics took 12 s, and 40
+       overflowed the stack. A document that two links of one read reach is
+       now given once. A read through a handle or of a slot is made under
+       the declared schema, which leaves out a member the schema does not
+       declare and gives a link at a position typed `unknown` as a
+       reference stand-in (LS §7.8, ES §2.4), and the computed part of a
+       body's argument is narrowed to the entries of `Body.computed`: a
+       stored value at a path with no `value` entry at or below it is read
+       with its references as stand-ins. At 1,000 topics the unnarrowed
+       read of the pivot followed every topic along its mentions and
+       overflowed the stack.
+     - `equalsKey` and `Writable.for` of a reference (keyed by its
+       identity).

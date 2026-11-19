@@ -2456,7 +2456,11 @@ export class Instance {
         };
       }
     }
-    for (const { id, kind, value } of options.documents ?? []) {
+    // The documents that exist before the instance are the root's: an
+    // instance a body makes shares its store and makes none of them.
+    for (
+      const { id, kind, value } of options.parent ? [] : options.documents ?? []
+    ) {
       this.store.create(id, kind, value);
     }
     // The creation of an instance by something that is no handler is a

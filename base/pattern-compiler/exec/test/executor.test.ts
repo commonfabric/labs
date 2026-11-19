@@ -5436,6 +5436,34 @@ describe("an instance a function body makes", () => {
   const streamAt = (instance: Instance, path: string[]) =>
     new Handle(instance, new Ref("result", path), undefined, undefined, []);
 
+  it("writes none of the documents the executor was started with when it is made", async () => {
+    // `options.documents` are the root instance's: the instance a body
+    // makes shares the store and makes none of them again.
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/instantiate.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const instance = new Instance(
+      patterns.find((pattern) => pattern.name === "default")!,
+      { note: "n" },
+      {
+        artifacts: (id) =>
+          patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+        documents: [{ id: "given", kind: "input", value: { kept: true } }],
+      },
+    );
+    const before = instance.transactions.length;
+
+    expect(instance.send(ADD, { title: "a" }).committed).toBe(true);
+    expect(
+      instance.transactions.slice(before).flatMap(({ written }) => written),
+    ).not.toContain("given");
+  });
+
   it("is an instance of the callee's plan, with documents of its own in the same store", async () => {
     const instance = await start();
     const before = instance.documents();
