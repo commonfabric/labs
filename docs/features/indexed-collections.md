@@ -281,9 +281,18 @@ rather than counted because a maintenance transaction can be run again, and a
 count would then repeat: a query that asked at that count, before the rows
 were there, would take itself to be current.
 
-A serving runtime commits in waves and can withdraw a maintenance transaction
-that ended well. The members that transaction re-read are then owed again,
-through the documents they were read from.
+A serving runtime commits in waves: the transactions that ended together go
+to storage as one commit. A commit may write one database only, and a wave
+that is refused takes every transaction in it along. So the maintenance
+events of a space run one at a time, each after the wave of the one before
+has settled, whichever collection they belong to. A maintenance transaction
+that a wave withdraws after it ended well is owed again: its members through
+the documents they were read from, so the next drain asks the database what
+it holds for them. After three withdrawals in a row, what is owed waits for
+the next write to the collection.
+
+A handler that writes one collection in the same wave as maintenance writing
+another is refused with it, and a served event is not run again.
 
 A cell bound to a named `_cf_link` parameter of such a query is bound as the
 reference its member is stored under, so any link to a member looks it up. A
