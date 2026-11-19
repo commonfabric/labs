@@ -4,7 +4,6 @@
  * the clinic owner, and the ssn column additionally carries a static `pii`
  * label. A diagnosis query fits its declared ceiling and shows rows, while an
  * ssn query over the same rows is refused.
- *
  * Demonstrates how per-row and per-column labels combine in `cfSqlite`, with
  * `maxConfidentiality` and `onExceed: "fail"`.
  */

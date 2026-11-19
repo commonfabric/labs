@@ -1,7 +1,6 @@
 /**
  * A page layout with a header, footer, left and right sidebars, and two main
  * content panels that show as tabs on narrow screens.
- *
  * Demonstrates `cf-screen` with `header` and `footer` slots and
  * `cf-autolayout` with `tabNames` and `left`/`right` slotted sidebars.
  */

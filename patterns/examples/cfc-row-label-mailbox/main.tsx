@@ -4,7 +4,6 @@
  * its own sender, recipients, and the database owner. It shows an inbox of all
  * rows, a skim query that drops rows above its ceiling, a `COUNT(*)` that
  * refuses, and a compose form whose insert is checked by the same rule.
- *
  * Demonstrates data-derived per-row labels with `cfSqlite` tables, output
  * ceilings with `onExceed: "skip"`, and fail-closed aggregates and writes.
  */

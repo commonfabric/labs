@@ -2,7 +2,6 @@
  * Steps through three embedded pieces (two counters and a note) with Prev and
  * Next buttons that show the selected piece, alongside a `cf-picker` control
  * bound to the same selection.
- *
  * Demonstrates `cf-picker` with `$items` and `$selectedIndex` bound to cells,
  * and instantiating other patterns as items to render.
  */

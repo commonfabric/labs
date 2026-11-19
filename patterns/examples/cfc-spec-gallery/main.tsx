@@ -4,7 +4,6 @@
  * that prepare a result and then authorize it separately, plus lighter cards
  * such as returning a membership number, accepting an invite, and fact-check
  * and provenance disclosures.
- *
  * Demonstrates trusted surfaces that authorize actions, `cf-cfc-label` showing
  * the label on protected values, and write authorization with
  * `WriteAuthorizedBy`.

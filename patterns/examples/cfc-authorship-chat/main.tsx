@@ -3,7 +3,6 @@
  * author claim matches its authorship integrity, one that claims a different
  * author than the integrity names, and an imported one with no integrity at
  * all.
- *
  * Demonstrates `cf-cfc-authorship` checking a message's persisted
  * `authored-by` integrity label before rendering a trusted avatar.
  */
