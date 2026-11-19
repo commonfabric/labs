@@ -7009,6 +7009,20 @@ export class Instance {
     }
     const at: (Position | Ref)[] = host.reads.slice(from);
     if (slot.observes === "identity" && found instanceof Ref) at.push(found);
+    // What a `reduce` computed is read from its memo entry, which reads no
+    // position: the slot is bound to every position the steps of the
+    // `reduce` read, in this transaction or an earlier one.
+    const operation = slot.root.kind === "operation"
+      ? slot.root.operation ?? -1
+      : -1;
+    if (
+      at.length === 0 && this.#reduces.has(operation) &&
+      host.accumulator?.operation !== operation
+    ) {
+      for (const read of this.reduced(operation)(host.context).reads) {
+        at.push(read);
+      }
+    }
     const held = host.bound.get(index);
     if (held !== undefined && "at" in held) {
       for (const position of at) held.at.push(position);

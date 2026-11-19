@@ -814,6 +814,18 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(new Set(minted(within.label)).size).toBe(2);
   });
 
+  it("binds the slots of a `reduce` over an array of plain values in place a cell holds, and commits", async () => {
+    const { refused, label } = await commitWithOptionOn(
+      "reduce-entries",
+      { entries: [{ amount: 1 }, { amount: 2 }] },
+      ["total"],
+    );
+    expect(refused).toEqual([]);
+    expect(JSON.stringify(label?.confidentiality ?? [])).toContain(
+      '"input:entries"',
+    );
+  });
+
   for (
     const [fixture, argument, path, source] of [
       ["pass-through", { secret: "s", flag: true }, ["whole"], "secret"],
