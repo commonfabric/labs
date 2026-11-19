@@ -151,6 +151,7 @@ import {
   PatternIndexStore,
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
+import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 import type {
   DeployedSource,
@@ -2546,7 +2547,7 @@ export const piece = targetOptions(
   )
   .option(
     "--pattern-index-url <url:string>",
-    "Base URL of the pattern index --from-index reads.",
+    "Base URL of the pattern index --from-index reads; the deployment's by default.",
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
@@ -5462,12 +5463,10 @@ function newPieceEntry(
   if (patternId === "") {
     throw new ValidationError("--from-index requires a non-blank pattern id.");
   }
-  const patternIndexUrl = options.patternIndexUrl?.trim();
-  if (patternIndexUrl === undefined || patternIndexUrl === "") {
-    throw new ValidationError(
-      "--from-index needs the pattern index to read from: pass --pattern-index-url <url>, or set CF_PATTERN_INDEX_URL.",
-    );
-  }
+  // The same index every cf pattern command uses: the flag, else
+  // CF_PATTERN_INDEX_URL, else the deployment's.
+  const patternIndexUrl = options.patternIndexUrl?.trim() ||
+    DEFAULT_PATTERN_INDEX_URL;
   // The index client appends a function name to the base's path, so it
   // refuses a base with a query or fragment; refused here too, before the
   // space root is touched.

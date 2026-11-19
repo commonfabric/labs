@@ -11,6 +11,7 @@ import {
   recordIndexedPiece,
 } from "../commands/piece.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 
@@ -119,14 +120,21 @@ describe("piece new --from-index", () => {
       expect(recorded).toEqual([[INDEX_URL, "fid1:created", "pat-1"]]);
     });
 
+    it("reads the deployment's index when no index URL is given", async () => {
+      for (const options of [{}, { patternIndexUrl: "  " }]) {
+        const { recorded } = await run(
+          { fromIndex: "pat-1", ...options },
+          undefined,
+        );
+
+        expect(recorded).toEqual([
+          [DEFAULT_PATTERN_INDEX_URL, "fid1:created", "pat-1"],
+        ]);
+      }
+    });
+
     for (
       const [name, options, main, message] of [
-        [
-          "no index URL",
-          { fromIndex: "pat-1" },
-          undefined,
-          "--from-index needs the pattern index to read from",
-        ],
         [
           "an index URL that does not parse",
           { fromIndex: "pat-1", patternIndexUrl: "not a url" },
