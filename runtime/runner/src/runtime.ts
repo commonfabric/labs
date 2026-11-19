@@ -3060,7 +3060,11 @@ export class Runtime {
     wrapped.setCfcPolicyEvaluationMode(this.cfcPolicyEvaluation);
     wrapped.setCfcLabelMetadataProtectionMode(this.cfcLabelMetadataProtection);
     wrapped.setCfcDeclaredMonotonicityMode(this.cfcDeclaredMonotonicity);
-    wrapped.setCfcPlanLabels(this.experimental.compiledPatterns === true);
+    // Only a serving runtime stores labels from templates: a client's
+    // speculative run is never the stored result.
+    wrapped.setCfcPlanLabels(
+      this.experimental.compiledPatterns === true && this.servingPosture,
+    );
     wrapped.setCfcSinkMaxConfidentiality(this.cfcSinkMaxConfidentiality);
     wrapped.setCfcPolicySnapshot(this.cfcPolicySnapshot);
     wrapped.setCfcTrustConfig(this.cfcTrustConfig);

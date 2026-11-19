@@ -45,10 +45,11 @@ const space = signer.did();
 /**
  * A plan with one body whose write edges take slot 0, slot 1, slot 2 (bound
  * to a staged label in the cases that use it), a selection between slots 0
- * and 1 on slot 2, and a fold of slot 3 over the elements of collection 0.
+ * and 1 on slot 2, a fold of slot 3 over the elements of collection 0, and
+ * a constant; and one output, of slot 0.
  */
 const plan: CompiledPlan = {
-  outputs: [],
+  outputs: [{ template: { op: "slot", slot: 0 } }],
   bodies: [{
     writes: [
       { template: { op: "slot", slot: 0 } },
@@ -69,6 +70,7 @@ const plan: CompiledPlan = {
           body: { op: "slot", slot: 3 },
         },
       },
+      { template: { op: "const" } },
     ],
   }],
   cones: [],
@@ -87,6 +89,7 @@ const withRuntime = async (
     apiUrl: new URL(import.meta.url),
     storageManager,
     experimental: { compiledPatterns: enabled },
+    servingPosture: true,
   });
   try {
     await body(runtime);
@@ -483,6 +486,7 @@ describe("cfc-plan-labels", () => {
         target: CfcAddress,
         runtime: Runtime,
       ) => void,
+      writeRoot = false,
     ) => {
       let outcome:
         | {
@@ -539,8 +543,16 @@ describe("cfc-plan-labels", () => {
         tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
         tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
         const cell = runtime.getCell(space, "plan-target", undefined, tx);
-        cell.key("a").set("x");
-        cell.key("b").set("y");
+        if (writeRoot) {
+          tx.writeValueOrThrow({ ...link, path: [] }, {
+            a: "x",
+            b: "y",
+            c: "z",
+          });
+        } else {
+          cell.key("a").set("x");
+          cell.key("b").set("y");
+        }
         record(tx, identity, target, runtime);
         const { error } = await tx.commit().settled;
         const reader = runtime.edit();
@@ -592,6 +604,38 @@ describe("cfc-plan-labels", () => {
     it("stores each path's own source's label with the option on", async () => {
       const { error, value, shape } = await commitWrites(true, recordBoth);
       expect(error).toBeUndefined();
+      expect(value["/a"]).toEqual(["secret-a"]);
+      expect(value["/b"]).toEqual(["secret-b"]);
+      expect(shape["/a"]).toEqual(["secret-a"]);
+      expect(shape["/b"]).toEqual(["secret-b"]);
+    });
+
+    it("stores each covered path's own label below a path written whole, beside the join there", async () => {
+      const { error, value, shape } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          recordBoth(tx, identity, target);
+          tx.recordCfcWritePolicyInput(
+            {
+              kind: "plan-write",
+              target: { ...target, path: ["c"] },
+              compiledPattern: identity,
+              record: { body: 0, write: 5 },
+              instance: target.id,
+              keys: [],
+              slots: {},
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        true,
+      );
+      expect(error).toBeUndefined();
+      // A covered path whose label is empty stores entries all the same,
+      // which replace the written path's join down there.
+      expect(value["/c"]).toEqual([]);
+      expect(shape["/c"]).toEqual([]);
+      expect(value["/"]).toEqual(["secret-a", "secret-b"]);
       expect(value["/a"]).toEqual(["secret-a"]);
       expect(value["/b"]).toEqual(["secret-b"]);
       expect(shape["/a"]).toEqual(["secret-a"]);
@@ -800,6 +844,34 @@ describe("cfc-plan-labels", () => {
       const small = await foldCounters(10, groups(10));
       expect(small.planTemplatesInstantiated).toBeGreaterThan(0);
       expect(await foldCounters(1000, groups(1000))).toEqual(small);
+    });
+
+    it("takes for a slot bound to an output the label of that output, from the inputs its group reports", async () => {
+      // The result of another per-element construct: the element's slot
+      // reads output 0 of the upstream element, whose own slot read the
+      // changed element.
+      await foldCounters(10, (list, last) => ({
+        groups: [
+          {
+            slots: { 3: { chain: [address("of:src-a")], observes: "value" } },
+            count: 9,
+          },
+          {
+            slots: { 3: { output: 0 } },
+            outputs: {
+              0: {
+                slots: {
+                  0: {
+                    chain: [address(list, ["items", last])],
+                    observes: "value",
+                  },
+                },
+              },
+            },
+            count: 1,
+          },
+        ],
+      }));
     });
   });
 });

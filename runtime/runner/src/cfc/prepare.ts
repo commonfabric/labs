@@ -4952,7 +4952,9 @@ export const planLabelsFor = (
   },
 ): PlanLabels => {
   const writes = planWritesByTarget(tx);
-  if (writes.size === 0) return { byTarget: new Map(), reasons: [] };
+  if (writes.size === 0) {
+    return { byTarget: new Map(), paths: new Map(), reasons: [] };
+  }
   const registry = tx.compiledPlans(runtimeWritePolicyAuthorization)!;
   // The transaction's flow observations by document, as the join counts
   // them: a read the write path makes of its own destination is none.
@@ -12350,7 +12352,7 @@ export function* prepareBoundaryCommitSteps(
   // off.
   const planLabels = flowPersist
     ? planLabelsFor(tx, flowJoin)
-    : { byTarget: new Map(), reasons: [] };
+    : { byTarget: new Map(), paths: new Map(), reasons: [] };
   for (const reason of planLabels.reasons) reasons.push(reason);
   // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
   // The label stamped at a path a compiled pattern's write covers is the
@@ -13734,6 +13736,24 @@ export function* prepareBoundaryCommitSteps(
         }
         derivedStampPaths.push(path);
       }
+      // A path a compiled pattern's write covers below a path written whole
+      // stamps its own label, which replaces the written path's join down
+      // within each class there. The written path keeps the join: what it
+      // holds outside the covered paths no record labels.
+      if (planLabels.byTarget.has(key)) {
+        const stamped = new PathPrefixIndex();
+        for (const path of derivedStampPaths) stamped.add(path);
+        const seen = new Set(derivedStampPaths.map(pathKey));
+        for (const path of planLabels.paths.get(key) ?? []) {
+          if (
+            path.length > 0 && !seen.has(pathKey(path)) &&
+            stamped.hasPrefixOf(path.slice(0, -1))
+          ) {
+            seen.add(pathKey(path));
+            derivedStampPaths.push(path);
+          }
+        }
+      }
       // H4 writer-fit (SC-18b, §8.12.4 `canWrite`): the per-tx join landing
       // below as this target's `derived` value component is the measurement
       // of the written value's actual taint, and canWrite demands it fit the
@@ -14131,9 +14151,14 @@ export function* prepareBoundaryCommitSteps(
         // reader consuming both as covering entries sees today's label or
         // a wider one — additively safe, no dial (C0 §9).
         const pathLabel = flowLabelAt(key, path);
+        // A covered path stores its entries even where its label is empty,
+        // so that they replace a written ancestor's join down there.
+        const coveredPath = planLabels.byTarget.get(key)?.has(
+          planLabelPathKey(path),
+        ) === true;
         if (
           pathLabel.confidentiality.length > 0 ||
-          pathLabel.integrity.length > 0
+          pathLabel.integrity.length > 0 || coveredPath
         ) {
           const stamp = markFlowStampEntry({
             path,
@@ -14167,7 +14192,7 @@ export function* prepareBoundaryCommitSteps(
         const hasShapeEntry = frozenShapePaths.has(pathKey(path));
         if (!hasShapeEntry) {
           const shapeConfidentiality = frozenConfidentialityFor(path);
-          if (shapeConfidentiality.length > 0) {
+          if (shapeConfidentiality.length > 0 || coveredPath) {
             frozenShapePaths.add(pathKey(path));
             persistedLabelEntries.push(markFlowStampEntry({
               path,

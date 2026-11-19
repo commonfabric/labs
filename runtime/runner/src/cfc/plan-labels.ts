@@ -105,8 +105,19 @@ export interface PlanLabels {
    */
   readonly byTarget: ReadonlyMap<string, ReadonlyMap<string, InternedLabel>>;
 
+  /** The canonical path of each covered path, by document key. */
+  readonly paths: ReadonlyMap<string, readonly (readonly string[])[]>;
+
   /** Refusal reasons; the commit is refused when there is any. */
   readonly reasons: readonly string[];
+}
+
+/**
+ * The inputs of one place a template is instantiated at, with the inputs
+ * reported for each output it or an enclosing place names.
+ */
+interface PlaceInputs extends TemplateInputs {
+  reported(output: number): PlanInputs | undefined;
 }
 
 /** Thrown inside the pre-pass for a report the transaction does not back. */
@@ -236,10 +247,13 @@ export const instantiatePlanLabels = (
   };
 
   /**
-   * The label of a slot: the observation at the end of its chain, with the
-   * pointer labels of the link positions before it joined in.
+   * The label of a slot bound to an address: the observation at the end of
+   * its chain, with the pointer labels of the link positions before it
+   * joined in.
    */
-  const slotLabel = (binding: SlotBinding): InternedLabel => {
+  const slotLabel = (
+    binding: Exclude<SlotBinding, { output: number }>,
+  ): InternedLabel => {
     if ("staged" in binding) return stagedLabel(binding.staged);
     const { chain, observes } = binding;
     if (chain.length === 0) {
@@ -324,12 +338,18 @@ export const instantiatePlanLabels = (
     plan: CompiledPlan,
     write: PlanWrite,
     place: PlanInputs,
-    enclosing: TemplateInputs | undefined,
-  ): TemplateInputs => {
+    enclosing: PlaceInputs | undefined,
+  ): PlaceInputs => {
     const memberships = new Map<number, InternedLabel>();
-    const self: TemplateInputs = {
+    const self: PlaceInputs = {
+      reported: (output) =>
+        place.outputs?.[output] ?? enclosing?.reported(output),
       slotLabel: (slot) => {
         const binding = place.slots[slot];
+        if (binding !== undefined && "output" in binding) {
+          const label = self.outputLabel(binding.output);
+          return label === NEUTRAL ? table.empty : label;
+        }
         if (binding !== undefined) return slotLabel(binding);
         if (enclosing !== undefined) return enclosing.slotLabel(slot);
         throw new TemplateInstantiationError(`slot ${slot} has no binding`);
@@ -388,7 +408,7 @@ export const instantiatePlanLabels = (
             `output ${output} is not in the plan`,
           );
         }
-        const reported = write.outputs?.[output];
+        const reported = self.reported(output);
         return cached(
           [
             "output",
@@ -457,7 +477,7 @@ export const instantiatePlanLabels = (
     plan: CompiledPlan,
     write: PlanWrite,
     elements: PlanElements,
-    enclosing: TemplateInputs,
+    enclosing: PlaceInputs,
   ): ElementInputs =>
     "uniform" in elements
       ? { uniform: inputsFor(plan, write, elements.uniform, enclosing) }
@@ -514,18 +534,23 @@ export const instantiatePlanLabels = (
   }
   noteWork(env, work, bounds);
   const byTarget = new Map<string, Map<string, InternedLabel>>();
+  const paths = new Map<string, (readonly string[])[]>();
   if (reasons.length === 0) {
     for (const [coveringKey, label] of labels) {
-      const { documentKey, pathKey } = covering.get(coveringKey)!;
-      let paths = byTarget.get(documentKey);
-      if (paths === undefined) {
-        paths = new Map();
-        byTarget.set(documentKey, paths);
+      const { documentKey, pathKey, input } = covering.get(coveringKey)!;
+      let labelsByPath = byTarget.get(documentKey);
+      if (labelsByPath === undefined) {
+        labelsByPath = new Map();
+        byTarget.set(documentKey, labelsByPath);
+        paths.set(documentKey, []);
       }
-      paths.set(pathKey, label);
+      labelsByPath.set(pathKey, label);
+      paths.get(documentKey)!.push(
+        canonicalizeLogicalPath(input.target.path),
+      );
     }
   }
-  return { byTarget, reasons };
+  return { byTarget, paths, reasons };
 };
 
 /** Reports the counts of one pre-pass. */

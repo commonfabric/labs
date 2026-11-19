@@ -1199,13 +1199,17 @@ holds the measurements and the conditions for revisiting.
   `EXPERIMENTAL_FLAG_AUTHORITY` and `"deployment"` in `SHELL_FLAG_SOURCES`,
   since which labels a compiled pattern's writes store is the deployment's
   choice. `Runtime` hands it to each transaction it creates
-  (`setCfcPlanLabels`), which keeps it as `CfcTxState.planLabels` and reports
-  it among the dials of a refused write when it is on.
+  (`setCfcPlanLabels`) only where the runtime is the serving one
+  (`RuntimeOptions.servingPosture`): a client's speculative run is never the
+  stored result, so a client's transactions keep it off. The transaction
+  keeps it as `CfcTxState.planLabels` and reports it among the dials of a
+  refused write when it is on.
 - **Added by.** Bernhard Seefeld, 2026-11-19.
 - **Purpose.** The one option for the compiled pattern language integration
   ([`docs/plans/compiled-pattern-language-integration.md`](../plans/compiled-pattern-language-integration.md)).
-  It gates labels from templates at commit: with it on, the commit
-  preparation stamps a path that a compiled pattern's write covers with the
+  It gates labels from templates at commit: with it on in a serving
+  runtime, the commit preparation stamps a path that a compiled pattern's
+  write covers, at or below a path the transaction wrote, with the
   label instantiated from the plan's label template
   (`runtime/runner/src/cfc/plan-template.ts`,
   `runtime/runner/src/cfc/plan-labels.ts`), in place of the one join over the

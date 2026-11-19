@@ -52,7 +52,26 @@ describe("CFC runtime options", () => {
     }
   });
 
-  it("turns the transaction's plan labels on with compiledPatterns", async () => {
+  it("turns the transaction's plan labels on with compiledPatterns on a serving runtime", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const tx = runtime.edit();
+    try {
+      expect(tx.getCfcState().planLabels).toBe(true);
+    } finally {
+      tx.abort();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("leaves the transaction's plan labels off with compiledPatterns on a runtime that does not serve", async () => {
+    // A client's speculative run is never the stored result.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -61,7 +80,7 @@ describe("CFC runtime options", () => {
     });
     const tx = runtime.edit();
     try {
-      expect(tx.getCfcState().planLabels).toBe(true);
+      expect(tx.getCfcState().planLabels).toBe(false);
     } finally {
       tx.abort();
       await runtime.dispose();

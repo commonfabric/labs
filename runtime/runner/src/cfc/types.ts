@@ -852,16 +852,21 @@ export type WritePolicyInput =
  * Where a compiled pattern's slot is bound: the chain of addresses its
  * observation followed, link positions first and the observed position
  * last, with the observation class it read the last one in; or an address
- * this transaction wrote, whose staged label the slot takes. An address path
- * may hold the segment `*` at an element position, which resolves to the
- * join over the entries it covers.
+ * this transaction wrote, whose staged label the slot takes; or an output of
+ * the plan, whose label the slot takes, instantiated from the inputs that
+ * `outputs` of the same place or of an enclosing one reports for it: the
+ * slot of an element of the result of another per-element construct, which
+ * reads the output of the upstream element and has no stored address. An
+ * address path may hold the segment `*` at an element position, which
+ * resolves to the join over the entries it covers.
  */
 export type SlotBinding =
   | {
     readonly chain: readonly CfcAddress[];
     readonly observes: "value" | "shape" | "followRef";
   }
-  | { readonly staged: CfcAddress };
+  | { readonly staged: CfcAddress }
+  | { readonly output: number };
 
 /** The bindings of a template's slots, by index into the plan's slots. */
 export type SlotBindings = { readonly [slot: number]: SlotBinding };
@@ -887,6 +892,13 @@ export type PlanInputs = {
 
   /** The addresses the reads of each `Plan.dynamicReads` entry read. */
   readonly dynamic?: { readonly [reads: number]: readonly CfcAddress[] };
+
+  /**
+   * The inputs of the cone instance of each output an `output` node or an
+   * output slot binding names here; an enclosing place's answer one this
+   * place does not name.
+   */
+  readonly outputs?: { readonly [output: number]: PlanInputs };
 };
 
 /**
@@ -923,9 +935,6 @@ export type PlanWrite = PlanInputs & {
 
   /** The element keys of the writing cone instance, outermost first. */
   readonly keys: readonly (readonly [collection: number, key: string])[];
-
-  /** The inputs of the cone instances of the named outputs. */
-  readonly outputs?: { readonly [output: number]: PlanInputs };
 };
 
 /**
