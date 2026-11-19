@@ -12,6 +12,7 @@ import {
 import {
   applyCommit,
   close,
+  createBranch,
   type Engine,
   open,
   read,
@@ -192,6 +193,18 @@ describe("applyCommit()", () => {
           patches: [marked("/value/tags", 0, 0, ["x"])],
         }],
         reads: () => [readAt(["value", "counts"])],
+      },
+      {
+        beside: "under a read of another branch alone",
+        operations: () => [{
+          op: "patch",
+          id,
+          patches: [marked("/value/tags", 0, 0, ["x"])],
+        }],
+        reads: () => {
+          createBranch(engine, "elsewhere");
+          return [{ ...readAt(["value"]), branch: "elsewhere" }];
+        },
       },
       {
         beside: "beside another operation on the document",

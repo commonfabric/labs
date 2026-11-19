@@ -348,8 +348,9 @@ export const EnvSchema = z.object({
     "true",
   ).transform((v) => v === "true" || v === "1"),
   // Whether this deployment's memory server advertises `markedSplicesV1`, so
-  // that clients send array changes as marked splices; off unless set to
-  // "true" or "1", and any other spelling refuses startup. Turn it on only
+  // that clients send array changes as marked splices: on for "true" or "1",
+  // off for "false", "0" or no setting, and any other spelling refuses
+  // startup. Turn it on only
   // once every serving worker that may read this deployment's rows, a
   // rollback's included, reads marked splices. See
   // docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`.

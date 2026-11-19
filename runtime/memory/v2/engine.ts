@@ -4625,11 +4625,11 @@ const refuseFractionalSplices = (
  * the indices it overwrote be read back exactly (`overwrittenArrayElements()`):
  *
  * - The commit must carry a recursive read of the array or of a path above
- *   it, confirmed or pending, so that the store refuses the commit where the
- *   array moved since the read, and the splice lands on the array it was
- *   diffed from.
- * - Its document must have no other operation in the commit, where a second
- *   one could change the array around it.
+ *   it, confirmed or pending, on the branch the commit writes, so that the
+ *   store refuses the commit where the array moved since the read, and the
+ *   splice lands on the array it was diffed from.
+ * - Its document instance must have no other operation in the commit, where
+ *   a second one could change the array around it.
  * - Every splice of its array must be marked, and nothing else in its patch
  *   operation may touch the array at or past the lowest index the splices
  *   name, add, remove or move an element of the array, or touch the array
@@ -4638,6 +4638,10 @@ const refuseFractionalSplices = (
  *   array above the array at or before the element the array is in, which
  *   would move the array; whether a container above it is an array is read
  *   from the document as the store holds it.
+ *
+ * `principal` and `sessionId` are the identity the commit writes as, a
+ * delegated commit's acting one, so each operation's instance resolves as
+ * its write does.
  *
  * The runner sends nothing else: it marks only splices it diffed under such a
  * read, sends one operation per document, drops what a splice would cover,
@@ -4656,22 +4660,34 @@ const refuseUnfoundedMarkedSplices = (
   },
 ): void => {
   const { commit, branch, principal, sessionId, scopeKeyByOpIndex } = options;
-  const instanceOf = (operation: { id: string; scope?: CellScope }) =>
-    `${operation.id}\0${normalizeScope(operation.scope)}`;
+  // The instance each operation writes, keyed as the write keys it
+  // (`writeOperation()`): an annotated scope key, or the scope resolved for
+  // the identity the commit writes as, which `principal` and `sessionId` are.
+  const scopeKeyOf = (
+    operation: { scope?: CellScope },
+    opIndex: number,
+  ): string =>
+    scopeKeyByOpIndex.get(opIndex) ??
+      resolveScopeKey(operation.scope, { principal, sessionId });
+  const instanceOf = (
+    operation: { id: string; scope?: CellScope },
+    opIndex: number,
+  ) => `${operation.id}\0${scopeKeyOf(operation, opIndex)}`;
   const operationsByInstance = new Map<string, number>();
-  const documentOperations = commit.operations.filter((
-    operation,
-  ): operation is Exclude<typeof operation, { op: "sqlite" }> =>
-    operation.op !== "sqlite"
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "sqlite") {
+      const instance = instanceOf(operation, opIndex);
+      operationsByInstance.set(
+        instance,
+        (operationsByInstance.get(instance) ?? 0) + 1,
+      );
+    }
+  });
+  // Only a read of the branch the commit writes pins what it writes.
+  const reads = [...commit.reads.confirmed, ...commit.reads.pending].filter(
+    (read) =>
+      (("branch" in read ? read.branch : undefined) ?? branch) === branch,
   );
-  for (const operation of documentOperations) {
-    const instance = instanceOf(operation);
-    operationsByInstance.set(
-      instance,
-      (operationsByInstance.get(instance) ?? 0) + 1,
-    );
-  }
-  const reads = [...commit.reads.confirmed, ...commit.reads.pending];
   const structural = (patch: PatchOp): boolean =>
     patch.op === "add" || patch.op === "remove" || patch.op === "move";
 
@@ -4701,13 +4717,12 @@ const refuseUnfoundedMarkedSplices = (
           branch,
           id: operation.id,
           scope,
-          scopeKey: scopeKeyByOpIndex.get(opIndex) ??
-            resolveScopeKey(operation.scope, { principal, sessionId }),
+          scopeKey: scopeKeyOf(operation, opIndex),
         })?.document,
       }).document;
 
     for (const [array, first] of firstMarked) {
-      if ((operationsByInstance.get(instanceOf(operation)) ?? 0) > 1) {
+      if ((operationsByInstance.get(instanceOf(operation, opIndex)) ?? 0) > 1) {
         refuse(array, "beside another operation on the document");
       }
       const arrayPath = parsePointer(array);
@@ -8082,11 +8097,13 @@ const applyCommitTransaction = (
   // would wrongly reject the replay as its own duplicate) and before the
   // seq allocation; the stamps apply per-op in the write loop below.
   // A marked splice stands as its mark says (`refuseUnfoundedMarkedSplices()`).
+  // Its document is read as the write keys it: a delegated commit's scoped
+  // writes key from the carried acting identity (see the write loop below).
   refuseUnfoundedMarkedSplices(engine, {
     commit,
     branch,
-    principal,
-    sessionId,
+    principal: delegated?.actingPrincipal ?? principal,
+    sessionId: delegated?.actingSession ?? sessionId,
     scopeKeyByOpIndex,
   });
 

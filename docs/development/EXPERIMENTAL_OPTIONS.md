@@ -1826,8 +1826,9 @@ the per-epic implementation notes).
 ### `markedSplicesV1`
 
 - **Toggle via.** The memory `Server`'s `markedSplices` option, which toolshed
-  sets from `MEMORY_MARKED_SPLICES` (off unless `true` or `1`; any other
-  spelling refuses startup). A server advertises the capability in
+  sets from `MEMORY_MARKED_SPLICES`: `true` or `1` turns it on, `false`, `0`
+  or no setting leaves it off, and any other spelling refuses startup. A
+  server advertises the capability in
   `hello.ok` only when it is on. A client reads it from the connection
   (`ISpaceReplica.markedSplices()`); it has no switch of its own.
 - **Purpose.** A change to a long array that inserts, removes or moves
