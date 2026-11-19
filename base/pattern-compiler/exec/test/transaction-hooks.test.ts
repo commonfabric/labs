@@ -373,6 +373,36 @@ describe("TransactionHooks", () => {
   });
 });
 
+describe("the selections of a write record", () => {
+  it("carries the branch each selector took, which the value code reports", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("selected"),
+      { flag: true, secret: "ss", plain: "p" },
+      { transactions: recorder },
+    );
+    const selections = (from: number) =>
+      new Map(
+        recorder.changed.slice(from).filter(({ doc }) => doc === instance.id)
+          .flatMap(({ writes }) => writes ?? []).flatMap((write) =>
+            "output" in write.record
+              ? [[write.record.output, write.selections]]
+              : []
+          ),
+      );
+    // `shown` takes `secret`, `either` takes `plain`, `given` takes
+    // `plain` where `extra` is absent, and the `if` of `chosen` takes its
+    // first path.
+    expect(selections(0)).toEqual(
+      new Map([[0, { 0: 0 }], [1, { 1: 0 }], [2, { 2: 1 }], [3, { 3: 0 }]]),
+    );
+
+    const begun = recorder.changed.length;
+    instance.writeArgument(["flag"], false);
+    expect(selections(begun)).toEqual(new Map([[0, { 0: 1 }], [3, { 3: 1 }]]));
+  });
+});
+
 /** One write record for each output, by the output's index. */
 const byOutput = (writes: readonly PlanWrite[]) =>
   new Map(

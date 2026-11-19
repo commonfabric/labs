@@ -113,6 +113,13 @@ pub(crate) struct Facts {
     /// by the start of the tag, and an attribute written as an element,
     /// by the start of that element.
     built: HashMap<(usize, u32), usize>,
+    /// The selector of `Plan.selectors` whose branch the value code of an
+    /// expression or an `if` statement reports, by its span, with whether
+    /// its test is one of presence (`??`) rather than of truthiness.
+    selectors: HashMap<(usize, u32, u32), (usize, bool)>,
+    /// The pick of `Plan.picks` whose key the value code of a member read
+    /// with a computed key reports, by the span of the read.
+    picks: HashMap<(usize, u32, u32), usize>,
     pub uses: HashMap<usize, UseFact>,
     pub handlers: HashMap<usize, HandlerFact>,
 }
@@ -184,6 +191,18 @@ impl Facts {
 
     pub fn inline_binding(&mut self, start: u32, binding: usize) {
         self.inline_bindings.insert((self.current, start), binding);
+    }
+
+    /// The selector whose branch the code at `span` reports (PL §3.5): a
+    /// conditional expression, `&&`, `||`, `??` or an `if` statement.
+    pub fn selector(&mut self, span: (u32, u32), selector: usize, presence: bool) {
+        self.selectors
+            .insert((self.current, span.0, span.1), (selector, presence));
+    }
+
+    /// The pick whose key the code at `span` reports (PL §3.18).
+    pub fn pick(&mut self, span: (u32, u32), pick: usize) {
+        self.picks.insert((self.current, span.0, span.1), pick);
     }
 }
 
@@ -556,6 +575,35 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
 
     fn place_of(&self, expression: &Expression<'a>) -> Option<Place> {
         self.fact(unwrap(expression).span()).map(|fact| fact.place)
+    }
+
+    /// The code of the test of a selection at `span`, made to report the
+    /// branch it selects to the host (ES §2.2) where the plan has a
+    /// selector for it: `$h.select` gives the test's value back.
+    fn selected(&self, span: Span, test: String) -> String {
+        let facts = &self.generator.finished.facts;
+        match self
+            .context
+            .and_then(|context| facts.selectors.get(&(context, span.start, span.end)))
+        {
+            Some((selector, true)) => format!("$h.select({selector}, {test}, true)"),
+            Some((selector, false)) => format!("$h.select({selector}, {test})"),
+            None => test,
+        }
+    }
+
+    /// The code of the key of a member read at `span`, made to report the
+    /// key it chooses to the host where the plan has a pick for it:
+    /// `$h.pick` gives the key back.
+    fn picked(&self, span: Span, key: String) -> String {
+        let facts = &self.generator.finished.facts;
+        match self
+            .context
+            .and_then(|context| facts.picks.get(&(context, span.start, span.end)))
+        {
+            Some(pick) => format!("$h.pick({pick}, {key})"),
+            None => key,
+        }
     }
 
     fn wanted(want: Want, code: String) -> String {
@@ -1384,6 +1432,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             }
             Expression::ConditionalExpression(conditional) => {
                 let test = self.render(&conditional.test, Want::Use);
+                let test = self.selected(conditional.span, test);
                 let consequent = self.render(&conditional.consequent, Want::Pass);
                 let alternate = self.render(&conditional.alternate, Want::Pass);
                 Some(Self::wanted(
@@ -1393,6 +1442,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             }
             Expression::LogicalExpression(logical) => {
                 let left = self.render(&logical.left, Want::Use);
+                let left = self.selected(logical.span, left);
                 let right = self.render(&logical.right, Want::Pass);
                 let operator = match logical.operator {
                     LogicalOperator::And => "&&",
@@ -1408,6 +1458,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
             ),
             Expression::ComputedMemberExpression(member) => {
                 let key = self.render(&member.expression, Want::Use);
+                let key = self.picked(member.span, key);
                 self.member(&member.object, key, want)
             }
             Expression::ChainExpression(chain) => match &chain.expression {
@@ -1418,6 +1469,7 @@ impl<'g, 'r, 'm, 'a> Rewriter<'g, 'r, 'm, 'a> {
                 ),
                 ChainElement::ComputedMemberExpression(member) => {
                     let key = self.render(&member.expression, Want::Use);
+                    let key = self.picked(member.span, key);
                     self.member(&member.object, key, want)
                 }
                 _ => None,
@@ -2483,6 +2535,18 @@ impl<'a> Visit<'a> for Rewriter<'_, '_, '_, 'a> {
             }
             Statement::VariableDeclaration(declaration) if declaration.declare => {
                 self.edit(declaration.span.start, declaration.span.end, "");
+            }
+            // The test of an `if` in a block of the reactive tier reports
+            // the path it takes.
+            Statement::IfStatement(statement) if self.context.is_some() => {
+                let span = statement.test.span();
+                let test = self.render(&statement.test, Want::Use);
+                let test = self.selected(statement.span, test);
+                self.edit(span.start, span.end, test);
+                self.visit_statement(&statement.consequent);
+                if let Some(alternate) = &statement.alternate {
+                    self.visit_statement(alternate);
+                }
             }
             _ => walk::walk_statement(self, it),
         }

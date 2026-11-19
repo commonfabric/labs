@@ -628,7 +628,19 @@ type Bound =
  * (`Instance.#noteInputs`), and the identifier of what those bindings
  * consumed, formed when a group asks for it.
  */
-type ConeInputs = { slots: Map<number, Bound>; id?: string };
+/**
+ * Where a write record finds what a template's slots, selectors and picks
+ * were bound to: a cone instance's kept inputs, or the host of the code
+ * that is writing. The first of a list that has an entry gives it.
+ */
+type Inputs = Pick<ConeInputs, "slots" | "selections" | "picks">;
+
+type ConeInputs = {
+  slots: Map<number, Bound>;
+  selections: Map<number, number>;
+  picks: Map<number, string | null>;
+  id?: string;
+};
 
 /**
  * The groups of the elements of one assembly of a collection that a
@@ -1085,6 +1097,10 @@ export class Host {
   demandedAt: { clock: number; reads: number } | undefined;
   /** What the evaluation bound each slot it read to, by the slot. */
   readonly bound = new Map<number, Bound>();
+  /** The branch each selector took, as the value code reported it. */
+  readonly selections = new Map<number, number>();
+  /** The key each pick chose, as the value code reported it. */
+  readonly picks = new Map<number, string | null>();
 
   constructor(
     readonly instance: Instance,
@@ -1131,6 +1147,31 @@ export class Host {
     const value = withDefaults(this.v(found), schema);
     instance.bindSlot(this, index, from, found);
     return value;
+  }
+
+  /**
+   * Records the branch a selector of the cone took (PL §3.5), from the
+   * value of its test: the first branch where the test is truthy, or
+   * with `presence` where it holds something, and the second otherwise.
+   * Gives the value back, so the test reads as it is written.
+   */
+  select(selector: number, test: unknown, presence = false): unknown {
+    const taken = presence ? test !== undefined && test !== null : !!test;
+    this.selections.set(selector, taken ? 0 : 1);
+    return test;
+  }
+
+  /**
+   * Records the key a pick of the cone chose (PL §3.18), with
+   * `chosenBy: "valueCode"`: the key as a text, and `null` for none.
+   * Gives the key back.
+   */
+  pick(pick: number, key: unknown): unknown {
+    this.picks.set(
+      pick,
+      key === undefined || key === null ? null : `${key as string}`,
+    );
+    return key;
   }
 
   /**
@@ -5037,7 +5078,11 @@ export class Instance {
     if (this.root.options.transactions !== undefined) {
       if (cone !== undefined) this.#noteInputs(cone, context, host);
       else if (key === "result") {
-        this.#inputs.set(RESULT_INPUTS, { slots: host.bound });
+        this.#inputs.set(RESULT_INPUTS, {
+          slots: host.bound,
+          selections: host.selections,
+          picks: host.picks,
+        });
       }
     }
     this.#evaluated(slot, entry, host, changed);
@@ -7043,8 +7088,11 @@ export class Instance {
   #noteInputs(cone: number, context: Context, host: Host): void {
     const within = this.collectionsOf(cone);
     const name = this.#coneInstance(cone, this.#keysIn(within, context));
-    const held: ConeInputs = this.#inputs.get(name) ?? { slots: new Map() };
+    const held: ConeInputs = this.#inputs.get(name) ??
+      { slots: new Map(), selections: new Map(), picks: new Map() };
     for (const [slot, bound] of host.bound) held.slots.set(slot, bound);
+    for (const [at, branch] of host.selections) held.selections.set(at, branch);
+    for (const [at, key] of host.picks) held.picks.set(at, key);
     delete held.id;
     this.#inputs.set(name, held);
     const collection = within.at(-1);
@@ -7083,6 +7131,16 @@ export class Instance {
           JSON.stringify([doc, path])
       );
       parts.push(`${slot}:${bound.observes}:${[...new Set(labels)].join(",")}`);
+    }
+    for (
+      const [selector, branch] of [...inputs.selections].sort(([a], [b]) =>
+        a - b
+      )
+    ) {
+      parts.push(`s${selector}=${branch}`);
+    }
+    for (const [pick, key] of [...inputs.picks].sort(([a], [b]) => a - b)) {
+      parts.push(`p${pick}=${JSON.stringify(key)}`);
     }
     inputs.id = parts.join(";");
     return inputs.id;
@@ -7252,22 +7310,41 @@ export class Instance {
   #inputsFor(
     template: Template | undefined,
     keys: [number, string][],
-    boundOf: (slot: number) => Bound | undefined,
+    sources: readonly (Inputs | undefined)[],
     depth = 0,
   ): NamedOutputInputs {
+    const first = <T>(of: (source: Inputs) => T | undefined): T | undefined => {
+      for (const source of sources) {
+        const found = source === undefined ? undefined : of(source);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    };
     const templates = this.plan.templates ?? [];
     const reached = reachedBy(template, templates);
     const slots: SlotBindings = {};
     const outputs: Record<number, NamedOutputInputs> = {};
     const elements: Record<number, FoldElements> = {};
+    const selections: Record<number, number> = {};
+    const picks: Record<number, string | null> = {};
     // A chain of outputs is as long as the plan is deep; one that is
     // longer than this is a cycle of the plan, and is not followed.
     if (depth < 64) {
       for (const slot of [...reached.slots].sort((a, b) => a - b)) {
-        const bound = boundOf(slot);
+        const bound = first((source) => source.slots.get(slot));
         if (bound !== undefined) {
           slots[slot] = this.#bindingOf(slot, bound, outputs, depth);
         }
+      }
+      for (const selector of [...reached.selectors].sort((a, b) => a - b)) {
+        const branch = first((source) => source.selections.get(selector));
+        if (branch !== undefined) selections[selector] = branch;
+      }
+      for (const pick of [...reached.picks].sort((a, b) => a - b)) {
+        const key = first((source) =>
+          source.picks.has(pick) ? { key: source.picks.get(pick) } : undefined
+        );
+        if (key !== undefined) picks[pick] = key.key ?? null;
       }
       for (const output of reached.outputs) {
         outputs[output] ??= this.#namedInputs(output, keys, depth + 1);
@@ -7285,6 +7362,8 @@ export class Instance {
       instance: this.id,
       keys,
       slots,
+      ...(Object.keys(selections).length === 0 ? {} : { selections }),
+      ...(Object.keys(picks).length === 0 ? {} : { picks }),
       ...(Object.keys(outputs).length === 0 ? {} : { outputs }),
       ...(Object.keys(elements).length === 0 ? {} : { elements }),
     };
@@ -7306,7 +7385,7 @@ export class Instance {
         collection,
         own[at],
       ]),
-      (slot) => inputs?.slots.get(slot) ?? result?.slots.get(slot),
+      [inputs, result],
       depth,
     );
   }
@@ -7333,13 +7412,8 @@ export class Instance {
     const table = this.#groups.get(name);
     const reached = reachedBy(body, templates);
     const cones = this.#elementCones(collection);
-    const boundFor = (key: string) => (slot: number) => {
-      for (const cone of cones) {
-        const bound = this.#inputsOf(cone, [...around, key])?.slots.get(slot);
-        if (bound !== undefined) return bound;
-      }
-      return undefined;
-    };
+    const sourcesFor = (key: string) =>
+      cones.map((cone) => this.#inputsOf(cone, [...around, key]));
     const keysOf = (key: string): [number, string][] => [
       ...outer.map((step, at): [number, string] => [step, around[at]]),
       [collection, key],
@@ -7367,7 +7441,10 @@ export class Instance {
           };
           continue;
         }
-        const bound = first === undefined ? undefined : boundFor(first)(slot);
+        const bound = first === undefined
+          ? undefined
+          : sourcesFor(first).map((source) => source?.slots.get(slot))
+            .find((found) => found !== undefined);
         if (bound !== undefined) {
           uniform[slot] = this.#bindingOf(slot, bound, {}, depth);
         }
@@ -7376,9 +7453,13 @@ export class Instance {
     }
     const groups = [...table?.groups.values() ?? []].map((members) => {
       const [key] = members;
-      const inputs = this.#inputsFor(body, keysOf(key), boundFor(key), depth);
+      const inputs = this.#inputsFor(body, keysOf(key), sourcesFor(key), depth);
       return {
         bindings: inputs.slots,
+        ...(inputs.selections === undefined
+          ? {}
+          : { selections: inputs.selections }),
+        ...(inputs.picks === undefined ? {} : { picks: inputs.picks }),
         ...(inputs.outputs === undefined ? {} : { outputs: inputs.outputs }),
         count: members.size,
       };
@@ -7432,7 +7513,11 @@ export class Instance {
         ...writing.instance.#inputsFor(
           template,
           keys,
-          (slot) => writing.host.bound.get(slot),
+          [{
+            slots: writing.host.bound,
+            selections: writing.host.selections,
+            picks: writing.host.picks,
+          }],
         ),
       }];
     });
@@ -7518,7 +7603,7 @@ export class Instance {
             collection,
             own[index],
           ]),
-          (slot) => inputs?.slots.get(slot) ?? result?.slots.get(slot),
+          [inputs, result],
         ),
       };
     });
