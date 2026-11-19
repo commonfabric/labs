@@ -68,9 +68,9 @@ Two consequences follow.
 - **An event the serving loop had not delivered at the fork point is not
   delivered in the fork.** Under server execution an event is appended to a
   stream's log and the loop runs its handler; a fork's runtime does not drain
-  those logs. A fork of a settled step has none pending. A fork of an unsettled
-  step shows the state before the pending handler ran, which is why the shell
-  marks such a step.
+  those logs. A fork of a settled step has none pending, as far back as the
+  listing that judged it read. A fork of an unsettled step shows the state
+  before the pending handler ran, which is why the shell marks such a step.
 - **A fork repeats no effect it has not diverged from.** The built-ins that
   reach outside the space, such as the fetch and language-model built-ins, key
   their stored result by a hash of their request. A fork inherits both, so its

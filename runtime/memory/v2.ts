@@ -2240,7 +2240,10 @@ export type CommitSummary = {
   /**
    * Who made the commit: the user a server-produced commit acted for, and
    * otherwise the principal of the session that committed. Absent for a
-   * commit of a session with no principal.
+   * commit of a session with no principal. This is the store's record and
+   * no more than the server verified: where a server admits sessions
+   * without a principal, such a session chooses its own id, and can choose
+   * one in the form the store keeps a principal's session under.
    */
   principal?: string;
 
