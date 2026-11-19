@@ -99,7 +99,7 @@ interface BranchCreateRequest {
 
 interface BranchCreateResult {
   serverSeq: number;
-  branch: BranchInfo; // See 6.11
+  branch: Branch; // As 6.11 reports it
 }
 ```
 

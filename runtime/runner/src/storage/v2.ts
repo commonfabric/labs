@@ -49,8 +49,8 @@ import {
   type ClientCommit,
   type CommitClass,
   type CommitPrecondition,
-  type CommitSummary,
   commitPreconditionValueHash,
+  type CommitSummary,
   DEFAULT_BRANCH,
   type DocumentPath,
   type EntityDocument,
@@ -5663,9 +5663,7 @@ class Provider
   restoreBranch(
     options?: { source?: BranchName; sourceSeq?: number },
   ): Promise<number | undefined> {
-    return this.#followReplacement((replica) =>
-      replica.restoreBranch(options)
-    );
+    return this.#followReplacement((replica) => replica.restoreBranch(options));
   }
 
   pullToServerHead(): Promise<void> {
