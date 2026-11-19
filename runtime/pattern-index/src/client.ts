@@ -142,6 +142,15 @@ export interface PatternIndexAggregate {
   lastSeenDay?: string;
 }
 
+/**
+ * One original along a remix's chain, as the index shows it to the reader:
+ * the pattern and its name, or `unavailable` for an original the reader may
+ * not read, which ends the chain.
+ */
+export type PatternIndexRemixLink =
+  | { patternId: string; name?: string }
+  | { unavailable: true };
+
 /** One hit from `searchPatterns`. Carries metadata and never source. */
 export interface PatternIndexSearchResult {
   patternId: string;
@@ -199,6 +208,12 @@ export interface PatternIndexSearchResult {
 
   /** Whether the caller is its author. */
   mine?: boolean;
+
+  /** A remix's nearest original, when the reader may follow it. */
+  remixedFrom?: string;
+
+  /** A remix's originals, nearest first, cut to what the reader may see. */
+  remixChain?: readonly PatternIndexRemixLink[];
 
   /** The first generation of this pattern's version chain. */
   lineageId?: string;
@@ -279,6 +294,10 @@ export interface PatternIndexPattern {
   dependencies: readonly string[];
   priorPatternId?: string;
   remixedFrom?: string;
+
+  /** A remix's originals, nearest first, cut to what the reader may see. */
+  remixChain?: readonly PatternIndexRemixLink[];
+
   lineageId?: string;
 
   /** The caller's own version with this source; owner only. */
