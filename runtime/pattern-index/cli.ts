@@ -3,9 +3,9 @@
  *
  * Contract: `runtime/pattern-index/cli.ts --identity <PKCS#8 path>
  * --base-url <index URL>` reads one JSON request on stdin and writes one JSON
- * answer on stdout. Requests use `op: search` or `op: feedback`; replies are
- * `{ok: true, value}` or `{ok: false, status, error}`. A completed request,
- * including a refusal, exits zero. Host failures exit nonzero with detail on
+ * answer on stdout. Requests use `op: search`, `op: feedback` or `op:
+ * source`; replies are `{ok: true, value}` or `{ok: false, status, error}`.
+ * A completed request, including a refusal, exits zero. Host failures exit nonzero with detail on
  * stderr and nothing on stdout. Malformed stdin produces a 400 JSON answer.
  * Index 401 (signature failure) and 403 (DID not allowlisted) remain distinct.
  *
@@ -15,7 +15,16 @@
  * These read and network grants are the complete permission set; environment
  * and FFI permissions are not required.
  *
- * Besides `search` and `feedback`, `op: whoami` answers the member the
+ * `op: source {patternIds}` answers each pattern's program as the index
+ * holds it (`getPattern` with its source), at most
+ * {@link SOURCE_PATTERNS_MAX} per request, in the order asked: `{patterns:
+ * [{patternId, name?, description, mine?, program} | {patternId, status}]}`,
+ * where `status` is the index's refusal of that one pattern (404 for one it
+ * does not hold or will not show this member), so one unreadable pattern
+ * does not cost the others. A caller reads someone else's pattern to build
+ * on it, so it can credit that pattern when it deploys what it built.
+ *
+ * Besides `search`, `feedback` and `source`, `op: whoami` answers the member the
  * identity acts as (with `signer`), `op: admit {did}` admits a key (admins),
  * and `op: join {link}` or `op: join {chain}` (a chain file's text, one
  * chain) joins the index exactly as `cf index join` does, answering
@@ -128,6 +137,51 @@ const join = async (
   return { ok: false, status: 400, error: "join needs a link or a chain" };
 };
 
+/** The most patterns one `source` request reads. */
+export const SOURCE_PATTERNS_MAX = 5;
+
+/** `op: source`: each pattern's program, or the index's refusal of it. */
+const answerSource = async (
+  client: PatternIndexClient,
+  body: Record<string, unknown>,
+): Promise<CliAnswer> => {
+  const { patternIds } = body;
+  if (
+    !Array.isArray(patternIds) || patternIds.length === 0 ||
+    patternIds.length > SOURCE_PATTERNS_MAX ||
+    !patternIds.every((id) => typeof id === "string" && id !== "")
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `patternIds must name 1 to ${SOURCE_PATTERNS_MAX} patterns, each a non-empty string`,
+    };
+  }
+  const patterns = [];
+  for (const patternId of patternIds as string[]) {
+    try {
+      const found = await client.getPattern({ patternId, includeSource: true });
+      if (found.program === undefined) {
+        patterns.push({ patternId, status: 404 });
+        continue;
+      }
+      patterns.push({
+        patternId: found.patternId,
+        ...(found.name === undefined ? {} : { name: found.name }),
+        description: found.description,
+        ...(found.mine === undefined ? {} : { mine: found.mine }),
+        program: found.program,
+      });
+    } catch (error) {
+      const failure = patternIndexFailure(error);
+      if (failure === undefined || failure.status === 502) throw error;
+      patterns.push({ patternId, status: failure.status });
+    }
+  }
+  return { ok: true, value: { patterns } };
+};
+
 /** Answers one operation, mapping index refusals and propagating failures. */
 const answerRequest = async (
   context: HelperContext,
@@ -169,6 +223,8 @@ const answerRequest = async (
           }
           : { ok: false, status: 502, error: recorded.message };
       }
+      case "source":
+        return await answerSource(client, body);
       case "whoami":
         return {
           ok: true,
@@ -244,7 +300,7 @@ const answerRequest = async (
           ok: false,
           status: 400,
           error:
-            "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
+            "op must be search, feedback, source, whoami, admit, join, view, getSharing or setSharing",
         };
     }
   } catch (error) {
