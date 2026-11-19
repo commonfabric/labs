@@ -185,13 +185,12 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   to the collection, and `backfillNames` does the same before it numbers them.
   Until one of them has run, such a board shows no topics.
 
-  A topic filed before the board held a collection also has nothing bound to
-  its `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts`
-  links each such topic's `board` to the board's, once the topic runs the
-  pattern that declares it. The restore tooling
-  (`scripts/topics-rehearsal-lib.ts`) relinks `board` as it does `mentionable`,
-  and retires `boardCrossrefs` and `boardCrossrefIndex` on a topic that no
-  longer declares them.
+  A topic filed before the board held a collection also has nothing bound to its
+  `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
+  each such topic's `board` to the board's, once the topic runs the pattern that
+  declares it. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
+  `board` as it does `mentionable`, and retires `boardCrossrefs` and
+  `boardCrossrefIndex` on a topic that no longer declares them.
 - **Authoring: cf-code-editor in the Edit→Save draft flow.** The editor binds
   the session-local `bodyDraft` (never live to the shared string — whole-value
   conflict semantics hold) with `@`-mention autocomplete over `mentionable`, and
