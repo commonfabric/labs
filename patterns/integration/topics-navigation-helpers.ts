@@ -424,34 +424,82 @@ async function markResolveAndClick(
     CLICK_TARGET_ATTR,
     LINK_TARGET_ATTR,
   ];
-  await page.evaluate((targetToken: string, clickTargetAttribute: string) => {
-    const scope = globalThis as typeof globalThis & {
-      __topicsNavigations?: Record<string, string>;
-    };
-    const navigations = scope.__topicsNavigations ??= {};
-    // Only a navigation that follows the click on the marked button is the
-    // click's; one dispatched while the helper revalidates is not.
-    let clicked = false;
-    const onClick = (event: Event) => {
-      const onMarked = event.composedPath().some((node) =>
-        node instanceof Element &&
-        (node.getAttribute(clickTargetAttribute) ?? "").split(/\s+/)
-          .includes(targetToken)
-      );
-      if (!onMarked) return;
-      clicked = true;
-      document.removeEventListener("click", onClick, true);
-    };
-    document.addEventListener("click", onClick, true);
-    const capture = (event: Event) => {
-      if (!clicked) return;
-      globalThis.removeEventListener("cf-navigate", capture);
-      navigations[targetToken] = String(
-        (event as CustomEvent<{ pieceId?: unknown }>).detail?.pieceId,
-      );
-    };
-    globalThis.addEventListener("cf-navigate", capture);
-  }, { args: [token, CLICK_TARGET_ATTR] });
+  // What the click opens is what the marked link's own activation found:
+  // the resolution its press or click makes (a labelled link resolves again
+  // when acted on), or, where it makes none, the one this click's choice
+  // recorded, or the target an unlabelled link follows. The helper waits for
+  // the navigation to that destination, so another link finishing a lookup
+  // of its own after this click is not taken for this one, and neither is a
+  // navigation dispatched while the helper revalidates.
+  await page.evaluate(
+    (
+      targetToken: string,
+      clickTargetAttribute: string,
+      linkTargetAttribute: string,
+    ) => {
+      type ClickRecord = {
+        clicked: boolean;
+        link?: HTMLElement & {
+          resolveTarget?: (...args: unknown[]) => Promise<unknown>;
+        };
+        resolutions: Promise<unknown>[];
+        navigations: string[];
+      };
+      const scope = globalThis as typeof globalThis & {
+        __topicsClicks?: Record<string, ClickRecord>;
+      };
+      const record: ClickRecord = {
+        clicked: false,
+        resolutions: [],
+        navigations: [],
+      };
+      (scope.__topicsClicks ??= {})[targetToken] = record;
+      const markedLinkOf = (event: Event) => {
+        const path = event.composedPath();
+        const onMarked = path.some((node) =>
+          node instanceof Element &&
+          (node.getAttribute(clickTargetAttribute) ?? "").split(/\s+/)
+            .includes(targetToken)
+        );
+        if (!onMarked) return undefined;
+        return path.find((node) =>
+          node instanceof Element &&
+          node.getAttribute(linkTargetAttribute) === targetToken
+        ) as ClickRecord["link"];
+      };
+      // Seen before the link's own handlers, so the resolution its press
+      // starts is the one recorded.
+      const watch = (link: ClickRecord["link"]) => {
+        if (!link || record.link === link) return;
+        record.link = link;
+        const original = link.resolveTarget;
+        if (typeof original !== "function") return;
+        link.resolveTarget = function (this: unknown, ...args: unknown[]) {
+          const resolving = original.apply(this, args);
+          record.resolutions.push(resolving);
+          return resolving;
+        };
+      };
+      const onPointerDown = (event: Event) => watch(markedLinkOf(event));
+      const onClick = (event: Event) => {
+        const link = markedLinkOf(event);
+        if (!link) return;
+        watch(link);
+        record.clicked = true;
+        document.removeEventListener("pointerdown", onPointerDown, true);
+        document.removeEventListener("click", onClick, true);
+      };
+      document.addEventListener("pointerdown", onPointerDown, true);
+      document.addEventListener("click", onClick, true);
+      globalThis.addEventListener("cf-navigate", (event: Event) => {
+        if (!record.clicked) return;
+        record.navigations.push(
+          String((event as CustomEvent<{ pieceId?: unknown }>).detail?.pieceId),
+        );
+      });
+    },
+    { args: [token, CLICK_TARGET_ATTR, LINK_TARGET_ATTR] },
+  );
   await clickMarked(page, {
     token,
     remark: {
@@ -464,17 +512,49 @@ async function markResolveAndClick(
     page,
     (_probe: ProbeApi, targetToken: string) =>
       (globalThis as typeof globalThis & {
-        __topicsNavigations?: Record<string, string>;
-      }).__topicsNavigations?.[targetToken] !== undefined,
+        __topicsClicks?: Record<string, { clicked: boolean }>;
+      }).__topicsClicks?.[targetToken]?.clicked === true,
     { args: [token] },
   );
-  return await page.evaluate(
-    (targetToken: string) =>
+  const opened = await page.evaluate(async (targetToken: string) => {
+    type Destination = { id(): string };
+    const record = (globalThis as typeof globalThis & {
+      __topicsClicks: Record<string, {
+        link?: HTMLElement & {
+          label?: string;
+          _resolvedCell?: Destination;
+          resolveTarget?: unknown;
+          __activation?: { token: string; target?: unknown };
+        };
+        resolutions: Promise<unknown>[];
+      }>;
+    }).__topicsClicks[targetToken];
+    // A click handler may start its resolution in the same task as the
+    // click; let it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const link = record.link;
+    const target = record.resolutions.length > 0
+      ? await record.resolutions[record.resolutions.length - 1]
+      : link?.label && link.resolveTarget
+      ? (link.__activation?.token === targetToken
+        ? link.__activation.target
+        : undefined)
+      : link?._resolvedCell;
+    return (target as Destination | undefined)?.id();
+  }, { args: [token] });
+  if (opened === undefined) {
+    throw new Error(`${description} resolved no destination when clicked`);
+  }
+  await waitForCondition(
+    page,
+    (_probe: ProbeApi, targetToken: string, destination: string) =>
       (globalThis as typeof globalThis & {
-        __topicsNavigations: Record<string, string>;
-      }).__topicsNavigations[targetToken],
-    { args: [token] },
+        __topicsClicks?: Record<string, { navigations: string[] }>;
+      }).__topicsClicks?.[targetToken]?.navigations.includes(destination) ===
+        true,
+    { args: [token, opened] },
   );
+  return opened;
 }
 
 /**

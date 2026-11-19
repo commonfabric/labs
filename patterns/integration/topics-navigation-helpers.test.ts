@@ -620,6 +620,79 @@ describe("topics-navigation-helpers", () => {
       expect(returned).toBe("of:fid1:clicked");
     });
 
+    it("reports the clicked link's navigation when another link's finishes after the click", async () => {
+      await page.evaluate(() => {
+        document.body.replaceChildren();
+        const clicks: string[] = [];
+        const destination = (pieceId: string) => ({
+          space: () => "did:key:space",
+          id: () => pieceId,
+          ref: () => ({ scope: "space", path: [] }),
+        });
+        const buildLink = (label: string, pieceId: string) => {
+          const link = Object.assign(document.createElement("cf-cell-link"), {
+            label,
+            _resolvedCell: undefined as unknown,
+            resolveTarget() {
+              return new Promise((resolve) =>
+                setTimeout(() => {
+                  link._resolvedCell = destination(pieceId);
+                  resolve(link._resolvedCell);
+                }, 30)
+              );
+            },
+          });
+          const linkRoot = link.attachShadow({ mode: "open" });
+          const chip = document.createElement("cf-chip");
+          const chipRoot = chip.attachShadow({ mode: "open" });
+          const button = document.createElement("button");
+          button.textContent = label;
+          chipRoot.append(button);
+          linkRoot.append(chip);
+          return { link, button };
+        };
+        const other = buildLink("Elsewhere", "of:fid1:earlier");
+        const clicked = buildLink("Open", "of:fid1:clicked");
+        // As a cf-cell-link's click does: resolve where the link points now,
+        // then navigate there. The other link, still finishing a lookup of
+        // its own, navigates first.
+        clicked.button.addEventListener("click", () => {
+          setTimeout(
+            () =>
+              globalThis.dispatchEvent(
+                new CustomEvent("cf-navigate", {
+                  detail: { pieceId: "of:fid1:earlier" },
+                }),
+              ),
+            10,
+          );
+          void clicked.link.resolveTarget().then((cell) => {
+            const pieceId = (cell as { id(): string }).id();
+            clicks.push(pieceId);
+            globalThis.dispatchEvent(
+              new CustomEvent("cf-navigate", { detail: { pieceId } }),
+            );
+          });
+        });
+        document.body.append(other.link, clicked.link);
+
+        Object.assign(globalThis, {
+          commonfabric: { viewSettled: () => Promise.resolve() },
+          __topicsNavigationResult: () => ({ clicks }),
+        });
+      });
+
+      const returned = await clickCellLink(page, "Open");
+      const result = await page.evaluate(() =>
+        (globalThis as typeof globalThis & {
+          __topicsNavigationResult: () => { clicks: string[] };
+        }).__topicsNavigationResult()
+      );
+
+      expect(returned).toBe("of:fid1:clicked");
+      expect(result.clicks).toEqual(["of:fid1:clicked"]);
+    });
+
     it("revalidates after a surviving link's box settles", async () => {
       await page.evaluate(() => {
         document.body.replaceChildren();
