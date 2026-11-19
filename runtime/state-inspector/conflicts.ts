@@ -280,6 +280,13 @@ export interface ReadCoverage {
   branches: string[];
 
   /**
+   * For each entity a read names only by an escaped spelling, which a
+   * search of the payload text for the id would not find, the seqs,
+   * ascending, of the commits holding such a read.
+   */
+  escapedReaders: Map<string, number[]>;
+
+  /**
    * Seqs of the commits an analysis found reading its entity but could not
    * check: an undecodable payload, a read missing a field it is replayed by
    * or holding one of the wrong type, a read whose scope it could not
@@ -324,8 +331,9 @@ const pastPrefix = (prefix: string): string =>
 
 /**
  * Returns what the stale-read scan cannot see in `space`, from one pass over
- * the commit log that holds one row at a time. `everyEntity` says the report
- * analyzes every entity; see {@link ReadCoverage.everyEntity}.
+ * the commit log and one over the payloads holding a backslash, each holding
+ * one row at a time. `everyEntity` says the report analyzes every entity;
+ * see {@link ReadCoverage.everyEntity}.
  */
 export function readCoverage(
   space: SpaceDb,
@@ -394,10 +402,44 @@ export function readCoverage(
     .prepare(`SELECT DISTINCT branch FROM revision`)
     .all<{ branch: string }>()
     .map(({ branch }) => branch);
+  // JSON spells a string otherwise than as written only with a backslash
+  // escape, so only a payload holding a backslash can hold a read whose id
+  // its text does not show. Those reads are collected here, in one pass
+  // over such payloads, for every entity's candidate search.
+  const escapedReaders = new Map<string, number[]>();
+  const escaped = space.db
+    .prepare(
+      `SELECT c.seq AS seq, json_extract(r.value, '$.id') AS id
+       FROM (
+         SELECT seq, original, ${BODY_SQL} AS body FROM "commit"
+         WHERE instr(original, char(92)) > 0
+       ) AS c,
+       json_each(
+         CASE
+           WHEN NOT json_valid(c.body) THEN '{}'
+           WHEN json_type(c.body, '$.reads.confirmed') IS NOT 'array'
+             THEN '{}'
+           ELSE c.body
+         END,
+         '$.reads.confirmed'
+       ) AS r
+       WHERE CASE WHEN r.type = 'object'
+         THEN json_type(r.value, '$.id') = 'text'
+           AND instr(c.original, json_extract(r.value, '$.id')) = 0
+         ELSE 0 END
+       ORDER BY c.seq ASC`,
+    )
+    .iter([...BODY_PARAMS]) as Iterable<{ seq: number; id: string }>;
+  for (const { seq, id } of escaped) {
+    const seqs = escapedReaders.get(id) ?? [];
+    if (seqs.at(-1) !== seq) seqs.push(seq);
+    escapedReaders.set(id, seqs);
+  }
   return {
     unread,
     compactions,
     branches,
+    escapedReaders,
     skipped: new Set(),
     everyEntity: opts.everyEntity ?? false,
   };
@@ -500,7 +542,7 @@ interface ConfirmedReadRef {
   seq: number;
   scope?: CellScope;
   branch?: string;
-  path?: string[];
+  path: string[];
   nonRecursive?: boolean;
 }
 
@@ -512,15 +554,15 @@ const CELL_SCOPES: ReadonlySet<unknown> = new Set<CellScope>([
 
 /**
  * Whether a stored read naming the entity has each field the scan replays
- * it by, of its type: a basis seq, and any path, branch, scope or shallow
+ * it by, of its type: a basis seq and a path, which admission requires (an
+ * empty one reads the whole document), and any branch, scope or shallow
  * flag. The log holds what was stored, not what admission accepted, and a
  * read without them cannot be checked.
  */
 function isReplayableRead(read: ConfirmedReadRef): boolean {
   return Number.isSafeInteger(read.seq) && read.seq >= 0 &&
-    (read.path === undefined ||
-      (Array.isArray(read.path) &&
-        read.path.every((part) => typeof part === "string"))) &&
+    Array.isArray(read.path) &&
+    read.path.every((part) => typeof part === "string") &&
     (read.branch === undefined || typeof read.branch === "string") &&
     (read.scope === undefined || CELL_SCOPES.has(read.scope)) &&
     (read.nonRecursive === undefined ||
@@ -631,33 +673,24 @@ export function entityConflicts(
   };
 
   // Candidate reader commits: those whose stored ClientCommit mentions this id.
-  // (Pre-filter by LIKE to avoid decoding every commit in the space.) JSON
-  // can spell the id otherwise only with an escape, so a payload holding a
-  // backslash is a candidate too when a read in its JSON names the id once
-  // decoded. The commit's own `branch` is the default for any read that
+  // (Pre-filter by LIKE to avoid decoding every commit in the space.) The
+  // commits whose read names it only by an escaped spelling come from the
+  // coverage pass. The commit's own `branch` is the default for any read that
   // omits one.
+  const escapedReaders = coverage.escapedReaders.get(id) ?? [];
   const candidates = space.db
     .prepare(
-      `SELECT seq, branch, session_id, original FROM (
-         SELECT seq, branch, session_id, original, ${BODY_SQL} AS body
-         FROM "commit"
-       )
-       WHERE original LIKE '%' || ? || '%'
-          OR CASE
-            WHEN instr(original, char(92)) = 0 THEN 0
-            WHEN NOT json_valid(body) THEN 0
-            WHEN json_type(body, '$.reads.confirmed') IS NOT 'array' THEN 0
-            ELSE EXISTS (
-              SELECT 1 FROM json_each(body, '$.reads.confirmed')
-              WHERE CASE WHEN type = 'object'
-                THEN json_extract(value, '$.id') = ? ELSE 0 END
-            )
-          END
+      `SELECT seq, branch, session_id, original FROM "commit"
+       WHERE original LIKE '%' || ? || '%'${
+        escapedReaders.length === 0
+          ? ""
+          : ` OR seq IN (${escapedReaders.map(() => "?").join(", ")})`
+      }
        ORDER BY seq ASC`,
     )
     .all<
       { seq: number; branch: string; session_id: string; original: string }
-    >([...BODY_PARAMS, id, id]);
+    >([id, ...escapedReaders]);
 
   const staleReads: StaleRead[] = [];
   for (const c of candidates) {
@@ -679,7 +712,7 @@ export function entityConflicts(
         skipped.add(c.seq);
         continue;
       }
-      const readPath = rd.path ?? [];
+      const readPath = rd.path;
       // An unqualified read defaults to the READER COMMIT'S branch, not the
       // branch being inspected — exactly as the engine's validateConfirmedReads
       // does (`read.branch ?? commitBranch`). Using the inspected branch would

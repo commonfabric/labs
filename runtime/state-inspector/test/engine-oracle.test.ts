@@ -276,6 +276,65 @@ Deno.test("oracle: scans the log for unchecked commits once per report", async (
   }
 });
 
+Deno.test("oracle: parses read sets once per report, whatever the values hold", async () => {
+  // Eight commits each read of:base and write a value holding a newline,
+  // which JSON escapes. The read ids are spelled as written, so no entity's
+  // search parses any commit's read set.
+  const path = await Deno.makeTempFile({ suffix: ".sqlite" });
+  const engine = await open({ url: toFileUrl(path) });
+  try {
+    applyCommit(engine, {
+      ...ALICE,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:base", value: doc("base") }],
+      },
+    });
+    for (let i = 0; i < 8; i++) {
+      applyCommit(engine, {
+        ...ALICE,
+        commit: {
+          localSeq: i + 2,
+          reads: {
+            confirmed: [{
+              id: "of:base",
+              path: toDocumentPath(["value"]),
+              seq: 1,
+            }],
+            pending: [],
+          },
+          operations: [{
+            op: "set",
+            id: `of:result-${i}`,
+            value: doc(`line one\nline two ${i}`),
+          }],
+        },
+      });
+    }
+  } finally {
+    close(engine);
+  }
+
+  const space = openSpace(path);
+  try {
+    // The coverage pass's two queries read read sets as JSON; no entity's
+    // candidate search does.
+    let parses = 0;
+    const prepare = space.db.prepare.bind(space.db);
+    space.db.prepare = ((sql: string) => {
+      if (sql.includes("json_each(")) parses++;
+      return prepare(sql);
+    }) as typeof space.db.prepare;
+
+    assertEquals(readCoherence(space), { anomalies: [], readSetsNotKept: 0 });
+    assertEquals(parses, 2);
+  } finally {
+    space.close();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
 Deno.test("oracle: does not certify a store whose write history compaction squashed", async () => {
   // The forged seq-10 read missed Bob's seq-2 write. Compaction keeps every
   // payload (its default window) but squashes entity:doc's history into its
@@ -515,8 +574,9 @@ Deno.test("oracle: finds a stale read whose entity id the JSON spells with an es
 
 Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the report", async () => {
   // A read of entity:doc with a basis that is not a seq, one with a scope
-  // that is none, and a read set holding a bare string, also spelled with an
-  // escape.
+  // that is none, two with no path (at seq 2, current, and at seq 1, below
+  // Bob's patch: a missing path is not the whole document), and a read set
+  // holding a bare string, also spelled with an escape.
   const read = forgedCommit.reads.confirmed[0];
   const reading = (confirmed: unknown[]) =>
     JSON.stringify({ ...forgedCommit, reads: { confirmed, pending: [] } });
@@ -524,6 +584,8 @@ Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the
     const original of [
       reading([{ ...read, seq: "x" }]),
       reading([{ ...read, scope: "elsewhere" }]),
+      reading([{ id: "entity:doc", seq: 2 }]),
+      reading([{ id: "entity:doc", seq: 1 }]),
       reading(["entity:doc"]),
       reading(["entity:doc"]).replace(`"entity:doc"`, `"entity:\\u0064oc"`),
     ]
