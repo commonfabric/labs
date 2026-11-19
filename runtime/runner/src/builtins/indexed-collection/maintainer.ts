@@ -172,7 +172,7 @@ export class IndexedCollectionMaintainer {
     if (!this.#enabled || this.#disposed) return;
     const collection = this.#spaceState(space).collections.get(id);
     if (collection === undefined) return;
-    collection.added.set(rows.member, rows);
+    collection.added.set(memberId(rows), rows);
     this.#schedule(collection);
   }
 
@@ -433,6 +433,15 @@ export class IndexedCollectionMaintainer {
     collection.pending.clear();
     const added = [...collection.added.values()];
     collection.added.clear();
+    // What this drain took is owed again if it cannot be carried out.
+    const owe = () => {
+      for (const doc of docs) collection.pending.add(doc);
+      for (const rows of added) {
+        if (!collection.added.has(memberId(rows))) {
+          collection.added.set(memberId(rows), rows);
+        }
+      }
+    };
     try {
       const opened = await this.#open(collection);
       const provider = this.#runtime.storageManager.open(
@@ -445,18 +454,13 @@ export class IndexedCollectionMaintainer {
         { docs: JSON.stringify(docs) },
       );
       const members = groupMemberRows(opened.descriptor, rows);
-      const found = new Set(members.map((member) => member.member));
+      const found = new Set(members.map(memberId));
       for (const rows of added) {
-        if (!found.has(rows.member)) members.push(rows);
+        if (!found.has(memberId(rows))) members.push(rows);
       }
       await this.#reread(collection, members);
     } catch (error) {
-      for (const doc of docs) collection.pending.add(doc);
-      for (const rows of added) {
-        if (!collection.added.has(rows.member)) {
-          collection.added.set(rows.member, rows);
-        }
-      }
+      owe();
       throw error;
     }
   }
@@ -522,6 +526,14 @@ export class IndexedCollectionMaintainer {
       }
     }
   }
+}
+
+/**
+ * Returns what tells one member's rows from another's: its kind and its
+ * reference together, since one cell can be a member of several kinds.
+ */
+function memberId(rows: MemberRows): string {
+  return `${rows.kind}\n${rows.member}`;
 }
 
 /** Helper for `#drain()`, which reads the wire form of a handle value. */
