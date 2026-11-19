@@ -5368,7 +5368,7 @@ function versionFactsOf(
     | "versionDescription"
     | "builtFrom"
   >,
-): Pick<DeployedSource, "madeBy" | "description" | "builtFrom"> {
+): Pick<DeployedSource, "versionOrigin" | "description" | "builtFrom"> {
   const { versionOrigin, versionDescription, builtFrom } = options;
   if (
     versionOrigin === undefined && versionDescription === undefined &&
@@ -5403,7 +5403,7 @@ function versionFactsOf(
     refuse("--version-description and --built-from take a non-empty value.");
   }
   return {
-    ...(versionOrigin === undefined ? {} : { madeBy: "agent" as const }),
+    ...(versionOrigin === undefined ? {} : { versionOrigin: "agent" as const }),
     ...(description === undefined ? {} : { description }),
     ...(from === undefined ? {} : { builtFrom: from }),
   };
@@ -5429,7 +5429,8 @@ function versionRecorder(
   entry: string,
   origin: string | undefined,
   print: (line: string) => void,
-  facts: Pick<DeployedSource, "madeBy" | "description" | "builtFrom"> = {},
+  facts: Pick<DeployedSource, "versionOrigin" | "description" | "builtFrom"> =
+    {},
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
   settle: () => Promise<VersionOutcome | undefined>;

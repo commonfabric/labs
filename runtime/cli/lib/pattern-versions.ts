@@ -205,7 +205,7 @@ export interface DeployedSource {
    * history follows the piece it was deployed to, as an agent run's does,
    * rather than the entry file, which for such a deploy is a staged copy.
    */
-  madeBy?: "agent";
+  versionOrigin?: "agent";
 
   /**
    * What the version says the pattern does, in place of the entry's doc
@@ -305,7 +305,7 @@ export async function recordDeployedVersion(
       deployed.piece.space,
       deployed.piece.id,
     );
-    const slot = deployed.madeBy === "agent"
+    const slot = deployed.versionOrigin === "agent"
       ? deployedTo
       : await entrySlot(entry, sources);
     // Source fetched from someone else's pattern and deployed unchanged is
@@ -349,7 +349,7 @@ export async function recordDeployedVersion(
         ...(remixedFrom === undefined ? {} : { remixedFrom }),
       }),
       slot,
-      origin: deployed.madeBy ?? "self",
+      origin: deployed.versionOrigin ?? "self",
       deployedTo,
       ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });

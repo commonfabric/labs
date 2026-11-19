@@ -323,7 +323,7 @@ describe("pattern-versions", () => {
 
       const outcome = await recordDeployedVersion(
         deployed({
-          madeBy: "agent",
+          versionOrigin: "agent",
           description: "Plans who brings what to the lunch.",
         }),
         deps,
@@ -361,7 +361,7 @@ describe("pattern-versions", () => {
       const { deps } = depsWith(client);
 
       await recordDeployedVersion(
-        deployed({ madeBy: "agent", builtFrom: "pat-theirs" }),
+        deployed({ versionOrigin: "agent", builtFrom: "pat-theirs" }),
         deps,
       );
 
@@ -380,7 +380,7 @@ describe("pattern-versions", () => {
       const { deps } = depsWith(client);
 
       await recordDeployedVersion(
-        deployed({ madeBy: "agent", builtFrom: "pat-mine" }),
+        deployed({ versionOrigin: "agent", builtFrom: "pat-mine" }),
         deps,
       );
 
@@ -396,7 +396,7 @@ describe("pattern-versions", () => {
       const { deps } = depsWith(client);
 
       await recordDeployedVersion(
-        deployed({ madeBy: "agent", builtFrom: "pat-theirs" }),
+        deployed({ versionOrigin: "agent", builtFrom: "pat-theirs" }),
         deps,
       );
 
@@ -412,7 +412,7 @@ describe("pattern-versions", () => {
       const { deps } = depsWith(client);
 
       const outcome = await recordDeployedVersion(
-        deployed({ madeBy: "agent", builtFrom: "pat-1" }),
+        deployed({ versionOrigin: "agent", builtFrom: "pat-1" }),
         deps,
       );
 
@@ -783,7 +783,7 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
         builtFrom: "pat-theirs",
       });
       await run({});
-      expect(recorded.map((d) => [d.madeBy, d.description, d.builtFrom]))
+      expect(recorded.map((d) => [d.versionOrigin, d.description, d.builtFrom]))
         .toEqual([
           ["agent", "Plans the lunch.", "pat-theirs"],
           [undefined, undefined, undefined],
