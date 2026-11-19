@@ -232,6 +232,24 @@ describe("selectSessionOverwritePathsSince()", () => {
       expect(overwritten(filled)).toEqual([]);
     });
 
+    it("returns nothing for a truncation beside an increment of the element it drops", () => {
+      // The per-index form of a change that increments the last element and
+      // then truncates the array sends both.
+      commit(
+        patch({ op: "replace", path: "/value/tags", value: [10, 20, 30] }),
+        { principal: "did:key:seeder", sessionId: "seeder-session" },
+      );
+      const counted = commit(
+        patch({ op: "replace", path: "/value/count", value: 1 }),
+        { principal: "did:key:seeder", sessionId: "seeder-session" },
+      );
+      commit(patch(
+        { op: "increment", path: "/value/tags/2", by: 1 },
+        { op: "splice", path: "/value/tags", index: 2, remove: 1, add: [] },
+      ));
+      expect(overwritten(counted)).toEqual([]);
+    });
+
     it("leaves an index below its first splice to the replace that reaches it", () => {
       commit(patch(
         { op: "replace", path: "/value/tags/0", value: "z" },

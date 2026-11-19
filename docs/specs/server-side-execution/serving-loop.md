@@ -1754,10 +1754,10 @@ path with a `set` or `delete` (the root) or with a `replace`, `add` or
 index the array holds both before and after them whose value differs, from
 the first splice's index on: they stand for the per-index writes of the
 same change (memory-v2 08-conflict-granularity.md, "Array writes and the
-leaf-only matcher"), which replace exactly those indices. The store refuses
-a commit whose splices share their array with anything that could blur
-that: another op at or past the first splice's index, an add, remove or
-move at an element, or an op at the array or above it. An element a splice only appends past
+leaf-only matcher"), which replace exactly those indices. That is exact for
+every shape the runner sends; a hand-built commit that changes the array at
+or past the first splice's index some other way as well has those changes
+read as the splices' too. An element a splice only appends past
 the old end, or only drops off the new end, is overwritten by nothing. A served
 handler's own array changes go index by index, so a patch this rule drops is
 never part of a splice that also carries a write it keeps. A write that

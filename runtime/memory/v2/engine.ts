@@ -15,7 +15,6 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
-import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -4421,13 +4420,10 @@ export type SessionOverwrite =
  * `move`. The splices a revision makes to one array report, as ranges
  * (`SessionOverwrite`), the indices both before and after it whose value
  * differs, from the first splice's index on: the indices the per-index form
- * of the same change replaces (`overwrittenArrayElements()`). That is exact
- * because a commit's splices stand alone on their array: nothing else in the
- * commit touches the array at or past its first splice's index, or above it
- * (`refuseMixedSplices()`). An element a splice only appends past the old end,
- * and one it only drops off the new end, is overwritten by nothing. A patch
- * that merges into existing content — an append, an increment — overwrites
- * nothing and is left out.
+ * of the same change replaces (`overwrittenArrayElements()`). An element a
+ * splice only appends past the old end, and one it only drops off the new
+ * end, is overwritten by nothing. A patch that merges into existing content —
+ * an append, an increment — overwrites nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4473,8 +4469,14 @@ ORDER BY r.seq, r.op_index
         } else if (patch.op === "splice") {
           const spliced = splicedArrays.get(patch.path) ??
             { fromIndex: Infinity, shrinkBound: 0 };
-          spliced.fromIndex = Math.min(spliced.fromIndex, patch.index);
-          spliced.shrinkBound += patch.remove - patch.add.length;
+          // As the store applied it (`spliceAll()`): `Array.prototype.splice`
+          // takes the index and the count as whole numbers, truncating any
+          // fraction a row stored before such commits were refused.
+          spliced.fromIndex = Math.min(
+            spliced.fromIndex,
+            Math.trunc(patch.index),
+          );
+          spliced.shrinkBound += Math.trunc(patch.remove) - patch.add.length;
           splicedArrays.set(patch.path, spliced);
         }
       }
@@ -4554,10 +4556,19 @@ type SplicedArray = { fromIndex: number; shrinkBound: number };
  * whose value differs between the two. That is what the per-index form of the
  * same change writes: a `replace` at each index whose value it changed, and a
  * splice at the tail for the length. An index below the first splice's is
- * one no splice reaches, and nothing else in the revision touches the array
- * from there on (`refuseMixedSplices()`). A first splice at or past the
- * array's prior length, as a tail append's is, changes no index both sides
- * hold, and the earlier document is not read.
+ * one no splice reaches. A first splice at or past the array's prior length,
+ * as a tail append's is, changes no index both sides hold, and the earlier
+ * document is not read.
+ *
+ * That is exact for every shape a client sends: the runner's edit-script
+ * splices, which nothing else in the commit touches at or past the first
+ * one's index, and the per-index form, whose replaces sit below its tail
+ * splice. An increment the per-index form sends beside a tail splice, at an
+ * element the splice drops, sits where no index both sides hold. A
+ * hand-built revision that changes the array at or past the first splice's
+ * index some other way as well, an increment or an op by index, has those
+ * changes read as the splices' too, which can supersede a consequence write
+ * that the same change sent index by index would leave standing.
  */
 const overwrittenArrayElements = (
   array: readonly string[],
@@ -4583,83 +4594,28 @@ const overwrittenArrayElements = (
 
 /**
  * Throws a {@link ProtocolError} where `patches`, one patch operation's on the
- * document `id`, splice an array beside another op that touches it at or past
- * the lowest index they splice it at, adds, removes or moves one of its
- * elements, or touches the array itself or a value above it. Each of those
- * can change which element an index holds, or what it holds, around the
- * splices, so the indices the splices overwrote could not be read back from
- * the documents before and after the commit (`overwrittenArrayElements()`).
- * Splices of an array above it are judged by the same rule for that array,
- * and a replace or other op beneath an element below the first splice's
- * index stands. The runner sends nothing else: it drops what a splice would
- * cover, sends no add, remove or move at an element, and diffs an array a
- * mergeable op reaches index by index.
+ * document `id`, hold a splice whose index or count of removals is not a
+ * whole number at or above zero. The store would apply one with the number
+ * truncated (`spliceAll()`), so the index its patch names would not be the
+ * one it changed.
  */
-const refuseMixedSplices = (
+const refuseFractionalSplices = (
   id: string,
   patches: readonly PatchOp[],
 ): void => {
-  const firstSplice = new Map<string, number>();
   for (const patch of patches) {
     if (patch.op !== "splice") continue;
-    firstSplice.set(
-      patch.path,
-      Math.min(firstSplice.get(patch.path) ?? Infinity, patch.index),
-    );
-  }
-  if (firstSplice.size === 0) return;
-  const refuse = (array: string, patch: PatchOp): never => {
+    if (
+      Number.isInteger(patch.index) && patch.index >= 0 &&
+      Number.isInteger(patch.remove) && patch.remove >= 0
+    ) {
+      continue;
+    }
     throw new ProtocolError(
-      `memory v2 commit splices ${array} in document ${id} beside a ` +
-        `${patch.op} at ${patch.path} that touches the array at or past ` +
-        `index ${firstSplice.get(array)}, or the array itself, or a value ` +
-        "above it: a commit's splices must stand alone on their array",
+      `memory v2 commit splices ${patch.path} in document ${id} at index ` +
+        `${patch.index}, removing ${patch.remove}: a splice's index and count ` +
+        "must be whole numbers at or above zero",
     );
-  };
-  const outside = new Set<string>();
-  for (const patch of patches) {
-    const pointers = patch.op === "move" ? [patch.from, patch.path] : [
-      patch.path,
-    ];
-    for (const pointer of pointers) {
-      if (patch.op !== "splice") outside.add(pointer);
-      const path = parsePointer(pointer);
-      // Each spliced array at or above the op's path.
-      for (let length = 0; length <= path.length; length += 1) {
-        const array = encodePointer(path.slice(0, length));
-        const first = firstSplice.get(array);
-        if (first === undefined) continue;
-        if (length === path.length) {
-          if (patch.op !== "splice") refuse(array, patch);
-          continue;
-        }
-        // An add, remove or move at an element moves every element after
-        // it, wherever it is.
-        const segment = path[length]!;
-        if (
-          !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
-          (length === path.length - 1 &&
-            (patch.op === "add" || patch.op === "remove" ||
-              patch.op === "move"))
-        ) {
-          refuse(array, patch);
-        }
-      }
-    }
-  }
-  // An op other than a splice at a path above a spliced array.
-  for (const array of firstSplice.keys()) {
-    const path = parsePointer(array);
-    for (let length = 0; length < path.length; length += 1) {
-      const above = encodePointer(path.slice(0, length));
-      if (!outside.has(above)) continue;
-      const patch = patches.find((candidate) =>
-        candidate.op !== "splice" &&
-        (candidate.path === above ||
-          (candidate.op === "move" && candidate.from === above))
-      )!;
-      refuse(array, patch);
-    }
   }
 };
 
@@ -6755,13 +6711,12 @@ const applyCommitTransaction = (
   // already answered from the store above.
   refuseDeletedSpace(engine, space);
 
-  // A splice stands alone on its array (`refuseMixedSplices()`), which is
-  // what lets what a session's splices overwrote be read back exactly
-  // (`selectSessionOverwritePathsSince()`). Fresh commits only: an exact
-  // replay already answered from the store above.
+  // A splice names its index and its count of removals in whole numbers
+  // (`refuseFractionalSplices()`). Fresh commits only: an exact replay
+  // already answered from the store above.
   for (const operation of commit.operations) {
     if (operation.op === "patch") {
-      refuseMixedSplices(operation.id, operation.patches);
+      refuseFractionalSplices(operation.id, operation.patches);
     }
   }
 

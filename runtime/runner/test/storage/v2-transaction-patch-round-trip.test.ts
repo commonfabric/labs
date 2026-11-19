@@ -829,6 +829,26 @@ describe("v2-transaction", () => {
       });
     });
 
+    it("commits an increment of an element beside the truncation that drops it", async () => {
+      const writer = connect();
+      await commit(
+        writer,
+        "truncated",
+        (cell) => cell.set({ list: [10, 20, 30] }),
+      );
+
+      const sent = await commit(writer, "truncated", (cell) => {
+        cell.key("list").key(2).increment(1);
+        cell.key("list").key("length").set(2);
+      });
+
+      expect([...sent].sort()).toEqual([
+        "increment /value/list/2",
+        "splice /value/list",
+      ]);
+      expect(await storedValue("truncated")).toStrictEqual({ list: [10, 20] });
+    });
+
     it("sends a change that no edit script within 64 edits makes index by index", async () => {
       // Seventy elements change and one is removed, past the bound where the
       // search for a shortest edit script stops. One splice spanning the
