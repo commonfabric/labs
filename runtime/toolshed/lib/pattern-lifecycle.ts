@@ -36,7 +36,7 @@ import type {
   ServedRegistrationPreparation,
   ServedSetSourceReceipt,
 } from "@commonfabric/piece/ops";
-import type { RuntimeProgram } from "@commonfabric/runner";
+import type { HostFacts, RuntimeProgram } from "@commonfabric/runner";
 import {
   type LifecyclePhaseTiming,
   LifecycleVerbFailure,
@@ -85,6 +85,10 @@ const lifecycleBodies = {
     ...sourceFields,
     requestKey: z.string().min(1).max(256).optional(),
     argument: z.record(z.string(), z.unknown()).optional(),
+    hostFacts: z.record(
+      z.string(),
+      z.union([z.string(), z.number(), z.boolean(), z.null()]),
+    ).optional(),
     repository: z.string().optional(),
     slug: z.string().optional(),
     force: z.boolean().optional(),
@@ -357,6 +361,7 @@ export async function processUpload(
 type InstantiateInput = WireSource & {
   space: string;
   argument?: Record<string, unknown>;
+  hostFacts?: HostFacts;
   repository?: string;
   slug?: string;
   force?: boolean;
@@ -434,6 +439,7 @@ async function instantiate(
     request: {
       source,
       ...(input.argument === undefined ? {} : { argument: input.argument }),
+      ...(input.hostFacts === undefined ? {} : { hostFacts: input.hostFacts }),
       ...(input.repository === undefined
         ? {}
         : { repository: input.repository }),

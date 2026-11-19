@@ -17,6 +17,7 @@ import {
   getPatternSource,
   getPieceReconciliation,
   getPieceSourceRevisions,
+  type HostFacts,
   type NormalizedFullLink,
   Runtime,
   type RuntimeProgram,
@@ -82,6 +83,19 @@ const BASE_PROGRAM = programOf([
   "    label: seed ?? 'unset',",
   "  }),",
   ");",
+  "",
+].join("\n"));
+
+/** `BASE_PROGRAM` with an argument filled from the host fact `loom.id`. */
+const PLACED_PROGRAM = programOf([
+  "import { type HostFact, NAME, pattern } from 'commonfabric';",
+  "export default pattern<",
+  "  { loomId?: HostFact<string, 'loom.id'>; seed?: string },",
+  "  { label: string }",
+  ">(({ loomId }) => ({",
+  "  [NAME]: 'Placed',",
+  "  label: loomId ?? 'unplaced',",
+  "}));",
   "",
 ].join("\n"));
 
@@ -231,6 +245,7 @@ describe("served lifecycle verbs", () => {
       force?: boolean;
       register?: boolean;
       requestKey?: string;
+      hostFacts?: HostFacts;
     } = {},
   ) =>
     served(
@@ -902,6 +917,31 @@ export default pattern(() => {
       expect(argument.get()).toEqual({ seed: "planted" });
       expect(getPieceSourceRevisions(piece.getCell())).toHaveLength(1);
       expect(host.stats().lifecycleVerbs).toEqual({ runs: 1, failures: 0 });
+    });
+
+    it("fills the argument properties the pattern marks with the host facts it is given", async () => {
+      const placed = await instantiate({ program: PLACED_PROGRAM }, undefined, {
+        hostFacts: { "loom.id": "loom-1", "loom.slot": 3 },
+      });
+      const chosen = await instantiate(
+        { program: PLACED_PROGRAM },
+        { loomId: "chosen" },
+        { hostFacts: { "loom.id": "loom-1" } },
+      );
+      const unmarked = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        hostFacts: { "loom.id": "loom-1" },
+      });
+
+      const pieces = await clientPieces();
+      const argumentOf = async (pieceId: string) => {
+        const piece = await pieces.get(pieceId);
+        const argument = pieces.getArgument(piece.getCell());
+        await argument.sync();
+        return argument.get();
+      };
+      expect(await argumentOf(placed.pieceId)).toEqual({ loomId: "loom-1" });
+      expect(await argumentOf(chosen.pieceId)).toEqual({ loomId: "chosen" });
+      expect(await argumentOf(unmarked.pieceId)).toEqual({});
     });
 
     it("takes a pattern an earlier upload left in the space", async () => {

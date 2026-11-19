@@ -19,7 +19,6 @@ import {
 import {
   isModule,
   type JSONSchema,
-  type JSONValue,
   type Module,
   type Pattern,
 } from "./builder/types.ts";
@@ -533,9 +532,12 @@ export function foldStoredArgumentSlots<T>(
 /**
  * The facts a host knows about where it creates a piece, by key: the values a
  * pattern's argument properties marked `hostFact` are filled from
- * (`HostFact<T, K>`; `docs/features/host-embedding.md`, "Host facts").
+ * (`HostFact<T, K>`; `docs/features/host-embedding.md`, "Host facts"). A fact
+ * is a scalar, such as an identifier.
  */
-export type HostFacts = Readonly<Record<string, JSONValue>>;
+export type HostFacts = Readonly<
+  Record<string, string | number | boolean | null>
+>;
 
 /**
  * `argument`, a new piece's argument, with each top-level property `schema`
@@ -555,7 +557,7 @@ export function fillHostFacts(
   if (!isObjectOrArray(root) || !isObjectOrArray(root.properties)) {
     return argument;
   }
-  const filled: Record<string, JSONValue> = {};
+  const filled: Record<string, string | number | boolean | null> = {};
   for (const [name, declared] of Object.entries(root.properties)) {
     const property = isObjectOrArray(declared) && declared.$ref
       ? resolveCfcSchemaRefs(declared, schema)

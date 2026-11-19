@@ -84,6 +84,7 @@ import {
   getCellOrThrow,
   getMetaLink,
   getPatternIdentityRef,
+  type HostFacts,
   isCell,
   isCellResult,
   isReadableCell,
@@ -1954,6 +1955,7 @@ async function createWithReceipt(
   repository: string | undefined,
   options: {
     input?: object;
+    hostFacts?: HostFacts;
     start?: boolean;
     slug?: string;
     force?: boolean;
@@ -1969,6 +1971,9 @@ async function createWithReceipt(
       const request = {
         requestKey,
         ...(options?.input === undefined ? {} : { argument: options.input }),
+        ...(options?.hostFacts === undefined
+          ? {}
+          : { hostFacts: options.hostFacts }),
         ...(repository === undefined ? {} : { repository }),
         ...(options?.slug === undefined ? {} : { slug: options.slug }),
         ...(options?.force === undefined ? {} : { force: options.force }),
@@ -2102,6 +2107,13 @@ export async function newPieceWithReceipt(
   options?: {
     /** Initial argument committed during setup, before registration or start. */
     input?: object;
+
+    /**
+     * Facts the host knows about where it creates the piece, filled into the
+     * argument properties the pattern marks with them (`HostFact<T, K>`). An
+     * `input` value for such a property is kept.
+     */
+    hostFacts?: HostFacts;
 
     start?: boolean;
     slug?: string;
@@ -2299,6 +2311,9 @@ export async function newPieceWithReceipt(
         repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
+        ...(options?.hostFacts === undefined
+          ? {}
+          : { hostFacts: options.hostFacts }),
       })),
   );
   // Here rather than after the registry add below: the piece now exists in

@@ -28,9 +28,11 @@ import {
   type Cell,
   compileAndSavePattern,
   entityIdFrom,
+  fillHostFacts,
   getPatternIdentityRef,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
+  type HostFacts,
   isStream,
   type MemorySpace,
   type NormalizedFullLink,
@@ -126,6 +128,12 @@ export interface ServedInstantiateRequest {
 
   /** The new piece's argument; absent means the pattern's defaults. */
   argument?: object;
+
+  /**
+   * Facts the host knows about where it creates the piece, filled into the
+   * argument properties the pattern marks with them (`fillHostFacts()`).
+   */
+  hostFacts?: HostFacts;
 
   /** Repository locator stored with the piece's source. */
   repository?: string;
@@ -462,7 +470,12 @@ export async function servedInstantiatePiece(
     if (retained !== undefined) return retained;
     // With a transaction supplied, setup runs to completion before it
     // returns and leaves the commit to this transaction.
-    void runtime.setup(tx, pattern, request.argument ?? {}, piece, {
+    const argument = fillHostFacts(
+      request.argument ?? {},
+      pattern.argumentSchema,
+      request.hostFacts,
+    );
+    void runtime.setup(tx, pattern, argument, piece, {
       ...(request.repository === undefined
         ? {}
         : { patternRepository: request.repository }),

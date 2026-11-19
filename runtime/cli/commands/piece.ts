@@ -2558,6 +2558,11 @@ export const piece = targetOptions(
     "--input-file <path:string>",
     "Initialize the piece with a JSON object from this file before starting or registering it.",
   )
+  .option(
+    "--host-fact <fact:string>",
+    "A fact about where the piece is created, as <key>=<value>, filled into the argument property the pattern marks with HostFact<T, key>. Repeatable.",
+    { collect: true },
+  )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
     "--main-export <export:string>",
@@ -5487,6 +5492,34 @@ function newPieceEntry(
   return { patternId, patternIndexUrl };
 }
 
+/**
+ * The host facts `--host-fact <key>=<value>` options name, by key, or
+ * `undefined` for none. Throws for an option with no `=` or no key, and for a
+ * key named twice.
+ */
+export function parseHostFacts(
+  options: readonly string[] | undefined,
+): Record<string, string> | undefined {
+  if (options === undefined || options.length === 0) return undefined;
+  const facts: Record<string, string> = {};
+  for (const option of options) {
+    const at = option.indexOf("=");
+    if (at <= 0) {
+      throw new ValidationError(
+        `\`--host-fact\` takes \`<key>=<value>\`, not \`${option}\`.`,
+      );
+    }
+    const key = option.slice(0, at);
+    if (Object.hasOwn(facts, key)) {
+      throw new ValidationError(
+        `\`--host-fact\` names \`${key}\` twice; a fact has one value.`,
+      );
+    }
+    facts[key] = option.slice(at + 1);
+  }
+  return facts;
+}
+
 export async function newPieceFromCommand(
   // deno-lint-ignore no-explicit-any
   options: any,
@@ -5496,6 +5529,7 @@ export async function newPieceFromCommand(
   setQuietMode(!!options.quiet);
   const entry = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
+  const hostFacts = parseHostFacts(options.hostFact);
   const input = options.inputFile === undefined
     ? undefined
     : JSON.parse(await Deno.readTextFile(options.inputFile));
@@ -5521,6 +5555,7 @@ export async function newPieceFromCommand(
       slug: options.slug,
       force: !!options.force,
       ...(input === undefined ? {} : { input }),
+      ...(hostFacts === undefined ? {} : { hostFacts }),
       ...(options.requestKey === undefined
         ? {}
         : { requestKey: options.requestKey }),

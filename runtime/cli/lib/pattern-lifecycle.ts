@@ -11,7 +11,7 @@
 import type { FabricPlainObject } from "@commonfabric/api";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PatternLifecycleVerb } from "@commonfabric/memory/v2";
-import type { RuntimeProgram } from "@commonfabric/runner";
+import type { HostFacts, RuntimeProgram } from "@commonfabric/runner";
 
 /** How a verb reaches the serving side. */
 export interface LifecycleClientConfig {
@@ -231,6 +231,7 @@ export async function instantiatePieceOnServer(
     )
     & {
       argument?: object;
+      hostFacts?: HostFacts;
       repository?: string;
       slug?: string;
       force?: boolean;
@@ -259,6 +260,7 @@ export async function instantiatePieceOnServer(
       ? { pattern: input.pattern }
       : { program: wireProgram(input.program) }),
     ...(input.argument === undefined ? {} : { argument: input.argument }),
+    ...(input.hostFacts === undefined ? {} : { hostFacts: input.hostFacts }),
     ...(input.repository === undefined ? {} : { repository: input.repository }),
     ...(input.slug === undefined ? {} : { slug: input.slug }),
     ...(input.force === undefined ? {} : { force: input.force }),

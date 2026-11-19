@@ -35,12 +35,14 @@ import {
   type EntityIdListResult,
   type EnvReader,
   type ExperimentalOptions,
+  fillHostFacts,
   getEntityId,
   getMetaLink,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
   getPieceSourceSnapshot,
+  type HostFacts,
   idStringForEntityAddress,
   type IExtendedStorageTransaction,
   inSpaceRootCause,
@@ -223,6 +225,13 @@ export interface PiecesControllerOptions {
 
 export interface CreatePieceOptions {
   input?: object;
+
+  /**
+   * Facts the host knows about where it creates the piece, filled into the
+   * argument properties the pattern marks with them (`fillHostFacts()`).
+   */
+  hostFacts?: HostFacts;
+
   repository?: string;
   origin?: string;
   start?: boolean;
@@ -1691,9 +1700,16 @@ export class PiecesController<T = unknown> {
   ): Promise<PieceController<U>> {
     const start = options.start ?? true;
     const pattern = await compileProgram(this, program);
+    const input = options.hostFacts === undefined
+      ? options.input
+      : fillHostFacts(
+        options.input ?? {},
+        pattern.argumentSchema,
+        options.hostFacts,
+      );
     const piece = await this.runPersistent<U>(
       pattern,
-      options.input,
+      input,
       cause,
       { repository: options.repository, origin: options.origin, start },
     );

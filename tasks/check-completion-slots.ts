@@ -147,6 +147,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ],
   ["piece new:request-key", "an opaque caller retry key"],
   [
+    "piece new:host-fact",
+    "a `<key>=<value>` fact only the host creating the piece knows",
+  ],
+  [
     "piece new:from-index",
     "a published pattern's id, which a pattern-index search answers",
   ],
