@@ -18,11 +18,10 @@
  *
  * The corpus is the `patterns/` directory of the repository, or, with
  * `COMPARE_ROOT` set, that of the directory it names, which is also the
- * root a program's local imports resolve under. `topics/tree.ts` writes
- * such a directory for Topics. With `COMPARE_TODAY_ROOT` set as well,
- * today's runtime compiles the module of the same path under the directory
- * it names, so that the crate's source and today's can differ where
- * today's declarations refuse what the documents require.
+ * root a program's local imports resolve under. With `COMPARE_TODAY_ROOT`
+ * set as well, today's runtime compiles the module of the same path under
+ * the directory it names, so that the crate's source and today's can
+ * differ.
  */
 import { fromFileUrl } from "@std/path";
 

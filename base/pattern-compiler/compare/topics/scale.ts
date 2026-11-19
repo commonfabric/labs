@@ -33,8 +33,8 @@
  * Each step also records what the board holds afterwards in a few facts
  * that the two arms are compared on (`facts`).
  *
- * The executor runs the program as `topics/tree.ts` writes it, which the
- * crate emits. Today's runtime runs the program of the repository.
+ * Both arms run the program of the repository, which the crate emits for
+ * the executor and today's runtime compiles.
  */
 import { Identity } from "@commonfabric/identity";
 import { fromFileUrl } from "@std/path";
@@ -48,9 +48,19 @@ import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../../exec/executor.ts";
 import { Ref } from "../../exec/store.ts";
-import { TOPICS_FILES, writeTopicsTree } from "./tree.ts";
 
 const repository = fromFileUrl(new URL("../../../../", import.meta.url));
+
+/** The files of the program of Topics, relative to `patterns/`. */
+const TOPICS_FILES = [
+  "apps/topics/main.tsx",
+  "apps/topics/crossref-index.ts",
+  "apps/topics/topic.tsx",
+  "product/collection-naming/mentionable.ts",
+  "product/collection-naming/naming.ts",
+  "product/collection-naming/allocator.ts",
+  "system/profile-face/profile-face.ts",
+];
 
 /** What one topic of the seeded board holds, with `mentions` as indexes. */
 const topicOf = (index: number) => ({
@@ -130,22 +140,14 @@ const factsOf = (result: Record<string, unknown>): Facts => {
 // The executor
 //
 
-/** The board's artifact and that of a topic, emitted from the tree. */
+/** The board's artifact and that of a topic, emitted by the crate. */
 const emitted = async (): Promise<{
   board: Artifact;
   artifacts: (id: string) => Artifact | undefined;
 }> => {
-  const root = await Deno.makeTempDir({ prefix: "topics-tree-" });
-  await writeTopicsTree(root);
   const { success, stdout, stderr } = await new Deno.Command(
     `${repository}base/pattern-compiler/target/release/pattern-compiler`,
-    {
-      args: [
-        "emit",
-        ...TOPICS_FILES.map((file) => file.replace(/^patterns\//, "")),
-      ],
-      cwd: `${root}/patterns`,
-    },
+    { args: ["emit", ...TOPICS_FILES], cwd: `${repository}patterns` },
   ).output();
   if (!success) throw new Error(new TextDecoder().decode(stderr));
   const modules = JSON.parse(new TextDecoder().decode(stdout)) as {

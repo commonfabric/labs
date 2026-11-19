@@ -900,28 +900,22 @@ deno run -A --no-check base/pattern-compiler/compare/integrated.ts report integr
 ## Topics
 
 Topics (`patterns/apps/topics/`) is the target both tracks of the integration
-work toward. Its program is seven files, and the crate accepts it after the
-rewrite `compare/topics/rewrite.patch`, which `compare/topics/tree.ts` applies
-to a copy of the seven files; notes 539 on of `SPEC-NOTES.md` say which rule
-asks for each change. The comparison runs on such a copy with `COMPARE_ROOT`,
-and with `COMPARE_TODAY_ROOT` today's runtime compiles the source of the
-repository, which today's declarations accept and the rewritten source they do
-not (note 539):
+work toward. Its program is seven files, rewritten to the subset in the
+repository's own source (notes 549 on of `SPEC-NOTES.md`), so the crate and
+today's runtime run one source. The comparison runs on it like on any module:
 
 ```sh
-deno run -A base/pattern-compiler/compare/topics/tree.ts topics-tree
-COMPARE_ROOT=topics-tree COMPARE_TODAY_ROOT=$PWD deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts stubbed values.jsonl
-COMPARE_ROOT=topics-tree COMPARE_TODAY_ROOT=$PWD deno run -A --no-check base/pattern-compiler/compare/corpus.ts run labels.jsonl --stubbed
+deno run -A --no-check base/pattern-compiler/compare/values-corpus.ts stubbed values.jsonl apps/topics/
+deno run -A --no-check base/pattern-compiler/compare/corpus.ts run labels.jsonl apps/topics/ --stubbed
 ```
 
 `compare/topics/scale.ts` runs the board at a size of 100, 1,000 or 2,000
-topics, on the executor (the program of the tree) or on today's runtime (the
-program of the repository), in a process of its own: the load, three edits of
-one topic by a writer outside the board, and three creates through `addTopic`,
-each timed until the board is up to date and the read of its result apart, with
-the facts of the result both arms are compared on. Each topic is a document that
-holds what the board demands of a topic and references to the two topics before
-it, and the board's argument holds a reference to each:
+topics, on the executor or on today's runtime, in a process of its own: the
+load, three edits of one topic by a writer outside the board, and three creates
+through `addTopic`, each timed until the board is up to date and the read of its
+result apart, with the facts of the result both arms are compared on. Each topic
+is a document that holds what the board demands of a topic and references to the
+two topics before it, and the board's argument holds a reference to each:
 
 ```sh
 deno run -A --no-check base/pattern-compiler/compare/topics/scale.ts executor 100 1000 2000
