@@ -3,7 +3,7 @@ import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
-import type { BranchName } from "../../v2.ts";
+import { type BranchName, toDocumentPath } from "../../v2.ts";
 import {
   applyCommit,
   close,
@@ -160,7 +160,10 @@ describe("engine", () => {
           sessionId,
           commit: {
             localSeq: ++localSeq,
-            reads: { confirmed: [{ id, path: [], seq }], pending: [] },
+            reads: {
+              confirmed: [{ id, path: toDocumentPath([]), seq }],
+              pending: [],
+            },
             operations: [{ op: "set", id, value: { value: "fork" } }],
             branch: "fork",
           },
@@ -179,7 +182,10 @@ describe("engine", () => {
         sessionId,
         commit: {
           localSeq: ++localSeq,
-          reads: { confirmed: [{ id, path: [], seq: atFork }], pending: [] },
+          reads: {
+            confirmed: [{ id, path: toDocumentPath([]), seq: atFork }],
+            pending: [],
+          },
           operations: [{ op: "set", id, value: { value: "fork" } }],
           branch: "fork",
         },

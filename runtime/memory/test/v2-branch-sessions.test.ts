@@ -8,7 +8,8 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { BranchName, FabricValue } from "../v2.ts";
+import type { FabricValue } from "@commonfabric/data-model";
+import type { BranchName } from "../v2.ts";
 import {
   type Client,
   connect,
@@ -105,9 +106,9 @@ describe("branch sessions", () => {
 
       await set(main, "on main");
       await set(writer, "on fork");
-      const update = await updates.next();
+      await updates.next();
 
-      expect(update.value.entities.map((entity) => entity.document?.value))
+      expect(view.entities.map((entity) => entity.document?.value))
         .toEqual(["on fork"]);
       expect(view.entities.map((entity) => entity.branch)).toEqual(["fork"]);
     });
@@ -224,9 +225,9 @@ describe("branch sessions", () => {
       const updates = view.subscribe();
 
       const seq = await main.restoreBranch({ sourceSeq: then.seq });
-      const update = await updates.next();
+      await updates.next();
 
-      expect(update.value.entities.map((entity) => entity.document?.value))
+      expect(view.entities.map((entity) => entity.document?.value))
         .toEqual(["old"]);
       expect((await main.listHistory({ limit: 1 }))[0]).toMatchObject({
         seq,

@@ -67,7 +67,9 @@ const SENT = {
     contentAddressedSchemas: false,
     localSessionDocuments: true,
     syncCidReferences: true,
+    serverExecution: false,
   },
+  branches: { [federatedSpace]: "reach-branch" },
   cfcEnforcementMode: "enforce-strict",
   cfcFlowLabels: "persist",
   cfcReadMaxConfidentiality: [cfcAtom.user(signer.did())],
@@ -242,6 +244,10 @@ const REACH = {
   awaitHealth: {
     reads: (o) => o.processor.accessForTestingOnly.awaitedHealth,
     expected: true,
+  },
+  branches: {
+    reads: (o) => o.storage.branches,
+    expected: { [federatedSpace]: "reach-branch" },
   },
 } satisfies Record<keyof Required<InitializationData>, FieldReach>;
 
