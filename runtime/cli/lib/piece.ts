@@ -140,6 +140,7 @@ import {
   isObjectOrArray,
   isPlainObject,
 } from "@commonfabric/js-values/types";
+import { encodeDataFile } from "@commonfabric/text/data-file";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -2825,6 +2826,71 @@ export async function checkPiecePattern(
   return await piece.checkPattern(program);
 }
 
+/** What a piece runs now: the pattern it points at and that pattern's source. */
+export interface RunningPattern {
+  /** The space (a DID) the piece is in. */
+  space: string;
+
+  /** The piece's id. */
+  id: string;
+
+  /** The content-addressed id of the pattern it runs. */
+  patternId: string;
+
+  program: RuntimeProgram;
+
+  /** The origin the piece follows, when it follows one (`setsrc --origin`). */
+  origin?: string;
+}
+
+/**
+ * Reads what the piece `config` names runs now, without changing it. The
+ * pattern pointer is read once, so the id and the source always match.
+ *
+ * @throws Error when the piece points at no pattern, or its pattern's source
+ * is not in the space.
+ */
+export async function readRunningPattern(
+  config: PieceConfig,
+  deps: PieceResolutionDeps = {},
+): Promise<RunningPattern> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  try {
+    const resolvedConfig = await resolvePieceConfigWithPieces(
+      config,
+      pieces,
+      deps,
+    );
+    const piece = await pieces.get(
+      resolvedConfig.piece,
+      false,
+      undefined,
+      resolvedConfig.pieceScope,
+    );
+    const ref = await piece.getPatternRef();
+    const program = ref === undefined
+      ? undefined
+      : await pieces.runtime.patternManager.getPatternSourceProgramByIdentity(
+        ref.identity,
+        pieces.getSpace(),
+      );
+    if (ref === undefined || program === undefined) {
+      throw new Error(
+        `Piece "${resolvedConfig.piece}" does not contain a pattern source.`,
+      );
+    }
+    return {
+      space: pieces.getSpace(),
+      id: resolvedConfig.piece,
+      patternId: ref.identity,
+      program: { ...program, mainExport: ref.symbol },
+      ...(ref.source.origin === undefined ? {} : { origin: ref.source.origin }),
+    };
+  } finally {
+    await pieces.dispose();
+  }
+}
+
 export async function savePiecePattern(
   config: PieceConfig,
   outPath: string,
@@ -2894,18 +2960,30 @@ async function recordSavedIndexSource(
  * layout it comes back to, and a `setsrc` from here resolves the same imports
  * and the same data files. A name that is not grounded belongs to no layout
  * and is refused rather than written somewhere arbitrary.
+ *
+ * Each file is written as the bytes it was stored from, so a binary media
+ * file, which the package holds as a `data:` URL, comes back as the image,
+ * font, or sound it was read from. Every name is checked and every file
+ * encoded before the first is written, so a refused name or a file that
+ * cannot be encoded writes nothing; a failure to write a file can still leave
+ * the files before it written.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
   outPath: string,
 ): Promise<void> {
-  for (const { name, contents } of program.files) {
+  const files = program.files.map(({ name, contents }) => {
     if (name[0] !== "/") {
       throw new Error("Ungrounded file in pattern.");
     }
-    const outFilePath = join(outPath, name.substring(1));
-    await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeTextFile(outFilePath, contents);
+    return {
+      path: join(outPath, name.substring(1)),
+      bytes: encodeDataFile(contents, name),
+    };
+  });
+  for (const { path, bytes } of files) {
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeFile(path, bytes);
   }
 }
 

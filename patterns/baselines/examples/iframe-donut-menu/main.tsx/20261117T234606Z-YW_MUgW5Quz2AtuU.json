@@ -1,0 +1,82 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "examples/iframe-donut-menu/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "IframeStateData": {
+        "properties": {
+          "favorite": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The id of the favorite donut, or `null` before one is chosen."
+          }
+        },
+        "required": [
+          "favorite"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "A menu of donuts, one of which may be the favorite.",
+    "properties": {
+      "$FS": {
+        "description": "The menu as text, with the favorite marked.",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "frontmatter": {
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "type": {
+            "enum": [
+              "text/markdown"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "frontmatter",
+          "content"
+        ],
+        "type": "object"
+      },
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "state": {
+        "$ref": "#/$defs/IframeStateData",
+        "description": "Which donut is the favorite, for everyone on the piece."
+      }
+    },
+    "required": [
+      "state",
+      "$NAME",
+      "$UI",
+      "$FS"
+    ],
+    "type": "object"
+  }
+}

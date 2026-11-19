@@ -32,9 +32,9 @@ describe("v2-track-explicit-instances", () => {
   // session's own, and each instance's links are attributed to the
   // instance holding them: the second visit, being the session's own,
   // takes down the override the first installed. The two are walked under
-  // selectors of their own, since the traversal memo keys a document by
-  // its scope's name and under one selector the second instance would be
-  // answered by the first's traversal.
+  // selectors of their own: the walk of Alice's instance records the root
+  // under the session's own key as well, which under one selector would
+  // cover the session's own instance and leave it unwalked.
 
   const roots = [
     {
@@ -54,6 +54,8 @@ describe("v2-track-explicit-instances", () => {
       engine: Awaited<ReturnType<typeof open>>,
       tracked: ReturnType<typeof trackGraph>,
     ) => void,
+    tracking: readonly Parameters<typeof trackGraph>[2]["roots"][number][] =
+      roots,
   ): Promise<void> => {
     const path = await Deno.makeTempFile({ suffix: ".sqlite" });
     const engine = await open({ url: toFileUrl(path) });
@@ -67,6 +69,24 @@ describe("v2-track-explicit-instances", () => {
             userRoot("of:root", "of:x"),
             { op: "set", id: "of:x", value: { value: { name: "x" } } },
             { op: "set", id: "of:y", value: { value: { name: "y" } } },
+            {
+              op: "set",
+              id: "of:e",
+              value: {
+                value: {
+                  r: {
+                    "/": {
+                      "link@1": {
+                        id: "of:root",
+                        path: [],
+                        space,
+                        scope: "user",
+                      },
+                    },
+                  },
+                },
+              },
+            },
           ],
         },
       });
@@ -80,7 +100,7 @@ describe("v2-track-explicit-instances", () => {
       });
       fn(
         engine,
-        trackGraph(space, engine, { roots: [...roots] }, undefined, service),
+        trackGraph(space, engine, { roots: [...tracking] }, undefined, service),
       );
     } finally {
       close(engine);
@@ -91,15 +111,63 @@ describe("v2-track-explicit-instances", () => {
   describe("trackGraph()", () => {
     it("attributes what each instance of a root reaches to that instance", async () => {
       await withTrackedInstances((_engine, tracked) => {
+        // Each referrer is the record, one instance under one selector,
+        // whose walk reached the document; its key leads with the
+        // instance's document key.
         const referrersOf = (id: string) =>
           [...tracked.state.trackedBy.entries()]
             .filter(([entry]) => entry.startsWith(`${space}/space/${id}\0`))
-            .flatMap(([, referrers]) => [...referrers]);
-        expect(referrersOf("of:x")).toEqual([`${space}/${aliceKey}/of:root`]);
+            .flatMap(([, referrers]) => [...referrers])
+            .map((referrer) => referrer.split("\0"));
+        expect(referrersOf("of:x")).toEqual([
+          [`${space}/${aliceKey}/of:root`, expect.any(String)],
+        ]);
         expect(referrersOf("of:y")).toEqual([
-          `${space}/${serviceKey}/of:root`,
+          [`${space}/${serviceKey}/of:root`, expect.any(String)],
         ]);
       });
+    });
+
+    it("delivers what each instance of a root reaches when both are walked under one selector", async () => {
+      // The session's own instance and then Alice's, named explicitly, are
+      // walked under one selector. They are one document by scope name, so
+      // each instance's positions are memoized apart.
+
+      await withTrackedInstances((_engine, tracked) => {
+        expect(
+          [...tracked.state.entities.values()].map((entity) => entity.id)
+            .toSorted(),
+        ).toEqual(["of:root", "of:root", "of:x", "of:y"]);
+      }, [{ ...roots[1], selector: roots[0].selector }, roots[0]]);
+    });
+
+    it("reaches the session's own instance through a link from a root walked after another instance's", async () => {
+      // `of:e` links to `of:root` in the user scope, which a walk reads as
+      // the session's own instance, after the walk of Alice's instance.
+
+      await withTrackedInstances((_engine, tracked) => {
+        expect(
+          [...tracked.state.entities.values()].map((entity) => entity.id)
+            .toSorted(),
+        ).toEqual(["of:e", "of:root", "of:root", "of:x", "of:y"]);
+      }, [roots[0], {
+        id: "of:e",
+        selector: {
+          path: [],
+          schema: {
+            type: "object",
+            properties: {
+              r: {
+                type: "object",
+                properties: {
+                  child: { type: "object" },
+                  other: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+      }]);
     });
   });
 

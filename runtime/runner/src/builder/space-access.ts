@@ -176,14 +176,35 @@ export function spaceMembers(
   const space = spaceOfTarget(target, "spaceMembers(target)");
   const acl = accessLevel(runtime, tx, space, principal, reactive, true)
     ?.grantedBy;
-  if (acl === undefined) return undefined;
-  const principals: Record<DID, SpaceGrantLevel> = {};
-  let anyone: SpaceGrantLevel | undefined;
-  for (const [user, entry] of Object.entries(acl)) {
-    if (user === ANYONE_USER) anyone = entry;
-    else if (isDID(user) && entry !== undefined) principals[user] = entry;
-  }
-  return anyone === undefined ? { principals } : { principals, anyone };
+  return acl === undefined ? undefined : memberListOf(acl);
+}
+
+/**
+ * Returns the principals the access list of `space` names, each with the
+ * level its entry grants, and the list's `*` entry apart, as `anyone`, read
+ * through `tx`: the list {@link spaceMembers} returns, for a host rather than
+ * for pattern code. It takes no frame, so a host calls it with a transaction
+ * of its own, and it checks no principal: whoever the host shows the list to
+ * is the host's decision, as it is for any value the host reads.
+ *
+ * `undefined` means there is no list to read: one that has not arrived, a
+ * space that has none, a value that is not a well-formed list, and a space
+ * the memory server has refused as deleted. On a client, so does a space the
+ * memory server has refused this runtime's session, since the copy the
+ * replica kept is then no longer this runtime's to read. A serving runtime
+ * reads every space as its owner, so a refusal of its own session, other than
+ * a deletion, changes nothing.
+ */
+export function spaceMemberListAt(
+  runtime: Runtime,
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): SpaceMemberList | undefined {
+  const acl = aclOf(runtime, tx, space);
+  const refusal = refusalOf(runtime, space);
+  if (isDeletedSpaceError(refusal)) return undefined;
+  if (!runtime.servingPosture && refusal !== undefined) return undefined;
+  return isACL(acl) ? memberListOf(acl) : undefined;
 }
 
 /**
@@ -493,8 +514,23 @@ function accessLevel(
 }
 
 /**
- * Helper for {@link accessLevel} and {@link spaceDeleted}, which returns the
- * value of `space`'s access list, read through `tx`: `undefined` while it has
+ * Helper for {@link spaceMembers} and {@link spaceMemberListAt}, which returns
+ * the principals `acl` names, each with the level its entry grants, and its
+ * `*` entry apart, as `anyone`.
+ */
+function memberListOf(acl: ACL): SpaceMemberList {
+  const principals: Record<DID, SpaceGrantLevel> = {};
+  let anyone: SpaceGrantLevel | undefined;
+  for (const [user, entry] of Object.entries(acl)) {
+    if (user === ANYONE_USER) anyone = entry;
+    else if (isDID(user) && entry !== undefined) principals[user] = entry;
+  }
+  return anyone === undefined ? { principals } : { principals, anyone };
+}
+
+/**
+ * Helper for {@link accessLevel}, {@link spaceDeleted} and
+ * {@link spaceMemberListAt}, which returns the value of `space`'s access list, read through `tx`: `undefined` while it has
  * not arrived, and for a space that has none.
  */
 function aclOf(
@@ -510,8 +546,8 @@ function aclOf(
 }
 
 /**
- * Helper for {@link accessLevel} and {@link spaceDeleted}, which returns the
- * memory server's refusal of this runtime's session `space` for good, or
+ * Helper for {@link accessLevel}, {@link spaceDeleted} and
+ * {@link spaceMemberListAt}, which returns the memory server's refusal of this runtime's session `space` for good, or
  * `undefined` when it has not refused it.
  */
 function refusalOf(runtime: Runtime, space: MemorySpace): Error | undefined {

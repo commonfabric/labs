@@ -1,4 +1,5 @@
 import type { Runtime } from "@commonfabric/runner";
+import { logUnhandledRejections } from "@commonfabric/runner/sandbox/unhandled-rejections";
 import { servedRequestHandler } from "@commonfabric/runner/executor/served-requests";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
@@ -48,6 +49,7 @@ if (import.meta.main) {
   // Read at each call, since a background launch redirects the console.
   const log = (...data: unknown[]) => console.log(...data);
   const error = (...data: unknown[]) => console.error(...data);
+  logUnhandledRejections();
   const ac = new AbortController();
   const shutdown = createShutdown({
     abort: () => ac.abort(),

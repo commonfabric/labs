@@ -417,6 +417,96 @@ describe("FileSystemProgramResolver.resolveDataFile", () => {
   });
 });
 
+describe("listDataFiles()", () => {
+  it("lists the in-memory names directly inside a directory", async () => {
+    const program = new InMemoryProgram("/main.tsx", {
+      "/main.tsx": "",
+      "/assets/glaze.png": "",
+      "/assets/old/glaze.png": "",
+    });
+
+    expect(await program.listDataFiles("/assets")).toEqual([
+      "/assets/glaze.png",
+    ]);
+    expect(await program.listDataFiles("/absent")).toBeUndefined();
+  });
+
+  it("lists the files directly inside a directory on the file system", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets/old"), { recursive: true });
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      await Deno.writeTextFile(path.join(root, "assets/menu.woff2"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+        "/assets/menu.woff2",
+      ]);
+      expect(await resolver.listDataFiles("/absent")).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("returns undefined for a path naming a file rather than a directory", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "guest.html"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/guest.html")).toBeUndefined();
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("leaves out a link in the directory that resolves to nothing", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets"));
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      await Deno.symlink("missing.png", path.join(root, "assets/gone.png"));
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("refuses a directory that climbs out of the root", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      await expect(resolver.listDataFiles("/../elsewhere")).rejects.toThrow(
+        "resolves outside of root directory",
+      );
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+});
+
 describe("HttpProgramResolver.resolveSource", () => {
   it("fetches the module a grounded specifier names, beside the main module", async () => {
     const requested: string[] = [];

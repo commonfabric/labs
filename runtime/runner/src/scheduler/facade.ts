@@ -3512,7 +3512,8 @@ export class Scheduler {
       isLiveAction: (action) => this.#isLiveAction(action),
       hasActiveDebounceTimer: (action) =>
         this.#gates.hasActiveDebounceTimer(action),
-      getNextEligibleRunTime: (action) => this.#getNextEligibleRunTime(action),
+      getNextEligibleRunTime: (action, now) =>
+        this.#getNextEligibleRunTime(action, now),
       // Engaged only while an initial rehydration is being applied (synchronous
       // post-phase-7). MUST NOT read backgroundTasks: that set holds work such
       // as an event-driven piece start (events.ts) or a sidecar pattern launch,
@@ -4037,8 +4038,11 @@ export class Scheduler {
     return record?.status === "invalid" || record?.status === "never-ran";
   }
 
-  #getNextEligibleRunTime(action: Action): number | undefined {
-    return this.#gates.getNextEligibleRunTime(action);
+  #getNextEligibleRunTime(
+    action: Action,
+    now = performance.now(),
+  ): number | undefined {
+    return this.#gates.getNextEligibleRunTime(action, now);
   }
 
   #markActionInvalid(
@@ -4246,11 +4250,11 @@ export class Scheduler {
    *
    * events.md §5's T3 drop predicate is "no runnable handler", never
    * "the run raced" — and a load failure is the second: the document the
-   * closure reads exists durably, only the read path failed. The live
-   * shape (verification-coverage.md's OW45 residue member) is a serving
-   * session revoked by the genesis ACL landing after activation —
-   * `unauthorized` on a cross-space read of a document the server itself
-   * wrote a moment earlier. Sealing §5's dropped-event notice for that
+   * closure reads exists durably, only the read path failed. The shape
+   * first seen live (verification-coverage.md's OW45 residue member) is a
+   * serving session an access-list change revoked — `unauthorized` on a
+   * cross-space read of a document the server itself wrote a moment
+   * earlier. Sealing §5's dropped-event notice for that
    * discharges at-least-once on a healthy trusted user action and
    * advances the watermark past it, so nothing ever re-runs it: the click
    * is silently lost.
@@ -4260,8 +4264,11 @@ export class Scheduler {
    * re-delivering it. What makes the deferral converge is the session
    * remount: an admitted commit touching the space's ACL document re-arms
    * the session (storage/v2.ts `consumeOwedSessionRemount`, triggered by
-   * executor/host.ts). A load whose ACL never changes, or whose re-open
-   * is denied, defers indefinitely, which is OW54's territory. The
+   * executor/host.ts). The host hears only the commits its own memory
+   * server admits, so a session that an owner in another process revoked,
+   * as an ownership move there revokes a bound one, is re-armed by nothing.
+   * Such a load, like one whose ACL never changes or whose re-open is
+   * denied, defers indefinitely, which is OW54's territory. The
    * deferral carries the drain's arrival-order BARRIER with it (events.md
    * §2, mirroring the sidecar-sync-failure arm): every later-arrived
    * durable served entry behind it IN THE SAME SPACE defers too, or a

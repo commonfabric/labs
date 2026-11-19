@@ -1,6 +1,7 @@
 /**
  * The files of a working tree as git sees them, for the checks that make a
- * claim about every file in the repository.
+ * claim about every file in the repository, and the git runner and default
+ * base revision those checks share.
  */
 
 /**
@@ -65,3 +66,16 @@ export function gitIn(directory?: string): Git {
 
 /** Runs git in the process's own directory. */
 export const git: Git = gitIn();
+
+/**
+ * The revision a change is compared against where the command line names
+ * none, in the repository `run` runs git in: `upstream/main` in a checkout
+ * of a fork, which is where a pull request's base lives, and `origin/main`
+ * otherwise. Each is given by its full name, so that a local branch of the
+ * same short name does not stand in for it. Throws when git fails.
+ */
+export async function defaultBase(run: Git): Promise<string> {
+  const upstream = "refs/remotes/upstream/main";
+  const listed = await run("for-each-ref", "--format=%(refname)", upstream);
+  return listed.trim() === upstream ? upstream : "refs/remotes/origin/main";
+}

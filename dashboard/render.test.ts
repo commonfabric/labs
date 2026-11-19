@@ -27,6 +27,7 @@ import { FAVICON_VERSION } from "./favicon.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
 import { TILE_LABEL_RULE } from "./chart-layout.ts";
+import { DASHBOARD_HEADER_RULES } from "./dashboard-header.ts";
 
 const TEST_VERSION = "1".repeat(40);
 
@@ -378,20 +379,7 @@ Deno.test("shell: the shared message is directly editable in the header center",
     brandAt < messageAt && messageAt < freshnessAt,
     "the shared message sits between the left and right header content",
   );
-  assertStringIncludes(
-    html,
-    `.top{display:grid;grid-template-columns:max-content minmax(0,1fr) max-content`,
-  );
-  assertStringIncludes(html, `.message-form{position:relative;width:min(100%,480px)`);
-  assertStringIncludes(html, `text-align:center`);
-  assertStringIncludes(
-    html,
-    `@media(max-width:560px){.top{grid-template-columns:minmax(0,1fr) max-content`,
-  );
-  assertStringIncludes(
-    html,
-    `.message-form{grid-column:1/-1;grid-row:2;width:100%}`,
-  );
+  assertStringIncludes(html, DASHBOARD_HEADER_RULES);
 });
 
 Deno.test("shell: the freshness age and the refresh interval reach both the text and the script", () => {
@@ -438,7 +426,7 @@ Deno.test("shell: the page watches its own stream and reopens one that stops del
   assertStringIncludes(html, `followUpdates(() => new EventSource('/events'), RED_AFTER, paint, {`);
   assertStringIncludes(
     html,
-    `badge.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';`,
+    `badgeText.textContent = updates.check(now) ? '● LIVE' : '● OFFLINE';`,
   );
   assertStringIncludes(html, `document.addEventListener('visibilitychange', paint);`);
   assertStringIncludes(html, `addEventListener('online', paint);`);
@@ -771,7 +759,9 @@ Deno.test("shell: the header carries the shortcut and no name of its own", () =>
   assertExists(brand, "the header's brand row");
   assertEquals(
     brand[1],
-    `<span class="badge" id="livebadge">● LIVE</span>` +
+    `<span class="badge" id="livebadge"><span class="steady">` +
+      `<span id="livetext">● LIVE</span><span class="room">● OFFLINE</span>` +
+      `</span></span>` +
       `<span class="shortcut">go/fabricwall</span>`,
     "the badge and the shortcut, and nothing naming the page",
   );

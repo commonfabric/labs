@@ -152,7 +152,6 @@ import {
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
 import { noteWroteTo } from "../lib/write-receipt.ts";
-import { loadIdentity } from "../lib/identity.ts";
 import type {
   DeployedSource,
   VersionOutcome,
@@ -1495,6 +1494,9 @@ const EX_COMP_PIECE = `${EX_COMP} --cell ${EX_PIECE}`;
  */
 const CELL_FLAG = `"--cell" (or "--piece")`;
 
+const NO_INDEX_VERSION_HELP =
+  "Keep no version of this deploy in the pattern index, and do not wait on it.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2542,6 +2544,7 @@ export const piece = targetOptions(
     "--pattern-index-url <url:string>",
     "Base URL of the pattern index --from-index reads.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2704,6 +2707,7 @@ export const piece = targetOptions(
     "--origin <origin:string>",
     "Record this origin (a system: ref or fabric URL) with the revision, so the piece follows it from then on. Without it, setsrc detaches the piece.",
   )
+  .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3604,6 +3608,9 @@ export interface PieceCLIOptions {
 
   /** `setsrc`: the origin the piece follows from then on. */
   origin?: string;
+
+  /** `setsrc` and `new`: `false` under `--no-index-version`. */
+  indexVersion?: boolean;
   json?: boolean;
 }
 
@@ -5258,49 +5265,37 @@ export async function restoreFromCommand(
   }
 }
 
-/** The modules recording a version needs, loaded on first use. */
+/** The module recording a version, loaded on first use. */
 const loadVersionModules = async () => ({
-  // deno-lint-ignore cf-imports/no-inline-module-import
-  access: await import("@commonfabric/pattern-index/access"),
   // deno-lint-ignore cf-imports/no-inline-module-import
   versions: await import("../lib/pattern-versions.ts"),
 });
 
 /**
- * Keeps a deploy of the person's own source as a private version in the
- * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
- * signing as the deploying identity. Never throws, synchronously or not:
- * the deploy it follows has committed, and an index that is misconfigured
- * or unreachable must not turn that into a failure.
+ * Keeps a deploy as a private version: `recordVersionInIndex` in
+ * `lib/pattern-versions.ts`, loaded here rather than with the command,
+ * since recording reaches the compiler's identity code, which starting
+ * `cf piece` must not load. Never throws.
  */
 export async function recordVersionInIndex(
   identity: string,
   deployed: DeployedSource,
 ): Promise<VersionOutcome> {
-  // Loaded here rather than with the command: recording reaches the
-  // compiler's identity code, which starting `cf piece` must not load.
   let modules;
-  let baseUrl: string;
-  let store: PatternIndexStore;
   try {
     modules = await loadVersionModules();
-    baseUrl = modules.access.resolvePatternIndexUrl(undefined);
-    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
   } catch (error) {
     return { status: "failed", reason: describeFailure(error) };
   }
-  const { openPatternIndexClient } = modules.access;
-  return await modules.versions.recordDeployedVersion(deployed, {
-    store,
-    openClient: async () =>
-      openPatternIndexClient({
-        baseUrl,
-        signer: await loadIdentity(identity),
-        store,
-      }),
-    readTextFile: (path) => Deno.readTextFile(path),
-  });
+  return await modules.versions.recordVersionInIndex(identity, deployed);
 }
+
+/**
+ * Records no version, for `--no-index-version`: a deploy in a tight edit
+ * loop makes no index call and never waits on the index.
+ */
+const skipIndexVersion = (): Promise<VersionOutcome> =>
+  Promise.resolve({ status: "skipped", reason: "--no-index-version" });
 
 /**
  * The version a deploy is recording, started from `onDeployed` once the
@@ -5478,7 +5473,7 @@ export async function newPieceFromCommand(
     throw new Error("`--input-file` must contain a JSON object.");
   }
   const version = main === undefined ? undefined : versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     absPath(main),
     undefined,
@@ -5871,7 +5866,7 @@ export async function applyPieceSourceCommandAction(
   deps: ApplyPieceSourceCommandDependencies = {},
 ): Promise<void> {
   const version = versionRecorder(
-    deps.recordVersion ??
+    options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) =>
         recordVersionInIndex(parseSpaceOptions(options).identity, deployed)),
     absPath(mainPath),

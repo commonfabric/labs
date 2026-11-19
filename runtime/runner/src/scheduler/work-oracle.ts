@@ -63,7 +63,13 @@ export interface PullSchedulingState {
     DirtyPullRunnableStateWithDebounce;
   readonly isLiveAction: (action: Action) => boolean;
   readonly hasActiveDebounceTimer: (action: Action) => boolean;
-  readonly getNextEligibleRunTime: (action: Action) => number | undefined;
+
+  /** Returns future eligibility as of the caller's clock sample. */
+  readonly getNextEligibleRunTime: (
+    action: Action,
+    now: number,
+  ) => number | undefined;
+
   // Per-action escape valve for convergence-backoff-deferred work. Keeping the
   // episode count on the gated node prevents one non-settling subgraph from
   // releasing idle() for an unrelated future convergence wave.
@@ -183,7 +189,7 @@ export function isTimeGated(
   action: Action,
   now: number,
 ): boolean {
-  const nextEligibleAt = state.getNextEligibleRunTime(action);
+  const nextEligibleAt = state.getNextEligibleRunTime(action, now);
   return nextEligibleAt !== undefined && nextEligibleAt > now;
 }
 
@@ -241,6 +247,8 @@ export interface PullWorkAssessment {
 export function assessPullWork(
   state: PullSchedulingState,
 ): PullWorkAssessment {
+  // Eligibility and its wake share a clock sample, so a deadline that expires
+  // during the scan still leaves a wake scheduled for the deferred work.
   const now = performance.now();
   let nextWakeAt: number | undefined;
   let deferredIdleBlocking = false;
@@ -276,7 +284,7 @@ export function assessPullWork(
   // queries are pure), and eligibleAt = max(debounce, throttle, backoff), so
   // one gate read covers every deferral mechanism.
   const noteFutureEligibility = (action: Action): void => {
-    const nextEligibleAt = state.getNextEligibleRunTime(action);
+    const nextEligibleAt = state.getNextEligibleRunTime(action, now);
     if (nextEligibleAt !== undefined && nextEligibleAt > now) {
       nextWakeAt = nextWakeAt === undefined
         ? nextEligibleAt

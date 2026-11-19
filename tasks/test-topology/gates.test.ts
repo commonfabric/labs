@@ -366,15 +366,31 @@ describe("the repository's gate suites", () => {
       [{ unit: "check-test-aliases", skip: [] }],
       { ...context, baseRef: "origin/release" },
     );
-    expect(invocation!.command).toContain("origin/release");
+    expect(invocation!.command.at(-1)).toBe("origin/release");
   });
 
-  it("compares against main where the lane names no base", async () => {
-    const [invocation] = await byId("repo-history-gates").command(
-      [{ unit: "check-baselines-append-only", skip: [] }],
+  it("names no base to a gate where the lane names none", async () => {
+    for (const unit of ["check-baselines-append-only", "check-test-aliases"]) {
+      const [invocation] = await byId("repo-history-gates").command(
+        [{ unit, skip: [] }],
+        context,
+      );
+      expect(invocation!.command.at(-1)).toBe(unit);
+    }
+
+    const [part] = await byId("repo-history-gates").command(
+      [{
+        unit: `check-cause-assignments 1 of ${CAUSE_ASSIGNMENT_PARTS}`,
+        skip: [],
+      }],
       context,
     );
-    expect(invocation!.command).toContain("origin/main");
+    expect(part!.command.slice(-4)).toEqual([
+      "task",
+      "check-cause-assignments",
+      "--part",
+      `1/${CAUSE_ASSIGNMENT_PARTS}`,
+    ]);
   });
 
   it("runs a gate that belongs to a package in that package", async () => {

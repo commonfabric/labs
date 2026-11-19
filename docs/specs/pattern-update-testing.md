@@ -363,6 +363,14 @@ deno task pattern-vintage --capture-changed                # capture a generatio
 deno task pattern-vintage --pin apps/topics/topics.test.tsx     # promote the newest generation
 ```
 
+While it runs, the command prints a line on standard error as each step begins,
+numbered against the count of such steps: each fixture's replay
+(`fixture 2/9: …`), each recorded instantiation in that fixture that today's
+source can be applied to (`  target 3/14: …`), and each test run to capture a
+fixture (`capture 1/2: …`). A line is printed only once the step before it has
+ended, so the last line names the step most recently begun. Nothing is printed
+while one long step runs, such as one slow test run.
+
 `--update` and `--pin` name a **test** path, never a pattern path: a fixture is
 produced by running a test and covers whatever that test instantiates.
 `system/home/home.tsx` names no test and captures nothing.

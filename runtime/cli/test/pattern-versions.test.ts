@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import {
   deployedPieceRef,
   type PatternIndexClient,
@@ -21,7 +21,9 @@ import {
 import {
   type DeployedSource,
   entrySlot,
+  gitCheckoutOf,
   recordDeployedVersion,
+  recordVersionInIndex as recordVersionInIndexLib,
   type VersionDeps,
   versionLine,
   type VersionOutcome,
@@ -179,6 +181,16 @@ describe("pattern-versions", () => {
       );
     });
 
+    it("asks the index to keep the version private when the deploy says so", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      await recordDeployedVersion(deployed({ keepPrivate: true }), deps);
+
+      expect(published.map((r) => r.keepPrivate)).toEqual([true]);
+    });
+
     it("makes no index call and reads no pattern id on a machine that never joined, and says so only the first time", async () => {
       const { client, published } = stubClient();
       const { deps, opened } = depsWith(client);
@@ -334,6 +346,45 @@ describe("pattern-versions", () => {
     });
   });
 
+  describe("gitCheckoutOf()", () => {
+    // Deno refuses to start git synchronously, before the catch that turns
+    // a failed git into "no checkout", so the lineage never quietly falls
+    // back to a path slot. This pins that.
+    it("finds this checkout, and throws rather than answer none when it may not run git", async () => {
+      const here = fromFileUrl(new URL(".", import.meta.url));
+      expect(await gitCheckoutOf(here)).toMatchObject({
+        root: expect.any(String),
+      });
+
+      // A process without --allow-run, as a daemon might be started.
+      const module = new URL("../lib/pattern-versions.ts", import.meta.url)
+        .href;
+      const script = join(dir, "probe.ts");
+      await Deno.writeTextFile(
+        script,
+        `const { gitCheckoutOf } = await import(${JSON.stringify(module)});
+await gitCheckoutOf(${JSON.stringify(here)});`,
+      );
+      const { code, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--no-lock",
+          "--config",
+          fromFileUrl(new URL("../deno.jsonc", import.meta.url)),
+          "--allow-read",
+          "--allow-env",
+          script,
+        ],
+        stdout: "null",
+        stderr: "piped",
+      }).output();
+      expect(code).not.toBe(0);
+      expect(new TextDecoder().decode(stderr)).toMatch(
+        /NotCapable|--allow-run/,
+      );
+    });
+  });
+
   describe("entrySlot()", () => {
     it("answers one slot for the same file in two checkouts of one repository, whatever the remote's spelling", async () => {
       const a = join(dir, "a");
@@ -440,12 +491,11 @@ describe("pattern-versions", () => {
       const before = Deno.env.get("CF_PATTERN_INDEX_URL");
       Deno.env.set("CF_PATTERN_INDEX_URL", "https://index.test/?x=1");
       try {
-        const outcome = await recordVersionInIndex(
-          "/unused/test.key",
-          deployed(),
-        );
+        for (const record of [recordVersionInIndex, recordVersionInIndexLib]) {
+          const outcome = await record("/unused/test.key", deployed());
 
-        expect(outcome.status).toBe("failed");
+          expect(outcome.status).toBe("failed");
+        }
       } finally {
         if (before === undefined) Deno.env.delete("CF_PATTERN_INDEX_URL");
         else Deno.env.set("CF_PATTERN_INDEX_URL", before);
@@ -535,6 +585,58 @@ describe("pattern-versions", () => {
       expect(recorded.map((d) => [d.entry, d.origin])).toEqual([
         [entry, "system:x.tsx"],
       ]);
+    });
+
+    it("makes no index call under --no-index-version, so the deploy never waits on the index", async () => {
+      const recorded: DeployedSource[] = [];
+      const lines: string[] = [];
+      const run = (indexVersion: boolean | undefined) =>
+        applyPieceSourceCommandAction(
+          {
+            identity: "/unused/test.key",
+            space: "s",
+            apiUrl: "https://cf.dev",
+            ...(indexVersion === undefined ? {} : { indexVersion }),
+          },
+          entry,
+          {
+            setPieceSourceFromCommand: (_options, _main, deps) => {
+              deps?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:p" },
+              });
+              return Promise.resolve({
+                config: { piece: "fid1:p" },
+                update: {
+                  ref: { identity: "pat-1", symbol: "default" },
+                  revisionId: "rev-1",
+                  seq: 7,
+                  refresh: { status: "completed" },
+                },
+              } as never);
+            },
+            // An index that never answers: a deploy that waited on it
+            // would never return.
+            recordVersion: (deployed) => {
+              recorded.push(deployed);
+              return new Promise<VersionOutcome>(() => {});
+            },
+            render: () => {},
+            warn: (line) => lines.push(line),
+            hint: () => {},
+          },
+        );
+
+      await run(false);
+      expect(recorded).toEqual([]);
+      expect(lines).toEqual([]);
+
+      // The same deploy without the flag goes to the index.
+      void run(true);
+      void run(undefined);
+      await Promise.resolve();
+      expect(recorded.map((d) => d.entry)).toEqual([entry, entry]);
     });
   });
 
@@ -637,6 +739,50 @@ describe("pattern-versions", () => {
       );
 
       expect(recorded.map((d) => d.entry)).toEqual([entry]);
+    });
+
+    it("reports a deploy under --no-index-version as skipped in its --json receipt, with no index call", async () => {
+      const printed: unknown[] = [];
+      let calls = 0;
+      await captureStderr(() =>
+        newPieceFromCommand(
+          {
+            apiUrl: "https://cf.dev",
+            space: "s",
+            identity: "/unused/test.key",
+            quiet: true,
+            json: true,
+            indexVersion: false,
+          },
+          entry,
+          {
+            newPiece: (_config, _entry, options) => {
+              options?.onDeployed?.({
+                program: PROGRAM,
+                patternId: () => Promise.resolve("pat-1"),
+                piece: { space: "did:key:z6Mkspace", id: "fid1:created" },
+              });
+              return Promise.resolve({ pieceId: "fid1:created" });
+            },
+            recordVersion: () => {
+              calls += 1;
+              return Promise.resolve({
+                status: "recorded",
+                created: true,
+                response: RECORDED,
+              });
+            },
+            render: (value) => printed.push(value),
+            note: () => {},
+          },
+        )
+      );
+
+      expect(calls).toBe(0);
+      expect(printed).toEqual([{
+        pieceId: "fid1:created",
+        version: { status: "skipped", reason: "--no-index-version" },
+      }]);
     });
   });
 });

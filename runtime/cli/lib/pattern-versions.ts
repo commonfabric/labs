@@ -42,7 +42,15 @@ import {
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
-import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
+import {
+  openPatternIndexClient,
+  resolvePatternIndexUrl,
+} from "@commonfabric/pattern-index/access";
+import { loadIdentity } from "./identity.ts";
 
 /** The git checkout a file is in: its top directory and `origin` remote. */
 export interface GitCheckout {
@@ -181,6 +189,12 @@ export interface DeployedSource {
    * repository pattern, which is not the person's own work.
    */
   origin?: string;
+
+  /**
+   * Keep the version private whatever the person's sharing setting says, so
+   * only an explicit `cf pattern share` hands it to anyone.
+   */
+  keepPrivate?: boolean;
 }
 
 /** What recording a deploy as a version came to. */
@@ -302,11 +316,44 @@ export async function recordDeployedVersion(
         deployed.piece.space,
         deployed.piece.id,
       ),
+      ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });
     return { status: "recorded", created: response.created, response };
   } catch (error) {
     return { status: "failed", reason: failureReason(error) };
   }
+}
+
+/**
+ * Keeps a deploy of the person's own source as a private version in the
+ * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
+ * signing as `identity` (a key file's path) and keeping this machine's
+ * index state where `cf` keeps it, so the lineage is the one `cf` deploys
+ * continue. Never throws: the deploy it follows has committed, and an index
+ * that is misconfigured or unreachable must not turn that into a failure.
+ */
+export async function recordVersionInIndex(
+  identity: string,
+  deployed: DeployedSource,
+): Promise<VersionOutcome> {
+  let baseUrl: string;
+  let store: PatternIndexStore;
+  try {
+    baseUrl = resolvePatternIndexUrl(undefined);
+    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  } catch (error) {
+    return { status: "failed", reason: describeFailure(error) };
+  }
+  return await recordDeployedVersion(deployed, {
+    store,
+    openClient: async () =>
+      openPatternIndexClient({
+        baseUrl,
+        signer: await loadIdentity(identity),
+        store,
+      }),
+    readTextFile: (path) => Deno.readTextFile(path),
+  });
 }
 
 /**

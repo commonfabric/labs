@@ -26,6 +26,7 @@ import { namesInstances } from "../builder/instance-name.ts";
 import { isTrustedBuilderArtifact } from "../builder/pattern-metadata.ts";
 import { makeFrame, runInFrame } from "../builder/pattern.ts";
 import { validateCfcPolicyArtifactManifest } from "../cfc/policy.ts";
+import { DataFileStrings } from "../data-file-strings.ts";
 import type { PatternCoverageCollector } from "../pattern-coverage.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
 import {
@@ -391,6 +392,7 @@ export class Engine extends EventTarget {
   #sesRuntime: SESRuntime | undefined;
 
   readonly #executableRegistry = new ExecutableRegistry();
+  readonly #dataFileStrings = new DataFileStrings();
 
   readonly #consoleShim = createSafeConsoleGlobal(new Console(this));
   readonly #patternCoverageByGraph = new WeakMap<
@@ -430,6 +432,14 @@ export class Engine extends EventTarget {
         return outerThis.#sesRuntime;
       },
     };
+  }
+
+  /**
+   * The strings the `dataFile` readers of programs this engine loads have
+   * returned, which setup stores in a result document by reference.
+   */
+  get dataFileStrings(): DataFileStrings {
+    return this.#dataFileStrings;
   }
 
   /**
@@ -817,6 +827,7 @@ export class Engine extends EventTarget {
         // A `dataFile()` path resolves against the reading module's stored
         // name, so a read lands in the same space `dataFiles` is keyed by.
         storedNameFor,
+        dataFileStrings: this.#dataFileStrings,
       });
       if (options.patternCoverage) {
         this.#patternCoverageByGraph.set(graph, options.patternCoverage);
@@ -1816,6 +1827,7 @@ export class Engine extends EventTarget {
     }
     const graph = buildRecordsFromCompiled(modules, {
       runtimeModules: runtimeModulesOption,
+      dataFileStrings: this.#dataFileStrings,
     });
 
     // The cached bodies carry the coverage probes from the compile that emitted
@@ -2001,6 +2013,7 @@ export class Engine extends EventTarget {
     this.#runtimeInternals = undefined;
     this.#compilerInternals = undefined;
     this.#executableRegistry.clear();
+    this.#dataFileStrings.clear();
   }
 
   #getSESRuntime(): SESRuntime {

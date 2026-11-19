@@ -52,6 +52,7 @@ dashboard/
   favicon-artwork.ts  build/test-only SVG source for those favicon copies
   version.ts    the browser/server compatibility version a page reloads on
   dashboard-message.ts  shared message storage and fade timing
+  dashboard-header.ts  the page header: identity, shared message, freshness indicator
   render.ts     renderTile(label, view) + the page shell/CSS
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
@@ -86,12 +87,16 @@ its last-known value and shows a short reason (e.g. "source unreachable"), with
 the full error in the server log — so one unreachable source never blanks or
 breaks the board.
 
-The text field centered between the dashboard identity and freshness indicator
-is a shared message. Editing the field and leaving it saves the text for every
-connected dashboard and persists it in the dashboard cache. The message remains
-fully visible for two hours. It then fades linearly for four hours, after which
-the server replaces it with the empty string. A new edit starts the timing
-again.
+The text field filling the space between the dashboard identity and the
+freshness indicator is a shared message. On a screen narrower than 560 pixels
+it takes a row of its own below them. The badge is as wide as it is when it
+reads OFFLINE, and the freshness indicator as wide as it is for an age of four
+digits, so the field keeps its place as either changes. Only an age of five
+digits or more pushes it aside. Editing the field and leaving it saves the text
+for every connected dashboard and persists it in the dashboard cache. The
+message remains fully visible for two hours. It then fades linearly for four
+hours, after which the server replaces it with the empty string. A new edit
+starts the timing again.
 
 The trust, duration and recent-run tiles declare the workflow snapshots they
 read in `runSources`. A snapshot holds either a workflow's runs on main or its

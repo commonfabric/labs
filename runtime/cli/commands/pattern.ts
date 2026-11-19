@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command, ValidationError } from "@cliffy/command";
 import { basename, dirname } from "@std/path";
 import { LLMClient } from "@commonfabric/llm";
 import type { MemorySpace, Runtime } from "@commonfabric/runner";
@@ -28,9 +28,13 @@ import {
   rollbackLines,
 } from "../lib/pattern-history.ts";
 import {
+  type DeployedSource,
   entrySlot,
   lineageForEntry,
   type SlotSources,
+  versionJson,
+  versionLine,
+  type VersionOutcome,
 } from "../lib/pattern-versions.ts";
 import {
   chooseProfile,
@@ -47,7 +51,12 @@ import {
   type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
-import { loadPieces, type SpaceConfig } from "../lib/piece.ts";
+import {
+  loadPieces,
+  readRunningPattern,
+  type RunningPattern,
+  type SpaceConfig,
+} from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import {
@@ -57,8 +66,10 @@ import {
   rethrowAsNotMember,
 } from "./pattern-index.ts";
 import {
+  parsePieceOptions,
   parseSpaceOptions,
   type PieceCLIOptions,
+  recordVersionInIndex,
   targetOptions,
 } from "./piece.ts";
 
@@ -454,8 +465,8 @@ export async function rollback(
       {
         client,
         sources,
-        readTextFile: (path) => Deno.readTextFile(path),
-        writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+        readFile: (path) => Deno.readFile(path),
+        writeFile: (path, bytes) => Deno.writeFile(path, bytes),
       },
     );
     out(
@@ -464,6 +475,81 @@ export async function rollback(
     );
   });
 }
+
+/** What `cf pattern checkpoint` reaches; the real piece and index by default. */
+export interface CheckpointDeps {
+  readRunning?: typeof readRunningPattern;
+  readTextFile?: (path: string) => Promise<string>;
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
+  render?: typeof render;
+}
+
+/**
+ * `cf pattern checkpoint`: keeps what a piece runs now as a private version
+ * of `entry`'s lineage, which the sharing setting never shares on its own.
+ * It deploys nothing, so a pattern made with `--no-index-version` deploys is
+ * kept once a change is finished. Exits 1 when no version was kept, since the
+ * person asked for one.
+ */
+export async function checkpoint(
+  options: PieceCLIOptions & { json?: boolean },
+  entry: string,
+  {
+    readRunning = readRunningPattern,
+    readTextFile = (path) => Deno.readTextFile(path),
+    recordVersion,
+    render: out = render,
+  }: CheckpointDeps = {},
+): Promise<void> {
+  const config = parsePieceOptions(options);
+  const running: RunningPattern = await readRunning(config);
+  // The entry names the lineage the version joins, so it must be the file
+  // the piece runs, as it was deployed: another file, or this one edited
+  // since, would file the piece's source under the wrong history.
+  const runningMain = running.program.files.find((file) =>
+    file.name === running.program.main
+  );
+  if (runningMain?.contents !== await readTextFile(absPath(entry))) {
+    throw new ValidationError(
+      `${entry} is not what the piece runs: deploy it first ` +
+        `(cf piece setsrc), or name the entry file the piece was deployed from.`,
+      { exitCode: 1 },
+    );
+  }
+  const outcome = await (recordVersion ??
+    ((deployed) => recordVersionInIndex(config.identity, deployed)))({
+      entry: absPath(entry),
+      program: running.program,
+      patternId: () => Promise.resolve(running.patternId),
+      piece: { space: running.space, id: running.id },
+      // A piece following a system or repository pattern is not the
+      // person's work, and keeps no version, as a deploy of it does not.
+      ...(running.origin === undefined ? {} : { origin: running.origin }),
+      // Until the index shares a checkpoint only once it has settled (in
+      // use a full day, unchanged), viewing the piece would share it the
+      // first time it is opened; private until an explicit share.
+      keepPrivate: true,
+    });
+  if (options.json) {
+    out(versionJson(outcome), { json: true });
+  } else {
+    out(checkpointLine(outcome));
+  }
+  if (outcome.status !== "recorded") Deno.exitCode = 1;
+}
+
+/** What a checkpoint came to, in one line; a version not kept says why. */
+export const checkpointLine = (outcome: VersionOutcome): string => {
+  switch (outcome.status) {
+    case "recorded":
+      return versionLine(outcome) ?? "";
+    case "not-joined":
+      return "No version kept: this machine has not joined a pattern index (cf index join).";
+    case "skipped":
+    case "failed":
+      return `No version kept: ${outcome.reason}.`;
+  }
+};
 
 export async function unshare(
   options: IndexCLIOptions,
@@ -660,8 +746,8 @@ export const pattern = new Command()
       new Command()
         .description(
           "The versions the index keeps of a pattern you deploy: one for " +
-            "each cf piece new or cf piece setsrc of it, private unless " +
-            "shared. Without an entry file, lists every pattern of yours " +
+            "each cf piece new or cf piece setsrc of it, and each " +
+            "cf pattern checkpoint, private unless shared. Without an entry file, lists every pattern of yours " +
             "the index keeps. Only you can read them.",
         )
         .arguments("[entry:string]")
@@ -692,6 +778,30 @@ export const pattern = new Command()
           "Restore version 3 of ./bins.tsx.",
         ),
     ).action(rollback),
+  )
+  /* pattern checkpoint */
+  .command(
+    "checkpoint",
+    targetOptions(
+      new Command()
+        .description(
+          "Keep what a piece runs now as a private checkpoint in a " +
+            "pattern's history, the version cf pattern rollback goes back " +
+            "to. It deploys nothing, and stays private until " +
+            "cf pattern share.",
+        )
+        .arguments("<entry:string>")
+        .option(
+          "-c,--cell, --piece <cell:string>",
+          "The piece whose pattern to keep.",
+        )
+        .option("--json", "Print the outcome as JSON, for an agent to read.")
+        .example(
+          cliText("cf pattern checkpoint ./bins.tsx --cell <piece>"),
+          "Keep the pattern <piece> runs as a private version of ./bins.tsx.",
+        ),
+      { global: false },
+    ).action(checkpoint),
   )
   /* pattern unshare */
   .command(

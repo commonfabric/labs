@@ -4366,7 +4366,7 @@ export class Runner {
     resultCell: Cell<R>,
     options: { preserveName: boolean; setupBegan: number },
   ): void {
-    const { result, fabricResult, changed, nameCarried } = this
+    const { result, fabricResult, codeDocuments, changed, nameCarried } = this
       .#nextResultProjection(
         tx,
         pattern,
@@ -4414,6 +4414,9 @@ export class Runner {
       const writableResultCell = pattern.resultSchema === undefined
         ? resultCell.withTx(tx)
         : resultCell.withTx(tx).asSchema(pattern.resultSchema);
+      for (const code of codeDocuments) {
+        tx.stageContentAddressedDocument(resultLink.space, code);
+      }
       // The result root marks the whole result document as generated: setup
       // rewrites the complete projection.
       writableResultCell.setRawUntyped(fabricResult, false, "output");
@@ -4424,12 +4427,14 @@ export class Runner {
    * The projection setting `pattern` up stores on `resultCell`, beside the
    * one stored now: `result` is the projection as bound to the document,
    * which the policy-input recorder walks; `fabricResult` is what a write
-   * stores; and `changed` is whether that differs from what is stored, which
-   * is the one condition under which setup writes it. `nameCarried` is
-   * whether the projection's name is the one stored rather than the
-   * pattern's. `argumentCellLink` is the argument link the projection binds
-   * to, which setup has staged under `pattern`'s argument schema by the time
-   * it writes. Reads only.
+   * stores, with each string a data-file reader returned written as a link to
+   * a code document, and `codeDocuments` the strings those links name, whose
+   * documents a write stages; and `changed` is whether that differs from what
+   * is stored, which is the one condition under which setup writes it.
+   * `nameCarried` is whether the projection's name is the one stored rather
+   * than the pattern's. `argumentCellLink` is the argument link the projection
+   * binds to, which setup has staged under `pattern`'s argument schema by the
+   * time it writes. Reads only.
    */
   #nextResultProjection<R>(
     tx: IExtendedStorageTransaction,
@@ -4440,6 +4445,7 @@ export class Runner {
   ): {
     result: R;
     fabricResult: FabricValue;
+    codeDocuments: readonly string[];
     changed: boolean;
     nameCarried: boolean;
   } {
@@ -4498,12 +4504,20 @@ export class Runner {
     // artifact is not a `FabricValue`, so it is replaced before the
     // conversion. That keeps the gate below comparing what a write would
     // actually store, which is the whole point of converting first.
-    const fabricResult = fabricFromConvertibleJsValue(
-      flattenBuilderArtifacts(result),
-    );
+    //
+    // A data-file string becomes a link here, on the copy a write stores, and
+    // not in `result`: a link to a code document records no policy input, and
+    // the comparison below has to see the link a write would store.
+    const { value: linked, documents: codeDocuments } = this.#runtime.harness
+      .dataFileStrings.linkInto(
+        flattenBuilderArtifacts(result),
+        resultCell.getAsNormalizedFullLink().space,
+      );
+    const fabricResult = fabricFromConvertibleJsValue(linked);
     return {
       result,
       fabricResult,
+      codeDocuments,
       changed: !valueEqualByWalk(fabricResult, previousResult),
       nameCarried,
     };
@@ -14705,6 +14719,41 @@ export class Runner {
     return { resultCell, cancelDeferredStart };
   }
 
+  /**
+   * On a serving runtime, writes the `result` back-link to `resultCell`, the
+   * result of the piece `pattern` sets up, onto each instance this run writes
+   * of one of `pattern`'s derived internal cells scoped narrower than
+   * `resultCell`, where the instance holds none, in the transaction `tx` that
+   * writes its value. Every instance of a derived internal cell carries that
+   * back-link (`docs/specs/space-model/4-cells.md`). A setup writes it onto
+   * the instances it runs under, and a served run for a demander writes the
+   * demander's instance, which no setup there has run under, so the
+   * instance's first value carries it. `writes` is what the node writes.
+   */
+  #writeServedBackLinks(
+    tx: IExtendedStorageTransaction,
+    pattern: Pattern,
+    resultCell: Cell<any>,
+    writes: readonly NormalizedFullLink[],
+  ): void {
+    if (!this.#runtime.servingPosture) return;
+    const descriptors = pattern.derivedInternalCells;
+    if (!descriptors?.length || writes.length === 0) return;
+    const ownerScope = resultCell.getAsNormalizedFullLink().scope;
+    const written = new Set(writes.map(({ space, id }) => `${space}/${id}`));
+    for (const descriptor of descriptors) {
+      const derived = getDerivedInternalCell(resultCell, descriptor, tx);
+      const { space, id, scope } = derived.getAsNormalizedFullLink();
+      if (
+        scopeRank(scope) <= scopeRank(ownerScope) ||
+        !written.has(`${space}/${id}`) ||
+        derived.getMetaRaw("result", { meta: PRESENCE_PROBE_READ }) !==
+          undefined
+      ) continue;
+      setResultCell(derived, resultCell.asSchema(pattern.resultSchema));
+    }
+  }
+
   #writeJavaScriptActionResult(
     tx: IExtendedStorageTransaction,
     resultSchema: JSONSchema | undefined,
@@ -15449,7 +15498,7 @@ export class Runner {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);
             }
             const normalized = normalizeSandboxResult(result, name);
-            return this.#writeJavaScriptActionResult(
+            const written = this.#writeJavaScriptActionResult(
               tx,
               module.resultSchema,
               normalized.value,
@@ -15462,6 +15511,8 @@ export class Runner {
               previousResultCellRef,
               tx.getNarrowestReadScope(),
             );
+            this.#writeServedBackLinks(tx, pattern, resultCell, writes);
+            return written;
           } finally {
             logger.timeEnd("action", "postRun");
           }
