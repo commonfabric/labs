@@ -234,7 +234,10 @@ import {
   RetryImmediately,
 } from "./scheduler/retry-immediately.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
-import { isSchemaMismatchError } from "./schema-view.ts";
+import {
+  isSchemaMismatchError,
+  isUnresolvedInputError,
+} from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
 import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -244,6 +247,7 @@ import {
   TransactionWrapper,
 } from "./storage/extended-storage-transaction.ts";
 import {
+  getDirectTransactionReadActivities,
   getTransactionReadActivities,
   getTransactionWriteDetails,
 } from "./storage/transaction-inspection.ts";
@@ -254,6 +258,7 @@ import {
   type MemorySpace,
   type Result,
   toThrowable,
+  type UnexaminedAbsence,
   type Unit,
   type URI,
 } from "./storage/interface.ts";
@@ -14720,6 +14725,90 @@ export class Runner {
   }
 
   /**
+   * Whether a run of `action` through `tx`, disposed of as one whose input
+   * did not resolve, keeps the result it already holds: whether `tx` read as
+   * absent a document still in transit to this replica, one of `links` when
+   * given (`#transitAbsences()`), and one of `writes`, the documents the node
+   * writes, already holds a value. When it does, `action` runs again once the
+   * loads of those documents have settled, whatever they find, since a
+   * document that arrives absent changes no value the run's reads could see.
+   */
+  #keepsResultInTransit(
+    action: Action,
+    tx: IExtendedStorageTransaction,
+    writes: readonly NormalizedFullLink[],
+    links?: readonly NormalizedFullLink[],
+  ): boolean {
+    const absences = this.#transitAbsences(tx, links);
+    if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
+    const identity = tx.tx.scopeKeyIdentity ?? this.#runtime.scopeKeyIdentity;
+    const manager = this.#runtime.storageManager;
+    // Each load is asked for here, so that an absence no read has asked the
+    // store about yet settles too.
+    const loads = absences.map((absence) =>
+      this.#runtime.getCellFromLink({
+        space: absence.space,
+        id: absence.id,
+        path: [],
+        scope: absence.scope,
+      }).sync()
+    );
+    const keys = absences.map((absence) => entityKey(absence, identity));
+    // Not a task the scheduler waits on to be idle: the run has finished, and
+    // what follows is a new run, as a change arriving on the change channel
+    // would start, which document readiness's re-arm works the same way.
+    void Promise.allSettled([
+      ...loads,
+      manager.loadsSettled?.(keys) ?? Promise.resolve(),
+    ]).then(() => this.#runtime.scheduler.invalidateAction(action));
+    return true;
+  }
+
+  /**
+   * The documents `tx` read as absent that are still in transit to this
+   * replica, those among `links` when given: ones the replica has never
+   * examined, so that a load of each is in flight or was never asked for
+   * (`IStorageProvider.unexaminedAbsences()`), and that the store has not
+   * reported holding nothing at either (`storeReportedAbsent()`). Such an
+   * absence says nothing about the document yet, where one the replica or
+   * the store has reported is what the document holds (`speculation.md` §2,
+   * "transit, not knowledge").
+   */
+  #transitAbsences(
+    tx: IExtendedStorageTransaction,
+    links?: readonly NormalizedFullLink[],
+  ): UnexaminedAbsence[] {
+    const spaces = new Set<MemorySpace>();
+    if (links === undefined) {
+      for (const read of getDirectTransactionReadActivities(tx.tx) ?? []) {
+        spaces.add(read.space);
+      }
+    } else {
+      for (const link of links) spaces.add(link.space);
+    }
+    const wanted = links === undefined ? undefined : new Set(
+      links.map((link) => `${link.space}\0${link.id}\0${link.scope}`),
+    );
+    const identity = tx.tx.scopeKeyIdentity;
+    const found: UnexaminedAbsence[] = [];
+    for (const space of spaces) {
+      const provider = this.#runtime.storageManager.open(space);
+      for (const absence of provider.unexaminedAbsences?.(tx.tx) ?? []) {
+        const key = `${absence.space}\0${absence.id}\0${absence.scope}`;
+        if (wanted !== undefined && !wanted.has(key)) continue;
+        if (
+          provider.storeReportedAbsent?.(
+            { id: absence.id, scope: absence.scope },
+            identity,
+          ) === true
+        ) continue;
+        found.push(absence);
+      }
+    }
+    return found;
+  }
+
+  /**
    * Whether any of `writes`, the documents a node writes, holds a value, read
    * through `tx` as a presence probe.
    */
@@ -15495,11 +15584,13 @@ export class Runner {
             // rejection — does not get to hand back a result built on data the
             // schema does not describe. Either way the run is disposed of as an
             // argument that did not resolve, not an error: an undefined result
-            // through the ordinary path, or, where the node already holds a
-            // result, no write at all, so that a result read from data that
-            // has not arrived never replaces one read from data that had. The
-            // reads it took are registered, including the one that failed, so
-            // it runs again when the data changes and may then find it valid.
+            // through the ordinary path. The one exception is an input still
+            // in transit, a document this replica has not loaded yet, where
+            // a node that already holds a result keeps it, so that a result
+            // read from data that has not arrived never replaces one read
+            // from data that had. The reads the run took are registered,
+            // including the one that failed, so it runs again when the data
+            // changes and may then find it valid.
             const refusal = tx.takeSchemaRefusal();
             let keepsResult = false;
             if (refusal !== undefined) {
@@ -15511,7 +15602,10 @@ export class Runner {
                 ],
               );
               result = undefined;
-              keepsResult = this.#holdsResult(tx, writes);
+              keepsResult = isUnresolvedInputError(refusal) &&
+                this.#keepsResultInTransit(action, tx, writes, [refusal.link]);
+            } else if (!isValidArgument) {
+              keepsResult = this.#keepsResultInTransit(action, tx, writes);
             }
             if (frame.pendingSpaceNames && frame.pendingSpaceNames.size > 0) {
               return this.#resolvePendingSpaceNamesAndRetry(frame, tx);

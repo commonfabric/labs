@@ -1,10 +1,12 @@
 /**
  * A computation whose run reads an input before the input has arrived is
- * refused, and runs again once the input arrives. The refused run writes
+ * refused, and runs again once the input arrives. While the input is in
+ * transit, a document this replica has not loaded yet, the refused run writes
  * nothing over a result the node already holds, so a client starting a piece
  * cold, whose first runs read inputs in spaces it has not loaded yet, never
  * replaces a stored result, for itself or for any other client, with one read
- * from data that had not arrived.
+ * from data that had not arrived. Once the input has arrived, a refused run
+ * clears the result, as one whose input holds nothing it can use should.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -27,7 +29,7 @@ const space = owner.did() as MemorySpace;
 const inputSpace = inputSigner.did() as MemorySpace;
 
 /** A piece whose one computation reads a document in another space. */
-const PATTERN = [
+const COMPUTED_PATTERN = [
   "import { computed, pattern, Writable } from 'commonfabric';",
   "type Ref = Writable<{ name: string }>;",
   "export default pattern<{ ref: Ref }, { out: string }>(({ ref }) => {",
@@ -36,10 +38,32 @@ const PATTERN = [
   "});",
 ].join("\n");
 
+/**
+ * The same piece, its computation a lift taking the document as its whole
+ * argument, so that an input not yet arrived leaves the argument undefined
+ * where the runtime reads arguments eagerly.
+ */
+const LIFT_PATTERN = [
+  "import { lift, pattern, Writable } from 'commonfabric';",
+  "type Ref = Writable<{ name: string }>;",
+  "const label = lift((input: { name: string }) => 'out:' + input.name);",
+  "export default pattern<{ ref: Ref }, { out: string }>(({ ref }) => {",
+  "  const out = label(ref);",
+  "  return { out };",
+  "});",
+].join("\n");
+
+/** How a case's runtimes read and what the piece is. */
+interface Shape {
+  pattern: string;
+  lazyMaterialization?: false;
+}
+
 describe("refused-run-keeps-result", () => {
   let server: MemoryV2Server.Server;
   let opened: { runtime: Runtime; storage: EmulatedStorageManager }[];
   let inputSpaceHeld: PromiseWithResolvers<void> | undefined;
+  let shape: Shape;
 
   /** A runtime of its own over the shared server, acting as `owner`. */
   const open = (): Runtime => {
@@ -47,6 +71,9 @@ describe("refused-run-keeps-result", () => {
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager: storage,
+      ...(shape.lazyMaterialization === false
+        ? { experimental: { lazyMaterialization: false } }
+        : {}),
     });
     runtime.scheduler.setActionRunTraceEnabled(true);
     opened.push({ runtime, storage });
@@ -56,6 +83,7 @@ describe("refused-run-keeps-result", () => {
   beforeEach(() => {
     opened = [];
     inputSpaceHeld = undefined;
+    shape = { pattern: COMPUTED_PATTERN };
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     // A session on the input space opens only once the test lets it, so a
     // cold runtime's first run reads its input before the input arrives.
@@ -85,7 +113,7 @@ describe("refused-run-keeps-result", () => {
     const warm = open();
     const compiled = await warm.patternManager.compilePattern({
       main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: PATTERN }],
+      files: [{ name: "/main.tsx", contents: shape.pattern }],
     }, { space });
     const ref = warm.getCell<{ name: string }>(inputSpace, "input");
     {
@@ -240,5 +268,90 @@ describe("refused-run-keeps-result", () => {
     expect(after).toHaveLength(1);
     expect(after[0]).toContain("out:abc");
     cancel();
+  });
+
+  it("clears a result when its input has arrived holding a value of another shape", async () => {
+    // The input is here, so its value is what it is, and a run refused for
+    // it clears the result.
+
+    const { warm, ref, result, outId } = await standUp("abc", true);
+    const seen: unknown[] = [];
+    const cancel = result.key("out").sink((value) => {
+      seen.push(value);
+    });
+    await warm.idle();
+    {
+      const tx = warm.edit();
+      ref.withTx(tx).setRaw({ name: 5 } as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await warm.idle();
+    await warm.storageManager.synced();
+    expect(result.key("out").get()).toBeUndefined();
+    const stored = await storedValues(outId);
+    expect(stored.at(-1)).toContain("Undefined");
+    expect(seen.at(-1)).toBeUndefined();
+    cancel();
+  });
+
+  it("clears a result it kept through its input's transit once the input arrives absent", async () => {
+    // The piece's argument is pointed at a document nothing has written, in
+    // the input space, while nothing demands `out`. The cold start keeps the
+    // stored result while that space is out of reach, and clears it once the
+    // space has loaded and the document is known to be absent.
+
+    const { warm, compiled, result, outId } = await standUp("abc", true);
+    warm.runner.stop(result);
+    {
+      const tx = warm.edit();
+      result.withTx(tx).getArgumentCell<{ ref: unknown }>()!.key("ref").set(
+        warm.getCell<{ name: string }>(inputSpace, "never-written") as never,
+      );
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await warm.idle();
+    await warm.storageManager.synced();
+    const before = await storedValues(outId);
+
+    const { cold, coldResult, cancel } = await startCold(compiled);
+    expect(await storedValues(outId)).toEqual(before);
+    expect(coldResult.key("out").get()).toBe("out:abc");
+
+    await releaseInput(cold);
+    expect(coldResult.key("out").get()).toBeUndefined();
+    const after = await storedValues(outId);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.at(-1)).toContain("Undefined");
+    cancel();
+  });
+
+  describe("a lift whose argument is read eagerly", () => {
+    // Read eagerly, an argument whose document has not arrived reads as
+    // undefined rather than refusing, and the lift's body is not run.
+
+    beforeEach(() => {
+      shape = { pattern: LIFT_PATTERN, lazyMaterialization: false };
+    });
+
+    it("leaves a result it already holds in place while its argument has not arrived, and writes the argument's result once it has", async () => {
+      const { warm, compiled, ref, result, outId } = await standUp(
+        "abc",
+        true,
+      );
+      warm.runner.stop(result);
+      await rename(warm, ref, "def");
+      const before = await storedValues(outId);
+
+      const { cold, coldResult, cancel } = await startCold(compiled);
+      expect(outRuns(cold)).toBe(1);
+      expect(await storedValues(outId)).toEqual(before);
+      expect(coldResult.key("out").get()).toBe("out:abc");
+
+      await releaseInput(cold);
+      expect(coldResult.key("out").get()).toBe("out:def");
+      const after = await storedValues(outId);
+      expect(after.some((data) => data.includes("Undefined"))).toBe(false);
+      cancel();
+    });
   });
 });
