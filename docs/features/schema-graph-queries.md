@@ -56,11 +56,11 @@ caller keeps them, walks them under a schema, and records what it reached.
   wants the target of a document's `pattern`, `argument`, `result`, or
   `internal` link names it (`../specs/memory-v2/05-queries.md`, "Metadata /
   Provenance Resolution").
-- `schemaTrackerKey(space, id, scope, identity)` is the key a walk records
-  under: one entry per scope INSTANCE, the middle segment the shared
-  `scope_key` vocabulary resolved from the scope and the acting identity
-  (key-vocabulary.md §1 sites 5-6), or the instance itself where the
-  address names one. Both packages need to build one —
+- `schemaTrackerKey(space, id, scope, identity, scopeKey?)` is the key a
+  walk records under: one entry per scope INSTANCE, the middle segment the
+  instance an address names (`scopeKey`) where it names one, and otherwise
+  the shared `scope_key` vocabulary resolved from the scope and the acting
+  identity (key-vocabulary.md §1 sites 5-6). Both packages need to build one —
   `memory` to look up what a write invalidated, `runner` to record what a
   traversal reached — so there is one function and both call it, including
   the coverage check in `isLinkedDocumentCovered` for links that declare a
