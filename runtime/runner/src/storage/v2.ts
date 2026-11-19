@@ -7548,6 +7548,18 @@ export class SpaceReplica
     return this.#sessionClient?.serverFlags?.sqliteCommitRowLabelEval === true;
   }
 
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1` in its handshake. Read from the LIVE client of the
+   * last resolved session, as the row-label capability above is: `false`
+   * until a session exists, so a commit built before then goes index by
+   * index, and refreshed by reconnect handshakes, so a server rolled back to
+   * one that does not advertise it gets the per-index form from then on.
+   */
+  markedSplices(): boolean {
+    return this.#sessionClient?.serverFlags?.markedSplicesV1 === true;
+  }
+
   async registerSqliteDiskSource(
     id: string,
     path: string,

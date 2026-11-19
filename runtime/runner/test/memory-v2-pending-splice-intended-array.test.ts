@@ -33,7 +33,12 @@ describe("memory-v2-pending-splice-intended-array", () => {
   const sessions: Session[] = [];
 
   beforeEach(() => {
-    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+    // The server advertises `markedSplicesV1`, so each head insertion goes as
+    // a marked splice, the shape these races are about.
+    server = newSharedServer({
+      subscriptionRefreshDelayMs: "manual",
+      markedSplices: true,
+    });
     verdicts = [];
     heldIds = new Set();
     held = Promise.withResolvers<void>();

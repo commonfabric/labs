@@ -43,7 +43,10 @@ describe("v2-transaction", () => {
   const sessions: Session[] = [];
 
   beforeEach(() => {
-    server = newSharedServer();
+    // The server advertises `markedSplicesV1`, so a pinned change to an
+    // array goes as marked splices; one case below connects to a server that
+    // does not.
+    server = newSharedServer({ markedSplices: true });
     sentPatches = [];
     const transact = server.transact.bind(server);
     server.transact = (...args: Parameters<typeof transact>) => {
@@ -570,6 +573,7 @@ describe("v2-transaction", () => {
         index: 0,
         remove: 0,
         add: ["x"],
+        pinned: true,
       }]);
       expect(await storedValue("head")).toStrictEqual({ list: ["x", ...list] });
     });
@@ -592,6 +596,7 @@ describe("v2-transaction", () => {
         index: 50,
         remove: 1,
         add: [],
+        pinned: true,
       }]);
       expect(await storedValue("middle")).toStrictEqual({ list: remaining });
     });
@@ -609,8 +614,22 @@ describe("v2-transaction", () => {
       );
 
       expect(sent).toEqual([
-        { op: "splice", path: "/value/list", index: 0, remove: 0, add: ["x"] },
-        { op: "splice", path: "/value/list", index: 61, remove: 0, add: ["y"] },
+        {
+          op: "splice",
+          path: "/value/list",
+          index: 0,
+          remove: 0,
+          add: ["x"],
+          pinned: true,
+        },
+        {
+          op: "splice",
+          path: "/value/list",
+          index: 61,
+          remove: 0,
+          add: ["y"],
+          pinned: true,
+        },
       ]);
       expect(await storedValue("two")).toStrictEqual({ list: grown });
     });
@@ -691,8 +710,16 @@ describe("v2-transaction", () => {
           index: 0,
           remove: 0,
           add: ["e90"],
+          pinned: true,
         },
-        { op: "splice", path: "/value/list", index: 91, remove: 1, add: [] },
+        {
+          op: "splice",
+          path: "/value/list",
+          index: 91,
+          remove: 1,
+          add: [],
+          pinned: true,
+        },
       ]);
       expect(await storedValue("long-move")).toStrictEqual({ list: moved });
     });
@@ -792,7 +819,14 @@ describe("v2-transaction", () => {
       ]);
 
       expect(sentPatches.slice(alreadySent)).toEqual([
-        { op: "splice", path: "/value/list", index: 0, remove: 0, add: ["x"] },
+        {
+          op: "splice",
+          path: "/value/list",
+          index: 0,
+          remove: 0,
+          add: ["x"],
+          pinned: true,
+        },
         { op: "append", path: "/value/list", values: ["y"] },
       ]);
       expect(await storedValue("head-and-push")).toStrictEqual({
@@ -827,6 +861,57 @@ describe("v2-transaction", () => {
       expect(await storedValue("edit-and-push")).toStrictEqual({
         list: ["b", "a", "c"],
       });
+    });
+
+    it("sends a head insertion index by index to a server that does not advertise marked splices", async () => {
+      // A server without `markedSplicesV1`, an older one or a deployment that
+      // has not turned it on, reads a splice as overwriting nothing, so the
+      // change goes in the form it reads.
+      const older = newSharedServer();
+      const sentToOlder: PatchOp[] = [];
+      const transact = older.transact.bind(older);
+      older.transact = (...args: Parameters<typeof transact>) => {
+        for (const operation of args[0].commit.operations) {
+          if (operation.op !== "patch") continue;
+          for (const patch of operation.patches) sentToOlder.push(patch);
+        }
+        return transact(...args);
+      };
+      const storage = EmulatedStorageManager.connectTo(older, { as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: storage,
+      });
+      try {
+        const list = items(10);
+        const seed = runtime.edit();
+        runtime.getCell<FabricValue>(space, "older", undefined, seed)
+          .set({ list });
+        expect((await seed.commit().settled).error).toBeUndefined();
+
+        const alreadySent = sentToOlder.length;
+        const insertion = runtime.edit();
+        const cell = runtime.getCell<FabricValue>(
+          space,
+          "older",
+          undefined,
+          insertion,
+        ).key("list");
+        cell.set(["x", ...(cell.get() as string[])]);
+        expect((await insertion.commit().settled).error).toBeUndefined();
+
+        const sent = sentToOlder.slice(alreadySent);
+        expect(sent.map(kindAndPath)).toEqual([
+          ...list.map((_, index) => `replace /value/list/${index}`),
+          "splice /value/list",
+        ]);
+        expect(sent.some((op) => op.op === "splice" && op.pinned === true))
+          .toBe(false);
+      } finally {
+        await runtime.dispose();
+        await storage.close();
+        await older.close();
+      }
     });
 
     it("commits an increment of an element beside the truncation that drops it", async () => {

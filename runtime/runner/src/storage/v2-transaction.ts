@@ -667,7 +667,9 @@ const buildArrayPatchCandidates = (
   }
 
   // Each splice applies to the array the ones before it left, so its index is
-  // its run's start shifted by what those splices added and removed.
+  // its run's start shifted by what those splices added and removed. Each is
+  // marked: it was diffed under a read that pins the array, and stands for the
+  // per-index writes of the same change (`PatchOp`'s `pinned`).
   const pointer = encodePointer(path);
   let shift = 0;
   return hunks.map((hunk) => {
@@ -680,6 +682,7 @@ const buildArrayPatchCandidates = (
         index,
         remove: hunk.remove,
         add: after.slice(hunk.addStart, hunk.addStart + hunk.add),
+        pinned: true,
       },
       path,
       coversDescendants: false,
@@ -4407,6 +4410,12 @@ export class V2StorageTransaction implements IStorageTransaction {
    * commit, so working them out before that never claims a read the commit
    * leaves out.
    *
+   * The splices go marked (`PatchOp`'s `pinned`), so only to a server that
+   * advertises `markedSplicesV1` (`ISpaceReplica.markedSplices()`). An older
+   * server, or a deployment that has not turned it on, reads a splice as
+   * overwriting nothing, and would let a delayed handler's write land over
+   * the change; it gets the per-index form.
+   *
    * A transaction a serving loop runs an event handler in sends none: the
    * wave drops each of its patches that the firing session's later writes
    * overwrote (serving-loop.md §3d), and a splice that both replaces an
@@ -4416,6 +4425,9 @@ export class V2StorageTransaction implements IStorageTransaction {
     space: MemorySpace,
   ): (id: URI, scope: CellScope, arrayPath: readonly string[]) => boolean {
     if (isServedEventHandlerTx(this)) return () => false;
+    if (this.#branches.get(space)?.replica.markedSplices?.() !== true) {
+      return () => false;
+    }
     let pinning: Map<string, Set<string>> | undefined;
     return (id, scope, arrayPath) => {
       if (pinning === undefined) {

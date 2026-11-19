@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -4417,13 +4418,15 @@ export type SessionOverwrite =
  * §3d). Only writes that replace what sits at their path count: a `set` or
  * `delete` revision reports the root path, and a `patch` revision reports
  * the paths of its `replace`, `add` and `remove` patches and both paths of a
- * `move`. The splices a revision makes to one array report, as ranges
- * (`SessionOverwrite`), the indices both before and after it whose value
- * differs, from the first splice's index on: the indices the per-index form
- * of the same change replaces (`overwrittenArrayElements()`). An element a
- * splice only appends past the old end, and one it only drops off the new
- * end, is overwritten by nothing. A patch that merges into existing content —
- * an append, an increment — overwrites nothing and is left out.
+ * `move`. The marked splices a revision makes to one array (`PatchOp`'s
+ * `pinned`) report, as ranges (`SessionOverwrite`), the indices both before
+ * and after it whose value differs, from the first splice's index on: the
+ * indices the per-index form of the same change replaces
+ * (`overwrittenArrayElements()`). An element a splice only appends past the
+ * old end, and one it only drops off the new end, is overwritten by nothing.
+ * An unmarked splice, such as the tail splice of the per-index form, merges
+ * into existing content, as an append or an increment does: it overwrites
+ * nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4466,7 +4469,7 @@ ORDER BY r.seq, r.op_index
         } else if (patch.op === "move") {
           paths.push(parsePointer(patch.from));
           paths.push(parsePointer(patch.path));
-        } else if (patch.op === "splice") {
+        } else if (patch.op === "splice" && patch.pinned === true) {
           const spliced = splicedArrays.get(patch.path) ??
             { fromIndex: Infinity, shrinkBound: 0 };
           // As the store applied it (`spliceAll()`): `Array.prototype.splice`
@@ -4560,15 +4563,10 @@ type SplicedArray = { fromIndex: number; shrinkBound: number };
  * as a tail append's is, changes no index both sides hold, and the earlier
  * document is not read.
  *
- * That is exact for every shape a client sends: the runner's edit-script
- * splices, which nothing else in the commit touches at or past the first
- * one's index, and the per-index form, whose replaces sit below its tail
- * splice. An increment the per-index form sends beside a tail splice, at an
- * element the splice drops, sits where no index both sides hold. A
- * hand-built revision that changes the array at or past the first splice's
- * index some other way as well, an increment or an op by index, has those
- * changes read as the splices' too, which can supersede a consequence write
- * that the same change sent index by index would leave standing.
+ * That is exact because the splices are marked: the store admitted them only
+ * under a read that pins the array, so they landed on the array they were
+ * diffed from, and alone on their array in the commit, so nothing else in it
+ * changed the array from their first index on (`refuseUnfoundedMarkedSplices()`).
  */
 const overwrittenArrayElements = (
   array: readonly string[],
@@ -4619,9 +4617,166 @@ const refuseFractionalSplices = (
   }
 };
 
+/**
+ * Throws a {@link ProtocolError} where a marked splice in `commit`
+ * (`PatchOp`'s `pinned`) does not stand as its mark says, which is what lets
+ * the indices it overwrote be read back exactly (`overwrittenArrayElements()`):
+ *
+ * - The commit must carry a recursive read of the array or of a path above
+ *   it, confirmed or pending, so that the store refuses the commit where the
+ *   array moved since the read, and the splice lands on the array it was
+ *   diffed from.
+ * - Its document must have no other operation in the commit, where a second
+ *   one could change the array around it.
+ * - Every splice of its array must be marked, and nothing else in its patch
+ *   operation may touch the array at or past the lowest index the splices
+ *   name, add, remove or move an element of the array, or touch the array
+ *   itself or a value above it, save a splice of an array above it past the
+ *   element the array is in. Nor may it add, remove or move an element of an
+ *   array above the array at or before the element the array is in, which
+ *   would move the array; whether a container above it is an array is read
+ *   from the document as the store holds it.
+ *
+ * The runner sends nothing else: it marks only splices it diffed under such a
+ * read, sends one operation per document, drops what a splice would cover,
+ * sends no add, remove or move at an element, and diffs an array a mergeable
+ * op reaches index by index. An unmarked splice is left to the rules every
+ * patch meets.
+ */
+const refuseUnfoundedMarkedSplices = (
+  engine: Engine,
+  options: {
+    commit: ClientCommit;
+    branch: BranchName;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyByOpIndex: ReadonlyMap<number, string>;
+  },
+): void => {
+  const { commit, branch, principal, sessionId, scopeKeyByOpIndex } = options;
+  const instanceOf = (operation: { id: string; scope?: CellScope }) =>
+    `${operation.id}\0${normalizeScope(operation.scope)}`;
+  const operationsByInstance = new Map<string, number>();
+  const documentOperations = commit.operations.filter((
+    operation,
+  ): operation is Exclude<typeof operation, { op: "sqlite" }> =>
+    operation.op !== "sqlite"
+  );
+  for (const operation of documentOperations) {
+    const instance = instanceOf(operation);
+    operationsByInstance.set(
+      instance,
+      (operationsByInstance.get(instance) ?? 0) + 1,
+    );
+  }
+  const reads = [...commit.reads.confirmed, ...commit.reads.pending];
+  const structural = (patch: PatchOp): boolean =>
+    patch.op === "add" || patch.op === "remove" || patch.op === "move";
+
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "patch") return;
+    const firstMarked = new Map<string, number>();
+    for (const patch of operation.patches) {
+      if (patch.op !== "splice" || patch.pinned !== true) continue;
+      firstMarked.set(
+        patch.path,
+        Math.min(firstMarked.get(patch.path) ?? Infinity, patch.index),
+      );
+    }
+    if (firstMarked.size === 0) return;
+    const scope = normalizeScope(operation.scope);
+    const refuse = (array: string, why: string): never => {
+      throw new ProtocolError(
+        `memory v2 commit marks a splice of ${array} in document ` +
+          `${operation.id} ${why}: a marked splice must stand under a read ` +
+          "that pins its array, alone on the array in its commit",
+      );
+    };
+    let current: { document: EntityDocument | null | undefined } | undefined;
+    const currentDocument = (): EntityDocument | null | undefined =>
+      (current ??= {
+        document: readStateForScopeKey(engine, {
+          branch,
+          id: operation.id,
+          scope,
+          scopeKey: scopeKeyByOpIndex.get(opIndex) ??
+            resolveScopeKey(operation.scope, { principal, sessionId }),
+        })?.document,
+      }).document;
+
+    for (const [array, first] of firstMarked) {
+      if ((operationsByInstance.get(instanceOf(operation)) ?? 0) > 1) {
+        refuse(array, "beside another operation on the document");
+      }
+      const arrayPath = parsePointer(array);
+      if (
+        !reads.some((read) =>
+          read.id === operation.id && normalizeScope(read.scope) === scope &&
+          read.nonRecursive !== true && isPrefixPath(read.path, arrayPath)
+        )
+      ) {
+        refuse(array, "without a recursive read of the array or above it");
+      }
+      for (const patch of operation.patches) {
+        if (patch.op === "splice" && patch.path === array) {
+          if (patch.pinned !== true) refuse(array, "beside an unmarked one");
+          continue;
+        }
+        const pointers = patch.op === "move" ? [patch.from, patch.path] : [
+          patch.path,
+        ];
+        for (const pointer of pointers) {
+          const path = parsePointer(pointer);
+          if (isPrefixPath(path, arrayPath)) {
+            // At the array or above it: a splice of an array above it stands
+            // past the element the array is in.
+            const ours = arrayPath[path.length];
+            if (
+              patch.op === "splice" && ours !== undefined &&
+              isArrayIndexPropertyName(ours) && patch.index > Number(ours)
+            ) {
+              continue;
+            }
+            refuse(array, `beside a ${patch.op} at ${pointer}`);
+          }
+          if (isPrefixPath(arrayPath, path)) {
+            const segment = path[arrayPath.length]!;
+            if (
+              !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
+              (path.length === arrayPath.length + 1 && structural(patch))
+            ) {
+              refuse(array, `beside a ${patch.op} at ${pointer}`);
+            }
+            continue;
+          }
+          // An element of an array above it, added, removed or moved at or
+          // before the element the array is in, moves the array.
+          const parent = path.slice(0, -1);
+          if (
+            !structural(patch) || parent.length >= arrayPath.length ||
+            !isPrefixPath(parent, arrayPath)
+          ) {
+            continue;
+          }
+          const segment = path[parent.length]!;
+          const ours = arrayPath[parent.length]!;
+          if (
+            arrayAtPath(currentDocument(), parent) !== undefined &&
+            isArrayIndexPropertyName(segment) &&
+            isArrayIndexPropertyName(ours) &&
+            Number(segment) <= Number(ours)
+          ) {
+            refuse(array, `beside a ${patch.op} at ${pointer} that moves it`);
+          }
+        }
+      }
+    }
+  });
+};
+
 /** The array at `path` of `document`, or `undefined` where there is none. */
 const arrayAtPath = (
-  document: EntityDocument | null,
+  document: EntityDocument | null | undefined,
   path: readonly string[],
 ): readonly FabricValue[] | undefined => {
   let node: unknown = document;
@@ -7924,6 +8079,15 @@ const applyCommitTransaction = (
   // result — the original admission stamped it; re-running the CAS here
   // would wrongly reject the replay as its own duplicate) and before the
   // seq allocation; the stamps apply per-op in the write loop below.
+  // A marked splice stands as its mark says (`refuseUnfoundedMarkedSplices()`).
+  refuseUnfoundedMarkedSplices(engine, {
+    commit,
+    branch,
+    principal,
+    sessionId,
+    scopeKeyByOpIndex,
+  });
+
   const eventAppendPlan = validateEventAppends(engine, {
     commit,
     commitClass,

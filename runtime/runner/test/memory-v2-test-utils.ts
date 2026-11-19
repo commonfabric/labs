@@ -71,6 +71,7 @@ export const newSharedServer = (options?: {
   store?: URL;
   sessions?: MemoryV2Server.SessionRegistry;
   delegatingDids?: readonly string[];
+  markedSplices?: boolean;
 }): MemoryV2Server.Server =>
   newLoopbackServer({
     ...options,

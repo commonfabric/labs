@@ -59,6 +59,7 @@ was last checked against the code.
 | [`conflictAdmissionMode`](#conflictadmissionmode)                           | `CF_CONFLICT_ADMISSION` env, or `setConflictAdmissionMode()`                                                                                    | `off`                                                                                | William Kelly (#4237); `hold` removed CT-1925 (#5110) | keep `preempt` as a tuning dial or remove after re-measurement                                                                                                                                                                    | implemented, off by default, measured net-negative                              |
 | [`syncSchemaTableV2`](#syncschematablev2)                                   | `setSyncSchemaTableConfig()` (negotiated per connection)                                                                                        | on                                                                                   | Ben Follington (#4292)                                | retire the negotiation once every peer speaks v2                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`messageCompressionV1`](#messagecompressionv1)                             | `setMessageCompressionConfig()` (negotiated per connection)                                                                                     | on                                                                                   | PR #6474                                             | retire the rollback switch after the binary WebSocket envelope has field-soaked                                                                                                                                                   | implemented, on by default                                                      |
+| [`markedSplicesV1`](#markedsplicesv1) | server: `MEMORY_MARKED_SPLICES` env on toolshed (the memory `Server`'s `markedSplices` option); clients adopt it per connection | off | Gideon Wald, Bernhard Seefeld (#9982) | turn on once every serving worker that may read a deployment's rows, a rollback's included, reads marked splices; then retire the flag with the servers that predate it | implemented; servers read marked splices always, advertise them off by default |
 | [`syncCidReferencesV1`](#synccidreferencesv1) | server: `MEMORY_SYNC_CID_REFERENCES` env on toolshed (the memory `Server`'s `syncCidReferences` option); client: `EXPERIMENTAL_SYNC_CID_REFERENCES` env, or `RuntimeOptions.experimental` (negotiated per connection) | server on, client off | Dan Bornstein (#9719) | measure the bandwidth saved against the extra round trip, then graduate or remove | implemented; servers on, clients off by default |
 | [`ownWriteEcho`](#ownwriteecho)                                             | `setOwnWriteEchoConfig()` (server-side only, not negotiated)                                                                                    | on                                                                                   | Robin McCollum (CT-1965)                              | remove the switch once the echo has field-soaked                                                                                                                                                                                  | implemented, on by default                                                      |
 | [`experimentalConcurrentWatchRefresh`](#experimentalconcurrentwatchrefresh) | `IRemoteStorageProviderSettings`; in the shell, the `commonfabric.concurrentWatchRefresh()` console command (localStorage, per browser profile) | off                                                                                  | Ben Follington (#4937; shell toggle #4974)            | graduate to always-on after live measurement, or remove if superseded                                                                                                                                                             | off by default; acquisition/removal ordering tested; real-latency measurement pending |
@@ -1821,6 +1822,35 @@ the per-epic implementation notes).
   both sides and delete the server option, the toolshed setting and the client
   option. Removing: delete the reference rewrite, the client's resolution and
   fetch, the capability and the three settings.
+
+### `markedSplicesV1`
+
+- **Toggle via.** The memory `Server`'s `markedSplices` option, which toolshed
+  sets from `MEMORY_MARKED_SPLICES` (off unless `true` or `1`; any other
+  spelling refuses startup). A server advertises the capability in
+  `hello.ok` only when it is on. A client reads it from the connection
+  (`ISpaceReplica.markedSplices()`); it has no switch of its own.
+- **Purpose.** A change to a long array that inserts, removes or moves
+  elements near its head goes as edit-script splices instead of a `replace`
+  at every shifted index: on the Topics board, one new topic at the head of
+  its 3,270-entry index goes from 711,556 bytes of operations to one splice.
+  A client sends them only under a recursive read that pins the array, and
+  marks each one (`pinned` on the `splice` op), so that server execution's
+  supersession reads the indices it changed as overwritten
+  (`selectSessionOverwritePathsSince()`); an unmarked splice, such as the
+  tail splice of the per-index form, overwrites nothing, as before. The store
+  admits a marked splice only under that read and alone on its array in the
+  commit (`refuseUnfoundedMarkedSplices()` in memory `v2/engine.ts`). Without
+  the capability a client sends the per-index form.
+- **Rollout.** Readers before writers. A server of this build reads marked
+  splices whether or not it advertises them. A serving worker of an older
+  build reads a stored marked splice as overwriting nothing, and can let a
+  delayed handler's write land over the change it stands for, so a
+  deployment turns the capability on only once every serving worker that may
+  read its rows, a rollback's included, runs a build that reads the mark.
+  Turning it off again stops new marked splices on each client's next
+  connection; rows already stored keep their mark.
+- **Added by.** Gideon Wald, with Bernhard Seefeld's ruling (#9982).
 
 ### `messageCompressionV1`
 

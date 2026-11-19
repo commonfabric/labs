@@ -113,14 +113,23 @@ the session that fired the event, and drops the ones they overwrote
 (server-side-execution serving-loop.md §3d), which it cannot do to part of a
 splice.
 
-What a commit's splices overwrote is read back by comparing the array's
-values before and after the commit, from the first splice's index on
-(`overwrittenArrayElements()` in memory `v2/engine.ts`, for
-server-side-execution serving-loop.md §3d). That is exact for the shapes
-above, the only ones the runner sends. A hand-built commit that also changes
-the array at or past the first splice's index some other way, an increment
-or an op by index, has those changes read as the splices' too. The engine
-refuses only a splice whose index or count is not a whole number.
+Edit-script splices go marked (`pinned` on the `splice` op), and only to a
+server that advertises `markedSplicesV1` (see
+[`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md#markedsplicesv1));
+otherwise the change goes per index. What a commit's marked splices overwrote
+is read back by comparing the array's values before and after the commit, from
+the first splice's index on (`overwrittenArrayElements()` in memory
+`v2/engine.ts`, for server-side-execution serving-loop.md §3d). That is exact
+because the engine admits a marked splice only under a recursive read covering
+its array, with its document in no other operation of the commit, and alone on
+its array: nothing else in its patch operation touches the array at or past
+the first splice's index, adds, removes or moves one of its elements, touches
+the array or a value above it (save a splice of an outer array past the
+element the array is in), or moves the array by adding, removing or moving an
+element of an outer array at or before it (`refuseUnfoundedMarkedSplices()`).
+An unmarked splice, such as the tail splice of the per-index form, is read as
+overwriting nothing. The engine also refuses a splice whose index or count is
+not a whole number.
 
 A length change already puts a splice on the array's path, so sending it as
 splices throughout costs no conflict precision; a change that keeps the length

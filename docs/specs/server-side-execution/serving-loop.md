@@ -1750,14 +1750,13 @@ as — after the entry's seq. A patch at or below a path one of those
 commits overwrote is DROPPED from the consequence, and so is a whole-doc
 `set` or `delete` that one of them rewrote whole. A commit overwrites a
 path with a `set` or `delete` (the root) or with a `replace`, `add` or
-`remove` patch. The splices a commit makes to an array overwrite each
-index the array holds both before and after them whose value differs, from
-the first splice's index on: they stand for the per-index writes of the
-same change (memory-v2 08-conflict-granularity.md, "Array writes and the
-leaf-only matcher"), which replace exactly those indices. That is exact for
-every shape the runner sends; a hand-built commit that changes the array at
-or past the first splice's index some other way as well has those changes
-read as the splices' too. An element a splice only appends past
+`remove` patch. The marked splices a commit makes to an array (`pinned`)
+overwrite each index the array holds both before and after them whose value
+differs, from the first splice's index on: they stand for the per-index
+writes of the same change (memory-v2 08-conflict-granularity.md, "Array
+writes and the leaf-only matcher"), which replace exactly those indices, and
+the store admits them only where that reading is exact. An unmarked splice,
+such as the tail splice of the per-index form, overwrites nothing. An element a splice only appends past
 the old end, or only drops off the new end, is overwritten by nothing. A served
 handler's own array changes go index by index, so a patch this rule drops is
 never part of a splice that also carries a write it keeps. A write that

@@ -2,12 +2,13 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import type { Operation, PatchOp } from "../../v2.ts";
+import { type Operation, type PatchOp, toDocumentPath } from "../../v2.ts";
 import {
   applyCommit,
   close,
   type Engine,
   open,
+  selectDocHead,
   selectSessionOverwritePathsSince,
 } from "../../v2/engine.ts";
 
@@ -23,23 +24,38 @@ describe("selectSessionOverwritePathsSince()", () => {
   let path: string;
   let localSeq = 0;
 
+  // A commit that marks a splice carries the read the mark stands on: a
+  // recursive read of the document's value at its current head.
   const commit = (
     operations: Operation[],
     by: { principal: string; sessionId: string } = {
       principal,
       sessionId: session,
     },
-  ): number =>
-    applyCommit(engine, {
+  ): number => {
+    const marks = operations.some((operation) =>
+      operation.op === "patch" &&
+      operation.patches.some((patch) =>
+        patch.op === "splice" && patch.pinned === true
+      )
+    );
+    const seq = selectDocHead(engine, { id, scopeKey: "space" });
+    return applyCommit(engine, {
       sessionId: by.sessionId,
       principal: by.principal,
       space,
       commit: {
         localSeq: ++localSeq,
-        reads: { confirmed: [], pending: [] },
+        reads: {
+          confirmed: marks
+            ? [{ id, path: toDocumentPath(["value"]), seq }]
+            : [],
+          pending: [],
+        },
         operations,
       },
     }).seq;
+  };
 
   const patch = (...patches: PatchOp[]): Operation[] => [
     { op: "patch", id, patches },
@@ -144,6 +160,7 @@ describe("selectSessionOverwritePathsSince()", () => {
     it("returns the elements it moved where it inserts", () => {
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 1,
         remove: 0,
@@ -157,6 +174,7 @@ describe("selectSessionOverwritePathsSince()", () => {
     it("returns the elements it replaced or moved where it removes more than it adds", () => {
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 0,
         remove: 2,
@@ -170,6 +188,7 @@ describe("selectSessionOverwritePathsSince()", () => {
     it("returns the indices it replaced where it keeps the length", () => {
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 1,
         remove: 2,
@@ -183,6 +202,7 @@ describe("selectSessionOverwritePathsSince()", () => {
     it("returns nothing for a splice that appends past the end", () => {
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 4,
         remove: 0,
@@ -208,6 +228,7 @@ describe("selectSessionOverwritePathsSince()", () => {
       );
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 0,
         remove: 0,
@@ -224,6 +245,7 @@ describe("selectSessionOverwritePathsSince()", () => {
       // so the splice only appends.
       commit(patch({
         op: "splice",
+        pinned: true,
         path: "/value/tags",
         index: 4,
         remove: 1,
@@ -250,10 +272,36 @@ describe("selectSessionOverwritePathsSince()", () => {
       expect(overwritten(counted)).toEqual([]);
     });
 
+    it("returns nothing for an unmarked splice that lands mid-array after a peer's append", () => {
+      // The per-index form appends at the writer's old length; a peer's
+      // append landed first, so the splice inserts before the peer's elements
+      // and moves them. An unmarked splice overwrites nothing, so a delayed
+      // handler's write to one of those elements stands.
+      commit(patch({ op: "append", path: "/value/tags", values: ["p", "q"] }), {
+        principal: "did:key:peer",
+        sessionId: "peer-session",
+      });
+      commit(patch({
+        op: "splice",
+        path: "/value/tags",
+        index: 4,
+        remove: 0,
+        add: ["mine"],
+      }));
+      expect(overwritten(filled)).toEqual([]);
+    });
+
     it("leaves an index below its first splice to the replace that reaches it", () => {
       commit(patch(
         { op: "replace", path: "/value/tags/0", value: "z" },
-        { op: "splice", path: "/value/tags", index: 2, remove: 0, add: ["x"] },
+        {
+          op: "splice",
+          pinned: true,
+          path: "/value/tags",
+          index: 2,
+          remove: 0,
+          add: ["x"],
+        },
       ));
       expect(overwritten(filled)).toEqual([
         ["value", "tags", "0"],
@@ -265,8 +313,22 @@ describe("selectSessionOverwritePathsSince()", () => {
       // `c` moves to the head: an insertion, then the removal of its old
       // place, which leaves `d` at index 3.
       commit(patch(
-        { op: "splice", path: "/value/tags", index: 0, remove: 0, add: ["c"] },
-        { op: "splice", path: "/value/tags", index: 3, remove: 1, add: [] },
+        {
+          op: "splice",
+          pinned: true,
+          path: "/value/tags",
+          index: 0,
+          remove: 0,
+          add: ["c"],
+        },
+        {
+          op: "splice",
+          pinned: true,
+          path: "/value/tags",
+          index: 3,
+          remove: 1,
+          add: [],
+        },
       ));
       expect(overwritten(filled)).toEqual([
         { array: ["value", "tags"], fromIndex: 0, toIndex: 3 },
