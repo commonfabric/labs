@@ -190,10 +190,11 @@ How each part of the question is answered:
   (`compare/template.ts`) stays a test oracle only.
 - **The flag.** The whole effort is behind one experimental option, off by
   default. Milestones 1 and 2 need none, because nothing in the runtime
-  reaches the adapter. Milestone 3 adds the option, which lets the runner
-  run a piece from a plan, registered in
-  `docs/development/EXPERIMENTAL_OPTIONS.md` in the same change, and every
-  later milestone runs under it with no option of its own. The ruling that
+  reaches the adapter. The first of milestones 3 and 4 to be built adds
+  the option, registered in `docs/development/EXPERIMENTAL_OPTIONS.md` in
+  the same change: under it the preparation takes labels from templates
+  (milestone 4) and the runner runs a piece from a plan (milestone 3). Every
+  other milestone runs under it with no option of its own. The ruling that
   a space runs one path or the other becomes a mark of the space that the
   option permits.
 - **The CFC specification process.** Milestones 1 to 3 are a host
@@ -252,6 +253,20 @@ cost of one change does not grow with the length of a list.
 
 Each milestone ends with the corpus run both ways and the values compared,
 and reports what it measures beside the figures before it.
+
+**The order of work.** The numbers name the milestones and are not their
+order. The owner asked on 2026-11-19 for milestone 4, labels from templates
+at commit, sooner. It is built next, on the adapter of milestone 1 and
+beside milestone 2, and does not wait for milestone 3. The reason is in the
+first figures below: with one transaction per cause, today's join stamps
+one label on everything a settle writes, so the labels that milestones 1 to
+3 store are too wide, commits are refused that the design accepts, and the
+cost of preparation that milestone 2 would report is of a rule that neither
+today's runtime nor the design applies at that grouping. The figure that
+decides whether the work continues is therefore taken with milestone 4 in
+place. Milestone 4 needs from milestone 3 only the experimental option,
+which it adds itself (see "The flag" above); nothing else of the runner
+changes for it.
 
 1. **The executor's documents in the runtime's storage.** Each transaction
    of the executor is a transaction of the runtime: each position it reads

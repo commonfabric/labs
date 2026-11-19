@@ -5421,6 +5421,11 @@ is relitigated.
   by default (2026-11-18). Labels from templates at commit (its milestone
   4) assume specs pull request #91 lands as it stands, and need no option
   of their own.
+- Milestone 4 of the integration, labels from templates at commit, is
+  built ahead of its number (2026-11-19): next, on the adapter of milestone
+  1 and beside milestone 2.
+  [compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)
+  ("The order of work") has the reason.
 - The language is a subset of TypeScript with its own compiler, written in
   Rust. The runtime's CFC kernel and scheduler stay in TypeScript.
 - The compiler emits JavaScript value code and a data plan. There is no
