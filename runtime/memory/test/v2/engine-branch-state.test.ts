@@ -55,6 +55,35 @@ describe("engine", () => {
     await Deno.remove(path);
   });
 
+  describe("createBranch()", () => {
+    it("returns an existing branch for a repeat that names no fork point, after its parent moved on", () => {
+      setValue("first");
+      const created = createBranch(engine, "fork");
+      setValue("second");
+
+      expect(createBranch(engine, "fork")).toEqual(created);
+    });
+
+    it("throws for a repeat that names another fork point", () => {
+      const first = setValue("first");
+      setValue("second");
+      createBranch(engine, "fork", { forkSeq: first });
+
+      expect(() => createBranch(engine, "fork", { forkSeq: first + 1 }))
+        .toThrow("branch name is taken: fork");
+    });
+
+    it("throws for the name of a deleted branch", () => {
+      setValue("first");
+      createBranch(engine, "fork");
+      deleteBranch(engine, "fork");
+
+      expect(() => createBranch(engine, "fork")).toThrow(
+        "branch name is taken: fork",
+      );
+    });
+  });
+
   describe("read()", () => {
     it("returns the value at the head and the value as of an older seq", () => {
       const first = setValue("first");
@@ -157,6 +186,27 @@ describe("engine", () => {
       });
 
       expect(valueAt({ branch: "fork" })).toBe("fork");
+    });
+
+    it("throws for a fork's commit that writes a SQLite database", () => {
+      setValue("parent");
+      createBranch(engine, "fork");
+
+      expect(() =>
+        applyCommit(engine, {
+          sessionId,
+          commit: {
+            localSeq: ++localSeq,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "sqlite",
+              db: { id: "of:db" },
+              sql: "INSERT INTO notes (body) VALUES ('fork')",
+            }],
+            branch: "fork",
+          },
+        })
+      ).toThrow("cannot write a SQLite database");
     });
 
     it("throws for an unknown branch, and reads the branch once it exists", () => {

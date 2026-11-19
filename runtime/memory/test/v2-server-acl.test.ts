@@ -5394,4 +5394,175 @@ describe("v2-server-acl", () => {
       expect(sameAcl(undefined, {})).toBe(false);
     });
   });
+  describe("branch and history requests in `enforce` mode", () => {
+    const space = "did:key:z6Mk-acl-branches";
+
+    /** Sends a request on `harness` and returns the response to it. */
+    const request = async <Result>(
+      harness: Harness,
+      message: Record<string, unknown>,
+    ): Promise<ResponseMessage<Result>> => {
+      await harness.connection.receive(encodeMemoryBoundary({
+        ...message,
+        requestId: nextRequestId("branch"),
+        space,
+      }));
+      return nextResponse<Result>(harness.messages);
+    };
+
+    /**
+     * A server whose space grants ALICE OWNER, BOB WRITE and CAROL READ, and
+     * holds one document, with an open session for each of the three.
+     */
+    const serve = async (store: string) => {
+      const server = createAclServer(store, { mode: "enforce" });
+      await initializeSpaceAcl(server, space, {
+        [ALICE]: "OWNER",
+        [BOB]: "WRITE",
+        [CAROL]: "READ",
+      });
+      const open = async (principal: string, session?: SessionDescriptor) => {
+        const harness = await connect(server);
+        const opened = await openSession(harness, space, principal, session);
+        expectExists(opened.ok);
+        return { harness, sessionId: opened.ok.sessionId };
+      };
+      const owner = await open(ALICE);
+      expectExists(
+        (await transactSet(
+          owner.harness,
+          space,
+          owner.sessionId,
+          "of:doc",
+          "first",
+          1,
+        )).ok,
+      );
+      return { server, open, owner, writer: await open(BOB) };
+    };
+
+    it("lists branches and history for a reader, and returns `AuthorizationError` for their fork", async () => {
+      const { server, open } = await serve("memory://acl-branch-reader");
+      try {
+        const reader = await open(CAROL);
+        const address = { sessionId: reader.sessionId };
+
+        expectExists(
+          (await request(reader.harness, { type: "branch.list", ...address }))
+            .ok,
+        );
+        expectExists(
+          (await request(reader.harness, { type: "history.list", ...address }))
+            .ok,
+        );
+        const fork = await request(reader.harness, {
+          type: "branch.create",
+          name: "fork",
+          ...address,
+        });
+        expect(fork.error?.name).toBe("AuthorizationError");
+        const removal = await request(reader.harness, {
+          type: "branch.delete",
+          name: "fork",
+          ...address,
+        });
+        expect(removal.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("forks for a writer, and returns `AuthorizationError` for their restore", async () => {
+      const { server, writer } = await serve("memory://acl-branch-writer");
+      try {
+        const address = { sessionId: writer.sessionId };
+
+        expectExists(
+          (await request(writer.harness, {
+            type: "branch.create",
+            name: "fork",
+            ...address,
+          })).ok,
+        );
+        const restore = await request(writer.harness, {
+          type: "branch.restore",
+          source: "fork",
+          ...address,
+        });
+        expect(restore.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("restores for an owner", async () => {
+      const { server, owner } = await serve("memory://acl-branch-owner");
+      try {
+        const address = { sessionId: owner.sessionId };
+        const history = await request<{ commits: { seq: number }[] }>(
+          owner.harness,
+          { type: "history.list", ...address },
+        );
+        expectExists(history.ok);
+        const then = history.ok.commits[0].seq;
+        expectExists(
+          (await transactSet(
+            owner.harness,
+            space,
+            owner.sessionId,
+            "of:doc",
+            "second",
+            2,
+          )).ok,
+        );
+
+        const restore = await request<{ seq?: number }>(owner.harness, {
+          type: "branch.restore",
+          sourceSeq: then,
+          ...address,
+        });
+
+        expectExists(restore.ok);
+        expect(typeof restore.ok.seq).toBe("number");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("returns an error for a write to the access list from a session of a branch", async () => {
+      const { server, open, owner } = await serve("memory://acl-branch-acl");
+      try {
+        expectExists(
+          (await request(owner.harness, {
+            type: "branch.create",
+            name: "fork",
+            sessionId: owner.sessionId,
+          })).ok,
+        );
+        const onFork = await open(ALICE, { branch: "fork" });
+
+        const write = await transactSet(
+          onFork.harness,
+          space,
+          onFork.sessionId,
+          `of:${space}`,
+          { [ALICE]: "OWNER", [CAROL]: "OWNER" },
+          1,
+        );
+
+        expectExists(write.error);
+        const acl = await graphQuery(
+          owner.harness,
+          space,
+          owner.sessionId,
+          `of:${space}`,
+        );
+        expect(acl.ok?.entities[0]?.document?.value).toMatchObject({
+          [CAROL]: "READ",
+        });
+      } finally {
+        await server.close();
+      }
+    });
+  });
 });

@@ -849,25 +849,30 @@ export class XRootView extends BaseView implements ShellApp {
       this._openHistory?.busy === true || !Number.isSafeInteger(seq)
     ) return;
     this._historyError = undefined;
-    this._openHistory = { seq, busy: true };
+    const opening: OpenHistory = { seq, busy: true };
+    this._openHistory = opening;
     const previous = this.#fork;
+    let fork: SpaceFork;
     try {
-      const fork = await rt.forkSpace(space, seq);
-      // The view moved on while the fork was being taken.
-      if (rt !== this.#rt.value || space !== this.space) {
-        await fork.discard();
-        return;
-      }
-      this.#fork = fork;
-      this._openHistory = { seq, busy: false };
-      await previous?.discard();
+      fork = await rt.forkSpace(space, seq);
     } catch (error) {
       console.error("[RootView] Failed to open history:", error);
+      if (this._openHistory !== opening) return;
       this._historyError = describeFailure(error);
-      this._openHistory = previous === undefined || previous !== this.#fork
+      this._openHistory = previous === undefined
         ? undefined
         : { seq: previous.seq, busy: false };
+      return;
     }
+    // Anything that let go of the fork being opened, such as the panel
+    // closing or the view moving on, replaced `_openHistory` meanwhile.
+    if (this._openHistory !== opening) {
+      void this.#discard(fork);
+      return;
+    }
+    this.#fork = fork;
+    this._openHistory = { seq, busy: false };
+    if (previous !== undefined) void this.#discard(previous);
   }
 
   /** Returns from the open fork to the space as it stands. */
@@ -877,11 +882,7 @@ export class XRootView extends BaseView implements ShellApp {
     this._historyError = undefined;
     this.#fork = undefined;
     this._openHistory = undefined;
-    try {
-      await fork.discard();
-    } catch (error) {
-      console.error("[RootView] Failed to discard a fork:", error);
-    }
+    await this.#discard(fork);
   }
 
   /**
@@ -892,18 +893,18 @@ export class XRootView extends BaseView implements ShellApp {
     const fork = this.#fork;
     if (fork === undefined || this._openHistory?.busy === true) return;
     this._historyError = undefined;
-    this._openHistory = { seq: fork.seq, busy: true };
+    const restoring: OpenHistory = { seq: fork.seq, busy: true };
+    this._openHistory = restoring;
     try {
       await fork.restore();
     } catch (error) {
       console.error("[RootView] Failed to restore from history:", error);
+      if (this._openHistory !== restoring) return;
       this._historyError = describeFailure(error);
-      if (fork === this.#fork) {
-        this._openHistory = { seq: fork.seq, busy: false };
-      }
+      this._openHistory = { seq: fork.seq, busy: false };
       return;
     }
-    if (fork !== this.#fork) return;
+    if (this._openHistory !== restoring) return;
     this.#fork = undefined;
     this._openHistory = undefined;
   }
@@ -915,9 +916,16 @@ export class XRootView extends BaseView implements ShellApp {
     this._openHistory = undefined;
     if (fork === undefined) return;
     this.#fork = undefined;
-    fork.discard().catch((error) =>
-      console.error("[RootView] Failed to discard a fork:", error)
-    );
+    void this.#discard(fork);
+  }
+
+  /** Ends `fork`, reporting a failure to do so and throwing none. */
+  async #discard(fork: SpaceFork): Promise<void> {
+    try {
+      await fork.discard();
+    } catch (error) {
+      console.error("[RootView] Failed to discard a fork:", error);
+    }
   }
 
   /**

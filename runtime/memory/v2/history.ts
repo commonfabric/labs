@@ -91,6 +91,7 @@ SELECT c.seq, c.branch, c.class, c.created_at, c.acting_principal,
         )) AS writes
 FROM "commit" c
 WHERE c.branch = :branch AND c.seq <= :through AND c.seq < :before
+  AND c.seq >= :floor
 ORDER BY c.seq DESC
 LIMIT :limit
 `;
@@ -135,7 +136,9 @@ const toCommitSummary = (row: CommitRow): CommitSummary => ({
 
 /**
  * Returns the commits of a branch's history, newest first: the branch's own,
- * then those it inherits from each ancestor up to its fork point.
+ * then those it inherits from each ancestor up to its fork point. History
+ * below the store's compaction floor (`Engine.compactionFloor()`) is closed,
+ * and its commits are left out.
  *
  * @throws When the branch does not exist.
  */
@@ -150,6 +153,7 @@ export const listCommits = (
     MAX_COMMIT_PAGE_SIZE,
   );
   const statement = engine.prepare(SELECT_COMMITS);
+  const floor = Engine.compactionFloor(engine);
   const commits: CommitSummary[] = [];
   for (
     const segment of lineageSegments(engine, branch, Number.MAX_SAFE_INTEGER)
@@ -159,6 +163,7 @@ export const listCommits = (
       branch: segment.branch,
       through: segment.through,
       before,
+      floor,
       limit: limit - commits.length,
     }) as CommitRow[];
     for (const row of rows) commits.push(toCommitSummary(row));
@@ -179,7 +184,11 @@ export type RestoreOptions = {
 
   /** The point of `source`'s history to restore, its head when absent. */
   sourceSeq?: number;
+
+  /** The session the restoring commit is recorded under. */
   sessionId: SessionId;
+
+  /** That session's sequence number for the commit. */
   localSeq: number;
 };
 
@@ -263,7 +272,7 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * editors start it again from the restored value.
  *
  * @throws When either branch does not exist, or when `sourceSeq` lies outside
- * `source`'s history.
+ * `source`'s history or below the store's compaction floor.
  */
 export const restoreBranch = (
   engine: Engine.Engine,
@@ -282,6 +291,7 @@ export const restoreBranch = (
     ) {
       throw new Error(`seq ${sourceSeq} is out of range for branch ${source}`);
     }
+    Engine.assertAboveCompactionFloor(engine, sourceSeq);
     const { instances, base } = divergedInstances(
       engine,
       lineageSegments(engine, target, Number.MAX_SAFE_INTEGER),

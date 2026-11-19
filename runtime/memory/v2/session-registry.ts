@@ -411,9 +411,8 @@ export class SessionRegistry {
         `session ${sessionId} is already bound to ${existing.principal}`,
       );
     }
-    // A session's replica holds one branch's documents, and its watches name
-    // none, so a resume on another branch would re-deliver nothing the
-    // replica lacks.
+    // A session's replica holds one branch's documents, which a resume on
+    // another branch would leave it holding as though they were that one's.
     if (
       existing !== undefined &&
       (existing.branch ?? DEFAULT_BRANCH) !== (session.branch ?? DEFAULT_BRANCH)
@@ -525,7 +524,7 @@ export class SessionRegistry {
         ? { servingBinding: true as const }
         : {}),
       ...(inProcess || session.actingAs === "space-owner" ||
-          session.demand === false || onBranch
+          session.demand === false
         ? { servingOwn: true as const }
         : {}),
       // No serving loop runs a branch, so a session of one is demand on

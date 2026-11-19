@@ -137,6 +137,17 @@ describe("branch sessions", () => {
       expect(notices.map((notice) => notice.seq)).toEqual([onMain.seq]);
     });
 
+    it("is refused a request the server serves on the default branch alone", async () => {
+      await set(main, "value");
+      await main.createBranch("fork");
+      const fork = await mount("fork");
+
+      await expect(fork.entityIdExists(id)).rejects.toThrow(
+        "is served on a space's default branch only",
+      );
+      expect((await main.entityIdExists(id))?.exists).toBe(true);
+    });
+
     it("is refused for a branch the space does not have", async () => {
       await expect(mount("missing")).rejects.toThrow(
         'The space has no active branch "missing"',
@@ -176,12 +187,13 @@ describe("branch sessions", () => {
 
     it("throws for a name another fork point holds", async () => {
       const { seq } = await set(main, "value");
-      await set(main, "later");
+      const later = await set(main, "later");
       await main.createBranch("fork", { forkSeq: seq });
 
-      await expect(main.createBranch("fork")).rejects.toThrow(
-        "branch name is taken: fork",
-      );
+      await expect(main.createBranch("fork", { forkSeq: later.seq })).rejects
+        .toThrow(
+          "branch name is taken: fork",
+        );
     });
   });
 

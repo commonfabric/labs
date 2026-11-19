@@ -167,6 +167,9 @@ export class XHistoryView extends BaseView {
   @state()
   private accessor _next: number | undefined = undefined;
 
+  /** How many listings have begun, which tells a superseded one apart. */
+  #listing = 0;
+
   /**
    * Lists a stretch of history: the newest when `before` is absent, which
    * replaces the list, and otherwise the one below `before`, which extends
@@ -175,15 +178,16 @@ export class XHistoryView extends BaseView {
   #list = new Task<[number | undefined], void>(this, {
     task: async ([before]) => {
       const { rt, space } = this;
+      const listing = ++this.#listing;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
         return;
       }
       const page = await rt.spaceHistory(space, before);
-      // A stretch that arrives after the view moved to another space, or to
-      // another runtime, is that one's history.
-      if (rt !== this.rt || space !== this.space) return;
+      // A stretch that arrives after a later listing began belongs to a list
+      // that one has replaced.
+      if (listing !== this.#listing) return;
       this._steps = before === undefined
         ? page.steps
         : [...this._steps, ...page.steps];
@@ -211,8 +215,9 @@ export class XHistoryView extends BaseView {
     return html`
       <section class="open" role="status">
         <p>
-          Showing this space as it stood at #${open.seq}. What you do here
-          stays here until you restore it.
+          Showing this space as it stood at #${open.seq}. Changes you make
+          to it here are kept apart from the space until you restore them.
+          Other spaces are not kept apart.
         </p>
         <div class="actions">
           <cf-button

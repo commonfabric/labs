@@ -28,12 +28,14 @@ describe("space history", () => {
     await runtime.storageManager.synced();
   };
 
-  /** Reads the cell as the server holds it now. */
-  const stored = async (): Promise<string | undefined> => {
+  /** Resolves once the runtime's replica holds `value` in the cell. */
+  const storedBecomes = (value: string): Promise<void> => {
+    const arrived = Promise.withResolvers<void>();
     const cell = runtime.getCell<string>(space, "space-history");
-    await cell.sync();
-    await runtime.storageManager.synced();
-    return cell.get();
+    const cancel = cell.sink((current) => {
+      if (current === value) arrived.resolve();
+    });
+    return arrived.promise.finally(cancel);
   };
 
   beforeEach(async () => {
@@ -89,7 +91,7 @@ describe("space history", () => {
 
       const seq = await client.restoreSpace({ space, seq: first.seq });
 
-      expect(await stored()).toBe("first");
+      await storedBecomes("first");
       const { steps: [newest] } = await client.spaceHistory({ space });
       expect(newest).toMatchObject({
         seq,
@@ -121,7 +123,7 @@ describe("space history", () => {
       await client.restoreSpace({ space, branch: "fork" });
       await client.deleteSpaceBranch({ space, name: "fork" });
 
-      expect(await stored()).toBe("first");
+      await storedBecomes("first");
     });
 
     it("rejects for a fork point past the space's history", async () => {

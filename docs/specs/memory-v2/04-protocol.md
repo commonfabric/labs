@@ -1872,8 +1872,8 @@ its result carries `serverSeq`.
 | `branch.restore` | `source?`, `sourceSeq?`              | `seq?`                | OWNER    |
 
 - A request the engine refuses, for a name that is taken, a fork point outside
-  the parent's history or a branch that does not exist, gets a `QueryError`
-  carrying the reason.
+  the parent's history or below the store's compaction floor, or a branch
+  that does not exist, gets a `QueryError` carrying the reason.
 - `branch.restore` restores the default branch only. It is serialized with the
   space's commits, and the documents it writes reach the space's sessions as
   any commit's do.
@@ -2789,7 +2789,9 @@ entity values remain content-addressed.
 `branch` on read and write commands still determines which branch is being read
 or mutated. If omitted, the branch the session was opened on is used
 (`SessionDescriptor.branch`, section 4.1.2; `06-branching.md` section 6.16),
-which is the default branch unless the open named another.
+which is the default branch unless the open named another. The commands that
+carry no `branch` and are served on the default branch alone are refused from
+a session of another branch; section 6.16 lists them.
 
 ## 4.11 Message Ordering
 

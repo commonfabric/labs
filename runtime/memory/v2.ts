@@ -2199,8 +2199,7 @@ export type EntityIdLookupRequest = {
 /**
  * A branch as the server reports it. `forkSeq` is the point of
  * `parentBranch`'s history the branch holds; both are `null` for the default
- * branch. `status` is `active`, or `deleted` once the branch takes no more
- * commits.
+ * branch. A `deleted` branch takes no more commits.
  */
 export type BranchInfo = {
   name: BranchName;
@@ -2208,7 +2207,7 @@ export type BranchInfo = {
   forkSeq: number | null;
   createdSeq: number;
   headSeq: number;
-  status: string;
+  status: "active" | "deleted";
 };
 
 /** One commit of a branch's history, without the documents it wrote. */
@@ -2217,6 +2216,8 @@ export type CommitSummary = {
 
   /** The branch the commit landed on, which a fork's history inherits from. */
   branch: BranchName;
+
+  /** Who made the commit: a client, a serving loop, or the server itself. */
   class: CommitClass;
 
   /** When the server admitted the commit, as an ISO 8601 UTC time. */

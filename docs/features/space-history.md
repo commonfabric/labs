@@ -24,6 +24,12 @@ computation made, such as an event, an edit or a restore, and runs through the
 commits computing what followed from it. The step's `seq` is its last commit,
 which is the point of history holding the state the step left.
 
+A space that has been compacted
+([`../plans/compact-space.md`](../plans/compact-space.md)) has no steps below
+the compaction: compaction deletes revisions, so a point of history below it
+can hold a document as absent that the space held then, and the server
+neither lists such a point nor forks or restores from it.
+
 A step is **settled** when the serving loop had computed everything its first
 commit called for before the next step began. The loop records the seq it has
 computed through on each commit it makes (`derivedThrough`), so a step is
@@ -36,8 +42,9 @@ piece writes: an interaction as small as switching a tab is state, and a state
 taken between an event and the computation that follows it has that
 computation still to do. So an earlier step is always opened in a fork: a
 branch of the space, forked at the step's `seq`. A fork is cheap to make, since
-a branch shares its parent's revisions up to the fork point, and what happens
-in it stays in it.
+a branch shares its parent's revisions up to the fork point, and what a fork's
+runtime writes to the space's documents stays in the fork. The section below
+says what does not.
 
 **A restore.** Setting a space back is one new commit on the space that writes
 every document the space and the chosen state differ in. Nothing is removed
@@ -67,8 +74,19 @@ Two consequences follow.
   changes a request, the built-in sends the new one, from the fork's runtime,
   as it would anywhere.
 
-A fork covers one space. A link out of it reaches the other space as that
-space stands now.
+### What a fork does not contain
+
+A fork is a branch of one space's documents, and three things lie outside it.
+
+- **Other spaces.** A link out of a fork reaches the other space as that space
+  stands now, and a write a piece in the fork makes to another space lands in
+  that space.
+- **SQLite databases.** A pattern's SQLite database is not stored as
+  revisions, so no branch holds a copy of one. A piece in a fork reads the
+  database as it stands now, beside documents from the past, and a write to
+  it from a fork is refused rather than landing in the space.
+- **Effects.** A request a fork's runtime sends, because the fork diverged
+  from what was already fetched, is a real request.
 
 ## What a restore covers
 
@@ -130,7 +148,9 @@ within the space. The panel then offers two ways out. "Back to now" discards
 the fork. "Restore this version" restores the space from it. Closing the panel,
 moving to another space, or replacing the runtime discards the fork as well.
 
-A fork whose page goes away before discarding it leaves its branch in the
+Ending a fork deletes its branch first and disposes of its runtime after, so
+a fork dropped because its own runtime is being replaced still gets its branch
+deleted. A fork whose page goes away before ending it leaves its branch in the
 store. Such a branch holds nothing but what was done in it and is not
 reachable from the space, but the space compaction tool refuses a store with a
 branch that is not deleted (`../plans/compact-space.md`), so an operator

@@ -2472,7 +2472,7 @@ class Connection {
   ): Promise<void> {
     const parsed = received === null
       ? null
-      : this.#server.onSessionBranch(received);
+      : this.#server.withSessionBranch(received);
     const characters = payload.length;
     if (this.#closed) {
       return;
@@ -2546,6 +2546,12 @@ class Connection {
       this.#syncCidReferences = clientFlags?.syncCidReferencesV1 === true &&
         serverFlags?.syncCidReferencesV1 === true;
       this.#ready = true;
+      return;
+    }
+
+    const refusal = this.#server.branchSessionRefusal(parsed);
+    if (refusal !== undefined) {
+      this.#send(refusal);
       return;
     }
 
@@ -8621,7 +8627,7 @@ export class Server {
    * wherever it names none (`SessionDescriptor.branch`). A message of a
    * session of the default branch, or of no session, is returned as it is.
    */
-  onSessionBranch<Message extends ClientMessage | RejectedClientMessage>(
+  withSessionBranch<Message extends ClientMessage | RejectedClientMessage>(
     message: Message,
   ): Message {
     if (
@@ -8659,7 +8665,38 @@ export class Server {
       case "history.list":
         return { ...message, branch: message.branch ?? branch };
     }
-    return message;
+  }
+
+  /**
+   * Returns the refusal of `message` where its session is of a branch other
+   * than the default and the request is one the server serves on the default
+   * branch alone: listing or probing entity ids, a pattern-lifecycle verb,
+   * resolving an event's attention, and a crossing to the space's owner.
+   * Served for such a session, each would read or change the space itself
+   * rather than the branch. Returns `undefined` for every other message.
+   * A SQLite query is served: it reads the space's database as it stands,
+   * no branch holding a copy of one.
+   */
+  branchSessionRefusal(
+    message: ClientMessage | RejectedClientMessage,
+  ): ResponseMessage<never> | undefined {
+    if (
+      message.type !== "entity-id.list" &&
+      message.type !== "entity-id.exists" &&
+      message.type !== "pattern.lifecycle" &&
+      message.type !== "event.attention.resolve" &&
+      message.type !== "served"
+    ) return undefined;
+    const branch = this.#sessions.get(message.space, message.sessionId)
+      ?.branch;
+    return branch === undefined ? undefined : respondTypedError<never>(
+      message.requestId,
+      toError(
+        "ProtocolError",
+        `\`${message.type}\` is served on a space's default branch only, ` +
+          `and this session is of the branch ${JSON.stringify(branch)}`,
+      ),
+    );
   }
 
   /**

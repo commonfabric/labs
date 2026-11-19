@@ -1705,7 +1705,7 @@ type BranchRow = {
   fork_seq: number | null;
   created_seq: number;
   head_seq: number;
-  status: string;
+  status: "active" | "deleted";
 };
 
 export const DEFAULT_SNAPSHOT_INTERVAL = 10;
@@ -2477,17 +2477,34 @@ export const close = (engine: Engine): void => {
 export const MAX_BRANCH_NAME_LENGTH = 128;
 
 /**
+ * The seq below which the store's history is closed: that of the newest
+ * commit `cf space compact` inserted, or 0 for a store never compacted.
+ * Compaction deletes revisions below a cut it chooses per document, so a
+ * point of history below its commit can hold a document as absent that the
+ * space held then. A fork or a restore of such a point would take that
+ * absence for the state, so neither reaches below this seq.
+ */
+export const compactionFloor = (engine: Engine): number =>
+  (engine.prepare(`
+SELECT COALESCE(MAX(seq), 0) AS seq FROM "commit"
+WHERE class = 'system' AND session_id LIKE :prefix
+`).get({ prefix: `${COMPACTION_SESSION_PREFIX}%` }) as { seq: number }).seq;
+
+/**
  * Creates the branch `name`, forked from `options.parentBranch` (the default
  * branch when absent) as of `options.forkSeq` (the parent's head when
  * absent), and returns it. The branch holds what its parent held at the fork
  * point, shares the parent's revisions up to there, and diverges from its
- * first own commit. Creating a branch that already exists with the same
- * parent and fork point returns it unchanged.
+ * first own commit. Creating a branch that already exists and is active
+ * returns it unchanged, provided it has the same parent and, where
+ * `options.forkSeq` is given, that fork point. Creating the default branch
+ * returns it.
  *
- * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH}, when
- * the parent does not exist or is deleted, when
- * the fork point lies outside the parent's history, or when `name` is taken
- * by a branch with another parent or fork point, a deleted one included.
+ * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH}, when the
+ * parent does not exist or is deleted, when the fork point lies outside the
+ * parent's history or below the store's {@link compactionFloor}, or when
+ * `name` is taken by a deleted branch or by one with another parent or fork
+ * point.
  */
 export const createBranch = (
   engine: Engine,
@@ -2498,19 +2515,16 @@ export const createBranch = (
   } = {},
 ): BranchState =>
   engine.database.transaction((txEngine: Engine) => {
-    const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
-    const parent = requireBranch(txEngine, parentBranch);
-    const forkSeq = options.forkSeq ?? parent.headSeq;
     if (name === DEFAULT_BRANCH) {
-      return parent.name === DEFAULT_BRANCH
-        ? parent
-        : requireBranch(txEngine, DEFAULT_BRANCH);
+      return requireBranch(txEngine, DEFAULT_BRANCH);
     }
+    const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
     const existing = getBranch(txEngine, name);
     if (existing !== null) {
       if (
         existing.status !== "active" ||
-        existing.parentBranch !== parentBranch || existing.forkSeq !== forkSeq
+        existing.parentBranch !== parentBranch ||
+        (options.forkSeq !== undefined && existing.forkSeq !== options.forkSeq)
       ) {
         throw new Error(`branch name is taken: ${name}`);
       }
@@ -2519,9 +2533,11 @@ export const createBranch = (
     if (name.length > MAX_BRANCH_NAME_LENGTH) {
       throw new Error("branch name is too long");
     }
+    const parent = requireBranch(txEngine, parentBranch);
     if (parent.status !== "active") {
       throw new Error(`branch is not active: ${parentBranch}`);
     }
+    const forkSeq = options.forkSeq ?? parent.headSeq;
     const firstSeq = parentBranch === DEFAULT_BRANCH ? 0 : parent.createdSeq;
     if (
       !Number.isSafeInteger(forkSeq) || forkSeq < firstSeq ||
@@ -2531,6 +2547,7 @@ export const createBranch = (
         `seq ${forkSeq} is out of range for branch ${parentBranch}`,
       );
     }
+    assertAboveCompactionFloor(txEngine, forkSeq);
     txEngine.statement("insertBranch").run({
       name,
       parent_branch: parentBranch,
@@ -2540,6 +2557,23 @@ export const createBranch = (
     });
     return requireBranch(txEngine, name);
   }).immediate(engine);
+
+/**
+ * Throws when `seq` names a point of history below the store's
+ * {@link compactionFloor}.
+ */
+export const assertAboveCompactionFloor = (
+  engine: Engine,
+  seq: number,
+): void => {
+  const floor = compactionFloor(engine);
+  if (seq < floor) {
+    throw new Error(
+      `history below seq ${floor} was compacted, and seq ${seq} names no ` +
+        "state of the space",
+    );
+  }
+};
 
 /**
  * Deletes `branch`: it takes no further commit and
@@ -6824,6 +6858,17 @@ const applyCommitTransaction = (
   const branch = commit.branch ?? DEFAULT_BRANCH;
   if (requireBranch(engine, branch).status !== "active") {
     throw new Error(`branch is not active: ${branch}`);
+  }
+  // A pattern's SQLite database is one file per space and scope, with no
+  // branches: a write to it from a fork would land in the space itself.
+  if (
+    branch !== DEFAULT_BRANCH &&
+    commit.operations.some((operation) => operation.op === "sqlite")
+  ) {
+    throw new ProtocolError(
+      "a commit on a branch other than the default cannot write a SQLite " +
+        "database, which no branch holds a copy of",
+    );
   }
 
   // A sessionless delegated chain has NO session instance (scopes.md

@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
+  type CommitSummary,
   dbNeedsColumnProvenance,
   DEFAULT_BRANCH,
   eventAttentionEntryKey,
@@ -4484,17 +4485,27 @@ export class RuntimeProcessor {
     request: SpaceHistoryListRequest,
   ): Promise<SpaceHistoryListResponse> {
     const provider = this.#historyProvider(request.space);
-    const commits = await provider.listHistory({
-      limit: HISTORY_PAGE_COMMITS,
-      ...(request.before !== undefined ? { before: request.before } : {}),
-    });
-    const steps = historySteps(commits);
-    // A full page may have cut a step off, whose commits the next page holds
-    // from that step's first commit down.
-    const next = commits.length < HISTORY_PAGE_COMMITS
-      ? undefined
-      : steps.at(-1)?.startSeq ?? commits.at(-1)?.seq;
-    return { steps, ...(next !== undefined ? { next } : {}) };
+    const commits: CommitSummary[] = [];
+    let before = request.before;
+    for (;;) {
+      const page = await provider.listHistory({
+        limit: HISTORY_PAGE_COMMITS,
+        ...(before !== undefined ? { before } : {}),
+      });
+      for (const commit of page) commits.push(commit);
+      const steps = historySteps(commits);
+      const exhausted = page.length < HISTORY_PAGE_COMMITS;
+      // A page holding the first commit of no step is the middle of one, so
+      // the listing reads on until it has that step whole.
+      if (steps.length === 0 && !exhausted) {
+        before = page.at(-1)!.seq;
+        continue;
+      }
+      // A full page may have cut its oldest step's predecessor off, whose
+      // commits the next request holds from that step's first commit down.
+      const next = exhausted ? undefined : steps.at(-1)!.startSeq;
+      return { steps, ...(next !== undefined ? { next } : {}) };
+    }
   }
 
   /** Forks a branch of the requested space. */

@@ -112,12 +112,14 @@ When `branch.create({ name, parentBranch, forkSeq })` is served:
 2. **Resolve the fork seq.** If `forkSeq` is omitted, use the parent branch's
    current `headSeq`. Otherwise it must lie in the parent's history: at most
    the parent's `headSeq`, and for a parent other than the default branch at
-   least the parent's `createdSeq`.
+   least the parent's `createdSeq`. It must not lie below the store's
+   compaction floor (6.17.1).
 3. **Check the name.** A name at most 128 characters long that no branch has
-   had is taken by the new branch. A name an active branch has with the same
-   parent and fork seq returns that branch unchanged, so a repeated request is
-   harmless. Any other use of a taken name is refused, a deleted branch's name
-   included: names are permanently consumed.
+   had is taken by the new branch. A name an active branch has returns that
+   branch unchanged when the request names the same parent and either the
+   same fork seq or none, so a repeated request is harmless. Any other use of
+   a taken name is refused, a deleted branch's name included: names are
+   permanently consumed.
 4. **Create the `Branch` record:**
    ```
    Branch {
@@ -606,7 +608,7 @@ interface BranchInfo {
   forkSeq: number | null; // null for the default branch
   createdSeq: number;
   headSeq: number;
-  status: string; // "active" or "deleted"
+  status: "active" | "deleted";
 }
 ```
 
@@ -756,7 +758,8 @@ interface BranchRestoreResult {
 ### 6.15.2 Semantics
 
 1. `sourceSeq` must lie in the source's history, as a point-in-time read's
-   `atSeq` must (6.10.1). The source may be deleted.
+   `atSeq` must (6.10.1), and not below the store's compaction floor
+   (6.17.1). The source may be deleted.
 2. The server finds the point where the two histories part: the common
    ancestor branch, at the lower of the seqs the two lineages reach on it.
    Only documents written on either side above that point can differ.
@@ -809,6 +812,14 @@ is served on the branch it names.
 
 - The branch must exist and be active when the session opens; an open on any
   other is refused.
+- A commit on a branch other than the default cannot carry a `sqlite`
+  operation. A pattern's SQLite database is one file per space and scope, no
+  branch holding a copy of it, so the write would land in the space itself.
+  A `sqlite.query` from a session of a branch is served, and reads the
+  database as it stands.
+- The server serves `entity-id.list`, `entity-id.exists`, `pattern.lifecycle`,
+  `event.attention.resolve` and `served` on the default branch alone, and
+  refuses each from a session of another branch with a `ProtocolError`.
 - A session keeps its branch for life. A resume declaring another is refused,
   since the session's replica holds one branch's documents.
 - A session of a branch other than the default is never client demand
@@ -848,8 +859,17 @@ interface CommitSummary {
 ```
 
 A commit whose payload compaction emptied (`docs/plans/compact-space.md`)
-reports no events and no restore. History below a compaction cut is not
-listed, since its commits are gone.
+reports no events and no restore.
+
+### 6.17.1 The Compaction Floor
+
+Compaction deletes revisions below a cut it chooses per document, and leaves
+the commit rows. A point of history below a compaction can therefore hold a
+document as absent that the space held then. The seq of the newest commit a
+compaction inserted is the store's **compaction floor**, and history below it
+is closed: `history.list` leaves its commits out, and `branch.create` and
+`branch.restore` refuse a fork point or a source seq below it. A store never
+compacted has a floor of 0.
 
 ---
 

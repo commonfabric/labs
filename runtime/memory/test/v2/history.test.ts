@@ -3,16 +3,23 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
-import { type BranchName, resolveScopeKey, toValuePath } from "../../v2.ts";
+import {
+  type BranchName,
+  encodeMemoryBoundary,
+  resolveScopeKey,
+  toValuePath,
+} from "../../v2.ts";
 import {
   applyCommit,
   close,
+  COMPACTION_SESSION_PREFIX,
   createBranch,
   deleteBranch,
   type Engine,
   open,
   queryOperationField,
   read,
+  serverSeq,
 } from "../../v2/engine.ts";
 import { listCommits, restoreBranch } from "../../v2/history.ts";
 import {
@@ -76,6 +83,25 @@ describe("history", () => {
     await Deno.remove(path);
   });
 
+  /**
+   * Inserts the commit `cf space compact` leaves at the head of a store it
+   * has compacted, and returns its seq.
+   */
+  const markCompacted = (): number => {
+    const seq = serverSeq(engine) + 1;
+    engine.database.prepare(
+      `INSERT INTO "commit"
+         (seq, branch, session_id, local_seq, original, resolution, class)
+       VALUES (?, '', ?, 1, ?, ?, 'system')`,
+    ).run(
+      seq,
+      `${COMPACTION_SESSION_PREFIX}test`,
+      encodeMemoryBoundary({}),
+      encodeMemoryBoundary({}),
+    );
+    return seq;
+  };
+
   describe("listCommits()", () => {
     it("returns a branch's commits newest first", () => {
       const first = set("of:a", "one");
@@ -111,6 +137,15 @@ describe("history", () => {
       expect(
         listCommits(engine, { before: seqs[3], limit: 2 }).map((c) => c.seq),
       ).toEqual([seqs[2], seqs[1]]);
+    });
+
+    it("leaves out the commits below a compaction", () => {
+      set("of:a", "before");
+      const floor = markCompacted();
+      const after = set("of:a", "after");
+
+      expect(listCommits(engine).map((commit) => commit.seq))
+        .toEqual([after, floor]);
     });
 
     it("throws for a branch that does not exist", () => {
@@ -166,6 +201,15 @@ describe("history", () => {
 
       expect(restore({ sourceSeq: head })).toBeUndefined();
       expect(listCommits(engine).map((c) => c.seq)).toEqual([head]);
+    });
+
+    it("throws for a fork point below a compaction", () => {
+      const then = set("of:a", "old");
+      markCompacted();
+
+      expect(() => createBranch(engine, "fork", { forkSeq: then })).toThrow(
+        "was compacted",
+      );
     });
 
     it("restores the default branch to a fork's head", () => {
@@ -280,6 +324,15 @@ describe("history", () => {
       restore({ sourceSeq: then });
 
       expect(valueOf(`of:${space}`)).toBe("access list");
+    });
+
+    it("throws for a seq below a compaction, and writes nothing", () => {
+      const then = set("of:a", "old");
+      set("of:a", "new");
+      markCompacted();
+
+      expect(() => restore({ sourceSeq: then })).toThrow("was compacted");
+      expect(valueOf("of:a")).toBe("new");
     });
 
     it("throws for a seq outside the source's history", () => {

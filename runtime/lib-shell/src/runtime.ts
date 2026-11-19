@@ -1295,10 +1295,11 @@ export class RuntimeInternals extends EventTarget {
 }
 
 /**
- * A fork of a space: a branch that holds the space as it stood at one point
- * of its history, and a runtime that runs it there. What is done in the fork
- * stays in the fork, so it can be looked at and interacted with freely, and
- * is then either restored into the space or discarded.
+ * A fork of a space: a branch that holds the space's documents as they stood
+ * at one point of its history, and a runtime that runs it there. What that
+ * runtime writes to the space's documents stays in the fork, which is then
+ * either restored into the space or discarded. What it writes to another
+ * space lands there, and the requests its effects send are real.
  */
 export class SpaceFork {
   readonly #space: DID;
@@ -1363,22 +1364,33 @@ export class SpaceFork {
       space: this.#space,
       branch: this.#branch,
     });
-    await this.discard();
+    // The space is restored whatever becomes of the fork's own teardown.
+    try {
+      await this.discard();
+    } catch (error) {
+      console.error("[SpaceFork] Failed to end a restored fork:", error);
+    }
     return seq;
   }
 
   /**
-   * Ends the fork: disposes of its runtime and deletes its branch. What was
+   * Ends the fork: deletes its branch and disposes of its runtime. What was
    * done in it stays in the space's store, unreachable from the space.
    */
   async discard(): Promise<void> {
     if (this.#ended) return;
     this.#ended = true;
-    await this.#runtime.dispose();
-    await this.#origin.deleteSpaceBranch({
+    // The delete is sent before anything is awaited, so a caller that is
+    // about to dispose of the runtime that took the fork still gets it out.
+    const deleted = this.#origin.deleteSpaceBranch({
       space: this.#space,
       name: this.#branch,
     });
+    try {
+      await this.#runtime.dispose();
+    } finally {
+      await deleted;
+    }
   }
 }
 
