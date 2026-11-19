@@ -9549,12 +9549,11 @@ the executor. `FA` is `footprint-analysis.md`.
      left out). The counts are those of the second run. "Settle" is from the
      change until the board is up to date; the read of the result after that is
      apart. The executor runs the rewritten program (note 539) in memory,
-     today's runtime the program of the repository on emulated storage in
-     the client posture: a bare `Runtime` resolves server-side execution to
-     off (`getServerExecutionConfig` in `runtime/memory/v2.ts`), so it
-     derives and commits in the client. These are not figures of
-     server-side execution, which a deployment runs and the existing Topics
-     benchmarks measure.
+     today's runtime the program of the repository on emulated storage in the
+     client posture: a bare `Runtime` resolves server-side execution to off
+     (`getServerExecutionConfig` in `runtime/memory/v2.ts`), so it derives and
+     commits in the client. These are not figures of server-side execution,
+     which a deployment runs and the existing Topics benchmarks measure.
 
      | Topics | Step                       | Executor, first run, ms | Executor, second run, ms |        Today, ms | Executor: evaluations, documents | Today: actions, commits, documents |
      | -----: | -------------------------- | ----------------------: | -----------------------: | ---------------: | -------------------------------: | ---------------------------------: |
@@ -9638,145 +9637,151 @@ the executor. `FA` is `footprint-analysis.md`.
 
 ## The Topics source rewritten to the subset
 
-At the owner's direction of 2026-11-18 ("it's ok and even desired to modify
-the patterns to fit our tighter syntax. let's do that and learn from it"),
-the source of Topics in `patterns/` is rewritten to the subset, and
-`compare/topics/rewrite.patch` with `compare/topics/tree.ts` are removed:
-one source now runs on both sides. Notes 549 to 559 record each rewrite: the
-construct, the rule that refuses it, the rewrite, whether it was mechanical
-or changed the program's design, and what the diagnostic said. A rewrite
-marked _today's `base/api`_ is a workaround: in `base/api/index.ts`
-`Cell<T>` is not assignable to `ReadonlyCell<T>` (`CELL_BRAND` "cell"
-against "readonly"), where LS §7.5.1 says it is, so the form the documents
-ask for does not compile in today's runtime; the site returns to that form
-if the declarations change.
+At the owner's direction of 2026-11-18 ("it's ok and even desired to modify the
+patterns to fit our tighter syntax. let's do that and learn from it"), the
+source of Topics in `patterns/` is rewritten to the subset, and
+`compare/topics/rewrite.patch` with `compare/topics/tree.ts` are removed: one
+source now runs on both sides. Notes 549 to 559 record each rewrite: the
+construct, the rule that refuses it, the rewrite, whether it was mechanical or
+changed the program's design, and what the diagnostic said. A rewrite marked
+_today's `base/api`_ is a workaround: in `base/api/index.ts` `Cell<T>` is not
+assignable to `ReadonlyCell<T>` (`CELL_BRAND` "cell" against "readonly"), where
+LS §7.5.1 says it is, so the form the documents ask for does not compile in
+today's runtime; the site returns to that form if the declarations change.
 
 549. **An import of `commonfabric/schema` with no bindings** (`topic.tsx`).
-     Rule: `module-scope:import-form`. Rewrite: removed; nothing in the
-     module needed it, and today's type check passes without it.
-     Mechanical. The diagnostic ("An import of `commonfabric/schema` with no
-     bindings. Import a named binding from `commonfabric`, ...") was enough.
+     Rule: `module-scope:import-form`. Rewrite: removed; nothing in the module
+     needed it, and today's type check passes without it. Mechanical. The
+     diagnostic ("An import of `commonfabric/schema` with no bindings. Import a
+     named binding from `commonfabric`, ...") was enough.
 550. **A mapped type** (`StampsRead<K>` of `topic.tsx`). Rule:
      `subset-type:mapped`. Rewrite: `Readonly<Record<K, number | undefined>>`.
      Mechanical. The diagnostic, which lists `Record<K, T>`, was enough.
-551. **A helper that declares `{ get(); key(i): { equals() } }` and is given
-     a cell** (`isElementOf` of `topic.tsx`, five calls). Rule: a structural
-     type is not a handle (LS §7.5.1, open question 23), reported as
-     `subset-type:mismatch`. Rewrite: `<A extends readonly unknown[]>(array:
-     Writable<A>, candidate: object)`. _Today's `base/api`_: the diagnostic's
-     own suggestion, `ReadonlyCell<unknown[]>`, is the subset form and does
-     not compile today against the `Writable` arrays the handlers hold; the
-     generic `Writable<A>` binds `A` to the array's own type in the crate
-     (an exact cell type) and is covariant in today's declarations.
-     Mechanical. The diagnostic was enough for the subset and not for
-     today's runtime.
+551. **A helper that declares `{ get(); key(i): { equals() } }` and is given a
+     cell** (`isElementOf` of `topic.tsx`, five calls). Rule: a structural type
+     is not a handle (LS §7.5.1, open question 23), reported as
+     `subset-type:mismatch`. Rewrite:
+     `<A extends readonly unknown[]>(array:
+     Writable<A>, candidate: object)`.
+     _Today's `base/api`_: the diagnostic's own suggestion,
+     `ReadonlyCell<unknown[]>`, is the subset form and does not compile today
+     against the `Writable` arrays the handlers hold; the generic `Writable<A>`
+     binds `A` to the array's own type in the crate (an exact cell type) and is
+     covariant in today's declarations. Mechanical. The diagnostic was enough
+     for the subset and not for today's runtime.
 552. **Helpers that declare `{ get(): T | undefined }` so that the mid-sync
      guard is compile-checked** (`mentionListsOf` and `cardRowsOf` of
-     `main.tsx`, `mentionableRowsOf` of `mentionable.ts`). The structural
-     type was the authors' design: `get()` of a cell is declared to return
-     the value alone, so against a cell type a missing `?.` type-checks, and
-     the structural `| undefined` made it an error. Rule: as in note 551.
-     Rewrite: `ReadonlyCell<T | undefined>`, which the diagnostic suggested
-     and which keeps the check: its `get()` returns the value or
-     `undefined`. `mentionableRowsOf` takes a named `MentionableMember`.
-     Mechanical in the source; the pattern tests that hand these helpers
-     stand-ins built by hand no longer type-check, and today's transformer
-     refuses `as unknown as` in a pattern test, so they cast with `as never`.
-     The diagnostic was enough, and for these three it compiles today (the
-     elements are `ReadonlyCell` already).
-553. **A helper that declares the members of a collection and the
-     namespace structurally, the member's verb as a method chain**
-     (`recordNames` of `naming.ts`). Rule: as in note 551. Rewrite:
+     `main.tsx`, `mentionableRowsOf` of `mentionable.ts`). The structural type
+     was the authors' design: `get()` of a cell is declared to return the value
+     alone, so against a cell type a missing `?.` type-checks, and the
+     structural `| undefined` made it an error. Rule: as in note 551. Rewrite:
+     `ReadonlyCell<T | undefined>`, which the diagnostic suggested and which
+     keeps the check: its `get()` returns the value or `undefined`.
+     `mentionableRowsOf` takes a named `MentionableMember`. Mechanical in the
+     source; the pattern tests that hand these helpers stand-ins built by hand
+     no longer type-check, and today's transformer refuses `as unknown as` in a
+     pattern test, so they cast with `as never`. The diagnostic was enough, and
+     for these three it compiles today (the elements are `ReadonlyCell`
+     already).
+553. **A helper that declares the members of a collection and the namespace
+     structurally, the member's verb as a method chain** (`recordNames` of
+     `naming.ts`). Rule: as in note 551. Rewrite:
      `recordNames<A extends readonly (RecordNameMember | undefined)[]>(members:
-     Writable<A>, names: Writable<NamesMap>)`, with `RecordNameMember`
-     declaring `shortName?: string` and `recordName?: Stream<{ name: string }>`.
-     _Today's `base/api`_ for `members` (the subset form is a `ReadonlyCell`
-     of the view); `Writable<NamesMap>` for `names` is the subset form, since
-     the helper writes through it. A small design change: the verb the
-     helper sends is now a declared optional stream of a named member type.
-     The diagnostic was not enough: it suggested `ReadonlyCell<{ shortName?:
-     string } | undefined[]>`, which writes the array type with the wrong
-     precedence and leaves out the verb, so following it gives
-     `schema:path-not-in-type` at `recordName`, and it suggested a read-only
-     cell for `names`, which the helper writes.
+     Writable<A>, names: Writable<NamesMap>)`,
+     with `RecordNameMember` declaring `shortName?: string` and
+     `recordName?: Stream<{ name: string }>`. _Today's `base/api`_ for `members`
+     (the subset form is a `ReadonlyCell` of the view); `Writable<NamesMap>` for
+     `names` is the subset form, since the helper writes through it. A small
+     design change: the verb the helper sends is now a declared optional stream
+     of a named member type. The diagnostic was not enough: it suggested
+     `ReadonlyCell<{ shortName?:
+     string } | undefined[]>`, which writes the
+     array type with the wrong precedence and leaves out the verb, so following
+     it gives `schema:path-not-in-type` at `recordName`, and it suggested a
+     read-only cell for `names`, which the helper writes.
 554. **`createNamed(names, create)` takes the namespace as the structural
      `NamesMapCell`** (two calls of `main.tsx`). Rule: as in note 551. The
      structural type is `allocator.ts`'s design: the module imports no value
-     from `commonfabric`, so that a plain `deno test` can import it and hand
-     it a stand-in. Rewrite: Topics calls `nextNameAmong` of the allocator,
-     a function of plain values, and writes `names.key(name).set(piece)`
-     itself, in the same handler; `allocator.ts` is unchanged. A design
-     change at the call sites: the helper that allocated and wrote in one
-     call is not used by Topics. The alternative, `NamesMapCell =
-     Writable<NamesMap>`, breaks the allocator's own test stand-ins. The
-     diagnostic was not enough: it suggested `ReadonlyCell<{ [key: string]:
-     unknown } | undefined>` for a parameter the helper writes through.
-555. **`profileFace(profile: Cell<ProfileFaceFields>)` given a cell of a
-     profile with more fields** (`profile-face.ts`). Rule: a cell that can be
-     read and written holds exactly its type (LS §7.5). Rewrite:
-     `<P extends ProfileFaceFields>(profile: Cell<P> | undefined)`, with the
-     two key handles annotated `Cell<FabricBytes | undefined>` and
-     `Cell<string | undefined>`, since today's type checker reads no member
-     of `P["picture"]`. _Today's `base/api`_: the diagnostic's
+     from `commonfabric`, so that a plain `deno test` can import it and hand it
+     a stand-in. Rewrite: Topics calls `nextNameAmong` of the allocator, a
+     function of plain values, and writes `names.key(name).set(piece)` itself,
+     in the same handler; `allocator.ts` is unchanged. A design change at the
+     call sites: the helper that allocated and wrote in one call is not used by
+     Topics. The alternative, `NamesMapCell =
+     Writable<NamesMap>`, breaks
+     the allocator's own test stand-ins. The diagnostic was not enough: it
+     suggested `ReadonlyCell<{ [key: string]:
+     unknown } | undefined>` for a
+     parameter the helper writes through.
+555. **`profileFace(profile: Cell<ProfileFaceFields>)` given a cell of a profile
+     with more fields** (`profile-face.ts`). Rule: a cell that can be read and
+     written holds exactly its type (LS §7.5). Rewrite:
+     `<P extends ProfileFaceFields>(profile: Cell<P> | undefined)`, with the two
+     key handles annotated `Cell<FabricBytes | undefined>` and
+     `Cell<string | undefined>`, since today's type checker reads no member of
+     `P["picture"]`. _Today's `base/api`_: the diagnostic's
      `ReadonlyCell<{ picture?: FabricBytes; avatar?: string }>` is the subset
      form. Mechanical; every other caller compiles unchanged.
 556. **Keys of older data declared `unknown` and read after a kind test**
-     (`createdByName` of `TopicInput`, `authorName` of a stored comment).
-     Rule: by ruling, a kind test narrows nothing on a data position typed
-     `unknown` (LS §7.8), `schema:unknown-type-access`; a key of older data
-     that code reads as a string is declared `string`. Rewrite: both are
-     declared `string`, and the explicit reader schema `type: ["string",
-     "unknown"]` is gone. A design change in how older data is read: the
-     upgrade used to read any stored value and decide with `typeof`; now a
-     stored value of another type reads as absent. In a handler, absent is
-     what the upgrade takes for "not yet resolved", so a handler leaves such
-     a topic's step to the `lift`, which completes it with no author, as
-     before; `author-migration.test.tsx` (non-string values complete
-     without authors) passes, handing `42` and `false` with `as never`. The
-     diagnostic said what to change ("Replace `unknown` with a type that
-     declares the properties read") and not why the `typeof` before the
-     read does not count, which is what a reader of this code asks.
-557. **A record built in the body handed to handlers that declare a cell of
-     it** (`upgrade` of `topic.tsx`, ten handlers and the `lift`
-     `migrateTopicState`, each reading it with `upgrade.get()`). Rule: a
-     record written in the reactive tier is no place; each path is bound to
-     the place it denotes (LS §7.5.2). Rewrite: the handlers' state declares
+     (`createdByName` of `TopicInput`, `authorName` of a stored comment). Rule:
+     by ruling, a kind test narrows nothing on a data position typed `unknown`
+     (LS §7.8), `schema:unknown-type-access`; a key of older data that code
+     reads as a string is declared `string`. Rewrite: both are declared
+     `string`, and the explicit reader schema `type: ["string",
+     "unknown"]`
+     is gone. A design change in how older data is read: the upgrade used to
+     read any stored value and decide with `typeof`; now a stored value of
+     another type reads as absent. In a handler, absent is what the upgrade
+     takes for "not yet resolved", so a handler leaves such a topic's step to
+     the `lift`, which completes it with no author, as before;
+     `author-migration.test.tsx` (non-string values complete without authors)
+     passes, handing `42` and `false` with `as never`. The diagnostic said what
+     to change ("Replace `unknown` with a type that declares the properties
+     read") and not why the `typeof` before the read does not count, which is
+     what a reader of this code asks.
+557. **A record built in the body handed to handlers that declare a cell of it**
+     (`upgrade` of `topic.tsx`, ten handlers and the `lift` `migrateTopicState`,
+     each reading it with `upgrade.get()`). Rule: a record written in the
+     reactive tier is no place; each path is bound to the place it denotes (LS
+     §7.5.2). Rewrite: the handlers' state declares
      `upgrade: TopicUpgradeState`, the record of handles, and 30 reads
-     `upgrade.get()` become `upgrade`; the explicit `TOPIC_UPGRADE_SCHEMA`
-     and its 17 overrides of the handlers' state schemas are removed, since
-     the schemas derived from the types carry the cells. Mostly mechanical,
-     and it is what made the 72 writes nameable. The diagnostic ("a cell of
-     the value's type would not be assignable to the declared handle") named
-     the mismatch and not the fix.
-558. **Handles that read older, partially populated records through a
-     writable handle of a looser type than the place** (`createdBy:
-     Writable<Partial<TopicAuthor> | undefined>` and `comments:
-     Writable<TopicUpgradeComment[]>` of `TopicUpgradeState`, bound to
-     inputs of `TopicAuthor` and `StoredTopicComment[]`). Rule: a writable
-     handle holds the type of its place (LS §7.5.2). Rewrite: each is split
-     into a writable handle of the place's type (`createdBy`, `comments`)
-     and a read-only view (`creatorRead: ReadonlyCell<Partial<TopicAuthor> |
-     undefined>`, `commentsRead: ReadonlyCell<TopicUpgradeComment[]>`) bound
-     to the same input; the upgrade reads through the views and writes
-     through the handles. A design change, and a change of the contract of
-     the exported handlers: a caller that binds one gives both members, as
-     the pattern tests' fixtures now do. The diagnostic named the mismatch
-     and not the split.
+     `upgrade.get()` become `upgrade`; the explicit `TOPIC_UPGRADE_SCHEMA` and
+     its 17 overrides of the handlers' state schemas are removed, since the
+     schemas derived from the types carry the cells. Mostly mechanical, and it
+     is what made the 72 writes nameable. The diagnostic ("a cell of the value's
+     type would not be assignable to the declared handle") named the mismatch
+     and not the fix.
+558. **Handles that read older, partially populated records through a writable
+     handle of a looser type than the place**
+     (`createdBy:
+     Writable<Partial<TopicAuthor> | undefined>` and
+     `comments:
+     Writable<TopicUpgradeComment[]>` of `TopicUpgradeState`,
+     bound to inputs of `TopicAuthor` and `StoredTopicComment[]`). Rule: a
+     writable handle holds the type of its place (LS §7.5.2). Rewrite: each is
+     split into a writable handle of the place's type (`createdBy`, `comments`)
+     and a read-only view
+     (`creatorRead: ReadonlyCell<Partial<TopicAuthor> |
+     undefined>`,
+     `commentsRead: ReadonlyCell<TopicUpgradeComment[]>`) bound to the same
+     input; the upgrade reads through the views and writes through the handles.
+     A design change, and a change of the contract of the exported handlers: a
+     caller that binds one gives both members, as the pattern tests' fixtures
+     now do. The diagnostic named the mismatch and not the split.
 559. **What the rewrite left as it was, and the results.** Unchanged:
-     `allocator.ts` and its test; `backfillNames` and `assignName`, which
-     Topics does not call; `product/collection-naming/board.tsx`. After the
-     rewrite the crate reports no error for the seven files and emits both
-     patterns with no unsupported construct; `deno task cfcheck` reports no
-     error for Topics, collection naming, the profile face, and the 13
-     pattern files that use one of them; the pattern tests of
-     `patterns/apps/topics/`, `patterns/product/collection-naming/` and
-     `patterns/system/profile-face/` pass and fail exactly as before the
-     rewrite, file by file (before and after: one console error in
-     `activity-scalars`, three failures in `multi-user`, one in
-     `render-shape`, five in `topics`, one in `topics-shape`, all present on
-     the merged branch before any change); `allocator.test.ts` passes. The
-     value comparison on the one source gives the figures of note 546 (463
-     of 504 equal; 33 of the 41 differences are the stubbed `wish`'s `[UI]`
-     and 8 are `referencedBy`), and the labels those of note 547 (52 outputs
-     tighter and 6 whose atom names the pattern, none looser; 7 write
-     edges, 3 equal and 4 tighter).
+     `allocator.ts` and its test; `backfillNames` and `assignName`, which Topics
+     does not call; `product/collection-naming/board.tsx`. After the rewrite the
+     crate reports no error for the seven files and emits both patterns with no
+     unsupported construct; `deno task cfcheck` reports no error for Topics,
+     collection naming, the profile face, and the 13 pattern files that use one
+     of them; the pattern tests of `patterns/apps/topics/`,
+     `patterns/product/collection-naming/` and `patterns/system/profile-face/`
+     pass and fail exactly as before the rewrite, file by file (before and
+     after: one console error in `activity-scalars`, three failures in
+     `multi-user`, one in `render-shape`, five in `topics`, one in
+     `topics-shape`, all present on the merged branch before any change);
+     `allocator.test.ts` passes. The value comparison on the one source gives
+     the figures of note 546 (463 of 504 equal; 33 of the 41 differences are the
+     stubbed `wish`'s `[UI]` and 8 are `referencedBy`), and the labels those of
+     note 547 (52 outputs tighter and 6 whose atom names the pattern, none
+     looser; 7 write edges, 3 equal and 4 tighter).
