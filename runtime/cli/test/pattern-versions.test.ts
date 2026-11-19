@@ -340,6 +340,21 @@ describe("pattern-versions", () => {
       expect(request.hashtags).toEqual(["chores"]);
     });
 
+    it("reads an agent's doc comment from the program it deployed, never from its staged entry", async () => {
+      await joinIndex();
+      await Deno.remove(entry);
+      const { client, published } = stubClient();
+      const { deps } = depsWith(client);
+
+      const outcome = await recordDeployedVersion(
+        deployed({ versionOrigin: "agent", description: "Plans the bins." }),
+        deps,
+      );
+
+      expect(outcome.status).toBe("recorded");
+      expect(published[0].hashtags).toEqual(["chores"]);
+    });
+
     it("keeps the person's own deploy under its entry file and its own origin", async () => {
       await joinIndex();
       const { client, published } = stubClient();

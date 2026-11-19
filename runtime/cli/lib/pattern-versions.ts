@@ -331,8 +331,16 @@ export async function recordDeployedVersion(
         if (!started) remixedFrom = fetchedFrom;
       }
     }
+    // An agent's entry is a staged copy, which a deploy that does not wait on
+    // its version (the share sidecar) may already have removed: its doc
+    // comment is read from the program the deploy committed.
+    const source = deployed.versionOrigin === "agent"
+      ? deployed.program.files.find((file) =>
+        file.name === deployed.program.main
+      )?.contents ?? ""
+      : await deps.readTextFile(entry);
     const doc = {
-      ...patternDocMetadata(await deps.readTextFile(entry)),
+      ...patternDocMetadata(source),
       ...(deployed.description === undefined
         ? {}
         : { description: deployed.description }),
