@@ -7536,6 +7536,48 @@ export class Instance {
   }
 
   /**
+   * What a slot is bound to where no evaluation bound it and an evaluation
+   * bound another slot with the same root and path: the value code read the
+   * position once, in the other slot's class. The condition of a selector
+   * that is the left operand of `??` is such a `shape` slot, read only
+   * through the read of its value. The positions are those that read went
+   * through, and for an `identity` read the reference it gave, which is
+   * where the value whose shape the slot observes is.
+   */
+  #samePositionBound(
+    slot: number,
+    boundOf: (slot: number) => Bound | undefined,
+  ): Bound | undefined {
+    const record = this.plan.slots[slot];
+    for (const other of this.#slotsAtPosition(slot)) {
+      const bound = boundOf(other);
+      if (bound === undefined || !("at" in bound)) continue;
+      return { observes: record.observes, at: [...bound.at] };
+    }
+    return undefined;
+  }
+
+  /** The other slots with the root and the path of `slot`, by its index. */
+  #slotsAtPosition(slot: number): number[] {
+    if (this.#atPosition === undefined) {
+      const byPosition = new Map<string, number[]>();
+      this.plan.slots.forEach(({ root, path }, index) => {
+        const key = canonical([root, path]);
+        byPosition.set(key, [...byPosition.get(key) ?? [], index]);
+      });
+      this.#atPosition = this.plan.slots.map(({ root, path }, index) =>
+        (byPosition.get(canonical([root, path])) ?? []).filter((other) =>
+          other !== index
+        )
+      );
+    }
+    return this.#atPosition[slot];
+  }
+
+  /** The result of `#slotsAtPosition()` for every slot, made once. */
+  #atPosition: number[][] | undefined;
+
+  /**
    * The slots the membership of a collection reaches: those of its
    * membership template, or, for a `filter`, whose membership template is
    * the fold over its own elements, those of the membership of its source
@@ -7734,7 +7776,11 @@ export class Instance {
       const bindingsOf = (reaching: Iterable<number>, into: SlotBindings) => {
         for (const slot of [...reaching].sort((a, b) => a - b)) {
           const bound = first((source) => source.slots.get(slot)) ??
-            this.#elementBound(slot, byCollection);
+            this.#elementBound(slot, byCollection) ??
+            this.#samePositionBound(
+              slot,
+              (other) => first((source) => source.slots.get(other)),
+            );
           if (bound !== undefined) {
             into[slot] = this.#bindingOf(slot, bound, outputs, depth);
           }

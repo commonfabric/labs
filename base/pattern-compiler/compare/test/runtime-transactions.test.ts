@@ -549,6 +549,77 @@ describe("RuntimeTransactions with labels from templates", () => {
   });
 });
 
+describe("a slot of a template that the value code reads for another class", () => {
+  it("binds the `shape` slot of the left operand of `??` to the position its value was read at, and commits", async () => {
+    const signer = await Identity.fromPassphrase("pattern-compiler-compare");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      cfcFlowLabels: "persist",
+      experimental: { compiledPatterns: true },
+      servingPosture: true,
+    });
+    const id = identifierOf({ test: "coalesce" });
+    const artifact = await artifactOf("coalesce");
+    const hooks = new RuntimeTransactions(runtime, space, {
+      owner: id,
+      artifact,
+    });
+    try {
+      const inputs = generateInputs(
+        artifact.plan as Parameters<typeof generateInputs>[0],
+        artifact.schemas as Parameters<typeof generateInputs>[1],
+        await scenarioAudience(),
+      );
+      const { given, documents } = await labeledInputs(
+        runtime,
+        space,
+        inputs,
+        { name: "ada" },
+        hooks,
+      );
+      const instance = new Instance(artifact, given, {
+        space,
+        id,
+        transactions: hooks,
+        documents,
+      });
+      expect(await hooks.settled()).toEqual([]);
+      const read = runtime.edit();
+      try {
+        const metadata = readStoredCfcMetadata(read, {
+          space,
+          id: hooks.entityOf(instance.id),
+          scope: "space",
+        });
+        const label = metadata === undefined
+          ? undefined
+          : labelForConsumedEntries(
+            consumedEntriesForRead(metadata, ["shout"], {
+              nonRecursive: false,
+              consumes: "value",
+            }),
+            ["shout"],
+            false,
+          );
+        // The label of the template is stored: a kept output carries the
+        // atom of its pattern.
+        expect(JSON.stringify(label?.integrity ?? [])).toContain(
+          '"kind":"compiled"',
+        );
+      } finally {
+        read.abort();
+      }
+    } finally {
+      hooks.close();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+});
+
 describe("the cost of labels from templates for a `filter`", () => {
   it("commits a change of one element over plain values in place, over references, and over the result of a `map`, one that leaves the filtered list and one that stays in it, with the same work and stored entries at 20 and at 200 elements", async () => {
     for (const which of CASES) {

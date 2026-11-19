@@ -546,7 +546,8 @@ export class RuntimeTransactions implements TransactionHooks {
   /**
    * Journals, in the transaction in progress, the observations a slot's
    * chain names that it has not journaled: a probe at each link position
-   * and at a position whose reference the slot observes, and a read of the
+   * and at a position whose reference the slot observes, a read that is
+   * not recursive at the last position of a `shape` slot, and a read of the
    * value at the last position otherwise. A group of a fold's elements is
    * bound to the positions one of its elements read, possibly in an
    * earlier transaction, and every element of the group has labels with
@@ -565,7 +566,11 @@ export class RuntimeTransactions implements TransactionHooks {
       this.#observed.add(text);
       const address = this.#address(doc, path);
       if (probe) readMaybeLink(tx, address);
-      else if (!this.#read.has(JSON.stringify([doc, path]))) {
+      else if (observes === "shape") {
+        // The runtime journals a read that is not recursive as one of the
+        // shape of the value.
+        tx.readValueOrThrow(address, { nonRecursive: true });
+      } else if (!this.#read.has(JSON.stringify([doc, path]))) {
         this.#read.add(JSON.stringify([doc, path]));
         tx.readValueOrThrow(address);
       }
