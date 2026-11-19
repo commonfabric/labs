@@ -61,9 +61,23 @@ import {
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
-import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
+import {
+  type CfcObservationMaxConfidentiality,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { AgentRunReport } from "./agent-runner.ts";
+
+/**
+ * The error code of a job the runtime's information-flow rules stopped: a
+ * read the session's read ceiling withholds threw out of the run. Not a
+ * provider's failure, and not `REFUSED`, which is a result the boundary would
+ * not release. A local job carries it as written; an `AgentRun` record, whose
+ * taxonomy (`AGENT_RUN_ERROR_CODES`) a system pattern's result declares,
+ * records it as `PROVIDER_FAILURE`.
+ */
+export const CFC_REFUSED = "CFC_REFUSED";
 
 /** The host command endpoint a job's command tools call. */
 export interface HarnessJobCommands {
@@ -303,11 +317,12 @@ export type HarnessJobResult =
     }
     | {
       outcome: "failed";
-      errorCode: AgentRunErrorCode;
+      errorCode: AgentRunErrorCode | typeof CFC_REFUSED;
 
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
-       * was submitted, or the field the schema refused and the reason.
+       * was submitted, or the field the schema refused and the reason; for a
+       * run that ended on a thrown error, that error described.
        */
       errorDetail?: string;
     }
@@ -702,15 +717,22 @@ export const runHarnessJob = async (
     };
   }
   if (loopResult === undefined) {
+    // A run that ended on a thrown error says which, so the job's owner can
+    // tell a model that failed from a read the runtime withheld.
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
+    const errorDetail = loopError !== undefined
+      ? describeFailure(loopError)
+      : refusalDetail;
     return {
       outcome: "failed",
       recordedRun,
-      errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
-      ...(loopError === undefined && refusalDetail !== undefined
-        ? { errorDetail: refusalDetail }
-        : {}),
+      errorCode: limit
+        ? LIMIT_REACHED
+        : loopError instanceof CfcReadCeilingError
+        ? CFC_REFUSED
+        : PROVIDER_FAILURE,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
       ...(report !== undefined ? { report } : {}),
     };
   }

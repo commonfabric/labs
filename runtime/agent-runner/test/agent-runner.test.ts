@@ -15,7 +15,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import {
+  type CfcConfClause,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
 import type { CfHarnessEngine } from "@commonfabric/cf-harness/engine";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { getBuiltinTool } from "@commonfabric/cf-harness/tools";
@@ -2589,6 +2592,16 @@ describe("agent runner", () => {
       await startHarnessRunner(() =>
         Promise.reject(new Error("provider disconnected"))
       );
+      const result = await submit();
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+    });
+
+    it("records as `PROVIDER_FAILURE` a run a read above the session's read ceiling ended", async () => {
+      // The job reports `CFC_REFUSED`; the record's taxonomy, which a system
+      // pattern's result declares, holds no such code.
+      await startHarnessRunner(() => Promise.reject(new CfcReadCeilingError()));
       const result = await submit();
       const record = await waitForState(result, "failed");
 
