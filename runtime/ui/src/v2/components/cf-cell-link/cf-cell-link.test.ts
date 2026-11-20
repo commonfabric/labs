@@ -2,7 +2,7 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
+import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity/did";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
@@ -10,6 +10,8 @@ import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
 import { endDrag, getCurrentDrag, isDragging } from "../../core/drag-state.ts";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { createRenderableCellHandle } from "../../test-utils/mock-vdom-connection.ts";
+import { setNewTabReservation } from "@commonfabric/navigation";
+
 import { CFCellLink } from "./index.ts";
 
 function deferred<T>() {
@@ -57,9 +59,9 @@ describe("CFCellLink", () => {
       globalThis.removeEventListener("cf-navigate", listener);
     }
   });
-  it("warns, naming the link, and navigates nowhere on a click before the link resolves", () => {
+  it("warns, naming the link, and navigates nowhere on a click before an unlabelled link resolves", () => {
     const element = new CFCellLink() as any;
-    element.label = "Team chat";
+    element._name = "Team chat";
     element.cell = {
       ref: () => ({
         space: "did:key:home",
@@ -873,6 +875,61 @@ function pointer(type: string, x: number, y: number, pointerId = 1): Event {
   });
 }
 
+/**
+ * The reads `element`-side code makes of `cell` from now on: each
+ * `resolveAsCell()`, and each `asSchema()`, through which both following a
+ * link's target and asking for its `[NAME]` go.
+ */
+function countReads(cell: CellHandle): {
+  resolutions: number;
+  schemaReads: number;
+} {
+  const reads = { resolutions: 0, schemaReads: 0 };
+  const resolveAsCell = cell.resolveAsCell.bind(cell);
+  const asSchema = cell.asSchema.bind(cell);
+  Object.assign(cell, {
+    resolveAsCell: () => {
+      reads.resolutions++;
+      return resolveAsCell();
+    },
+    asSchema: (schema: Parameters<CellHandle["asSchema"]>[0]) => {
+      reads.schemaReads++;
+      return asSchema(schema);
+    },
+  });
+  return reads;
+}
+
+/**
+ * The piece ids navigated to while `act()` runs and once what it started
+ * has settled, for a click whose target is resolved by the click.
+ */
+async function navigatedToOnceSettled(act: () => void): Promise<string[]> {
+  const seen: string[] = [];
+  const listener = (event: Event) =>
+    seen.push((event as CustomEvent).detail.pieceId);
+  globalThis.addEventListener("cf-navigate", listener);
+  try {
+    act();
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    globalThis.removeEventListener("cf-navigate", listener);
+  }
+  return seen;
+}
+
+/**
+ * A click a pointer makes, as opposed to one the keyboard makes: it carries
+ * the click count in `detail`.
+ */
+function pointerClick(init: MouseEventInit = {}, pointerId?: number): Event {
+  const options = { detail: 1, bubbles: true, composed: true, ...init };
+  return pointerId === undefined
+    ? new MouseEvent("click", options)
+    : new PointerEvent("click", { ...options, pointerId });
+}
+
 /** The piece ids navigated to while `act()` runs. */
 function navigatedTo(act: () => void): string[] {
   const seen: string[] = [];
@@ -909,6 +966,14 @@ describe("CFCellLink in a document", () => {
       });
 
       expect(await shownText(element)).toBe("Inbox #abcdef");
+    });
+
+    it("hands back the target an unlabelled link already follows", async () => {
+      const cell = pieceCell("of:fid1:piece-abcdef", "Inbox");
+      const element = await cellLink({ cell });
+      await shownText(element);
+
+      expect(await element.resolveTarget()).toBe(cell);
     });
 
     it("shows only the end of the id of a resolved cell with no name", async () => {
@@ -1049,6 +1114,649 @@ describe("CFCellLink in a document", () => {
       document.body.append(element);
 
       expect(await shownText(element)).toBe("Archive #123456");
+    });
+  });
+
+  describe("a labelled link", () => {
+    /** A cell holding a link to `target`: it resolves to `target`. */
+    function linkTo(...targets: CellHandle[]): CellHandle {
+      const queue = [...targets];
+      return Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () =>
+          Promise.resolve(queue.length > 1 ? queue.shift()! : queue[0]),
+      });
+    }
+
+    it("reads nothing of its target while it is shown", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111", "Inbox"));
+      const reads = countReads(cell);
+
+      const element = await cellLink({ label: "Open", cell });
+
+      expect(await shownText(element)).toBe("Open");
+      expect(reads).toEqual({ resolutions: 0, schemaReads: 0 });
+    });
+
+    it("resolves when clicked, and opens where its link points", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111", "Inbox"));
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+    });
+
+    it("opens where its link points at each click, not where it pointed before", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-222222"]);
+    });
+
+    it("resolves once for a press and the click that follows it", async () => {
+      const cell = linkTo(pieceCell("of:fid1:topic-111111"));
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      const opened = await navigatedToOnceSettled(() => {
+        chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+        chip(element).dispatchEvent(pointerClick());
+      });
+
+      expect(opened).toEqual(["of:fid1:topic-111111"]);
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("resolves a keyboard's click on its own while a mouse press is held", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      await settle();
+      // The keyboard's click carries no detail: it is not the press's.
+      const opened = await navigatedToOnceSettled(() => chip(element).click());
+
+      expect(opened).toEqual(["of:fid1:topic-222222"]);
+      expect(reads.resolutions).toBe(2);
+    });
+
+    it("asks the worker for where the links end, loading what they pass through", async () => {
+      const target = pieceCell("of:fid1:topic-111111");
+      const asked: unknown[] = [];
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: (options?: unknown) => {
+          asked.push(options);
+          return Promise.resolve(target);
+        },
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-111111"]);
+      expect(asked).toEqual([{ loaded: true }]);
+    });
+
+    it("resolves again for a click after a press was let go", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointercancel", 10, 10));
+      await settle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      // The keyboard's click, with no press of its own: where the link
+      // points now, not where the cancelled press found it.
+      expect(await navigatedToOnceSettled(() => chip(element).click()))
+        .toEqual(["of:fid1:topic-222222"]);
+    });
+
+    it("keeps a released touch press for its click, which comes later", async () => {
+      const cell = linkTo(
+        pieceCell("of:fid1:topic-111111"),
+        pieceCell("of:fid1:topic-222222"),
+      );
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 7));
+      await settle();
+      document.dispatchEvent(pointer("pointerup", 10, 10, 7));
+      // A touch screen's click comes a while after the release.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      const opened = await navigatedToOnceSettled(() =>
+        chip(element).dispatchEvent(pointerClick({}, 7))
+      );
+      expect(opened).toEqual(["of:fid1:topic-111111"]);
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("lets a released press go once no click has followed it for a while", async () => {
+      const hold = CFCellLink.releasedPressHoldMs;
+      CFCellLink.releasedPressHoldMs = 0;
+      try {
+        const cell = linkTo(
+          pieceCell("of:fid1:topic-111111"),
+          pieceCell("of:fid1:topic-222222"),
+        );
+        const element = await cellLink({
+          label: "Open",
+          cell,
+          isStatic: true,
+        });
+        await shownText(element);
+
+        chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 1));
+        await settle();
+        document.dispatchEvent(pointer("pointerup", 10, 10, 1));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(
+          await navigatedToOnceSettled(() =>
+            chip(element).dispatchEvent(pointerClick({}, 1))
+          ),
+        ).toEqual(["of:fid1:topic-222222"]);
+      } finally {
+        CFCellLink.releasedPressHoldMs = hold;
+      }
+    });
+
+    it("drags only what its current press resolved, once that lands", async () => {
+      const first = draggableCell({ $NAME: "First" });
+      const second = draggableCell({ $NAME: "Second" });
+      const pending = deferred<CellHandle>();
+      const answers: Promise<CellHandle>[] = [
+        Promise.resolve(first),
+        pending.promise,
+      ];
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => answers.shift()!,
+      });
+      const element = await cellLink({ label: "Open", cell });
+      await shownText(element);
+      expect(await element.resolveTarget()).toBe(first);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      document.dispatchEvent(pointer("pointermove", 30, 30));
+      expect(isDragging()).toBe(false);
+
+      pending.resolve(second);
+      await settle();
+      document.dispatchEvent(pointer("pointermove", 40, 40));
+
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(second);
+    });
+
+    it("keeps its press when another pointer is released", async () => {
+      const target = draggableCell({ $NAME: "Inbox" });
+      const element = await cellLink({ label: "Open", cell: linkTo(target) });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10, 1));
+      await settle();
+      document.dispatchEvent(pointer("pointerup", 200, 200, 2));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      document.dispatchEvent(pointer("pointermove", 40, 40, 1));
+
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(target);
+    });
+
+    describe("with the command key held", () => {
+      // A host that has turned tab reservation on, as the shell does; the
+      // case for one that has not turns it off itself.
+      let reserveAfterMs: number;
+      beforeEach(() => {
+        reserveAfterMs = CFCellLink.newTabReserveAfterMs;
+        setNewTabReservation(true);
+      });
+      afterEach(() => {
+        CFCellLink.newTabReserveAfterMs = reserveAfterMs;
+        setNewTabReservation(false);
+      });
+
+      /** A tab `globalThis.open` hands back, recording what is done to it. */
+      function fakeTab() {
+        return {
+          opener: {} as unknown,
+          location: { href: "" },
+          closed: false,
+          close() {
+            this.closed = true;
+          },
+        };
+      }
+
+      /**
+       * Runs `act` with `globalThis.open` answering with `tab` and recording
+       * each call, and restores it after `act` settles.
+       */
+      async function withOpen(
+        tab: ReturnType<typeof fakeTab>,
+        act: (openArgs: unknown[][]) => Promise<void>,
+      ): Promise<void> {
+        const openArgs: unknown[][] = [];
+        const scope = globalThis as unknown as {
+          open: (...args: unknown[]) => unknown;
+        };
+        const original = scope.open;
+        scope.open = (...args: unknown[]) => {
+          openArgs.push(args);
+          return tab;
+        };
+        try {
+          await act(openArgs);
+        } finally {
+          scope.open = original;
+        }
+      }
+
+      /** A pointer's click on `element`'s chip with the command key held. */
+      function commandClick(element: CFCellLink): void {
+        chip(element).dispatchEvent(pointerClick({ metaKey: true }));
+      }
+
+      /** Lets a timer due now, and what it leads to, run. */
+      const nextTask = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+      it("opens a target its press already resolved within the click", async () => {
+        const element = await cellLink({
+          label: "Open",
+          cell: linkTo(pieceCell("of:fid1:topic-111111")),
+          isStatic: true,
+        });
+        await shownText(element);
+        const opened: unknown[] = [];
+        const onOpen = (event: Event) => {
+          event.preventDefault();
+          opened.push((event as CustomEvent).detail.pieceId);
+        };
+        globalThis.addEventListener("cf-open-external", onOpen);
+        const tab = fakeTab();
+        try {
+          await withOpen(tab, async (openArgs) => {
+            chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+            await settle();
+            commandClick(element);
+            expect(opened).toEqual(["of:fid1:topic-111111"]);
+            expect(openArgs).toEqual([]);
+          });
+        } finally {
+          globalThis.removeEventListener("cf-open-external", onOpen);
+        }
+      });
+
+      it("reserves no tab for a target found soon, so a host can open its own", async () => {
+        CFCellLink.newTabReserveAfterMs = 60_000;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const opened: unknown[] = [];
+        const onOpen = (event: Event) => {
+          event.preventDefault();
+          opened.push((event as CustomEvent).detail.pieceId);
+        };
+        globalThis.addEventListener("cf-open-external", onOpen);
+        try {
+          await withOpen(fakeTab(), async (openArgs) => {
+            commandClick(element);
+            // Later than a reservation due at once would be, well before one
+            // due at the deadline.
+            await nextTask();
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+            expect(openArgs).toEqual([]);
+          });
+        } finally {
+          globalThis.removeEventListener("cf-open-external", onOpen);
+        }
+        expect(opened).toEqual(["of:fid1:topic-111111"]);
+      });
+
+      it("reserves no tab under a host that has not turned reservation on, and hands it the target once it lands", async () => {
+        setNewTabReservation(false);
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const opened: unknown[] = [];
+        const onOpen = (event: Event) => {
+          event.preventDefault();
+          opened.push((event as CustomEvent).detail.pieceId);
+        };
+        globalThis.addEventListener("cf-open-external", onOpen);
+        try {
+          await withOpen(fakeTab(), async (openArgs) => {
+            commandClick(element);
+            await nextTask();
+            expect(openArgs).toEqual([]);
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+            expect(openArgs).toEqual([]);
+          });
+        } finally {
+          globalThis.removeEventListener("cf-open-external", onOpen);
+        }
+        expect(opened).toEqual(["of:fid1:topic-111111"]);
+      });
+
+      it("reserves a tab for a slow target, and points it there once it lands", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const tab = fakeTab();
+
+        await withOpen(tab, async (openArgs) => {
+          commandClick(element);
+          await nextTask();
+          expect(openArgs).toEqual([["", "_blank"]]);
+
+          pending.resolve(pieceCell("of:fid1:topic-111111"));
+          await settle();
+          await nextTask();
+        });
+
+        expect(tab.location.href).toContain("of:fid1:topic-111111");
+        expect(tab.opener).toBe(null);
+        expect(tab.closed).toBe(false);
+      });
+
+      it("closes the reserved tab, without a warning, when the link is taken off the page first", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const tab = fakeTab();
+        const warnings: unknown[][] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        try {
+          await withOpen(tab, async () => {
+            commandClick(element);
+            await nextTask();
+            element.remove();
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+          });
+        } finally {
+          console.warn = originalWarn;
+        }
+
+        expect(tab.closed).toBe(true);
+        expect(warnings).toEqual([]);
+      });
+
+      it("closes the reserved tab, without a warning, when the link changes before its target arrives", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const tab = fakeTab();
+        const warnings: unknown[][] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        try {
+          await withOpen(tab, async () => {
+            commandClick(element);
+            await nextTask();
+            element.cell = linkTo(pieceCell("of:fid1:topic-222222"));
+            await element.updateComplete;
+            pending.resolve(pieceCell("of:fid1:topic-111111"));
+            await settle();
+            await nextTask();
+          });
+        } finally {
+          console.warn = originalWarn;
+        }
+
+        expect(tab.closed).toBe(true);
+        expect(warnings).toEqual([]);
+      });
+
+      it("closes the reserved tab, and warns, when the click resolves nothing", async () => {
+        CFCellLink.newTabReserveAfterMs = 0;
+        const pending = deferred<CellHandle>();
+        const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+          resolveAsCell: () => pending.promise,
+        });
+        const element = await cellLink({ label: "Open", cell, isStatic: true });
+        await shownText(element);
+        const tab = fakeTab();
+        const warnings: unknown[][] = [];
+        const originalWarn = console.warn;
+        console.warn = (...args: unknown[]) => warnings.push(args);
+        try {
+          await errorsLogged(() =>
+            withOpen(tab, async () => {
+              commandClick(element);
+              await nextTask();
+              pending.reject(new Error("boom"));
+              await settle();
+              await nextTask();
+            })
+          );
+        } finally {
+          console.warn = originalWarn;
+        }
+
+        expect(tab.closed).toBe(true);
+        expect(warnings.map((call) => call[0])).toEqual([
+          "cf-cell-link: the click opens nothing: the link names no cell to open.",
+        ]);
+      });
+    });
+
+    it("never asks for its target's name, even once resolved", async () => {
+      const target = pieceCell("of:fid1:topic-111111", "Inbox");
+      const targetReads = countReads(target);
+      const element = await cellLink({
+        label: "Open",
+        cell: linkTo(target),
+        isStatic: true,
+      });
+
+      expect(await element.resolveTarget()).toBe(target);
+      expect(await shownText(element)).toBe("Open");
+      expect(targetReads.schemaReads).toBe(0);
+    });
+
+    it("drags its target once its press has resolved it", async () => {
+      const target = draggableCell({ $NAME: "Inbox" });
+      const element = await cellLink({ label: "Open", cell: linkTo(target) });
+      await shownText(element);
+
+      chip(element).dispatchEvent(pointer("pointerdown", 10, 10));
+      await settle();
+      document.dispatchEvent(pointer("pointermove", 20, 20));
+
+      expect(isDragging()).toBe(true);
+      expect(getCurrentDrag()!.cell).toBe(target);
+    });
+
+    it("follows its target and shows its name once it loses its label", async () => {
+      const cell = pieceCell("of:fid1:piece-123456", "Inbox");
+      const reads = countReads(cell);
+      const element = await cellLink({ label: "Open", cell });
+      expect(await shownText(element)).toBe("Open");
+
+      element.label = undefined;
+
+      expect(await shownText(element)).toBe("Inbox #123456");
+      expect(reads.resolutions).toBe(1);
+    });
+
+    it("warns, naming the link, when the click resolves nothing", async () => {
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => Promise.reject(new Error("boom")),
+      });
+      const element = await cellLink({ label: "Team chat", cell });
+      await shownText(element);
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      let opened: string[] = [];
+      try {
+        const logged = await errorsLogged(async () => {
+          opened = await navigatedToOnceSettled(() => chip(element).click());
+        });
+        expect(logged.map((call) => call[0])).toEqual([
+          "Failed to resolve cell:",
+        ]);
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(opened).toEqual([]);
+      expect(warnings).toEqual([[
+        "cf-cell-link: the click opens nothing: the link names no cell to open.",
+        {
+          label: "Team chat",
+          cell: {
+            space: "did:key:test-space",
+            id: "of:fid1:row-000000",
+            scope: "space",
+            path: [],
+          },
+        },
+      ]]);
+    });
+
+    it("resolves nothing, and opens nothing, with neither a cell nor a link", async () => {
+      const element = await cellLink({ label: "Open" });
+      await shownText(element);
+
+      expect(await element.resolveTarget()).toBeUndefined();
+    });
+
+    it("logs a link given as a string with no space to resolve it in, and resolves nothing", async () => {
+      const target = pieceCell("of:fid1:topic-111111");
+      const element = await cellLink({
+        label: "Open",
+        link: "/of:fid1:abcdefghijklmnopqrstuvwxyz",
+        runtime: Object.assign(target.runtime(), {
+          getCellFromRef: () => target,
+        }),
+      });
+      await shownText(element);
+
+      let resolved: CellHandle | undefined = target;
+      const logged = await errorsLogged(async () => {
+        resolved = await element.resolveTarget();
+      });
+
+      expect(resolved).toBeUndefined();
+      expect(logged).toEqual([[
+        "Failed to resolve link:",
+        new Error("Link missing space."),
+      ]]);
+    });
+
+    it("logs nothing when a resolution fails after it is detached", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell });
+      await shownText(element);
+
+      let resolved: CellHandle | undefined = cell;
+      const logged = await errorsLogged(async () => {
+        const resolving = element.resolveTarget();
+        element.remove();
+        pending.reject(new Error("boom"));
+        resolved = await resolving;
+      });
+
+      expect(resolved).toBeUndefined();
+      expect(logged).toEqual([]);
+    });
+
+    it("opens nothing for a click that resolves after it is detached", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+
+      const opened = await navigatedToOnceSettled(() => {
+        chip(element).click();
+        element.remove();
+        pending.resolve(pieceCell("of:fid1:topic-111111"));
+      });
+
+      expect(opened).toEqual([]);
+    });
+
+    it("opens nothing, and warns nothing, for a click whose link changes before its target arrives", async () => {
+      const pending = deferred<CellHandle>();
+      const cell = Object.assign(pieceCell("of:fid1:row-000000"), {
+        resolveAsCell: () => pending.promise,
+      });
+      const element = await cellLink({ label: "Open", cell, isStatic: true });
+      await shownText(element);
+      const warnings: unknown[][] = [];
+      const originalWarn = console.warn;
+      console.warn = (...args: unknown[]) => warnings.push(args);
+      let opened: string[] = [];
+      try {
+        opened = await navigatedToOnceSettled(() => {
+          chip(element).click();
+          element.cell = linkTo(pieceCell("of:fid1:topic-222222"));
+          // The input change lands in the element's next update; the click's
+          // target arrives after it.
+          void element.updateComplete.then(() =>
+            pending.resolve(pieceCell("of:fid1:topic-111111"))
+          );
+        });
+      } finally {
+        console.warn = originalWarn;
+      }
+
+      expect(opened).toEqual([]);
+      expect(warnings).toEqual([]);
     });
   });
 
