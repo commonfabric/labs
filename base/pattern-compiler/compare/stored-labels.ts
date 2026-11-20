@@ -793,7 +793,17 @@ export type ModuleLabels = {
   /** Today's rows the labeled arm stored nothing for, by reason. */
   unmatched?: Record<string, number>;
   /** The write records checked against the evaluator. */
-  oracle?: { checked: number; agree: number; differs: Difference[] };
+  oracle?: {
+    checked: number;
+    agree: number;
+    differs: Difference[];
+    /**
+     * Each write record checked: the record, the written path, whether an
+     * entry was stored there, and whether the evaluator found a selection
+     * or a pick unreported, or did not evaluate.
+     */
+    records?: (string | boolean)[][];
+  };
   /** Commits refused with the option on and not with it off. */
   refusedOnly?: string[];
   /** Commits refused with the option off. */
@@ -1102,6 +1112,13 @@ export const compareModule = async (
       checked: checks.length,
       agree: checks.filter(agrees).length,
       differs: checks.filter((check) => !agrees(check)).map(differenceOf),
+      records: checks.map((check) => [
+        JSON.stringify(check.record),
+        check.path.join("/"),
+        check.entry,
+        check.bound,
+        ...(check.error === undefined ? [] : [check.error]),
+      ]),
     },
     refusedOnly: refusedOn.filter((reason) =>
       !offReasons.has(refusalReason(reason))
