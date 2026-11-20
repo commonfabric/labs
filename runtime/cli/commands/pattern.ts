@@ -20,18 +20,18 @@ import {
 } from "@commonfabric/pattern-index/store";
 import { mineLines, mineRows } from "../lib/pattern-mine.ts";
 import {
-  type LinkChannel,
-  linkLine,
-  makeStable,
-  patternLink,
-} from "../lib/pattern-channels.ts";
-import {
   entryHistory,
   historyLines,
   lineageLines,
+  type LinkChannel,
+  linkLine,
+  makeStable,
   PatternHistoryError,
+  patternLink,
+  requireLineage,
   rollbackEntry,
   rollbackLines,
+  stableLine,
 } from "../lib/pattern-history.ts";
 import {
   type DeployedSource,
@@ -51,7 +51,10 @@ import {
 import { type ListedProfile, listProfiles } from "../lib/profile.ts";
 import type { DIDKey } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type {
+  PatternIndexChannel,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import {
   publishPatternFromDisk,
   type PublishReport,
@@ -199,11 +202,24 @@ interface NamedPublishCLIOptions extends PublishCLIOptions {
 }
 
 /**
- * Checks and shares `entry`, printing the report; with `naming`, then names
- * the lineage the share was kept in, once the report is out, so a naming
- * that fails never hides what the share did.
+ * `cf pattern share`: checks and shares `entry` on beta, by link only,
+ * printing the report; `cf pattern stable` makes it findable.
  */
 export async function share(
+  options: PublishCLIOptions,
+  entry: string,
+  deps: PublishCommandDeps = {},
+): Promise<void> {
+  await shareOn("beta", options, entry, deps);
+}
+
+/**
+ * Checks and shares `entry` on `channel`, printing the report; with
+ * `naming`, then names the lineage the share was kept in, once the report is
+ * out, so a naming that fails never hides what the share did.
+ */
+async function shareOn(
+  channel: PatternIndexChannel,
   options: PublishCLIOptions,
   entry: string,
   {
@@ -256,9 +272,7 @@ export async function share(
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
         slot: await entrySlot(absPath(entry), slotSources(store)),
-        // A plain share goes to beta, by link only, until cf pattern stable;
-        // publishing under a name is meant to be found, so it is stable.
-        channel: naming === undefined ? "beta" : "stable",
+        channel,
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
@@ -363,7 +377,8 @@ export async function publishNamed(
   const sources = slotSources(
     storeFor(resolvePatternIndexUrl(options.patternIndexUrl), deps.store),
   );
-  await share(options, entry, deps, async (client, report) => {
+  // Publishing under a name is meant to be found, so it shares on stable.
+  await shareOn("stable", options, entry, deps, async (client, report) => {
     // The lineage the share landed in, which the index may have found by
     // an earlier publication rather than by this file's slot.
     const lineageId = report.lineageId ??
@@ -581,19 +596,6 @@ export async function unshare(
   });
 }
 
-/** The entry's lineage, or a refusal saying the index keeps none. */
-async function keptLineage(
-  client: Pick<PatternIndexClient, "listLineages">,
-  entry: string,
-  sources: SlotSources,
-) {
-  const lineage = await lineageForEntry(client, absPath(entry), sources);
-  if (lineage === undefined) {
-    throw new PatternHistoryError(`No versions of ${entry} are kept.`);
-  }
-  return lineage;
-}
-
 /** `cf pattern stable`: makes the newest shared version findable. */
 export async function stable(
   options: IndexCLIOptions,
@@ -602,16 +604,11 @@ export async function stable(
 ): Promise<void> {
   await ownerOnly(async () => {
     const { client, sources } = await indexFor(options, access);
-    const lineage = await keptLineage(client, entry, sources);
+    const lineage = await requireLineage(client, absPath(entry), sources);
     const report = await makeStable(client, lineage, entry);
-    out(
-      options.json
-        ? report
-        : report.changed
-        ? `Version ${report.number} of ${entry} is stable: search, the catalog and its link (cf pattern link) give it.`
-        : `Version ${report.number} of ${entry} is stable already.`,
-      { json: options.json },
-    );
+    out(options.json ? report : stableLine(entry, report), {
+      json: options.json,
+    });
   });
 }
 
@@ -628,9 +625,9 @@ export async function link(
     (options.beta ? "beta" : "stable");
   await ownerOnly(async () => {
     const { client, sources } = await indexFor(options, access);
-    const lineage = await keptLineage(client, entry, sources);
+    const lineage = await requireLineage(client, absPath(entry), sources);
     const report = await patternLink(client, lineage, entry, channel);
-    out(options.json ? report : linkLine(entry, report), {
+    out(options.json ? report : linkLine(entry, lineage, report), {
       json: options.json,
     });
   });
@@ -889,7 +886,9 @@ export const pattern = new Command()
         .description(
           "Make a pattern's newest shared version stable: what search, the " +
             "catalog and a plain link give. It passed the privacy check when " +
-            "it was shared on beta, so nothing new is exposed.",
+            "it was shared on beta, so no new source is exposed; only who " +
+            "can find it changes. One still being checked becomes stable " +
+            "once it passes.",
         )
         .arguments("<entry:string>"),
     ).action(stable),
@@ -901,8 +900,9 @@ export const pattern = new Command()
       new Command()
         .description(
           "Print a link to a shared pattern: its stable version, or beta " +
-            "when nothing is stable yet. Links name the pattern by its " +
-            "pseudonym, never you, and open only for people with accounts.",
+            "when nothing is stable yet. A link names the pattern by its " +
+            "pseudonym, and shows your name only on a pattern published " +
+            "under it.",
         )
         .arguments("<entry:string>")
         .option("--beta", "Link to beta, the newest shared version.")

@@ -189,13 +189,16 @@ export class FakePatternIndex {
       : undefined;
     const existing = this.publications.get(patternId);
     if (existing !== undefined) {
+      // The index answers the version already holding this source.
+      const versionId = [...this.#versions].find(([, id]) => id === patternId)
+        ?.[0];
       return json(200, {
         patternId,
         created: false,
         listing: existing.listing,
         ...(lineageKey === undefined
           ? {}
-          : { seq: this.#lineageSeqs.get(lineageKey) }),
+          : { seq: this.#lineageSeqs.get(lineageKey), versionId }),
       });
     }
     this.publications.set(patternId, {
@@ -230,14 +233,17 @@ export class FakePatternIndex {
     const listed = this.#requestListing(owner, { patternId });
     if (listed.status !== 200) return listed;
     const stored = this.publications.get(patternId)!;
-    stored.channel = body.channel === "beta" ? "beta" : "stable";
+    const asked = body.channel === "beta" ? "beta" : "stable";
+    // Channels only move forward: stable never goes back to beta.
+    const changed = stored.channel !== asked && stored.channel !== "stable";
+    if (changed) stored.channel = asked;
     return json(200, {
       versionId: body.versionId,
       patternId,
       visibility: "public",
       share: "pending",
       listing: stored.listing,
-      changed: true,
+      changed,
     });
   }
 

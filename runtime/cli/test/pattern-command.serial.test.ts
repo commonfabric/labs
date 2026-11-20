@@ -754,8 +754,17 @@ describe("pattern", () => {
   });
 
   describe("stable()", () => {
-    it("makes the entry's newest shared version stable and says what gives it", async () => {
+    /** Keeps `lin-1` with `channels` and, optionally, a pending head. */
+    const keepShared = async (
+      channels: PatternIndexLineage["channels"],
+      more: Partial<PatternIndexLineage> = {},
+    ) => {
       lineages.keep(await entrysSlot());
+      lineages.lineages = [{ ...lineages.lineages[0], channels, ...more }];
+    };
+
+    it("makes the version holding the newest shared number stable", async () => {
+      await keepShared({ latest: 2, stable: 1, beta: 2 });
       lineages.versions = [
         summary(3, { head: true }),
         summary(2, { shared: { number: 2, stable: false } }),
@@ -767,41 +776,74 @@ describe("pattern", () => {
       expect(lineages.calls.find((call) => call.fn === "shareVersion")?.body)
         .toEqual({ versionId: "ver-2", channel: "stable" });
       expect(rendered[0].value).toBe(
-        `Version 2 of ${entry} is stable: search, the catalog and its link (cf pattern link) give it.`,
+        `Shared version #2 of ${entry} is stable: search and the catalog show it.`,
       );
       expect(Deno.exitCode).toBe(savedExitCode);
     });
 
-    it("asks nothing of the index when the newest shared version is stable already", async () => {
-      lineages.keep(await entrysSlot());
-      lineages.versions = [
-        summary(2, { shared: { number: 1, stable: true } }),
-      ];
+    it("makes a share still being checked stable, never the older number before it", async () => {
+      await keepShared(
+        { latest: 1, beta: 1 },
+        { head: summary(2, { head: true, share: "pending" }) },
+      );
+
+      await stable(options(), entry, ownerDeps());
+
+      expect(lineages.calls.find((call) => call.fn === "shareVersion")?.body)
+        .toEqual({ versionId: "ver-2", channel: "stable" });
+      expect(rendered[0].value).toBe(
+        `${entry} is still being checked; once it passes it is stable, and search and the catalog show it.`,
+      );
+    });
+
+    it("asks nothing of the index when the newest shared number is stable already", async () => {
+      await keepShared({ latest: 1, stable: 1, beta: 1 });
 
       await stable(options(), entry, ownerDeps());
 
       expect(lineages.calls.some((call) => call.fn === "shareVersion"))
         .toBe(false);
       expect(rendered[0].value).toBe(
-        `Version 1 of ${entry} is stable already.`,
+        `Shared version #1 of ${entry} is stable already.`,
       );
     });
 
-    it("exits 1 making nothing stable when nothing of the entry is shared yet", async () => {
-      lineages.keep(await entrysSlot());
+    for (
+      const [name, channels, more, message] of [
+        ["nothing of it is shared yet", {}, {}, "shares it on beta first"],
+        [
+          "it was unshared",
+          { latest: 1, beta: 1 },
+          { withdrawn: true },
+          "is not shared",
+        ],
+        [
+          "the newest number's version is no longer kept",
+          { latest: 2, beta: 2 },
+          {},
+          "is no longer kept",
+        ],
+      ] as const
+    ) {
+      it(`exits 1 making nothing stable when ${name}`, async () => {
+        await keepShared(channels, more);
+        lineages.versions = [
+          summary(1, { head: true, shared: { number: 1, stable: false } }),
+        ];
 
-      await stable(options(), entry, ownerDeps());
+        await stable(options(), entry, ownerDeps());
 
-      expect(lineages.calls.some((call) => call.fn === "shareVersion"))
-        .toBe(false);
-      expect(errors.join("\n")).toContain("cf pattern share shares it on beta");
-      expect(Deno.exitCode).toBe(1);
-    });
+        expect(lineages.calls.some((call) => call.fn === "shareVersion"))
+          .toBe(false);
+        expect(errors.join("\n")).toContain(message);
+        expect(Deno.exitCode).toBe(1);
+      });
+    }
 
-    it("exits 1 saying to run it again when a newer version was shared since", async () => {
-      lineages.keep(await entrysSlot());
+    it("exits 1 saying to run it again when the index says a newer version was shared", async () => {
+      await keepShared({ latest: 2, beta: 2 });
       lineages.versions = [
-        summary(2, { shared: { number: 2, stable: false } }),
+        summary(2, { head: true, shared: { number: 2, stable: false } }),
       ];
       lineages.notNewest = true;
 
@@ -824,7 +866,7 @@ describe("pattern", () => {
       stable: channel === "stable",
     });
 
-    it("prints the stable link by the lineage's pseudonym", async () => {
+    it("prints the stable link by the lineage's pseudonym, saying it does not name the person", async () => {
       lineages.keep(await entrysSlot());
       lineages.links = {
         "a-xyz": linkTo("a-xyz", "stable", 1),
@@ -834,8 +876,21 @@ describe("pattern", () => {
       await link(options(), entry, ownerDeps());
 
       expect(rendered[0].value).toBe(
-        `a-xyz: ${entry} on stable, version 1 now. Anyone with an account can open it.`,
+        `a-xyz: ${entry}, stable (shared version #1 now). It names the pattern, not you.`,
       );
+    });
+
+    it("says the link shows the person's name on a pattern published under it", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.lineages = [{
+        ...lineages.lineages[0],
+        published: { profile: { space: "did:key:z6Mkp" }, since: "2026-11-16" },
+      }];
+      lineages.links = { "a-xyz": linkTo("a-xyz", "stable", 1) };
+
+      await link(options(), entry, ownerDeps());
+
+      expect(String(rendered[0].value)).toContain("It shows your name");
     });
 
     it("gives beta when nothing is stable yet, and beta with --beta", async () => {
@@ -846,8 +901,8 @@ describe("pattern", () => {
       await link(options({ beta: true }), entry, ownerDeps());
 
       expect(rendered.map((r) => r.value)).toEqual([
-        `a-xyz@beta: ${entry} on beta, version 2 now. Anyone with an account can open it.`,
-        `a-xyz@beta: ${entry} on beta, version 2 now. Anyone with an account can open it.`,
+        `a-xyz@beta: ${entry}, beta (shared version #2 now). It names the pattern, not you.`,
+        `a-xyz@beta: ${entry}, beta (shared version #2 now). It names the pattern, not you.`,
       ]);
     });
 
@@ -862,9 +917,9 @@ describe("pattern", () => {
       await link(options({ number: 5 }), entry, ownerDeps());
 
       expect(rendered.map((r) => r.value)).toEqual([
-        `a-xyz@1: ${entry} on exactly version 1. Anyone with an account can open it.`,
+        `a-xyz@1: ${entry}, exactly shared version #1. It names the pattern, not you.`,
       ]);
-      expect(errors.join("\n")).toContain("has no shared version 5");
+      expect(errors.join("\n")).toContain("has no shared version #5");
       expect(Deno.exitCode).toBe(1);
     });
 

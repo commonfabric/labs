@@ -185,6 +185,12 @@ export type ListingReport =
 
     /** The channel it was shared on, when one was asked for. */
     channel?: PatternIndexChannel;
+
+    /**
+     * False when the index moved nothing: the source was shared already on
+     * that channel or a later one, or by another of your patterns.
+     */
+    changed?: boolean;
   }
   | { status: "capped"; resetsAt?: string }
   | { status: "failed"; reason: string };
@@ -431,18 +437,25 @@ export async function publishPatternFromDisk(
   }
   if (!response.created) priorPatternId = undefined;
   const versionId = response.versionId;
-  const listing = options.channel !== undefined && versionId !== undefined
+  const channel = options.channel;
+  const listing: ListingReport = channel !== undefined &&
+      versionId !== undefined
     ? await requestShare(async () => {
-      const answer = await deps.client.shareVersion({
-        versionId,
-        channel: options.channel,
-      });
+      const answer = await deps.client.shareVersion({ versionId, channel });
       return {
         status: "requested",
         listing: answer.listing ?? "pending",
-        channel: options.channel,
+        channel,
+        changed: answer.changed,
       };
     })
+    // A listing request shares on stable, so a beta share never falls back
+    // to one: it says it shared nothing instead.
+    : channel === "beta"
+    ? {
+      status: "failed",
+      reason: "the index kept no version of it to share on beta",
+    }
     : await requestShare(async () => ({
       status: "requested",
       listing: (await deps.client.requestListing({
@@ -466,7 +479,7 @@ export async function publishPatternFromDisk(
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern share ${options.entry} again once the limit resets to request the listing. Meanwhile ${
+      ? `Run cf pattern share ${options.entry} again once the limit resets to share it. Meanwhile ${
         tryIt(response.patternId)
       }`
       : tryIt(response.patternId),
@@ -816,14 +829,16 @@ export const publishReportLines = (report: PublishReport): string[] => {
   switch (listing.status) {
     case "requested":
       lines.push(
-        listing.channel === "beta"
+        listing.changed === false
+          ? "Already shared: where it is did not change (cf pattern link says where)."
+          : listing.channel === "beta"
           ? `Beta: ${betaMeaning(listing.listing)}.`
           : `Listing: ${listingMeaning(listing.listing)}.`,
       );
       break;
     case "capped":
       lines.push(
-        `Listing not requested: you reached today's limit on listing requests${
+        `Not shared yet: you reached today's limit on shares${
           listing.resetsAt !== undefined
             ? `; it resets at ${listing.resetsAt}`
             : ""
@@ -831,7 +846,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
       );
       break;
     case "failed":
-      lines.push(`Listing not requested: ${listing.reason}.`);
+      lines.push(`Not shared: ${listing.reason}.`);
       break;
   }
   lines.push(`Next: ${report.next}.`);

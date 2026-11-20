@@ -3578,19 +3578,23 @@ index's check passes it becomes the lineage's next numbered shared version (1,
 listing. Past the index's daily limit it says when the limit resets, and running
 the same command then shares it again. The next step it prints is deploying the
 pattern with `cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
-author opens it in a loom.
+`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
 
 `cf pattern stable <entry>` makes the newest shared version **stable**: what
 search, listings and a plain link give. It passed the check when it was shared,
-so nothing new is exposed. Both channels only move forward: to go back, roll
-back, share again (a new number), then make that stable.
+so no new source is exposed; only who can find it changes. A share still being
+checked is made stable instead, so it is findable once it passes and an older
+number never becomes stable by being the newest so far. Both channels only move
+forward: to go back, roll back, share again (a new number), then make that
+stable. `cf pattern history` shows each version's shared number and channel.
 
 `cf pattern link <entry>` prints a link that names the pattern by its lineage's
-pseudonym, never the person: `<pseudonym>` for stable (beta when nothing is
-stable yet), `--beta` for `<pseudonym>@beta`, and `--number <n>` for
-`<pseudonym>@<n>`, exactly version n, which never changes. It checks the link
-with the index first, so it never prints one that opens nothing.
+pseudonym, which shows the person's name only on a lineage published under it:
+`<pseudonym>` for stable (beta when nothing is stable yet), `--beta` for
+`<pseudonym>@beta`, and `--number <n>` for `<pseudonym>@<n>`, exactly version n,
+which never changes. It checks the link with the index first, so it never prints
+one that opens nothing.
 
 `cf pattern unshare <entry>` takes the pattern out of others' searches and
 listings and shares no later version until `cf pattern share` runs again. A

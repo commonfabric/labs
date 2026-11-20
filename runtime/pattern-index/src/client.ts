@@ -419,6 +419,10 @@ export interface PatternIndexListedPattern {
   bucket?: PatternIndexBucket;
   listed?: boolean;
   listing?: PatternIndexListing;
+
+  /** `beta` on a record shared to beta only; owner only. */
+  channel?: "beta";
+
   grandfathered?: true;
   hidden?: true;
 
@@ -751,6 +755,15 @@ export interface PatternIndexLineage {
   /** How many versions it has, and how many of them others can read. */
   versions: number;
   sharedVersions: number;
+
+  /**
+   * Its shared version numbers: the newest, and the one each channel's link
+   * gives now. Each is absent while nothing is there.
+   */
+  channels?: { latest?: number; stable?: number; beta?: number };
+
+  /** Unshared: nothing of it is offered on a channel until shared again. */
+  withdrawn?: boolean;
 
   published?: PatternIndexPublishedAuthor;
   tier: number;

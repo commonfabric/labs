@@ -139,7 +139,7 @@ describe("pattern-mine", () => {
 
       expect(Object.fromEntries(rows.map((r) => [r.patternId, r.next])))
         .toEqual({
-          n: "unlisted: run cf pattern share <entry file> to request a listing",
+          n: "not shared: run cf pattern share <entry file> to share it on beta, by link",
           off: "unlisted",
           m: "in Main: other people's use ranks it",
           f: "featured",
