@@ -48,6 +48,16 @@ export type PatternRestore = {
   error?: string;
 };
 
+/**
+ * Returns whether `restore` was asked of `change`: the same revision of the
+ * same piece in the same scope, an omitted scope being the space's.
+ */
+function isRestoreOf(restore: PatternRestore, change: PatternChange): boolean {
+  return restore.pieceId === change.pieceId &&
+    restore.revisionId === change.revisionId &&
+    (restore.scope ?? "space") === (change.scope ?? "space");
+}
+
 /** Returns what the step list calls `step`. */
 function stepLabel(step: SpaceHistoryStep): string {
   switch (step.kind) {
@@ -370,8 +380,7 @@ export class XHistoryView extends BaseView {
    */
   #renderPatternChange(change: PatternChange) {
     const restore = this.patternRestore;
-    const mine = restore?.pieceId === change.pieceId &&
-      restore.revisionId === change.revisionId;
+    const mine = restore !== undefined && isRestoreOf(restore, change);
     const blocked = this.open !== undefined || restore?.busy === true;
     return html`
       <div
@@ -440,10 +449,7 @@ export class XHistoryView extends BaseView {
     const said = restore?.error ?? restore?.warning;
     if (restore === undefined || said === undefined) return nothing;
     const listed = this._steps.some((step) =>
-      step.patternChanges.some((change) =>
-        change.pieceId === restore.pieceId &&
-        change.revisionId === restore.revisionId
-      )
+      step.patternChanges.some((change) => isRestoreOf(restore, change))
     );
     return listed ? nothing : html`
       <p class="note error pattern-restore-note" role="alert">${said}</p>

@@ -980,8 +980,13 @@ export class XRootView extends BaseView implements ShellApp {
       rt === undefined || space === undefined ||
       this._patternRestore?.busy === true || this.#fork !== undefined
     ) return;
-    const { pieceId, revisionId } = change;
-    const restoring: PatternRestore = { pieceId, revisionId, busy: true };
+    // What every state of this restore says of the change it was asked of.
+    const asked = {
+      pieceId: change.pieceId,
+      revisionId: change.revisionId,
+      ...(change.scope !== undefined ? { scope: change.scope } : {}),
+    };
+    const restoring: PatternRestore = { ...asked, busy: true };
     this._patternRestore = restoring;
     try {
       const response = await rt.restorePiecePattern(
@@ -992,10 +997,8 @@ export class XRootView extends BaseView implements ShellApp {
       if (this._patternRestore !== restoring) return;
       if (response.compatibilityWarning !== undefined) {
         this._patternRestore = {
-          pieceId,
-          revisionId,
+          ...asked,
           busy: false,
-          ...(change.scope !== undefined ? { scope: change.scope } : {}),
           warning: response.compatibilityWarning,
           ...(response.confirmationToken !== undefined
             ? { confirmationToken: response.confirmationToken }
@@ -1008,8 +1011,7 @@ export class XRootView extends BaseView implements ShellApp {
       this._patternRestore = response.executionWarning === undefined
         ? undefined
         : {
-          pieceId,
-          revisionId,
+          ...asked,
           busy: false,
           error: response.executionWarning,
         };
@@ -1018,8 +1020,7 @@ export class XRootView extends BaseView implements ShellApp {
       console.error("[RootView] Failed to restore a pattern:", error);
       if (this._patternRestore !== restoring) return;
       this._patternRestore = {
-        pieceId,
-        revisionId,
+        ...asked,
         busy: false,
         error: describeFailure(error),
       };

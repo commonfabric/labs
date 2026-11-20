@@ -207,6 +207,258 @@ describe("XHistoryView", () => {
     buttons[nth].dispatch(new Event("click"));
   }
 
+  describe("the step list", () => {
+    it("lists nothing and says nothing has happened, asking no runtime, while it has no space", async () => {
+      const { view, listings, update } = mount(
+        () => Promise.resolve({ steps: [step(4)] }),
+      );
+      view.space = undefined;
+
+      const rendered = await update(
+        ["space"],
+        (markup) => markup.includes("Nothing has happened"),
+      );
+
+      expect(listings).toEqual([]);
+      expect(rendered).not.toContain("data-seq");
+    });
+
+    it("drops the steps of the space it showed once it has no runtime", async () => {
+      const { view, markup, update } = await listed([step(4)]);
+
+      view.rt = undefined;
+      await update(
+        ["rt"],
+        (rendered) => rendered.includes("Nothing has happened"),
+      );
+
+      expect(markup()).not.toContain("data-seq");
+      expect(markup()).not.toContain("Show older steps");
+    });
+
+    it("says the history could not be listed when the runtime rejects", async () => {
+      const { update } = mount(() => Promise.reject(new Error("offline")));
+
+      const rendered = await update(
+        ["rt", "space"],
+        (markup) => markup.includes("could not be listed"),
+      );
+
+      expect(rendered).not.toContain("Nothing has happened");
+    });
+
+    it("keeps the steps of the later of two listings when the earlier one answers last", async () => {
+      const first = Promise.withResolvers<Page>();
+      const answers = [first.promise, Promise.resolve({ steps: [step(9)] })];
+      const { view, markup, update } = mount(() => answers.shift()!);
+      (view as unknown as {
+        willUpdate(changed: Map<string, unknown>): void;
+      }).willUpdate(new Map([["rt", undefined]]));
+      view.changes = 1;
+      await update(
+        ["changes"],
+        (rendered) => rendered.includes('data-seq="9"'),
+      );
+
+      first.resolve({ steps: [step(4)], next: 4 });
+      // The listing was waiting on this promise before this case was, so it
+      // has been resumed by the time this case is.
+      await first.promise;
+
+      expect(markup()).toContain('data-seq="9"');
+      expect(markup()).not.toContain('data-seq="4"');
+      expect(markup()).not.toContain("Show older steps");
+    });
+
+    it("calls a step by what began it: an edit, one event or several, or the point restored to", async () => {
+      const { markup } = await listed([
+        { ...step(8), kind: "restore", restoredSeq: 2 },
+        { ...step(7), kind: "event", events: 3 },
+        { ...step(6), kind: "event", events: 1 },
+        step(5),
+      ]);
+
+      const labels = [
+        ...markup().matchAll(
+          /data-seq="(\d+)"[^>]*>\s*<span>([^<]*)<\/span>/g,
+        ),
+      ].map(([, seq, label]) => [seq, label]);
+      expect(labels).toEqual([
+        ["8", "Restored to #2"],
+        ["7", "3 events"],
+        ["6", "Event"],
+        ["5", "Edit"],
+      ]);
+    });
+
+    it("numbers the event steps in the order listed, and no other step", async () => {
+      const { markup } = await listed([
+        { ...step(8), kind: "event", events: 1 },
+        step(7),
+        { ...step(6), kind: "event", events: 1 },
+      ]);
+
+      const indexes = [
+        ...markup().matchAll(
+          /data-seq="(\d+)"\s+data-event-index="(\d+)"/g,
+        ),
+      ].map(([, seq, index]) => [seq, index]);
+      expect(indexes).toEqual([["8", "0"], ["6", "1"]]);
+    });
+
+    it("says who began a step that has a principal, shortening a long DID, and nothing for one with none", async () => {
+      const long = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
+      const { markup } = await listed([
+        { ...step(6), principal: long },
+        { ...step(5), principal: "did:key:short" },
+        step(4),
+      ]);
+
+      const rendered = markup();
+      expect(rendered).toContain(`title="${long}"`);
+      expect(rendered).toContain("by did:key:z6Mkha…ta2doK");
+      expect(rendered).toContain("by did:key:short");
+      expect(rendered.split('class="detail by"')).toHaveLength(3);
+    });
+
+    it("marks a step whose events had yet to be handled as in progress, and no settled one", async () => {
+      const { markup } = await listed([
+        { ...step(5), settled: false },
+        step(4),
+      ]);
+
+      expect(markup().split("in progress")).toHaveLength(2);
+      expect(markup().indexOf("in progress")).toBeLessThan(
+        markup().indexOf('data-seq="4"'),
+      );
+    });
+
+    it("sends `open-history` for the step chosen", async () => {
+      const { view, commands } = await listed([step(5), step(4)]);
+
+      const steps = templateListeners(view.render(), "click", view).filter((
+        { tag },
+      ) => tag.includes('class="step"'));
+      steps[1].dispatch(new Event("click"));
+
+      expect(commands).toEqual([{ type: "open-history", seq: 4 }]);
+    });
+
+    it("sends the command that hides the panel from its close button", async () => {
+      const { view, commands } = await listed([step(4)]);
+
+      const [close] = templateListeners(view.render(), "click", view).filter((
+        { tag },
+      ) => tag.includes('aria-label="Close history"'));
+      close.dispatch(new Event("click"));
+
+      expect(commands).toEqual([
+        { type: "set-config", key: "showHistoryView", value: false },
+      ]);
+    });
+
+    it("renders the failure it is handed, and none while it is handed none", async () => {
+      const { view, markup } = await listed([step(4)]);
+      expect(markup()).not.toContain('role="alert"');
+
+      view.error = "The fork could not be opened.";
+
+      expect(markup()).toContain("The fork could not be opened.");
+      expect(markup().split('role="alert"')).toHaveLength(2);
+    });
+  });
+
+  describe("an open fork", () => {
+    /** The opening tag of the step numbered `seq`, in `markup`. */
+    function stepTag(markup: string, seq: number): string {
+      const at = markup.indexOf(`data-seq="${seq}"`);
+      return markup.slice(
+        markup.lastIndexOf("<button", at),
+        markup.indexOf(">", at),
+      );
+    }
+
+    it("renders no fork's section, and every step enabled and not current, while none is open", async () => {
+      const { markup } = await listed([step(5), step(4)]);
+
+      expect(markup()).not.toContain('class="open"');
+      for (const seq of [5, 4]) {
+        expect(stepTag(markup(), seq)).toContain('aria-current="false"');
+        expect(stepTag(markup(), seq)).toContain('?disabled="false"');
+      }
+    });
+
+    it("says which point the fork shows, and marks that step alone as current and disabled", async () => {
+      const { view, markup } = await listed([step(5), step(4)]);
+
+      view.open = { seq: 4, busy: false };
+
+      expect(markup()).toContain("Showing this space as it stood at #4.");
+      expect(stepTag(markup(), 4)).toContain('aria-current="true"');
+      expect(stepTag(markup(), 4)).toContain('?disabled="true"');
+      expect(stepTag(markup(), 5)).toContain('aria-current="false"');
+      expect(stepTag(markup(), 5)).toContain('?disabled="false"');
+    });
+
+    it("disables every step and both of the fork's buttons while the fork is busy, and neither button once it is not", async () => {
+      const { view, markup } = await listed([step(5), step(4)]);
+      const buttons = (rendered: string) =>
+        ["history-back", "history-restore"].map((id) => {
+          const at = rendered.indexOf(`id="${id}"`);
+          return rendered.slice(at, rendered.indexOf(">", at));
+        });
+
+      view.open = { seq: 4, busy: true };
+      expect(stepTag(markup(), 5)).toContain('?disabled="true"');
+      for (const tag of buttons(markup())) {
+        expect(tag).toContain('?disabled="true"');
+      }
+
+      view.open = { seq: 4, busy: false };
+      for (const tag of buttons(markup())) {
+        expect(tag).toContain('?disabled="false"');
+      }
+    });
+
+    it("sends `close-history` from the way back, and `restore-history` from the way to restore", async () => {
+      const { view, commands } = await listed([step(4)]);
+      view.open = { seq: 4, busy: false };
+      const button = (id: string) =>
+        templateListeners(view.render(), "click", view).filter(({ tag }) =>
+          tag.includes(`id="${id}"`)
+        )[0];
+
+      button("history-back").dispatch(new Event("click"));
+      button("history-restore").dispatch(new Event("click"));
+
+      expect(commands).toEqual([
+        { type: "close-history" },
+        { type: "restore-history" },
+      ]);
+    });
+
+    it("lists the history again when the fork is let go of, and not when one is opened", async () => {
+      const pages: Page[] = [{ steps: [step(4)] }, { steps: [step(5)] }];
+      const { view, listings, update } = mount(
+        () => Promise.resolve(pages.shift()!),
+      );
+      await update(
+        ["rt", "space"],
+        (markup) => markup.includes('data-seq="4"'),
+      );
+
+      view.open = { seq: 4, busy: false };
+      (view as unknown as {
+        willUpdate(changed: Map<string, unknown>): void;
+      }).willUpdate(new Map([["open", undefined]]));
+      expect(listings).toEqual([undefined]);
+
+      view.open = undefined;
+      await update(["open"], (markup) => markup.includes('data-seq="5"'));
+      expect(listings).toEqual([undefined, undefined]);
+    });
+  });
+
   describe("a step's pattern changes", () => {
     it("renders none for a step that recorded none", async () => {
       const { markup } = await listed([step(4)]);
@@ -389,7 +641,7 @@ describe("XHistoryView", () => {
       const { view, commands } = await listed([
         step(4, [change("fid1:a", "r1", { scope: "session" })]),
       ]);
-      view.patternRestore = warned;
+      view.patternRestore = { ...warned, scope: "session" };
 
       click(view, "pattern-restore-confirm");
 
@@ -559,6 +811,86 @@ describe("XHistoryView", () => {
 
       expect(markup()).not.toContain("pattern-restore-note");
       expect(markup()).not.toContain('role="alert"');
+    });
+  });
+
+  describe("a restore's scope", () => {
+    const failed: PatternRestore = {
+      pieceId: "fid1:a",
+      revisionId: "r1",
+      busy: false,
+      error: "the piece is gone",
+    };
+
+    /** Whether the row of the change to `r1`, and the panel, say `failed`. */
+    function said(markup: string): { row: boolean; panel: boolean } {
+      return {
+        row: changeMarkup(markup, "r1").includes("the piece is gone"),
+        panel: markup.includes("pattern-restore-note"),
+      };
+    }
+
+    it("renders a restore's failure on the row of the change in the same scope, and no panel note", async () => {
+      const { view, markup } = await listed([
+        step(4, [change("fid1:a", "r1", { scope: "user" })]),
+      ]);
+
+      view.patternRestore = { ...failed, scope: "user" };
+
+      expect(said(markup())).toEqual({ row: true, panel: false });
+    });
+
+    it("renders it on the row whether the scope `space` is given or left out, on either side", async () => {
+      const plain = await listed([step(4, [change("fid1:a", "r1")])]);
+      plain.view.patternRestore = { ...failed, scope: "space" };
+      expect(said(plain.markup())).toEqual({ row: true, panel: false });
+
+      const scoped = await listed([
+        step(4, [change("fid1:a", "r1", { scope: "space" })]),
+      ]);
+      scoped.view.patternRestore = failed;
+      expect(said(scoped.markup())).toEqual({ row: true, panel: false });
+    });
+
+    it("renders it as the panel's note, and not on the row, where the listed change is in another scope", async () => {
+      const { view, markup } = await listed([
+        step(4, [change("fid1:a", "r1", { scope: "user" })]),
+      ]);
+
+      view.patternRestore = { ...failed, scope: "session" };
+      expect(said(markup())).toEqual({ row: false, panel: true });
+
+      view.patternRestore = failed;
+      expect(said(markup())).toEqual({ row: false, panel: true });
+    });
+
+    it("renders a warning's way to restore anyway on the row in the restore's scope alone, where the change is listed in two", async () => {
+      const { view, commands, markup } = await listed([
+        step(4, [
+          change("fid1:a", "r1", { scope: "user" }),
+          change("fid1:a", "r1", { scope: "session" }),
+        ]),
+      ]);
+
+      view.patternRestore = {
+        pieceId: "fid1:a",
+        revisionId: "r1",
+        scope: "session",
+        busy: false,
+        warning: "It does not fit.",
+        confirmationToken: "t1",
+      };
+
+      expect(markup().split("pattern-restore-confirm")).toHaveLength(2);
+      expect(markup()).not.toContain("pattern-restore-note");
+      click(view, "pattern-restore-confirm");
+      expect(commands).toEqual([{
+        type: "restore-pattern",
+        pieceId: "fid1:a",
+        revisionId: "r1",
+        scope: "session",
+        confirmationToken: "t1",
+      }]);
     });
   });
 
