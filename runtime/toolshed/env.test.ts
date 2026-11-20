@@ -46,19 +46,13 @@ Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only f
   expect(() => enabled("on")).toThrow();
 });
 
-Deno.test("MEMORY_MARKED_SPLICES parses strictly: off by default, on only for 'true'/'1', and any other spelling refuses", () => {
-  const enabled = (v: string | undefined) =>
-    EnvSchema.parse(v === undefined ? {} : { MEMORY_MARKED_SPLICES: v })
-      .MEMORY_MARKED_SPLICES;
-
-  assertEquals(enabled(undefined), false);
-  assertEquals(enabled("false"), false);
-  assertEquals(enabled("0"), false);
-  assertEquals(enabled("true"), true);
-  assertEquals(enabled("1"), true);
-  // A misspelled setting must not silently leave the deployment either way.
-  expect(() => enabled("TRUE")).toThrow();
-  expect(() => enabled("on")).toThrow();
+Deno.test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", () => {
+  // The setting is gone: a deployment that still sets it, as an override
+  // file written while it existed does, starts as one that does not.
+  for (const value of ["true", "false", "on"]) {
+    const parsed = EnvSchema.parse({ MEMORY_MARKED_SPLICES: value });
+    assertEquals("MEMORY_MARKED_SPLICES" in parsed, false);
+  }
 });
 
 Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {

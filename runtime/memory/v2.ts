@@ -1503,11 +1503,10 @@ export type MemoryProtocolFlags = {
    * `pinned`) and reads each one's overwritten indices for server
    * execution's supersession. A client sends a change to an array as marked
    * splices only to a server that advertises it, and otherwise index by
-   * index. Not build-inherent: a deployment advertises it only once every
-   * serving worker that may read its rows, a rollback's included, reads the
-   * mark (docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`), so
-   * absent, an older server's or a deployment's that has not turned it on,
-   * parses to false.
+   * index. Build-inherent; absent, as from a server that predates marked
+   * splices, it parses to false. Such a server reads a stored marked splice
+   * as overwriting nothing, so under server execution a deployment must not
+   * roll back to one (docs/specs/memory-v2/08-conflict-granularity.md).
    */
   markedSplicesV1?: boolean;
 
@@ -3360,9 +3359,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
-  // Deployment configuration, not build-inherent: the memory server advertises
-  // it under its `markedSplices` option (`Server.memoryProtocolFlags()`).
-  markedSplicesV1: false,
+  // Build-inherent: this build's server reads marked splices and admits them
+  // as `refuseUnfoundedMarkedSplices()` allows.
+  markedSplicesV1: true,
   // Build-inherent: this build's server relays presence rooms.
   presenceV1: true,
   // Build-inherent: this build's server ends one session on request.

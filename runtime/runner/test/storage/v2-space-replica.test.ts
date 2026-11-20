@@ -31,6 +31,7 @@ import {
   mountOver,
   newSharedServer,
   newSpaceReplica,
+  withoutMarkedSplices,
 } from "../memory-v2-test-utils.ts";
 import { captureLogs } from "../support/captured-logs.ts";
 
@@ -579,8 +580,10 @@ describe("SpaceReplica", () => {
       it("refuses a commit the session refuses to send for its marked splice as a local conflict, leaving no stale floor", async () => {
         setConflictAdmissionMode("preempt");
         cleanups.push(() => setConflictAdmissionMode(undefined));
-        // The server does not advertise `markedSplicesV1`, so the session
-        // refuses the commit at its first send.
+        // The server does not advertise `markedSplicesV1`, as one that
+        // predates marked splices does not, so the session refuses the commit
+        // at its first send.
+        withoutMarkedSplices(server);
         const replica = replicaOver();
         const result = await replica.commitNative({
           operations: [{

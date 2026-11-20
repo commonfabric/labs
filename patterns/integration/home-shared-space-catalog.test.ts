@@ -689,9 +689,8 @@ async function withChatManager(
           // `invoke` returns once the handling has committed, a served one
           // included; the request's status alone can come from the client's
           // speculative run first. A served `forget` that runs after its
-          // room's space is deleted cannot load the room, and holds every
-          // later event in Home's space until the server's 60-second budget
-          // for a failed delivery runs out.
+          // room's space is deleted reads the room as absent, since a load in
+          // a deleted space settles as an absence, and archives its entry.
           await invoke(runtime, manager.key("forget"), {
             requestId,
             room,
@@ -2606,11 +2605,12 @@ describe("Home chat manager and a deleted room", () => {
         );
 
         for (
-          const [requestId, stream, room] of [
-            ["join-listed", "joinRoom", listed],
-            ["join-forgotten", "joinRoom", forgotten],
-            ["accept-listed", "accept", listed],
-            ["accept-forgotten", "accept", forgotten],
+          const [requestId, stream, event] of [
+            ["join-listed", "joinRoom", { room: listed }],
+            ["join-forgotten", "joinRoom", { room: forgotten }],
+            ["accept-listed", "accept", { room: listed }],
+            ["accept-forgotten", "accept", { room: forgotten }],
+            ["offer-listed", "offerRoom", { room: listed, member: BOB }],
           ] as const
         ) {
           // `invoke` returns once the handling has committed, a served one
@@ -2619,36 +2619,16 @@ describe("Home chat manager and a deleted room", () => {
           await invoke(
             runtime,
             manager.key(stream),
-            { requestId, room },
+            { requestId, ...event },
             requestId,
           );
           expect(await manager.key("requests").key(requestId).pull())
             .toMatchObject({ status: "refused" });
         }
 
-        // The offer is sent without waiting on its send's callback, which
-        // doesn't always settle for a served offer naming a deleted room. A
-        // start sent after it is handled after it, in Home's own order.
-        sendEvent(manager.key("offerRoom"), {
-          requestId: "offer-listed",
-          room: listed,
-          member: BOB,
-        });
-        await chats.start("createGroup", "g-after", {
-          title: "After",
-          members: [],
-        });
-        await waitForCellValue<unknown[]>(
-          runtime,
-          manager.key("rooms"),
-          (value) => value?.length === 1,
-          { stuckLabel: "the room started after the offer" },
-        );
-        expect(await manager.key("requests").key("offer-listed").pull())
-          .toMatchObject({ status: "refused" });
-
         const { entries } = await home.key("sharedSpaceCatalog").pull();
         expect(entries[forgotten.space].state).toBe("archived");
+        expect(await manager.key("rooms").pull()).toEqual([]);
       });
     });
   }
