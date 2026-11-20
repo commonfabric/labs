@@ -648,7 +648,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
    * unsent (`unsentConnectionError()`, `markUnsent()`): no server holds it.
    * One lost once a frame of it reached the socket (a write that fails, or a
    * socket replaced between a routed payload's records), or one sent on a
-   * socket that fails to open, rejects with a plain `ConnectionError`.
+   * socket that fails to open, rejects with a plain `ConnectionError`. As
+   * `MemoryClient.Transport.send()` says, a response that arrives before the
+   * rejection answers the request, whatever the rejection.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
