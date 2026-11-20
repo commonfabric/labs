@@ -106,8 +106,9 @@ route otherwise.
   source space, in the source's own counter.
 
 A slice with a read row behind what the source last said is marked `2`, as
-it is for a row behind a local head. One whose rows are current and whose
-source said "stale upstream" is marked `1`. A fourth case joins the three
+it is for a row behind a local head, and so is one with a read the source
+refused, at registration or once its grant was revoked. One whose rows are
+current and whose source said "stale upstream" is marked `1`. A fourth case joins the three
 under "How a mark is cleared" in the first plan: an input in another space
 is stale while the source last said so, and while the source has said
 nothing of it yet.

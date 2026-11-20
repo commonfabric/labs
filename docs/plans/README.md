@@ -42,7 +42,7 @@ a record: archive it to `docs/history/plans/` following the procedure in
   and a pull from a position, and demand travels upstream only along stale
   edges; with it, a wish's own computations are recorded under an identity,
   a slice that read the interval clock expires, and a computation the
-  scheduler runs without demand is left unrun until something can observe
+  scheduler runs without demand may be left unrun while nothing can observe
   what it would write.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
