@@ -634,9 +634,10 @@ process:
   many documents. `session.watch.add` and `session.watch.refresh` entries also
   carry `upserts`, the snapshots the frame delivered: a wide traversal that
   yields few is repeated server work, and a wide frame is transport and
-  client-ingest work as well. A refresh carries only `watches` and `upserts`: it
-  re-evaluates by dirty document rather than by root, so it has no traversal to
-  attribute, and absent is the honest answer there. A watch set evaluated whole,
+  client-ingest work as well. A refresh by dirty document carries only `watches`
+  and `upserts`: it re-evaluates by document rather than by root, so it has no
+  traversal to attribute, and absent is the honest answer there. A refresh that
+  evaluates a session whole is the exception, attributed as below. A watch set evaluated whole,
   or moved to a view replacement's roots, records an entry per part of the
   session's graphs it evaluated, and each such entry names the session
   (`sessionId`, `principal`), the views it held (`views`, whose roots are among
