@@ -46,11 +46,15 @@
             "description": "When the board stored the report, in milliseconds since the epoch.",
             "type": "number"
           },
+          "id": {
+            "description": "The report's id, unique on the board: 32 lowercase hex characters the\nsender derives, so a resend carries the same one.",
+            "type": "string"
+          },
           "kind": {
             "$ref": "#/$defs/ReportKind"
           },
           "name": {
-            "description": "The report's name, unique on the board, such as `quiet-heron-41`.",
+            "description": "The report's name, a label for people such as `quiet-heron-41`. Two\nsenders may use the same one.",
             "type": "string"
           },
           "structured": {
@@ -62,6 +66,7 @@
           }
         },
         "required": [
+          "id",
           "name",
           "kind",
           "structured",
@@ -98,7 +103,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/feedback-reports/main.tsx",
-              "moduleIdentity": "ihiYzMv_7bYF5BNrQ7KHLjaEyIkiNs1xmnwc8isx4KY",
+              "moduleIdentity": "KGetoXonU-bp38PBS5i8CoG9WUk71dzsl4ZVlKycYhk",
               "path": [
                 "addReportHandler"
               ]
@@ -143,6 +148,9 @@
             "description": "The agent sending the report, as Topics verbs take one. The author is\nthe principal whose key signs the call.",
             "type": "string"
           },
+          "id": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -158,6 +166,7 @@
         },
         "required": [
           "agentName",
+          "id",
           "name",
           "kind",
           "structured"
@@ -203,8 +212,8 @@
             "description": "The agent linking the report, such as the triage command's.",
             "type": "string"
           },
-          "name": {
-            "description": "The report's name.",
+          "id": {
+            "description": "The report's id.",
             "type": "string"
           },
           "topic": {
@@ -214,7 +223,7 @@
         },
         "required": [
           "agentName",
-          "name",
+          "id",
           "topic"
         ],
         "type": "object"
@@ -231,11 +240,15 @@
             "description": "When the board stored the report, in milliseconds since the epoch.",
             "type": "number"
           },
+          "id": {
+            "description": "The report's id, unique on the board: 32 lowercase hex characters the\nsender derives, so a resend carries the same one.",
+            "type": "string"
+          },
           "kind": {
             "$ref": "#/$defs/ReportKind"
           },
           "name": {
-            "description": "The report's name, unique on the board, such as `quiet-heron-41`.",
+            "description": "The report's name, a label for people such as `quiet-heron-41`. Two\nsenders may use the same one.",
             "type": "string"
           },
           "structured": {
@@ -247,6 +260,7 @@
           }
         },
         "required": [
+          "id",
           "name",
           "kind",
           "structured",
@@ -258,6 +272,9 @@
         "properties": {
           "createdAt": {
             "type": "number"
+          },
+          "id": {
+            "type": "string"
           },
           "kind": {
             "type": "string"
@@ -274,6 +291,7 @@
           }
         },
         "required": [
+          "id",
           "name",
           "kind",
           "source",
@@ -341,7 +359,7 @@
           "type": "string"
         },
         "default": {},
-        "description": "The Topic each linked report was filed under, by report name.",
+        "description": "The Topic each linked report was filed under, by report id.",
         "properties": {},
         "type": "object"
       }

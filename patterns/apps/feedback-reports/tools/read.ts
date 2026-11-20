@@ -7,7 +7,7 @@
  *
  * The layout read here is the one `../main.tsx` stores: the board's input
  * document holds `reports`, a list whose records are usually documents of
- * their own, and `topicOf`, each report's name to the Topic it was filed
+ * their own, and `topicOf`, each report's id to the Topic it was filed
  * under.
  */
 
@@ -31,6 +31,10 @@ type Position = ReturnType<DocReader["root"]>;
 
 /** A report as the client reads it. */
 export interface Report {
+  /** The report's id, unique on the board. */
+  id: string;
+
+  /** The report's name, a label two reports may share. */
   name: string;
   kind: string;
   words?: string;
@@ -56,7 +60,7 @@ export interface Report {
 }
 
 /** The fields of a report whose labels say who wrote it. */
-const ATTESTED_FIELDS = ["name", "kind", "structured", "createdAt"];
+const ATTESTED_FIELDS = ["id", "name", "kind", "structured", "createdAt"];
 
 /** The deepest a stored value is followed, past which it reads as nothing. */
 const MAX_DEPTH = 32;
@@ -105,13 +109,14 @@ export function assembleReports(
   const root = reader.root(boardInput);
   const topicOf = objectOf(reader, reader.child(root, "topicOf"));
   return reader.items(reader.child(root, "reports")).map((at) => {
-    const name = reader.text(at, "name");
+    const id = reader.text(at, "id");
     const words = reader.follow(reader.child(at, "words")).value;
     const structured = objectOf(reader, reader.child(at, "structured"));
-    const topic = topicOf?.[name];
+    const topic = topicOf?.[id];
     const labels = reader.labels(at, ATTESTED_FIELDS);
     return {
-      name,
+      id,
+      name: reader.text(at, "name"),
       kind: reader.text(at, "kind"),
       ...(typeof words === "string" ? { words } : {}),
       structured: structured ?? {},

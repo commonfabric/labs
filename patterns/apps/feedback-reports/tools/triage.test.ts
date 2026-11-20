@@ -19,6 +19,9 @@ const TRUSTED = new Set([ADA]);
 /** Words no Topic may carry. */
 const SECRET = "Lunch with Pat about the merger";
 
+/** The id the tests give the report named `name`. */
+const idOf = (name: string) => `id-${name}`;
+
 /** A report Ada sent about a want stopped at `stop` by `cause`. */
 function report(
   name: string,
@@ -26,6 +29,7 @@ function report(
   rest: Partial<Report> = {},
 ): Report {
   return {
+    id: idOf(name),
     name,
     kind: "broke",
     words: SECRET,
@@ -135,8 +139,8 @@ describe("triage", () => {
       );
 
       expect(plan.file.map((filing) => filing.reports)).toEqual([
-        ["a", "b"],
-        ["c"],
+        [idOf("a"), idOf("b")],
+        [idOf("c")],
       ]);
       expect(plan.update).toEqual([]);
     });
@@ -160,7 +164,7 @@ describe("triage", () => {
       expect(plan.update).toEqual([{
         topic: "of:topic-1",
         body: bodyOf([report("a"), report("b")]),
-        reports: ["b"],
+        reports: [idOf("b")],
       }]);
     });
 
@@ -178,7 +182,7 @@ describe("triage", () => {
       );
 
       expect(plan.update).toHaveLength(1);
-      expect(plan.update[0].reports).toEqual(["a", "b"]);
+      expect(plan.update[0].reports).toEqual([idOf("a"), idOf("b")]);
       expect(plan.update[0].comment).toBe(
         "New reports: a, b.\nNew CFS releases: 2026.12.01.\n3 reports now.",
       );
@@ -209,7 +213,21 @@ describe("triage", () => {
       );
 
       expect(plan.update).toEqual([]);
-      expect(plan.file.map((filing) => filing.reports)).toEqual([["b"]]);
+      expect(plan.file.map((filing) => filing.reports)).toEqual([[idOf("b")]]);
+    });
+
+    it("tells apart two reports sharing a name by their ids", () => {
+      const ours = report("quiet-heron-41", {}, { topic: "of:topic-1" });
+      const theirs = report("quiet-heron-41", { cause: "rate-limited" }, {
+        id: "id-other-install",
+      });
+
+      const plan = planTriage([ours, theirs], TRUSTED);
+
+      expect(plan.update).toEqual([]);
+      expect(plan.file.map((filing) => filing.reports)).toEqual([
+        ["id-other-install"],
+      ]);
     });
 
     it("leaves a report already linked alone", () => {

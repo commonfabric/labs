@@ -51,10 +51,22 @@ function reportDoc(
   };
 }
 
+/** The id a sender would derive for the report named `name`: 32 hex. */
+function idOf(name: string): string {
+  return [...new TextEncoder().encode(name)]
+    .map((byte) => byte.toString(16).padStart(2, "0")).join("")
+    .padEnd(32, "0").slice(0, 32);
+}
+
 /** A request `send` takes, for a want stopped at gmail sync. */
-function request(name: string, release = "2026.11.18"): FabricPlainObject {
+function request(
+  name: string,
+  release = "2026.11.18",
+  id = idOf(name),
+): FabricPlainObject {
   return {
     agentName: "cfs-feedback",
+    id,
     name,
     kind: "broke",
     words: SECRET,
@@ -77,8 +89,8 @@ describe("feedback-reports command", () => {
   let verbs: string[];
   /** The reports board's input: its report documents and Topic links. */
   let reportIds: string[];
-  /** The names of the reports on the board. */
-  let names: string[];
+  /** The ids of the reports on the board. */
+  let ids: string[];
   let topicOf: Record<string, string>;
   /** Who the fake `cf` writes reports as. */
   let sender: string;
@@ -92,7 +104,7 @@ describe("feedback-reports command", () => {
     stdin = undefined;
     verbs = [];
     reportIds = [];
-    names = [];
+    ids = [];
     topicOf = {};
     sender = ADA;
     topicInput = { ...INPUT_1 };
@@ -124,7 +136,7 @@ describe("feedback-reports command", () => {
   ) {
     const id = `of:fid1:report-${reportIds.length + 1}`;
     reportIds.push(id);
-    names.push(String(record.name));
+    ids.push(String(record.id));
     const { agentName: _, ...stored } = record;
     await board.write({
       [id]: reportDoc({ ...stored, createdAt: 1 }, author ?? undefined),
@@ -155,20 +167,20 @@ describe("feedback-reports command", () => {
     const payload = JSON.parse(input);
     verbs.push(verb);
     if (verb === "addReport") {
-      if (names.includes(payload.name)) {
+      if (ids.includes(payload.id)) {
         return {
           code: 1,
           stdout: "",
-          stderr: `Error: addReport rejected: duplicate-name: a report named ` +
-            `${payload.name} is already on the board\n` +
+          stderr: `Error: addReport rejected: duplicate-id: a report with ` +
+            `id ${payload.id} is already on the board\n` +
             `invocation: ${id} phase: dispatched\n`,
         };
       }
       await addReport(payload, sender);
-      return ok({ name: payload.name });
+      return ok({ id: payload.id, name: payload.name });
     }
     if (verb === "linkTopic") {
-      topicOf = { ...topicOf, [payload.name]: payload.topic };
+      topicOf = { ...topicOf, [payload.id]: payload.topic };
       await writeReportsInput();
       return ok();
     }
@@ -274,14 +286,26 @@ describe("feedback-reports command", () => {
   }
 
   describe("send", () => {
-    it("writes the report on stdin and answers with its name", async () => {
+    it("writes the report on stdin and answers with its id and name", async () => {
       stdin = JSON.stringify(request("quiet-heron-41"));
 
       const status = await main(["send"], deps);
 
       expect(status).toBe(0);
-      expect(output).toEqual(['{"ok":true,"name":"quiet-heron-41"}']);
+      expect(JSON.parse(output[0])).toEqual({
+        ok: true,
+        id: idOf("quiet-heron-41"),
+        name: "quiet-heron-41",
+      });
       expect(verbs).toEqual(["addReport"]);
+    });
+
+    it("writes a report whose name another install's report already has", async () => {
+      await addReport(request("quiet-heron-41", "2026.11.18", "f".repeat(32)));
+      stdin = JSON.stringify(request("quiet-heron-41"));
+
+      expect(await main(["send"], deps)).toBe(0);
+      expect(ids).toEqual(["f".repeat(32), idOf("quiet-heron-41")]);
     });
 
     it("answers with the board's code when the board refuses the report", async () => {
@@ -291,8 +315,10 @@ describe("feedback-reports command", () => {
       expect(await main(["send"], deps)).toBe(1);
       expect(JSON.parse(output[0])).toEqual({
         ok: false,
-        code: "duplicate-name",
-        message: "a report named quiet-heron-41 is already on the board",
+        code: "duplicate-id",
+        message: `a report with id ${
+          idOf("quiet-heron-41")
+        } is already on the board`,
       });
     });
 
@@ -332,8 +358,8 @@ describe("feedback-reports command", () => {
 
       expect(verbs).toEqual(["addTopic", "linkTopic", "linkTopic"]);
       expect(topicOf).toEqual({
-        "quiet-heron-41": "of:fid1:topic-piece-3",
-        "calm-otter-7": "of:fid1:topic-piece-3",
+        [idOf("quiet-heron-41")]: "of:fid1:topic-piece-3",
+        [idOf("calm-otter-7")]: "of:fid1:topic-piece-3",
       });
       expect(topicsOutput[0]).toContain("Created top/3");
       expect(output.at(-1)).toContain("Filed 1 Topics and updated 0");
@@ -341,7 +367,7 @@ describe("feedback-reports command", () => {
 
     it("updates the body of the Topic a new report's problem is filed under, commenting only on a new release", async () => {
       await addReport(request("quiet-heron-41"));
-      topicOf = { "quiet-heron-41": "of:fid1:topic-alias-1" };
+      topicOf = { [idOf("quiet-heron-41")]: "of:fid1:topic-alias-1" };
       await writeReportsInput();
       await addReport(request("calm-otter-7"));
       const trusted = await trustedFile(ADA);
@@ -352,7 +378,7 @@ describe("feedback-reports command", () => {
 
       expect(verbs).toEqual(["setBody", "linkTopic"]);
       expect(topicInput.body).toContain("- Count: 2");
-      expect(topicOf["calm-otter-7"]).toBe("of:fid1:topic-alias-1");
+      expect(topicOf[idOf("calm-otter-7")]).toBe("of:fid1:topic-alias-1");
 
       verbs = [];
       await addReport(request("brave-lynx-3", "2026.12.01"));

@@ -151,7 +151,7 @@ async function readBoard(deps: ReportsDeps, board: Board): Promise<Report[]> {
 
 /** What `send` answers on stdout. */
 export type SendAnswer =
-  | { ok: true; name: string }
+  | { ok: true; id: string; name: string }
   | { ok: false; code: string; message: string; invocation?: string };
 
 /**
@@ -182,6 +182,7 @@ export async function sendAction(
       );
     }
     const board = boardFrom(deps, options);
+    const id = typeof request.id === "string" ? request.id : "";
     const name = typeof request.name === "string" ? request.name.trim() : "";
     return await invoke(
       deps,
@@ -190,12 +191,12 @@ export async function sendAction(
       { target: board.board, verb: "addReport", payload: { ...request } },
       async () => {
         const reports = await readBoard(deps, board);
-        if (!reports.some((report) => report.name === name)) {
+        if (!reports.some((report) => report.id === id)) {
           throw new UnconfirmedWrite(
-            `addReport settled, but no report named ${name} reads back.`,
+            `addReport settled, but no report with id ${id} reads back.`,
           );
         }
-        return { ok: true, name };
+        return { ok: true, id, name };
       },
     );
   } catch (error) {
@@ -263,7 +264,7 @@ export async function triageAction(
     ...(options.identity === undefined ? {} : { identity: options.identity }),
   };
   const linked = new Map<string, string>();
-  const link = async (name: string, topic: string) => {
+  const link = async (id: string, topic: string) => {
     await invoke(
       deps,
       board,
@@ -271,11 +272,11 @@ export async function triageAction(
       {
         target: board.board,
         verb: "linkTopic",
-        payload: { agentName, name, topic },
+        payload: { agentName, id, topic },
       },
       () => Promise.resolve(),
     );
-    linked.set(name, topic);
+    linked.set(id, topic);
   };
   // Each problem's reports are linked as soon as its Topic is written, so a
   // run that stops part way leaves what it filed linked.
@@ -286,7 +287,7 @@ export async function triageAction(
       filing.body,
       deps.topics,
     );
-    for (const name of filing.reports) await link(name, topic.address);
+    for (const id of filing.reports) await link(id, topic.address);
   }
   for (const update of plan.update) {
     if (update.comment !== undefined) {
@@ -298,16 +299,16 @@ export async function triageAction(
       );
     }
     await bodyAction(topicOptions, update.topic, update.body, deps.topics);
-    for (const name of update.reports) await link(name, update.topic);
+    for (const id of update.reports) await link(id, update.topic);
   }
   const after = await readBoard(deps, board);
-  const unlinked = [...linked].filter(([name, topic]) =>
-    !after.some((report) => report.name === name && report.topic === topic)
+  const unlinked = [...linked].filter(([id, topic]) =>
+    !after.some((report) => report.id === id && report.topic === topic)
   );
   if (unlinked.length > 0) {
     throw new UnconfirmedWrite(
       "linkTopic settled, but these reports do not read back linked: " +
-        unlinked.map(([name]) => name).join(", "),
+        unlinked.map(([id]) => id).join(", "),
     );
   }
   deps.write(
@@ -345,7 +346,7 @@ export const USAGE = `Usage: deno task -q feedback-reports <command> [options]
 
 Commands:
   send < request.json   Write the addReport request on stdin; answer on
-                        stdout with {"ok":true,"name":...} or
+                        stdout with {"ok":true,"id":...,"name":...} or
                         {"ok":false,"code":...,"message":...}.
   triage --trusted <file> --agent-name <name> [--dry-run]
                         File or update a Topic for each new report from a

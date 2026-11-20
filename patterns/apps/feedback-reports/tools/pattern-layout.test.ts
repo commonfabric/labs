@@ -14,6 +14,7 @@ import {
 import { readReports } from "./read.ts";
 
 const PATTERNS_ROOT = fromFileUrl(new URL("../../..", import.meta.url));
+const ID = "0123456789abcdef".repeat(2);
 const BOARD_MAIN = fromFileUrl(new URL("../main.tsx", import.meta.url));
 
 describe("the reports pattern's storage, read through the copy", () => {
@@ -63,6 +64,7 @@ describe("the reports pattern's storage, read through the copy", () => {
 
     root.key("addReport").send({
       agentName: "cfs-feedback",
+      id: ID,
       name: "quiet-heron-41",
       kind: "broke",
       words: "Mail stopped.",
@@ -75,7 +77,7 @@ describe("the reports pattern's storage, read through the copy", () => {
     await runtime.idle();
     root.key("linkTopic").send({
       agentName: "Triage",
-      name: "quiet-heron-41",
+      id: ID,
       topic: "of:fid1:topic",
     });
     await runtime.idle();
@@ -92,6 +94,7 @@ describe("the reports pattern's storage, read through the copy", () => {
       );
 
       expect(reports).toEqual([{
+        id: ID,
         name: "quiet-heron-41",
         kind: "broke",
         words: "Mail stopped.",

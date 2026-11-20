@@ -15,7 +15,13 @@ status. The Topic is where people discuss the problem.
 
 Each report is stored as:
 
-- `name`: the report's name, unique on the board, such as `quiet-heron-41`.
+- `id`: the report's id, unique on the board: exactly 32 lowercase hex
+  characters. The sender derives it from a secret of its own and the report's
+  name, so sending the same report again carries the same id, and two senders'
+  ids do not collide.
+- `name`: a label for people, such as `quiet-heron-41`. Names come from a small
+  set and restart on every install, so two reports may share one; nothing on the
+  board is keyed by name.
 - `kind`: `broke` or `wish`.
 - `words`: the person's own words, if they gave any, at most 4000 characters.
   The sending service removes names and other personal details first.
@@ -37,8 +43,8 @@ Each report is stored as:
 - `createdAt`: when the board stored the report.
 
 The Topic each report was filed under is kept beside the reports, in `topicOf`,
-by report name, rather than inside the report. The board publishes the two
-joined as `index`, without the words, and counts the reports with no Topic as
+by report id, rather than inside the report. The board publishes the two joined
+as `index`, without the words, and counts the reports with no Topic as
 `newCount`.
 
 The board does not store who sent a report. The runtime labels every report
@@ -52,19 +58,21 @@ of the report keeps the report written by its sender alone.
 Each verb takes `agentName`, the agent making the call, as Topics verbs do. The
 identity behind the call is the key that signs it.
 
-- `addReport { agentName, name, kind, words?, structured }` stores a report and
-  returns `{ name }`. It refuses a call with no `agentName`, a missing `name`, a
-  missing or unknown `kind`, a `structured` with no `source`, `words` over 4000
-  characters, and a `name` already on the board.
-- `linkTopic { agentName, name, topic }` records the Topic a report was filed
-  under, and returns `{ name, topic }`. A report keeps the first Topic it is
-  linked to: linking it to the same Topic again changes nothing, and linking it
-  to another is refused, as is linking a report that is not on the board.
+- `addReport { agentName, id, name, kind, words?, structured }` stores a report
+  and returns `{ id, name }`. It refuses a call with no `agentName`, a missing
+  or malformed `id`, a missing `name`, a missing or unknown `kind`, a
+  `structured` with no `source`, `words` over 4000 characters, and an `id`
+  already on the board.
+- `linkTopic { agentName, id, topic }` records the Topic the report with that id
+  was filed under, and returns `{ id, topic }`. A report keeps the first Topic
+  it is linked to: linking it to the same Topic again changes nothing, and
+  linking it to another is refused, as is linking a report that is not on the
+  board.
 
 A refused call fails with the message `<verb> rejected: <code>: <reason>`, so a
-caller can act on the code: `unsigned`, `missing-name`, `missing-kind`,
-`bad-kind`, `missing-source`, `bad-words`, `words-too-long`, `duplicate-name`,
-`missing-topic`, `unknown-report` or `already-linked`.
+caller can act on the code: `unsigned`, `bad-id`, `missing-name`,
+`missing-kind`, `bad-kind`, `missing-source`, `bad-words`, `words-too-long`,
+`duplicate-id`, `missing-topic`, `unknown-report` or `already-linked`.
 
 ## From the command line
 
@@ -82,7 +90,7 @@ request as JSON on stdin and prints one JSON answer on stdout:
 
 ```text
 $ deno task -q feedback-reports send < request.json
-{"ok":true,"name":"quiet-heron-41"}
+{"ok":true,"id":"0f3c…","name":"quiet-heron-41"}
 ```
 
 On failure it prints `{"ok":false,"code":"...","message":"..."}` and exits with
@@ -92,7 +100,9 @@ status 1. The code is one of the board's refusal codes above, or one of:
 - `not-configured`: the board's variables are not all set.
 - `unsettled`: the write may have landed, but no answer arrived. The answer also
   carries `invocation`; send the same request again with `--invocation <id>` to
-  settle it without writing twice.
+  settle it without writing twice. Sending it again without `--invocation` is
+  safe too: if the first write landed, the board answers `duplicate-id`, which
+  for a resend means the report is already there.
 - `unconfirmed`: the write was made but the report does not read back.
 - `failed`: anything else.
 

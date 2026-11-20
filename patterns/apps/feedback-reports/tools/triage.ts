@@ -42,6 +42,7 @@ export interface Problem {
 /** What a run of triage does. */
 export interface Plan {
   /** A new Topic for each problem nothing on the board matches. */
+  /** Each lists the ids of the reports it files. */
   file: { title: string; body: string; reports: string[] }[];
 
   /** For each problem already filed, its new body, and a comment when the
@@ -172,7 +173,7 @@ export function planTriage(
   const plan: Plan = { file: [], update: [], untrusted, unreadable };
   for (const problem of problems) {
     if (problem.added.length === 0) continue;
-    const reports = problem.added.map((report) => report.name);
+    const reports = problem.added.map((report) => report.id);
     const all = [...problem.filed, ...problem.added];
     if (problem.topic === undefined) {
       plan.file.push({ title: titleOf(all), body: bodyOf(all), reports });
@@ -274,7 +275,7 @@ export function bodyOf(reports: readonly Report[]): string {
     `- Count: ${reports.length}`,
     "",
     "Filed by triage from the reports' structured fields. Each report is on " +
-    "the feedback reports board under its name; what the reporters wrote " +
+    "the feedback reports board; what the reporters wrote " +
     "stays there.",
   ].join("\n");
 }
