@@ -368,14 +368,53 @@ function resolveBranchRow(
 }
 
 /**
+ * Helper for {@link reconstructWithinBranch}, which returns the document a
+ * branch inherits through `parent`, the link of its read chain after its
+ * own: what the parent holds at the fork point, or `undefined` where it holds
+ * none there.
+ */
+function inheritedDocument(
+  space: SpaceDb,
+  parent: BranchReadLink,
+  scope: string,
+  id: string,
+): StoredDocument | undefined {
+  const resolved = resolveBranchRow(
+    space,
+    parent.branch,
+    scope,
+    id,
+    parent.atSeq,
+  );
+  if (resolved === undefined) return undefined;
+  const { row, branch } = resolved;
+  switch (row.op) {
+    case "set":
+      return row.data === null ? undefined : storedDocument(row.data);
+    case "patch":
+      return reconstructWithinBranch(
+        space,
+        branch,
+        scope,
+        id,
+        row.seq,
+        row.op_index,
+      );
+    default:
+      return undefined;
+  }
+}
+
+/**
  * Reconstruct a patched document WITHIN a single branch, replicating the
  * engine's `reconstructPatchedDocument`: pick a base — the latest `snapshot`
  * (if present and at/after the latest `set`/`delete`) else the latest
  * `set`/`delete` at/before `(rowSeq, rowOpIndex)` — then apply that branch's
  * `patch` rows strictly after the base up to the cut. A `set`/snapshot decodes
- * to its document; a `delete` (or no base) starts from `{}`. No cross-branch
- * composition: a child-local patch with no child base starts from `{}`, exactly
- * as the runtime reads it (NOT the inherited parent value).
+ * to its document; a `delete` starts from `{}`. With no base on the branch at
+ * all, the patches were written over the document the branch inherits, which
+ * its parent holds as of the fork point, so that is where they start; a branch
+ * with no parent, or one whose parent holds none, starts from `{}`.
  */
 function reconstructWithinBranch(
   space: SpaceDb,
@@ -405,6 +444,7 @@ function reconstructWithinBranch(
     : {};
   let baseSeq = base ? base.seq : 0;
   let baseOpIndex = base ? base.op_index : -1;
+  let inherits = base === undefined;
 
   // Prefer a snapshot base when it's at/after the set/delete base — the engine
   // does this for speed AND it future-proofs against any revision compaction
@@ -432,9 +472,19 @@ function reconstructWithinBranch(
       // any other. Decoding it without that check lets a malformed one through
       // for later patches to rebuild a valid-looking document over.
       doc = storedDocument(snap.value);
+      inherits = false;
       baseSeq = snap.seq;
       baseOpIndex = MAX_SEQ; // patches with seq > snapshot.seq only
     }
+  }
+
+  if (inherits) {
+    // The second link of the read chain is the parent, cut at the fork point.
+    const parent = branchReadChain(space, branch)[1];
+    const inherited = parent === undefined
+      ? undefined
+      : inheritedDocument(space, parent, scope, id);
+    if (inherited !== undefined) doc = inherited;
   }
 
   const patches = space.all<RevRow>(
@@ -529,7 +579,8 @@ export type AbsenceStatus = Exclude<ReconstructOutcome["status"], "present">;
  * read path (`read()` → `readRowForBranch` → `reconstructPatchedDocument` in
  * `runtime/memory/v2`), proven identical by `reconstruct-parity.test.ts` which
  * drives the real engine. Branch inheritance resolves the visible ROW (not a
- * merged log); patched reconstruction stays within the resolved branch.
+ * merged log); a patched document is rebuilt from the resolved branch's rows,
+ * over the document that branch inherits where it holds no base of its own.
  *
  * A decode failure is returned as `undecodable` rather than thrown, so that one
  * corrupt entity does not abort a walk over a whole space.
