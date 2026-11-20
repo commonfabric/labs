@@ -261,6 +261,25 @@ const FLAT_MAP_PROGRAM: RuntimeProgram = {
   }],
 };
 
+// The rows of `MAP_PROGRAM`, built from a list the piece's argument links to.
+const LINKED_MAP_PROGRAM: RuntimeProgram = {
+  ...MAP_PROGRAM,
+  files: [{
+    ...MAP_PROGRAM.files[0],
+    contents: MAP_PROGRAM.files[0].contents.replace(
+      /export default pattern<[\s\S]*$/,
+      [
+        "export default pattern<",
+        "  { list: number[] },",
+        "  { rows: { record: Stream<unknown>; seen: number }[] }",
+        ">(({ list }) => ({",
+        "  rows: list.map((each) => recorder({ doubled: each })),",
+        "}));",
+      ].join("\n"),
+    ),
+  }],
+};
+
 // A `filter` over what the enclosing instance derives, whose predicate
 // instances take each element as their input.
 const FILTER_PROGRAM: RuntimeProgram = {
@@ -892,6 +911,29 @@ describe("ensure-piece-running", () => {
     });
 
     /**
+     * The instances a list builtin builds in `runtime` from here on, each
+     * with the root of the piece whose graph holds the builtin, which the
+     * builtin passes the instance's run as `parentPieceRootId`, in the order
+     * they are built.
+     */
+    const elementsBuiltIn = (runtime: Runtime) => {
+      const built: { element: NormalizedFullLink; builder: string }[] = [];
+      const runInTransaction = runtime.runner.runInTransaction.bind(
+        runtime.runner,
+      );
+      runtime.runner.runInTransaction = (tx, pattern, input, cell, options) => {
+        if (options?.parentPieceRootId !== undefined) {
+          built.push({
+            element: cell.getAsNormalizedFullLink(),
+            builder: options.parentPieceRootId,
+          });
+        }
+        return runInTransaction(tx, pattern, input, cell, options);
+      };
+      return built;
+    };
+
+    /**
      * Runs `program` with `value` 1, then stops it and moves `value` to 5
      * with nothing running, and returns the stream `streamPath` names in its
      * result, the enclosing instance's result, and the result of each
@@ -903,18 +945,7 @@ describe("ensure-piece-running", () => {
       streamPath: (string | number)[],
     ) => {
       const first = newRuntime();
-      // A list builtin runs each element's instance with the root of the
-      // piece whose graph holds it as `parentPieceRootId`.
-      const elements: NormalizedFullLink[] = [];
-      const runInTransaction = first.runner.runInTransaction.bind(
-        first.runner,
-      );
-      first.runner.runInTransaction = (tx, pattern, input, cell, options) => {
-        if (options?.parentPieceRootId !== undefined) {
-          elements.push(cell.getAsNormalizedFullLink());
-        }
-        return runInTransaction(tx, pattern, input, cell, options);
-      };
+      const built = elementsBuiltIn(first);
       const compiled = await first.patternManager.compilePattern(program, {
         space,
       });
@@ -948,7 +979,11 @@ describe("ensure-piece-running", () => {
       }
       await first.idle();
       await first.storageManager.synced();
-      return { stream, enclosing: result.getAsNormalizedFullLink(), elements };
+      return {
+        stream,
+        enclosing: result.getAsNormalizedFullLink(),
+        elements: built.map(({ element }) => element),
+      };
     };
 
     for (
@@ -1139,6 +1174,64 @@ describe("ensure-piece-running", () => {
           ),
         ).toBe(true);
       });
+    });
+
+    it("starts the piece that built a row, and neither the piece its list comes from nor a piece linking the row", async () => {
+      const first = newRuntime();
+      const built = elementsBuiltIn(first);
+      const [producerPattern, builderPattern, linkerPattern] = await Promise
+        .all(
+          [FILTER_PROGRAM, LINKED_MAP_PROGRAM, PROGRAM].map((program) =>
+            first.patternManager.compilePattern(program, { space })
+          ),
+        );
+      const [producer, builder, linker] = ["producer", "builder", "linker"]
+        .map((name) =>
+          first.getCell<Record<string, unknown>>(
+            space,
+            `input sources ${name} result`,
+            undefined,
+          )
+        );
+      {
+        const tx = first.edit();
+        first.run(tx, producerPattern, { value: 1 }, producer);
+        first.run(tx, builderPattern, { list: producer.key("rows") }, builder);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      await builder.pull();
+      const rows = built.filter(({ builder: id }) =>
+        id === builder.getAsNormalizedFullLink().id
+      );
+      expect(rows.length).toBe(1);
+      const row = first.getCellFromLink({ ...rows[0].element, path: [] });
+      {
+        const tx = first.edit();
+        first.run(tx, linkerPattern, { value: 1 }, linker);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      {
+        const tx = first.edit();
+        first.getCellFromLink(getMetaLink(linker, "argument")!).withTx(tx)
+          .key("others").set([row]);
+        expect((await tx.commit().settled).error).toBeUndefined();
+      }
+      for (const piece of [producer, builder, linker]) first.runner.stop(piece);
+      await first.idle();
+      await first.storageManager.synced();
+      const opener = newRuntime();
+      const opened = opener.getCellFromLink(row.getAsNormalizedFullLink());
+      await opened.sync();
+
+      await startWithInputSources(opener, opened, () => opener.start(opened));
+
+      expect(
+        [opened, builder, producer, linker].map((piece) =>
+          opener.runner.isRunning(
+            opener.getCellFromLink(piece.getAsNormalizedFullLink()),
+          )
+        ),
+      ).toEqual([true, true, false, false]);
     });
 
     /**
