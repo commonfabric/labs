@@ -7248,6 +7248,26 @@ export class Instance {
   }
 
   /** The bindings a cone instance last made. */
+  /**
+   * What another cone instance bound a slot to, for the element keys
+   * given: a slot names a position whichever cone reads it, and a template
+   * that holds a copy of another cone's, as the output of a pattern
+   * compiled in that passes its interim output on does, reaches slots its
+   * own cone did not read.
+   */
+  #otherConeBound(
+    slot: number,
+    keys: readonly [number, string][],
+  ): Bound | undefined {
+    for (const [cone, record] of this.plan.cones.entries()) {
+      if (!(record as { slots?: number[] }).slots?.includes(slot)) continue;
+      const bound = this.#inputsOf(cone, this.#keysFor(cone, keys))?.slots
+        .get(slot);
+      if (bound !== undefined) return bound;
+    }
+    return undefined;
+  }
+
   #inputsOf(cone: number, keys: readonly string[]): ConeInputs | undefined {
     return this.#inputs.get(this.#coneInstance(cone, keys));
   }
@@ -7870,7 +7890,8 @@ export class Instance {
             this.#elementsBound(
               slot,
               (other) => first((source) => source.slots.get(other)),
-            );
+            ) ??
+            this.#otherConeBound(slot, keys);
           if (bound !== undefined) {
             into[slot] = this.#bindingOf(slot, bound, outputs, depth);
             continue;

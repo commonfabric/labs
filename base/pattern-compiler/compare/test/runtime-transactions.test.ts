@@ -824,6 +824,15 @@ describe("write records the runtime instantiates with the option on", () => {
     expect(refused).toEqual([]);
   });
 
+  it("binds the slot of a state cell that a pattern compiled in passes to an element property, and commits", async () => {
+    const { refused } = await commitWithOptionOn(
+      "state-to-component",
+      { title: "t" },
+      ["controls"],
+    );
+    expect(refused).toEqual([]);
+  });
+
   it("binds the slots of a `reduce` over an array of plain values in place a cell holds, and commits", async () => {
     const { refused, label } = await commitWithOptionOn(
       "reduce-entries",
