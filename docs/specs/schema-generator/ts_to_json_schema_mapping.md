@@ -694,7 +694,9 @@ A handle type that extends `SqliteDb` and has type parameters of its own, as
 read off the reference to `SqliteDb` in the type's hierarchy
 (`getCellWrapperInfo`), and the type arguments written on the subtype are
 left unread: they are the subtype's own, and none is the value the handle
-reads as.
+reads as. Such a subtype is not hoisted under its own name either: the
+position that holds the handle states `asCell: ["sqlite"]` beside the
+`$ref`, as a position written `SqliteDb` does.
 
 The remaining typed arrays and the buffer types map to `true` (accept
 anything), which overclaims: none of them is representable as a `FabricValue`,

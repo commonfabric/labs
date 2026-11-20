@@ -1,12 +1,6 @@
 {
   "argumentSchema": {
     "$defs": {
-      "IndexedCollections": {
-        "$ref": "#/$defs/SqliteDatabase",
-        "asCell": [
-          "sqlite"
-        ]
-      },
       "SqliteDatabase": {
         "additionalProperties": true,
         "properties": {
@@ -166,7 +160,10 @@
     },
     "properties": {
       "board": {
-        "$ref": "#/$defs/IndexedCollections",
+        "$ref": "#/$defs/SqliteDatabase",
+        "asCell": [
+          "sqlite"
+        ],
         "description": "The board's collection of topics. A topic asks it which topics mention\nthis one, and reads nothing else of it; see `MENTIONED_BY_SQL`. Absent, a\ntopic simply shows no inbound references."
       },
       "body": {

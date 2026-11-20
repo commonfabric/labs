@@ -178,9 +178,6 @@
         ],
         "type": "object"
       },
-      "IndexedCollections": {
-        "$ref": "#/$defs/SqliteDatabase"
-      },
       "MentionableRow": {
         "properties": {
           "$NAME": {
@@ -545,7 +542,7 @@
         "description": "Bring a board that held its topics as a list up to date: add every\nlisted topic to the collection, as `adoptTopics` does, number every one\nthe namespace does not hold, in filing order, and ask every topic that reports no number to store\nthe one the namespace holds for it. Idempotent: a run over topics that all report their numbers writes\nnothing and sends nothing. What one run cannot confirm is the asking, so\nthe result separates the topics it found numbered from the ones it asked,\nand running it again completes whichever asking did not land."
       },
       "board": {
-        "$ref": "#/$defs/IndexedCollections",
+        "$ref": "#/$defs/SqliteDatabase",
         "description": "The board's topics as a collection: what `addTopic` adds to, and what a\ntopic asks which topics mention it. Published so a topic composed outside\n`addTopic` can be wired to the collection the board's own children ask,\nand so a caller can put its own question to the tables `TopicBoard`\nnames."
       },
       "crossrefIndex": {
