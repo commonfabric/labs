@@ -4523,6 +4523,13 @@ export class SpaceServer implements TransactionSealDestination {
       // commits (holder ≠ self) do re-arm. If a start-less server-side
       // creation path ever appears, move this skip below the re-arm.
       if (this.#isOwnEcho(record)) continue;
+      // An admitted write can land on a document this runtime never loaded,
+      // which its own storage does not report. Indexed collections mirror
+      // such documents too, so they hear of every foreign write here.
+      runtime.indexedCollections.noteWrites(
+        this.#options.space,
+        record.writes.map((write) => write.id),
+      );
       if (
         this.#deliveryCheckpoints.size > 0 ||
         this.#deliveryCheckpointWriteBlocked.size > 0 ||
