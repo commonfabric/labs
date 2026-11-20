@@ -739,6 +739,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20261026T191653Z-r5gOPL0sIP-vg3Tw",
       "20261028T062707Z-hm6k1qqIvc3sxVTF",
       "20261116T101720Z-I9BlP7RO117PBqvJ",
+      "20261119T222839Z-Qu-HuRv_MxP-XL9Z",
     ],
     paths: ["argument.createdByName", "argument.comments[].authorName"],
     reason: "The legacy author-name keys are declared `string` rather than " +

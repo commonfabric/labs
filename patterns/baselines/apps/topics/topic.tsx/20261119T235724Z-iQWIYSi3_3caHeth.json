@@ -75,7 +75,10 @@
             "type": "object"
           },
           "source": {
-            "description": "The pivot the positions belong to. `unknown` for the reason\n`TopicCrossrefRow.topic` is: it is written as a reference and only ever\ncompared.",
+            "asCell": [
+              "comparable"
+            ],
+            "description": "The pivot the positions belong to. A cell for the reason\n`TopicCrossrefRow.topic` is: it is written as a reference and only ever\ncompared.",
             "type": "unknown"
           }
         },
@@ -88,12 +91,18 @@
         "properties": {
           "mentionedBy": {
             "items": {
+              "asCell": [
+                "comparable"
+              ],
               "type": "unknown"
             },
             "type": "array"
           },
           "topic": {
-            "description": "The topic this row is about. `unknown` because it is written as a\nreference and only ever compared — `equals` takes the raw link. Anything\nwider retrieves the piece instead of pointing at it: declared `object`,\nthis field reads back as the whole expanded topic, `$UI` tree included.",
+            "asCell": [
+              "comparable"
+            ],
+            "description": "The topic this row is about. A cell because it is written as a reference\nand only ever compared — `equals` takes the raw link. Anything wider\nretrieves the piece instead of pointing at it: declared `object`, this\nfield reads back as the whole expanded topic, `$UI` tree included.",
             "type": "unknown"
           }
         },
