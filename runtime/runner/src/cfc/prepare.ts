@@ -14416,8 +14416,12 @@ export function* prepareBoundaryCommitSteps(
       // The label of a covered path that holds a link is the label of the
       // link: a pointer-class entry at the slot, read by a reader of the
       // reference, whose integrity a read through the link does not take
-      // (PL §3.2 and §3.10). It holds the pattern's atom of a kept output.
+      // (plan-and-label-templates.md sections 3.2 and 3.10). It holds the
+      // pattern's atom of a kept output.
+      const linkLabelKeys = new Set<string>();
       for (const path of linkLabelPaths) {
+        if (linkLabelKeys.has(pathKey(path))) continue;
+        linkLabelKeys.add(pathKey(path));
         const pathLabel = flowLabelAt(key, path);
         persistedLabelEntries.push(markFlowStampEntry({
           path,
