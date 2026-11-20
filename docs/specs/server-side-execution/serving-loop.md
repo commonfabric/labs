@@ -1229,10 +1229,15 @@ executing:
   told passes the word to each space armed with it, pulling nothing, and
   its loop judges again each root it left unstarted. Which spaces are armed
   is held in the memory server's memory, so after a restart every space
-  pulls before it rests on another. A trigger carries how many triggers
-  lead to it from a commit a client authored, and a space eight or more
-  along such a chain is one no space rests on: a slice that read it is
-  marked `2`, so its piece starts, until a client's commit lands there. A
+  pulls before it rests on another. A trigger carries the number of the
+  change it leads back to, one with no trigger behind it, and how many
+  triggers lead from that change. The same change reaching a space through
+  more triggers than before has come round a circle of spaces, and at
+  eight such laps the space is held: no space rests on it, so a slice that
+  read it is marked `2` and its piece starts. A hold ends by itself, the
+  first after a second and each further one after twice as long as the
+  last, up to five minutes, and at once when a change the space has not
+  been sent reaches it. A
   slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is

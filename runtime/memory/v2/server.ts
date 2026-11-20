@@ -407,15 +407,53 @@ const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
 const CURRENCY_ROOT_HOPS_MAX = 10;
 
 /**
- * How many triggers may lead from a commit a client authored to a space's
- * latest change before no other space rests on that space's silence
- * (serving-loop.md §3b). Spaces whose pieces read each other pass a trigger
- * around for as long as their computations keep changing each other's
- * inputs, and nothing in one space sees the whole circle. A reader of a
- * space this far along a chain of triggers is marked instead of armed, so
- * each piece that reads it starts, as it would with no index kept.
+ * How many times the change behind a trigger may come back to a space before
+ * no other space rests on that space for a while (serving-loop.md §3b).
+ * Spaces whose pieces read each other pass a trigger around for as long as
+ * their computations keep changing each other's inputs, and nothing in one
+ * space sees the whole circle. A space a change keeps coming back to is
+ * held: a slice that read it is marked instead of armed, so each piece that
+ * reads it starts, as it would with no index kept, and no trigger leaves it
+ * until the hold ends.
  */
-const CURRENCY_TRIGGER_HOPS_MAX = 8;
+const CURRENCY_TRIGGER_LAPS_MAX = 8;
+
+/** How long a space's first hold lasts, in milliseconds. */
+const CURRENCY_HOLD_BASE_MS = 1_000;
+
+/**
+ * The longest a hold lasts, in milliseconds. Each hold of a space that was
+ * not left alone for as long again as its last one lasts twice as long, up
+ * to this.
+ */
+const CURRENCY_HOLD_MAX_MS = 300_000;
+
+/**
+ * What a space holds of the change behind the latest trigger it was sent
+ * (serving-loop.md §3b).
+ */
+type CurrencyTrail = {
+  /**
+   * The change the trigger leads back to, one with no trigger behind it,
+   * by the number this server gave it.
+   */
+  origin: number;
+
+  /** How many triggers lead from that change to the space. */
+  hops: number;
+
+  /** How many times that change came back to the space since its last hold. */
+  laps: number;
+
+  /** How long the space's last hold lasted, in milliseconds, `0` for none. */
+  gapMs: number;
+
+  /** The time until which no other space rests on this one, `0` for none. */
+  heldUntil: number;
+};
+
+/** The part of a trail a trigger carries. */
+type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops">;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -3750,11 +3788,15 @@ export class Server {
   readonly #currencyToldThrough = new Map<string, number>();
 
   /**
-   * How many triggers lead to each space's latest change from a commit a
-   * client authored. A space no trigger reached since such a commit has no
-   * entry.
+   * What each space holds of the change behind the latest trigger it was
+   * sent. A space no trigger reached since a client's commit landed in it
+   * has no entry, and each change of its own is one with no trigger behind
+   * it.
    */
-  readonly #currencyHops = new Map<string, number>();
+  readonly #currencyTrails = new Map<string, CurrencyTrail>();
+
+  /** How many changes with no trigger behind them this server numbered. */
+  #currencyOrigins = 0;
 
   /**
    * The spaces with an advance of the currency cursor queued behind a
@@ -3777,7 +3819,7 @@ export class Server {
     triggers: 0,
     pulls: 0,
     advancesQueued: 0,
-    overHops: 0,
+    holds: 0,
   };
 
   /**
@@ -12507,14 +12549,14 @@ export class Server {
   /**
    * What passed between the currency indexes of the spaces this server
    * holds: the triggers sent, the pulls made, the advances a commit queued,
-   * and how often a chain of triggers took a space to
-   * `CURRENCY_TRIGGER_HOPS_MAX`. Diagnostics and tests only.
+   * and how often a space was held because a change kept coming back to it.
+   * Diagnostics and tests only.
    */
   currencyDeliveryStats(): {
     triggers: number;
     pulls: number;
     advancesQueued: number;
-    overHops: number;
+    holds: number;
   } {
     return { ...this.#currencyDelivery };
   }
@@ -12529,19 +12571,14 @@ export class Server {
 
   /**
    * The engine of `source`, a space whose store a slice of another space
-   * read, or `undefined` where no slice may rest on what it reports: another
-   * owner holds the space, it has no store, it is deleted, or its latest
-   * change is `CURRENCY_TRIGGER_HOPS_MAX` triggers from a commit a client
-   * authored.
+   * read, or `undefined` where this server cannot ask it: another owner
+   * holds the space, it has no store, or it is deleted.
    */
   async #currencySourceEngine(
     source: string,
   ): Promise<Engine.Engine | undefined> {
     if (
       this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
-    ) return undefined;
-    if (
-      (this.#currencyHops.get(source) ?? 0) >= CURRENCY_TRIGGER_HOPS_MAX
     ) return undefined;
     // A record names the space, and opening a store that is not there
     // would make one.
@@ -12599,63 +12636,107 @@ export class Server {
       since: this.#currencyToldThrough.get(space) ?? 0,
     });
     this.#currencyToldThrough.set(space, moved.position);
-    const hops = (this.#currencyHops.get(space) ?? 0) + 1;
+    let step: CurrencyTrailStep | undefined;
     for (const { reader, position } of moved.readers) {
       const pulledAt = armed.get(reader);
       if (pulledAt === undefined || position <= pulledAt) continue;
       armed.delete(reader);
-      this.#triggerCurrencyReader(reader, hops);
+      step ??= this.#currencyTrailFrom(space);
+      this.#triggerCurrencyReader(reader, step);
     }
+  }
+
+  /**
+   * The step a trigger from `space` carries: one hop further along the
+   * change behind the latest trigger `space` was sent, or the first hop of
+   * a change of its own where none reached it.
+   */
+  #currencyTrailFrom(space: string): CurrencyTrailStep {
+    const trail = this.#currencyTrails.get(space);
+    if (trail === undefined) {
+      this.#currencyOrigins += 1;
+      return { origin: this.#currencyOrigins, hops: 1 };
+    }
+    return { origin: trail.origin, hops: trail.hops + 1 };
+  }
+
+  /**
+   * Notes that a trigger carrying `step` reached `space`. A change `space`
+   * has not been sent before starts its trail over, and ends a hold. The
+   * same change arriving through more triggers than before has come back
+   * round a circle of spaces, which is a lap; arriving through no more, it
+   * is a further change of a space upstream, and changes nothing. At
+   * `CURRENCY_TRIGGER_LAPS_MAX` laps `space` is held, for twice as long as
+   * its last hold unless it was left alone for as long again as that one
+   * lasted.
+   */
+  #noteCurrencyTrail(space: string, step: CurrencyTrailStep): void {
+    const trail = this.#currencyTrails.get(space);
+    if (trail === undefined || trail.origin !== step.origin) {
+      this.#currencyTrails.set(space, {
+        origin: step.origin,
+        hops: step.hops,
+        laps: 0,
+        gapMs: 0,
+        heldUntil: 0,
+      });
+      return;
+    }
+    if (step.hops <= trail.hops) return;
+    trail.hops = step.hops;
+    trail.laps += 1;
+    if (trail.laps < CURRENCY_TRIGGER_LAPS_MAX) return;
+    const now = Date.now();
+    const rested = now - trail.heldUntil > trail.gapMs;
+    trail.gapMs = trail.gapMs === 0 || rested
+      ? CURRENCY_HOLD_BASE_MS
+      : Math.min(trail.gapMs * 2, CURRENCY_HOLD_MAX_MS);
+    trail.heldUntil = now + trail.gapMs;
+    trail.laps = 0;
+    this.#currencyDelivery.holds += 1;
+    console.warn(
+      `memory v2: a change came back to the space ${space} ` +
+        `${CURRENCY_TRIGGER_LAPS_MAX} times through the spaces that read ` +
+        `it; no space rests on its currency index for ${trail.gapMs} ms`,
+    );
+  }
+
+  /** Whether `space` is held, so that no other space rests on it. */
+  #currencyHeld(space: string): boolean {
+    return (this.#currencyTrails.get(space)?.heldUntil ?? 0) > Date.now();
   }
 
   /**
    * Tells every armed reader of `space` that it may have moved, and disarms
    * them: `space` no longer hears of each change to a space it reads, so
-   * no reader may rest on hearing nothing from it. `hops` is how many
-   * triggers lead to this from a commit a client authored, where a change
-   * is behind it.
+   * no reader may rest on hearing nothing from it. `step` is what the
+   * triggers carry, where a change is behind them.
    */
-  #disarmCurrencyReaders(space: string, hops?: number): void {
+  #disarmCurrencyReaders(space: string, step?: CurrencyTrailStep): void {
     const armed = this.#currencyArmed.get(space);
     if (armed === undefined || armed.size === 0) return;
     const readers = [...armed.keys()];
     armed.clear();
-    for (const reader of readers) this.#triggerCurrencyReader(reader, hops);
+    for (const reader of readers) this.#triggerCurrencyReader(reader, step);
   }
 
   /**
    * Delivers a trigger to `reader`, which a space it reads has just
-   * disarmed: something in that space may have moved. `hops` is how many
-   * triggers lead to this one from a commit a client authored, where a
-   * change is behind it, and becomes the reader's own count. The reader's
-   * serving loop is told, and judges again where it holds a root unstarted.
-   * Nothing is pulled here. The reader's own armed readers are told in
-   * turn, since what the reader computes from that space may have moved
-   * with it. A reader is told at most once between two pulls, so a circle
-   * of spaces ends at the first one already told.
+   * disarmed: something in that space may have moved. `step` says which
+   * change is behind the trigger and how far it has come, where one is. The
+   * reader's serving loop is told, and judges again where it holds a root
+   * unstarted. Nothing is pulled here. The reader's own armed readers are
+   * told in turn, since what the reader computes from that space may have
+   * moved with it. A reader is told at most once between two pulls, so one
+   * trigger ends at the first space already told.
    */
-  #triggerCurrencyReader(reader: string, hops?: number): void {
+  #triggerCurrencyReader(reader: string, step?: CurrencyTrailStep): void {
     this.#currencyDelivery.triggers += 1;
-    if (hops !== undefined) {
-      const before = this.#currencyHops.get(reader) ?? 0;
-      this.#currencyHops.set(reader, hops);
-      // Counted and logged where the space crosses the limit, and not for
-      // each further trigger that finds it there.
-      if (
-        hops >= CURRENCY_TRIGGER_HOPS_MAX && before < CURRENCY_TRIGGER_HOPS_MAX
-      ) {
-        this.#currencyDelivery.overHops += 1;
-        console.warn(
-          `memory v2: a change reached the space ${reader} through ` +
-            `${hops} triggers with no commit from a client among them; no ` +
-            "space rests on its currency index until one lands there",
-        );
-      }
-    }
+    if (step !== undefined) this.#noteCurrencyTrail(reader, step);
     this.#notifyCurrencyChanged(reader);
     this.#disarmCurrencyReaders(
       reader,
-      hops === undefined ? undefined : hops + 1,
+      step === undefined ? undefined : this.#currencyTrailFrom(reader),
     );
   }
 
@@ -12722,9 +12803,12 @@ export class Server {
   /**
    * Helper for `#followCurrencySources()`, which follows one source. A
    * source `space` is armed with has told it nothing since its last pull,
-   * and is not asked. One it cannot rest on is forgotten, which marks each
-   * slice that read it. Any other is pulled from, after it has followed the
-   * spaces it reads itself, and arms `space` in the same step.
+   * and is not asked. One that cannot be asked, or is held, is forgotten,
+   * which marks each slice that read it. Any other is pulled from, and arms
+   * `space` in the same step. A source that is pulled from or held follows
+   * the spaces it reads itself first, so that it hears of a change upstream
+   * of it: that is what a reader armed with it rests on, and what ends a
+   * hold early.
    */
   async #followCurrencySource(
     engine: Engine.Engine,
@@ -12738,7 +12822,9 @@ export class Server {
       armed?.delete(space);
       return forgetCurrencySource(engine, { space, source }).length > 0;
     }
-    if (armed?.has(space) === true) return false;
+    if (armed?.has(space) === true && !this.#currencyHeld(source)) {
+      return false;
+    }
     if (!visiting.has(source)) {
       visiting.add(source);
       const marked = await this.#followCurrencySources(
@@ -12750,6 +12836,10 @@ export class Server {
       // The source's own loop may hold a root unstarted on a slice this
       // marked.
       if (marked) this.#notifyCurrencyChanged(source);
+    }
+    if (this.#currencyHeld(source)) {
+      this.#currencyArmed.get(source)?.delete(space);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
     }
     const pulled = pullCurrencyExports(sourceEngine, {
       space: source,
@@ -12783,8 +12873,9 @@ export class Server {
    * Stores the records a serving loop took of `space`'s pieces at a quiescent
    * point in its currency index (serving-loop.md §3b). Each instance of
    * another space that a record read is registered with that space's index
-   * first, where this server may rest on it, so the record is stored against
-   * what that space reports of it. Server-internal machinery and tests only.
+   * first, where this server holds its store and the space is not held, so
+   * the record is stored against what that space reports of it.
+   * Server-internal machinery and tests only.
    */
   async storeCurrencyRecords(
     space: string,
@@ -12808,7 +12899,9 @@ export class Server {
     let unheard = false;
     for (const [source, instances] of reads) {
       const sourceEngine = await this.#currencySourceEngine(source);
-      if (sourceEngine === undefined) continue;
+      // A read of a space that cannot be asked, or is held, is stored with
+      // nothing reported of it, which leaves its slice marked.
+      if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
       const registered = registerCurrencyReads(sourceEngine, {
         space: source,
         reader: space,
@@ -13066,8 +13159,9 @@ export class Server {
   }
 
   #notifyCommitAdmitted(notice: AdmittedCommitNotice): void {
-    // A commit a client authored is where a chain of triggers starts over.
-    if (notice.class === "authored") this.#currencyHops.delete(notice.space);
+    // A change of the space after a commit a client authored there is one
+    // with no trigger behind it.
+    if (notice.class === "authored") this.#currencyTrails.delete(notice.space);
     this.#queueCurrencyAdvance(notice.space);
     const observer = this.#serverExecutionObserver;
     if (observer?.commitAdmitted !== undefined) {

@@ -245,16 +245,43 @@ the other space, whose loop judges and pulls.
 
 One trigger cannot circle: a space is told at most once between two pulls,
 so the trigger stops at the first space already told. What circles is a
-change that keeps being made. So a trigger carries how many triggers lead
-to it from a commit a client authored. A space takes the count of the
-trigger it received, sends it on one higher, and returns to zero when a
-client's commit is admitted there. A space whose count has reached eight
-is one no other space rests on: a judgment that would pull from it marks
-`2` each slice that read it and does not arm, and a record that reads it
-is stored marked `2`. Its readers then start their pieces, as they would
-with no index kept, and no further trigger passes along that edge, until a
-client's commit lands in that space. The memory server counts each chain
-that reaches the limit and logs it.
+change that keeps being made, and what tells it apart from a pipeline is
+that the same change comes back to a space it already passed.
+
+So each change with no trigger behind it is given a number, and a trigger
+carries that number and how many triggers lead to it from that change. A
+space keeps the number and the count of the latest trigger it was sent,
+and sends both on, the count one higher. A change of a space that no
+trigger has reached since a client's commit landed there is one with no
+trigger behind it, and takes a new number.
+
+A trigger that reaches a space says one of three things:
+
+- **A change the space has not been sent.** The space takes its number and
+  count. This is every trigger of a pipeline, however long: a new email is
+  a new change in each space it passes down to.
+- **The same change through no more triggers than before.** A space
+  upstream changed again for a reason of its own, such as a clock or an
+  import, and sent the number it still holds. Nothing is counted.
+- **The same change through more triggers than before.** It has come round
+  a circle of spaces. That is a lap.
+
+At eight laps the space is held: no other space rests on it. A judgment
+that would pull from it marks `2` each slice that read it and does not arm,
+and a record that reads it is stored marked `2`. Its readers then start
+their pieces, as they would with no index kept, and no trigger passes along
+that edge. The hold ends by itself. The first lasts a second, and each
+further hold of a space lasts twice as long as its last one, up to five
+minutes, unless the space was left alone for as long again as that one
+lasted. So a circle that never settles is slowed to one round of eight laps
+in each hold, a circle that settles costs nothing once it has, and no space
+is left held for want of a visit. A change the space has not been sent ends
+a hold at once, and a held space goes on pulling from the spaces it reads
+so that one can reach it. The memory server counts each hold and logs it.
+
+Several paths of different lengths from one space to another count as laps
+too, one for each longer path a trigger arrives by, so the limit has to
+stay above the number of such paths.
 
 This bounds what the index adds, and detects the circle. It does not stop
 the recomputation itself, which runs through each loop's own replica once
@@ -493,15 +520,18 @@ One is owed:
 ## Not worked out
 
 - **A dependency cycle that spans spaces.** Marking stops at a marked
-  slice and a trigger at a space already told, so both end, and the count a
-  trigger carries stops the index from resting on a space far along such a
-  chain ("A circle of triggers"). Recomputation around the cycle is not
+  slice and a trigger at a space already told, so both end, and a space a
+  change keeps coming back to is held for a while ("A circle of triggers").
+  Recomputation around the cycle is not
   stopped: once the pieces run, each loop's replica delivers the other's
   commit and the piece runs again, with no trigger involved, and no loop's
-  convergence guard sees the whole cycle. Stopping it needs the same count
-  on what a serving loop derives: a derived commit that carries how many
-  spaces its cause crossed, and a loop that holds a piece back past a
-  limit, as the scheduler holds a computation back within one space.
+  convergence guard sees the whole cycle. Stopping it needs the same trail
+  on what a serving loop derives: a derived commit that carries the change
+  behind it and how far it has come, and a loop that holds a piece back
+  once the change has come round too often, as the scheduler holds a
+  computation back within one space. That would also tell a lap from a
+  space's own further change exactly, where the memory server can only
+  compare counts.
 - **Which of a space's readers a trigger is passed to.** All of them, as
   built. Passing it only to the readers of an instance computed from the
   source that moved needs the walk a pull's marking makes, made without
@@ -536,8 +566,8 @@ One is owed:
 4. **The trigger.** Done, for spaces one memory server holds: the position
    counter, arming on a pull, the one-bit push and what a reader does with
    it, marking from a pull, the load of a root a loop holds, the advance a
-   commit queues in a space with an armed reader, and the count that keeps
-   a circle of triggers from going round. `skip` acts on a slice that read
+   commit queues in a space with an armed reader, and the hold that slows
+   a circle of triggers. `skip` acts on a slice that read
    another space. Which readers are armed is held in memory, and a trigger
    that leaves the process is not built.
 5. **Demand across spaces**, with its ruling, built together with the first
@@ -559,8 +589,10 @@ For the index, in `runtime/memory/test/`, with two stores. Tests 1 to 4
 exist in `v2-currency-index.test.ts`, with the readers a source finds to
 tell after each kind of change. Tests 5, 7 and 8 exist in
 `v2-server-currency.test.ts`, which has the memory server register, pull,
-arm and tell, with a source it holds and one another owner holds, and has
-two spaces that read each other reach the limit on a chain of triggers:
+arm and tell, with a source it holds and one another owner holds. It also
+has a chain of ten spaces that is never held, and two spaces that read each
+other held after eight laps, for longer each time, and released by a change
+with no trigger behind it:
 
 1. A slice that read an instance in another space is stored clean when the
    source's head is the sequence number it read at and the source reports

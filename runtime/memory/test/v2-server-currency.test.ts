@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { type Stub, stub } from "@std/testing/mock";
 import {
   type CurrencyRecord,
   selectCurrencyPiece,
@@ -139,6 +140,12 @@ describe("v2-server-currency", () => {
       records: [record],
     });
 
+  /** The seq of the latest commit to `id` in `space`. */
+  const headOf = async (space: string, id: string): Promise<number> =>
+    ((await server.engineForSpace(space)).database.prepare(
+      `SELECT MAX(seq) AS seq FROM head WHERE id = ?`,
+    ).get(id) as { seq: number }).seq;
+
   /** The mark the `space` slice of `piece` holds in `space`. */
   const markOf = async (space = SPACE, piece = "of:piece") =>
     selectCurrencyPiece(await server.engineForSpace(space), { piece })?.mark;
@@ -210,10 +217,15 @@ describe("v2-server-currency", () => {
             "computed:mid",
           ]),
         );
-        const mid = (await server.engineForSpace(SPACE)).database.prepare(
-          `SELECT MAX(seq) AS seq FROM head WHERE id = 'computed:mid'`,
-        ).get() as { seq: number };
-        await store(reading(SPACE, "computed:mid", mid.seq, "of:end"), FAR);
+        await store(
+          reading(
+            SPACE,
+            "computed:mid",
+            await headOf(SPACE, "computed:mid"),
+            "of:end",
+          ),
+          FAR,
+        );
         await servable(FAR, "of:end");
         expect(server.currencyReadersArmedOn(SPACE)).toEqual([FAR]);
 
@@ -288,10 +300,9 @@ describe("v2-server-currency", () => {
           },
           SOURCE,
         );
-        const far = (await server.engineForSpace(SOURCE)).database.prepare(
-          `SELECT MAX(seq) AS seq FROM head WHERE id = 'computed:far'`,
-        ).get() as { seq: number };
-        await store(reading(SOURCE, "computed:far", far.seq));
+        await store(
+          reading(SOURCE, "computed:far", await headOf(SOURCE, "computed:far")),
+        );
         await servable();
         const changed = await change(SOURCE, "of:raw");
         expect(told).toEqual([SOURCE, SPACE]);
@@ -362,10 +373,15 @@ describe("v2-server-currency", () => {
               ["computed:mid"],
             ),
           );
-          const mid = (await server.engineForSpace(SPACE)).database.prepare(
-            `SELECT MAX(seq) AS seq FROM head WHERE id = 'computed:mid'`,
-          ).get() as { seq: number };
-          await store(reading(SPACE, "computed:mid", mid.seq, "of:end"), FAR);
+          await store(
+            reading(
+              SPACE,
+              "computed:mid",
+              await headOf(SPACE, "computed:mid"),
+              "of:end",
+            ),
+            FAR,
+          );
           await servable(FAR, "of:end");
         });
 
@@ -391,10 +407,59 @@ describe("v2-server-currency", () => {
         });
       });
 
+      describe("with ten spaces in a chain", () => {
+        // Each space after the first computes `computed:out` from what the
+        // one before it holds, so one change passes down the whole chain.
+
+        /** The spaces of the chain, in the order a change passes them. */
+        const chain = Array.from(
+          { length: 10 },
+          (_, at) => `did:key:z6Mk-server-currency-test-chain-${at}`,
+        );
+
+        beforeEach(async () => {
+          server = newServer();
+          let head = await write(chain[0], "of:far");
+          for (let at = 1; at < chain.length; at++) {
+            await store(
+              reading(
+                chain[at - 1],
+                at === 1 ? "of:far" : "computed:out",
+                head,
+                "of:piece",
+                ["computed:out"],
+              ),
+              chain[at],
+            );
+            head = await headOf(chain[at], "computed:out");
+          }
+          await servable(chain[9]);
+        });
+
+        it("tells every space after the first of a change in the first, and holds none", async () => {
+          await change(chain[0], "of:far");
+
+          expect(told).toEqual(chain.slice(1));
+          expect(server.currencyDeliveryStats().holds).toBe(0);
+        });
+
+        it("arms the last space with the one before it again once it is judged", async () => {
+          await change(chain[0], "of:far");
+
+          await servable(chain[9]);
+
+          expect(server.currencyReadersArmedOn(chain[8])).toEqual([chain[9]]);
+        });
+      });
+
       describe("with two spaces that read each other", () => {
         // `SPACE` reads `SOURCE`'s `of:far` and `SOURCE` reads `SPACE`'s
         // `of:near`, so a trigger from either reaches the other and comes
         // back.
+
+        /** What `Date.now()` returns in these cases. */
+        let now: number;
+        let clock: Stub<DateConstructor>;
 
         /** Judges both spaces' pieces, which arms each with the other. */
         const armBoth = async (): Promise<void> => {
@@ -402,14 +467,49 @@ describe("v2-server-currency", () => {
           await servable(SOURCE, "of:back");
         };
 
-        beforeEach(async () => {
-          server = newServer();
-          await store(reading(SOURCE, "of:far", await write(SOURCE, "of:far")));
+        /**
+         * Records each space's piece as having read the other's document at
+         * its head, and judges both.
+         */
+        const recordBoth = async (): Promise<void> => {
           await store(
-            reading(SPACE, "of:near", await write(SPACE, "of:near"), "of:back"),
+            reading(SOURCE, "of:far", await headOf(SOURCE, "of:far")),
+          );
+          await store(
+            reading(
+              SPACE,
+              "of:near",
+              await headOf(SPACE, "of:near"),
+              "of:back",
+            ),
             SOURCE,
           );
           await armBoth();
+        };
+
+        /**
+         * Changes `SOURCE`'s document `count` times with no client behind
+         * the change, arming both spaces again after each. The change
+         * reaches `SPACE` and comes back to `SOURCE` each time.
+         */
+        const goRound = async (count: number): Promise<void> => {
+          for (let round = 0; round < count; round++) {
+            await change(SOURCE, "of:far");
+            await armBoth();
+          }
+        };
+
+        beforeEach(async () => {
+          now = 1_700_000_000_000;
+          clock = stub(Date, "now", () => now);
+          server = newServer();
+          await write(SOURCE, "of:far");
+          await write(SPACE, "of:near");
+          await recordBoth();
+        });
+
+        afterEach(() => {
+          clock.restore();
         });
 
         it("passes a trigger around once, and stops at the space already told", async () => {
@@ -420,26 +520,86 @@ describe("v2-server-currency", () => {
           expect(server.currencyReadersArmedOn(SPACE)).toEqual([]);
         });
 
-        it("marks `2` the slices that read a space eight triggers from a commit a client authored, and rests on it again after one", async () => {
-          // Each change no client authored adds two triggers to the chain:
-          // one to the reader, and one back.
+        it("holds neither space while a change has come back fewer than eight times", async () => {
+          // The first round is where the change sets out, and each further
+          // one is a lap.
 
-          for (let round = 0; round < 4; round++) {
-            await change(SOURCE, "of:far");
-            await armBoth();
-          }
-          expect(server.currencyDeliveryStats().overHops).toBe(1);
-          expect(await markOf()).toBe(2);
+          await goRound(8);
+
+          expect(server.currencyDeliveryStats().holds).toBe(0);
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+        });
+
+        it("holds both spaces once a change has come back to them eight times, and marks `2` the slices that read them", async () => {
+          await goRound(9);
+
+          expect(server.currencyDeliveryStats().holds).toBe(2);
+          expect([await markOf(), await markOf(SOURCE, "of:back")]).toEqual([
+            2,
+            2,
+          ]);
           expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          expect(server.currencyReadersArmedOn(SPACE)).toEqual([]);
+        });
 
-          await author(SOURCE, "of:far");
-          const head = (await server.engineForSpace(SOURCE)).database.prepare(
-            `SELECT MAX(seq) AS seq FROM head WHERE id = 'of:far'`,
-          ).get() as { seq: number };
-          await store(reading(SOURCE, "of:far", head.seq));
+        it("stores marked `2` a record that reads a space that is held", async () => {
+          await goRound(9);
+
+          await store(
+            reading(SOURCE, "of:far", await headOf(SOURCE, "of:far")),
+          );
+
+          expect(await markOf()).toBe(2);
+        });
+
+        it("rests on a space again once its hold has passed", async () => {
+          await goRound(9);
+          now += 1_001;
+
+          await recordBoth();
 
           expect(await servable()).toBe(true);
           expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+        });
+
+        it("holds a space for twice as long when the change goes on coming back", async () => {
+          await goRound(9);
+          now += 1_001;
+          await recordBoth();
+          await goRound(8);
+          expect(server.currencyDeliveryStats().holds).toBe(4);
+
+          now += 1_001;
+          await recordBoth();
+          expect(await servable()).toBe(false);
+          now += 1_000;
+          await recordBoth();
+
+          expect(await servable()).toBe(true);
+        });
+
+        it("holds a space for as long as the first time once it was left alone for longer than its last hold", async () => {
+          await goRound(9);
+          now += 2_001;
+          await recordBoth();
+          await goRound(8);
+
+          now += 1_001;
+          await recordBoth();
+
+          expect(await servable()).toBe(true);
+        });
+
+        it("ends the hold of a space that a change with no trigger behind it reaches", async () => {
+          await goRound(9);
+          await author(SOURCE, "of:far");
+          await recordBoth();
+          expect(await servable(SOURCE, "of:back")).toBe(false);
+
+          await change(SOURCE, "of:far");
+          await recordBoth();
+
+          expect(await servable(SOURCE, "of:back")).toBe(true);
         });
       });
     });
