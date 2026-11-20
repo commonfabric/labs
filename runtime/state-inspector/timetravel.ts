@@ -495,13 +495,20 @@ export function entityTimeline(
   const steps: TimelineStep[] = [];
   let doc: FabricValue | undefined = undefined;
   let stateKnown = true;
+  // Why the state is unknown when no write of the branch's own made it so:
+  // what the branch inherits could not be reconstructed.
+  let unknownBecause: string | undefined;
   if (owner !== undefined) {
     try {
       doc = inheritedDocument(space, owner.branch, scope, opts.id);
-    } catch {
-      // What the branch inherits did not decode, so a patch over it has no
-      // known state until a set or delete on the branch gives it one.
+    } catch (e) {
+      // A patch over what the branch inherits then has no known state until
+      // a set or delete on the branch gives it one, and says why.
       stateKnown = false;
+      unknownBecause =
+        `The document this branch inherits could not be reconstructed: ${
+          (e as Error).message
+        }`;
     }
   }
   let previousValue: SelectedDiffValue =
@@ -512,9 +519,11 @@ export function entityTimeline(
     const previousStateKnown = stateKnown;
     let reconstructionError: string | undefined;
     if (r.op === "patch" && !stateKnown) {
-      reconstructionError =
+      reconstructionError = unknownBecause ??
         "State remains unknown because an earlier write could not be reconstructed.";
     } else {
+      // From this write on, the state is known or unknown because of it.
+      unknownBecause = undefined;
       try {
         if (r.op === "set") {
           doc = r.data ? decodeStored(r.data) : undefined;

@@ -485,7 +485,8 @@ function reconstructWithinBranch(
  * fork point `?? 0` included, and where a replay of a branch's own writes
  * starts (`entityTimeline`). `visited` holds the branches already asked on
  * this read, so a malformed cycle in `parent_branch` ends rather than recurs.
- * Throws when the parent's document does not decode.
+ * Throws when the parent's document does not decode, or when the row it
+ * resolves to holds an operation other than `set`, `patch` or `delete`.
  */
 export function inheritedDocument(
   space: SpaceDb,
@@ -515,6 +516,11 @@ export function inheritedDocument(
   );
   if (!resolved || resolved.row.op === "delete") return {};
   if (resolved.row.op === "set") return storedDocument(resolved.row.data);
+  if (resolved.row.op !== "patch") {
+    // Replayed as a patch, an operation no reader understands would pass as
+    // a document; the engine refuses it too.
+    throw new Error(`Unsupported revision operation: ${resolved.row.op}`);
+  }
   return reconstructWithinBranch(
     space,
     resolved.branch,

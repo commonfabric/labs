@@ -61,6 +61,8 @@ interface Write {
   value?: unknown;
   /** Written as a `patch` row with these operations instead of a `set`. */
   patches?: unknown[];
+  /** The row's operation, when it is neither of those. */
+  op?: string;
 }
 
 /**
@@ -94,7 +96,7 @@ async function withFork(
       w.id,
       w.scope ?? "space",
       seq,
-      w.patches ? "patch" : "set",
+      w.op ?? (w.patches ? "patch" : "set"),
       JSON.stringify(w.patches ?? { value: w.value }),
       seq,
     );
@@ -229,6 +231,30 @@ describe("branch-visible", () => {
           },
         ]);
         expect(steps[0].changes).toBeGreaterThan(0);
+      });
+    });
+
+    it("reports a child's patch as unknown, naming the cause, when what it inherited cannot be read", async () => {
+      // The parent's row holds an operation no reader understands, so what
+      // the child inherits is unknown, and so is the state after the child's
+      // patch over it. The step names the inherited document as the cause,
+      // not an earlier write of the child's.
+      await withFork([
+        { id: "of:odd", op: "merge", value: { list: ["a"] } },
+      ], [
+        {
+          id: "of:odd",
+          patches: [{ op: "add", path: "/value/list/0", value: "c" }],
+        },
+      ], (space) => {
+        const steps = entityTimeline(space, { id: "of:odd", branch: "kid" });
+        expect(steps).toHaveLength(1);
+        expect(steps[0].stateKnown).toBe(false);
+        expect(steps[0].exists).toBe(false);
+        expect(steps[0].error).toBe(
+          "The document this branch inherits could not be reconstructed: " +
+            "Unsupported revision operation: merge",
+        );
       });
     });
   });
