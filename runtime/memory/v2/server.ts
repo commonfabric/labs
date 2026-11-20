@@ -12453,6 +12453,12 @@ export class Server {
   /**
    * Brings what `space`'s currency index holds of the space `source` up to
    * what `source` reports now, or forgets it where `source` cannot be asked.
+   *
+   * The pieces this marks are reported to nobody. A serving loop is told of
+   * a marked piece so that it loads a root it left unstarted, and no root is
+   * left unstarted on a slice this can mark: one that read another space
+   * refuses its root, and one that reads what such a slice writes is marked
+   * already.
    */
   async #followCurrencySource(
     engine: Engine.Engine,
