@@ -26,6 +26,7 @@ import {
   NAME,
   nameBlob,
   pattern,
+  type PerSession,
   type PerSpace,
   principalOf,
   spaceAccess,
@@ -498,7 +499,10 @@ export interface FileStoreInput {
 /** A space's file store, whose viewer is the person using it. */
 const FileStore = pattern<FileStoreInput, FileStoreOutput>(
   ({ entries, requests }) => {
-    const profileWish = wish<FileProfile>({ query: "#profile" });
+    // Each session finds its own profile: a session whose wish finds none, or
+    // fails, writes that into its own instance, never over the one a session
+    // that found the profile reads.
+    const profileWish = wish<PerSession<FileProfile>>({ query: "#profile" });
     return FileStoreCore({
       entries,
       requests,

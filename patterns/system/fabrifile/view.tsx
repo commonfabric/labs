@@ -200,8 +200,9 @@ const FileRow = pattern<FileRowInput, { [UI]: VNode }>(
     );
     const addedBy = computed(() => entry.get().addedBy);
     // Offered to its adder, as the viewer's profile names them, and to an
-    // OWNER; the store decides who may change an entry, by who wrote it.
-    const changeDisplay = computed((): ControlDisplay =>
+    // OWNER; the store decides who may change an entry, by who wrote it. Each
+    // session's own, as the profile it is derived from is.
+    const changeDisplay = computed((): PerSession<ControlDisplay> =>
       spaceAccess(entry) === "OWNER" ||
         (mayWriteIn(entry) && viewer?.get() !== undefined &&
           equals(entry.get().addedBy, viewer))
@@ -265,7 +266,8 @@ const FileRow = pattern<FileRowInput, { [UI]: VNode }>(
 export const FileStoreView = pattern<FileStoreViewInput, FileStoreViewOutput>(
   ({ store }) => {
     const sent = new Writable.perSession<SentRequest[]>([]);
-    const viewerWish = wish<FileProfile>({ query: "#profile" });
+    // Each session finds its own profile, as `FileStore` does.
+    const viewerWish = wish<PerSession<FileProfile>>({ query: "#profile" });
     // The store's `add` is a cell in the store's own space.
     const addDisplay = computed((): ControlDisplay =>
       mayWriteIn(store.add) ? "block" : "none"
