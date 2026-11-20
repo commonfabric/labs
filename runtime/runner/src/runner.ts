@@ -3112,11 +3112,16 @@ export class Runner {
 
   /**
    * For each action, the documents whose load, asked for by a run of it kept
-   * in transit (`#keepsResultInTransit()`), failed. Such a document is no
+   * in transit (`#keepsResultInTransit()`), failed, or settled with the
+   * document still in transit (`#transitAbsences()`), as a load from a space
+   * that refuses this replica settles (the store's ledger records no failure
+   * for one: the document is absent for its reader). Such a document is no
    * longer on its way, so a later run refused for it clears its result rather
-   * than keeping it and asking for the load again.
+   * than keeping it and asking for the load again. A load that delivered its
+   * document is not recorded, so a later transit of it, as a replaced
+   * replica's, keeps the result again.
    */
-  readonly #failedTransitLoads = new WeakMap<Action, Set<string>>();
+  readonly #settledTransitLoads = new WeakMap<Action, Set<string>>();
 
   /**
    * Tombstones for `#sessionPatternPointers` entries dropped by _capacity
@@ -14794,8 +14799,9 @@ export class Runner {
    * writes, already holds a value. When it does, `action` runs again once the
    * loads of those documents have settled, whatever they find, since a
    * document that arrives absent changes no value the run's reads could see.
-   * A document whose load failed is no longer in transit
-   * (`#failedTransitLoads`), so the run after a failure clears the result
+   * A document whose load failed, or settled without delivering it, as one
+   * in a space that refuses this replica does, is no longer in transit
+   * (`#settledTransitLoads`), so the run after that clears the result
    * instead of asking for the load again.
    */
   #keepsResultInTransit(
@@ -14806,13 +14812,21 @@ export class Runner {
   ): boolean {
     const identity = tx.tx.scopeKeyIdentity;
     const keyIdentity = identity ?? this.#runtime.scopeKeyIdentity;
-    const failed = this.#failedTransitLoads.get(action);
+    const settled = this.#settledTransitLoads.get(action);
     const absences = this.#transitAbsences(tx, links).filter((absence) =>
-      !failed?.has(entityKey(absence, keyIdentity))
+      !settled?.has(entityKey(absence, keyIdentity))
     );
     if (absences.length === 0 || !this.#holdsResult(tx, writes)) return false;
     // Each load is asked for here, under the run's own scope identity, so
     // that an absence no read has asked the store about yet settles too.
+    const settle = (absence: UnexaminedAbsence) => {
+      let keys = this.#settledTransitLoads.get(action);
+      if (keys === undefined) {
+        keys = new Set();
+        this.#settledTransitLoads.set(action, keys);
+      }
+      keys.add(entityKey(absence, keyIdentity));
+    };
     const loads = absences.map((absence) =>
       documentLoad(
         this.#runtime,
@@ -14823,14 +14837,12 @@ export class Runner {
           scope: absence.scope,
         }),
         identity,
-      ).catch(() => {
-        let keys = this.#failedTransitLoads.get(action);
-        if (keys === undefined) {
-          keys = new Set();
-          this.#failedTransitLoads.set(action, keys);
-        }
-        keys.add(entityKey(absence, keyIdentity));
-      })
+      ).then(
+        () => {
+          if (this.#stillInTransit(absence, identity)) settle(absence);
+        },
+        () => settle(absence),
+      )
     );
     // Not a task the scheduler waits on to be idle: the run has finished, and
     // what follows is a new run, as a change arriving on the change channel
@@ -14841,6 +14853,27 @@ export class Runner {
       this.#runtime.scheduler.invalidateAction(action)
     );
     return true;
+  }
+
+  /**
+   * Whether `absence`, a document {@link #transitAbsences} found, is still in
+   * transit by the same test, now that its load has settled: still with no
+   * record in this replica, the space's replica since then if it was
+   * replaced, and not reported absent by the store. A document in a space
+   * that refuses this replica stays in transit by that test however often
+   * its load settles; a delivered one does not.
+   */
+  #stillInTransit(
+    absence: UnexaminedAbsence,
+    identity: ScopeKeyIdentity | undefined,
+  ): boolean {
+    const provider = this.#runtime.storageManager.open(absence.space);
+    const unexamined = provider.stillUnexamined?.([absence]) ?? [absence];
+    return unexamined.length > 0 &&
+      provider.storeReportedAbsent?.(
+          { id: absence.id, scope: absence.scope },
+          identity,
+        ) !== true;
   }
 
   /**

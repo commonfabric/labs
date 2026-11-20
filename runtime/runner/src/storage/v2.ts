@@ -5471,6 +5471,13 @@ class Provider
     return this.replica.presentCount(absences);
   }
 
+  /** See {@link SpaceReplica.stillUnexamined}. */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return this.replica.stillUnexamined(absences);
+  }
+
   /** See {@link SpaceReplica.storeReportedAbsent}. */
   storeReportedAbsent(
     address: { id: URI; scope?: CellScope },
@@ -11471,6 +11478,23 @@ export class SpaceReplica
       if ((this.#docs.get(key)?.confirmed.seq ?? 0) > 0) present += 1;
     }
     return present;
+  }
+
+  /**
+   * Those of `absences` this replica still holds no record of: neither a
+   * revision nor an examined absence. `absences` is a list an
+   * {@link unexaminedAbsences} call returned, of this replica or of one it
+   * replaced, keyed as {@link presentCount} keys it.
+   */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return absences.filter((absence) =>
+      !this.#docs.has(docKey(
+        absence.id,
+        this.instanceKey(absence.scope, undefined, absence.scopeKey),
+      ))
+    );
   }
 
   /**
