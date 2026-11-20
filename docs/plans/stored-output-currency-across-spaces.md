@@ -1,7 +1,7 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Step 1 is done; the rest is a design, with the steps
-to build it. It
+Status: In progress. Steps 1 and 3 are done; the rest is a design, with the
+steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -21,9 +21,9 @@ plan takes each:
 
 - **A read in another space.** The index holds one space's sequence numbers
   and marks, and nothing tells it that a document elsewhere changed.
-- **A computation that names no piece.** A slice that read a document whose
-  writer the record cannot attribute is not vouched for, and some of what a
-  wish registers with the scheduler is such a writer.
+- **A computation that names no piece.** No record covers what such a
+  computation wrote, and some of what a wish registers with the scheduler
+  is one. A slice that read its output takes over what it read.
 - **A clock.** A wish for `#now/N` reads a cell a timer writes. Nothing
   marks the slice that read it when the interval passes while no runtime
   holds the timer, so such a slice is never vouched for and its piece
@@ -43,14 +43,12 @@ failure to design out.
 Each row is measured under a serving loop, in
 `runtime/runner/test/executor/space-server-currency-wish.test.ts`, for the
 targets that file names: `#favorites`, `#profileName`, a hashtag among the
-favorites, `#default`, `/`, `#now` and `#now/60`. The second row's shared
-resolver is from reading `runtime/runner/src/builtins/wish.ts`; the
-fixture's wish is not headless and shares none.
+favorites, both headless and not, `#default`, `/`, `#now` and `#now/60`.
 
 | Target | What the wish reads | What keeps its slice from being served |
 | --- | --- | --- |
 | `#profile`, `#profileName`, `#profileBio`, `#profileSpace`, `#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, `#chatManager` | The home space of the principal the run is for. A serving runtime runs such a wish once for each viewer (`homeSpacePrincipalFor()` narrows the run to the user), so the reads sit in that viewer's `user:` slice. | The read is in another space. |
-| Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query in one space share one resolver, which the wish registers with the scheduler under no piece. | The read is in another space, and the resolver's output is a document whose writer names no piece. |
+| Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query over the space's own root share one resolver, which the wish registers with the scheduler under no piece. | The read in another space, for a search of the home space. Nothing for a search of the space's own root: the slice takes over the shared resolver's reads. |
 | `/`, `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | The root of the piece's own space, or of the home space or a named space where the wish's `scope` says so. | Nothing known for the piece's own space; the read in another space otherwise. |
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
 | `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
@@ -280,13 +278,22 @@ spans spaces.
 
 ### Computations that name no piece
 
-Every action a builtin registers with the scheduler carries an identity the
-index can record it under. For an action that belongs to one piece, that is
-the piece. The shared hashtag resolver belongs to every piece whose wish
-uses it, so it is recorded as a unit of its own, identified by the document
-it writes, beneath each of those pieces. Step 3 decides whether that shape
-holds once the resolver's reads in the home space are counted, or whether
-the resolver stops being shared under a serving runtime.
+The shared hashtag resolver belongs to every piece whose wish uses it, so
+it names none, and no record covers what it wrote. A slice that read its
+output answers for it instead: the snapshot adds what the resolver read to
+the slice's own reads, and records the resolver's output as an input, so a
+change to anything the resolver read marks the slice and starts its piece,
+which runs the resolver again. This holds for any computation that names no
+piece, through any number of them, on three conditions: the computation is
+live, it is clean, and it runs once and not once for each viewer. Where one
+fails, the slice is not vouched for (`unattributed-writer`). A piece that
+answers for such a computation is recorded again whenever that computation
+runs, since what it read can change with nothing of the piece's own
+changing.
+
+The resolver is shared only for a search that does not depend on the home
+space, so the reads a slice takes over from it are in the piece's own
+space.
 
 ### The interval clock
 
@@ -449,8 +456,7 @@ One is owed:
    would have been served is counted as today. `skip` goes on starting a
    root that rests on such a slice, since nothing would yet wake a live
    session whose root was left unstarted.
-3. **Computations that name no piece**, as above. Independent of step 2,
-   and small.
+3. **Computations that name no piece.** Done, as above.
 4. **The trigger.** The position counter, arming on a pull, the one-bit
    push and what a reader does with it, marking from a pull, the load of a
    root a loop holds, and the advance a commit queues in a space with an
@@ -512,8 +518,11 @@ For the serving loop, in `runtime/runner/test/executor/`:
 13. A piece that reads `#now/N` is served from the store within the
     interval and started after it, and a root a loop holds unstarted is
     loaded when the interval passes.
-14. Two pieces whose wishes share a hashtag resolver are each recorded
-    clean, and a change to what the resolver read marks both.
+14. A piece whose headless wish shares a hashtag resolver is recorded
+    clean, with the resolver's read of the space's root among its slice's
+    reads. This exists in `space-server-currency-wish.test.ts`; two pieces
+    on one resolver, and the mark a change to that root leaves on both, are
+    still to write.
 
 For computations that run without demand, in both places:
 

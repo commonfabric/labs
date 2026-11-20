@@ -37,7 +37,11 @@ export type PieceUnvouchedReason =
   | "not-clean"
   /** A live computation of the slice read a document in another space. */
   | "foreign-read"
-  /** A live computation of the slice read a document whose writer names no piece. */
+  /**
+   * A live computation of the slice read a document whose writer names no
+   * piece and cannot be answered for: it is not live, not clean, or runs
+   * once for each viewer.
+   */
   | "unattributed-writer"
   /** A live computation of the slice read a document a clock writes. */
   | "clock-read";
@@ -54,14 +58,15 @@ export type PieceCurrencySlice = {
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
    * computation that ran at its key is clean, and everything they read is in
-   * the piece's space, with a writer that names a piece, and is no document a
-   * clock writes.
+   * the piece's space, is no document a clock writes, and has no writer the
+   * slice cannot answer for.
    */
   unvouched: PieceUnvouchedReason[];
 
   /**
-   * The document instances the slice's live computations read. `scopeKey`
-   * is `ANY_INSTANCE` for a read whose instance the run does not name.
+   * The document instances the slice's live computations read, and those a
+   * writer that names no piece read to write one of them. `scopeKey` is
+   * `ANY_INSTANCE` for a read whose instance the run does not name.
    */
   reads: Array<
     { space: MemorySpace; id: string; scopeKey: string; derived: boolean }
@@ -205,7 +210,9 @@ const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
 
 /**
  * Snapshots the piece whose result document is `piece`, in `space`, or
- * returns `undefined` when no active node names it as its piece.
+ * returns `undefined` when no active node names it as its piece. Tells
+ * `state.nodes` of each computation that names no piece and whose output the
+ * piece read, so that a change to one reports the piece as changed.
  */
 export function snapshotPieceCurrency(
   state: PieceCurrencyState,
@@ -285,25 +292,48 @@ export function snapshotPieceCurrency(
     }
   }
 
-  /** Whether some computation writes `id`, and whether each names a piece. */
+  /**
+   * Whether a computation that names a piece writes `id`, and the
+   * computations that write it and name none.
+   */
   const writersOf = (
     id: IMemorySpaceAddress["id"],
-  ): { written: boolean; unattributed: boolean } => {
-    let written = false;
-    let unattributed = false;
+  ): { attributed: boolean; unattributed: Action[] } => {
+    let attributed = false;
+    const unattributed: Action[] = [];
     for (const scope of SCOPE_NAMES) {
       const writers = state.writeIndex.writersByEntity.get(
         entityNameKey({ space, id, scope }),
       );
       if (writers === undefined) continue;
       for (const writer of writers) {
-        written = true;
-        // A writer that names no piece is one no record covers, so nothing
-        // says whether what it wrote is current.
-        if (identityOf(writer)?.pieceRootId === undefined) unattributed = true;
+        if (identityOf(writer)?.pieceRootId === undefined) {
+          unattributed.push(writer);
+        } else attributed = true;
       }
     }
-    return { written, unattributed };
+    return { attributed, unattributed };
+  };
+
+  /**
+   * What `writer`, a computation that names no piece, read, or `undefined`
+   * where it cannot be answered for. No record covers such a computation, so
+   * a slice that read what it wrote answers for it by taking over its reads:
+   * what it wrote is current while it ran clean, once for every viewer, and
+   * nothing it read has changed since.
+   */
+  const readsOf = (writer: Action): IMemorySpaceAddress[] | undefined => {
+    // What the writer read can change, and it can become clean, with nothing
+    // of the piece's own changing, so the piece is due a snapshot whenever
+    // the writer changes.
+    state.nodes.noteAnsweredFor(writer, piece);
+    const node = state.nodes.get(writer);
+    const log = state.dependencies.get(writer);
+    if (
+      node === undefined || log === undefined || node.fanOut !== undefined ||
+      node.status !== "clean" || !isLive(state.liveness, node)
+    ) return undefined;
+    return [...log.reads, ...log.shallowReads];
   };
 
   return {
@@ -313,6 +343,8 @@ export function snapshotPieceCurrency(
     writes: [...writes],
     slices: [...slices].map(([key, slice]) => {
       const reads: PieceCurrencySlice["reads"] = [];
+      // A read taken over from a writer that names no piece joins the map
+      // while it is walked, and is walked in its turn.
       for (const read of slice.reads.values()) {
         if (read.space !== space) {
           slice.unvouched.add("foreign-read");
@@ -322,11 +354,30 @@ export function snapshotPieceCurrency(
         if (state.clockDocuments.has(clockDocumentKey(read))) {
           slice.unvouched.add("clock-read");
         }
-        const { written, unattributed } = writersOf(read.id);
-        if (unattributed) slice.unvouched.add("unattributed-writer");
+        const { attributed, unattributed } = writersOf(read.id);
+        const takenOver = unattributed.map(readsOf);
+        if (takenOver.includes(undefined)) {
+          slice.unvouched.add("unattributed-writer");
+        }
+        for (const inherited of takenOver) {
+          for (const address of inherited ?? []) {
+            const scopeKey = instanceRead(address, undefined);
+            const entry = `${address.space}\0${scopeKey}\0${address.id}`;
+            if (slice.reads.has(entry)) continue;
+            slice.reads.set(entry, {
+              space: address.space,
+              id: address.id,
+              scopeKey,
+            });
+          }
+        }
         reads.push({
           ...read,
-          derived: written || entityKindOfIdString(read.id) === "computed",
+          // A document only such writers write is an input the slice
+          // answers for through their reads, and no recorded piece's.
+          derived: attributed || takenOver.includes(undefined) ||
+            (unattributed.length === 0 &&
+              entityKindOfIdString(read.id) === "computed"),
         });
       }
       return {

@@ -223,6 +223,12 @@ export class NodeRegistry {
    */
   #changedPieces: Set<string> | undefined;
 
+  /**
+   * The pieces that answer for each computation that names no piece, as
+   * `noteAnsweredFor()` was told of them.
+   */
+  readonly #answering = new WeakMap<Action, Set<string>>();
+
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
 
@@ -407,12 +413,33 @@ export class NodeRegistry {
     return taken;
   }
 
-  /** Helper for the members above, which records the piece of `record`. */
+  /**
+   * Records that `piece` answers for `action`, a computation that names no
+   * piece: `piece` is among the changed pieces whenever `action` is the node
+   * that changed.
+   */
+  noteAnsweredFor(action: Action, piece: string): void {
+    const pieces = this.#answering.get(action);
+    if (pieces === undefined) this.#answering.set(action, new Set([piece]));
+    else pieces.add(piece);
+  }
+
+  /**
+   * Helper for the members above, which records the piece of `record`, or
+   * the pieces that answer for it where it names none.
+   */
   #noteChangedPiece(record: SchedulerNode): void {
-    if (this.#changedPieces === undefined) return;
+    const changed = this.#changedPieces;
+    if (changed === undefined) return;
     const pieceRootId = (record.action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity?.pieceRootId;
-    if (pieceRootId !== undefined) this.#changedPieces.add(pieceRootId);
+    if (pieceRootId !== undefined) {
+      changed.add(pieceRootId);
+      return;
+    }
+    for (const piece of this.#answering.get(record.action) ?? []) {
+      changed.add(piece);
+    }
   }
 
   /**

@@ -1207,9 +1207,12 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space, one whose writer names no
-  piece, or one a clock writes (the interval cell of a `#now/N` wish), which
-  no commit marks when its interval passes. Every slice of a record is stored marked when the piece's root is
+  clean, or read a document in another space, or one a clock writes (the
+  interval cell of a `#now/N` wish), which no commit marks when its interval
+  passes, or one whose writer names no piece and is not live, not clean, or
+  runs once for each viewer. A slice that read what a live, clean writer
+  that names no piece wrote, such as a wish's shared hashtag resolver, takes
+  over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
   narrower than the space, and when it records a source origin (§3e), since
   a start is where that origin is followed. A clean computation vouches for
   the instances its runs wrote: for a run at a fan-out instance, the

@@ -341,6 +341,30 @@ describe("SpaceServer", () => {
       }
     });
 
+    describe("recording a piece whose headless wish shares a hashtag resolver", () => {
+      it("vouches for every slice, which reads what the resolver read", async () => {
+        // The resolver is one computation for every wish of its query in the
+        // space, and names no piece, so the slice that read its result takes
+        // over its read of the space's root.
+
+        host = newHost("record");
+        const { alice, root } = await watch(
+          wishProgram(
+            `{ query: '#${FAVORITE_TAG}', scope: ['.'], headless: true }`,
+          ),
+        );
+        await host.whenQuiescent();
+
+        const taken = snapshotOf(root)!;
+        expect(taken.slices.flatMap((slice) => slice.unvouched)).toEqual([]);
+        expect(
+          slicesAt(taken, "space")[0].reads.map((read) => read.id),
+        ).toContain(alice.getCell(space, space).getAsNormalizedFullLink().id);
+        expect(host.stats().currency.unvouched).toEqual({});
+        expect(await recordOf(root)).toEqual({ mark: 0, epoch: EPOCH });
+      });
+    });
+
     describe("recording a piece whose wish reads the interval clock", () => {
       /** The time the interval clock holds at `at`, as `reader` shows it. */
       const tickAt = (at: number) =>

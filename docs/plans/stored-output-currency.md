@@ -117,7 +117,9 @@ of its runs at the snapshot:
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
 - one read a document in another space;
-- one read a document whose writer in this runtime names no piece;
+- one read a document whose writer in this runtime names no piece and
+  cannot be answered for. A writer that is live, clean and runs once is
+  answered for by the slice, which takes over what it read;
 - one read a document a clock writes, which is the interval cell of a wish
   for `#now/N`: no commit marks the slice when the interval passes while no
   runtime holds the clock.
