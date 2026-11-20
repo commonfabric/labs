@@ -12,12 +12,14 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 - [Upgrading pieces at scale](upgrading-pieces-at-scale.md) replaces the
   serial, hand-ordered procedure that updating a Topics board takes today.
-  Topics' pieces follow a pattern published in a team-owned space, through the
-  same fabric-origin follow any provider can use; each piece adopts on its next
-  start, a same-contract release is a pointer move, a stored-shape change is
-  classified before it ships, two stored shapes are the normal state, and an
-  index backfill is a scan that starts no piece. The design holds at any scale
-  because a release writes nothing to a piece nobody starts.
+  Topics' pieces, which follow no origin yet, will follow a pattern published in
+  a team-owned space, through the same fabric-origin follow any provider can
+  use; each piece adopts on its next start, a same-contract release is a pointer
+  move, a stored-shape change is classified before it ships, two stored shapes
+  are the normal state, and an index backfill is a scan that starts no piece.
+  It also lists the corrections the model does not cover and the mechanism for
+  each. The design holds at any scale because a release writes nothing to a
+  piece nobody starts.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
