@@ -22,7 +22,11 @@ import type {
   StoreReadThrough,
   URI,
 } from "../../src/storage/interface.ts";
-import type { SessionConnection, SpaceReplica } from "../../src/storage/v2.ts";
+import {
+  type SessionConnection,
+  setConflictAdmissionMode,
+  type SpaceReplica,
+} from "../../src/storage/v2.ts";
 import {
   mountOver,
   newSharedServer,
@@ -572,78 +576,42 @@ describe("SpaceReplica", () => {
         expect(mounts).toBe(0);
       });
 
-      describe("for a commit carrying a marked splice", () => {
-        /**
-         * Commits a marked head insertion into `doc`'s list through a replica
-         * whose connection advertises `markedSplicesV1` and is in the state
-         * `state.now` holds when the commit reaches the session, and returns
-         * the result with the commits the session was handed.
-         */
-        const commitMarked = async (
-          state: { now: MemoryV2Client.ConnectionState },
-        ) => {
-          const handed: MemoryV2Client.SpaceSession["transact"][] = [];
-          const replica = replicaOver({
-            createSession: async () => {
-              const { client, session } = await mount();
-              const transact = session.transact.bind(session);
-              session.transact = (commit, beforeIssue) => {
-                handed.push(transact);
-                return transact(commit, beforeIssue);
-              };
-              return {
-                session,
-                client: {
-                  serverFlags: {
-                    ...client.serverFlags!,
-                    markedSplicesV1: true,
-                  },
-                  get connectionState() {
-                    return state.now;
-                  },
-                  delivered: () => client.delivered(),
-                  close: () => client.close(),
-                },
-              };
-            },
-          });
-          await replica.ensureSession();
-          const result = await replica.commitNative({
-            operations: [{
-              op: "patch",
-              id: doc,
-              type: "application/json",
-              patches: [{
-                op: "splice",
-                path: "/value/list",
-                index: 0,
-                remove: 0,
-                add: ["x"],
-                pinned: true,
-              }],
-              value: { value: { list: ["x"] } },
+      it("refuses a commit the session refuses to send for its marked splice as a local conflict, leaving no stale floor", async () => {
+        setConflictAdmissionMode("preempt");
+        cleanups.push(() => setConflictAdmissionMode(undefined));
+        // The server does not advertise `markedSplicesV1`, so the session
+        // refuses the commit at its first send.
+        const replica = replicaOver();
+        const result = await replica.commitNative({
+          operations: [{
+            op: "patch",
+            id: doc,
+            type: "application/json",
+            patches: [{
+              op: "splice",
+              path: "/value/list",
+              index: 0,
+              remove: 0,
+              add: ["x"],
+              pinned: true,
             }],
-          });
-          return { result, handed: handed.length };
-        };
-
-        it("refuses it as a conflict, handing the session nothing, while the connection reconnects", async () => {
-          const { result, handed } = await commitMarked({
-            now: "reconnecting",
-          });
-          expect(result.error?.name).toBe("ConflictError");
-          expect(result.error?.message).toContain("markedSplicesV1");
-          expect(handed).toBe(0);
+            value: { value: { list: ["x"] } },
+          }],
         });
-
-        it("hands it to the session on a live connection that advertises the mark", async () => {
-          const { result, handed } = await commitMarked({ now: "connected" });
-          expect(handed).toBe(1);
-          // The store refuses it, as it carries no read that pins the list.
-          expect(result.error?.message ?? "").not.toContain(
-            "does not advertise",
-          );
-        });
+        expect(result.error?.name).toBe("ConflictError");
+        expect(result.error?.message).toContain("markedSplicesV1");
+        // Nothing reached the store, which will never report this commit
+        // caught up, so a later reader of the document is not held for it.
+        expect(
+          replica.accessForTestingOnly.preemptThreshold({
+            localSeq: 99,
+            reads: {
+              confirmed: [{ id: doc, path: toDocumentPath([]), seq: 0 }],
+              pending: [],
+            },
+            operations: [],
+          }),
+        ).toBeUndefined();
       });
     });
 

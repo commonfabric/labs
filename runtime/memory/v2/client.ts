@@ -17,6 +17,7 @@ import {
 import { backtickQuote } from "@commonfabric/text/markdown";
 
 import {
+  carriesMarkedSplice,
   type ClientCommit,
   compatibleMemoryProtocolFlags,
   type ConnectionAuthResult,
@@ -609,6 +610,16 @@ type OutstandingCommit = {
    * `MAX_OWN_WRITE_FAILURES`.
    */
   writeFailures?: number;
+
+  /**
+   * Set as the commit's first send begins. Until then, a commit carrying a
+   * marked splice is refused where the connection it would go out on does not
+   * advertise `markedSplicesV1` ({@link isMarkedSpliceRefusal}). From then on
+   * every attempt sends it unchanged, whatever the connection advertises: the
+   * store may already hold it, and it tells a resend of a commit it took from
+   * a new one by the commit's bytes.
+   */
+  sent?: true;
 };
 
 /**
@@ -1317,6 +1328,11 @@ export class Client {
    * only after the server has handled the request, and so after the frames
    * the server sent while handling it. `options.onResponse` hears the
    * response as the client handles it, before any frame after it.
+   *
+   * `options.beforeSend` runs once the request is encoded for the connection
+   * it goes out on, with nothing left that could still stop it there, so that
+   * `serverFlags` are that connection's; throwing stops the request, unsent,
+   * with the error thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1325,6 +1341,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
+      beforeSend?: () => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1357,6 +1374,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
+    options.beforeSend?.();
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -5812,6 +5830,16 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
+          beforeSend: () => {
+            if (
+              pendingCommit.sent !== true &&
+              carriesMarkedSplice(pendingCommit.commit) &&
+              this.#client.serverFlags?.markedSplicesV1 !== true
+            ) {
+              throw markedSpliceRefusal();
+            }
+            pendingCommit.sent = true;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -6406,6 +6434,32 @@ const protocolError = (message: string): Error => {
   error.name = "ProtocolError";
   return error;
 };
+
+/**
+ * The refusal of a commit carrying a marked splice (`PatchOp`'s `pinned`)
+ * whose first send would go out on a connection that does not advertise
+ * `markedSplicesV1`, as the server it reaches may then read the splice as
+ * overwriting nothing. Nothing was sent, so the commit's writer can diff the
+ * change again for the connection as it is. Named `ConflictError`, a refusal
+ * its writer can retry; it carries no seq to wait for, as the store's own
+ * conflicts do.
+ */
+const markedSpliceRefusal = (): Error =>
+  Object.assign(
+    new Error(
+      "memory v2 commit not sent: it marks a splice, and the connection " +
+        "does not advertise markedSplicesV1",
+    ),
+    { name: "ConflictError", markedSpliceRefusal: true },
+  );
+
+/**
+ * Whether `error` is a session's refusal of a commit, unsent, because it
+ * marks a splice and its connection does not advertise `markedSplicesV1`.
+ */
+export const isMarkedSpliceRefusal = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error as { markedSpliceRefusal?: unknown }).markedSpliceRefusal === true;
 
 // A ProtocolError that no retry can heal (the peers disagree on a data-model
 // wire contract). Tagged so the reconnect loop gives up rather than retrying it.

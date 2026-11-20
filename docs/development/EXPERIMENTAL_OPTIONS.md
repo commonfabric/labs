@@ -1831,10 +1831,11 @@ the per-epic implementation notes).
   server advertises the capability in `hello.ok` only when it is on. A client
   reads it from the connection that is up (`ISpaceReplica.markedSplices()`),
   and diffs a change per index while the connection is down or
-  reconnecting; it has no switch of its own. Just before sending a marked
-  commit it checks the connection again, and refuses the commit as a
-  conflict, to be diffed again, where the connection no longer advertises
-  the capability.
+  reconnecting; it has no switch of its own. A session checks a marked
+  commit again at its first send (memory client `isMarkedSpliceRefusal()`),
+  and refuses it, unsent, where the connection it would go out on does not
+  advertise the capability; the runner takes that as a conflict and diffs
+  the change again. A commit it has sent once goes again unchanged.
 - **Purpose.** A change to a long array that inserts, removes or moves
   elements near its head goes as edit-script splices instead of a `replace`
   at every shifted index: on the Topics board, one new topic at the head of

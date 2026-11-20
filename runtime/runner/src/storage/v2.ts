@@ -1695,15 +1695,6 @@ const advertisesMarkedSplices = (
   connection?.connectionState === "connected" &&
   connection.serverFlags?.markedSplicesV1 === true;
 
-/** Whether `commit` carries a marked splice (`PatchOp`'s `pinned`). */
-const carriesMarkedSplice = (commit: ClientCommit): boolean =>
-  commit.operations.some((operation) =>
-    operation.op === "patch" &&
-    operation.patches.some((patch) =>
-      patch.op === "splice" && patch.pinned === true
-    )
-  );
-
 const scalarizePendingReadStacks = (commit: ClientCommit): ClientCommit => {
   const hasStack = (reads: { localSeq: number | number[] }[]): boolean =>
     reads.some((read) => Array.isArray(read.localSeq));
@@ -7811,11 +7802,13 @@ export class SpaceReplica
    * its connection is down or reconnecting: a commit built then goes index by
    * index.
    *
-   * A commit built marked is checked again just before it is handed to the
-   * session, which may be on another connection by then (`#pushCommit()`).
-   * A resend of one already sent keeps its bytes, so that the store can
-   * answer a resend of a commit it already took (its replay identity); the
-   * readers-first rollout (`markedSplicesV1` in
+   * A commit built marked can reach its first send on another connection.
+   * The session checks it then, and refuses it, unsent, where that
+   * connection does not advertise the mark (memory client
+   * `isMarkedSpliceRefusal()`), which `#pushCommit()` takes as a local
+   * conflict. A resend of one already sent keeps its bytes, so that the store
+   * can answer a resend of a commit it already took (its replay identity);
+   * the readers-first rollout (`markedSplicesV1` in
    * docs/development/EXPERIMENTAL_OPTIONS.md) is what makes such a resend
    * safe on a server that stopped advertising it.
    */
@@ -10733,39 +10726,6 @@ export class SpaceReplica
             { pushed: true },
           );
         }
-        if (
-          carriesMarkedSplice(wireCommit) && !advertisesMarkedSplices(client)
-        ) {
-          // Its array changes were diffed into marked splices on a connection
-          // that advertised `markedSplicesV1`, and the one it would go out on
-          // now does not, or is down, so the server it reaches may read them
-          // as overwriting nothing (serving-loop.md §3d). Refused before it is
-          // sent, as a conflict, so that the action runs again and diffs the
-          // change for the connection as it is then.
-          const withdrawn = this.#makeLocalRejection(
-            commit,
-            "marked splices not sent: the connection does not advertise " +
-              "markedSplicesV1",
-          );
-          if (inFlight !== undefined) {
-            this.#rejectInFlightCommitLocally(inFlight, withdrawn);
-          }
-          telemetry?.submit({
-            type: "storage.push.error",
-            id: pushOpId,
-            sessionId: session.sessionId,
-            error: withdrawn.name,
-            ...rejectionAttribution(withdrawn, commit),
-          });
-          notifyRejectionSources(withdrawn);
-          return await this.#finalizeRejection(
-            localSeq,
-            operations,
-            source,
-            withdrawn,
-            { pushed: true },
-          );
-        }
         if (inFlight === undefined) {
           // No pending reads → no dependency that can be dropped from under
           // this commit; keep the direct await.
@@ -10853,6 +10813,32 @@ export class SpaceReplica
         });
         return { ok: {} };
       } catch (error) {
+        if (MemoryV2Client.isMarkedSpliceRefusal(error)) {
+          // The session refused the commit before its first send, as the
+          // connection it would have gone out on does not advertise
+          // `markedSplicesV1`. Nothing reached the store, so it is a local
+          // conflict, with no stale floor: the store never saw this localSeq
+          // and will never report it caught up. The action runs again and
+          // diffs the change for the connection as it is then.
+          const refused = this.#makeLocalRejection(
+            commit,
+            describeFailure(error),
+          );
+          telemetry?.submit({
+            type: "storage.push.error",
+            id: pushOpId,
+            error: refused.name,
+            ...rejectionAttribution(refused, commit),
+          });
+          notifyRejectionSources(refused);
+          return await this.#finalizeRejection(
+            localSeq,
+            operations,
+            source,
+            refused,
+            { pushed: true },
+          );
+        }
         let cause = error;
         if (this.#replacementRead !== undefined) {
           const routeConflict = new Error("memory replica route replaced");
