@@ -171,6 +171,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
     "a published pattern's id, which a pattern-index search answers",
   ],
   [
+    "piece new:from-link",
+    "a shared pattern link, which someone hands over (cf pattern link prints one)",
+  ],
+  [
     "ingest mint:gmail-access-token",
     "a secret; a candidate list is the wrong place",
   ],
