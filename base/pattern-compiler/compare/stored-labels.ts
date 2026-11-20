@@ -1504,7 +1504,8 @@ const STEPPED_PAIRS = 20_000;
 
 /**
  * The length of the text of a scenario's result above which the scenario is
- * not run again with its events sent three times (`compareModule`).
+ * not run again with its events sent three times (`compareModule`), and
+ * above which such a run stops (`soundnessAfterEachEvent`).
  */
 const REPEATED_RESULT_LIMIT = 250_000;
 
@@ -1574,6 +1575,14 @@ export const soundnessAfterEachEvent = async (
           for (const reason of reasons) refused.push(reason);
         },
         sent: (runtime, hooks, instance, position) => {
+          // A scenario whose result grows large stops here: each run in
+          // memory holds the result, and the events sent again add to it.
+          const grown = JSON.stringify(instance.result()).length;
+          if (grown > REPEATED_RESULT_LIMIT) {
+            throw new Error(
+              `the result is larger than ${REPEATED_RESULT_LIMIT} characters`,
+            );
+          }
           stepped.advance();
           // Where the checks after every event would compare more pairs
           // than `STEPPED_PAIRS`, or read more of the result than
@@ -1586,7 +1595,7 @@ export const soundnessAfterEachEvent = async (
               size * events.length > STEPPED_SIZE) &&
             (position + 1) % third !== 0 && position !== events.length - 1
           ) return;
-          size = JSON.stringify(instance.result()).length;
+          size = grown;
           last = checkSoundness(
             runtime,
             hooks,
