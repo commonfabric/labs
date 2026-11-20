@@ -4416,10 +4416,10 @@ export class V2StorageTransaction implements IStorageTransaction {
    * leaves out.
    *
    * The splices go marked (`PatchOp`'s `pinned`), so only to a server that
-   * advertises `markedSplicesV1` (`ISpaceReplica.markedSplices()`). An older
-   * server, or a deployment that has not turned it on, reads a splice as
-   * overwriting nothing, and would let a delayed handler's write land over
-   * the change; it gets the per-index form.
+   * advertises `markedSplicesV1` (`ISpaceReplica.markedSplices()`). A server
+   * that predates marked splices reads a splice as overwriting nothing, and
+   * would let a delayed handler's write land over the change; it gets the
+   * per-index form.
    *
    * A transaction a serving loop runs in a wave sends none
    * (`isServedWaveRunTx()`): the wave batch carries no read set the store

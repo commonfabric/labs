@@ -74,10 +74,7 @@ describe("collaborative-text-changes", () => {
     // Fan-out is manual, so a session sees another's write only once the
     // test has the server deliver it. The server advertises marked splices,
     // so a list change beside an edit is held to its rules.
-    server = newSharedServer({
-      subscriptionRefreshDelayMs: "manual",
-      markedSplices: true,
-    });
+    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
     storage = EmulatedStorageManager.connectTo(server, { as: signer });
     editorStorage = EmulatedStorageManager.connectTo(server, { as: signer });
     rt = new Runtime({

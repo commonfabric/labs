@@ -151,7 +151,8 @@ describe("v2-client marked splices across a reconnect", () => {
   // send would go out on a connection that does not advertise
   // `markedSplicesV1`; a commit it has sent once goes again unchanged. Each
   // case opens the space on a server that advertises the mark, then
-  // reconnects to one on the same store that does not.
+  // reconnects to one on the same store that does not, standing in for a
+  // server that predates marked splices, as after a rollback.
   let path: string;
   let before: Server;
   let after: Server | undefined;
@@ -160,12 +161,22 @@ describe("v2-client marked splices across a reconnect", () => {
   let session: SpaceSession;
   let seeded: number;
 
-  const server = (markedSplices: boolean) =>
-    new Server({
+  /**
+   * A server on the case's store, which advertises the mark as this build's
+   * do, unless `markedSplices` is false, when it advertises what one that
+   * predates marked splices does.
+   */
+  const server = (markedSplices: boolean) => {
+    const made = new Server({
       ...testSessionOpenServerOptions,
       store: toFileUrl(path),
-      markedSplices,
     });
+    if (!markedSplices) {
+      const flags = made.memoryProtocolFlags.bind(made);
+      made.memoryProtocolFlags = () => ({ ...flags(), markedSplicesV1: false });
+    }
+    return made;
+  };
 
   /** A head insertion into the list, marked, under a read of the document. */
   const markedInsertion = (localSeq: number): ClientCommit => ({

@@ -37,7 +37,7 @@ describe("WaveAccumulator", () => {
   beforeEach(async () => {
     // The server advertises marked splices, so the served runs' array
     // changes are held to the rules a wave batch meets.
-    server = newSharedServer({ markedSplices: true });
+    server = newSharedServer();
     storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
