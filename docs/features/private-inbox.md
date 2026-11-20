@@ -1044,13 +1044,11 @@ The intake reads that mark before it acts: a notice whose `sharedAt` is the
 one the catalog marks is decided as acted on, and its room is not read. So the
 catalog, not the runtime, holds which notices were acted on, and a runtime
 that starts with many notices in the inbox reads only the rooms of those not
-yet marked. A sender's later notice of the same room replaces its row in the
-inbox under a later `sharedAt`, which the mark does not hold, so the intake
-acts on it again; any `sharedAt` other than the marked one counts, an earlier
-one included. Any other notice is ignored, its room unread, for the life of
-the runtime worker. A notice whose vetting fails other than by a refusal
-waits on its space's state, and one whose send fails is left undecided, as an
-offer is.
+yet marked. A row holding a `sharedAt` other than the marked one, an earlier
+one included, is acted on again. Any other notice is ignored, its room unread,
+for the life of the runtime worker. A notice whose vetting fails other than by
+a refusal waits on its space's state, and one whose send fails is left
+undecided, as an offer is.
 
 Anyone can append to an inbox, so a notice proves nothing about its sender. A
 forged one can make the intake read again the title of a room the person's
