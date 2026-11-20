@@ -2421,10 +2421,18 @@ export const FabriChatManagerCore = pattern<
         direct.get() ?? {},
       )
     );
+    // The listed rooms' links, in `roomsForUser`'s order. A map runs each
+    // element by the element's identity, which for a link is the room it
+    // links and for an entry is its place in the list, so the rosters are
+    // mapped over the links: a room listed newly, ahead of the others, runs
+    // its own reader alone, and every other reader stays with its room.
+    const roomLinksForUser = computed((): PerUser<Cell<unknown>[]> =>
+      roomsForUser.map((entry) => entry.room)
+    );
     // Each listed room's roster, each read on its own and per user, as
     // `roomsForUser` is: a room's space is read under the reader's access.
-    const rostersForUser = roomsForUser.map((entry) =>
-      RoomRoster.asScope("user")({ room: entry.room })
+    const rostersForUser = roomLinksForUser.map((room) =>
+      RoomRoster.asScope("user")({ room })
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`
     // is: a profile attests no one to a reader its space refuses. Its
@@ -2448,15 +2456,15 @@ export const FabriChatManagerCore = pattern<
     // session asks for the people, so that a view showing the manager, or a
     // room showing its picker, reads no room's roster, and holds no room's
     // space open, until a picker is opened. The people are drawn from them as
-    // `peopleForUser` draws its own, the rooms list being the one
-    // difference: a derivation of `peopleForUser` itself would read it, and
-    // every roster with it, whether or not the session had asked, since a
-    // derivation reads what it is derived from before it runs.
-    const roomsAskedForSession = computed((): PerSession<ChatIndexEntry[]> =>
-      peopleAskedForSession.get() === true ? [...roomsForUser] : []
+    // `peopleForUser` draws its own, over the same links, the rooms list
+    // being the one difference: a derivation of `peopleForUser` itself would
+    // read it, and every roster with it, whether or not the session had
+    // asked, since a derivation reads what it is derived from before it runs.
+    const roomsAskedForSession = computed((): PerSession<Cell<unknown>[]> =>
+      peopleAskedForSession.get() === true ? [...roomLinksForUser] : []
     );
-    const rostersForSession = roomsAskedForSession.map((entry) =>
-      RoomRoster.asScope("user")({ room: entry.room })
+    const rostersForSession = roomsAskedForSession.map((room) =>
+      RoomRoster.asScope("user")({ room })
     );
     const peopleForSession = computed(
       (): PerSession<Record<string, ManagerProfileCell[]>> =>
