@@ -20,6 +20,11 @@
  *   `compiledPatterns` on, so the paths the executor's write records cover
  *   store the labels of their templates.
  *
+ * A module that has a `wish` runs in the seeded home of `wish-home.ts`, in
+ * each of the three: the two runs in storage write the home into their
+ * storage, so a read of the profile is a read of a labeled document of
+ * another space.
+ *
  * The storage is the runtime's emulated storage, as in every run of today's
  * runtime this comparison makes. A figure of `plain` and `labeled` is from
  * the start of the executor's work to the settlement of every commit it
@@ -51,7 +56,12 @@ import { Runtime } from "../../../runtime/runner/src/runtime.ts";
 import { StorageManager } from "../../../runtime/runner/src/storage/cache.deno.ts";
 import { type Artifact, Instance } from "../exec/executor.ts";
 import { identifierOf, isLink, nameText } from "../exec/store.ts";
-import { artifactsOf, corpusModules, mainPattern } from "./corpus.ts";
+import {
+  artifactsOf,
+  corpusModules,
+  mainPattern,
+  wishStubs,
+} from "./corpus.ts";
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import { drawing, eventSeed, restoreRandom, seedRandom } from "./random.ts";
@@ -60,6 +70,7 @@ import {
   RuntimeTransactions,
 } from "./runtime-transactions.ts";
 import { compareValues, outOfFileForm, type Values } from "./values.ts";
+import { hasWish, homeStubs, seedHome } from "./wish-home.ts";
 
 /** The timing counters of the runtime a figure counts, by their key. */
 const COUNTED = {
@@ -340,7 +351,12 @@ export const inStorage = async (
   try {
     // The inputs as cells of their own, each under a schema with a clause.
     let given = argument;
-    let documents: { id: string; kind: string; value: unknown }[] = [];
+    let documents: {
+      id: string;
+      kind: string;
+      value: unknown;
+      space?: string;
+    }[] = [];
     if (labeled) {
       const inputs = generateInputs(
         artifact.plan as Parameters<typeof generateInputs>[0],
@@ -355,6 +371,15 @@ export const inStorage = async (
         hooks,
       ));
     }
+    // The home a `wish` of the pattern resolves in, which the executor is
+    // handed as documents it did not make (`wish-home.ts`).
+    const home = hasWish(artifact.plan)
+      ? homeStubs(await seedHome(runtime, space))
+      : undefined;
+    for (const { id, space: other } of home?.documents ?? []) {
+      hooks.external(id, other as MemorySpace | undefined);
+    }
+    documents = [...documents, ...home?.documents ?? []];
     const measure = async (work: () => void): Promise<Figure> => {
       const before = hooks.counts;
       const bounds = runtime.getCfcStats().planLabelBounds;
@@ -383,6 +408,7 @@ export const inStorage = async (
         ...options,
         transactions: hooks,
         documents,
+        ...(home === undefined ? {} : { wishes: home.wishes }),
       });
     });
     if (instance === undefined) throw new Error("no instance");
@@ -463,7 +489,15 @@ const run = async (from: string, to: string, only: string | undefined) => {
     } else {
       console.error(earlier.module);
       const events = committedEvents(earlier.runtime);
-      const options = instanceOptions(earlier.module, space, artifacts);
+      const stubs = await wishStubs(artifact.plan);
+      const options = {
+        ...instanceOptions(earlier.module, space, artifacts),
+        // The home of the run in memory. A run in storage seeds its own.
+        ...(stubs?.home === undefined ? {} : {
+          documents: stubs.home.documents,
+          wishes: stubs.home.wishes,
+        }),
+      };
       const { argument } = earlier.runtime;
       try {
         const memory = inMemory(artifact, argument, events, options);
@@ -494,6 +528,7 @@ const run = async (from: string, to: string, only: string | undefined) => {
           earlier.runtime.outcomes as Parameters<typeof compareValues>[3],
           outOfFileForm(earlier.runtime.values) as Values,
           artifacts,
+          await wishStubs(artifact.plan),
         );
         result.today = {
           compared: comparison.compared,
