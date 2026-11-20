@@ -6972,8 +6972,9 @@ export class Instance {
    * that leave the values as they are (`TransactionHooks.unchanged`): the
    * label of an output that read the changed label is formed again, and no
    * value code runs. The executor keeps no record of which outputs read
-   * which label, so the work is the number of kept outputs, each element
-   * of a per-element output counted, and not the number that read it.
+   * which label, so the work is the number of kept outputs with no kept
+   * output below them, each element of a per-element output counted, and
+   * not the number that read it.
    */
   #relabel(): void {
     const hooks = this.options.transactions;
@@ -6981,7 +6982,17 @@ export class Instance {
     this.#relabeling = false;
     this.#within("derivation", () => {
       for (const instance of new Set([this, ...this.#instances.values()])) {
-        const writes = instance.#outputWrites(instance.id, [], undefined);
+        const all = instance.#outputWrites(instance.id, [], undefined);
+        // An output with a kept output below its path is left out: the
+        // runtime stores a record's label for its path and clears what is
+        // stored below, and an output below that the plan has no template
+        // for has no record to store its label again.
+        const below = (path: readonly string[]) =>
+          instance.plan.outputs.some((output) =>
+            output.kept && output.path.length > path.length &&
+            matchesPath(output.path.slice(0, path.length), path)
+          );
+        const writes = all.filter(({ target }) => !below(target.path));
         if (writes.length > 0) {
           hooks.unchanged?.(instance.id, [], this.store, undefined, writes);
         }

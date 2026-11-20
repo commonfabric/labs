@@ -572,13 +572,19 @@ export class RuntimeTransactions implements TransactionHooks {
   ): void {
     if (this.#compiledPattern === undefined) return;
     const tx = this.#open();
-    // The write policy of the write, as `change` records it: the label is
-    // stored under the policy a write of the path is held to.
-    recordRelevantSchemaWritePolicyInput(
-      tx,
-      this.#address(doc, path),
-      schema as JSONSchema | undefined,
-    );
+    // The write policy of each path a record names, as `change` records it
+    // for a write: the label is stored under the policy a write of the
+    // path is held to.
+    for (const target of new Set(writes.map((write) => write.target))) {
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(target.doc, target.path),
+        target.doc === doc &&
+          JSON.stringify(target.path) === JSON.stringify(path)
+          ? schema as JSONSchema | undefined
+          : undefined,
+      );
+    }
     this.#record(tx, writes, true);
   }
 
