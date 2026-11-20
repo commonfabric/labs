@@ -884,6 +884,17 @@ export type PatchOp =
     index: number;
     remove: number;
     add: FabricValue[];
+    /**
+     * Marks a splice its writer diffed under a recursive read of the array or
+     * of a path above it, so that it stands for the per-index writes of the
+     * same change: the store reads the indices whose values it changed as
+     * overwritten (server execution's supersession, serving-loop.md §3d),
+     * where an unmarked splice, such as a tail splice of the per-index form,
+     * overwrites nothing. A writer sends it only to a server that advertises
+     * `markedSplicesV1`, and the store admits it only under that read and
+     * alone on its array in the commit. Absent means unmarked.
+     */
+    pinned?: true;
   }
   // A tail-relative append: `values` are inserted at the array's current tail,
   // with the array (and the path to it) created if absent, or if its slot holds
@@ -1274,6 +1285,17 @@ export type ClientCommit = {
   eventAppends?: EventAppendDecl[];
 };
 
+/** Whether `commit` carries a marked splice (`PatchOp`'s `pinned`). */
+export const carriesMarkedSplice = (
+  commit: { readonly operations: readonly Operation[] },
+): boolean =>
+  commit.operations.some((operation) =>
+    operation.op === "patch" &&
+    operation.patches.some((patch) =>
+      patch.op === "splice" && patch.pinned === true
+    )
+  );
+
 export type SessionOpenResult = {
   /** Serving Toolshed process commit, not the router or a compatibility gate. */
   serverBuild?: string;
@@ -1477,6 +1499,19 @@ export type MemoryProtocolFlags = {
   sessionReadCeiling?: boolean;
 
   /**
+   * Server capability: the server admits marked splices (`PatchOp`'s
+   * `pinned`) and reads each one's overwritten indices for server
+   * execution's supersession. A client sends a change to an array as marked
+   * splices only to a server that advertises it, and otherwise index by
+   * index. Not build-inherent: a deployment advertises it only once every
+   * serving worker that may read its rows, a rollback's included, reads the
+   * mark (docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`), so
+   * absent, an older server's or a deployment's that has not turned it on,
+   * parses to false.
+   */
+  markedSplicesV1?: boolean;
+
+  /**
    * Server capability: the server relays ephemeral presence rooms under a
    * space over this connection — `presence.join`, `presence.publish`,
    * `presence.leave`, and the `presence/upsert` and `presence/remove`
@@ -1667,6 +1702,7 @@ export type WireMemoryProtocolFlags = {
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
   sessionReadCeiling?: boolean;
+  markedSplicesV1?: boolean;
   presenceV1?: boolean;
   sessionClose?: boolean;
   connectionAuth?: boolean;
@@ -3324,6 +3360,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a session's declared read
   // ceiling and its serving runtime stamps it onto the runs it serves.
   sessionReadCeiling: true,
+  // Deployment configuration, not build-inherent: the memory server advertises
+  // it under its `markedSplices` option (`Server.memoryProtocolFlags()`).
+  markedSplicesV1: false,
   // Build-inherent: this build's server relays presence rooms.
   presenceV1: true,
   // Build-inherent: this build's server ends one session on request.
@@ -3425,6 +3464,7 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   entityIdLookup: true,
   viewScopedReplicationV1: true,
   sessionReadCeiling: true,
+  markedSplicesV1: true,
   sessionHoldings: true,
   presenceV1: true,
   sessionClose: true,
@@ -3512,6 +3552,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: a client carrying a read
     // ceiling refuses such a server rather than reading unbounded.
     sessionReadCeiling: value.sessionReadCeiling === true,
+    // Absent (an older server, or a deployment that has not turned it on)
+    // parses to false: a client then sends array changes index by index.
+    markedSplicesV1: value.markedSplicesV1 === true,
     // Absent (an older server) parses to false: a client then refuses to
     // join a presence room rather than send a message the server would
     // refuse.
@@ -3603,6 +3646,7 @@ export const wireMemoryProtocolFlags = (
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
   sessionReadCeiling: flags.sessionReadCeiling,
+  markedSplicesV1: flags.markedSplicesV1,
   presenceV1: flags.presenceV1,
   sessionClose: flags.sessionClose,
   connectionAuth: flags.connectionAuth,

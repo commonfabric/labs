@@ -44,6 +44,7 @@ import {
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
+import type { SessionOverwrite } from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type {
   ServedAclChange,
@@ -73,6 +74,7 @@ import {
   pathsOverlap,
 } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -85,7 +87,10 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
-import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import {
+  markServedDerivationTx,
+  markServedWaveRunTx,
+} from "../storage/reactivity-log.ts";
 import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
@@ -337,6 +342,7 @@ export function stampWaveRunContext(
 ): void {
   waveRunContexts.set(tx, context);
   if (context.kind === "derivation") markServedDerivationTx(tx);
+  markServedWaveRunTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
@@ -816,19 +822,20 @@ export interface WaveCommitSink {
   ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>>;
 
   /**
-   * The value paths that the authored commits of `session` overwrote in a
-   * doc-instance after `sinceSeq` — §3d's supersession of an event
-   * consequence by a later write of the session that fired the event.
-   * Writes that merge into existing content (appends, splices, increments)
-   * overwrite nothing and are not reported. A sink that cannot answer omits
-   * it, and no consequence is superseded.
+   * Where the authored commits of `session` overwrote a doc-instance after
+   * `sinceSeq` — §3d's supersession of an event consequence by a later write
+   * of the session that fired the event. Splices overwrite the indices whose
+   * value they changed, as ranges of an array (`SessionOverwrite`). Writes
+   * that merge into existing content (appends, increments) overwrite nothing
+   * and are not reported. A sink that cannot answer omits it, and no
+   * consequence is superseded.
    */
   sessionOverwritePathsSince?(
     space: MemorySpace,
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>>;
+  ): Promise<ReadonlyArray<SessionOverwrite>>;
 
   commitWave(
     batch: WaveSpaceCommit,
@@ -1124,6 +1131,22 @@ export const warmWritesOf = (
     if (!writes.has(key)) writes.set(key, { id: op.id, scopeKey });
   }
   return [...writes.values()];
+};
+
+/** Whether the value path `path` lies where `overwrite` overwrote: at or
+ * beneath its value path, or at or beneath an element of its array at an
+ * index from its `fromIndex` up to its `toIndex` (`SessionOverwrite`). */
+const overwriteCovers = (
+  overwrite: SessionOverwrite,
+  path: readonly string[],
+): boolean => {
+  if (!("fromIndex" in overwrite)) return isPrefixPath(overwrite, path);
+  const { array, fromIndex, toIndex = Infinity } = overwrite;
+  if (path.length <= array.length || !isPrefixPath(array, path)) return false;
+  const segment = path[array.length]!;
+  if (!isArrayIndexPropertyName(segment)) return false;
+  const index = Number(segment);
+  return index >= fromIndex && index < toIndex;
 };
 
 /** The eventIds of the seq-LESS stream entries one sealed op appends —
@@ -2592,7 +2615,9 @@ export class WaveAccumulator
       if (overwritten.length === 0) return undefined;
       const covered = (path: string): boolean => {
         const parsed = parsePointer(path);
-        return overwritten.some((prefix) => isPrefixPath(prefix, parsed));
+        return overwritten.some((overwrite) =>
+          overwriteCovers(overwrite, parsed)
+        );
       };
       const patches = new Set<PatchOp>();
       let whole = true;

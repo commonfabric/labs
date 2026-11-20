@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -94,6 +95,7 @@ import {
   type ApplyOpResolution,
   type BranchInfo,
   type BranchName,
+  carriesMarkedSplice,
   type CellScope,
   type ClientCommit,
   type CommitClass,
@@ -4612,15 +4614,37 @@ ORDER BY seq, op_index
 };
 
 /**
- * The value paths that one session's authored commits overwrote in one doc
- * instance after `sinceSeq`, the session being `sessionId` opened by
- * `principal`. This is the input to the wave commit step's supersession of an
- * event consequence by a later write of the session that fired the event
- * (serving-loop.md §3d). Only writes that replace what sits at their path
- * count: a `set` or `delete` revision reports the root path, and a `patch`
- * revision reports the paths of its `replace`, `add` and `remove` patches and
- * both paths of a `move`. A patch that merges into existing content — an
- * append, a splice, an increment — overwrites nothing and is left out.
+ * Where a session's write overwrote a document: a value path, standing for
+ * the value there and everything beneath it, or `{ array, fromIndex,
+ * toIndex }`, standing for the elements of the array at `array` from index
+ * `fromIndex` up to `toIndex`, or every one from `fromIndex` on where
+ * `toIndex` is absent, and everything beneath them.
+ */
+export type SessionOverwrite =
+  | readonly string[]
+  | {
+    readonly array: readonly string[];
+    readonly fromIndex: number;
+    readonly toIndex?: number;
+  };
+
+/**
+ * Where one session's authored commits overwrote one doc instance after
+ * `sinceSeq`, the session being `sessionId` opened by `principal`. This is
+ * the input to the wave commit step's supersession of an event consequence
+ * by a later write of the session that fired the event (serving-loop.md
+ * §3d). Only writes that replace what sits at their path count: a `set` or
+ * `delete` revision reports the root path, and a `patch` revision reports
+ * the paths of its `replace`, `add` and `remove` patches and both paths of a
+ * `move`. The marked splices a revision makes to one array (`PatchOp`'s
+ * `pinned`) report, as ranges (`SessionOverwrite`), the indices both before
+ * and after it whose value differs, from the first splice's index on: the
+ * indices the per-index form of the same change replaces
+ * (`overwrittenArrayElements()`). An element a splice only appends past the
+ * old end, and one it only drops off the new end, is overwritten by nothing.
+ * An unmarked splice, such as the tail splice of the per-index form, merges
+ * into existing content, as an append or an increment does: it overwrites
+ * nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4632,24 +4656,29 @@ export const selectSessionOverwritePathsSince = (
     principal: string;
     sessionId: SessionId;
   },
-): Array<readonly string[]> => {
+): Array<SessionOverwrite> => {
+  const branch = options.branch ?? DEFAULT_BRANCH;
   const rows = engine.prepare(`
-SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+SELECT r.seq, r.op_index, r.op, r.data FROM revision r
+JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :since_seq
   AND c.class = 'authored' AND c.session_id = :session_id
 ORDER BY r.seq, r.op_index
 `).all({
-      branch: options.branch ?? DEFAULT_BRANCH,
+      branch,
       id: options.id,
       scope_key: options.scopeKey,
       since_seq: options.sinceSeq,
       session_id: resolveCommitSessionKey(options.sessionId, options.principal),
-    }) as Array<{ op: string; data: string | null }>;
-  const paths: Array<readonly string[]> = [];
+    }) as Array<
+      { seq: number; op_index: number; op: string; data: string | null }
+    >;
+  const paths: Array<SessionOverwrite> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
       const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      const splicedArrays = new Map<string, SplicedArray>();
       for (const patch of patches) {
         if (
           patch.op === "replace" || patch.op === "add" || patch.op === "remove"
@@ -4658,6 +4687,39 @@ ORDER BY r.seq, r.op_index
         } else if (patch.op === "move") {
           paths.push(parsePointer(patch.from));
           paths.push(parsePointer(patch.path));
+        } else if (patch.op === "splice" && patch.pinned === true) {
+          const spliced = splicedArrays.get(patch.path) ??
+            { fromIndex: Infinity, shrinkBound: 0 };
+          // As the store applied it (`spliceAll()`): `Array.prototype.splice`
+          // takes the index and the count as whole numbers, truncating any
+          // fraction and reading `NaN` as 0, in a row an older server stored
+          // before such commits were refused.
+          spliced.fromIndex = Math.min(
+            spliced.fromIndex,
+            Math.trunc(patch.index) || 0,
+          );
+          spliced.shrinkBound += (Math.trunc(patch.remove) || 0) -
+            patch.add.length;
+          splicedArrays.set(patch.path, spliced);
+        }
+      }
+      if (splicedArrays.size === 0) continue;
+      const documents = revisionDocuments(engine, {
+        branch,
+        id: options.id,
+        scopeKey: options.scopeKey,
+        seq: row.seq,
+        opIndex: row.op_index,
+      });
+      for (const [pointer, spliced] of splicedArrays) {
+        for (
+          const overwrite of overwrittenArrayElements(
+            parsePointer(pointer),
+            spliced,
+            documents,
+          )
+        ) {
+          paths.push(overwrite);
         }
       }
     } else if (row.op === "set" || row.op === "delete") {
@@ -4665,6 +4727,433 @@ ORDER BY r.seq, r.op_index
     }
   }
   return paths;
+};
+
+/**
+ * The documents one revision row's overwrites are worked out from, each read
+ * at most once, on first use, and shared by every array the row splices: the
+ * document as the row left it, and as it stood before the row.
+ */
+type RevisionDocuments = {
+  after(): EntityDocument | null;
+  before(): EntityDocument | null;
+};
+
+/**
+ * Helper for {@link selectSessionOverwritePathsSince}, which returns the
+ * {@link RevisionDocuments} of the revision row `revision`.
+ */
+const revisionDocuments = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): RevisionDocuments => {
+  let after: { document: EntityDocument | null } | undefined;
+  let before: { document: EntityDocument | null } | undefined;
+  return {
+    after: () =>
+      (after ??= { document: readRevision(engine, revision) }).document,
+    before: () =>
+      (before ??= { document: previousRevisionDocument(engine, revision) })
+        .document,
+  };
+};
+
+/**
+ * What one revision's splices of one array say of it: the lowest index they
+ * splice at, and the most the array's length before the revision can exceed
+ * its length after, which is what they can remove less what they add.
+ */
+type SplicedArray = { fromIndex: number; shrinkBound: number };
+
+/**
+ * Helper for {@link selectSessionOverwritePathsSince}, which returns the
+ * elements of the array at `array` that one revision's splices of it,
+ * `spliced`, overwrote: as ranges, the indices from the first splice's index
+ * up to the shorter of the array's lengths before and after the revision
+ * whose value differs between the two. That is what the per-index form of the
+ * same change writes: a `replace` at each index whose value it changed, and a
+ * splice at the tail for the length. An index below the first splice's is
+ * one no splice reaches. A first splice at or past the array's prior length,
+ * as a tail append's is, changes no index both sides hold, and the earlier
+ * document is not read.
+ *
+ * That is exact because the splices are marked: the store admitted them only
+ * under a read that pins the array, so they landed on the array they were
+ * diffed from, and alone on their array in the commit, so nothing else in it
+ * changed the array from their first index on (`refuseUnfoundedMarkedSplices()`).
+ */
+const overwrittenArrayElements = (
+  array: readonly string[],
+  spliced: SplicedArray,
+  documents: RevisionDocuments,
+): SessionOverwrite[] => {
+  const after = arrayAtPath(documents.after(), array) ?? [];
+  if (spliced.fromIndex >= after.length + spliced.shrinkBound) return [];
+  const before = arrayAtPath(documents.before(), array) ?? [];
+
+  const overwritten: SessionOverwrite[] = [];
+  const bound = Math.min(before.length, after.length);
+  for (let index = spliced.fromIndex; index < bound; index += 1) {
+    if (valueEqual(before[index]!, after[index]!)) continue;
+    const start = index;
+    while (index < bound && !valueEqual(before[index]!, after[index]!)) {
+      index += 1;
+    }
+    overwritten.push({ array, fromIndex: start, toIndex: index });
+  }
+  return overwritten;
+};
+
+/**
+ * Throws a {@link ProtocolError} where `patches`, one patch operation's on the
+ * document `id`, hold a splice whose index or count of removals is not a
+ * whole number at or above zero. The store would apply one with the number
+ * truncated (`spliceAll()`), so the index its patch names would not be the
+ * one it changed.
+ */
+const refuseFractionalSplices = (
+  id: string,
+  patches: readonly PatchOp[],
+): void => {
+  for (const patch of patches) {
+    if (patch.op !== "splice") continue;
+    if (
+      Number.isInteger(patch.index) && patch.index >= 0 &&
+      Number.isInteger(patch.remove) && patch.remove >= 0
+    ) {
+      continue;
+    }
+    throw new ProtocolError(
+      `memory v2 commit splices ${patch.path} in document ${id} at index ` +
+        `${patch.index}, removing ${patch.remove}: a splice's index and count ` +
+        "must be whole numbers at or above zero",
+    );
+  }
+};
+
+/**
+ * Throws a {@link ProtocolError} where a marked splice in `commit`
+ * (`PatchOp`'s `pinned`) does not stand as its mark says, which is what lets
+ * the indices it overwrote be read back exactly (`overwrittenArrayElements()`):
+ *
+ * - The commit must carry a recursive read of the array or of a path above
+ *   it, on the branch the commit writes, so that the store refuses the
+ *   commit where the array moved since the read, and the splice lands on the
+ *   array it was diffed from. The read is confirmed, or pending and naming
+ *   its confirmed basis (`PendingRead`'s `basisSeq`), from which the store
+ *   checks it over the whole interval since.
+ * - Its document instance must have no other operation in the commit, where
+ *   a second one could change the array around it.
+ * - Every splice of its array must be marked, and nothing else in its patch
+ *   operation may touch the array at or past the lowest index the splices
+ *   name, add, remove or move an element of the array, or touch the array
+ *   itself or a value above it, save a splice of an array above it past the
+ *   element the array is in. Nor may it add, remove or move an element of an
+ *   array above the array at or before the element the array is in, which
+ *   would move the array; whether a container above it is an array is read
+ *   from the document as the store holds it.
+ *
+ * `principal` and `sessionId` are the identity the commit writes as, a
+ * delegated commit's acting one, so each operation's instance resolves as
+ * its write does.
+ *
+ * The runner sends nothing else: it marks only splices it diffed under such a
+ * read, sends one operation per document, drops what a splice would cover,
+ * sends no add, remove or move at an element, and diffs an array a mergeable
+ * op reaches index by index. An unmarked splice is left to the rules every
+ * patch meets.
+ */
+const refuseUnfoundedMarkedSplices = (
+  engine: Engine,
+  options: {
+    commit: ClientCommit;
+    branch: BranchName;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyByOpIndex: ReadonlyMap<number, string>;
+  },
+): void => {
+  const { commit, branch, principal, sessionId, scopeKeyByOpIndex } = options;
+  if (!carriesMarkedSplice(commit)) return;
+  // The instance each operation writes, keyed as the write keys it
+  // (`writeOperation()`): an annotated scope key, or the scope resolved for
+  // the identity the commit writes as, which `principal` and `sessionId` are.
+  const scopeKeyOf = (
+    operation: { scope?: CellScope },
+    opIndex: number,
+  ): string =>
+    scopeKeyByOpIndex.get(opIndex) ??
+      resolveScopeKey(operation.scope, { principal, sessionId });
+  const instanceOf = (
+    operation: { id: string; scope?: CellScope },
+    opIndex: number,
+  ) => `${operation.id}\0${scopeKeyOf(operation, opIndex)}`;
+  const operationsByInstance = new Map<string, number>();
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "sqlite") {
+      const instance = instanceOf(operation, opIndex);
+      operationsByInstance.set(
+        instance,
+        (operationsByInstance.get(instance) ?? 0) + 1,
+      );
+    }
+  });
+  // Only a read of the branch the commit writes pins what it writes, and a
+  // pending read only where it names its confirmed basis (`basisSeq`): one
+  // that does not is checked for staleness from its highest dependency's
+  // resolution on, which misses a peer's write landing before that (INV-1's
+  // CT-1910 deviation, docs/specs/memory-v2/09-invariants.md). The pointers
+  // each document's recursive reads cover, keyed by document and scope.
+  const pins = new Map<string, Set<string>>();
+  for (
+    const read of [
+      ...commit.reads.confirmed,
+      ...commit.reads.pending.filter((read) => read.basisSeq !== undefined),
+    ]
+  ) {
+    if (
+      read.nonRecursive === true ||
+      (("branch" in read ? read.branch : undefined) ?? branch) !== branch
+    ) {
+      continue;
+    }
+    const key = `${read.id}\0${normalizeScope(read.scope)}`;
+    const covered = pins.get(key) ?? new Set<string>();
+    covered.add(encodePointer(read.path));
+    pins.set(key, covered);
+  }
+  const structural = (patch: PatchOp): boolean =>
+    patch.op === "add" || patch.op === "remove" || patch.op === "move";
+
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "patch") return;
+    const firstMarked = new Map<string, number>();
+    for (const patch of operation.patches) {
+      if (patch.op !== "splice" || patch.pinned !== true) continue;
+      firstMarked.set(
+        patch.path,
+        Math.min(firstMarked.get(patch.path) ?? Infinity, patch.index),
+      );
+    }
+    if (firstMarked.size === 0) return;
+    const scope = normalizeScope(operation.scope);
+    const refuse = (array: string, why: string): never => {
+      throw new ProtocolError(
+        `memory v2 commit marks a splice of ${array} in document ` +
+          `${operation.id} ${why}: a marked splice must stand under a read ` +
+          "that pins its array, alone on the array in its commit",
+      );
+    };
+    let current: { document: EntityDocument | null | undefined } | undefined;
+    const currentDocument = (): EntityDocument | null | undefined =>
+      (current ??= {
+        document: readStateForScopeKey(engine, {
+          branch,
+          id: operation.id,
+          scope,
+          scopeKey: scopeKeyOf(operation, opIndex),
+        })?.document,
+      }).document;
+
+    // Every pointer the operation's patches name (a move names two), summed
+    // up once, so that each marked array looks up only the paths from the
+    // root down to it, one lookup per path:
+    // - `at`, by the pointer itself: its first op other than a splice, whether
+    //   any splice there is unmarked, and the lowest index a splice names;
+    // - `beneath`, by each pointer above it: the ops themselves;
+    // - `shifting`, by the pointer of its parent, for an add, remove or move
+    //   at an element: the one at the lowest index.
+    type Named = { patch: PatchOp; pointer: string; path: string[] };
+    type At = { other?: Named; unmarked: boolean; lowestSplice: number };
+    const at = new Map<string, At>();
+    const beneath = new Map<string, Named[]>();
+    const shifting = new Map<string, { lowest: number; named: Named }>();
+    for (const patch of operation.patches) {
+      const pointers = patch.op === "move"
+        ? [patch.from, patch.path]
+        : [patch.path];
+      for (const pointer of pointers) {
+        const path = parsePointer(pointer);
+        const named = { patch, pointer, path };
+        const key = encodePointer(path);
+        const here = at.get(key) ??
+          { unmarked: false, lowestSplice: Infinity };
+        if (patch.op === "splice") {
+          here.unmarked ||= patch.pinned !== true;
+          here.lowestSplice = Math.min(here.lowestSplice, patch.index);
+        } else {
+          here.other ??= named;
+        }
+        at.set(key, here);
+        for (let depth = 0; depth < path.length; depth++) {
+          const above = encodePointer(path.slice(0, depth));
+          const entries = beneath.get(above);
+          if (entries === undefined) beneath.set(above, [named]);
+          else entries.push(named);
+        }
+        const segment = path[path.length - 1];
+        if (
+          structural(patch) && segment !== undefined &&
+          isArrayIndexPropertyName(segment)
+        ) {
+          const parent = encodePointer(path.slice(0, -1));
+          const lowest = shifting.get(parent);
+          if (lowest === undefined || Number(segment) < lowest.lowest) {
+            shifting.set(parent, { lowest: Number(segment), named });
+          }
+        }
+      }
+    }
+    const reads = pins.get(`${operation.id}\0${scope}`);
+    // Whether the container at each pointer above a marked array is an array
+    // in the document as the store holds it, read once per pointer.
+    const arrays = new Map<string, boolean>();
+    const isArrayAt = (pointer: string, path: readonly string[]): boolean => {
+      let known = arrays.get(pointer);
+      if (known === undefined) {
+        known = arrayAtPath(currentDocument(), path) !== undefined;
+        arrays.set(pointer, known);
+      }
+      return known;
+    };
+
+    for (const [array, first] of firstMarked) {
+      if ((operationsByInstance.get(instanceOf(operation, opIndex)) ?? 0) > 1) {
+        refuse(array, "beside another operation on the document");
+      }
+      const arrayPath = parsePointer(array);
+      // The pointer of each path from the root down to the array, the array's
+      // own last.
+      const above = Array.from(
+        { length: arrayPath.length + 1 },
+        (_, depth) => encodePointer(arrayPath.slice(0, depth)),
+      );
+      if (!above.some((pointer) => reads?.has(pointer) === true)) {
+        refuse(array, "without a recursive read of the array or above it");
+      }
+      for (let depth = 0; depth <= arrayPath.length; depth++) {
+        const here = at.get(above[depth]);
+        if (here === undefined) continue;
+        // At the array or above it, nothing but splices: every one of the
+        // array's own marked, and one of an array above it only past the
+        // element the array is in.
+        if (here.other !== undefined) {
+          refuse(
+            array,
+            `beside a ${here.other.patch.op} at ${here.other.pointer}`,
+          );
+        }
+        if (depth === arrayPath.length) {
+          if (here.unmarked) refuse(array, "beside an unmarked one");
+          continue;
+        }
+        const ours = arrayPath[depth]!;
+        if (
+          here.lowestSplice !== Infinity &&
+          !(isArrayIndexPropertyName(ours) && here.lowestSplice > Number(ours))
+        ) {
+          refuse(array, `beside a splice at ${above[depth]}`);
+        }
+      }
+      // Beneath the array: below the first index, and no element added,
+      // removed or moved.
+      for (const named of beneath.get(above[arrayPath.length]) ?? []) {
+        const segment = named.path[arrayPath.length]!;
+        if (
+          !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
+          (named.path.length === arrayPath.length + 1 &&
+            structural(named.patch))
+        ) {
+          refuse(array, `beside a ${named.patch.op} at ${named.pointer}`);
+        }
+      }
+      // An element of an array above it, added, removed or moved at or
+      // before the element the array is in, moves the array.
+      for (let depth = 0; depth < arrayPath.length; depth++) {
+        const shift = shifting.get(above[depth]);
+        const ours = arrayPath[depth]!;
+        if (
+          shift !== undefined && isArrayIndexPropertyName(ours) &&
+          shift.lowest <= Number(ours) &&
+          isArrayAt(above[depth], arrayPath.slice(0, depth))
+        ) {
+          refuse(
+            array,
+            `beside a ${shift.named.patch.op} at ${shift.named.pointer} ` +
+              "that moves it",
+          );
+        }
+      }
+    }
+  });
+};
+
+/** The array at `path` of `document`, or `undefined` where there is none. */
+const arrayAtPath = (
+  document: EntityDocument | null | undefined,
+  path: readonly string[],
+): readonly FabricValue[] | undefined => {
+  let node: unknown = document;
+  for (const segment of path) {
+    node = isObjectOrArray(node)
+      ? (node as Record<string, unknown>)[segment]
+      : undefined;
+  }
+  return Array.isArray(node) ? node : undefined;
+};
+
+/**
+ * The document as it stood before the revision row of `revision`: as the
+ * document's previous row on the branch left it, or, where the row is the
+ * branch's first of the document, as the branch inherited it at its fork
+ * point; `null` where there was none.
+ */
+const previousRevisionDocument = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): EntityDocument | null => {
+  const previous = engine.prepare(`
+SELECT seq, op_index FROM revision
+WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+  AND (seq < :seq OR (seq = :seq AND op_index < :op_index))
+ORDER BY seq DESC, op_index DESC
+LIMIT 1
+`).get({
+      branch: revision.branch,
+      id: revision.id,
+      scope_key: revision.scopeKey,
+      seq: revision.seq,
+      op_index: revision.opIndex,
+    }) as { seq: number; op_index: number } | undefined;
+  if (previous !== undefined) {
+    return readRevision(engine, {
+      branch: revision.branch,
+      id: revision.id,
+      scopeKey: revision.scopeKey,
+      seq: previous.seq,
+      opIndex: previous.op_index,
+    });
+  }
+  // The branch's first row of the document: a read of the branch just
+  // before it resolves the document the branch inherited at its fork point.
+  return read(engine, {
+    id: revision.id,
+    branch: revision.branch,
+    scopeKey: revision.scopeKey,
+    seq: revision.seq - 1,
+  });
 };
 
 /**
@@ -6701,6 +7190,15 @@ const applyCommitTransaction = (
   // already answered from the store above.
   refuseDeletedSpace(engine, space);
 
+  // A splice names its index and its count of removals in whole numbers
+  // (`refuseFractionalSplices()`). Fresh commits only: an exact replay
+  // already answered from the store above.
+  for (const operation of commit.operations) {
+    if (operation.op === "patch") {
+      refuseFractionalSplices(operation.id, operation.patches);
+    }
+  }
+
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
   // `derived` row): the producer holds the space's lease — ONE equality check
   // against the holder the memory server's map names, not admission
@@ -7945,6 +8443,17 @@ const applyCommitTransaction = (
   // result — the original admission stamped it; re-running the CAS here
   // would wrongly reject the replay as its own duplicate) and before the
   // seq allocation; the stamps apply per-op in the write loop below.
+  // A marked splice stands as its mark says (`refuseUnfoundedMarkedSplices()`).
+  // Its document is read as the write keys it: a delegated commit's scoped
+  // writes key from the carried acting identity (see the write loop below).
+  refuseUnfoundedMarkedSplices(engine, {
+    commit,
+    branch,
+    principal: delegated?.actingPrincipal ?? principal,
+    sessionId: delegated?.actingSession ?? sessionId,
+    scopeKeyByOpIndex,
+  });
+
   const eventAppendPlan = validateEventAppends(engine, {
     commit,
     commitClass,

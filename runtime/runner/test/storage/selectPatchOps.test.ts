@@ -30,7 +30,7 @@ const tailSplice = (
   },
   path,
   coversDescendants: false,
-  tailSpliceStartIndex: start,
+  spliceStartIndex: start,
 });
 
 /** The pointers of the ops `selectPatchOps()` keeps. */
@@ -83,10 +83,10 @@ const selectComparingAllPairs = (
 ): string[] => {
   const subsumedByTailSplice = (path: readonly string[]) =>
     nonCover.some((splice) =>
-      splice.tailSpliceStartIndex !== undefined &&
+      splice.spliceStartIndex !== undefined &&
       path.length > splice.path.length && isPrefixPath(splice.path, path) &&
       /^(0|[1-9]\d*)$/.test(path[splice.path.length]) &&
-      Number(path[splice.path.length]) >= splice.tailSpliceStartIndex
+      Number(path[splice.path.length]) >= splice.spliceStartIndex
     );
   const covers = fullCover
     .filter((candidate) => !subsumedByTailSplice(candidate.path))
@@ -140,7 +140,7 @@ describe("selectPatchOps()", () => {
   it("keeps a covering candidate beneath a non-covering one that is not a tail splice", () => {
     const splice: PatchDraftCandidate = {
       ...tailSplice(["value", "list"], 0),
-      tailSpliceStartIndex: undefined,
+      spliceStartIndex: undefined,
     };
 
     expect(keptPointers([cover(["value", "list", "3"])], [splice])).toEqual([
