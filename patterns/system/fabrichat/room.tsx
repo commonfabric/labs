@@ -57,6 +57,7 @@ import {
   type FileStoreRecord,
   type FileStoreRecordCell,
 } from "../fabrifile/store.tsx";
+import { FileStoreView } from "../fabrifile/view.tsx";
 import {
   addParticipant,
   type ParticipantRosterCell,
@@ -1926,13 +1927,16 @@ export const FabriChatRoomCore = pattern<
     joined: tellJoined,
   });
   const openAttach = prepareAttach({ ensureFileStore: ensureFileStoreHere });
+  // Whether the space names a store, read from the record itself: the link
+  // `spaceFileStore` holds reads as a value even while it links nothing.
+  const hasSpaceFileStore = computed(() =>
+    (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
+      undefined
+  );
   const attachFiles = commitAttach({
     composer,
     store: spaceFileStore,
-    hasStore: computed(() =>
-      (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
-        undefined
-    ),
+    hasStore: hasSpaceFileStore,
   });
   // The files this session's composer is attaching, a list of the session's
   // own, so that each session's rows are its own.
@@ -1956,6 +1960,25 @@ export const FabriChatRoomCore = pattern<
         : [];
     })
   );
+  // Whether this session has the space's files open. The store's view is
+  // mapped from a list of the session's own that holds the store only while
+  // they are, so a session that hasn't opened them holds no view, and nothing
+  // reads the store's entries for it.
+  const filesOpen = new Writable.perSession(false);
+  const filesStores = computed((): PerSession<Cell<FileStoreOutput>[]> =>
+    filesOpen.get() && hasSpaceFileStore && spaceFileStore !== undefined
+      ? [spaceFileStore]
+      : []
+  );
+  const filesViews = filesStores.map((store) => FileStoreView({ store }));
+  const filesViewUIs = computed((): PerSession<VNode[]> =>
+    filesViews.map((filesView) => filesView[UI])
+  );
+  const filesLabel = computed(() => filesOpen.get() ? "Hide files" : "Files");
+  const filesToggleDisplay = computed((): ChatDisplay =>
+    hasSpaceFileStore ? "block" : "none"
+  );
+  const toggleFiles = action(() => filesOpen.set(!filesOpen.get()));
   const threadComposers = threadComposerRoots.map((root) =>
     FabriChatThreadComposer({
       root,
@@ -2209,16 +2232,30 @@ export const FabriChatRoomCore = pattern<
               </cf-button>
             </cf-hstack>
           ))}
-          <cf-file-input
-            multiple
-            showPreview={false}
-            buttonText="📎 Attach"
-            variant="ghost"
-            size="sm"
-            disabled={cannotSendForSession}
-            oncf-click={openAttach}
-            oncf-change={attachFiles}
-          />
+          <cf-hstack gap="2" align="center">
+            <cf-file-input
+              multiple
+              showPreview={false}
+              buttonText="📎 Attach"
+              variant="ghost"
+              size="sm"
+              disabled={cannotSendForSession}
+              oncf-click={openAttach}
+              oncf-change={attachFiles}
+            />
+            <div
+              id="fabrichat-files-toggle"
+              hidden
+              style={{ display: filesToggleDisplay }}
+            >
+              <cf-button size="sm" variant="ghost" onClick={toggleFiles}>
+                {filesLabel}
+              </cf-button>
+            </div>
+          </cf-hstack>
+        </cf-vstack>
+        <cf-vstack id="fabrichat-files" gap="2">
+          {filesViewUIs}
         </cf-vstack>
 
         <cf-vstack

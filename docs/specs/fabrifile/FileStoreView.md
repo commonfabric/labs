@@ -13,8 +13,11 @@ which is `PerSession`: a sort order, a selection, a rename in progress, and the
 uploads it has started and not yet added. It MUST NOT hold anything read from
 the store, or any copy of a file's bytes.
 
-A root that offers file storage instantiates the view from its own rendering,
-when it shows its files. A client that draws natively never instantiates it.
+A root that offers file storage, or another piece that shows its space's
+store, such as a FabriChat room
+([`FabriChatRoom`](../fabrichat/FabriChatRoom.md)), instantiates the view from
+its own rendering, when it shows its files. A client that draws natively never
+instantiates it.
 
 ## What it shows
 
