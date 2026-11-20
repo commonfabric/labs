@@ -20,6 +20,12 @@ import {
 } from "@commonfabric/pattern-index/store";
 import { mineLines, mineRows } from "../lib/pattern-mine.ts";
 import {
+  type LinkChannel,
+  linkLine,
+  makeStable,
+  patternLink,
+} from "../lib/pattern-channels.ts";
+import {
   entryHistory,
   historyLines,
   lineageLines,
@@ -575,6 +581,61 @@ export async function unshare(
   });
 }
 
+/** The entry's lineage, or a refusal saying the index keeps none. */
+async function keptLineage(
+  client: Pick<PatternIndexClient, "listLineages">,
+  entry: string,
+  sources: SlotSources,
+) {
+  const lineage = await lineageForEntry(client, absPath(entry), sources);
+  if (lineage === undefined) {
+    throw new PatternHistoryError(`No versions of ${entry} are kept.`);
+  }
+  return lineage;
+}
+
+/** `cf pattern stable`: makes the newest shared version findable. */
+export async function stable(
+  options: IndexCLIOptions,
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await keptLineage(client, entry, sources);
+    const report = await makeStable(client, lineage, entry);
+    out(
+      options.json
+        ? report
+        : report.changed
+        ? `Version ${report.number} of ${entry} is stable: search, the catalog and its link (cf pattern link) give it.`
+        : `Version ${report.number} of ${entry} is stable already.`,
+      { json: options.json },
+    );
+  });
+}
+
+/** `cf pattern link`: a link to the entry's stable, beta or numbered version. */
+export async function link(
+  options: IndexCLIOptions & { beta?: boolean; number?: number },
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  if (options.beta && options.number !== undefined) {
+    throw new ValidationError("Pass --beta or --number, not both.");
+  }
+  const channel: LinkChannel = options.number ??
+    (options.beta ? "beta" : "stable");
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await keptLineage(client, entry, sources);
+    const report = await patternLink(client, lineage, entry, channel);
+    out(options.json ? report : linkLine(entry, report), {
+      json: options.json,
+    });
+  });
+}
+
 export async function unpublish(
   options: IndexCLIOptions,
   entry: string,
@@ -819,6 +880,37 @@ export const pattern = new Command()
         )
         .arguments("<entry:string>"),
     ).action(unshare),
+  )
+  /* pattern stable */
+  .command(
+    "stable",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Make a pattern's newest shared version stable: what search, the " +
+            "catalog and a plain link give. It passed the privacy check when " +
+            "it was shared on beta, so nothing new is exposed.",
+        )
+        .arguments("<entry:string>"),
+    ).action(stable),
+  )
+  /* pattern link */
+  .command(
+    "link",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Print a link to a shared pattern: its stable version, or beta " +
+            "when nothing is stable yet. Links name the pattern by its " +
+            "pseudonym, never you, and open only for people with accounts.",
+        )
+        .arguments("<entry:string>")
+        .option("--beta", "Link to beta, the newest shared version.")
+        .option(
+          "--number <n:integer>",
+          "Link to exactly shared version n, which never changes.",
+        ),
+    ).action(link),
   )
   /* pattern unpublish */
   .command(

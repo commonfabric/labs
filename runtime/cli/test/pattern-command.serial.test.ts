@@ -18,6 +18,7 @@ import {
 } from "@commonfabric/llm";
 import type {
   PatternIndexLineage,
+  PatternIndexLink,
   PatternIndexProgram,
   PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
@@ -28,10 +29,12 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { delegationsCause } from "../../runner/src/runtime.ts";
 import {
   history,
+  link,
   type PublishCommandDeps,
   publishNamed,
   rollback,
   share,
+  stable,
   unpublish,
   unshare,
 } from "../commands/pattern.ts";
@@ -108,6 +111,18 @@ class FakeLineages {
   /** Whether the lineage is published under the member's name. */
   published = false;
 
+  /** What `listVersions` answers for `lin-1`, newest first. */
+  versions: PatternIndexVersionSummary[] = [
+    summary(2, { head: true }),
+    summary(1),
+  ];
+
+  /** What each pattern link resolves to; any other ref is a 404. */
+  links: Record<string, PatternIndexLink> = {};
+
+  /** Whether `shareVersion` refuses as not the newest (409). */
+  notNewest = false;
+
   readonly #rest: PatternIndexFetch;
 
   constructor(rest: PatternIndexFetch) {
@@ -131,27 +146,69 @@ class FakeLineages {
 
   readonly fetchFn: PatternIndexFetch = async (input, init) => {
     const fn = String(input).split("/").at(-1)!;
-    const answer = this.#answer(fn);
+    const body = JSON.parse(String(init?.body ?? "{}"));
+    // A pattern link is an owner's lineage read; a pattern id is the index's.
+    const answer = fn === "getPattern" && body.ref === undefined
+      ? undefined
+      : this.#answer(fn);
     if (answer === undefined) return await this.#rest(input, init);
     if (!this.member) {
       return Response.json({ error: "not a member" }, { status: 403 });
     }
-    const body = JSON.parse(String(init?.body ?? "{}"));
     this.calls.push({ fn, body });
-    return Response.json(answer(body));
+    return answer(body);
   };
 
   #answer(
     fn: string,
-  ): ((body: Record<string, unknown>) => unknown) | undefined {
+  ): ((body: Record<string, unknown>) => Response) | undefined {
+    const answer = this.#value(fn);
+    return answer === undefined ? undefined : (body) => {
+      const value = answer(body);
+      if (value === undefined) {
+        return Response.json({ error: "pattern not found" }, {
+          status: 404,
+        });
+      }
+      return value instanceof Response ? value : Response.json(value);
+    };
+  }
+
+  #value(
+    fn: string,
+  ):
+    | ((body: Record<string, unknown>) => Response | object | undefined)
+    | undefined {
     switch (fn) {
+      case "getPattern":
+        return ({ ref }) => {
+          const link = this.links[String(ref)];
+          return link === undefined ? undefined : {
+            patternId: `pat-${link.number}`,
+            createdAt: "2026-11-16T10:00:00.000Z",
+            description: "Says where the household lives.",
+            hashtags: [],
+            dependencies: [],
+            link,
+          };
+        };
+      case "shareVersion":
+        return ({ versionId }) =>
+          this.notNewest
+            ? Response.json({ code: "not_newest" }, { status: 409 })
+            : {
+              versionId,
+              patternId: "pat-2",
+              visibility: "public",
+              share: "shared",
+              listing: "passed",
+              shared: 2,
+              changed: true,
+            };
       case "listLineages":
         return () => ({ lineages: this.lineages });
       case "listVersions":
-        return () => ({
-          lineageId: "lin-1",
-          versions: [summary(2, { head: true }), summary(1)],
-        });
+        return () => ({ lineageId: "lin-1", versions: this.versions });
       case "getVersion":
         return ({ versionId }) => ({
           ...summary(Number(String(versionId).slice(4))),
@@ -480,7 +537,7 @@ describe("pattern", () => {
         });
       expect(rendered.map((r) => r.json)).toEqual([undefined, undefined]);
       expect(String(rendered[0].value)).toContain("as p-me (v1).");
-      expect(index.calls.find((call) => call.fn === "shareVersion")?.body)
+      expect(lineages.calls.find((call) => call.fn === "shareVersion")?.body)
         .toEqual({ versionId: expect.any(String), channel: "stable" });
       expect(rendered[1].value).toBe(
         `Published under "Sam Lee"; cf pattern unpublish ${entry} stops showing it.`,
@@ -692,6 +749,132 @@ describe("pattern", () => {
       expect(lineages.calls.some((call) => call.fn === "unshareLineage"))
         .toBe(false);
       expect(rendered).toEqual([]);
+      expect(Deno.exitCode).toBe(1);
+    });
+  });
+
+  describe("stable()", () => {
+    it("makes the entry's newest shared version stable and says what gives it", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.versions = [
+        summary(3, { head: true }),
+        summary(2, { shared: { number: 2, stable: false } }),
+        summary(1, { shared: { number: 1, stable: true } }),
+      ];
+
+      await stable(options(), entry, ownerDeps());
+
+      expect(lineages.calls.find((call) => call.fn === "shareVersion")?.body)
+        .toEqual({ versionId: "ver-2", channel: "stable" });
+      expect(rendered[0].value).toBe(
+        `Version 2 of ${entry} is stable: search, the catalog and its link (cf pattern link) give it.`,
+      );
+      expect(Deno.exitCode).toBe(savedExitCode);
+    });
+
+    it("asks nothing of the index when the newest shared version is stable already", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.versions = [
+        summary(2, { shared: { number: 1, stable: true } }),
+      ];
+
+      await stable(options(), entry, ownerDeps());
+
+      expect(lineages.calls.some((call) => call.fn === "shareVersion"))
+        .toBe(false);
+      expect(rendered[0].value).toBe(
+        `Version 1 of ${entry} is stable already.`,
+      );
+    });
+
+    it("exits 1 making nothing stable when nothing of the entry is shared yet", async () => {
+      lineages.keep(await entrysSlot());
+
+      await stable(options(), entry, ownerDeps());
+
+      expect(lineages.calls.some((call) => call.fn === "shareVersion"))
+        .toBe(false);
+      expect(errors.join("\n")).toContain("cf pattern share shares it on beta");
+      expect(Deno.exitCode).toBe(1);
+    });
+
+    it("exits 1 saying to run it again when a newer version was shared since", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.versions = [
+        summary(2, { shared: { number: 2, stable: false } }),
+      ];
+      lineages.notNewest = true;
+
+      await stable(options(), entry, ownerDeps());
+
+      expect(errors.join("\n")).toContain("run cf pattern stable again");
+      expect(Deno.exitCode).toBe(1);
+    });
+  });
+
+  describe("link()", () => {
+    const linkTo = (
+      ref: string,
+      channel: PatternIndexLink["channel"],
+      number: number,
+    ): PatternIndexLink => ({
+      ref,
+      channel,
+      number,
+      stable: channel === "stable",
+    });
+
+    it("prints the stable link by the lineage's pseudonym", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.links = {
+        "a-xyz": linkTo("a-xyz", "stable", 1),
+        "a-xyz@beta": linkTo("a-xyz@beta", "beta", 2),
+      };
+
+      await link(options(), entry, ownerDeps());
+
+      expect(rendered[0].value).toBe(
+        `a-xyz: ${entry} on stable, version 1 now. Anyone with an account can open it.`,
+      );
+    });
+
+    it("gives beta when nothing is stable yet, and beta with --beta", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.links = { "a-xyz@beta": linkTo("a-xyz@beta", "beta", 2) };
+
+      await link(options(), entry, ownerDeps());
+      await link(options({ beta: true }), entry, ownerDeps());
+
+      expect(rendered.map((r) => r.value)).toEqual([
+        `a-xyz@beta: ${entry} on beta, version 2 now. Anyone with an account can open it.`,
+        `a-xyz@beta: ${entry} on beta, version 2 now. Anyone with an account can open it.`,
+      ]);
+    });
+
+    it("prints exactly one shared version with --number, never falling back", async () => {
+      lineages.keep(await entrysSlot());
+      lineages.links = {
+        "a-xyz": linkTo("a-xyz", "stable", 2),
+        "a-xyz@1": linkTo("a-xyz@1", "number", 1),
+      };
+
+      await link(options({ number: 1 }), entry, ownerDeps());
+      await link(options({ number: 5 }), entry, ownerDeps());
+
+      expect(rendered.map((r) => r.value)).toEqual([
+        `a-xyz@1: ${entry} on exactly version 1. Anyone with an account can open it.`,
+      ]);
+      expect(errors.join("\n")).toContain("has no shared version 5");
+      expect(Deno.exitCode).toBe(1);
+    });
+
+    it("exits 1 printing no link when nothing of the entry is shared yet", async () => {
+      lineages.keep(await entrysSlot());
+
+      await link(options(), entry, ownerDeps());
+
+      expect(rendered).toEqual([]);
+      expect(errors.join("\n")).toContain("Nothing of");
       expect(Deno.exitCode).toBe(1);
     });
   });
