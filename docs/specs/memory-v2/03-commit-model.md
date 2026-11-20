@@ -465,13 +465,18 @@ confirmed read, the document at its `seq`; and the stored document itself
 when the commit did not read the document, where the sequence is an identity
 only if it is idempotent. A read names its branch only where that differs
 from the commit's, exactly as §3.6.1's staleness rule reads it, and a read of
-the same entity on another branch is passed over. Two reads leave the view
+the same entity on another branch is passed over. Three reads leave the view
 unreconstructable, and a commit carrying one gets no exemption: a pending
 read that declares no `basisSeq`, since the durable document at a named
 layer's resolution is not the reader's view, carrying every foreign write on
 other paths that landed before the layer and that the reader had not
-integrated; and a read whose basis lies below the commit's branch's creation
-seq, which names no state of that branch (`06-branching.md` §6.10.1).
+integrated; a read whose basis lies below the commit's branch's creation
+seq, which names no state of that branch (`06-branching.md` §6.10.1); and a
+pending read naming a layer stored without its operations (`02-storage.md`
+§3.3), which the commit log does not hold to replay. Derived commits are made
+in an execution-lease holder's session, and the server makes every commit of
+that session with no pending reads, so no read of its own names such a
+layer.
 
 Applying such a commit changes nothing, so no read it recorded can have led it
 to a wrong write, and refusing it would only make the writer re-derive the
@@ -592,8 +597,10 @@ by the read's shape:
   reconstructed the layer's view from (§3.6.1) sat on the reader's declared
   `basisSeq` through no own layer the reader does not name, the reader's
   view through the layer is the document the proof was made against, which is the stored document at the layer's seq, and the
-  scan starts at that seq instead. The server looks for such a layer only
-  once the declared basis has found a conflict.
+  scan starts at that seq instead. A layer stored without its operations
+  (`02-storage.md` §3.3) keeps none to establish either, so the scan never
+  starts at its seq. The server looks for such a layer only once the declared basis has
+  found a conflict.
 - **Legacy basis (`basisSeq` absent).** The scan is based at the HIGHEST
   element's resolution seq. Writes landing between the reader's confirmed
   basis and that seq are not scanned — the pending-read basis over-advance
@@ -663,7 +670,8 @@ in the commit log.
 1. Validate all confirmed reads.
 2. Resolve all pending reads within the logical session.
 3. Assign the next global `seq`.
-4. Append a `commit` row containing the original payload and resolution data.
+4. Append a `commit` row containing the original payload, in the form the log
+   stores it in (`02-storage.md` §3.3), and resolution data.
 5. Append one `revision` row per operation in the transaction — except an
    operation proven to change nothing (an identical re-`set` of a
    content-addressed document, or every operation of an identity commit,
@@ -706,7 +714,7 @@ Every entry holds a client commit. Creating or deleting a branch takes no
 The semantic JSON write path is keyed by `seq`, not by commit hash. The
 content-addressed UCAN envelope is reserved for a later signed-write pass.
 A stored `ClientCommit` may hold a `digest` of the whole submission in
-place of its `reads` (02-storage.md §3.3).
+place of its `reads`, its `operations` or both (02-storage.md §3.3).
 
 ### 3.7.3 Seq Assignment
 
@@ -737,9 +745,9 @@ On replay after reconnect:
 
 1. the server deduplicates by `(sessionId, localSeq)`
 2. it compares the replayed `original` payload with the stored `original`:
-   byte for byte, or, where the log holds the commit in digest form
-   (02-storage.md §3.3), with the digest form of the replayed payload, whose
-   digest is the SHA-256 of the replayed payload's whole encoding
+   byte for byte, or, where the log holds the commit in a digest form
+   (02-storage.md §3.3), with that form of the replayed payload, whose digest
+   is the SHA-256 of the replayed payload's whole encoding
 3. if they match, it returns the existing commit result
 4. if they differ, the replay is a protocol error
 

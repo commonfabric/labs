@@ -458,7 +458,10 @@ Deno.test("conflicts: counts an unchecked read of a write outside the selected s
         `SELECT original FROM "commit" WHERE seq = 2`,
       ).get<{ original: string }>()!;
       db.prepare(`UPDATE "commit" SET original = ? WHERE seq = 2`).run(
-        encodeStoredCommit(JSON.parse(original) as ClientCommit, false),
+        encodeStoredCommit(JSON.parse(original) as ClientCommit, {
+          reads: false,
+          operations: true,
+        }),
       );
     } finally {
       db.close();

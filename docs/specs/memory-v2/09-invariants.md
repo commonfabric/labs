@@ -456,7 +456,8 @@ acceptance as an INV-1 hit.
 Layer: server dedup (`03-commit-model.md` §3.7.4); client retained-commit
 replay.
 
-Soundness direction: none — exact.
+Soundness direction: none — exact, short of a SHA-256 collision for a commit
+stored in a digest form (`02-storage.md` §3.3).
 
 Checked by: engine and reconnect unit tests.
 

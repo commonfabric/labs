@@ -61,11 +61,11 @@ done, and the compaction tool comes after it.
 
 | Fact | Where |
 | --- | --- |
-| A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the client commit, whole or in digest form, where a digest of the whole submission stands in for its reads ([02-storage.md §3.3](../specs/memory-v2/02-storage.md)); `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `runtime/memory/v2/engine.ts`, the `INIT` statement |
+| A space is one SQLite file. `commit` is the write log (`seq` primary key; `session_id` + `local_seq` unique; `original` holds the client commit, whole or in a digest form, where a digest of the whole submission stands in for its reads, its operations or both ([02-storage.md §3.3](../specs/memory-v2/02-storage.md)); `resolution`; `class`). `revision` holds one row per operation on one document instance, keyed `(branch, id, scope_key, seq, op_index)`, with `op` in `set`, `patch`, `delete` and a foreign key to `commit`. `head` points at each instance's newest revision. `snapshot` holds a materialized document at a seq. `op_submission`, `op_integrated` and `op_checkpoint` hold collaborative operation fields with foreign keys to `commit`; `op_field_epoch` keeps a `commit_seq` column without one. `branch`, `execution_lease`, `scheduler_basis`, `execution_outbox`, `blob_store`, `invocation`, `authorization` complete the schema; patterns add their own tables through the SQLite builtin. | `runtime/memory/v2/engine.ts`, the `INIT` statement |
 | A read resolves the head row by joining `head` to `revision`, so a head whose revision row is missing reads as absent. A `set` decodes directly; a `patch` reconstructs from the newer of the last `set`/`delete` and the newest snapshot, replaying the patches after it. | `readStateForScopeKey`, `reconstructPatchedDocument` |
 | The engine writes a snapshot when a document has accumulated `snapshotInterval` (10) patches since its base or newest snapshot, and keeps the newest `snapshotRetention` (2) per instance. So a replay chain is at most ten rows. | `maybeMaterializeSnapshot`, `DEFAULT_SNAPSHOT_INTERVAL` |
 | Finding the base runs `selectLatestBase`, which walks the instance's revision index backward from the head until it finds a `set` or `delete`, no further back than the newest snapshot's seq. The index does not cover `op`, so each row the walk visits costs a table fetch; the bound keeps the walk within one snapshot interval of patches. Reconstruction, the commit-time snapshot check and the schema-reference probe run it through `latestBaseAndSnapshot`. | `SELECT_LATEST_BASE`, `latestBaseAndSnapshot` |
-| A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its encoding matches the stored `original`, or, for a row in digest form, when its encoding's SHA-256 matches the stored digest, refused as a replay mismatch when neither does, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `storesCommit` (`runtime/memory/v2/stored-commit.ts`), `selectPendingResolution` |
+| A confirmed read is validated by scanning for a `set`/`delete` after its basis seq, then for an overlapping patch. A pending read whose basis the engine cannot reconstruct keeps the staleness refusal it arrived with. A pending read names the own-session layers its view included, and the conflict scan excludes rows whose commit carries that session and one of those `local_seq`s. A resubmitted commit is recognized by `(session_id, local_seq)` alone, answered from its stored result when its encoding matches the stored `original`, or, for a row in a digest form, when that form of the resubmission matches it, which it does when its encoding's SHA-256 matches the stored digest, refused as a replay mismatch when neither does, and applied as a fresh commit when no row is found. An `origin-committed` precondition looks up the origin commit by the same key. A revision's `commit_seq` is joined to `commit.seq` everywhere it is used; nothing requires it to equal the revision's own `seq`. | `findConflictSeq`, the pending-read `basisOf`, `selectExistingCommit`, `storesCommit` (`runtime/memory/v2/stored-commit.ts`), `selectPendingResolution` |
 | A resumed session's catch-up is a full watch evaluation diffed against the holdings the client sent, not a replay of commits since a seq. The serving loop's commit feed reads from the seq its index scan ran against, in-process. | `runtime/memory/v2/server.ts` (`forceFullResync`), `selectCommitsSince` |
 | The decoded-document cache keys an entry by the revision's address plus its `op` and data length, on the premise that the engine only appends revisions. The per-space bound is 128 MB and 65,536 entries; the Server bounds the total. | `documentCacheKey`, `DEFAULT_DOCUMENT_CACHE_*` |
 | `VACUUM INTO` from a read-only connection is the sanctioned way to take a crash-consistent single-file copy of a live store. | `runtime/memory/v2/dump.ts` |
@@ -88,7 +88,8 @@ are from the investigation record.
 **Where the bytes are.** A `set` stores its document twice — in
 `commit.original` as the operation and in `revision.data` as the row — and a
 patch stores its patch list twice the same way, and `original` also carries
-the commit's read set. On the September copy the split is:
+the commit's read set. A derived commit stored without its operations keeps
+them in `revision.data` alone. On the September copy the split is:
 
 | Column | Bytes as stored |
 | --- | ---: |
@@ -315,7 +316,9 @@ Each is something a reader relies on today, with the code that relies on it.
   of a later one — Astra's review reproduced the second with a week-old row
   swept by an age window). No age window makes this safe, so no commit row is
   deleted. Outside the retained window the row's `original` is replaced by a
-  marker carrying a hash of what it held, whether or not a surviving row
+  marker carrying a hash of what it held, in whichever form the engine stored
+  it (a payload may already be in a digest form, and the marker then hashes
+  that text), whether or not a surviving row
   still points at the commit: nothing reads a payload beyond replay
   detection and the pending-read layer replay, which the window serves, and
   the genesis receipt, which is exempt below, and a compaction commit's own
@@ -341,7 +344,9 @@ Each is something a reader relies on today, with the code that relies on it.
   carries the document, and the payload would only duplicate it. On the
   2026-10-09 production file that is the difference between 4.1 GB and most
   of 13.6 GB (see [what the history costs](#what-the-history-costs-today-measured-on-copies)). The audit behind the list is every `FROM "commit"` outside
-  the engine: `genesis-root.ts` is the one live reader of `original`; the
+  the engine: `genesis-root.ts` is the one live reader of `original`, and
+  `stored-commit.ts` decides which form the engine stores and how a
+  resubmission matches each; the
   state inspector's readers (`conflicts.ts`, `timetravel.ts`, `churn.ts`,
   `scopes.ts`, `grouping.ts`, `queries.ts`, `clone.ts`, `discover.ts`) are
   offline history readers that lose what the archive keeps. A reader added
@@ -957,10 +962,13 @@ is the follow-up only if the rehearsal says the bound is not enough.
 **Answer a hollowed commit's resubmission faithfully (stage 8).** After
 compaction a resubmitted commit whose payload was hollowed is refused as a
 replay mismatch: safe, but the client reports an error for a write that
-landed. The marker the tool writes carries a hash of the original bytes, so
-the engine can learn to recognize it: a resubmission whose encoded bytes hash
-to the marker's value is answered `replayed: true` at the stored seq with
-every operation elided, exactly as a within-window replay is answered today.
+landed. The marker the tool writes carries a hash of the stored bytes, so
+the engine can learn to recognize it. A resubmission matches a marker when the
+marker's hash equals `hashStringOf` of one of the forms the engine stores for
+it at the row's class and seq, which are the forms `storesCommit()` compares a
+resubmission in. A matching resubmission is answered `replayed: true` at the
+stored seq with every operation elided, exactly as a within-window replay is
+answered today.
 This also puts the compaction on record inside the store: the `system` commit
 the tool inserts is the compaction log, with the run's report as its
 `original`, and `cf inspect` can read it to say "history before this commit

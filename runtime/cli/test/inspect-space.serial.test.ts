@@ -233,7 +233,7 @@ describe("inspect-space", () => {
           reads: { confirmed: [{ id: "of:x", path: [], seq: 2 }], pending: [] },
           operations: [{ op: "set", id: "of:y", value: { value: 1 } }],
         } as unknown as ClientCommit,
-        false,
+        { reads: false, operations: true },
       );
       seedSpace(
         space,

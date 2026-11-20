@@ -68,7 +68,9 @@ import { ExecutionLeases } from "./execution-lease.ts";
 import { HeldDocuments } from "./held-documents.ts";
 import { prepare, type PreparedStatement } from "./prepared-statement.ts";
 import {
+  digestsOperations,
   encodeStoredCommit,
+  omitsOperations,
   type StoredClientCommit,
   storesCommit,
 } from "./stored-commit.ts";
@@ -7174,7 +7176,7 @@ const applyCommitTransaction = (
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
   if (existing) {
-    if (!storesCommit(existing.original, commit)) {
+    if (!storesCommit(existing, commit)) {
       throw new ProtocolError(
         `commit replay mismatch for session ${sessionId} localSeq ${commit.localSeq}`,
       );
@@ -8251,6 +8253,9 @@ const applyCommitTransaction = (
         const layer = decodeTrustedMemoryBoundary(
           row.original,
         ) as StoredClientCommit;
+        // A layer stored without its operations has none to replay, which
+        // leaves its view of the document as unknown as a missing layer does.
+        if (omitsOperations(layer)) return { known: false };
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -8521,7 +8526,11 @@ const applyCommitTransaction = (
     [...elidedOpIndexes].some((opIndex) =>
       commit.operations[opIndex].op === "patch"
     );
-  const original = encodeStoredCommit(commit, keepsReads);
+  const encoded = encodeMemoryBoundary(commit);
+  const original = encodeStoredCommit(commit, {
+    reads: keepsReads,
+    operations: !digestsOperations(commit, commitClass, seq),
+  }, encoded);
   const resolution = encodeMemoryBoundary(
     resolvedPendingReads.length > 0 ? { seq, resolvedPendingReads } : { seq },
   );
@@ -8653,8 +8662,8 @@ const applyCommitTransaction = (
     // stream `seq` (this commit's) and admission-resolved `firedAt`
     // written into a CLONE of the op — the caller's operation objects are
     // shared with replica overlays and stay pristine; `original` (encoded
-    // above, pre-stamp) records the as-received payload so replay
-    // comparison stays stable.
+    // above, pre-stamp) records the as-received payload, or its digest, so
+    // replay comparison stays stable.
     const stamps = eventAppendPlan.get(opIndex);
     const appendStamped = stamps === undefined
       ? operation
@@ -8706,7 +8715,9 @@ const applyCommitTransaction = (
     });
   }
 
-  validateStoredSyncSchemaRefs(engine, branch, revisions, original);
+  // The whole encoding, never the stored form: the guard reads every string
+  // the operations carry out of it.
+  validateStoredSyncSchemaRefs(engine, branch, revisions, encoded);
 
   // Per-stream `eventWatermark` maintenance (Phase 3; events.md §4): a
   // DERIVED commit that touched a stream sidecar has its watermark
@@ -9468,6 +9479,9 @@ const identityLayerBasis = (
     const layer = decodeTrustedMemoryBoundary(
       row.original,
     ) as StoredClientCommit;
+    // A layer stored without its operations has none to prove an identity
+    // from.
+    if (omitsOperations(layer)) continue;
     const opIndexes: number[] = [];
     let replayable = true;
     for (const [opIndex, operation] of layer.operations.entries()) {
