@@ -724,12 +724,10 @@ The strict-only delta is:
     that gate now. Its request stages under a `sqliteQuery` sink, which
     releases ungated under the max-enforcement posture for a reason of its
     own: the bound a read wants is the database's own SPACE, and a per-sink
-    ceiling holds a clause list and nothing else. That bound is also what the
-    store's own ceiling was refusing, and it was worth exactly one case — a
-    database in another space receiving a request that carries a label —
-    so the builtin applies it before staging, where which space the database
-    is in is a thing it can see, measuring the transaction's flow join rather
-    than the transaction-global consumed set the sink ceilings read. The
+    ceiling holds a clause list and nothing else. A database in another
+    space receives a labeled request like one in the same space: its
+    provider serves the trusted runtime, and the rows' labels decide what
+    each reader is shown (`sqlite-builtin/06-cfc.md`). The
     control state takes the route, because a request hash is a function of
     parameters no author can foresee, while `/result`'s per-column entries
     stay the author's: the route declines at a declared path, and the
