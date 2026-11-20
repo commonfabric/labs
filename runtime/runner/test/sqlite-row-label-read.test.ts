@@ -633,6 +633,30 @@ describe("resolveCeilingPlaceholders", () => {
     }]);
   });
 
+  it("resolves the cell-schema spelling, a placeholder as a User's subject", () => {
+    const U = "https://commonfabric.org/cfc/atom/User";
+    const res = resolveCeilingPlaceholders(
+      [
+        { type: U, subject: { __ctCurrentPrincipal: true } },
+        { anyOf: [{ type: U, subject: { __ctDbOwner: true } }] },
+        // Not the canonical two-field User: left as written, and so unresolved.
+        { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+      ],
+      { actingPrincipal: "did:key:zMe", owner: OWNER },
+    );
+    if ("error" in res) throw new Error(res.error);
+    assertEquals(res.atoms, [
+      { type: U, subject: "did:key:zMe" },
+      { anyOf: [{ type: U, subject: OWNER }] },
+      { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+    ]);
+    const noActing = resolveCeilingPlaceholders(
+      [{ type: U, subject: { __ctCurrentPrincipal: true } }],
+      { owner: OWNER },
+    );
+    assert("error" in noActing);
+  });
+
   it("an unresolvable placeholder inside an `anyOf` fails closed", () => {
     const res = resolveCeilingPlaceholders(
       [{ anyOf: [{ __ctCurrentPrincipal: true }, OWNER] }],

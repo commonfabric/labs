@@ -1113,7 +1113,7 @@ Deno.test("a wire match without the global flag still evaluates (forced, no thro
   assertEquals(res.confidentiality, [user("did:mailto:a@b.example")]);
 });
 
-// CFC spec §4.1.1 / §15.2: a reader principal is the structured
+// CFC spec §4.1.2 / §15.2: a reader principal is the structured
 // `User{subject}` atom, never a bare DID string (§13.12.1 writes the db owner
 // as `O = User(did:key:owner)`, §4.2 an OR-clause participant as
 // `User(did:mailto:…)`). A bare string meets no `User` ceiling under the fit

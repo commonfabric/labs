@@ -804,7 +804,7 @@ function evalPrincipal(
 }
 
 // A reader, as a confidentiality alternative, is the structured
-// `User{subject}` atom (CFC spec §4.1.1, §15.2; §13.12.1 writes the db owner
+// `User{subject}` atom (CFC spec §4.1.2, §15.2; §13.12.1 writes the db owner
 // `O = User(did:key:owner)`), never the bare DID: the fit test compares atoms
 // exactly, so a bare string would meet no `User` ceiling — the owner's own run
 // could not read the rows `dbOwner()` labels for it.

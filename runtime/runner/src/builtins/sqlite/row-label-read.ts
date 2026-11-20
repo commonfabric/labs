@@ -6,7 +6,11 @@
 // Spec: docs/specs/sqlite-builtin/06-cfc.md ("Read — re-derive per row,
 // attach, ceiling"; "Fail-closed rules").
 
-import type { CfcAtom, CfcAtomObject } from "@commonfabric/api/cfc";
+import {
+  CFC_ATOM_TYPE,
+  type CfcAtom,
+  type CfcAtomObject,
+} from "@commonfabric/api/cfc";
 import {
   atomKey,
   evaluateRowLabel,
@@ -146,7 +150,8 @@ function intersectCommonAlternatives(
 // readable by all. Per-row labels store concrete principals (dbOwner() is
 // resolved to the owner at eval time), so an alternative admits the reader iff
 // it is exactly the reader's canonical `User(<reader DID>)` atom (CFC spec
-// §15.2). A bare DID string is no atom (§4.1.1) and admits nobody; neither does
+// §15.2). A bare DID string is not an atom under the spec (§4.1.2: atoms are
+// JSON objects with a `type`) and admits nobody; neither does
 // a non-principal alternative (Caveat/Expires/material-risk marker) — the row
 // is withheld, fail closed.
 function readerAdmitsLabel(
@@ -448,6 +453,20 @@ export function resolveCeilingPlaceholders(
   const resolveAtom = (
     atom: CfcAtom,
   ): { atom: CfcAtom } | { error: string } => {
+    // The cell-schema spelling wraps the placeholder as a User's subject
+    // (`{type: User, subject: {__ctCurrentPrincipal: true}}`,
+    // current-principal-confidentiality.ts); it names the same reader as the
+    // bare placeholder, so it resolves to the same atom. Only the canonical
+    // two-field User qualifies.
+    if (
+      isObjectNotArray(atom) &&
+      Object.keys(atom).length === 2 &&
+      (atom as CfcAtomObject).type === CFC_ATOM_TYPE.User &&
+      isObjectNotArray((atom as CfcAtomObject).subject) &&
+      Object.keys((atom as CfcAtomObject).subject as object).length === 1
+    ) {
+      atom = (atom as CfcAtomObject).subject as CfcAtom;
+    }
     if (
       isObjectNotArray(atom) &&
       (atom as CfcAtomObject).__ctCurrentPrincipal === true

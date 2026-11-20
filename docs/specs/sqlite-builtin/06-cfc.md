@@ -235,7 +235,7 @@ returns a plain-JSON AST node):
 | helper | meaning |
 |---|---|
 | `match(f.col, /re/, {group?, min?})` | run the regex (forced global) over the column's text ⟹ the ordered list of matches (or capture `group`). The universal field extractor — split + clean in one; subsumes JSON arrays and dirty `Name <addr>` lists. **Strict-if-present:** a non-empty value yielding zero matches fails closed at evaluation (never under-label); `min` makes the field a required anchor |
-| `principal(protocol, match(…))` | the reader `User(did:<protocol>:<v>)` for each extracted `v` (distributes over the match list); under `authoredBy`/`endorsedBy` the DID itself is the claim's subject (CFC spec §4.1.1, §15.2). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
+| `principal(protocol, match(…))` | the reader `User(did:<protocol>:<v>)` for each extracted `v` (distributes over the match list); under `authoredBy`/`endorsedBy` the DID itself is the claim's subject (CFC spec §4.1.2, §15.2). Normalization is protocol-implied: `mailto`/`web` lowercase + trim; `did:key` untouched (base58 is case-sensitive) |
 | `dbOwner()` | the db's owner as the reader `User(<owner DID>)` (CFC spec §13.12.1's `O`) — the principal that created the SqliteDb cell, resolved from the db ref (a fixed db property, so the rule stays pure; for a per-user-scoped db this is that user). Creation under SERVED execution mints the CREATING RUN's acting principal — the demanded run's carried identity, never the serving runtime's ambient (service) identity (`docs/specs/server-side-execution/serving-loop.md` §3c); a served creating run with no carried actor mints NO owner, and `dbOwner()` fails closed (RATIFIED — RULED 2026-08-22; `docs/specs/server-side-execution/verification-coverage.md` OW53 records the ruling) |
 | `all(...t)` | a **conjunction**: each term contributes its own clauses, so each is an independent requirement (`all(any(A, B), C)` is `(A ∨ B) ∧ C`); the counterpart of `any(...)` |
 | `any(...t)` | **one OR-clause**: any alternative satisfies it (CFC spec §3.1.8). Serializes into the rule as an authored OR-clause; each alternative is a single principal-like term, not an `all(...)` or `any(...)` — never silently lowered to the conjunctive form |
@@ -552,7 +552,7 @@ which rows a reader may read never varies by session. A reader may read a row
 iff, for **every** conjunctive clause of the row's re-derived confidentiality,
 the reader's `User(<reader DID>)` atom is one of that clause's alternatives (the
 label stores concrete principals — `dbOwner()` is resolved at eval time — so
-this is exact-match; a bare DID string is no atom (CFC spec §4.1.1) and a
+this is exact-match; a bare DID string is no atom (CFC spec §4.1.2) and a
 non-principal atom like a caveat is never reader-satisfiable, so the row is
 withheld — fail closed). Because dropping a row releases its presence bit, this
 is a **declared existence release** (CFC spec §8.17, invariant 14) and requires
