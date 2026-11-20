@@ -168,6 +168,19 @@ export const CHAT_START = { surface: "ChatStartSurface", action: "ChatStart" };
 const CHAT_SEND = { surface: "ChatSendSurface", action: "ChatSend" };
 const CHAT_REACT = { surface: "ChatReactSurface", action: "ChatReact" };
 
+/**
+ * The label a manager's list gives a direct room with no title whose
+ * counterpart is `did`, a principal's `did:key`: `With ` and the key shortened
+ * as `shortDid()` in `../system/social-space/short-did.ts` shortens one too
+ * long to show whole, to its method and its key's last four characters.
+ */
+export function directRoomLabel(did: string): string {
+  if (!/^did:key:.{21,}$/u.test(did)) {
+    throw new Error(`Not a principal's \`did:key\`: ${did}`);
+  }
+  return `With did:key:…${[...did].slice(-4).join("")}`;
+}
+
 // Words a message's body is drawn from. None of them is a word a benchmark
 // writes into the room itself.
 const VOCABULARY = [
