@@ -26,16 +26,18 @@ a pattern later both implement the same shape.
   the caller sends, never into anything shared.
 - `GetItButton` is the only way to get a pattern. A person's tap appends
   `{requestId, patternId, destination, requestedAt, host}` to the catalog's
-  `getItRequests`, whose type (`GetItRequests`) declares the button's handler as
-  its one trusted writer: a push from anywhere else, or a send to the button
-  without a trusted tap, is refused. `destination` is defined by the host; a
-  host that places patterns on boards takes the board's id. The host writes its
-  answer to `getItAnswers` under the request's id (`started`, then `placed`,
-  `failed` or `cancelled`), and the button shows the answer to its latest
-  request. While that request is open or placed, a tap adds nothing; after a
-  failure or a cancellation, a tap asks again. `host` is copied from the
-  catalog's own `host`; while the catalog names none, nothing acts on requests,
-  so the button is disabled and says so.
+  `getItRequests` as a document of its own. Each request's type (`GetItEntry`)
+  declares the button's handler as its one trusted writer and labels the request
+  `authored-by` the person who tapped: a push from anywhere else, or a send to
+  the button without a trusted tap, is refused. Both are stored on the request
+  itself, so a host can check them on each request it acts on. `destination` is
+  defined by the host; a host that places patterns on boards takes the board's
+  id. The host writes its answer to `getItAnswers` under the request's id
+  (`started`, then `placed`, `failed` or `cancelled`), and the button shows the
+  answer to its latest request. While that request is open or placed, a tap adds
+  nothing; after a failure or a cancellation, a tap asks again. `host` is copied
+  from the catalog's own `host`; while the catalog names none, nothing acts on
+  requests, so the button is disabled and says so.
 - The button is a `cf-pattern-install`, which says in its own words what a tap
   does: "Install “title” onto loom". The title is the catalog's own, from the
   entry in `entries` with the button's `patternId`; when the window does not
@@ -78,19 +80,21 @@ pattern that's no longer available". A caller that cannot mount `CatalogByline`
 ## Implementing it
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
-stored under the `GetItRequests` type so the write policy holds, and `host` set
-to an opaque id for the host instance that acts on get requests. Each instance
-mints its own id and never takes one from a copy of another instance's state. It
-answers each `page` request in that request's `result`. It sets `authorProfile`
-only from the profile the index says the author published under
-(`author.published.profile`), as a `link@1` link to that profile's piece; a
-reference with no piece gets no `authorProfile`, so the entry shows the
-pseudonym. It sets `remixOf` only from the chain the index returns to this
-viewer (`remixChain`, each step's `name` as its `title`; never `remixedFrom`
-alone); a step it cannot read ends the chain as `{unavailable: true}`. It acts
-only on a request that names its own `host`, so a cloned host instance never
-acts on another's requests, and only within a window it chooses by
-`requestedAt`. It answers each request id in `getItRequests` under that id in
+stored under the `GetItRequests` type so each request's write policy and author
+label hold, and `host` set to an opaque id for the host instance that acts on
+get requests. Each instance mints its own id and never takes one from a copy of
+another instance's state. It answers each `page` request in that request's
+`result`. It sets `authorProfile` only from the profile the index says the
+author published under (`author.published.profile`), as a `link@1` link to that
+profile's piece; a reference with no piece gets no `authorProfile`, so the entry
+shows the pseudonym. It sets `remixOf` only from the chain the index returns to
+this viewer (`remixChain`, each step's `name` as its `title`; never
+`remixedFrom` alone); a step it cannot read ends the chain as
+`{unavailable: true}`. It acts only on a request that names its own `host`, so a
+cloned host instance never acts on another's requests, and only within a window
+it chooses by `requestedAt`. It may also refuse a request whose stored labels do
+not name the person it acts for as the author, or the button's handler as the
+writer. It answers each request id in `getItRequests` under that id in
 `getItAnswers`: `started` while it works, if it says anything before it is done,
 then one final state (`placed`, `failed` or `cancelled`) that it never changes.
 `FakeCatalog` (`fake-catalog.tsx`) answers from a fixed list of entries, as host
@@ -110,8 +114,10 @@ then one final state (`placed`, `failed` or `cancelled`) that it never changes.
   nothing here needs a transaction across spaces.
 - `getItAnswers` carries no write policy, so another caller could change what a
   button shows (though not what gets placed).
-- Nothing removes handled requests from `getItRequests`; the write policy that
-  keeps others from adding to it also keeps the host from trimming it.
+- Nothing removes handled requests from `getItRequests`. The write policy sits
+  on each request, not on the list, yet the runtime still refuses a write to the
+  list from any other handler, one that clears it included: what keeps others
+  from adding a request also keeps the host from trimming the list.
 - The test runs against the fake only. A host checks its own implementation with
   its own tests until the shared behavior is factored into a suite any
   implementation can run.
@@ -127,10 +133,10 @@ far as the following allow, and each is left to mechanism the runtime does not
 have yet:
 
 - The `data-ui-pattern`, `data-ui-event-integrity` and `data-ui-action` markers
-  are strings any pattern can write on its own elements. The write policy on
-  `getItRequests` names the button's handler, so another pattern's tap cannot
-  add a request, but nothing proves that the markers on a tap came from this
-  pattern's own view.
+  are strings any pattern can write on its own elements. Each request's write
+  policy names the button's handler, so another pattern's tap cannot add a
+  request, but nothing proves that the markers on a tap came from this pattern's
+  own view.
 - The title comes from the catalog the caller hands the button. A caller can
   pass a forged catalog whose entry gives the pattern another title, and the
   viewer's `#patternCatalog` favorite can be repointed at another piece. The

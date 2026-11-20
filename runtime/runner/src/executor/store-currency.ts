@@ -182,12 +182,19 @@ export class StoreCurrency {
           scope: "space",
         }),
       );
+      // What keeps the whole piece from being vouched for.
       const reasons: string[] = [...taken.unvouched];
       // A start is where a piece's source origin is followed, so a piece
       // that records one is never left unstarted.
       if (facts === undefined) reasons.push("no-pattern");
       else if (facts.followsOrigin) reasons.push("source-origin");
-      for (const reason of reasons) {
+      // A reason is counted once for a piece, whether it holds for the
+      // piece or for some of its slices.
+      const counted = new Set([
+        ...reasons,
+        ...taken.slices.flatMap((slice) => slice.unvouched),
+      ]);
+      for (const reason of counted) {
         const counts = this.#stats.currency.unvouched;
         counts[reason] = (counts[reason] ?? 0) + 1;
       }
@@ -195,10 +202,14 @@ export class StoreCurrency {
         piece,
         under: taken.under,
         vouched: reasons.length === 0,
-        reads: taken.reads,
         writes: taken.writes,
         owned: facts?.owned ?? [],
-        vouches: taken.vouches,
+        slices: taken.slices.map((slice) => ({
+          key: slice.key,
+          vouched: slice.unvouched.length === 0,
+          reads: slice.reads,
+          vouches: slice.vouches,
+        })),
       });
     }
     if (records.length === 0) return undefined;

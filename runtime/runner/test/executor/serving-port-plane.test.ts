@@ -249,10 +249,14 @@ describe("serving-port-plane", () => {
         piece: "of:piece",
         under: ["of:outer"],
         vouched: true,
-        reads: [{ space, id: "of:input", derived: false }],
         writes: ["computed:out"],
         owned: ["of:state"],
-        vouches: [{ id: "computed:out", scopeKey: "space" }],
+        slices: [{
+          key: "space",
+          vouched: true,
+          reads: [{ space, id: "of:input", scopeKey: "space", derived: false }],
+          vouches: ["computed:out"],
+        }],
       };
       const batch = {
         asOf: 4,
@@ -260,7 +264,9 @@ describe("serving-port-plane", () => {
         epoch: "release-7",
         records: [record],
       };
-      const marked = [{ piece: "of:piece", seq: 5, under: ["of:outer"] }];
+      const marked = [
+        { piece: "of:piece", slice: "space", seq: 5, under: ["of:outer"] },
+      ];
       const asked: unknown[] = [];
       bridge.onRequest("server.advanceCurrency", (params) => {
         asked.push(params);

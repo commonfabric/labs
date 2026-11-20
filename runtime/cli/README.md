@@ -3572,12 +3572,29 @@ predecessor (`priorPatternId`), so the new version keeps the old one's standing.
 A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
 created is published as a remix of that pattern (`remixedFrom`), or as a new
 version of it when it was the caller's own; `--remixed-from` names the source
-where `cf` has no record. Sharing then requests a listing. Past the index's
-daily limit it says when the limit resets, and running the same command then
-requests it again. The next step it prints is deploying the pattern with
-`cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
-author opens it in a loom.
+where `cf` has no record. Sharing then shares that version on **beta**: once the
+index's check passes it becomes the lineage's next numbered shared version (1,
+2, 3…), which anyone with its link can open, and nobody finds in search or a
+listing. Past the index's daily limit it says when the limit resets, and running
+the same command then shares it again. The next step it prints is deploying the
+pattern with `cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
+
+`cf pattern stable <entry>` makes the newest shared version **stable**: what
+search, listings and a plain link give. It passed the check when it was shared,
+so no new source is exposed; only who can find it changes. A share still being
+checked is made stable instead, so it is findable once it passes and an older
+number never becomes stable by being the newest so far. Both channels only move
+forward: to go back, roll back, share again (a new number), then make that
+stable. `cf pattern history` shows each version's shared number and channel.
+
+`cf pattern link <entry>` prints a link that names the pattern by its lineage's
+pseudonym, which shows the person's name only on a lineage published under it:
+`<pseudonym>` for stable (beta when nothing is stable yet), `--beta` for
+`<pseudonym>@beta`, and `--number <n>` for `<pseudonym>@<n>`, exactly version n,
+which never changes. It checks the link with the index first, so it never prints
+one that opens nothing.
 
 `cf pattern unshare <entry>` takes the pattern out of others' searches and
 listings and shares no later version until `cf pattern share` runs again. A
@@ -3586,7 +3603,8 @@ version already shared stays readable by its id, so imports of it keep working.
 ### Publishing under a name
 
 `cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
-then names the person as its author under one of their Common Fabric profiles
+but on stable, since a published pattern is meant to be found, then names the
+person as its author under one of their Common Fabric profiles
 (`--profile <space>`, the one `#profile` answers with by default). Only that
 lineage is named; the person's other lineages stay anonymous and are not linked
 to it. Without `--as "<the profile's name>"` it prints one line saying the name

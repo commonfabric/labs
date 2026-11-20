@@ -98,14 +98,19 @@ describe("StoreCurrency", () => {
         piece: `of:piece-${at}`,
         under: [],
         vouched: true,
-        reads: [{
-          space: SPACE,
-          id: ids[(at + count - 1) % count],
-          derived: true,
-        }],
         writes: [id],
         owned: [],
-        vouches: [],
+        slices: [{
+          key: "space",
+          vouched: true,
+          reads: [{
+            space: SPACE,
+            id: ids[(at + count - 1) % count],
+            scopeKey: "space",
+            derived: true,
+          }],
+          vouches: [id],
+        }],
       })),
     };
   };

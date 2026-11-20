@@ -22,82 +22,133 @@ relying on a detail here.
 - **Each pattern's piece is found by its slug**, `my-<name>`: the first save
   creates it with `--slug`, every later command names it with `--cell`. Never
   ask the person for a piece id.
-- **`my-patterns/.claude/settings.json`** carries `CF_API_URL`, `CF_SPACE` and
-  `CF_IDENTITY` as `env`, so no command needs those flags, and lists labs' own
-  `CLAUDE.md` and `.claude/rules/` in `claudeMdExcludes`, so a session here does
-  not take on labs' developer instructions. Claude Code applies both only to a
-  session started in `my-patterns/`, and only once the person trusts the folder.
-  The values are a copy: the person's loom service is the authority, and setup
-  refreshes them.
+- **`my-patterns/.claude/settings.json`** carries `CF_API_URL`, `CF_SPACE`,
+  `CF_IDENTITY` and `CF_SERVICE_URL` (their Common Fabric service) as `env`, so
+  no command needs those flags, and lists labs' own `CLAUDE.md` and
+  `.claude/rules/` in `claudeMdExcludes`, so a session here does not take on
+  labs' developer instructions. Claude Code applies both only to a session
+  started in `my-patterns/`, and only once the person trusts the folder. The
+  values are a copy: the person's service is the authority, and setup refreshes
+  them.
 - **`my-patterns/CLAUDE.md`** says what the folder is for.
 
 Both files come from this skill's `templates/`.
 
+## Their service
+
+Everything below that asks the person's Common Fabric service something goes
+through `cf fetch`, which signs as them: their service may run on a cloud host
+that answers nothing unsigned. `<service>` below is its address, as their
+Weaver's settings show it, or `http://localhost:<port>` when it runs on this Mac
+(`loom status` names the port); after setup it is `CF_SERVICE_URL`. A command is
+`echo '<json>' | cf fetch -X POST <service>/command/<id>`, the JSON being
+`{"args": {…}}`, plus `"context": {"loom_id": "…"}` for one that acts on a loom.
+Add `"actor": "user"` only where a step below says so: it claims the person is
+acting, which only a command they asked for should carry. An answer looks like
+`{"ok": true, "outputs": {…}}`; a refusal is `ok: false` with a `code` and a
+`reason`, and `cf fetch` exits 1 with the status.
+
 ## Setup ("set me up")
 
 Safe to run again whenever something is missing or a save does not show up; each
-step checks before it changes anything.
+step checks before it changes anything. Until step 6 writes the settings, every
+command names the service and the key itself: `<key>` is
+`~/.config/commonfabric/identity.key`, passed as `-i <key>`.
 
 1. **`cf` runs.** It needs Deno; then `deno task cf` works from anywhere in the
    clone, with nothing to install on PATH. `cf` below means that.
-2. **`cf` is the person.** `cf` must deploy as the same identity as their
-   Weaver, or what it makes lands where Weaver cannot see it and the index
-   counts them twice. Never make a key (`cf id new` makes a stranger). Their
-   loom service says who they are: its `GET /config` gives `identityDid`, and
-   `homeSpace` gives the space and the host their panes mount it from
-   (`loom status` names the service's port, e.g. 9900). The key is the file
-   whose `cf id did <file>` equals `identityDid`, usually
-   `~/.config/commonfabric/identity.key`. If no file matches, or `homeSpace` is
-   missing, stop and say so; never guess a host or a space.
-3. **The person is in the index.** If a `cf pattern` command says this machine
-   has not joined, ask them to copy their invite link (not paste it here, which
-   would keep it in the transcript) and run
-   `pbpaste | deno task cf index join --identity <key>` with the key from
-   step 2. A Mac whose loom already joined needs nothing.
-4. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
+2. **Where their service is.** Ask for the address their Weaver's settings show,
+   unless `CF_SERVICE_URL` already holds it.
+3. **`cf` is the person.** `cf` must act as the same identity as their Weaver,
+   or what it makes lands where Weaver cannot see it and the index counts them
+   twice. Never make a key (`cf id new` makes a stranger). When `<key>` is
+   missing, pair this Mac like any other device of theirs: ask them to open
+   Weaver's Settings > Pair a device and copy the code it shows (not paste it
+   here, which would keep it in the transcript), then run
+   `pbpaste | cf id pair <service> <key>`. Tell them plainly that this Mac now
+   holds their key as a file, which any program they run can read, and that
+   removing the device in Weaver does not take it back. (A key of its own,
+   delegated by their service and revocable, would avoid that; nothing issues
+   one yet.) `cf id pair` never replaces a keyfile holding someone else.
+4. **Where their pieces go.** `cf fetch -i <key> <service>/config`: its
+   `identityDid` must equal `cf id did <key>`, or stop and say this Mac holds
+   someone else's key. `homeSpace` gives the space and the host their panes
+   mount it from. If it is missing, stop and say so; never guess a host or a
+   space.
+5. **The person is in the index**, as the same member their service is. If
+   `cf index whoami -i <key>` says this machine has not joined, hand the
+   service's membership to this Mac, in one line, so the chain never reaches the
+   transcript and a refusal stops before the join:
+   `chain=$(echo '{"actor":"user"}' | cf fetch -i <key> -X POST <service>/command/index.chain | plutil -extract outputs.chain raw -o - -) && printf '%s' "$chain" | cf index join -i <key> --chain -`.
+   Run the same again whenever an index command says the chain lapsed or was
+   refused: only the service renews it, and a chain lasts about three months. If
+   the service answers `not-a-member`, it has not joined either: ask them to
+   copy their invite link and run `pbpaste | cf index join -i <key>`.
+6. **Settings remembered.** Write `my-patterns/CLAUDE.md` and
    `my-patterns/.claude/settings.json` from `templates/`, replacing every `<…>`
-   placeholder with the value steps 2 and 3 found and the labs root's absolute
+   placeholder with the value steps 2 to 4 found and the labs root's absolute
    path, and keeping any other settings already there.
-5. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
+7. **Hand over.** New pattern sessions start in `my-patterns/`, and the person
    accepts Claude Code's prompt to trust that folder.
 
 ## The loop
 
 - **save** keeps the person's Weaver up to date and nothing else. Check it
-  compiles first (`cf check <entry>`). First save:
-  `cf piece new <entry> --slug my-<name> --no-index-version`; later saves:
-  `cf piece setsrc --cell my-<name> --no-index-version <entry>`. Without
-  `--no-index-version` every save becomes a version in the index, which floods
-  undo and can be shared on its own. When `setsrc` refuses because the new
-  version does not fit the piece's data, offer a fresh piece or keeping the old
-  version; nothing carries data over yet.
-- **Into their Weaver**, once, after the first save: their loom service places
-  the piece on their private **Making** loom, never the loom they have open,
-  which may be shared. `loom command run loom.find --name Making --json` finds
-  it (`loom command run loom.create --title Making --json` makes it the first
-  time), then
-  `loom command run loom.add --loom <loom_id> --ref
-  pattern:<space>/<pieceId> --focus`
-  adds the piece (`cf piece new --json` gives the `pieceId`). Later saves update
-  it in place. Tell them it is on their Making loom, on any device their Weaver
-  runs on.
+  compiles first (`cf check <entry>`). Which save it is depends on what exists,
+  not on what this session remembers: if `cf piece inspect --cell my-<name>`
+  finds the piece, every save is
+  `cf piece setsrc --cell my-<name> --no-index-version <entry>`; only when it
+  finds none is it the first,
+  `cf piece new <entry> --slug my-<name>
+  --no-index-version`. Never pass
+  `--force` to take a slug: that strands the piece already on their Making loom.
+  Without `--no-index-version` every save becomes a version in the index, which
+  floods undo and can be shared on its own. When `setsrc` refuses because the
+  new version does not fit the piece's data, offer a fresh piece or keeping the
+  old version; nothing carries data over yet.
+- **When a save fails with cf's version note** ("cf is newer than the server"),
+  their service runs an older Common Fabric than this copy of labs. Say so in
+  those words, check out the commit the note names (or the newest release tag at
+  or before it) in this clone, and save again; do not set
+  `CF_SKIP_VERSION_CHECK`.
+- **Into their Weaver**, after the first save, and again whenever their Making
+  loom does not hold the piece: their service places it on their private
+  **Making** loom, never the loom they have open, which may be shared. Run
+  `loom.find` with `{"name": "Making"}`: use the loom titled exactly Making, the
+  most recently used if there are several; if there is none, `loom.create` with
+  `{"title": "Making"}`. Then `loom.add` with
+  `{"ref": "pattern:<space>/<pieceId>", "focus": true}` and that loom's
+  `loom_id` as context; `cf piece inspect --cell my-<name>` names the `pieceId`.
+  Adding a piece the loom already holds brings it forward rather than adding it
+  twice. Later saves update it in place. Tell them it is on their Making loom,
+  on any device their Weaver runs on.
 - **checkpoint** right after the save that finishes something they asked for:
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a version, the
   point undo goes back to: one per request, never one per save. Like any
   version, their sharing setting may share it once it has been in use for a day
-  with no newer version and passes the privacy check.
+  with no newer version and passes the privacy check: findable, or on beta if
+  they last shared this pattern on beta themselves.
 - **undo**: `cf pattern history <entry>` lists the checkpoints;
   `cf pattern rollback <entry> <version>` writes one back, then save. It refuses
   when there are edits no version keeps; ask before forcing it, since forcing
   loses them.
-- **share**: `cf pattern share <entry>`, anonymous. The privacy check may
-  rewrite the files into a general version; tell them what changed, then save,
-  so their Weaver runs what was shared. `cf pattern unshare <entry>` stops
-  sharing, though a version already shared stays readable by anyone who has it.
-  Putting their name on it is
+- **share** ("it's good, share it"): `cf pattern share <entry>`, anonymous, on
+  **beta**: once the privacy check passes, it is reachable by its link, and
+  nobody finds it. The privacy check may rewrite the files into a general
+  version; tell them what changed, then save, so their Weaver runs what was
+  shared. `cf pattern unshare <entry>` stops sharing, though a version already
+  shared stays readable by anyone who has it. Putting their name on it is
   `cf pattern publish <entry> --as "<profile name>"`, only when they ask for
   that and confirm the name it shows; it runs the same privacy check, so the
   same tell-then-save follows.
+- **stable** ("it's stable", "release it"): `cf pattern stable <entry>` makes
+  the newest shared version what search and the catalog show. Nothing new is
+  exposed. To go back to an older shared version: rollback, save, share, then
+  stable; numbers only move forward.
+- **link** ("a link for Ana"): `cf pattern link <entry>` gives stable, or beta
+  when nothing is stable yet; `--beta` when they ask for beta. It names the
+  pattern, not them, unless they published it under their name. Opening a link
+  in Weaver is not built yet; say so.
 - **open**: getting a pattern into a folder, with commands that already exist.
   `cf` reads paths from the folder the session started in, `my-patterns/`, so a
   pattern's folder is `<name>/`.
@@ -121,4 +172,4 @@ step checks before it changes anything.
 
 When nothing here does what they ask, say it is not built yet rather than
 improvising links, copies or Weaver deep links. Not built yet, e.g.: bringing
-the Making loom forward in Weaver by itself, beta and stable channels, links.
+the Making loom forward in Weaver by itself, opening a link in Weaver.

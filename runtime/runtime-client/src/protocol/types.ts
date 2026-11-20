@@ -1490,6 +1490,14 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Set to load first each document the links pass through that the worker's
+   * replica has no basis for, so that the answer is the address the links end
+   * at rather than the first document still to arrive. Without it the answer
+   * is what the replica resolves now.
+   */
+  loaded?: true;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
