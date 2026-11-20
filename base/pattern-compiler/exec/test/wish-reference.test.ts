@@ -130,6 +130,45 @@ describe("a `wish` whose answer is a reference", () => {
     expect((instance.result() as { count?: unknown }).count).toBe(0);
   });
 
+  // `fixtures/instantiate.tsx`: a handler whose body instantiates a
+  // pattern.
+  it("leaves a given document as it is when a function body makes an instance", async () => {
+    const [{ patterns }] = JSON.parse(
+      await Deno.readTextFile(
+        new URL(
+          "../../compare/fixtures/instantiate.emit.json",
+          import.meta.url,
+        ),
+      ),
+    ) as { patterns: Artifact[] }[];
+    const changed: string[] = [];
+    const instance = new Instance(
+      patterns.find((pattern) => pattern.name === "default")!,
+      { note: "n" },
+      {
+        artifacts: (id) =>
+          patterns.find((pattern) => pattern.plan.patterns?.[0] === id),
+        documents: [{ id: PROFILE, kind: "profile", value: { name: "ada" } }],
+        transactions: {
+          begin: () => {},
+          read: () => {},
+          change: (doc: string) => {
+            changed.push(doc);
+          },
+          end: () => {},
+        },
+      },
+    );
+    instance.store.write(new Ref(PROFILE, ["name"]), "grace");
+    changed.length = 0;
+
+    // The binding of the handler that instantiates.
+    expect(instance.send(1, { title: "a" }).committed).toBe(true);
+
+    expect(instance.store.docs.get(PROFILE)?.value).toEqual({ name: "grace" });
+    expect(changed).not.toContain(PROFILE);
+  });
+
   it("evaluates again what read the document when the document changes", async () => {
     const instance = await start();
 

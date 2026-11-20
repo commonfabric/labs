@@ -2606,7 +2606,10 @@ export class Instance {
         hooks.watchLabels?.((changes) => this.labelsChanged(changes));
       }
     }
-    for (const { id, kind, value, space } of options.documents ?? []) {
+    // An instance that a function body makes is given the options of the
+    // instance that made it, and the documents exist already.
+    const given = this.root === this ? options.documents ?? [] : [];
+    for (const { id, kind, value, space } of given) {
       this.store.create(id, kind, value);
       if (space !== undefined) this.store.spaces.set(id, space);
     }
