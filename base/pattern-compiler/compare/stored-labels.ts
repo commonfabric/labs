@@ -47,6 +47,7 @@ import {
   consumedEntriesForRead,
   labelForConsumedEntries,
 } from "../../../runtime/runner/src/cfc/consumed-label.ts";
+import { cfcCommitmentNormalForm } from "../../../runtime/runner/src/cfc/label-representation.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { observationLabelResolverFor } from "../../../runtime/runner/src/cfc/prepare.ts";
 import type {
@@ -68,6 +69,7 @@ import {
   mainPattern,
   type ResultRow,
   runModule,
+  wishStubs,
 } from "./corpus.ts";
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
@@ -263,10 +265,22 @@ const ordered = (atom: Atom): Atom => {
   return Object.fromEntries(fields);
 };
 
-/** A label with each clause's alternatives in one order (`ordered`). */
+/**
+ * A label with each clause's alternatives in one order (`ordered`), and
+ * each atom in its commitment-normal form: a label that a commit derives
+ * from a document of another space holds the committed form of an atom
+ * whose plain form the label of that document holds, and the two are one
+ * atom (`cfcCommitmentNormalForm()`).
+ */
 export const orderedLabel = (label: Label): Label => ({
-  confidentiality: label.confidentiality.map(ordered),
-  integrity: label.integrity,
+  confidentiality: label.confidentiality.map((clause) =>
+    ordered(cfcCommitmentNormalForm(clause as CfcAtom))
+  ),
+  integrity: label.integrity === "neutral"
+    ? "neutral"
+    : label.integrity.map((atom) =>
+      cfcCommitmentNormalForm(atom as CfcAtom) as Atom
+    ),
 });
 
 /** A stored label with the runtime's atoms of a compiled pattern mapped. */
@@ -899,7 +913,12 @@ export const compareModule = async (
     module,
     "outside first",
     undefined,
-    new ExecutorRun(artifact, argument, artifacts),
+    new ExecutorRun(
+      artifact,
+      argument,
+      artifacts,
+      await wishStubs(artifact.plan),
+    ),
   );
   if (today.skipped !== undefined) return { ...base, skipped: today.skipped };
   const events: Sent[] = (today.outcomes ?? []).flatMap((outcome, index) =>

@@ -158,6 +158,8 @@ export class RuntimeTransactions implements TransactionHooks {
   readonly #documents = new Set<string>();
   /** The document of the executor that each entity holds. */
   readonly #byEntity = new Map<string, string>();
+  /** The space of each document that is in another space than `#space`. */
+  readonly #spaces = new Map<string, MemorySpace>();
   /**
    * The identity the runtime registered the compiled pattern under, where
    * the runtime's option `compiledPatterns` is on and the artifact was
@@ -247,7 +249,10 @@ export class RuntimeTransactions implements TransactionHooks {
     // it reads, as the replica counts it, every document it has named.
     this.#stopReading = runtime.storageManager.addDocumentReader?.((
       address,
-    ) => address.space === space && this.#byEntity.has(address.id));
+    ) => {
+      const doc = this.#byEntity.get(address.id);
+      return doc !== undefined && address.space === this.#spaceOf(doc);
+    });
   }
 
   /** What the transactions were given so far. */
@@ -259,10 +264,18 @@ export class RuntimeTransactions implements TransactionHooks {
    * Takes a document as one that exists in storage and that the executor did
    * not make, as an input it is handed: it is kept loaded, a change to it is
    * written at its path, and it is not enrolled as a store the runtime owns.
+   * `space` is the space of a document that is in another space than the
+   * executor's.
    */
-  external(doc: string): void {
+  external(doc: string, space?: MemorySpace): void {
     this.entityOf(doc);
     this.#documents.add(doc);
+    if (space !== undefined) this.#spaces.set(doc, space);
+  }
+
+  /** The space a document of the executor is in. */
+  #spaceOf(doc: string): MemorySpace {
+    return this.#spaces.get(doc) ?? this.#space;
   }
 
   /** Stops keeping the documents of the executor loaded. */
@@ -320,7 +333,7 @@ export class RuntimeTransactions implements TransactionHooks {
     doc: string,
   ): CfcMetadata | undefined {
     return readStoredCfcMetadata(tx, {
-      space: this.#space,
+      space: this.#spaceOf(doc),
       id: this.entityOf(doc),
       scope: "space",
     });
@@ -595,7 +608,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The runtime's address of a position of a document of the executor. */
   #cfcAddress({ doc, path }: Address): CfcAddress {
     return {
-      space: this.#space,
+      space: this.#spaceOf(doc),
       id: this.entityOf(doc),
       scope: "space",
       path: [...path],
@@ -737,7 +750,7 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The address of a path of a document of the executor. */
   #address(doc: string, path: readonly string[]): NormalizedFullLink {
     return {
-      space: this.#space,
+      space: this.#spaceOf(doc),
       id: this.entityOf(doc),
       path: [...path],
       scope: "space",
@@ -755,7 +768,7 @@ export class RuntimeTransactions implements TransactionHooks {
       return createSigilLinkFromParsedLink(
         {
           id: this.entityOf(doc),
-          space: this.#space,
+          space: this.#spaceOf(doc),
           path,
           // A schema of a plan is a JSON schema with the members the
           // executor reads typed (`Schema` of `exec/store.ts`).

@@ -1,8 +1,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { Identity } from "@commonfabric/identity";
 
 import type { Artifact } from "../../exec/executor.ts";
 import { type Plan, runScenario } from "../harness.ts";
+import { instanceOptions, inStorage } from "../integrated.ts";
+import {
+  checkWrites,
+  type LabelPlan,
+  type OracleCheck,
+  storedLabelAt,
+} from "../stored-labels.ts";
 import { ExecutorRun, readingValues } from "../values.ts";
 import {
   type Home,
@@ -87,6 +95,97 @@ describe("wish-home", () => {
       expect(comparison.differences).toEqual([]);
       expect(comparison.compared).toBe(10);
       expect(unsimulated).toEqual([]);
+    });
+  });
+
+  // The labeled arm of `integrated.ts`: the executor's documents in the
+  // runtime's storage, with the option `compiledPatterns` on.
+  describe("the fixture on the executor with its documents in storage", () => {
+    const stored = async () => {
+      const artifact = await artifactOf("wish-home");
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      const labels: Record<string, string> = {};
+      const values: Record<string, unknown> = {};
+      const refused: string[] = [];
+      const checks: OracleCheck[] = [];
+      const { differs } = await inStorage(
+        artifact,
+        { note: "n" },
+        [],
+        instanceOptions("wish-home", space, () => undefined),
+        undefined,
+        true,
+        true,
+        {
+          refused: (reasons) => {
+            for (const reason of reasons) refused.push(reason);
+          },
+          committed: (runtime, _hooks, writes) => {
+            for (
+              const check of checkWrites(
+                runtime,
+                artifact.plan as unknown as LabelPlan,
+                writes,
+              )
+            ) checks.push(check);
+          },
+          end: (runtime, hooks, instance) => {
+            Object.assign(values, instance.result());
+            const tx = runtime.edit();
+            try {
+              for (const name of ["greeting", "about", "note"]) {
+                labels[name] = JSON.stringify(
+                  storedLabelAt(tx, {
+                    space,
+                    id: hooks.entityOf(instance.id),
+                    scope: "space",
+                    path: [name],
+                  }).confidentiality,
+                );
+              }
+            } finally {
+              tx.abort();
+            }
+          },
+        },
+      );
+      return { labels, values, refused, differs, checks };
+    };
+
+    it("computes the values from the profile the storage holds, and no commit is refused", async () => {
+      const { values, refused, differs } = await stored();
+
+      expect(refused).toEqual([]);
+      expect(differs).toEqual([]);
+      expect(values).toMatchObject({
+        greeting: `hello ${PROFILE.name}`,
+        about: `${PROFILE.initialNameApplied}: ${PROFILE.bio}`,
+        count: 0,
+      });
+    });
+
+    // An output that reads the outcome of a `wish` and nothing of the
+    // profile, as `count`, is left out: the outcome has no write record,
+    // and its label is the join of the transaction that resolved it.
+    it("stores the user atom of the profile in the label of an output derived from it, and not in the label of an output of the argument", async () => {
+      const { labels } = await stored();
+
+      expect(labels.greeting).toContain("/User");
+      expect(labels.about).toContain("/User");
+      expect(labels.note).not.toContain("/User");
+    });
+
+    it("stores for each write record the label the evaluator gives it, an atom of the other space in its committed form", async () => {
+      const { checks } = await stored();
+
+      expect(checks.length).toBeGreaterThan(0);
+      expect(
+        checks.filter((check) =>
+          check.error !== undefined || check.confidentiality !== "equal" ||
+          check.integrity !== "equal"
+        ).map(({ path }) => path.join("/")),
+      ).toEqual([]);
     });
   });
 

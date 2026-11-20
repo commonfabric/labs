@@ -151,7 +151,10 @@ export const seedHome = async (
   seedProfileOwner(claimed, profile.getAsNormalizedFullLink(), space);
   await committed(claimed);
   const home = runtime.edit();
-  const root = runtime.getHomeSpaceCell(home);
+  // The root of a space is the cell the space's own identifier names
+  // (`Runtime.getHomeSpaceCell()`, which a serving runtime refuses without
+  // a demanding identity).
+  const root = runtime.getCell(space, space, undefined, home);
   root.key("defaultPattern").set(
     {
       profiles: [runtime.getCell(inProfile, "profile", undefined, home)],

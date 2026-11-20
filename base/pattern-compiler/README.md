@@ -119,22 +119,24 @@ deno run -A --no-check base/pattern-compiler/compare/corpus.ts report results.js
 ```
 
 `run` takes each module the crate emits a plan for with no unsupported
-construct, skips the ones that need `wish` or request an effect, and appends one
-line per module to the results file. It sends the events of the handlers bound
-in no element body and no pattern compiled in first, and with `--plan-order` it
-sends every event in the order of the plan's bindings. `report` prints the
-modules run and skipped by reason, the outputs and write edges compared by
-category, what was not compared by reason, each output classified without the
-atom of a kept output and with it, the events committed and refused with the
-runtime's reason for each refusal, the looser rows by what differs, and the
-outputs the run holds no value at by what the run stores there, with one example
-each. Notes 177 to 186, 191 to 193, and 197 on of `SPEC-NOTES.md` say what the
-comparison takes as each side's label and what it found, notes 217 to 227 why
-the runtime refuses an event and what the generator does about it, notes 228 to
-240 what ruling U1 and the comparison rules of PL §3.1 changed, notes 241 to 251
-the events for handlers bound in an element body or in a pattern compiled in,
-and notes 252 on the order of the events and the state a write row is compared
-on.
+construct, skips the ones that request an effect, and appends one line per
+module to the results file. A module that calls `wish` runs in a seeded home
+(`compare/wish-home.ts`, under "The serving loop, error states and effects"
+below), and is skipped where its executor resolves a `wish` the home does not
+simulate. It sends the events of the handlers bound in no element body and no
+pattern compiled in first, and with `--plan-order` it sends every event in the
+order of the plan's bindings. `report` prints the modules run and skipped by
+reason, the outputs and write edges compared by category, what was not compared
+by reason, each output classified without the atom of a kept output and with it,
+the events committed and refused with the runtime's reason for each refusal, the
+looser rows by what differs, and the outputs the run holds no value at by what
+the run stores there, with one example each. Notes 177 to 186, 191 to 193, and
+197 on of `SPEC-NOTES.md` say what the comparison takes as each side's label and
+what it found, notes 217 to 227 why the runtime refuses an event and what the
+generator does about it, notes 228 to 240 what ruling U1 and the comparison
+rules of PL §3.1 changed, notes 241 to 251 the events for handlers bound in an
+element body or in a pattern compiled in, and notes 252 on the order of the
+events and the state a write row is compared on.
 
 `compare/cost.ts` measures what compiling and running the same modules costs
 today: the time of today's compile by phase, and for each module's generated
@@ -735,8 +737,11 @@ completion with `Instance.complete`, or answers from a table with
 `Instance.answer`. A handler requests an effect by calling the built-in, and the
 request leaves when the event commits. A `wish` resolves to a reference to what
 the option `wishes` gives for its operands, and the clock is a document that
-`Instance.tick` writes. A stream has a document from its first event
-(`execution-and-storage.md` §4.7).
+`Instance.tick` writes. The option gives either a value, which the executor
+stores in a document of its own, or the outcome itself, whose links lead to
+documents the instance was given (`options.documents`); such a document can be
+in another space, which the address of a reference to it then names. A stream
+has a document from its first event (`execution-and-storage.md` §4.7).
 
 `exec/test/serving.test.ts`, `effects.test.ts` and `growth.test.ts` test these,
 and `compare/test/batch.test.ts` compares a batch with today's runtime under its
@@ -756,6 +761,24 @@ runtime as well, with `fetch` replaced by a function that answers the same.
 and `growth.ts` what one change of a list costs the executor at several lengths.
 Notes 479 on of `SPEC-NOTES.md` have what was tested, what the documents do not
 decide, and the figures.
+
+A pattern that calls `wish` is compared in a seeded home
+(`compare/wish-home.ts`), by `corpus.ts run`, `values-corpus.ts run`,
+`integrated.ts` and `stored-labels.ts` alike. Before the pattern is compiled,
+today's runtime is given a profile in a space of its own, under a schema whose
+confidentiality is a user atom, and a root of the home space that lists the
+profile and holds an empty list of mentionable pieces and an empty piece
+registry; today's `wish` resolves against them. The profile holds the data
+members of the result of `patterns/system/profile-home/profile-home.tsx` and is
+no running instance of it. The executor is given the same documents and a table
+that answers `#profile`, `#profileName`, `#profileBio`, `#mentionable`,
+`#pieceRegistry` and a search for a tag with the outcome today's runtime stores
+for them, so a read of the profile is a read through a reference into the other
+space. Where the executor's documents are in the runtime's storage, the profile
+is the document the storage holds, with its label. A module whose executor
+resolves any other `wish` is not run, and its result names the query.
+`compare/fixtures/wish-home.tsx` and `compare/test/wish-home.test.ts` hold one
+`wish` of each kind.
 
 A template names the template of another output by a node
 `{ op: "output", output }` (ruling Z58), a template that a plan holds at more
