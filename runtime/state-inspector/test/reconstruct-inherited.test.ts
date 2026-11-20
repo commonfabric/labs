@@ -11,13 +11,14 @@ import { reconstructOutcome } from "../reconstruct.ts";
 type ParentRow = { op: string; data: string | null };
 
 /**
- * Creates a store in which the branch `child`, forked from the default branch
- * at seq 2, holds one patch of `of:doc` and no base, over the parent rows
- * given, which are stored at seq 1 and 2.
+ * Creates a store in which `child` holds one patch of `of:doc` and no base.
+ * It forks from `parentBranch` at seq 2, or has no parent when that is `null`.
+ * The default branch holds `parent` starting at seq 1.
  */
 function inheritedFixture(
   parent: readonly ParentRow[],
   childPatch: Parameters<typeof encodeMemoryBoundary>[0],
+  parentBranch: string | null = "",
 ): {
   /** Read-only store, closed when this fixture is disposed. */
   space: SpaceDb;
@@ -40,15 +41,22 @@ function inheritedFixture(
           name TEXT PRIMARY KEY, parent_branch TEXT, fork_seq INTEGER
         );
         INSERT INTO branch VALUES ('', NULL, NULL);
-        INSERT INTO branch VALUES ('child', '', 2);
       `);
+      db.prepare("INSERT INTO branch VALUES ('child', ?, 2)").run(parentBranch);
       const row = db.prepare(
         "INSERT INTO revision VALUES (?, 'of:doc', 'space', ?, 0, ?, ?, ?)",
       );
       parent.forEach(({ op, data }, index) =>
         row.run("", index + 1, op, data, index + 1)
       );
-      row.run("child", 3, "patch", encodeMemoryBoundary(childPatch), 3);
+      const childSeq = Math.max(3, parent.length + 1);
+      row.run(
+        "child",
+        childSeq,
+        "patch",
+        encodeMemoryBoundary(childPatch),
+        childSeq,
+      );
     } finally {
       db.close();
     }
@@ -77,10 +85,14 @@ const read = { id: "of:doc", branch: "child" };
 
 describe("reconstruct-inherited", () => {
   it("applies a branch's patch over the document its parent holds at the fork", () => {
-    using fixture = inheritedFixture([set({ value: { parent: 1 } })], addChild);
+    using fixture = inheritedFixture([
+      set({ value: { parent: 1 } }),
+      set({ value: { parent: 2 } }),
+      set({ value: { parent: 99, afterFork: true } }),
+    ], addChild);
     expect(reconstructOutcome(fixture.space, read)).toEqual({
       status: "present",
-      document: { value: { parent: 1, child: 2 } },
+      document: { value: { parent: 2, child: 2 } },
     });
   });
 
@@ -100,11 +112,65 @@ describe("reconstruct-inherited", () => {
     });
   });
 
+  it("inherits a document the parent created with a patch and no set", () => {
+    using fixture = inheritedFixture([{
+      op: "patch",
+      data: encodeMemoryBoundary([
+        { op: "add", path: "/value", value: { parent: 1 } },
+      ]),
+    }], addChild);
+
+    expect(reconstructOutcome(fixture.space, read)).toEqual({
+      status: "present",
+      document: { value: { parent: 1, child: 2 } },
+    });
+  });
+
   it("starts from an empty document where the parent deleted the entity", () => {
     using fixture = inheritedFixture(
-      [set({ value: { parent: 1 } }), { op: "delete", data: null }],
+      [set({ value: { parent: 1 }, parentOnly: true }), {
+        op: "delete",
+        data: null,
+      }],
       [{ op: "add", path: "/value", value: { child: 2 } }],
     );
+    expect(reconstructOutcome(fixture.space, read)).toEqual({
+      status: "present",
+      document: { value: { child: 2 } },
+    });
+  });
+
+  it("starts from an empty document where the parent has no revision of the entity", () => {
+    using fixture = inheritedFixture([], [
+      { op: "add", path: "/value", value: { child: 2 } },
+    ]);
+
+    expect(reconstructOutcome(fixture.space, read)).toEqual({
+      status: "present",
+      document: { value: { child: 2 } },
+    });
+  });
+
+  it("starts from an empty document for a branch with no parent", () => {
+    using fixture = inheritedFixture(
+      [set({ value: { parent: 1 }, parentOnly: true })],
+      [{ op: "add", path: "/value", value: { child: 2 } }],
+      null,
+    );
+
+    expect(reconstructOutcome(fixture.space, read)).toEqual({
+      status: "present",
+      document: { value: { child: 2 } },
+    });
+  });
+
+  it("starts from an empty document where the parent branch is absent", () => {
+    using fixture = inheritedFixture(
+      [set({ value: { parent: 1 }, parentOnly: true })],
+      [{ op: "add", path: "/value", value: { child: 2 } }],
+      "missing",
+    );
+
     expect(reconstructOutcome(fixture.space, read)).toEqual({
       status: "present",
       document: { value: { child: 2 } },
