@@ -462,8 +462,11 @@ type Dependency = {
   on?: string;
 };
 
+/** What the name that stands for an element table begins with. */
+const TABLE_PREFIX = "table ";
+
 /** The name that stands for the element table of an assembly. */
-const tableName = (assembly: string): string => `table ${assembly}`;
+const tableName = (assembly: string): string => `${TABLE_PREFIX}${assembly}`;
 
 /**
  * What the assembly of a `map` or a `filter` over a stored array keeps
@@ -7043,7 +7046,9 @@ export class Instance {
     if (slot.observes === "identity" && found instanceof Ref) at.push(found);
     // What a `reduce` computed is read from its memo entry, which reads no
     // position: the slot is bound to every position the steps of the
-    // `reduce` read, in this transaction or an earlier one.
+    // `reduce` read, in this transaction or an earlier one, and to those
+    // that the entries its steps used read, as the elements of the result
+    // of another per-element construct, which are at no stored position.
     const operation = slot.root.kind === "operation"
       ? slot.root.operation ?? -1
       : -1;
@@ -7051,7 +7056,9 @@ export class Instance {
       at.length === 0 && this.#reduces.has(operation) &&
       host.accumulator?.operation !== operation
     ) {
-      for (const read of this.reduced(operation)(host.context).reads) {
+      for (
+        const read of this.#readsBehind(this.reduced(operation)(host.context))
+      ) {
         at.push(read);
       }
     }
@@ -7061,6 +7068,30 @@ export class Instance {
       return;
     }
     host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * The positions an entry read, and those the memo entries it used read,
+   * each entry once: every stored position its value was computed from.
+   */
+  #readsBehind(entry: Entry): Position[] {
+    const found: Position[] = [];
+    const seen = new Set<Entry>();
+    const visit = (each: Entry) => {
+      if (seen.has(each)) return;
+      seen.add(each);
+      for (const read of each.reads) found.push(read);
+      for (const { on } of each.dependencies) {
+        if (on === undefined) continue;
+        // The name of an element table stands for its assembly.
+        const used = this.#memo.get(
+          on.startsWith(TABLE_PREFIX) ? on.slice(TABLE_PREFIX.length) : on,
+        );
+        if (used !== undefined) visit(used);
+      }
+    };
+    visit(entry);
+    return found;
   }
 
   /**
@@ -8313,15 +8344,19 @@ export class Instance {
       return [{
         target: { doc, path: [...at] },
         record,
-        ...writing.instance.#inputsFor(
+        ...writing.instance.#storedInPlace(
           template,
-          keys,
-          [{
-            slots: writing.host.bound,
-            selections: writing.host.selections,
-            picks: writing.host.picks,
-            dynamic: writing.host.dynamic,
-          }],
+          writing.instance.#inputsFor(
+            template,
+            keys,
+            [{
+              slots: writing.host.bound,
+              selections: writing.host.selections,
+              picks: writing.host.picks,
+              dynamic: writing.host.dynamic,
+            }],
+          ),
+          { doc, path: [...at] },
         ),
       }];
     });
@@ -8404,16 +8439,57 @@ export class Instance {
         return {
           target: { doc, path: at },
           record: { output },
-          ...this.#inputsFor(
+          ...this.#storedInPlace(
             record.template,
-            this.collectionsOf(record.cone).map((collection, index) => [
-              collection,
-              own[index],
-            ]),
-            [inputs, result],
+            this.#inputsFor(
+              record.template,
+              this.collectionsOf(record.cone).map((collection, index) => [
+                collection,
+                own[index],
+              ]),
+              [inputs, result],
+            ),
+            { doc, path: at },
           ),
         };
       });
+  }
+
+  /**
+   * The inputs of a write whose template is one slot of the class
+   * `identity`, directly or through the outputs it names, with that slot
+   * bound in the class `value` where the write stored a value at `target`
+   * and no reference: what a `reduce` computed, or a copy of an array that
+   * a spread child holds. The label of the stored value is then that of
+   * what the slot's positions hold, and not that of the reference alone.
+   */
+  #storedInPlace<T extends PlanInputs>(
+    template: Template | undefined,
+    inputs: T,
+    target: Address,
+  ): T {
+    const held = this.store.peek(target.doc, target.path);
+    if (held === undefined || isLink(held) || isStream(held)) return inputs;
+    const templates = this.plan.templates ?? [];
+    let place: PlanInputs | undefined = inputs;
+    let at = template;
+    // A chain of outputs is as long as the plan is deep.
+    for (let depth = 0; depth < 64 && place !== undefined; depth++) {
+      if (at?.op === "shared") at = templates[at.template];
+      else if (at?.op === "output") {
+        place = place.outputs?.[at.output];
+        at = this.plan.outputs[at.output]?.template;
+      } else break;
+    }
+    if (at?.op !== "slot" || place === undefined) return inputs;
+    const binding = place.slots[at.slot];
+    if (
+      binding !== undefined && "chain" in binding &&
+      binding.observes === "identity" && binding.chain.length > 0
+    ) {
+      place.slots[at.slot] = this.#chainsOf([...binding.chain], "value");
+    }
+    return inputs;
   }
 
   /**

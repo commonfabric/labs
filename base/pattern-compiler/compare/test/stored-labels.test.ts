@@ -38,7 +38,7 @@ describe("stored-labels", () => {
   // value that differs when one labeled input alone is changed stores the
   // clause of that input.
   describe("soundnessOfScenario()", () => {
-    it("finds the clause of each labeled input in the stored label of every value of a fixture that depends on it, but for six values", async () => {
+    it("finds the clause of each labeled input in the stored label of every value of a fixture that depends on it", async () => {
       const found: string[] = [];
       let dependent = 0;
       for (const scenario of await fixtureScenarios()) {
@@ -54,17 +54,7 @@ describe("stored-labels", () => {
         for (const line of lines(name, soundness)) found.push(line);
       }
 
-      // The result of a `reduce`, and the value a spread child copies,
-      // are stored in place under a template whose slot observes a
-      // reference alone.
-      expect(found).toEqual([
-        "reduce (written): output doubled depends on amounts",
-        "reduce (written): output doubled depends on bonus",
-        "reduce (written): output total depends on items",
-        "reduce (written): output weighted depends on amounts",
-        "spread-stream (written): output $UI depends on tags",
-        "spread-stream (written): output $UI/children/1 depends on tags",
-      ]);
+      expect(found).toEqual([]);
       expect(dependent).toBeGreaterThan(300);
     });
 
