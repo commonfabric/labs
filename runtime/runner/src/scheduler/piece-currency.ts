@@ -14,6 +14,7 @@ import {
   type ScopeKeyIdentity,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-index";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
@@ -24,18 +25,49 @@ import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import type { SchedulerWriteIndex } from "./scheduling-writes.ts";
 import type { Action, ReactivityLog, TelemetryAnnotations } from "./types.ts";
 
-/** One reason a piece cannot be vouched for. */
+/** One reason a piece, or one slice of it, cannot be vouched for. */
 export type PieceUnvouchedReason =
   /** The piece's root is narrower than the space. */
   | "scoped-root"
   /** A computation of the piece declares a write in another space. */
   | "foreign-write"
-  /** A live computation of the piece is not clean in some instance. */
+  /** A live computation of the slice is not clean. */
   | "not-clean"
-  /** A live computation of the piece read a document in another space. */
+  /** A live computation of the slice read a document in another space. */
   | "foreign-read"
-  /** A live computation read a document whose writer names no piece. */
+  /** A live computation of the slice read a document whose writer names no piece. */
   | "unattributed-writer";
+
+/**
+ * One slice of a piece: what its computations did when they ran at one scope
+ * key, `space` for a run every viewer shares and a user's or a session's key
+ * for a run made for that viewer.
+ */
+export type PieceCurrencySlice = {
+  /** The scope key the slice's computations ran at. */
+  key: ScopeKey;
+
+  /**
+   * Why the slice cannot be vouched for, empty when it can: every live
+   * computation that ran at its key is clean, and everything they read is in
+   * the piece's space with a writer that names a piece.
+   */
+  unvouched: PieceUnvouchedReason[];
+
+  /**
+   * The document instances the slice's live computations read. `scopeKey`
+   * is `ANY_INSTANCE` for a read whose instance the run does not name.
+   */
+  reads: Array<
+    { space: MemorySpace; id: string; scopeKey: string; derived: boolean }
+  >;
+
+  /**
+   * The ids of the documents whose instance at the slice's key a live, clean
+   * computation of the piece wrote.
+   */
+  vouches: string[];
+};
 
 /** One piece as the scheduler holds it at an instant. */
 export type PieceCurrencySnapshot = {
@@ -46,21 +78,19 @@ export type PieceCurrencySnapshot = {
   under: string[];
 
   /**
-   * Why the piece cannot be vouched for, empty when it can: every live node
-   * of it is clean in every instance it runs, its root is space-scoped, and
-   * everything it reads and writes is in its own space with a writer that
-   * names a piece.
+   * Why no slice of the piece can be vouched for, empty when one can: its
+   * root is space-scoped and everything it writes is in its own space.
    */
   unvouched: PieceUnvouchedReason[];
-
-  /** The documents the piece's live nodes read. */
-  reads: Array<{ space: MemorySpace; id: string; derived: boolean }>;
 
   /** The ids in the declared write surface of every node of the piece. */
   writes: string[];
 
-  /** The document instances the live, clean nodes of the piece write. */
-  vouches: Array<{ id: string; scopeKey: ScopeKey }>;
+  /**
+   * The slices the piece's computations ran at, and each broader slice one
+   * of them wrote a redirect in. The `space` slice is always among them.
+   */
+  slices: PieceCurrencySlice[];
 };
 
 /** The scheduler state a snapshot reads. */
@@ -120,15 +150,51 @@ const writtenKeys = (
   );
 };
 
-/** Whether `node` is clean in every instance it runs. */
-const isCleanThroughout = (node: SchedulerNode): boolean => {
-  if (node.status !== "clean") return false;
+/**
+ * The scope key of the instance a run under `identity` read at `read`, or
+ * `ANY_INSTANCE` where neither the read nor the run names it.
+ */
+const instanceRead = (
+  read: Pick<IMemorySpaceAddress, "scope" | "scopeKey">,
+  identity: ScopeKeyIdentity | undefined,
+): string => {
+  if (read.scopeKey !== undefined) return read.scopeKey;
+  const scope = normalizeCellScope(read.scope);
+  if (scope === "space") return "space";
+  return identity !== undefined && canResolveScopeKey(scope, identity)
+    ? resolveScopeKey(scope, identity)
+    : ANY_INSTANCE;
+};
+
+/** One run of a node: the scope key it ran at, and what that run left. */
+type NodeRun = {
+  key: ScopeKey;
+  identity: ScopeKeyIdentity | undefined;
+  log: ReactivityLog | undefined;
+  clean: boolean;
+};
+
+/**
+ * The runs `node` holds: one at `space` for a node that runs once, and one
+ * for each instance of a node that runs for each demander.
+ */
+const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
+  const clean = node.status === "clean";
   const fanOut = node.fanOut;
-  if (fanOut === undefined) return true;
-  for (const key of fanOut.instances.keys()) {
-    if (!fanOut.clean.has(key)) return false;
+  if (fanOut === undefined) {
+    return [{
+      key: "space",
+      identity: undefined,
+      log: state.dependencies.get(node.action),
+      clean,
+    }];
   }
-  return true;
+  return [...fanOut.instances].map(([key, instance]) => ({
+    key,
+    identity: instance.identity,
+    log: instance.log,
+    clean: clean && fanOut.clean.has(key),
+  }));
 };
 
 /**
@@ -148,9 +214,26 @@ export function snapshotPieceCurrency(
   const unvouched = new Set<PieceUnvouchedReason>();
   if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
   const under = (identity.demandRootIds ?? []).filter((id) => id !== piece);
-  const reads = new Map<string, Pick<IMemorySpaceAddress, "space" | "id">>();
   const writes = new Set<string>();
-  const vouches = new Map<string, { id: string; scopeKey: ScopeKey }>();
+
+  /** What each slice gathers, by its scope key. */
+  const slices = new Map<ScopeKey, {
+    unvouched: Set<PieceUnvouchedReason>;
+    reads: Map<
+      string,
+      Pick<IMemorySpaceAddress, "space" | "id"> & { scopeKey: string }
+    >;
+    vouches: Set<string>;
+  }>();
+  const sliceAt = (key: ScopeKey) => {
+    let slice = slices.get(key);
+    if (slice === undefined) {
+      slice = { unvouched: new Set(), reads: new Map(), vouches: new Set() };
+      slices.set(key, slice);
+    }
+    return slice;
+  };
+  sliceAt("space");
 
   for (const node of nodes) {
     const surface = state.writeIndex.getSchedulingWrites(node.action) ?? [];
@@ -162,75 +245,87 @@ export function snapshotPieceCurrency(
       writes.add(write.id);
     }
     if (!isLive(state.liveness, node)) continue;
-    const logs = [
-      state.dependencies.get(node.action),
-      ...[...(node.fanOut?.instances.values() ?? [])].map((instance) =>
-        instance.log
-      ),
-    ];
-    for (const log of logs) {
-      if (log === undefined) continue;
-      for (const read of [...log.reads, ...log.shallowReads]) {
-        reads.set(`${read.space}\0${read.id}`, {
+    for (const run of runsOf(state, node)) {
+      const slice = sliceAt(run.key);
+      for (
+        const read of [
+          ...(run.log?.reads ?? []),
+          ...(run.log?.shallowReads ?? []),
+        ]
+      ) {
+        const scopeKey = instanceRead(read, run.identity);
+        slice.reads.set(`${read.space}\0${scopeKey}\0${read.id}`, {
           space: read.space,
           id: read.id,
+          scopeKey,
         });
       }
-    }
-    if (!isCleanThroughout(node)) {
-      unvouched.add("not-clean");
-      continue;
-    }
-    for (const write of surface) {
-      if (write.space !== space) continue;
-      const declared = normalizeCellScope(write.scope);
-      const keys: ScopeKey[] = node.fanOut !== undefined
-        ? [...node.fanOut.clean].flatMap((key) =>
-          writtenKeys(declared, key, node.fanOut!.instances.get(key)?.identity)
-        )
-        : declared === "space"
-        ? ["space"]
-        : [];
-      for (const scopeKey of keys) {
-        vouches.set(`${scopeKey}\0${write.id}`, { id: write.id, scopeKey });
+      if (!run.clean) {
+        slice.unvouched.add("not-clean");
+        continue;
+      }
+      for (const write of surface) {
+        if (write.space !== space) continue;
+        const declared = normalizeCellScope(write.scope);
+        const keys: ScopeKey[] = node.fanOut !== undefined
+          ? writtenKeys(declared, run.key, run.identity)
+          : declared === "space"
+          ? ["space"]
+          : [];
+        // An instance is vouched for in the slice at its own key, which for
+        // a redirect is broader than the run's.
+        for (const key of keys) sliceAt(key).vouches.add(write.id);
       }
     }
   }
 
-  const readRows: PieceCurrencySnapshot["reads"] = [];
-  for (const read of reads.values()) {
-    if (read.space !== space) {
-      unvouched.add("foreign-read");
-      readRows.push({ ...read, derived: false });
-      continue;
-    }
+  /** Whether some computation writes `id`, and whether each names a piece. */
+  const writersOf = (
+    id: IMemorySpaceAddress["id"],
+  ): { written: boolean; unattributed: boolean } => {
     let written = false;
+    let unattributed = false;
     for (const scope of SCOPE_NAMES) {
       const writers = state.writeIndex.writersByEntity.get(
-        entityNameKey({ space: read.space, id: read.id, scope }),
+        entityNameKey({ space, id, scope }),
       );
       if (writers === undefined) continue;
       for (const writer of writers) {
         written = true;
         // A writer that names no piece is one no record covers, so nothing
         // says whether what it wrote is current.
-        if (identityOf(writer)?.pieceRootId === undefined) {
-          unvouched.add("unattributed-writer");
-        }
+        if (identityOf(writer)?.pieceRootId === undefined) unattributed = true;
       }
     }
-    readRows.push({
-      ...read,
-      derived: written || entityKindOfIdString(read.id) === "computed",
-    });
-  }
+    return { written, unattributed };
+  };
 
   return {
     piece,
     under,
     unvouched: [...unvouched],
-    reads: readRows,
     writes: [...writes],
-    vouches: [...vouches.values()],
+    slices: [...slices].map(([key, slice]) => {
+      const reads: PieceCurrencySlice["reads"] = [];
+      for (const read of slice.reads.values()) {
+        if (read.space !== space) {
+          slice.unvouched.add("foreign-read");
+          reads.push({ ...read, derived: false });
+          continue;
+        }
+        const { written, unattributed } = writersOf(read.id);
+        if (unattributed) slice.unvouched.add("unattributed-writer");
+        reads.push({
+          ...read,
+          derived: written || entityKindOfIdString(read.id) === "computed",
+        });
+      }
+      return {
+        key,
+        unvouched: [...slice.unvouched],
+        reads,
+        vouches: [...slice.vouches],
+      };
+    }),
   };
 }

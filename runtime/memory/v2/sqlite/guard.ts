@@ -27,7 +27,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "op_integrated",
   "op_checkpoint",
   "scheduler_basis",
-  "currency_piece",
+  "currency_slice",
   "currency_under",
   "currency_read",
   "currency_write",
