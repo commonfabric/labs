@@ -19,9 +19,9 @@ Each report is stored as:
   characters. The sender derives it from a secret of its own and the report's
   name, so sending the same report again carries the same id, and two senders'
   ids do not collide.
-- `name`: a label for people, such as `quiet-heron-41`. Names come from a small
-  set and restart on every install, so two reports may share one; nothing on the
-  board is keyed by name.
+- `name`: a label for people, of the form `quiet-heron-41`, at most 64
+  characters. Names come from a small set and restart on every install, so two
+  reports may share one; nothing on the board is keyed by name.
 - `kind`: `broke` or `wish`.
 - `words`: the person's own words, if they gave any, at most 4000 characters.
   The sending service removes names and other personal details first.
@@ -40,12 +40,22 @@ Each report is stored as:
   The board keeps every field it is sent, including ones it does not know, so a
   sender can add a field without the board changing. A reader ignores a field it
   does not know.
+
+  The known fields are identifiers, never prose, and the board refuses a report
+  whose fields break their shape: `source`, `want.cause`, `want.stop`,
+  `connector` and `probe` match `^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`, and
+  `cfs.release` is a commit hash or a version such as `2026.11.18`. No value or
+  key anywhere in `structured` may hold a link (a URL scheme, `www.`, or a
+  script scheme such as `javascript:`). `structured` may be at most 64K
+  characters as JSON, `commands` may hold 200 entries and `failingProbes` 50.
+  `fields.ts` holds these shapes, which triage checks again.
 - `createdAt`: when the board stored the report.
 
 The Topic each report was filed under is kept beside the reports, in `topicOf`,
-by report id, rather than inside the report. The board publishes the two joined
-as `index`, without the words, and counts the reports with no Topic as
-`newCount`.
+by report id, rather than inside the report. Only `linkTopic` may write a link,
+and the runtime labels each link `authored-by` whoever wrote it. The board
+publishes the two joined as `index`, without the words, and counts the reports
+with no Topic as `newCount`.
 
 The board does not store who sent a report. The runtime labels every report
 `authored-by` the identity whose key signed the `addReport` call, and that label
@@ -60,19 +70,24 @@ identity behind the call is the key that signs it.
 
 - `addReport { agentName, id, name, kind, words?, structured }` stores a report
   and returns `{ id, name }`. It refuses a call with no `agentName`, a missing
-  or malformed `id`, a missing `name`, a missing or unknown `kind`, a
-  `structured` with no `source`, `words` over 4000 characters, and an `id`
-  already on the board.
+  or malformed `id`, a missing or malformed `name`, a missing or unknown `kind`,
+  a `structured` that breaks the rules above, `words` over 4000 characters, and
+  an `id` already on the board.
 - `linkTopic { agentName, id, topic }` records the Topic the report with that id
-  was filed under, and returns `{ id, topic }`. A report keeps the first Topic
-  it is linked to: linking it to the same Topic again changes nothing, and
-  linking it to another is refused, as is linking a report that is not on the
-  board.
+  was filed under, and returns `{ id, topic }`. `topic` must be a Topic address,
+  `top/<n>` or a piece id such as `of:fid1:…`. A later link replaces an earlier
+  one. Anyone who may write the board may call `linkTopic`, so a link is no fact
+  by itself: a reader decides whom to believe from the link's label, as triage
+  does. (A first-link-wins rule would let any writer claim a report before
+  triage reached it.)
 
 A refused call fails with the message `<verb> rejected: <code>: <reason>`, so a
-caller can act on the code: `unsigned`, `bad-id`, `missing-name`,
-`missing-kind`, `bad-kind`, `missing-source`, `bad-words`, `words-too-long`,
-`duplicate-id`, `missing-topic`, `unknown-report` or `already-linked`.
+caller can act on the code. `addReport`: `unsigned`, `bad-id`, `missing-name`,
+`name-too-long`, `bad-name`, `missing-kind`, `bad-kind`, `missing-source`,
+`bad-source`, `structured-too-large`, `link-in-structured`, `bad-want`,
+`bad-release`, `bad-commands`, `too-many-commands`, `bad-probe`,
+`too-many-probes`, `bad-words`, `words-too-long` or `duplicate-id`. `linkTopic`:
+`unsigned`, `bad-id`, `bad-topic` or `unknown-report`.
 
 ## From the command line
 
@@ -109,7 +124,8 @@ status 1. The code is one of the board's refusal codes above, or one of:
 ### `triage`
 
 ```text
-deno task -q feedback-reports triage --trusted trusted.txt --agent-name Triage [--dry-run]
+deno task -q feedback-reports triage --trusted trusted.txt --triagers triagers.txt \
+  --agent-name Triage [--dry-run]
 ```
 
 `triage` runs once and stops. It reads the reports that have no Topic and, for
@@ -121,6 +137,13 @@ trusted file is the team's to keep; a sender cannot change it. A report from
 anyone else, or whose label cannot be read, is not filed: triage prints only how
 many there were, never their content, and leaves them for a person.
 
+**Links.** A report counts as filed only when its link names a Topic address and
+every identity the link's `authored-by` label names is in the triagers file, one
+DID per line; the identities triage runs as belong there. Any other link is
+ignored and counted, and its report is triaged as new, so a writer who links
+someone else's report to a Topic can neither hide the report nor steer which
+Topic triage rewrites.
+
 **Grouping.** A new report belongs to a problem already filed when it has the
 same `want.cause` and `want.stop` as a report filed under that Topic, or the
 same failing probe. New reports that match each other share a new Topic. A
@@ -130,23 +153,32 @@ senders define what a filed problem is.
 **The Topic.** A new Topic is written from a template over the structured
 fields, with no model:
 
-- the title is `[feedback] <surface>: <cause and stop in plain words>`, such as
-  `[feedback] Weaver: auth expired, stops at gmail sync`;
-- the body starts with `What is asked:` (find and fix the cause, or, when every
-  report is a wish, make a product call), then lists the report names, the
-  kinds, causes, stops, the most retries seen, failing probes, the releases
-  affected, and the count.
+- the title is `[feedback] <surface>: <cause> at <stop>`, such as
+  `[feedback] Weaver: auth-expired at gmail-sync`;
+- the body is a section between two marker comments. It starts with
+  `What is asked:` (find and fix the cause, or, when every report is a wish,
+  make a product call), then lists the report names, the kinds, causes, stops,
+  the most retries seen, failing probes, the releases affected, and the count. A
+  list shows at most 20 entries, then how many more.
 
 The reporters' `words` never go into a Topic: the Topic names each report, and
-the words stay on this board. Values from the structured fields are reduced to
-letters, digits and a little punctuation, so nothing a sender writes can carry
-Markdown, a link or a line break into the Topic.
+the words stay on this board. Every value triage puts in a Topic or prints must
+match its field's shape from `fields.ts`; one that does not shows as `invalid`,
+is counted, and groups nothing. So nothing a sender writes can carry Markdown, a
+link or a line break into a Topic or a terminal.
 
-For a problem already filed, triage rewrites the Topic's body with the new
-count, and adds a comment only when the new reports bring a release or a stop
-the Topic did not have. Since triage owns the body of a Topic it filed, notes
-about the problem belong in the Topic's comments. Each report is linked with
-`linkTopic` as soon as its Topic is written, and the run fails if a link does
-not read back.
+For a problem already filed, triage replaces only its marked section of the
+Topic's body, leaving whatever people wrote around it, and adds a comment only
+when the new reports bring a release or a stop the Topic did not have. A body
+whose markers are gone gets a new section after what it holds. Each report is
+linked with `linkTopic` as soon as its Topic is written, and the run fails if a
+link does not read back.
+
+A new Topic is filed as an invocation named by a hash of the ids of the reports
+it files, and a comment by the Topic and those ids. A run that stops after
+filing a Topic but before linking its reports files the same reports again when
+run again, under the same invocation, which settles on the Topic already filed
+rather than filing a second. Invocations are remembered per machine, so this
+holds for a rerun on the same machine.
 
 `--dry-run` prints what triage would file and change, and writes nothing.
