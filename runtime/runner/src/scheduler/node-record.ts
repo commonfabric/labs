@@ -214,6 +214,15 @@ export class NodeRegistry {
   /** Advances each time a node joins or leaves the active set. */
   #membership = 0;
 
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since `takeChangedPieces()` last ran: each one named by
+   * the `pieceRootId` of the node's action. `undefined` until
+   * `trackChangedPieces()` asks for the record, so a runtime nothing reads
+   * it from keeps none.
+   */
+  #changedPieces: Set<string> | undefined;
+
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
 
@@ -317,6 +326,7 @@ export class NodeRegistry {
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     if (this.#all.delete(record)) this.#membership++;
+    this.#noteChangedPiece(record);
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
@@ -371,6 +381,38 @@ export class NodeRegistry {
     }
     record.status = status;
     this.#syncInvalidIndex(record);
+    this.#noteChangedPiece(record);
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, which
+   * `takeChangedPieces()` reads.
+   */
+  trackChangedPieces(): void {
+    this.#changedPieces ??= new Set();
+  }
+
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since this was last called, each named by the
+   * `pieceRootId` of the node's action. A run writes its node's status as it
+   * starts, so every piece a run touched is among them. Empty unless
+   * `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    const changed = this.#changedPieces;
+    if (changed === undefined || changed.size === 0) return [];
+    const taken = [...changed];
+    changed.clear();
+    return taken;
+  }
+
+  /** Helper for the members above, which records the piece of `record`. */
+  #noteChangedPiece(record: SchedulerNode): void {
+    if (this.#changedPieces === undefined) return;
+    const pieceRootId = (record.action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity?.pieceRootId;
+    if (pieceRootId !== undefined) this.#changedPieces.add(pieceRootId);
   }
 
   /**
@@ -550,6 +592,11 @@ export class NodeRegistry {
     return [...found].sort(byJoining);
   }
 
+  /** Whether any active node names `rootId` as a demand root. */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodesByDemandRoot.has(rootId);
+  }
+
   /**
    * Files `action`'s node under the demand roots its observation identity
    * names now, in place of the ones it was filed under. The scheduler calls
@@ -628,6 +675,7 @@ export class NodeRegistry {
       this.#membership++;
       this.#joinedAt.set(record, this.#nextJoin++);
       this.#fileUnderDemandRoots(record, { joining: true });
+      this.#noteChangedPiece(record);
     }
     this.#all.add(record);
     if (record.kind === "effect") {

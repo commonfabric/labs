@@ -309,7 +309,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>> {
+  ): Promise<ReadonlyArray<Engine.SessionOverwrite>> {
     return this.#reads.sessionOverwritePathsSince(
       space,
       doc,
@@ -497,6 +497,38 @@ class PlaneMemoryServer implements HostMemoryServer {
   ): Promise<void> {
     return this.#endpoint.request("server.commitDeliveryFailureNotice", {
       notice,
+    });
+  }
+
+  /** @inheritDoc */
+  advanceCurrency(
+    space: string,
+  ): ReturnType<HostMemoryServer["advanceCurrency"]> {
+    return this.#endpoint.request("server.advanceCurrency", { space });
+  }
+
+  /** @inheritDoc */
+  storeCurrencyRecords(
+    space: string,
+    batch: Parameters<HostMemoryServer["storeCurrencyRecords"]>[1],
+  ): ReturnType<HostMemoryServer["storeCurrencyRecords"]> {
+    return this.#endpoint.request("server.storeCurrencyRecords", {
+      space,
+      batch,
+    });
+  }
+
+  /** @inheritDoc */
+  judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
+    return this.#endpoint.request("server.judgeCurrencyRoots", {
+      space,
+      roots: [...roots],
+      excludePrincipal: options.excludePrincipal,
+      epoch: options.epoch,
     });
   }
 

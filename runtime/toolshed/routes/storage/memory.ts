@@ -30,6 +30,7 @@ export type MemoryEnvironment = Pick<
   | "MEMORY_MINIMUM_CLIENT_GENERATION"
   | "API_URL"
   | "MEMORY_SYNC_CID_REFERENCES"
+  | "MEMORY_MARKED_SPLICES"
   | "MEMORY_STORE_READS_DIGEST"
   | "MEMORY_ACL_DELEGATIONS"
   | "MEMORY_DOCUMENT_CACHE_BUDGET_BYTES"
@@ -197,6 +198,9 @@ export async function openMemory(
     // Offered unless the deployment turns it off; a client takes it only when
     // it opts in.
     syncCidReferences: environment.MEMORY_SYNC_CID_REFERENCES,
+    // Advertised only where the deployment turns it on, once every serving
+    // worker that may read its rows reads marked splices.
+    markedSplices: environment.MEMORY_MARKED_SPLICES,
     // The posture this process publishes on `/api/meta`, read when an open
     // asks rather than now: it is published once the Runtime exists, after
     // this server is constructed, and until then it names no instances.
