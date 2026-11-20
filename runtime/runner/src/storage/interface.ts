@@ -3917,9 +3917,9 @@ export interface ISpaceReplica extends ISpace {
    * Whether the server this replica is connected to advertised
    * `markedSplicesV1`, so that a transaction may send a change to an array
    * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
-   * until a session exists and for an older server or a deployment that has
-   * not turned it on, and then the change goes index by index. Optional: a
-   * replica without it reads as `false`.
+   * until a session exists and for a server that predates marked splices,
+   * and then the change goes index by index. Optional: a replica without it
+   * reads as `false`.
    */
   markedSplices?(): boolean;
 

@@ -347,15 +347,6 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
-  // Whether this deployment's memory server advertises `markedSplicesV1`, so
-  // that clients send array changes as marked splices: on for "true" or "1",
-  // off for "false", "0" or no setting, and any other spelling refuses
-  // startup. Turn it on only once every serving worker that may read this
-  // deployment's rows, a rollback's included, reads marked splices. See
-  // docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`.
-  MEMORY_MARKED_SPLICES: z.enum(["true", "1", "false", "0"]).default(
-    "false",
-  ).transform((v) => v === "true" || v === "1"),
   // Whether this deployment's memory server stores an admitted commit's reads
   // as a digest where nothing reads them afterward
   // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or

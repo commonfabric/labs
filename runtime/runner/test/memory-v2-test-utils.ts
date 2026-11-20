@@ -71,12 +71,24 @@ export const newSharedServer = (options?: {
   store?: URL;
   sessions?: MemoryV2Server.SessionRegistry;
   delegatingDids?: readonly string[];
-  markedSplices?: boolean;
 }): MemoryV2Server.Server =>
   newLoopbackServer({
     ...options,
     audience: TEST_SESSION_OPEN_AUDIENCE,
   });
+
+/**
+ * Has `server` advertise what a server that predates marked splices does: no
+ * `markedSplicesV1`, so that its clients send array changes index by index.
+ * Returns `server`.
+ */
+export const withoutMarkedSplices = (
+  server: MemoryV2Server.Server,
+): MemoryV2Server.Server => {
+  const flags = server.memoryProtocolFlags.bind(server);
+  server.memoryProtocolFlags = () => ({ ...flags(), markedSplicesV1: false });
+  return server;
+};
 
 /**
  * Writes `space`'s deletion tombstone, naming `by`, straight into `engine`,

@@ -23,7 +23,10 @@ import {
   unmarkUiInputBlindWriteTx,
 } from "../../src/storage/reactivity-log.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
-import { newSharedServer } from "../memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  withoutMarkedSplices,
+} from "../memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase(
   "v2-transaction patch round trip",
@@ -46,7 +49,7 @@ describe("v2-transaction", () => {
     // The server advertises `markedSplicesV1`, so a pinned change to an
     // array goes as marked splices; one case below connects to a server that
     // does not.
-    server = newSharedServer({ markedSplices: true });
+    server = newSharedServer();
     sentPatches = [];
     const transact = server.transact.bind(server);
     server.transact = (...args: Parameters<typeof transact>) => {
@@ -864,10 +867,10 @@ describe("v2-transaction", () => {
     });
 
     it("sends a head insertion index by index to a server that does not advertise marked splices", async () => {
-      // A server without `markedSplicesV1`, an older one or a deployment that
-      // has not turned it on, reads a splice as overwriting nothing, so the
-      // change goes in the form it reads.
-      const older = newSharedServer();
+      // A server without `markedSplicesV1`, one that predates marked
+      // splices, reads a splice as overwriting nothing, so the change goes in
+      // the form it reads.
+      const older = withoutMarkedSplices(newSharedServer());
       const sentToOlder: PatchOp[] = [];
       const transact = older.transact.bind(older);
       older.transact = (...args: Parameters<typeof transact>) => {

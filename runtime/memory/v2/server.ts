@@ -3858,16 +3858,6 @@ export class Server {
       syncCidReferences?: boolean;
 
       /**
-       * Whether this server advertises `markedSplicesV1`, so that clients
-       * send array changes as marked splices (`PatchOp`'s `pinned`). Off
-       * unless `true`. This server reads marked splices whether or not it
-       * advertises them; a deployment turns this on only once every serving
-       * worker that may read its rows, a rollback's included, does too
-       * (docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`).
-       */
-      markedSplices?: boolean;
-
-      /**
        * Whether this server's posture names instances (INV-16): the
        * deployment's value of the `instanceNames` experimental flag. Asked at
        * every `session.open` that declares `instanceNames: true` of a space
@@ -4136,7 +4126,6 @@ export class Server {
       routedAuthV1: false,
       routedCompressionV1: false,
       syncCidReferencesV1: this.options.syncCidReferences !== false,
-      markedSplicesV1: this.options.markedSplices === true,
     };
   }
 
