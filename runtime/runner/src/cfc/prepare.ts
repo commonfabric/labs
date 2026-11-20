@@ -3871,31 +3871,38 @@ const isPerValueElementEntry = (entry: LabelMapEntry): boolean =>
   });
 
 /**
- * `value` with the slot at `rel` set to `slot`, or emptied where `present` is
- * false, copying each container on the way down and nothing else. Returns
- * `undefined` where a container on the way is not a plain array or record.
+ * Sets the slot at `rel` beneath `root` to `slot`, or empties it where
+ * `present` is false. `root` and every container in `owned` are copies this
+ * caller may change; any other container on the way down is copied once,
+ * put in its parent's place, and added to `owned`, so a later call for a
+ * path through it copies nothing. Returns false where a container on the way
+ * is not a plain array or record.
  */
-const withSlotAt = (
-  value: unknown,
+const setSlotIn = (
+  root: unknown[],
+  owned: Set<unknown>,
   rel: readonly string[],
   slot: unknown,
   present: boolean,
-): unknown[] | Record<string, unknown> | undefined => {
-  if (!isFabricPlainContainer(value as FabricValue)) return undefined;
-  const copy: unknown[] | Record<string, unknown> = Array.isArray(value)
-    ? value.slice()
-    : { ...(value as Record<string, unknown>) };
-  const [key, ...rest] = rel;
-  const slots = copy as Record<string, unknown>;
-  if (rest.length === 0) {
-    if (present) slots[key!] = slot;
-    else delete slots[key!];
-    return copy;
+): boolean => {
+  let container = root as unknown as Record<string, unknown>;
+  for (let depth = 0; depth < rel.length - 1; depth++) {
+    const key = rel[depth]!;
+    let child = container[key];
+    if (!isFabricPlainContainer(child as FabricValue)) return false;
+    if (!owned.has(child)) {
+      child = Array.isArray(child)
+        ? child.slice()
+        : { ...(child as Record<string, unknown>) };
+      owned.add(child);
+      container[key] = child;
+    }
+    container = child as Record<string, unknown>;
   }
-  const inner = withSlotAt(slots[key!], rest, slot, present);
-  if (inner === undefined) return undefined;
-  slots[key!] = inner;
-  return copy;
+  const key = rel[rel.length - 1]!;
+  if (present) container[key] = slot;
+  else delete container[key];
+  return true;
 };
 
 /**
@@ -3909,10 +3916,15 @@ const withSlotAt = (
  * entries of the element that stood there before. So the old and new arrays
  * are aligned by a shortest edit script (`keptElementIndices()`), and an
  * entry beneath an old element the script keeps at another index moves there
- * with it. An entry beneath an old element the script removes is dropped,
- * except where the new element at the same index is one the script adds: an
- * element edited in place pairs with itself there, and its entries are
- * cleared beneath the paths the diff wrote and kept elsewhere, as before.
+ * with it. A script keeps a subsequence, so an element that changes places
+ * with others, such as the first of three moved to the end, is one it
+ * removes at the old index and adds at the new one. Each old element the
+ * script removes is therefore paired, in order, with the first new element
+ * it adds that is equal to it and not yet paired, and its entries move there.
+ * An entry beneath an old element left unpaired is dropped, except where the
+ * new element at the same index is one the script adds and nothing is paired
+ * with: an element edited in place pairs with itself there, and its entries
+ * are cleared beneath the paths the diff wrote and kept elsewhere, as before.
  *
  * Only `derived` and `structure` entries move, existence entries excepted:
  * those are frozen at their path's creation (§8.12.8) and stay where they
@@ -3978,8 +3990,10 @@ const elementEntryPlacements = (
     const beneath = written.paths
       .filter((path) => path.length > array.length && isPrefix(array, path))
       .sort((left, right) => right.length - left.length);
-    let before: unknown = after.slice();
+    const beforeArray: unknown[] = after.slice();
+    const owned = new Set<unknown>([beforeArray]);
     let beforeLength: number | undefined;
+    let rebuilt = true;
     for (const path of beneath) {
       const key = pathKey(path);
       const rel = path.slice(array.length);
@@ -3988,17 +4002,17 @@ const elementEntryPlacements = (
         if (typeof previous === "number") beforeLength = previous;
         continue;
       }
-      before = withSlotAt(
-        before,
+      rebuilt = setSlotIn(
+        beforeArray,
+        owned,
         rel,
         previous,
         written.previousPresentByPath.get(key) ?? previous !== undefined,
       );
-      if (before === undefined) break;
+      if (!rebuilt) break;
     }
-    if (!Array.isArray(before)) continue;
-    if (beforeLength !== undefined) before.length = beforeLength;
-    const beforeArray = before;
+    if (!rebuilt) continue;
+    if (beforeLength !== undefined) beforeArray.length = beforeLength;
     const beforeKeys: (string | undefined)[] = [];
     const afterKeys: (string | undefined)[] = [];
     const keyOf = (
@@ -4021,6 +4035,23 @@ const elementEntryPlacements = (
     );
     const added = new Uint8Array(after.length).fill(1);
     for (const afterIndex of kept) if (afterIndex >= 0) added[afterIndex] = 0;
+    const addedByKey = new Map<string, number[]>();
+    for (let afterIndex = after.length - 1; afterIndex >= 0; afterIndex--) {
+      if (added[afterIndex] === 0) continue;
+      const key = keyOf(after, afterKeys, afterIndex);
+      const queue = addedByKey.get(key);
+      if (queue === undefined) addedByKey.set(key, [afterIndex]);
+      else queue.push(afterIndex);
+    }
+    for (let beforeIndex = 0; beforeIndex < kept.length; beforeIndex++) {
+      if (kept[beforeIndex]! >= 0) continue;
+      const afterIndex = addedByKey.get(
+        keyOf(beforeArray, beforeKeys, beforeIndex),
+      )?.pop();
+      if (afterIndex === undefined) continue;
+      kept[beforeIndex] = afterIndex;
+      added[afterIndex] = 0;
+    }
     alignments.push({ array, kept, added, afterLength: after.length });
   }
   if (alignments.length === 0) return undefined;

@@ -169,6 +169,33 @@ describe("CFC per-element label entries of a rewritten array", () => {
       expect(valueConfidentialityAt(id, ["0"])).toEqual(["bob-secret"]);
       expect(valueConfidentialityAt(id, ["2"])).toEqual(["carol-secret"]);
     });
+
+    it("moves the entries of an element the script removes and adds again elsewhere", async () => {
+      const id = await seed("reorder-first-to-last", ["x", "y", "z"], [
+        derivedEntry(["0"], "alice-secret"),
+        derivedEntry(["1"], "bob-secret"),
+        derivedEntry(["2"], "carol-secret"),
+      ]);
+      await write("reorder-first-to-last", ["y", "z", "x"], { reads: false });
+      expect(valueConfidentialityAt(id, ["0"])).toEqual(["bob-secret"]);
+      expect(valueConfidentialityAt(id, ["1"])).toEqual(["carol-secret"]);
+      expect(valueConfidentialityAt(id, ["2"])).toEqual(["alice-secret"]);
+    });
+
+    it("leaves an equal element's entries at an index the diff did not write", async () => {
+      const id = await seed("reorder-equal-tail", ["x", "y", "x"], [
+        derivedEntry(["0"], "alice-secret"),
+        derivedEntry(["1"], "bob-secret"),
+        derivedEntry(["2"], "carol-secret"),
+      ]);
+      await write("reorder-equal-tail", ["y", "x", "x"], { reads: false });
+      expect(valueConfidentialityAt(id, ["0"])).toEqual(["bob-secret"]);
+      expect([
+        ...valueConfidentialityAt(id, ["1"]),
+        ...valueConfidentialityAt(id, ["2"]),
+      ].sort()).toEqual(["alice-secret", "carol-secret"]);
+      expect(valueConfidentialityAt(id, ["2"])).toHaveLength(1);
+    });
   });
 
   describe("entries beneath an element", () => {

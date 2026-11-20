@@ -706,8 +706,10 @@ its index did not change is not written, and keeps the entries stored beneath
 it. An element the write moves to another index keeps them too:
 `elementEntryPlacements` in `cfc/prepare.ts` aligns the old and new arrays by
 a shortest edit script and moves each such entry, existence entries excepted,
-to the element's new index, and drops the entries beneath an element the
-script removes. Without the move, an element moved onto an index holding an
+to the element's new index. An element the script removes is paired, in
+order, with an equal element it adds, which is how an element that changes
+places with others is carried, and the entries beneath an element left
+unpaired are dropped. Without the move, an element moved onto an index holding an
 equal value would take the entries of the element that stood there, and its
 own would be lost. Declared entries stay with their position, and link entries
 follow the reference their slot holds.
@@ -743,8 +745,8 @@ follow the reference their slot holds.
   a write that sets an element equal to one stored elsewhere in the array,
   without reading it, carries that element's entries to it, an over-taint.
   Where no script within 64 edits aligns the arrays between their common
-  prefix and suffix, the elements between are paired by index, as before the
-  alignment existed.
+  prefix and suffix, the elements between are paired by value, in order, and
+  an element left unpaired by index, as before the alignment existed.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;
