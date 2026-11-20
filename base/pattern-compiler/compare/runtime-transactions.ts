@@ -102,6 +102,16 @@ export type RuntimeCounts = {
   reads: number;
   /** Writes staged, one for each change of the executor. */
   writes: number;
+  /**
+   * Write records recorded for a write that left the value at its target
+   * as it was.
+   */
+  unchangedRecords: number;
+  /**
+   * The paths whose label entries a commit changed in a document for which
+   * it recorded such a write record.
+   */
+  labelEntriesChanged: number;
 };
 
 /**
@@ -136,6 +146,12 @@ export class RuntimeTransactions implements TransactionHooks {
   }[] = [];
   /** The write records recorded in the transaction in progress. */
   #recorded: RecordedPlanWrite[] = [];
+  /**
+   * The label entries each document stored before the transaction in
+   * progress, for the documents it recorded a write for that left the
+   * value as it was.
+   */
+  readonly #unchanged = new Map<string, Map<string, string>>();
   /** The documents the transaction in progress wrote first. */
   #created: string[] = [];
   /** What hears of the write records of each commit that settled. */
@@ -153,6 +169,8 @@ export class RuntimeTransactions implements TransactionHooks {
     aborted: 0,
     reads: 0,
     writes: 0,
+    unchangedRecords: 0,
+    labelEntriesChanged: 0,
   };
   /** The identifier of each document the storage holds. */
   readonly #documents = new Set<string>();
@@ -178,7 +196,9 @@ export class RuntimeTransactions implements TransactionHooks {
   /** The documents of `#entries` that a commit changed since. */
   readonly #touched = new Set<string>();
   /** What the executor registered to hear of changed labels. */
-  #labelsChanged: ((changes: readonly LabelChange[]) => void) | undefined;
+  #labelsChanged:
+    | ((changes: readonly LabelChange[], alone?: boolean) => void)
+    | undefined;
   /** The subscription that hears of the commits of the space. */
   readonly #subscription: IStorageNotification | undefined;
 
@@ -287,7 +307,9 @@ export class RuntimeTransactions implements TransactionHooks {
   }
 
   /** @inheritDoc */
-  watchLabels(changed: (changes: readonly LabelChange[]) => void): void {
+  watchLabels(
+    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+  ): void {
     this.#labelsChanged = changed;
   }
 
@@ -478,13 +500,92 @@ export class RuntimeTransactions implements TransactionHooks {
     );
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
-    // transaction, and the path keeps the label stored with the value, as
-    // for any unchanged write: its records are not given. A transaction
-    // that keeps no log of its writes gives them all.
-    if (
-      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts
-    ) return;
-    for (const write of writes ?? []) {
+    // transaction: its records are given as those of a write that left the
+    // value as it was, so the path stores the label of the write for the
+    // value it holds. A transaction that keeps no log of its writes gives
+    // every record as that of a write.
+    this.#record(
+      tx,
+      writes ?? [],
+      attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
+    );
+  }
+
+  /**
+   * Keeps the label entries a document stores before the transaction in
+   * progress stores, for a write that left a value of the document as it
+   * was, the label of that write.
+   */
+  #noteUnchanged(doc: string): void {
+    if (this.#unchanged.has(doc)) return;
+    const tx = this.#runtime.edit();
+    try {
+      this.#unchanged.set(doc, entriesOf(this.#storedLabels(tx, doc)));
+    } finally {
+      tx.abort();
+    }
+  }
+
+  /**
+   * Tells the executor of the label entries that the transaction that just
+   * committed changed in the documents of `#unchanged`, where it changed
+   * a label and no value, and counts them.
+   */
+  #reportUnchanged(): void {
+    if (this.#unchanged.size === 0) return;
+    const changes: LabelChange[] = [];
+    const tx = this.#runtime.edit();
+    try {
+      for (const [doc, before] of this.#unchanged) {
+        const after = entriesOf(this.#storedLabels(tx, doc));
+        const paths = [...new Set([...before.keys(), ...after.keys()])]
+          .filter((path) => before.get(path) !== after.get(path));
+        if (paths.length === 0) continue;
+        this.#counts.labelEntriesChanged += paths.length;
+        changes.push({
+          doc,
+          paths: paths.map((path) => JSON.parse(path) as string[]),
+        });
+      }
+    } finally {
+      tx.abort();
+      this.#unchanged.clear();
+    }
+    if (changes.length > 0) this.#labelsChanged?.(changes, true);
+  }
+
+  /** @inheritDoc */
+  unchanged(
+    doc: string,
+    path: readonly string[],
+    _store: Store,
+    schema: Schema | undefined,
+    writes: readonly PlanWrite[],
+  ): void {
+    if (this.#compiledPattern === undefined) return;
+    const tx = this.#open();
+    // The write policy of the write, as `change` records it: the label is
+    // stored under the policy a write of the path is held to.
+    recordRelevantSchemaWritePolicyInput(
+      tx,
+      this.#address(doc, path),
+      schema as JSONSchema | undefined,
+    );
+    this.#record(tx, writes, true);
+  }
+
+  /**
+   * Records each write record with the runtime as an authorized
+   * `plan-write` input: `unchanged` for a write that left the value at its
+   * target as it was.
+   */
+  #record(
+    tx: IExtendedStorageTransaction,
+    writes: readonly PlanWrite[],
+    unchanged: boolean,
+  ): void {
+    if (this.#compiledPattern === undefined) return;
+    for (const write of writes) {
       const recorded: RecordedPlanWrite = {
         ...this.#inputs(write),
         target: this.#cfcAddress(write.target),
@@ -492,8 +593,13 @@ export class RuntimeTransactions implements TransactionHooks {
         record: write.record,
         instance: write.instance,
         keys: write.keys,
+        ...(unchanged ? { unchanged: true as const } : {}),
       };
       this.#recorded.push(recorded);
+      if (unchanged) {
+        this.#counts.unchangedRecords += 1;
+        this.#noteUnchanged(write.target.doc);
+      }
       // The runtime's mark: this adapter stands in for the runner, which
       // records what its own code computed.
       tx.recordCfcWritePolicyInput(
@@ -638,6 +744,7 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#tx = undefined;
     if (!committed) {
       tx.abort();
+      this.#unchanged.clear();
       this.#counts.aborted += 1;
       for (const doc of this.#created) this.#documents.delete(doc);
       return;
@@ -662,6 +769,8 @@ export class RuntimeTransactions implements TransactionHooks {
     this.#recorded = [];
     this.#created = [];
     this.#reportLabels();
+    if (refused) this.#unchanged.clear();
+    else this.#reportUnchanged();
     this.#counts.committed += 1;
     this.#counts.byCause[this.#cause] = (this.#counts.byCause[this.#cause] ??
       0) + 1;

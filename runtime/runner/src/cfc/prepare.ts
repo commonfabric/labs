@@ -3799,6 +3799,47 @@ const valueWriteTargets = (
       }
     }
   }
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+  // A write of a compiled pattern that left the value as it was is an
+  // attempted write (§8.10.1), which the transaction records no write for.
+  // Its path is a target all the same, holding the value it held, so that
+  // the label of the attempt is stored there (§8.12.8, replace-on-overwrite
+  // by the last attempted write). Behind `compiledPatterns`, which defaults
+  // off: with it off no such input is honored.
+  const planWrites = tx.getCfcState().planLabels
+    ? planWritesByTarget(tx)
+    : undefined;
+  for (const [key, inputs] of planWrites ?? []) {
+    for (const input of inputs) {
+      if (input.unchanged !== true) continue;
+      const path = canonicalizeLogicalPath(input.target.path);
+      const existing = result.get(key);
+      if (existing?.paths.some((written) => isPrefix(written, path))) continue;
+      const target = {
+        space: input.target.space,
+        scope: normalizeCellScope(input.target.scope),
+        id: input.target.id as URI,
+        type: "application/json" as MediaType,
+      };
+      const held = tx.readValueOrThrow({ ...target, path: [...path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      });
+      if (existing !== undefined) {
+        existing.paths.push(path);
+        existing.valuesByPath.set(pathKey(path), held);
+        existing.previousValuesByPath.set(pathKey(path), held);
+        existing.previousPresentByPath.set(pathKey(path), held !== undefined);
+      } else {
+        result.set(key, {
+          ...target,
+          paths: [path],
+          valuesByPath: new Map([[pathKey(path), held]]),
+          previousValuesByPath: new Map([[pathKey(path), held]]),
+          previousPresentByPath: new Map([[pathKey(path), held !== undefined]]),
+        });
+      }
+    }
+  }
   return result;
 };
 

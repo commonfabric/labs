@@ -1151,6 +1151,202 @@ describe("cfc-plan-labels", () => {
       );
     });
 
+    describe("for a write that left the value as it was", () => {
+      /**
+       * Seeds a source labeled `secret-a` and a target holding `{ a: "" }`,
+       * then commits a transaction that reads the source, writes `""` at
+       * `a` again and records the write as one that left the value as it
+       * was. With `again`, that transaction was committed once before. A
+       * sink reads `a` and another transaction read `a` before the commit;
+       * the other transaction then writes a document of its own.
+       */
+      const commitUnchanged = async (again = false) => {
+        let outcome:
+          | {
+            error: unknown;
+            value: unknown;
+            wrote: string[];
+            sinkCalls: { before: number; after: number };
+            otherError: unknown;
+          }
+          | undefined;
+        await withRuntime(true, async (runtime) => {
+          const seed = runtime.edit();
+          writeSeedEnvelopeDoc(seed, space);
+          seedStoredEnvelope(seed, memoryAddress("of:src-a", []), {
+            value: { text: "a" },
+            cfc: {
+              version: 1,
+              schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+              labelMap: {
+                version: 1,
+                entries: [{
+                  path: [],
+                  label: { confidentiality: ["secret-a"] },
+                }],
+              },
+            },
+          });
+          const targetCell = runtime.getCell(
+            space,
+            "plan-target-unchanged",
+            undefined,
+            seed,
+          );
+          targetCell.set({ a: "" });
+          const link = targetCell.getAsNormalizedFullLink();
+          const target: CfcAddress = {
+            space: link.space,
+            id: link.id,
+            scope: "space",
+            path: ["a"],
+          };
+          seed.enrollRuntimeOwnedStore(
+            { ...target, path: [] },
+            "plan-labels-test",
+            runtimeWritePolicyAuthorization,
+          );
+          // The document the other transaction writes takes its join.
+          const otherCell = runtime.getCell(
+            space,
+            "plan-other-document",
+            undefined,
+            seed,
+          );
+          otherCell.set("");
+          seed.enrollRuntimeOwnedStore(
+            {
+              space,
+              id: otherCell.getAsNormalizedFullLink().id,
+              scope: "space",
+              path: [],
+            },
+            "plan-labels-test",
+            runtimeWritePolicyAuthorization,
+          );
+          expect((await seed.commit().settled).error).toBeUndefined();
+          const identity = runtime.compiledPlans.register(
+            plan,
+            "code",
+            runtimeWritePolicyAuthorization,
+          );
+          /** The transaction that leaves `a` as it was, prepared. */
+          const leaving = () => {
+            const tx = runtime.edit();
+            tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+            tx.writeValueOrThrow({ ...link, path: ["a"] }, "");
+            tx.recordCfcWritePolicyInput(
+              {
+                ...planWrite(identity, target, 0, address("of:src-a")),
+                unchanged: true,
+              },
+              runtimeWritePolicyAuthorization,
+            );
+            runtime.prepareTxForCommit(tx);
+            return tx;
+          };
+          if (again) {
+            expect((await leaving().commit().settled).error).toBeUndefined();
+          }
+          let calls = 0;
+          const cancel = runtime.getCell(space, "plan-target-unchanged").key(
+            "a",
+          ).sink(() => {
+            calls++;
+          });
+          await runtime.idle();
+          const before = calls;
+          const other = runtime.edit();
+          runtime.getCell(space, "plan-target-unchanged", undefined, other)
+            .key("a").get();
+
+          const tx = leaving();
+          const wrote = [...(tx.getWriteDetails?.(space) ?? [])].filter((
+            write,
+          ) => write.address.id === link.id).map((write) =>
+            write.address.path.join("/")
+          );
+          const { error } = await tx.commit().settled;
+          await runtime.idle();
+          const after = calls;
+          cancel();
+
+          runtime.getCell(space, "plan-other-document", undefined, other).set(
+            "written",
+          );
+          const otherError = (await other.commit().settled).error;
+          const reader = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(reader, {
+              space,
+              id: link.id,
+              scope: "space",
+              type: "application/json",
+            });
+            outcome = {
+              error,
+              value: (metadata?.labelMap.entries ?? []).filter((entry) =>
+                entry.origin === "derived" && entry.observes === "value"
+              ).map((entry) => [
+                `/${entry.path.join("/")}`,
+                entry.label.confidentiality,
+              ]),
+              wrote,
+              sinkCalls: { before, after },
+              otherError,
+            };
+          } finally {
+            reader.abort();
+          }
+        });
+        return outcome!;
+      };
+
+      it("stores the label of the write at its path", async () => {
+        const { error, value } = await commitUnchanged();
+        expect(error).toBeUndefined();
+        expect(value).toEqual([["/a", ["secret-a"]]]);
+      });
+
+      it("writes the stored labels of the document and no value", async () => {
+        const { wrote } = await commitUnchanged();
+        expect(wrote).toEqual(["cfc"]);
+      });
+
+      // The labels of a document are stored in the document, and a read
+      // of a labeled value consumes them: a change of the label a reader
+      // consumed is a change of what the reader read.
+      it("runs a reader of the value again, whose consumed label changed", async () => {
+        const { sinkCalls } = await commitUnchanged();
+        expect(sinkCalls.after).toBe(sinkCalls.before + 1);
+      });
+
+      it("conflicts with a transaction that read the value under the label it had before", async () => {
+        const { otherError } = await commitUnchanged();
+        expect((otherError as Error | undefined)?.name).toBe(
+          "StorageTransactionInconsistent",
+        );
+      });
+
+      describe("where the path stores that label already", () => {
+        it("writes nothing", async () => {
+          const { error, wrote } = await commitUnchanged(true);
+          expect(error).toBeUndefined();
+          expect(wrote).toEqual([]);
+        });
+
+        it("does not run a reader of the value again", async () => {
+          const { sinkCalls } = await commitUnchanged(true);
+          expect(sinkCalls.after).toBe(sinkCalls.before);
+        });
+
+        it("does not conflict with a transaction that read the value before", async () => {
+          const { otherError } = await commitUnchanged(true);
+          expect(otherError).toBeUndefined();
+        });
+      });
+    });
+
     it("stores the transaction's join on both paths with the option off", async () => {
       const { error, value } = await commitWrites(false, recordBoth);
       expect(error).toBeUndefined();

@@ -1854,7 +1854,9 @@ export type TransactionHooks = {
    * each element of a `fold` that read a position at, above or below one
    * of them, and of no other element.
    */
-  watchLabels?(changed: (changes: readonly LabelChange[]) => void): void;
+  watchLabels?(
+    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+  ): void;
 
   /**
    * The transaction in progress changed a path of a document, which
@@ -1874,6 +1876,22 @@ export type TransactionHooks = {
     store: Store,
     schema?: Schema,
     writes?: readonly PlanWrite[],
+  ): void;
+
+  /**
+   * A write of a body of the transaction in progress left the value at a
+   * path of a document as it was. `writes` holds the record of each path of
+   * the plan the write covers, as `change` has it. The value is not written
+   * again; whoever stores labels stores the label of the records for the
+   * value the path holds, since what the body read decided that the value
+   * stays (ruling Z67).
+   */
+  unchanged?(
+    doc: string,
+    path: readonly string[],
+    store: Store,
+    schema: Schema | undefined,
+    writes: readonly PlanWrite[],
   ): void;
 
   /**
@@ -2677,7 +2695,19 @@ export class Instance {
         this.store.onRead = (doc, path, by) => {
           if (this.#tx !== undefined) hooks.read(doc, path, by);
         };
-        hooks.watchLabels?.((changes) => this.labelsChanged(changes));
+        hooks.watchLabels?.((changes, alone) =>
+          this.labelsChanged(changes, alone)
+        );
+        // A write of a body that leaves the value as it was is reported
+        // with the records of the write being made: what the body read
+        // decided that the value stays.
+        this.store.onUnchanged = (doc, path, schema) => {
+          if (this.#tx === undefined || this.#writing === undefined) return;
+          const writes = this.#writesOf(doc, path, undefined);
+          if (writes.length > 0) {
+            hooks.unchanged?.(doc, path, this.store, schema, writes);
+          }
+        };
       }
     }
     // An instance that a function body makes is given the options of the
@@ -6917,7 +6947,39 @@ export class Instance {
     const outcomes: Outcome[] = [];
     this.root.#drain(outcomes);
     this.root.settle();
+    this.root.#relabel();
     return outcomes;
+  }
+
+  /**
+   * On the root: a label changed while its value did not
+   * (`labelsChanged`), and the labels of the kept outputs were not formed
+   * again since.
+   */
+  #relabeling = false;
+
+  /**
+   * On the root: where a label changed alone, gives the transaction hooks
+   * the record of every kept output of this instance and of each instance
+   * it made, in a derivation transaction of its own, as those of writes
+   * that leave the values as they are (`TransactionHooks.unchanged`): the
+   * label of an output that read the changed label is formed again, and no
+   * value code runs. The executor keeps no record of which outputs read
+   * which label, so the work is the number of kept outputs, each element
+   * of a per-element output counted, and not the number that read it.
+   */
+  #relabel(): void {
+    const hooks = this.options.transactions;
+    if (!this.#relabeling || hooks?.unchanged === undefined) return;
+    this.#relabeling = false;
+    this.#within("derivation", () => {
+      for (const instance of new Set([this, ...this.#instances.values()])) {
+        const writes = instance.#outputWrites(instance.id, [], undefined);
+        if (writes.length > 0) {
+          hooks.unchanged?.(instance.id, [], this.store, undefined, writes);
+        }
+      }
+    });
   }
 
   queue(stream: StreamRef, event: unknown): void {
@@ -7590,14 +7652,19 @@ export class Instance {
    * entry that changed. The work is the number of those elements and the
    * length of the paths, and not the number of elements.
    */
-  labelsChanged(changes: readonly LabelChange[]): void {
+  labelsChanged(changes: readonly LabelChange[], alone = false): void {
     for (const instance of new Set([this, ...this.#instances.values()])) {
-      instance.#relabel(changes);
+      instance.#regroupReaders(changes);
     }
+    // Where the labels changed and no value did, nothing is evaluated
+    // again, and the label of an output that read a changed label is
+    // formed again behind the batch in progress, or the next one
+    // (`#relabel`).
+    if (alone && changes.length > 0) this.#relabeling = true;
   }
 
   /** Helper for `labelsChanged()`, for the folds of this instance. */
-  #relabel(changes: readonly LabelChange[]): void {
+  #regroupReaders(changes: readonly LabelChange[]): void {
     const readers = new Set<string>();
     const collect = (node: LabelReaders) => {
       for (const reader of node.readers) readers.add(reader);

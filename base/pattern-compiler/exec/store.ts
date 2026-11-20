@@ -850,6 +850,16 @@ export class Store {
   onWrite: ((doc: string, path: readonly string[]) => void) | undefined;
 
   /**
+   * Called for a write that leaves the value at its path as it was, with
+   * the document, the path and the schema of the reference the write was
+   * made through. The write is no change: nothing is journaled and no
+   * reader is marked.
+   */
+  onUnchanged:
+    | ((doc: string, path: readonly string[], schema?: Schema) => void)
+    | undefined;
+
+  /**
    * Called after each change of a document, with what changed: whoever
    * keeps an index from a position to its readers marks them
    * (`scheduler-and-serving-loop.md` §3.1). `keyed` is absent where the
@@ -2105,6 +2115,7 @@ export class Store {
       };
       this.docs.set(doc, document);
     } else if (JSON.stringify(located.value) === JSON.stringify(value)) {
+      this.onUnchanged?.(doc, path, located.ref.schema);
       return;
     } else {
       this.onWrite?.(doc, path);

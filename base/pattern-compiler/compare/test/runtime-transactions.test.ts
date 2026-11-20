@@ -1005,7 +1005,7 @@ describe("a commit the preparation refuses", () => {
 });
 
 describe("a change that leaves the stored value as it was", () => {
-  it("records no write record, as the storage records no write, and commits", async () => {
+  it("records its write record as that of a write that left the value as it was, and stores the label of the record at the path", async () => {
     const signer = await Identity.fromPassphrase("pattern-compiler-compare");
     const space = signer.did();
     const storageManager = StorageManager.emulate({ as: signer });
@@ -1029,18 +1029,37 @@ describe("a change that leaves the stored value as it was", () => {
       hooks.end({ committed: true });
       expect(await hooks.settled()).toEqual([]);
       // The executor writes `shout` again with the value it holds: the
-      // storage records no write, and a write record for it would name a
-      // path the transaction did not write.
+      // storage records no write, and the write record is given as that of
+      // a write that left the value as it was, which names a path the
+      // transaction did not write.
       hooks.begin("send");
       hooks.change(doc, ["shout"], store, undefined, [{
         target: { doc, path: ["shout"] },
         record: { output: 0 },
         instance: doc,
         keys: [],
-        slots: {},
+        slots: { 0: { constant: true }, 1: { constant: true } },
+        selections: { 0: 0 },
       }]);
       hooks.end({ committed: true });
       expect(await hooks.settled()).toEqual([]);
+      expect(hooks.counts.unchangedRecords).toBe(1);
+      // The kept output's label is the atom of its pattern.
+      const reader = runtime.edit();
+      try {
+        const entries = readStoredCfcMetadata(reader, {
+          space,
+          id: hooks.entityOf(doc),
+          scope: "space",
+        })?.labelMap.entries ?? [];
+        expect(
+          entries.filter((entry) =>
+            entry.observes === "value" && entry.path.join("/") === "shout"
+          ).map((entry) => entry.label.integrity?.length),
+        ).toEqual([1]);
+      } finally {
+        reader.abort();
+      }
     } finally {
       hooks.close();
       await runtime.dispose();

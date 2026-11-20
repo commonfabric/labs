@@ -63,9 +63,11 @@ class Recorder implements TransactionHooks {
   }
 
   /** What the executor registered to hear of changed labels. */
-  labelsChanged?: (changes: readonly LabelChange[]) => void;
+  labelsChanged?: (changes: readonly LabelChange[], alone?: boolean) => void;
 
-  watchLabels(changed: (changes: readonly LabelChange[]) => void): void {
+  watchLabels(
+    changed: (changes: readonly LabelChange[], alone?: boolean) => void,
+  ): void {
     this.labelsChanged = changed;
   }
 
@@ -109,6 +111,24 @@ class Recorder implements TransactionHooks {
       value: structuredClone(store.peek(doc, path)),
       ...(writes === undefined ? {} : { writes }),
     });
+  }
+
+  /** Each write that left the value at its path as it was. */
+  readonly left: {
+    cause: string;
+    doc: string;
+    path: string[];
+    writes: readonly PlanWrite[];
+  }[] = [];
+
+  unchanged(
+    doc: string,
+    path: readonly string[],
+    _store: Store,
+    _schema: unknown,
+    writes: readonly PlanWrite[],
+  ): void {
+    this.left.push({ cause: this.#cause, doc, path: [...path], writes });
   }
 
   end(
@@ -901,5 +921,97 @@ describe("TransactionHooks for a removal from an array of references", () => {
       title: "b",
       note: "n",
     });
+  });
+});
+
+// `fixtures/unchanged-write.tsx`: `raise` writes the greater of the inputs
+// `level` and `floor`.
+describe("TransactionHooks for a write that leaves the value as it was", () => {
+  const raised = async (floor: number) => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-write"),
+      { floor, level: 3 },
+      { transactions: recorder },
+    );
+    const before = recorder.changed.length;
+    instance.send(bindingOf(instance, "raise"), {});
+    return {
+      instance,
+      left: recorder.left,
+      changed: recorder.changed.slice(before).filter(({ cause }) =>
+        cause === "event"
+      ),
+    };
+  };
+
+  it("reports the write with the record of its write edge, and no change", async () => {
+    const { instance, left, changed } = await raised(3);
+
+    expect(changed).toEqual([]);
+    expect(left.map(({ cause, doc, path, writes }) => ({
+      cause,
+      doc,
+      path,
+      records: writes.map(({ record, target }) => ({ record, target })),
+    }))).toEqual([{
+      cause: "event",
+      doc: instance.argument,
+      path: ["level"],
+      records: [{
+        record: { body: 0, write: 0 },
+        target: { doc: instance.argument, path: ["level"] },
+      }],
+    }]);
+  });
+
+  it("gives the record of every kept output again, in a derivation transaction, after a label changed alone", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-write"),
+      { floor: 3, level: 3 },
+      { transactions: recorder },
+    );
+    const changed = recorder.changed.length;
+
+    recorder.labelsChanged?.(
+      [{ doc: instance.argument, paths: [["level"]] }],
+      true,
+    );
+    instance.dispatch();
+
+    expect(recorder.changed.length).toBe(changed);
+    expect(recorder.left.map(({ cause, doc, writes }) => ({
+      cause,
+      doc,
+      targets: writes.map(({ target }) => target.path.join("/")).sort(),
+    }))).toEqual([{
+      cause: "derivation",
+      doc: instance.id,
+      targets: ["level", "text"],
+    }]);
+  });
+
+  it("gives no record again after labels changed with their values", async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("unchanged-write"),
+      { floor: 3, level: 3 },
+      { transactions: recorder },
+    );
+
+    recorder.labelsChanged?.([{ doc: instance.argument, paths: [["level"]] }]);
+    instance.dispatch();
+
+    expect(recorder.left).toEqual([]);
+  });
+
+  it("reports a change, and no such write, where the value differs", async () => {
+    const { left, changed } = await raised(4);
+
+    expect(left).toEqual([]);
+    expect(changed.map(({ path, value }) => ({ path, value }))).toEqual([
+      { path: ["level"], value: 4 },
+    ]);
   });
 });

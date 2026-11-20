@@ -101,6 +101,16 @@ export type Figure = Counted & {
    * report them (the runtime's `planLabelBounds`).
    */
   planLabelBounds: number;
+  /**
+   * Write records recorded for a write that left the value at its target
+   * as it was (`RuntimeCounts.unchangedRecords`).
+   */
+  unchangedRecords: number;
+  /**
+   * The paths whose label entries changed in a document for which such a
+   * write record was recorded (`RuntimeCounts.labelEntriesChanged`).
+   */
+  labelEntriesChanged: number;
 };
 
 /** A run of a module one way. */
@@ -399,6 +409,9 @@ export const inStorage = async (
         writes: after.writes - before.writes,
         refused,
         planLabelBounds: runtime.getCfcStats().planLabelBounds - bounds,
+        unchangedRecords: after.unchangedRecords - before.unchangedRecords,
+        labelEntriesChanged: after.labelEntriesChanged -
+          before.labelEntriesChanged,
       };
     };
     resetAllTimingStats();

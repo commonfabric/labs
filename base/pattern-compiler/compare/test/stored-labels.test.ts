@@ -168,6 +168,24 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/unchanged-write.tsx`: `raise` writes the greater of the inputs
+  // `level` and `floor`, which leaves `level` as it was in the scenario.
+  describe("soundnessOfScenario() after a handler run that leaves the value it writes as it was", () => {
+    it("finds the clause of the input the run read in the stored label of the value", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "unchanged-write",
+        await artifactOf("unchanged-write"),
+        () => undefined,
+        { floor: 3, level: 3 },
+        [{ binding: 0, event: {} }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("unchanged-write", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   // `fixtures/state-declared.tsx`: a state cell whose type declares the
   // clause `alice`, with a constant as its first value, returned by
   // reference.

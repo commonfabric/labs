@@ -961,6 +961,14 @@ export type PlanWrite = PlanInputs & {
 
   /** The element keys of the writing cone instance, outermost first. */
   readonly keys: readonly (readonly [collection: number, key: string])[];
+
+  /**
+   * The write left the value at the target as it was, so the transaction
+   * holds no write of the path. The label is stored all the same, for the
+   * value the path holds: what the writing code read decided that the value
+   * stays.
+   */
+  readonly unchanged?: true;
 };
 
 /**
