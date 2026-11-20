@@ -2339,7 +2339,7 @@ same event commits no access change.
 
 | Name | Today | New design |
 | --- | --- | --- |
-| `patternTool(pattern, extraParams?)` | Returns the plain descriptor `{ pattern, extraParams }`; no node. A model built-in instantiates the pattern at tool-call time. | D. Replaced by a pattern closure: an inline `pattern(...)` that captures the bound values, which the compiler binds as private parameters (`language-subset.md`, §4.4.2). |
+| `patternTool(pattern, extraParams?)` | Returns the plain descriptor `{ pattern, extraParams }`; no node. A model built-in instantiates the pattern at tool-call time. | D. Replaced by a pattern closure: an inline `pattern(...)` that captures the bound values, which the compiler binds as private parameters (`language-subset.md`, §4.4.2). By the owner's ruling of 2026-11-19, a direct call in the reactive tier is accepted for an interim period with the warning `removed-form:pattern-tool-interim`, and is rewritten before any other stage to a closure that calls the pattern with the bound values (`language-subset.md`, §4.4.3). The accepted call is a factory value and no descriptor: a site that reads `pattern` or `extraParams` of the result, or spreads it, is refused. |
 | `byRef(name)` | A factory for a registered built-in by name. Not used in the pattern corpus. | D. Built-ins are not addressed by name from authored code. |
 | `uiVariant(piece, kind)` | Returns the view node `<cf-render variant={kind} $cell={piece} />`; no graph node (`uiVariant` in `builder/built-in.ts`). | Unchanged; a pure function. It is view-node construction in value code, the same as writing the element in JSX, and is legal wherever JSX is: in the reactive tier and in a function body. It reads nothing of `piece`: the operand is passed on unchanged into the node's `$cell` property, so it is observed for `identity`. `kind` is read by `value`. |
 | `nameInstance(value, name)` | Records an instance name consumed by `factoryFromPattern`; emitted by the transformer only with the `instanceNames` option. | D. The compiler records instance names in the plan. |
@@ -3397,7 +3397,11 @@ the boundary's declared label rule.
 
 Pattern closures replace `patternTool`: the bound parameters become
 captures of an inline pattern, private to it, so a model that is given the
-closure as a tool supplies the public input only. Pattern factory values
+closure as a tool supplies the public input only. For an interim period
+the compiler accepts a `patternTool` call of the reactive tier by rewriting
+it to such a closure (`language-subset.md`, §4.4.3). Of the 31 calls in
+the corpus 29 are accepted so, and the 2 refused spread the result into a
+record. Pattern factory values
 also give `compileAndRun` an ordinary reading: compilation returns a pattern
 factory value, and the author instantiates it. The corpus has no source
 site that calls or binds a received factory in a body (by reading; it needs

@@ -640,12 +640,48 @@ together with the stored labels resolved from those observations.
 By the owner's ruling on question 303 of the design's plan, every commit
 of a compiled pattern is prepared when the option is on, so every kept
 output carries the pattern's atom; the owner's reason is that soon all
-data carries a label, at least a `User` or `Space` atom. It is not yet
-built: the build prepares only the commits that read labeled data.
-Forcing the preparation of every commit raised the preparations over the
-corpus from 407 to 2,280 and the preparation time from 379 ms to 690 ms,
-about 0.3 ms per added preparation, and exposed 374 commits in 77 modules
-that the checks of plan labels refuse (open finding 1).
+data carries a label, at least a `User` or `Space` atom. It is built:
+`recordCfcWritePolicyInput` marks a transaction as relevant to CFC where
+it records an authorized `plan-write` input and stores labels from
+templates, so a commit that read no labeled data is prepared. A document
+that a `plan-write` covers enters the persist step whatever the
+transaction's join is.
+
+Built with it:
+
+- **The atom of a kept output at a link.** A covered path at which the
+  transaction wrote a link stores its label on a pointer-class entry at
+  that position, as `plan-and-label-templates.md` §3.2 has it ("Where the
+  atom of a kept output is stored"). A reader of the reference takes the
+  entry, and a read through the link takes the integrity of the target
+  alone. Where the links of an array's elements have equal labels, one
+  pointer-class entry at the array's `*` path is stored and an element
+  whose label equals it stores none. With one entry per link, the kept
+  result of a `filter` over an array of references stored 137 entries at
+  200 elements and 17 at 20.
+- **One atom per pattern.** Each entry of `Plan.patterns` is the hash of
+  the record `{ module, binding }`, with `module` the content hash of the
+  module the `pattern(...)` call is written in, formed from its path, its
+  text and the identities of the modules it imports (`module_identity` and
+  `pattern_identity` of `base/pattern-compiler/src/plan.rs`;
+  `plan-and-label-templates.md` §1.5). A pattern registered alone and the
+  same pattern compiled into another mint one atom. The hash is SHA-256
+  over the JSON text and is not the string that the runtime's
+  `computeModuleHashes` forms.
+- **The observation of a label is a dependency of the commit.** Where a
+  slot is bound to an address the transaction did not read, the runtime
+  observes the stored label with `labelBasisRead`
+  (`runtime/runner/src/storage/reactivity-log.ts`): a read that adds no
+  flow label, schedules nothing, and stays among the reads of the commit,
+  so the store validates the version the label was taken from. A label
+  that another session changed after the preparation fails that
+  validation, and a document that the replica never loaded is not taken
+  as a document with no label.
+- **A refusal is known before the next transaction.** The adapter runs
+  the preparation before the commit (`Runtime.prepareTxForCommit`), and
+  after a refusal it writes each document of the refused transaction whole
+  at its next change. A refusal that the store makes after the
+  preparation is known only when the commit settles.
 
 **The acceptance result.** On `examples/cfc-input-cell-demo/briefing.tsx`,
 with the option on, `climate`, which reads `city` alone, stores only the
@@ -678,51 +714,112 @@ every size. The rule and its limits are in
 `plan-and-label-templates.md` §2.3 ("One entry for the elements of an array
 written whole").
 
+**The comparison.** `compare/stored-labels.ts` reads both sides of a row
+after the last event, with every link below the row's path followed: the
+label at each position alone, joined over every position of the value
+(`deepLabel`), and a container row in the class `shape` on both sides. A
+link that names a position by a path is followed through the links stored
+on the way to that position. Labels are compared in commitment-normal
+form, since a label that derives from a document of another space holds
+the committed form of that document's atoms. For each binding of a slot
+of the argument that observes more than a reference, the comparison also
+checks, without the template, that the label the runtime resolves holds
+the clause of the input the slot is below and that no chain ends at a
+position that holds a link; the run reports no binding that fails the
+check.
+
+**`wish` in the comparison.** A module that calls `wish` runs in a seeded
+home (`compare/wish-home.ts`). Before the pattern is compiled, today's
+runtime is given a profile in a space of its own, under a schema whose
+confidentiality is a user atom, and a root of the home space that lists
+the profile and holds an empty list of mentionable pieces and an empty
+piece registry; today's `wish` resolves against them. The executor is
+given the same documents and a table that answers `#profile`,
+`#profileName`, `#profileBio`, `#mentionable`, `#pieceRegistry` and a
+search by tag with the outcome today's runtime stores, so a read of the
+profile is a read through a reference into another space, with the label
+the storage holds for it. Not simulated: the profile is data and no
+running instance of `patterns/system/profile-home/profile-home.tsx`; a
+search by tag finds nothing; and `#summaryIndex`, `#learnedSummary`,
+`#default`, `#chatManager`, `#favorites`, `#journal` and a query that is
+computed have no answer, so a module whose executor resolves one of them
+is not run. Of 113 calls of `wish` in the patterns outside tests, 46 are
+answered from the seeded profile, 16 with an empty list, 13 by the clock,
+17 by a search with no match, and 21 are not simulated.
+
 **The corpus.** `compare/corpus.ts` over the whole corpus,
-`patterns/system/` included. Of 271 modules attempted 210 run. 33 need
-`wish` and 14 request an effect. 11 runs fail at a commit that CFC
-enforcement refuses as not prepared: 6 for a missing trusted-event policy,
-3 for `writeAuthorizedBy` and 2 for `maxConfidentiality`. 3 do not run for
-other reasons: one comparison fails on a JSON string it cannot parse, one
-module has no value code, and one calls the built-in `linksOf` in a
-function body. Beside today's rows:
+`patterns/system/` included. Of 271 modules attempted 238 run. 16 request
+an effect. 12 runs fail at a commit that CFC enforcement refuses as not
+prepared: 6 for a missing trusted-event policy, 3 for `writeAuthorizedBy`,
+2 for `maxConfidentiality` and 1 for `writePolicyAnyOf`. 1 needs a `wish`
+that is not simulated (`#summaryIndex`), 1 has no value code, and 3
+comparisons fail: on the built-ins `spaceDeleted` and `linksOf` in a
+function body, and on an element construct that has no function. Beside
+today's rows:
 
 | | Equal | Tighter | Looser | Other |
 | --- | ---: | ---: | ---: | --- |
-| 1,386 output rows | 831 | 202 | 226 | 126 whose atom names the pattern, 1 incomparable |
-| 166 write rows | 109 | 9 | 46 | 2 incomparable |
+| 1,695 output rows | 292 | 1,010 | 121 | 259 whose atom names the pattern, 13 incomparable |
+| 196 write rows | 128 | 9 | 56 | 3 incomparable |
 
-108 of today's rows have no stored output and 49 no stored write to
-compare. Of the 226 output rows looser than today's, 164 are looser in
-confidentiality, and 55 of those are `$UI` rows that store the
-transaction's join (open finding 7). The rows looser than today's are not
-yet all attributed, so the corpus does not yet show that the labels from
-templates are equal to or tighter than today's outside the deliberate
-exceptions.
+48 of today's rows have no stored write and 4 no stored output to
+compare. The 177 looser rows, by cause:
 
-Of 2,792 write records checked against the template evaluator of the
-prototype, 1,430 agree. 1,302 records in 131 modules have no entry stored
-at the path where the evaluator gives the pattern's atom alone: they are
-written by commits that read no labeled data, which the build does not
-prepare. By the ruling on question 303 those commits are prepared, which
-is not yet built. 58 records were not
-evaluated, for dynamic reads that the record does not report. 2 records,
-both in `showcase/wordsearch/main.tsx`, are equal in confidentiality and
-tighter in integrity than the evaluator's label, which is a bound there.
-No other record differs from the evaluator.
+| Cause | Rows |
+| --- | ---: |
+| The module has commits refused with the option on, so the storage holds the labels of an earlier commit (open finding 4) | 89 |
+| Confidentiality: the module used the bound of a selection, a pick or a fold (open finding 5) | 31 |
+| Integrity alone: a handler write whose template, the `derive` of its body, has inputs with no label mints no atom (`plan-and-label-templates.md` §3.2), where today stamps `TransformedBy` of the handler from a transaction join that is not empty | 28 |
+| Confidentiality: today's label after the events holds fewer clauses than before the first event, and the two runs hold different states | 11 |
+| Confidentiality looser with no bound used and no refused commit, not attributed | 7 |
+| Integrity alone: other atoms that today has and the template lacks | 6 |
+| Integrity alone: a kept output whose atom is on the link's entry, which a read of the value through the link does not take, and whose target holds none (open finding 7) | 5 |
 
-With the option on and not off, 44 commits in 34 modules are refused: 23
-in 18 modules for a slot bound to an empty chain, 19 in 16 modules for a
-slot with no binding, 1 for a collection with no elements reported, and 1
-for a write record that names a path the transaction did not write. 10
-runs stopped after such a refusal. Over all 210 modules the option off
-made 2,381 commits and 528 preparations, in 307 ms of preparation, and the
-option on 2,111 commits and 407 preparations, in 379 ms; with the option
-on, the runtime took the transaction's join as a bound 140 times, for a
-`dynamic` node whose address the executor does not report. The 10 runs
-that stop after a refused commit do less work with the option on, so the
-two sides do not cover the same work. Emitting the corpus as one program takes
-339 s, against 1 s for `patterns/system/` alone.
+The rows looser than today's are not all attributed, and "tighter" is not
+evidence of correctness (open finding 1), so the corpus does not show
+that the labels from templates are equal to or tighter than today's
+outside the deliberate exceptions.
+
+Of 3,403 write records checked against the template evaluator of the
+prototype, 3,287 agree. 109 were not evaluated, for dynamic reads that
+the record does not report. 5 records in 2 modules are equal in
+confidentiality and tighter in integrity than the evaluator's label,
+which is a bound there. 1 record differs in integrity alone, and 1, in
+`examples/scoped-user-directory/main.tsx`, is looser in confidentiality
+than the evaluator's label.
+
+With the option on and not off, 60 commits in 33 modules are refused: 33
+in 24 modules for a slot bound to an empty chain, 17 in 9 modules for a
+slot with no binding, 6 in 2 modules for a collection that iterates no
+source, 3 in 2 modules for a pick whose choice was not reported and that
+chooses from no collection, and 1 for a collection with no elements
+reported. No run stopped after a refusal.
+
+Over the 210 modules that both this run and the run before the `wish`
+simulation cover, the option off made 525 preparations in 269 ms and the
+option on 1,142 in 977 ms. The machine was under load during the run
+(load averages between 8 and 11), so the times are an upper bound and
+not a measurement of the cost. Over all 238 modules the option off made
+2,697 commits and 647 preparations, and the option on 2,625 commits and
+1,284 preparations in 8,902 ms, of which one module accounts for about
+7,700 ms (open finding 3). With the option on the runtime took a bound
+333 times, 224 of them in the 210 modules.
+
+Today's runtime committed 1,882 transactions to its storage from the
+start of the instances until every kept output was read, 1,796 from the
+first event on, and 374 before the start, which is the compile cache;
+none was reverted. The count is of the commit notifications that the
+storage manager of today's run broadcasts. It is taken at another layer
+than the executor's count of its own commits, which includes the append
+of each event and each watermark as a transaction, so the two are not a
+comparison of work.
+
+The crate emits the corpus as one program in 6.3 s. Three changes brought
+it there from 339 s: two quadratic steps of the footprint analysis are
+linear (`Val::alts` and `normal_map` of `src/footprint.rs`), the identity
+of every module is formed once per program, and a path over a value whose
+type declares no structure widens where it repeats
+(`footprint-analysis.md` §5.2).
 
 **Defects the corpus found, fixed.**
 
@@ -760,25 +857,93 @@ two sides do not cover the same work. Emitting the corpus as one program takes
   (`#elementsBound` of `exec/executor.ts`), and the runtime takes the join
   of the element entries `*` covers, none for an empty collection.
 
+- *Two bindings stored a label without the clauses of what the slot
+  read.* A `value` slot that no evaluation of the writing cone bound took
+  the positions of another slot at the same path; where that slot
+  observes the reference, the positions end at the link, and the label was
+  that of the link's position alone. And the read of a value that holds
+  links was reported as one chain, of which the runtime took every
+  position but the last as a link crossed. Both are fixed: the chain goes
+  on to where the link leads, and a binding lists each position reached
+  through a link in the value as a chain of its own
+  (`plan-and-label-templates.md` §2.5, "A value that holds links"). 93
+  rows in 34 modules gained a clause (open finding 1).
+- *An `enumeration` slot was resolved as a read of the container's
+  value,* so the label of `items.length` held a clause that only a member
+  of an element declares. It is resolved as a `shape` read at the
+  container's path.
+- *The statement body of a `computed` that returns a place it named*
+  stored a copy under the label of the reference. The returned place is
+  observed for `value`.
+- *Refusals fixed:* a slot of the argument or of a state cell that no
+  evaluation bound is bound to the position it names; the slot of a
+  binding whose state the pattern computes is bound to that output; the
+  slot of a literal that a handler binding gives its state is a constant;
+  a slot that reads what a `reduce` computed is bound to the positions its
+  steps read; a slot that a cone's template reaches and another cone read
+  is bound where that cone read it; a change that leaves the stored value
+  as it was gives no write record; and, over an array of plain values in
+  place read through a computation, the slot of an element at no stored
+  position is bound to the one position that the computation read, which
+  is a wider bound than the element's own position.
+- *An instance that a function body makes* created again the documents
+  the executor was given, in the transaction of the body. It does not.
+
 **Open findings,** most serious first. Each is being worked on.
 
-1. *Every commit prepared, not yet built.* By the ruling on question 303
-   of the design's plan, every commit of a compiled pattern is prepared
-   when the option is on. Forcing it exposed 374 commits in 77 modules
-   that the checks of plan labels refuse.
-2. *Two soundness checks not yet made.* A plain value passed through an
-   `identity` slot in general, beyond the `select` branch fixed above; and
-   a change of a label between the preparation and the store's validation
-   of the commit.
-3. *The identity of entry 0 of `Plan.patterns` against a pattern compiled
-   into another.* Not yet checked.
-4. *Refusals that remain.* The 44 commits in 34 modules refused with the
-   option on and not off, with the reasons above.
-5. *The adapter does not await each commit.*
-6. *The time to emit the corpus.* 339 s for the corpus as one program,
-   against 1 s for `patterns/system/` alone: a cost that grows faster than
-   the input, whose cause is not yet found.
-7. *`$UI` rows that store the transaction's join.*
+1. *"Tighter" in the comparison is not evidence of correctness.* A row
+   counts as tighter where the stored label has fewer clauses than
+   today's, and a binding that leaves out a read has exactly that
+   effect. When the two binding defects above were fixed, 93 rows in 34
+   modules gained a clause, and all of them had counted as equal or
+   tighter before. The evaluator of the prototype reads the same bindings
+   as the runtime and cannot find a binding that leaves a read out. An
+   independent check is being built: it changes one input of a scenario
+   at a time and tests that every stored value that changes carries that
+   input's clause.
+2. *The outcome of a `wish` is looser than today's.* The executor
+   resolves the wishes of an instance in one transaction, and the outcome
+   of each is stored under that transaction's join, where today resolves
+   each `wish` in a transaction of its own. The rule is one label per
+   outcome, from its own operands and its own reads
+   (`plan-and-label-templates.md` §3.19). It needs a write record per
+   outcome, which is being built.
+3. *The preparations of one module cost about 650 ms each.*
+   `dev/experimental/folksonomy-stress-test.tsx` makes 12 preparations
+   in about 7,700 ms with the option on and none with it off. The cause
+   is not found.
+4. *Refusals that remain.* The 60 commits in 33 modules refused with the
+   option on and not off, with the reasons above. A module with a refused
+   commit holds the labels of an earlier commit, which accounts for 89 of
+   the looser rows.
+5. *The bounds.* The runtime took a bound 333 times, because the value
+   code or the runtime does not report a selection, a choice or the
+   addresses of a dynamic read: picks through `.key(k)`; the `through`
+   position of a scan; the choice of `find`; the `select` over the keys of
+   a record constructed in place; the optional members of a spread; and
+   dynamic reads of kind `link` through a selected reference.
+   `plan-and-label-templates.md` §4.2 has, for each, who knows the answer,
+   what is reported and where it is kept, and the provisional decision
+   P37 for the groups of a scan's prefix. 31 of the looser rows are in
+   modules that used a bound.
+6. *Today's runtime may store too narrow a label at two outputs.* In
+   `dev/scope-bug-ct1597-reduce/main.tsx` and
+   `dev/test/non-idempotent/accumulator.tsx` today's stored label lacks
+   a clause that the template's label holds and that the output appears
+   to depend on. Neither was reproduced in a test outside the corpus run,
+   so neither is a finding against the runtime yet.
+7. *The atom on a link is not taken by a read of the value through the
+   link.* A kept output that passes a value on by reference stores its
+   atom on the link's entry. A reader that reads the target's content
+   through the link takes the integrity of the target alone, so it does
+   not see the atom, and 5 rows are looser in integrity for it. Joining
+   the atom onto the target's content was not built: section 3.7.2 of the
+   specification's core concepts chapter (`03-core-concepts.md`) scopes
+   the endorsement of a link to the selection, and an atom with no scope
+   joined onto the content would claim that the pattern vouches for a
+   value it only chose. Whether the atom on a link is a selection
+   endorsement with a scope, taken when the link is traversed, is
+   question 313 of the design's plan, for the owner.
 
 Steps 11 and 12 of the milestone's plan, instantiation keys and verified
 units in the prepared digest and a derived write dropped alone, are not

@@ -1145,7 +1145,8 @@ factory values.
 
 `ifElse`, `when`, `unless`, and the `str` tag are not part of the language,
 so that no new pattern is written with them. `patternTool` is removed too,
-in favor of pattern closures (§4.4.2).
+in favor of pattern closures (§4.4.2). Each of the five has an interim
+acceptance, stated below.
 
 For an interim period the compiler accepts the first four with a warning
 (`removed-form:helper`) that states the replacement, by rewriting each to
@@ -1173,9 +1174,82 @@ pattern corpus
 in this repository, which is rewritten before that stage so that no pattern
 an author might imitate uses a removed form.
 
-`patternTool(...)` has no interim acceptance (`removed-form:pattern-tool`).
-Its rewrite moves the bound parameters out of the pattern's input and into
-captures:
+By the owner's ruling of 2026-11-19, `patternTool(...)` has an interim
+acceptance of its own, so that one pattern source runs in today's runtime
+and is compiled by this compiler. In tier R, a direct call
+`patternTool(P, { a, b })` of the name imported from `commonfabric` is
+accepted with the warning `removed-form:pattern-tool-interim` and
+rewritten, before any other stage sees the module, to an inline pattern
+closure (§4.4.2) that calls `P` with the bound values:
+
+| Written | Rewritten to |
+| --- | --- |
+| `patternTool(P, { a, b })` | `pattern<Omit<Parameters<typeof P>[0], "a" \| "b">>((rest) => P({ ...rest, a, b }))` |
+| `patternTool(P)` | `pattern<Parameters<typeof P>[0]>((rest) => P(rest))` |
+
+The input type of the closure is the input type of `P` without the bound
+keys, so a caller of the closure, a language model included, supplies the
+other members only. The bound values are captures of the closure. Where
+`P` is an inline `pattern<I, O>(...)`, the type is `I` as written in place
+of `Parameters<typeof P>[0]`, and the inline pattern is the callee of the
+closure's call. The message of the warning holds the closure.
+
+A call is accepted where all of these hold.
+
+- The callee is the name `patternTool` imported from `commonfabric`: no
+  alias, no namespace, no type argument, and no optional call.
+- The call is written in tier R.
+- The first argument is the name of a pattern declared at module scope or
+  imported, or an inline `pattern(...)` with a written input type.
+- The second argument is absent, or is an object literal whose properties
+  are plain or shorthand, each with a key that is an identifier or a
+  string literal, and each key once.
+- Where keys are bound, the input type of the pattern is an object type
+  that declares each of them, or that has an index signature.
+- The call has one or two arguments, and none is a spread.
+
+Every other call stays as written and is refused with
+`removed-form:pattern-tool`, as is `patternTool` used as a value. The
+refused shapes are:
+
+- `patternTool` reached through an alias or a namespace, called with a
+  type argument, or passed as a value;
+- a call in a function body or at module scope;
+- a first argument that is no pattern, such as a function or a member
+  access `tools.search`;
+- an inline pattern as the first argument with no written input type;
+- a second argument that is not an object literal;
+- bound values that hold a spread, a computed key, a method, a getter or
+  a setter, or one key twice;
+- a bound key that the input type of the pattern does not declare;
+- a third argument, or a spread argument;
+- a call that holds another `patternTool` call. The inner call is decided
+  on its own.
+
+Three further points are the choices of the prototype's implementer and
+await confirmation. They are not rulings (the continuation plan's
+question 314).
+
+- *A call whose result is spread, read by a member access, or called is
+  refused.* Today `patternTool` returns the record
+  `{ pattern, extraParams }`, and the closure is not that record, so a
+  site that reads the result as a record has no reading of the closure.
+- *A pattern whose input is declared only by an annotation of the
+  callback's parameter is refused when keys are bound.* The rewrite needs
+  the input type as an object type to check the bound keys against. With
+  no bound key such a pattern is accepted.
+- *Where the name `pattern` is not bound at the call, the rewrite adds it
+  to the import that `patternTool` comes from.* Where `pattern` is bound
+  there to anything but the `commonfabric` export, the call is refused.
+
+The interim ends as it does for the four helpers: when the builder form
+the transformer emits is retired, `removed-form:pattern-tool-interim` is
+an error, and it ends earlier for the pattern corpus in this repository.
+
+The accepted call is rewritten mechanically, and the closure it gives
+still declares the bound keys in the input type of `P`. The rewrite an
+author makes moves the bound parameters out of the pattern's input and
+into captures:
 
 ```tsx
 // Shown for illustration only.
@@ -1199,7 +1273,7 @@ scope, or by an inline closure that calls the module-scope pattern with
 them.
 
 The other forms that `builtin-inventory.md` classifies as removed are
-refused in every tier, also with no interim acceptance
+refused in every tier, with no interim acceptance
 (`removed-form:builtin`). Each has a replacement, which the message names.
 
 | Removed form | Write instead |
@@ -3977,7 +4051,8 @@ none of the other eight.
 | `ses-callback:callable-capture` | error | A tier-F body inside tier R captures a function value from an enclosing function scope. In a function body: the state of a handler binding, in either spelling of §5.2, or an inline `pattern(...)` used as a callee (§4.4.2) holds or captures a function value or a value of another code type, such as a `Map`, a `Set`, a `Date`, or an `Error` | Move the function to module scope. For a value of another code type, capture data, such as an array of entries or a timestamp, and build the value inside the body that uses it | changes (now also covers a handler binding and an inline pattern in a function body, and a code type other than a function) |
 | `removed-form:helper` | warning | A direct call of `ifElse`, `when`, or `unless`, or a `str` tagged template, in tier R (§4.4.3). An error once the builder form is retired | The rewrite: `c ? a : b` for `ifElse(c, a, b)`, `c && v` for `when(c, v)`, `c \|\| f` for `unless(c, f)`, a plain template literal for `str` | new |
 | `removed-form:helper-unsupported` | error | One of those four in any other form: with schema arguments, passed as a value, or through an alias. Also one of the four, in any form, in a function body or at module scope (§4.4.3) | The same rewrite. In a function body the operator is ordinary JavaScript | new |
-| `removed-form:pattern-tool` | error | A call of `patternTool` | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
+| `removed-form:pattern-tool-interim` | warning | A direct call of `patternTool` in tier R in a form the interim acceptance covers (§4.4.3). An error once the builder form is retired | The closure the call is compiled as, which the message holds: write it in place of the call, or write an inline `pattern(...)` that captures the bound values | new |
+| `removed-form:pattern-tool` | error | A call of `patternTool` in a form the interim acceptance does not cover, and `patternTool` used as a value (§4.4.3) | Write an inline `pattern(...)` that captures the bound values, and pass it as the tool (§4.4.3) | new (replaces `pattern-context:patterntool-requires-pattern`, which is retired) |
 | `removed-form:builtin` | error | A call, in any tier, of `llm`, `streamData`, `cell`, `byRef`, `nameInstance`, or a `...WithPattern` method (§4.4.3) | The replacement for the form found: `generateText` or `generateObject` for `llm`; a built-in of the fetch family for `streamData`; `Cell.of(value)` for `cell(value)`; the built-in imported by name for `byRef`; a `const` binding of the instance for `nameInstance`; the method without the suffix, with a callback written at the call, for a `...WithPattern` method | new |
 | `collection:callback-parameters` | error | A reactive collection callback that is not an arrow function written at the call, a function passed by name included (`xs.filter(Boolean)`, `xs.map(toRow)`); that takes the whole array as a parameter; or that has a default value or a rest element on a parameter or inside a parameter's destructuring pattern (§4.4.1). A parameter that is an object pattern or an array pattern is not reported | Write the arrow at the call, with the element and at most the index: `xs.filter((x) => Boolean(x))`. Capture the array by name if the body needs it. Write a default as an expression in the body | new |
 | `collection:reduce-callback` | error | A `reduce` in tier R whose callback has a block body | Write the step as one expression, `(sum, donut) => sum + donut.price`. A step that needs statements is a loop inside `computed(() => ...)` | new |
@@ -4155,7 +4230,7 @@ and 2 local type declarations, and nothing else.
 | Function overloads | 5 (2) | `patterns/system/fabrichat/manager.tsx` (4), `patterns/system/private-inbox/private-inbox.tsx` (1); 34 more in 29 pattern test files | Rewrite. Every occurrence but one is one idiom: a one-line function whose overload signature re-types a cell (`function inboxOf(pointer: Cell<A>): Cell<B>`) over an implementation that returns its argument as `unknown`. It exists because the double cast is refused. The exception, `aboutRecordOf` in `manager.tsx`, returns a `key` chain that ends at a property declared as a cell, and its overload states the flattened type that `key` has in this language (§4.7). [§12.4](#124-replace-the-re-typing-overloads-with-declared-types) gives the three rewrites, which need no new construct |
 | Mapped type | 1 (1) | `patterns/apps/topics/topic.tsx` | Rewrite as `Readonly<Record<K, number \| undefined>>` |
 | `ifElse`, `when`, `str` | 156 (54); 1 (1); 1 (1). No `unless` | for example `patterns/system/self/self.tsx`, `patterns/system/loom/main.tsx`; `when` in `patterns/system/omnibox-fab/omnibox-fab.tsx`; `str` in `patterns/apps/deep-research/deep-research.tsx` | Accepted for the interim with a warning (§4.4.3). The rewrite is mechanical: all 158 are direct calls. That each has the plain arguments is not reproduced |
-| `patternTool` | 31 (12) | pattern bodies | Rewrite to a pattern closure (§4.4.3) |
+| `patternTool` | 31 (12) | pattern bodies | 29 calls in 11 files are accepted for the interim with a warning (`removed-form:pattern-tool-interim`, §4.4.3). 2, both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`, are refused: each spreads the result into a record. Rewrite to a pattern closure (§4.4.3) |
 | A collection method called on a cell handle in a handler | 2, as `builtin-inventory.md` counts them (needs types) | handlers | Rewrite by one of the two corrections of §4.7: an inline `pattern(...)` that is instantiated, or `cell.get().map(...)` (`cell:collection-method-in-function`) |
 | A function type in a type used as data | 1 declaration, 35 uses in 10 modules (prototype) | `MentionablePiece` in `patterns/system/backlinks-index/backlinks-index.tsx`, whose property `mentionable` is declared `MentionablePiece[] \| { get?: () => MentionablePiece[] }`. The type is a pattern input, a cell value, and a handler state | Rewrite: the declaration says what the value is, a list or a cell of one (`subset-type:function-in-data`, §7.9) |
 | A cell passed to a parameter declared with a structural type | About 25 arguments (prototype) | Declarations of the kind are `roster: { get(): ... }` in `patterns/system/loom/participants.tsx` and `sources` in `patterns/apps/topics/main.tsx` | Rewrite: declare the parameter `ReadonlyCell<T>`, which accepts every cell the structural type was written to accept (§7.5.1) |

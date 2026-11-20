@@ -5240,6 +5240,33 @@ the slot is **bound**.
   which child's reference a body passed on (section 3.9), the label of
   that reference is the label of that child's binding alone. This is what
   the journaled reads of the same children consume today.
+- **A value that holds links.** A read of a value observes more than the
+  bound address where the value holds links below it. A `value` slot
+  consumes the subtree at its bound address (section 2.2), and a read of
+  that subtree is made through every link it holds: a list whose elements
+  are links to records, a record with a member that is a link, and a view
+  whose children are links are read as the values those links lead to. The
+  slot is therefore bound at each position such a link leads to as well,
+  and at the positions reached through the links those values hold in
+  turn. Each further binding has a chain of its own: the chain of the
+  slot's own binding, then the address in the value where the link is
+  stored, as a link crossed. The slot's confidentiality is the join, over
+  its own binding and every further one, of what the rules above give each:
+  the `followRef` entries along the chain with what the class consumes at
+  the address where the chain ends. Its integrity is the atoms that the
+  observation at the end of every one of the chains carries, as for a path
+  that holds `*`. A chain never ends at an address that holds a link:
+  where two links lead to one position, the second is a link crossed on
+  the way to that position. A slot of class `shape` or `enumeration`
+  consumes nothing below its bound address, so it has no further binding,
+  and an `identity` slot stops at the link. The three cases of a list
+  differ here. For an array of references and for the result of another
+  per-element construct whose positions hold links, the `value` slot of
+  the whole list has one further binding per element. For an array of
+  plain values in place the elements are part of the subtree at the bound
+  address and need none. A write record gives the further bindings as
+  chains below the slot's own. This is what a journaled read of the same
+  value through its links consumes today.
 
 A read stays `dynamic` where the plan cannot name its path ahead of the
 evaluation: a read through a handle that happens on some runs only or at a
@@ -6467,8 +6494,9 @@ pattern that contains it. The atom's `identity` is an entry of
   all data carries a label, at least a `User` or `Space` atom. Measured over
   the corpus in milestone 4 of the integration, preparing every commit
   raised the preparations from 407 to 2,280 and the preparation time from
-  379 ms to 690 ms, about 0.3 ms per added preparation. Not yet built: the
-  build prepares only the commits that read labeled data.
+  379 ms to 690 ms, about 0.3 ms per added preparation. Milestone 4 of
+  the integration builds it: a transaction that records an authorized
+  write record of a plan is prepared.
 
 **Where the atom of a kept output is stored.** A kept output that holds a
 value has the atom in the label of the value. A kept output that passes a
@@ -8458,7 +8486,10 @@ kind.
   cone.
 
 The runtime holds the position, and for `find` the chosen key, with the
-result, and instantiates the result's template from them (section 4.2). An
+result, and instantiates the result's template from them (section 4.2).
+Provisional (P37): it holds the groups of the prefix there as well, a
+count per group over the elements up to the deciding position (section
+4.2, "The groups of a prefix"). An
 aggregate with a callback, a `reduce`, and a collection index have a
 `Collection` of their own in the same way, with the receiver as its source.
 
@@ -9482,25 +9513,119 @@ when it is torn down are in the built-in's entry in
 `builtin-inventory.md`. A handler given as a tool, and the tools a dialog
 has built in, are not covered by this rule.
 
-The rule leaves three gaps of the closure records open.
+**What is undecided for a pattern closure used as a value.** The
+prototype translates no pattern closure that is used as a value. Its plan
+lists the closure as a construct it does not support, `Plan.closures` is
+empty, no plan with slots of root `params` is made for the inline pattern,
+and the write edge at the path that holds the closure has no template. A
+closure that is given to a language-model built-in as a tool is left out of
+the request. A `patternTool` call that the interim acceptance rewrites
+(`language-subset.md` §4.4.3) is such a closure, so it is accepted by the
+rules and compiles to a tool that is not sent. Four points have to be
+decided before a translation can be built. Three have a provisional
+decision, derived from what this document and `execution-and-storage.md`
+already state; they are the coordinator's and not the owner's. The fourth
+has one part with a provisional decision and one with none.
 
-- **Which path holds which closure.** No record says which output path,
-  argument path or request path holds which entry of `Plan.closures`.
-  `Child.callee` is the one member that names an entry by index. The rule
-  does not need the link, because it applies to the factory value the
-  request holds at run time, with the labels stored with that value. A
-  reader of a plan still cannot tell from the records which closure a
-  request passes as a tool.
-- **A conditional between two closures.** Where a request holds
-  `c ? closureA : closureB`, the rule applies to the factory value the
-  conditional selected, under the label the `select` gives it. Whether
-  such a conditional is a factory value at all, or a callee resolved
-  where it is written, is not decided here (`language-subset.md` §4.4.2).
-- **A closure called through `inSpace`.** A tool call instantiates the
-  closure with no modifier. What an `inSpace` call of a closure records
-  for the private parameters, which then cross into another space, is
-  not decided, and neither is whether a tool can be instantiated in
-  another space.
+1. **Which path holds which entry of `Plan.closures`** (section 8,
+   question 179). `Child.callee` is the one member that names an entry by
+   index, and it serves a closure that is the callee of an instantiation in
+   a body. No record says which output path, argument path or request path
+   holds the factory value of which entry. *Assumed, provisional (P33):* a
+   template node `{ op: "closure", closure }` stands at the place of the
+   closure expression. It denotes the label of the factory value as "The
+   label of the factory value" (above) defines it, over the entries of
+   `Closure.params`: a copied path with its template and a captured cell
+   with its `identity` slot. A template
+   with the node replaced by that join has the same label, as for an
+   `output` or a `shared` node. The entry of `Plan.outputs` at the path of
+   a closure in the result, the `WriteEdge` with target `argument` at an
+   argument path, and the `WriteEdge` with target `request` at the path of
+   a tool have the node as their template, or below a `select`, so a
+   reader of a plan finds the closure of a path from the template at that
+   path. The `Template` type of section 1.1 and the function of section
+   4.2 do not have the node while the decision is provisional. The
+   alternative is a member `closure` on `Output` and on `WriteEdge`,
+   which cannot name two entries for a path that a conditional decides.
+2. **The stored form of a factory value with copied captures** (section 8,
+   question 180). "Stored form" above says that a copied capture is stored
+   with the factory value and a captured cell as a link, and
+   `scheduler-and-serving-loop.md` §3.2 binds the root `params` to the
+   factory value at the address the `identity` slot of the factory is
+   bound to. Neither says what is stored. *Assumed, provisional (P34):*
+   the factory value of a closure is a record stored in place at its path,
+   with the content address of the compiled inline pattern
+   (`Closure.pattern`) in the form a module-scope pattern factory is
+   stored in, and one further member, `params`. Below `params`, each path
+   of `Closure.params` holds the copied value, narrowed as "How much a
+   copy holds" has it, or the link to the captured cell. Each copied path
+   has the label of its instantiated template at that position, and the
+   record as a whole has the label of the factory value, so a reader of
+   the factory's `identity` consumes the labels of the captures. The slots
+   of root `params` of the inline pattern's plan resolve below the
+   `params` member of the record that the receiver called, through the
+   chain of the receiver's `identity` slot. A body that passes the factory
+   on unchanged passes a reference to that address, by the rule for a
+   container passed on unchanged, and makes no second copy of the
+   captures. The record holds no schema of the captures: the inline
+   pattern's plan has the schemas of its `params` slots. The alternative
+   stores the captures in a parameters document of their own beside the
+   instance that wrote the closure, as for a closure written at an
+   instantiation in a function body, and the factory value links to it.
+   That makes the document shared by every holder of the factory, and its
+   identifier needs a cause that the writing cone instance and the
+   closure's position supply.
+3. **What value code writes for a closure expression** (section 8,
+   question 181). A cone's value function holds no handle and returns
+   plain data and markers (`execution-and-storage.md` §2.2), and the host
+   object has no member that makes a factory value. *Assumed, provisional
+   (P35):* a member `closure(closure, computed)` of the host object
+   returns a marker for the entry of `Plan.closures`, as `stream` returns
+   a marker for a binding. `computed` holds the captured values that the
+   evaluation computed, at their paths below `params`, and nothing at the
+   paths of captures that are slots, as the `computed` of `invoke` does.
+   The function places the marker in the value it returns and can do
+   nothing else with it: it cannot call it. When the runtime stores the
+   value, it writes the record of P34 in the marker's place: it copies
+   from `computed` the paths that `Closure.params` lists as copied,
+   narrowed, and builds the paths of slots and the links to captured cells
+   itself from the bindings of the cone instance. A marker in an interim
+   output stays a marker, and a closure called in the body that wrote it
+   is compiled in and has none. The alternative has the value function
+   return the record itself, which needs the function to hold links to
+   the captured cells and the content address of the inline pattern.
+4. **A conditional between closures, and a closure through `inSpace`, as
+   a tool** (section 8, question 182).
+   - *A conditional.* `language-subset.md` §4.4.2 makes
+     `c ? closureA : closureB` a pattern factory value. *Assumed,
+     provisional (P36):* the template at the path is a `select` whose
+     branches are the `closure` nodes of the two entries (P33). The value
+     function makes the marker of the branch it takes and reports the
+     selection. The request holds the factory value of the selected
+     closure, under the label of the `select`: the condition joined with
+     the label of that factory value. The rule for a tool applies to that
+     value as it stands in the request, and the plan lists both entries in
+     `Plan.closures`.
+   - *A closure through `inSpace`.* No provisional decision: the
+     alternatives differ in where captured data is stored and who has to
+     be able to read it, which is meaning and not form. (a) A factory
+     value with the modifier `inSpace` is refused where it is given as a
+     tool, and an instance that a tool call makes is always in the space
+     of the built-in's instance. It costs the direct spelling only: a
+     closure whose own body calls `P.inSpace(space)(...)` makes the
+     instance in the other space as a `Child` of the closure's plan, with
+     the argument edges and the checks of any `inSpace` request (section
+     3.14), and the captures stay where the factory value is. (b) The
+     modifier is allowed and the captures stay with the factory value.
+     The instance in the other space then reads its `params` slots across
+     spaces, so the runtime that serves that space has to be able to read
+     the space the factory value is stored in, for as long as the
+     instance lives. (c) The modifier is allowed and the copied captures
+     are written into a parameters document in the target space when the
+     instance is made. That is a write of the captured values into
+     another space: it needs the checks and the sequence of commits of an
+     `inSpace` request for each copied path, and a rule for whether a
+     later change of a capture reaches the instance.
 
 **Today.** `builtin-inventory.md` (`llmDialog`, "Tools") describes what a
 pattern tool does in the current runtime: it instantiates the stored
@@ -9815,7 +9940,10 @@ key (above).
 They are the operations above and add no rule. `h.key("b")` extends the
 path, like `a.b` (section 3.3). `h.key(k)` and `h.elementById(k)` with a
 key that is not a constant are a `pick` with the template of `k` as the
-choice. By ruling the record that `h.elementById(k)` leads to is a cell
+choice, and the value code reports the key it computed for the choice
+point, as for `a[k]` (section 4.2, "Selections and choices that are
+reported, and the bound where one is not"). By ruling the record that
+`h.elementById(k)` leads to is a cell
 of its own, named by the address of the list and the key, and no child
 of the list: it is not a member until a reference to it is added, and
 a reader of the list's label does not cover it before that
@@ -9943,6 +10071,27 @@ label of any slot with root `operation` comes from the operation's
 record.
 The rest of the operation's state document has the label section 2.6
 gives the bookkeeping of an operation.
+
+**The outcome of each `wish` has a label of its own.** An evaluation can
+resolve several operations of kind `wish` in one transaction: the wishes
+of one instance are resolved together when a reader of each is evaluated.
+The label stored at the paths of one outcome is the label of that
+operation alone, its `Operation.input` joined with the reads of its own
+entry of `Plan.dynamicReads`. It is not the join of the transaction, which
+holds the operands and the reads of every wish the transaction resolved,
+so the name a pattern reads through `#profileName` does not take the label
+of the candidates a search by hashtag considered in the same transaction.
+The reads of a resolution are therefore attributed to the operation that
+made them, as the reads through a handle are attributed to their `dynamic`
+node (section 3.10), and the write of an outcome is a write that a record
+of the plan covers: the runtime has, for each outcome the transaction
+writes, the operation, the bindings of the slots that `Operation.input`
+reaches, and the addresses its resolution read. Without that record per
+outcome the runtime stores the transaction's join at the outcome, which
+is a bound: wider than this rule, and wider than today's label where
+today resolves each wish in a transaction of its own. Milestone 4 of the
+integration is building the record
+([compiled-pattern-language-integration.md](../../plans/compiled-pattern-language-integration.md)).
 
 The query decides what the `dynamic` node can hold, the scope, and which
 other records the plan has. Where the `query` operand is a constant, the
@@ -10551,8 +10700,101 @@ of the outer collection holds the set of groups of the inner collection, so
 two outer elements whose own inputs are equal are two groups where their
 inner folds differ, and a change of the inner set regroups the enclosing
 element. For a `fold` with `through` the groups are those of the covered
-prefix; how the runtime keeps them as the deciding position moves is not
-determined by P31.
+prefix ("The groups of a prefix", below).
+
+**The groups of a prefix.** *Assumed, provisional (P37;* section 8,
+question 183*).* The groups that P31 keeps with a collection's assembly
+hold a count per group and no order, so the groups of the elements up to
+a position cannot be read from them. A scan (`findIndex`, `some`, `every`,
+and the choice of `find`) therefore keeps the group set of its prefix
+itself: a count per group over the elements from the first position to the
+deciding position, held with the memo entry that holds the scan's position
+(section 3.13, "The record of a scan"; `execution-and-storage.md` §3.1).
+`TemplateInputs.groups` with `upTo` returns the groups whose count there is
+above zero.
+
+- **A change inside the prefix.** An element of the prefix that is
+  evaluated again, or whose label changes, takes one from the count of its
+  old group and adds one to the count of its new group: one update.
+- **A move of the deciding position.** The elements between the old and
+  the new position enter or leave the prefix, and each is one update, with
+  the group that the collection's assembly holds for its key. A move costs
+  the number of elements between the two positions, and not the length of
+  the prefix or of the collection.
+- **A change of membership before the deciding position.** An element that
+  is inserted into or removed from the prefix is one update. A reorder
+  changes the counts only for the elements that cross the deciding
+  position.
+- **No element decides.** The prefix is the whole collection, and its
+  groups are those of the collection's assembly. The scan keeps no counts
+  of its own until an element decides.
+- **After a restart.** The memo is not durable. The scan runs again, and
+  the counts are formed again from the groups of the assembly, at the cost
+  of the length of the prefix, as the position itself is found again.
+
+By case of the source:
+
+- **An array of references.** The `groups` form. The group of each element
+  key is kept with the assembly, and the scan keeps the counts of the
+  prefix as above.
+- **An array of plain values in place.** The `uniform` form, where the
+  predicate's template allows it: one binding whose address holds `*`,
+  which covers every element and not the prefix alone. The label of the
+  prefix is then the label of all the elements. That is the label of the
+  prefix exactly where every element has the one `*` entry of section 2.3,
+  and wider where an element behind the deciding position has an entry of
+  its own; it is never wider than the read of the whole array that today's
+  scan makes. A move of the deciding position costs nothing. Where the
+  predicate's template does not allow the `uniform` form, the `groups`
+  form applies, as for an array of references.
+- **The result of another per-element construct.** The `groups` form, with
+  the upstream keys. The slot of an element is bound to the output of the
+  upstream element, and the counts of the prefix are kept as for an array
+  of references.
+
+The label this gives is the `fold` over the prefix that section 3.13
+defines, or in the `uniform` case a label that covers it. The alternative
+instantiates the predicate's template for every element of the prefix on
+every commit that changes the scan, at the cost of the length of the
+prefix.
+
+**Selections and choices that are reported, and the bound where one is
+not.** A `select`, a `pick` and a `fold` with `through` instantiate from a
+value that the evaluation decided: the branch, the chosen child, the
+deciding position. A `dynamic` node instantiates from the addresses that
+the evaluation read. Where a write reaches the runtime without one of
+them, the runtime does not guess. It takes a bound that covers every
+outcome: the join of all branches of a `select`, the join over all
+children of a `pick`, the whole collection for a prefix, and the
+transaction's join for a `dynamic` node. A bound is equal to or wider than
+the label the rule gives, never narrower, so it is sound, and it gives up
+the narrowing that the rule exists for. In the run of milestone 4 of the
+integration over the corpus the runtime took a bound 224 times over the
+210 modules that run without `wish`, and 333 times over the 238 modules
+of the later run, in each case because one of the six reports below is
+not made by the prototype. For each, the table has who knows the answer,
+what is reported, and where it is kept between evaluations, so that a
+change of a label alone (section 4.1) instantiates without running value
+code.
+
+| What is decided | Who knows it | What is reported | Where it is kept |
+| --- | --- | --- | --- |
+| The child that `h.key(k)` or `h.elementById(k)` chooses, with a key that is not a constant (section 3.18, "Handle methods in the reactive tier") | The value code, which computes `k` | The key, or that no child was chosen, in `ConeResult.picks` for the choice point (`Pick.chosenBy` is `valueCode`), as for `a[k]` | With the memo entry of the cone instance (`execution-and-storage.md` §3.1), and in the provenance record of a kept output (§7.2 there) |
+| The deciding position of a scan, the `through` of the `fold` of `findIndex`, `some`, `every` and of the choice of `find` (section 3.13) | The runtime, from its own scan of the per-element predicate outputs | The position, as the selection of the scan's selector of arity 0. No value function reports it | With the memo entry of the scan's result, beside the group counts of the prefix (above) |
+| The element that `find` chooses (section 3.13; `Pick.chosenBy` is `runtime`) | The runtime, from the same scan | The key of the chosen element, or that none was chosen, for the choice point | With the memo entry of the scan's result |
+| The branch of the `select` that the compiler emits for `a[k]` over a record constructed in place with a static key set (section 3.18, "A container the instance computed") | The value code, which computes `k` | The index of the member that `k` names, or of the last branch where it names none, in `ConeResult.selections` | With the memo entry of the cone instance |
+| Whether an optional member of a spread operand is present, the `select` of `{ ...a, x: e }` whose condition is the `shape` of `a.p` (section 3.4, "A spread in an object literal") | The value code, which builds the record and tests the member | The branch, in `ConeResult.selections`: the member of `a`, or the earlier member | With the memo entry of the cone instance |
+| The addresses a `dynamic` node of kind `link` read through a reference that a `select` or a `pick` of another cone chose (section 3.10) | The runtime, which resolves the link when the value code reads through the output that holds the reference | The addresses read, with the chain of each, attributed to the node | In the transaction's journal for the evaluation, and for a kept output in the `dynamic` member of its provenance record |
+
+Three of the six are the runtime's own knowledge and need no change of
+value code: the deciding position, the chosen element of `find`, and the
+addresses of a read through a link. Three are reports that value code
+makes in the form it already has for a conditional expression and for a
+computed key. The cases of a per-element construct do not differ in who
+reports: over an array of references, over an array of plain values in
+place and over the result of another per-element construct, the scan and
+the choice are the runtime's, and a selection inside the element body is
+reported per cone instance, which is per element key.
 
 A template label may rest on the labels of positions that an earlier
 transaction observed, as the element inputs of a group do when only one
@@ -13455,6 +13697,15 @@ this document made.
     the target's, under the specification's rule for the integrity of a link
     (§3.7.2, `03-core-concepts.md`). Not verified: this document's reading
     against the text of that section, which is for the specification change.
+    Milestone 4 of the integration stores the atom on the link's entry and
+    found 5 rows of the corpus looser in integrity than today's for it. It
+    did not join the atom onto the target's content: that section scopes
+    the endorsement of a link to the selection, and an atom with no scope
+    on the content would claim that the pattern vouches for a value it
+    only chose. For the project owner: whether the atom of a kept output on
+    a link is a selection endorsement with a scope, which a read that
+    traverses the link takes as such. It is question 313 of the
+    continuation plan.
 73. **A label that the schema of an event declares.** Today such a
     declaration adds nothing to what the handler writes (section 3.12), and
     no corpus pattern declares one. *Assumed:* the label of a slot of root
@@ -15658,10 +15909,8 @@ this document made.
      a `User` or `Space` atom. Over the corpus in milestone 4 of the
      integration it raised the preparations from 407 to 2,280 and the
      preparation time from 379 ms to 690 ms, about 0.3 ms per added
-     preparation. Not yet built: the build prepares only the commits that
-     read labeled data, and forcing the preparation of every commit exposed
-     374 commits in 77 modules that the checks of plan labels refuse. It is
-     question 303 of the continuation plan.
+     preparation. Milestone 4 of the integration builds it. It is question
+     303 of the continuation plan.
 178. **What a slot under `*` binds when the collection is empty** (for the
      prototype and the project owner; section 4.2, the `uniform` form). A
      binding whose address holds `*` covers no position of an empty array,
@@ -15672,3 +15921,44 @@ this document made.
      last `*` entry stored, which describes elements that no longer exist.
      It applies to an array of plain values in place, the case of the
      `uniform` form. It is question 305 of the continuation plan.
+179. **Which path holds which entry of `Plan.closures`** (for the
+     project owner to ratify; section 3.15, "What is undecided for a
+     pattern closure used as a value", point 1). *Assumed,* provisional
+     (P33 of the continuation plan): a template node
+     `{ op: "closure", closure }` at the place of the closure expression,
+     which denotes the label of the factory value. The alternative is a
+     member on `Output` and `WriteEdge`. The prototype builds neither:
+     its `Plan.closures` is empty. It is question 307 of the continuation
+     plan.
+180. **The stored form of a factory value with copied captures** (for the
+     project owner to ratify, and to `execution-and-storage.md`; section
+     3.15, point 2). *Assumed,* provisional (P34): a record in place at
+     the path, with the content address of the compiled inline pattern
+     and a member `params` that holds each copied path and each link to a
+     captured cell, each copied path under its own label. The alternative
+     is a parameters document that the factory value links to. It is
+     question 308 of the continuation plan.
+181. **What value code writes for a closure expression** (to
+     `execution-and-storage.md` and the prototype; section 3.15, point
+     3). *Assumed,* provisional (P35): a member `closure` of the host
+     object returns a marker, and the runtime writes the record of
+     question 180 in its place. It is question 309 of the continuation
+     plan.
+182. **A conditional between closures, and a closure through `inSpace`,
+     as a tool** (for the project owner; section 3.15, point 4).
+     *Assumed,* provisional (P36), for the conditional: a `select` over
+     the `closure` nodes, with the tool rule applied to the selected
+     factory value. For a closure through `inSpace` nothing is assumed:
+     the three alternatives of that point differ in where captured data
+     is stored and who must be able to read it. It is question 310 of the
+     continuation plan.
+183. **The groups of a scan's prefix** (for the project owner to ratify;
+     section 4.2, "The groups of a prefix"). *Assumed,* provisional
+     (P37): a scan keeps a count per group over its prefix with its memo
+     entry, updated per element that enters or leaves the prefix and per
+     element of the prefix that changes; a move of the deciding position
+     costs the elements between the old and the new position. Over an
+     array of plain values in place in the `uniform` form the label
+     covers all elements. The alternative instantiates the predicate's
+     template per element of the prefix. It is question 311 of the
+     continuation plan.

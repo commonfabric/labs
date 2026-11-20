@@ -1033,6 +1033,46 @@ the three differ only in how the key is computed (section 2.5). In the
 result of a `flatMap` each stored position holds the link that value
 code placed in the member, over a source of any of the three cases.
 
+**What is undecided for a pattern closure used as a value: what value
+code writes.** `ConeHost` has no member that makes a factory value, so a
+cone's value function has no way to place an inline pattern that the
+source uses as a value, with its captures, in the value it returns. The
+prototype translates no such closure: it is left out of the value, and a
+closure that a language-model built-in is given as a tool is not in the
+request. *Assumed,* provisional (P35 of the continuation plan; section
+11.1, question 113): `ConeHost` gets a member
+
+```ts
+// Shown for illustration only.
+type Index = number;
+
+interface ClosureHost {
+  /**
+   * A marker for the factory value of one entry of `Plan.closures`.
+   * `computed` holds the captured values this evaluation computed, at
+   * their paths below the private parameters, and nothing at the paths
+   * of captures that are slots.
+   */
+  closure(closure: Index, computed: unknown): unknown;
+}
+```
+
+which the function calls where the source writes the closure. It returns
+a marker, as `stream` does, and the function places the marker and can
+do nothing else with it. When the runtime stores the value, it writes
+the factory value in the marker's place (section 4.6, "A pattern closure
+used as a value"): it copies from `computed` the paths that
+`Closure.params` lists as copied, each narrowed to what the inline
+pattern's plan observes, and builds the paths of slots and the links to
+captured cells itself, from the bindings of the cone instance that called
+`closure`, as it builds the slot part of the argument of `invoke`. A
+marker in an interim output stays a marker. A closure that is called in
+the body that wrote it is compiled in and has no marker. Under a
+conditional between two closures the function makes the marker of the
+branch it takes and reports the selection
+(`plan-and-label-templates.md` §3.15, "What is undecided for a pattern
+closure used as a value").
+
 The prototype's executor implements the marker and the replacement. Its
 marker is a frozen object with no member, and the binding and the keys
 it stands for are held where value code does not reach them. It replaces
@@ -3855,6 +3895,26 @@ body instantiates, or a pattern that the author calls through
   read or supply it. A pattern closure used as a value is different: its
   copied captures are stored with the factory value, wherever that is
   stored, narrowed in the same way.
+- **A pattern closure used as a value.** *Assumed,* provisional (P34 of
+  the continuation plan; section 11.1, question 114). Its factory value
+  is a record stored in place at the path the value is written to: a
+  kept output, a path of a child's argument, or a path of the stored
+  request of an effect, where it is given as a tool. The record holds
+  the content address of the compiled inline pattern, in the form a
+  module-scope pattern factory is stored in, and a member `params` that
+  holds each path of `Closure.params`: the copied value, narrowed as
+  above, or the link to the captured cell. Each copied path has the
+  label of its instantiated template at its position. An instance that a
+  receiver makes by calling the factory has no parameters document: its
+  `params` slots resolve below the `params` member of the record the
+  receiver called (`scheduler-and-serving-loop.md` §3.2). A body that
+  passes the factory on unchanged passes a reference to the record's
+  address and copies nothing. The prototype stores no such record,
+  because it translates no closure used as a value. Not determined: the
+  names of the record's members; and where the captures are stored for a
+  closure called through `inSpace`, on which
+  `plan-and-label-templates.md` §3.15 states three alternatives and
+  assumes none.
 - **A child with a scope** (`asScope`). The scope is a constant of the
   site, `Child.scope`, and sets the scope of the state the child declares
   (`plan-and-label-templates.md` §3.14). *Assumed:* the transaction that
@@ -7593,6 +7653,21 @@ Added by the ruling that the scheduler is switched per space (section 9):
      removes a key at a position and enters another there, and a
      removal alone, which also leaves state stored, does not. It is
      question 301 of the continuation plan.
+113. **What value code writes for a pattern closure used as a value**
+     (section 2.2). *Assumed,* provisional (P35 of the continuation
+     plan, the coordinator's decision, and not ruled): a member
+     `closure` of `ConeHost` that returns a marker, which the runtime
+     replaces by the factory value when it stores the value. The
+     alternative has the value function return the record, which needs
+     it to hold links and the content address of the inline pattern. It
+     is question 309 of the continuation plan.
+114. **The stored form of the factory value of a pattern closure**
+     (section 4.6). *Assumed,* provisional (P34 of the continuation
+     plan, the coordinator's decision, and not ruled): a record in
+     place with the content address of the inline pattern and a member
+     `params`. The alternative is a parameters document that the
+     factory value links to, shared by every holder of the factory. It
+     is question 308 of the continuation plan.
 
 
 ### 11.2 For another document or the prototype

@@ -5703,6 +5703,21 @@ is relitigated.
 - `patternTool` is removed in favor of a pattern closure: an inline
   `pattern(...)` in the reactive tier, used as a value, whose captures the
   compiler binds as private parameters.
+- `patternTool` has an interim acceptance (2026-11-19; the owner's words:
+  "let's do that"). In a pattern body, a direct call
+  `patternTool(P, { a, b })` of the name imported from `commonfabric` is
+  accepted with the warning `removed-form:pattern-tool-interim` and
+  rewritten before any other stage to
+  `pattern<Omit<Parameters<typeof P>[0], "a" | "b">>((rest) => P({ ...rest, a, b }))`.
+  The owner's reason: it makes it easier to switch between the compiler and
+  the current patterns, since one source runs in today's runtime and is
+  compiled. The interim ends as it does for `ifElse`, `when`, `unless` and
+  `str`. `language-subset.md` §4.4.3 has the accepted and the refused
+  shapes. Of the 31 calls in the corpus 29 are accepted. Three points of
+  the build are the implementer's choices and not part of the ruling
+  (question 314). A rewritten call compiles to a pattern closure used as a
+  value, which the prototype does not translate, so the tool is not sent
+  (questions 307 to 310).
 
 **Calls inside a function body**
 
@@ -6267,10 +6282,8 @@ is relitigated.
   commit is prepared") states it. Measured over the corpus in milestone 4
   of the integration: preparing every commit raised the preparations from
   407 to 2,280 and the preparation time from 379 ms to 690 ms, about 0.3 ms
-  per added preparation. Not yet built: the build prepares only the
-  commits that read labeled data, and forcing the preparation of every
-  commit exposed 374 commits in 77 modules that the checks of plan labels
-  refuse ([Known limits](#known-limits-of-what-exists)).
+  per added preparation. Milestone 4 of the integration builds it
+  ([Known limits](#known-limits-of-what-exists)).
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6291,28 +6304,39 @@ pointer to its entry.
 **To look at first,** in this order.
 
 1. **The open findings of milestone 4.** Labels from templates at commit
-   are built (milestone 4 of the integration) and run over the whole corpus.
-   Not yet built: every commit of a compiled pattern prepared, by the
-   ruling on question 303; forcing it exposed 374 commits in 77 modules
-   that the checks of plan labels refuse. Open, most serious first, and
-   each being worked on: two soundness checks
-   not yet made (a plain value passed through an `identity` slot in
-   general, and a change of a label between the preparation and the
-   store's validation); the identity of entry 0 of `Plan.patterns` against
-   a pattern compiled into another; 44 commits in 34 modules refused with
-   the option on and not off, each with its reason; the adapter does not
-   await each commit; emitting the corpus as one program takes 339 s
-   against 1 s for `patterns/system/` alone, a cost that grows faster than
-   the input, with its cause not yet found; and the `$UI` rows that store
-   the transaction's join
+   are built (milestone 4 of the integration), with every commit of a
+   compiled pattern prepared, and run over the whole corpus with `wish`
+   simulated: of 271 modules 238 run; of 1,695 output rows 1,010 are
+   tighter than today's, 292 equal and 121 looser, and of 196 write rows
+   128 are equal, 9 tighter and 56 looser. Open, most serious first, and
+   each being worked on: "tighter" in the comparison is not evidence of
+   correctness, since 93 rows in 34 modules gained a clause when two
+   binding defects were fixed, and an independent check that changes one
+   input at a time is being built; the outcome of a `wish` is looser than
+   today's until it has a write record of its own; the preparations of
+   one module cost about 650 ms each, cause not found; 60 commits in 33
+   modules are refused with the option on and not off; the runtime took
+   a bound 333 times for a selection, a choice or a dynamic read that is
+   not reported (P37); today's runtime may store too narrow a label at
+   two outputs, not reproduced in isolation; and the atom on a link is
+   not taken by a read of the value through the link (question 313)
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
-2. **Question 302,** the owner's design for the integrity of a value a
+2. **A pattern closure used as a value is not translated,** and the
+   interim acceptance of `patternTool` rests on it: 29 calls of the corpus
+   are accepted and each compiles to a tool that is not sent. Four points
+   have to be decided first (questions 307 to 310), three with a
+   provisional decision (P33 to P36) and one, a closure through `inSpace`
+   as a tool, with alternatives and none.
+3. **Question 313,** for the owner: whether the atom of a kept output on a
+   link is a selection endorsement with a scope, which a read that
+   traverses the link takes.
+4. **Question 302,** the owner's design for the integrity of a value a
    pattern passes on from an argument: the minimum integrity it declares on
    an input becomes a requirement on the link written for the argument. It
    is recorded as a sketch with its open points and needs a specification
    change of its own; whether to pursue it is the owner's decision.
-3. **P31,** which milestone 4 builds: labels by identifier, and a `fold`
+5. **P31,** which milestone 4 builds: labels by identifier, and a `fold`
    instantiated once per group of element inputs, in the `uniform` form for
    an array of plain values in place and the `groups` form, with a count per
    group kept with the collection's assembly, for an array of references and
@@ -6320,21 +6344,21 @@ pointer to its entry.
    element costs 3 to 7 instantiations at 100, 1,000 and 10,000 elements.
    Its `*` entry for the elements of an array written whole gives a wider
    label after a `splice` than per-element entries would.
-4. **The scope of the storage decisions,** the coordinator's recommendation
+6. **The scope of the storage decisions,** the coordinator's recommendation
    after P29 was withdrawn: chunked storage of long arrays is a requirement
    on the storage layer, which today's runtime has as well, and this design
    keeps the split points, P22 and the bound on one row's change. It decides
    where questions 290, point (a), 296 and 299 are answered.
-5. **Question 304,** a defect of today's runtime found by reading and shown
+7. **Question 304,** a defect of today's runtime found by reading and shown
    by a test: when an array of plain values in place is spliced, the
    per-element label entries stay at their positions, so a position can
    hold the label of the value that was there before. Pull request 9982
    does not fix it (question 306).
-6. **P9** is flagged. With it a batch of events and the same events handled one
+8. **P9** is flagged. With it a batch of events and the same events handled one
    at a time can store different values, and today's runtime, which runs the
    writer again, stores the same value in both. The coordinator adopted it only
    so that the work continues.
-7. **Questions 254, 255 and 295,** on keys that are formed from plain values.
+9. **Questions 254, 255 and 295,** on keys that are formed from plain values.
    Over an array of plain values in place with no declared key, each keystroke
    in a row that has state re-keys the row, moves its state, stores the row
    again and leaves one new stream document, and a list of 100 records that is
@@ -6348,7 +6372,7 @@ pointer to its entry.
    not say whether it holds plain values in place or references and 168
    reports in 80 of 286 corpus modules were mostly for lists of references,
    and is replaced by a report of the runtime at the first such edit.
-8. **P18 with P19.** P18 changes the records of a plan and is written in full
+10. **P18 with P19.** P18 changes the records of a plan and is written in full
    into `plan-and-label-templates.md` §1.1. Its status: designed; amended
    after round 5 by one rule, for a callee that passes an argument on at a
    site that binds it by a literal; sound on the evidence of the corpus,
@@ -6359,7 +6383,7 @@ pointer to its entry.
    which is the one point at which the written-out form is not preserved
    outside the result (question 288). The corpus has no report that P19
    could lose.
-9. **P22,** which resolves a conflict of the documents with themselves: a cone
+11. **P22,** which resolves a conflict of the documents with themselves: a cone
    that places the result of a per-element construct holds a reference to the
    collection, so one row's change evaluates no enclosing cone.
 
@@ -7257,8 +7281,7 @@ today.
   `plan-and-label-templates.md` §2.3 ("One entry for the elements of an
   array written whole"), §4.2 ("Labels by identifier, and a `fold` per
   group", and `TemplateInputs.groups` in the pseudocode) and §4.3. *Not
-  determined:* a scan's prefix, whose groups change when the deciding
-  position moves; the label of a collection's array for a slot of root
+  determined:* the label of a collection's array for a slot of root
   `index`; the removal of the extreme of `min` and `max`; and what a slot
   under `*` binds over an empty collection (question 305). *Tests:*
   milestone 4 of the integration counts instantiations per commit, 3 to 7
@@ -7266,6 +7289,118 @@ today.
   `filter` over each of the three cases, and a test pins equal counts at
   two lengths. *If decided otherwise:* those passages return to one
   instantiation per element, and the count per identifier needs a home.
+- **P33. A template node names the closure whose factory value a path
+  holds** (question 307, which is `plan-and-label-templates.md` question
+  179). The coordinator's decision of 2026-11-20, derived from that
+  document's §3.15. *The case:* `Child.callee` is the one member that
+  names an entry of `Plan.closures`, so no record says which output,
+  argument or request path holds the factory value of which entry, and a
+  reader of a plan cannot tell which closure a request passes as a tool.
+  *Decision:* a leaf node `{ op: "closure", closure }` at the place of the
+  closure expression, which denotes the label of the factory value over
+  the entries of `Closure.params`. The `Output` at the path of a closure
+  in the result and the `WriteEdge` at an argument path or at the path of
+  a tool have it as their template, or below a `select`. *Alternative:* a
+  member `closure` on `Output` and `WriteEdge`, which cannot name two
+  entries for a path that a conditional decides. *How it is written:*
+  `plan-and-label-templates.md` §3.15 ("What is undecided for a pattern
+  closure used as a value", point 1), in prose; the `Template` type of its
+  §1.1 and the function of its §4.2 do not hold the node. *Tests:* none;
+  the prototype translates no closure used as a value. *If decided
+  otherwise:* that passage. The node is the same over an array of
+  references, an array of plain values in place and the result of another
+  per-element construct, where the closure is written in an element body.
+- **P34. The factory value of a closure is a record in place, with the
+  captures below `params`** (question 308, which is
+  `plan-and-label-templates.md` question 180 and ES question 114). The
+  coordinator's decision of 2026-11-20. *The case:* the documents say
+  that a copied capture is stored with the factory value and a captured
+  cell as a link, and bind the slots of root `params` to the factory
+  value at the address its `identity` slot is bound to; none says what is
+  stored there. *Decision:* a record at the path, with the content
+  address of the compiled inline pattern in the form a module-scope
+  pattern factory is stored in, and a member `params` that holds each
+  copied path, narrowed to what the inline pattern's plan observes, and
+  each link to a captured cell. Each copied path has the label of its
+  template, and the record has the label of the factory value. A body
+  that passes the factory on unchanged passes a reference. *Alternative:*
+  a parameters document that the factory value links to, which every
+  holder of the factory shares and whose identifier needs a cause.
+  *How it is written:* `plan-and-label-templates.md` §3.15 (point 2) and
+  `execution-and-storage.md` §4.6. *Not determined:* the names of the
+  members; the captures of a closure called through `inSpace`. *Tests:*
+  none. *If decided otherwise:* those two passages.
+- **P35. Value code makes a factory value through a marker of the host
+  object** (question 309, which is `plan-and-label-templates.md` question
+  181 and ES question 113). The coordinator's decision of 2026-11-20.
+  *The case:* a cone's value function holds no handle, and the host
+  object of `execution-and-storage.md` §2.2 has no member that makes a
+  factory value. *Decision:* a member `closure(closure, computed)` that
+  returns a marker, as `stream` does; the function places it, and the
+  runtime writes the record of P34 in its place, copying the copied
+  paths from `computed` and building the paths of slots and the links
+  itself. *Alternative:* the function returns the record, which needs it
+  to hold links and the content address of the inline pattern. *How it is
+  written:* `execution-and-storage.md` §2.2 and
+  `plan-and-label-templates.md` §3.15 (point 3). *Tests:* none. *If
+  decided otherwise:* those two passages.
+- **P36. A conditional between two closures given as a tool is a `select`
+  over their nodes** (question 310, first part, which is
+  `plan-and-label-templates.md` question 182). The coordinator's decision
+  of 2026-11-20. *The case:* `language-subset.md` §4.4.2 makes the
+  conditional a factory value, and `plan-and-label-templates.md` §3.15
+  left open what the request records. *Decision:* the template at the
+  path is a `select` whose branches are the `closure` nodes of P33; the
+  value function makes the marker of the branch it takes and reports the
+  selection; the tool rule applies to the selected factory value under
+  the label of the `select`. *Alternative:* a conditional between
+  closures is refused where it is given as a tool. *How it is written:*
+  `plan-and-label-templates.md` §3.15 (point 4). *Not decided, with no
+  provisional decision:* a closure through `inSpace` as a tool, the
+  second part of question 310. *Tests:* none. *If decided otherwise:*
+  that passage.
+- **P37. A scan keeps the groups of its prefix with its memo entry**
+  (question 311, which is `plan-and-label-templates.md` question 183).
+  The coordinator's decision of 2026-11-20. *The case:* the groups of P31
+  hold a count per group and no order, so the groups of the elements up
+  to the deciding position of `findIndex`, `some`, `every` and `find`
+  cannot be read from them; the run of milestone 4 takes the whole
+  collection as a bound there. *Decision:* a scan keeps, with the memo
+  entry that holds its position, a count per group over the elements of
+  the prefix. An element that enters or leaves the prefix, and an element
+  of the prefix that changes, is one update. A move of the deciding
+  position costs the number of elements between the old and the new
+  position. Where no element decides, the groups are those of the
+  collection's assembly. By case: over an array of references and over
+  the result of another per-element construct, the `groups` form with
+  those counts; over an array of plain values in place in the `uniform`
+  form, one binding at `*`, whose label covers all elements, which is
+  the label of the prefix where every element has the one `*` entry and
+  wider otherwise, and a move costs nothing. *Alternative:* the
+  predicate's template instantiated per element of the prefix on every
+  commit that changes the scan. *How it is written:*
+  `plan-and-label-templates.md` §4.2 ("The groups of a prefix", and the
+  table of what is reported for each selection and choice). *Tests:*
+  none; not built. *If decided otherwise:* that passage.
+- **P38. W6 over a value whose type declares no structure widens where
+  the path repeats** (question 312). The choice of the prototype's
+  author, adopted by the coordinator on 2026-11-20. *The case:* W6 of
+  `footprint-analysis.md` §5.2 is decided by type, and a body that walks
+  a value of type `unknown`, of no type or of an index signature reaches
+  no type that says where a path re-enters. One function of
+  `patterns/apps/weekly-calendar/view-walk.ts` recorded 28,799 read
+  entries. *Decision:* an access on a path that ends in a sequence of
+  segments repeated in direct succession that holds a key, or in three
+  `*`, widens to `value` at that position, and so does a key read again
+  on a value whose type declares no structure for it. *Direction:* wider
+  than W6 by type, never narrower. *Measured:* that function records 45
+  entries, and no plan of the corpus changed. *Alternative:* refuse a
+  walk of a value with no declared structure, or leave the set of paths
+  to the analysis limit W7. *How it is written:* `footprint-analysis.md`
+  §5.2 ("W6 over a value whose type declares no structure"). *Tests:* the
+  crate's (`square_end` and `holds_key` of
+  `base/pattern-compiler/src/footprint.rs`). *If decided otherwise:* that
+  passage, and the crate's two rules.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -11671,9 +11806,9 @@ and the rulings leave open.
      every commit of a compiled pattern is prepared when the option is on,
      so every kept output carries the pattern's atom. Over the corpus in
      milestone 4 of the integration that raised the preparations from 407
-     to 2,280 and the preparation time from 379 ms to 690 ms. Not yet
-     built; forcing it exposed 374 commits in 77 modules that the checks of
-     plan labels refuse.
+     to 2,280 and the preparation time from 379 ms to 690 ms. Milestone 4
+     builds it: a transaction that records an authorized write record of a
+     plan is prepared.
 304. **Per-element label entries of an array are not moved when the array
      is spliced** (a defect of today's runtime, found by reading and shown
      by a test). Where an array of plain values in place is written whole,
@@ -11729,14 +11864,84 @@ and the rulings leave open.
      the length. Either fix changes what CFC decides, so it goes through the
      specification procedure of `docs/development/cfc-spec-correspondence.md`
      first. *Assumed:* neither fix is built, and question 304 stands.
+307. **Which path holds which entry of `Plan.closures`** (PL question
+     179). The prototype translates no pattern closure used as a value:
+     `Plan.closures` is empty, and a closure given to a language-model
+     built-in as a tool is left out of the request, so a rewritten
+     `patternTool` call compiles to a tool that is not sent. This and the
+     next three questions have to be decided before the translation is
+     built. *Assumed,* provisional (P33): a template node
+     `{ op: "closure", closure }` at the place of the closure expression.
+308. **The stored form of a factory value with copied captures** (PL
+     question 180; ES question 114). *Assumed,* provisional (P34): a
+     record in place, with the content address of the inline pattern and
+     the captures below a member `params`.
+309. **What value code writes for a closure expression** (PL question
+     181; ES question 113). *Assumed,* provisional (P35): a member
+     `closure` of the host object returns a marker, and the runtime
+     writes the record in its place.
+310. **A conditional between closures, and a closure through `inSpace`,
+     as a tool** (PL question 182). *Assumed,* provisional (P36), for the
+     conditional: a `select` over the nodes of the two closures, with the
+     tool rule applied to the selected factory value. For a closure
+     through `inSpace` nothing is assumed, because the alternatives
+     differ in meaning. (a) Refuse the modifier on a tool: it costs the
+     direct spelling only, since a closure whose body calls
+     `P.inSpace(space)(...)` makes the instance in the other space as a
+     child of its own plan. (b) Allow it and leave the captures with the
+     factory value: the runtime that serves the other space has to read
+     the space the factory value is stored in for as long as the instance
+     lives. (c) Allow it and copy the captures into the target space when
+     the instance is made: a write of captured values into another space,
+     with the checks and the sequence of commits of an `inSpace` request
+     per copied path, and a rule for a later change of a capture.
+311. **The groups of a scan's prefix** (PL question 183). P31 keeps no
+     order among the groups of a collection. *Assumed,* provisional
+     (P37): a scan keeps a count per group over its prefix with its memo
+     entry, and a move of the deciding position costs the elements
+     between the old and the new position.
+312. **W6 over a value whose type declares no structure** (FA §5.2).
+     *Assumed,* provisional (P38): a path widens where it ends in a
+     repeated sequence that holds a key or in three `*`, and where a key
+     is read again on such a value. Wider than W6 by type, never
+     narrower.
+313. **Whether the atom of a kept output on a link is a selection
+     endorsement with a scope, taken when the link is traversed** (PL
+     question 72; for the owner). Milestone 4 stores the atom of a kept
+     output that passes a value on by reference on the link's entry. A
+     read of the value through the link takes the integrity of the target
+     alone, so it does not see the atom, and 5 rows of the corpus are
+     looser in integrity than today's for it. Joining the atom onto the
+     target's content was not built: section 3.7.2 of the specification's
+     core concepts chapter (`03-core-concepts.md`) scopes the endorsement
+     of a link to the selection, and an atom with no scope on the content
+     would claim that the pattern vouches for a value it only chose. The
+     question: is the atom on the link stored as an endorsement scoped to
+     the selection, and does a read that traverses the link take it in
+     that form, so that a rule can require "selected by this pattern"
+     without reading it as "computed by this pattern"? It needs a
+     specification change. *Assumed meanwhile:* the atom stays on the
+     link's entry, and a read through the link does not take it.
+314. **Three choices of the implementer of the interim acceptance of
+     `patternTool`** (LS §4.4.3; for the owner to confirm). The ruling
+     accepts a direct call in a pattern body by a rewrite. Not part of
+     it, and built so: a call whose result is spread, read by a member
+     access or called is refused, because the closure is not the record
+     `{ pattern, extraParams }`; a pattern whose input is declared only
+     by an annotation of the callback's parameter is refused when keys
+     are bound; and `pattern` is added to the `commonfabric` import where
+     the name is not bound. The 2 calls of the corpus that are refused,
+     both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`,
+     spread the result into a record. *Assumed:* the three stand.
 
 
 ## Open, and not needing the owner
 
-- **The pattern closure's remaining gaps** (K12): which output or argument
-  path holds which entry of `Plan.closures`, and a closure called through
-  `inSpace`. A conditional between two closures is a factory value
-  (`language-subset.md` §4.4.2).
+- **The pattern closure's remaining gaps** (K12) are questions 307 to 310
+  under [Open, and needing the owner](#open-and-needing-the-owner): which
+  path holds which entry of `Plan.closures`, the stored form of the
+  factory value, what value code writes, and a conditional between
+  closures and a closure through `inSpace` as a tool.
 - **The label of a model's output has no definition in the
   specification.** The rules for a tool closure and for a later send both
   rest on it, and specs pull request #91 refers to a contract rule for a
@@ -11976,31 +12181,51 @@ The open questions each document ends with stay where they are.
 
 - **Milestone 4 of the integration is built and its findings are open.**
   Labels from templates at commit are built on branch
-  `claude/compiled-pattern-m4` and measured over the whole corpus
+  `claude/compiled-pattern-m4`, with every commit of a compiled pattern
+  prepared, and measured over the whole corpus with `wish` simulated
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  "Milestone 4: labels from templates at commit"). Open, most serious
-  first, and each being worked on:
-  - not yet built: every commit of a compiled pattern prepared, by the
-    ruling on question 303; the build prepares only the commits that read
-    labeled data, and forcing it exposed 374 commits in 77 modules that
-    the checks of plan labels refuse;
-  - two soundness checks not yet made: that a plain value passed through
-    an `identity` slot is labeled correctly in general, and what happens
-    when a label changes between the preparation and the store's
-    validation;
-  - the identity of entry 0 of `Plan.patterns` against a pattern compiled
-    into another;
-  - 44 commits in 34 modules refused with the option on and not off, each
-    with a stated reason;
-  - the adapter does not await each commit;
-  - the crate emits the corpus as one program in 339 s, against 1 s for
-    `patterns/system/` alone: a cost that grows faster than the input,
-    whose cause is not yet found;
-  - the `$UI` rows that store the transaction's join.
+  "Milestone 4: labels from templates at commit"). Of 271 modules 238
+  run. Beside today's, of 1,695 output rows 1,010 are tighter, 292 equal,
+  259 have an atom that names the pattern, 121 are looser and 13
+  incomparable; of 196 write rows 128 are equal, 56 looser, 9 tighter and
+  3 incomparable. Open, most serious first, and each being worked on:
+  - "tighter" in the comparison is not evidence of correctness: 93 rows
+    in 34 modules gained a clause when two binding defects were fixed, and
+    an independent check that changes one input at a time is being built;
+  - the outcome of a `wish` is stored under the join of the transaction
+    that resolves every `wish` of the instance, looser than today's,
+    until each outcome has a write record of its own
+    (`plan-and-label-templates.md` §3.19);
+  - the preparations of `dev/experimental/folksonomy-stress-test.tsx`
+    cost about 650 ms each, and the cause is not found;
+  - 60 commits in 33 modules are refused with the option on and not off,
+    each with a stated reason, and a module with a refused commit holds
+    the labels of an earlier commit;
+  - the runtime took a bound 333 times, because a selection, a choice or
+    the addresses of a dynamic read are not reported
+    (`plan-and-label-templates.md` §4.2; P37);
+  - today's runtime may store too narrow a label at two outputs, of
+    `dev/scope-bug-ct1597-reduce/main.tsx` and
+    `dev/test/non-idempotent/accumulator.tsx`, not reproduced outside the
+    corpus run;
+  - the atom of a kept output on a link is not taken by a read of the
+    value through the link (question 313).
 
+  The preparation times of the run were taken on a machine under load.
   Steps 11 and 12 of the milestone's plan, instantiation keys and verified
   units in the prepared digest and a derived write dropped alone, are not
   built.
+- **A pattern closure used as a value is not translated by the
+  prototype.** `Plan.closures` is empty, and a closure given to a
+  language-model built-in as a tool is left out of the request. A
+  `patternTool` call that the interim acceptance rewrites is accepted and
+  compiles to a tool that is not sent (questions 307 to 310).
+- **The simulation of `wish` in the comparison is partial.** A seeded
+  profile, an empty list of mentionable pieces, an empty piece registry,
+  the clock and a search by tag that finds nothing are answered. The
+  profile is data and no running instance, and `#summaryIndex`,
+  `#learnedSummary`, `#default`, `#chatManager`, `#favorites`, `#journal`
+  and a computed query are not answered.
 - **Neither cross-read covered every section.** Each reader states what
   was not read in full at the end of its section of the record. In the
   second, no reader read `footprint-analysis.md` against the execution or
@@ -12745,14 +12970,17 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestones 1 and 4, the open findings of milestone 4 (preparing
-   every commit and the 374 commits it exposed, the two soundness checks,
-   the identity of entry 0 against a pattern compiled into another, the
-   refused commits, the adapter's commits, the time to emit the corpus,
-   the `$UI` rows) and its
-   steps 11 and 12; then Topics at scale on the runtime's storage, a
-   compiled piece in the runner behind the experimental option, value code
-   in the sandbox, and server execution with the network.
+   after milestones 1 and 4, the open findings of milestone 4 (the
+   independent check of the labels by changing one input at a time, the
+   write record per outcome of a `wish`, the cost of the preparations of
+   one module, the refused commits, the reports that remove the bounds
+   with the groups of a scan's prefix (P37), the two outputs that today's
+   runtime may label too narrowly, and the atom on a link) and its steps
+   11 and 12; the translation of a pattern closure used as a value, once
+   questions 307 to 310 are decided; then Topics at scale on the
+   runtime's storage, a compiled piece in the runner behind the
+   experimental option, value code in the sandbox, and server execution
+   with the network.
 
 ### Briefing an author
 
