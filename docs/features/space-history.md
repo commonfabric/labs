@@ -176,7 +176,8 @@ afterwards, where that pattern came from, and whether the piece is on that
 revision now. A source revision records the time it was made and no `seq`, so
 `withPatternChanges()` in `runtime/lib-shell/src/space-history.ts` places it
 by time: on the first step that began at or after the revision was made, when
-that step began within a minute of it. The revision's time is read from the
+that step began within a minute of it. A step's time is kept to the second,
+so a step counts as beginning after a revision made up to a second later. The revision's time is read from the
 clock of the runtime that changed the source and a step's from the memory
 server's, so clocks that disagree can place a change on a neighboring step. A
 revision made during a stretch of history the listing does not cover is left
@@ -206,8 +207,8 @@ names it, and the kind of origin the pattern came from. A change the piece
 has since moved on from offers "Restore this pattern version", which puts
 that piece back on that version of its pattern and keeps the space's data as
 it is now. Where the runtime warns that the stored data may not fit the older
-pattern, the panel shows the warning and offers "Restore it anyway". The
-action is not offered while a fork is open.
+pattern, the panel shows the warning and offers "Restore it anyway". Both
+actions are disabled while a fork is open.
 
 Choosing a step forks the space there. While a fork is open, the root element
 hands the fork's runtime to everything it renders in place of its own, so the

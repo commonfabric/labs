@@ -864,11 +864,17 @@ export class XRootView extends BaseView implements ShellApp {
     if (
       rt === undefined || space === undefined ||
       this._openHistory?.busy === true || !Number.isSafeInteger(seq) ||
+      // A pattern restore under way changes the space the fork would be
+      // taken beside.
+      this._patternRestore?.busy === true ||
       // Opening the step already open would replace its fork, and what was
       // done in it, with a new one.
       this.#fork?.seq === seq
     ) return;
     this._historyError = undefined;
+    // A warning about a pattern restore was given for the data as it stood,
+    // which a restore from the fork may change.
+    this._patternRestore = undefined;
     const view = this.app.view;
     const opening: OpenHistory = { seq, busy: true };
     this._openHistory = opening;
@@ -1028,6 +1034,14 @@ export class XRootView extends BaseView implements ShellApp {
       : undefined;
   }
 
+  /** Returns the scope of the piece in view, where the view gives one. */
+  #viewedPieceScope(): PatternChange["scope"] {
+    const view = this.app.view;
+    return this.#viewedPieceId() !== undefined && "pieceScope" in view
+      ? view.pieceScope
+      : undefined;
+  }
+
   /**
    * Lets go of the open fork, where there is one, and deletes it. Resolves
    * once the deletion has been answered, and rejects never.
@@ -1118,6 +1132,7 @@ export class XRootView extends BaseView implements ShellApp {
               .open="${this._openHistory}"
               .error="${this._historyError}"
               .pieceId="${this.#viewedPieceId()}"
+              .pieceScope="${this.#viewedPieceScope()}"
               .patternRestore="${this._patternRestore}"
               .changes="${this._historyChanges}"
             ></x-history-view>

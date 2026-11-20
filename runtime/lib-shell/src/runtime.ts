@@ -927,13 +927,13 @@ export class RuntimeInternals extends EventTarget {
    * `before` for the stretch older than this one. Each step carries the
    * changes of pattern code the space's pieces recorded during it, as a
    * piece's own source history lists them: the pieces the space lists, and
-   * those `pieceIds` names beside them, which is how a piece the space does
+   * those `pieces` names beside them, which is how a piece the space does
    * not list has its changes shown.
    */
   async spaceHistory(
     space: DID,
     before?: number,
-    pieceIds: readonly string[] = [],
+    pieces: readonly { id: string; scope?: CellScope }[] = [],
   ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
     this.#check();
     const [page, sources] = await Promise.all([
@@ -941,24 +941,27 @@ export class RuntimeInternals extends EventTarget {
         space,
         ...(before !== undefined ? { before } : {}),
       }),
-      this.#pieceSources(space, pieceIds),
+      this.#pieceSources(space, pieces),
     ]);
     return { ...page, steps: withPatternChanges(page.steps, sources) };
   }
 
   /**
    * Helper for `spaceHistory()`, which returns the source of each piece the
-   * space lists and each `pieceIds` names beside them. A piece whose source
+   * space lists and each `named` adds beside them. A piece whose source
    * cannot be read is left out, and so is every listed piece when the list
    * cannot be: a history is still worth showing without what it says of
    * pattern code.
    */
   async #pieceSources(
     space: DID,
-    pieceIds: readonly string[],
+    named: readonly { id: string; scope?: CellScope }[],
   ): Promise<PieceSourceOfScope[]> {
     let pieces: { id: string; scope?: CellScope }[] = [];
     try {
+      // A piece registered a moment ago is on the list once the space's
+      // pending writes have landed.
+      await this.#client.synced(space);
       const list = await this.#client.getPiecesListCell<unknown>(space);
       await list.sync();
       pieces = (list.get() ?? []).flatMap((piece) => {
@@ -981,13 +984,15 @@ export class RuntimeInternals extends EventTarget {
       ]);
     }
     // A listed piece is named by its full URI and a routed one without the
-    // scheme, so the two are compared without it.
-    const bare = (id: string) => id.replace(/^of:/, "");
-    const listed = new Set(pieces.map(({ id }) => bare(id)));
-    for (const id of pieceIds) {
-      if (listed.has(bare(id))) continue;
-      listed.add(bare(id));
-      pieces.push({ id });
+    // scheme, so the two are compared without it, and an omitted scope is
+    // the space's.
+    const key = ({ id, scope }: { id: string; scope?: CellScope }) =>
+      `${scope ?? "space"}\n${id.replace(/^of:/, "")}`;
+    const listed = new Set(pieces.map(key));
+    for (const piece of named) {
+      if (listed.has(key(piece))) continue;
+      listed.add(key(piece));
+      pieces.push(piece);
     }
     const sources = await Promise.allSettled(
       pieces.map(({ id, scope }) =>

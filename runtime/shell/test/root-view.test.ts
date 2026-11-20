@@ -1688,10 +1688,10 @@ describe("XRootView", () => {
 
     /**
      * Returns what a root view showing `shown` in `space`, with the history
-     * panel open, hands the panel as its `pieceId`: one entry, the panel
-     * being rendered once.
+     * panel open, hands the panel as its property `name`: one entry, the
+     * panel being rendered once.
      */
-    async function boundPieceId(shown: object): Promise<unknown[]> {
+    async function bound(shown: object, name: string): Promise<unknown[]> {
       const restore = installBrowserGlobals();
       try {
         const { XRootView } = await import("../src/views/RootView.ts");
@@ -1702,28 +1702,64 @@ describe("XRootView", () => {
           config: { ...view.app.config, showHistoryView: true },
           view: { spaceDid: space, ...shown } as typeof view.app.view,
         };
-        return templateBindings(view.render(), "pieceId");
+        return templateBindings(view.render(), name);
       } finally {
         restore();
       }
     }
 
-    it("is the piece a view names by id", async () => {
-      expect(await boundPieceId({ pieceId: "fid1:viewed" })).toEqual([
-        "fid1:viewed",
-      ]);
+    describe("pieceId", () => {
+      it("is the piece a view names by id", async () => {
+        expect(await bound({ pieceId: "fid1:viewed" }, "pieceId")).toEqual([
+          "fid1:viewed",
+        ]);
+      });
+
+      it("is none for a view that names its piece by slug, though it carries an id as well", async () => {
+        expect(
+          await bound(
+            { pieceSlug: "lunch", pieceId: "fid1:viewed" },
+            "pieceId",
+          ),
+        ).toEqual([undefined]);
+        expect(await bound({ pieceSlug: "lunch" }, "pieceId")).toEqual([
+          undefined,
+        ]);
+      });
+
+      it("is none for a view of a space with no piece, or with an empty piece id", async () => {
+        expect(await bound({}, "pieceId")).toEqual([undefined]);
+        expect(await bound({ pieceId: "" }, "pieceId")).toEqual([undefined]);
+      });
     });
 
-    it("is none for a view that names its piece by slug, though it carries an id as well", async () => {
-      expect(
-        await boundPieceId({ pieceSlug: "lunch", pieceId: "fid1:viewed" }),
-      ).toEqual([undefined]);
-      expect(await boundPieceId({ pieceSlug: "lunch" })).toEqual([undefined]);
-    });
+    describe("pieceScope", () => {
+      it("is the scope of a view that names its piece by id", async () => {
+        expect(
+          await bound(
+            { pieceId: "fid1:viewed", pieceScope: "user" },
+            "pieceScope",
+          ),
+        ).toEqual(["user"]);
+      });
 
-    it("is none for a view of a space with no piece, or with an empty piece id", async () => {
-      expect(await boundPieceId({})).toEqual([undefined]);
-      expect(await boundPieceId({ pieceId: "" })).toEqual([undefined]);
+      it("is none for a view that names its piece by id with no scope", async () => {
+        expect(await bound({ pieceId: "fid1:viewed" }, "pieceScope")).toEqual([
+          undefined,
+        ]);
+      });
+
+      it("is none for a view that names no piece by id, though it carries a scope", async () => {
+        expect(
+          await bound(
+            { pieceSlug: "lunch", pieceId: "fid1:viewed", pieceScope: "user" },
+            "pieceScope",
+          ),
+        ).toEqual([undefined]);
+        expect(await bound({ pieceScope: "user" }, "pieceScope")).toEqual([
+          undefined,
+        ]);
+      });
     });
   });
 
@@ -1765,6 +1801,7 @@ describe("XRootView", () => {
       };
       showSpace(space);
       const asked: unknown[][] = [];
+      const forks: number[] = [];
       // The runtime task's value is all of the task these cases read, and a
       // pattern restore and a fork are all they ask of the runtime.
       view.accessForTestingOnly.rt = {
@@ -1773,17 +1810,23 @@ describe("XRootView", () => {
             asked.push(args);
             return answer();
           },
-          forkSpace: (_space: string, seq: number) =>
-            Promise.resolve({
+          forkSpace: (_space: string, seq: number) => {
+            forks.push(seq);
+            return Promise.resolve({
               seq,
               runtime: { runtime: () => ({}) },
               discard: () => Promise.resolve(),
-            }),
+            });
+          },
         },
       } as never;
       return {
         view,
         asked,
+        /** The seq of each fork the runtime was asked for. */
+        forks,
+        /** What the history panel is handed as its `open`. */
+        openHistory: () => templateBindings(view.render(), "open")[0],
         errors,
         showSpace,
         /** What the history panel is handed as its `patternRestore`. */
@@ -2073,6 +2116,100 @@ describe("XRootView", () => {
       } finally {
         restore();
       }
+    });
+
+    describe("openHistory() beside it", () => {
+      it("asks for no fork while a restore is busy, and for one once the runtime has answered", async () => {
+        const answer = Promise.withResolvers<RestoreAnswer>();
+        const { view, forks, openHistory, patternRestore, restore } =
+          await mounted(() => answer.promise);
+        try {
+          const restoring = view.restorePattern({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          });
+
+          await view.openHistory(3);
+
+          expect(forks).toEqual([]);
+          expect(openHistory()).toBeUndefined();
+          expect(patternRestore()).toEqual({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+            busy: true,
+          });
+
+          answer.resolve({});
+          await restoring;
+          await view.openHistory(3);
+          expect(forks).toEqual([3]);
+          expect(openHistory()).toEqual({ seq: 3, busy: false });
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel no restore once a fork starts opening over a compatibility warning", async () => {
+        const { view, forks, patternRestore, restore } = await mounted(
+          () =>
+            Promise.resolve({
+              compatibilityWarning: "It does not fit.",
+              confirmationToken: "t1",
+            }),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+          expect(patternRestore()).toBeDefined();
+
+          const opening = view.openHistory(3);
+
+          // The warning is gone as the fork starts opening, before the
+          // runtime has answered with it.
+          expect(patternRestore()).toBeUndefined();
+          await opening;
+          expect(forks).toEqual([3]);
+          expect(patternRestore()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      it("hands the panel no restore once a fork starts opening over a failed restore", async () => {
+        const { view, patternRestore, restore } = await mounted(
+          () => Promise.reject(new Error("the piece is gone")),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+          expect(patternRestore()).toBeDefined();
+
+          await view.openHistory(3);
+
+          expect(patternRestore()).toBeUndefined();
+        } finally {
+          restore();
+        }
+      });
+
+      it("leaves a warning in place for a step that opens no fork", async () => {
+        const { view, forks, patternRestore, restore } = await mounted(
+          () => Promise.resolve({ compatibilityWarning: "It does not fit." }),
+        );
+        try {
+          await view.restorePattern({ pieceId: "fid1:a", revisionId: "r1" });
+
+          await view.openHistory(1.5);
+
+          expect(forks).toEqual([]);
+          expect(patternRestore()).toEqual({
+            pieceId: "fid1:a",
+            revisionId: "r1",
+            busy: false,
+            warning: "It does not fit.",
+          });
+        } finally {
+          restore();
+        }
+      });
     });
 
     describe("when the view moves to another space before the runtime answers", () => {

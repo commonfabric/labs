@@ -221,6 +221,10 @@ export class XHistoryView extends BaseView {
   @property({ attribute: false })
   accessor pieceId: string | undefined = undefined;
 
+  /** The scope that completes `pieceId`, where it is not the space's. */
+  @property({ attribute: false })
+  accessor pieceScope: PatternChange["scope"] = undefined;
+
   /** The pattern restore the panel asked for, while it is unsettled. */
   @property({ attribute: false })
   accessor patternRestore: PatternRestore | undefined = undefined;
@@ -250,7 +254,7 @@ export class XHistoryView extends BaseView {
    */
   #list = new Task<[number | undefined], void>(this, {
     task: async ([before]) => {
-      const { rt, space, pieceId } = this;
+      const { rt, space, pieceId, pieceScope } = this;
       const listing = ++this.#listing;
       if (rt === undefined || space === undefined) {
         this._steps = [];
@@ -260,7 +264,10 @@ export class XHistoryView extends BaseView {
       const page = await rt.spaceHistory(
         space,
         before,
-        pieceId === undefined ? [] : [pieceId],
+        pieceId === undefined ? [] : [{
+          id: pieceId,
+          ...(pieceScope !== undefined ? { scope: pieceScope } : {}),
+        }],
       );
       // A stretch that arrives after a later listing began belongs to a list
       // that one has replaced.
@@ -285,6 +292,7 @@ export class XHistoryView extends BaseView {
     // keeps the stretch the open step was chosen from.
     if (
       moved || changed.has("changes") || changed.has("pieceId") ||
+      changed.has("pieceScope") ||
       (changed.has("open") && this.open === undefined)
     ) {
       void this.#list.run([undefined]);
@@ -398,6 +406,7 @@ export class XHistoryView extends BaseView {
               <cf-button
                 class="pattern-restore-confirm"
                 size="sm"
+                ?disabled="${blocked}"
                 @click="${() =>
                   this.command({
                     type: "restore-pattern",
