@@ -78,6 +78,11 @@ export const NO_CANDIDATES = new Map<string, string>([
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
   ["acl remove:did", "the same DID, and the same absence of a source"],
   ["inspect identity:did", "a DID to look up, pasted from elsewhere"],
+  [
+    "id pair:service",
+    "the address of the person's service, as their Weaver's settings show it",
+  ],
+  ["fetch:url", "a route on a first-party service, composed by the caller"],
   ["id derive:passphrase", "a secret; a candidate list is the wrong place"],
   ["id from-mnemonic:mnemonic", "the same"],
   ["ingest revoke:id", "an ingest key id, held by whoever minted it"],
@@ -121,6 +126,7 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  ["fetch:method", "any HTTP method the route takes"],
   [
     "profile attest-name:expect",
     "the receipt from the owner-reviewed inspection",
