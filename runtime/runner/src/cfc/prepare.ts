@@ -4678,6 +4678,7 @@ const starEntryHolds = (
     readonly integrity: readonly CfcAtom[];
   },
   table: LabelTable,
+  observes: "value" | "followRef" = "value",
 ): boolean => {
   const last = path[path.length - 1];
   if (existing === undefined || !/^(0|[1-9][0-9]*)$/.test(last ?? "")) {
@@ -4689,7 +4690,7 @@ const starEntryHolds = (
     integrity: [...label.integrity],
   }).id;
   return existing.labelMap.entries.some((entry) =>
-    entry.origin === "derived" && entry.observes === "value" &&
+    entry.origin === "derived" && entry.observes === observes &&
     pathKey(entry.path) === star && table.intern(entry.label).id === id
   );
 };
@@ -14418,11 +14419,37 @@ export function* prepareBoundaryCommitSteps(
       // reference, whose integrity a read through the link does not take
       // (plan-and-label-templates.md sections 3.2 and 3.10). It holds the
       // pattern's atom of a kept output.
+      // The links of an array's elements whose labels are all one store one
+      // entry at the array's `*` path (`collapseEqualElements`), and an
+      // element whose label equals that entry stores none of its own.
       const linkLabelKeys = new Set<string>();
-      for (const path of linkLabelPaths) {
-        if (linkLabelKeys.has(pathKey(path))) continue;
+      const distinctLinkPaths = linkLabelPaths.filter((path) => {
+        if (linkLabelKeys.has(pathKey(path))) return false;
         linkLabelKeys.add(pathKey(path));
+        return true;
+      });
+      for (
+        const path of collapseEqualElements(
+          distinctLinkPaths,
+          (path) => planLabels.byTarget.get(key)?.get(planLabelPathKey(path)),
+          (path) => writtenValueAt(flowWrittenValues, path),
+          (path, label) => {
+            let labels = collapsedLabels.get(key);
+            if (labels === undefined) {
+              labels = new Map();
+              collapsedLabels.set(key, labels);
+            }
+            labels.set(planLabelPathKey(path), label);
+          },
+        )
+      ) {
         const pathLabel = flowLabelAt(key, path);
+        if (
+          planLabelTable !== undefined &&
+          starEntryHolds(existing, path, pathLabel, planLabelTable, "followRef")
+        ) {
+          continue;
+        }
         persistedLabelEntries.push(markFlowStampEntry({
           path,
           label: {
