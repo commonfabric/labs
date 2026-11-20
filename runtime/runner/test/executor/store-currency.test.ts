@@ -109,7 +109,7 @@ describe("StoreCurrency", () => {
             scopeKey: "space",
             derived: true,
           }],
-          vouches: [],
+          vouches: [id],
         }],
       })),
     };

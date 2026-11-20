@@ -5,7 +5,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
-import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-index";
+import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 import type { CellScope } from "../../src/builder/types.ts";
 import type { SchedulerLivenessState } from "../../src/scheduler/dependency-graph.ts";
 import { newFanOutNodeState } from "../../src/scheduler/fan-out.ts";

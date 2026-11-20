@@ -28,9 +28,10 @@ a record: archive it to `docs/history/plans/` following the procedure in
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
 - [Serving a piece's stored outputs while they are current](stored-output-currency.md)
-  keeps a durable record, per piece, of what it read, what it writes and which
-  stored outputs a serving loop vouched for, marks a piece stale through the
-  store when an input changes, and has the demand pass leave a piece unstarted
+  keeps a durable record, per piece and per viewer of it, of what it read,
+  what it writes and which stored outputs a serving loop vouched for, marks
+  that record stale through the store when an input changes, and has the
+  demand pass leave a piece unstarted
   only while its record proves every demanded output of it current, with a
   mode that records and judges without acting so the judgment can be checked
   first.

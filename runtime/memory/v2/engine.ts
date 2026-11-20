@@ -551,13 +551,17 @@ CREATE INDEX IF NOT EXISTS idx_currency_write_id
   ON currency_write (branch, id);
 -- The document instances a piece vouches for, each filed under the slice
 -- whose scope key is the instance's: a live, clean computation of the piece
--- wrote it, and seq is where the instance stood then.
+-- wrote it, and seq is where the instance stood then. held = 0 is a row the
+-- slice's latest record no longer vouches for, kept for its seq: the piece
+-- last answered for the instance there, which says whether a later head is
+-- an overwrite.
 CREATE TABLE IF NOT EXISTS currency_vouch (
   branch TEXT    NOT NULL,
   slice  TEXT    NOT NULL,
   piece  TEXT    NOT NULL,
   id     TEXT    NOT NULL,
   seq    INTEGER NOT NULL,
+  held   INTEGER NOT NULL,
   PRIMARY KEY (branch, slice, piece, id)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
@@ -2465,10 +2469,12 @@ const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   }).immediate();
 };
 
-// The currency index was first laid out one row per piece. It holds nothing
-// a serving loop does not record again, so a store of that layout loses its
-// records once: its tables are dropped here, ahead of the schema that
-// creates the sliced ones, and every piece starts on its next demand.
+/**
+ * Drops the currency index of a store that holds it laid out one row per
+ * piece, ahead of the schema that creates it laid out per slice. The index
+ * holds nothing a serving loop does not record again, so such a store loses
+ * its records once and every piece of it starts on its next demand.
+ */
 const dropUnslicedCurrencyTables = (database: Database): void => {
   if (!hasTable(database, "currency_piece")) return;
   database.transaction(() => {

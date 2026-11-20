@@ -8,13 +8,15 @@
 
 import {
   canResolveScopeKey,
-  identityOfScopeKey,
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
   scopeOfScopeKey,
 } from "@commonfabric/memory/v2";
-import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-index";
+import {
+  ANY_INSTANCE,
+  sliceChain,
+} from "@commonfabric/memory/v2/currency-keys";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import type { CellScope } from "../builder/types.ts";
 import { normalizeCellScope, scopeRank } from "../scope.ts";
@@ -112,20 +114,6 @@ const identityOf = (action: Action) =>
   (action as Partial<TelemetryAnnotations>).schedulerObservationIdentity;
 
 /**
- * The scope keys a run at the instance `key` writes at: `key` itself, and the
- * broader slots on its chain, which hold the redirects that lead to it.
- */
-const chainOf = (key: ScopeKey): ScopeKey[] => {
-  if (scopeOfScopeKey(key) !== "session") {
-    return key === "space" ? ["space"] : [key, "space"];
-  }
-  const identity = identityOfScopeKey(key);
-  return identity === undefined
-    ? [key, "space"]
-    : [key, resolveScopeKey("user", identity), "space"];
-};
-
-/**
  * The scope keys a clean run at the instance `key`, resolved under
  * `identity`, wrote a document declared at the scope `declared` at. The
  * value lands at the narrower of the run's instance and the declared scope
@@ -145,7 +133,7 @@ const writtenKeys = (
     }
     value = resolveScopeKey(declared, identity);
   }
-  return chainOf(value).filter((slot) =>
+  return (sliceChain(value) as ScopeKey[]).filter((slot) =>
     scopeRank(scopeOfScopeKey(slot)) >= scopeRank(declared)
   );
 };

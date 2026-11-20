@@ -87,6 +87,8 @@ describe("currency-index", () => {
     vouched?: boolean;
     reads?: CurrencyRead[];
     writes?: string[];
+    /** Ids the piece writes and vouches for the shared instance of. */
+    produces?: string[];
     owned?: string[];
     vouches?: Array<{ id: string; scopeKey: string }>;
     slices?: CurrencySliceRecord[];
@@ -111,10 +113,13 @@ describe("currency-index", () => {
       }
       return slice;
     };
+    // A record of a piece names its `space` slice, whatever else it names.
+    sliceAt("space");
     for (const read of parts.reads ?? []) sliceAt("space").reads.push(read);
     for (const { id, scopeKey } of parts.vouches ?? []) {
       sliceAt(scopeKey).vouches.push(id);
     }
+    for (const id of parts.produces ?? []) sliceAt("space").vouches.push(id);
     for (const given of parts.slices ?? []) {
       const merged = sliceAt(given.key);
       merged.vouched &&= given.vouched;
@@ -125,7 +130,7 @@ describe("currency-index", () => {
       piece,
       under: parts.under ?? [],
       vouched: parts.vouched ?? true,
-      writes: parts.writes ?? [],
+      writes: [...(parts.writes ?? []), ...(parts.produces ?? [])],
       owned: parts.owned ?? [],
       slices: [...slices.values()],
     };
@@ -249,11 +254,11 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceB", {
           reads: [input("of:a")],
-          writes: ["computed:b"],
+          produces: ["computed:b"],
         }),
         record("of:pieceC", {
           reads: [derived("computed:b")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
         record("of:pieceD", { reads: [derived("computed:c")] }),
       ]);
@@ -280,11 +285,17 @@ describe("currency-index", () => {
         "computed:c",
       );
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
-        record("of:pieceY", { reads: [input("of:x")], writes: ["computed:y"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
+        record("of:pieceY", {
+          reads: [input("of:x")],
+          produces: ["computed:y"],
+        }),
         record("of:pieceC", {
           reads: [derived("computed:b"), derived("computed:y")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
         record("of:pieceD", { reads: [derived("computed:c")] }),
       ]);
@@ -308,11 +319,11 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceB", {
           reads: [input("of:a")],
-          writes: ["computed:b"],
+          produces: ["computed:b"],
         }),
         record("of:pieceC", {
           reads: [derived("computed:b"), input("of:other")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
         record("of:pieceD", { reads: [derived("computed:c")] }),
       ]);
@@ -422,6 +433,10 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceB", {
           writes: ["computed:b"],
+          vouches: [ALICE_USER, ALICE_SESSION, BOB_USER].map((scopeKey) => ({
+            id: "computed:b",
+            scopeKey,
+          })),
           slices: [slice(ALICE_USER, [input("of:prefs", ALICE_USER)])],
         }),
         record("of:pieceC", {
@@ -453,6 +468,10 @@ describe("currency-index", () => {
         record("of:pieceB", {
           reads: [input("of:a")],
           writes: ["computed:b"],
+          vouches: [ALICE_USER, BOB_USER].map((scopeKey) => ({
+            id: "computed:b",
+            scopeKey,
+          })),
         }),
         record("of:pieceC", {
           slices: [
@@ -461,6 +480,10 @@ describe("currency-index", () => {
           ],
         }),
       ]);
+      expect([
+        markOf("of:pieceC", ALICE_USER),
+        markOf("of:pieceC", BOB_USER),
+      ]).toEqual([0, 0]);
 
       write("of:a");
       advance();
@@ -586,7 +609,7 @@ describe("currency-index", () => {
       store(asOf, [record("of:pieceC", { reads: [derived("computed:b")] })]);
       expect(markOf("of:pieceC")).toBe(1);
 
-      store(asOf, [record("of:pieceB", { writes: ["computed:b"] })]);
+      store(asOf, [record("of:pieceB", { produces: ["computed:b"] })]);
 
       expect(markOf("of:pieceC")).toBe(0);
     });
@@ -594,7 +617,10 @@ describe("currency-index", () => {
     it("stores marked `1` a piece whose input a marked piece writes, and names that piece", () => {
       const asOf = write("of:a", "computed:b");
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
       ]);
       const changed = write("of:a");
 
@@ -614,7 +640,7 @@ describe("currency-index", () => {
 
       const asOf = write("of:a", "of:b");
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["of:b"] }),
+        record("of:pieceB", { reads: [input("of:a")], produces: ["of:b"] }),
       ]);
       const changed = write("of:a");
 
@@ -626,10 +652,13 @@ describe("currency-index", () => {
     it("clears the pieces marked `1` downstream of a piece stored clean, through a chain", () => {
       const asOf = write("of:a", "computed:b", "computed:c");
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
         record("of:pieceC", {
           reads: [derived("computed:b")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
         record("of:pieceD", { reads: [derived("computed:c")] }),
       ]);
@@ -637,7 +666,10 @@ describe("currency-index", () => {
       expect(advance()).toEqual(["of:pieceB", "of:pieceC", "of:pieceD"]);
 
       store(changed, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
       ]);
 
       expect([markOf("of:pieceB"), markOf("of:pieceC"), markOf("of:pieceD")])
@@ -647,7 +679,10 @@ describe("currency-index", () => {
     it("leaves marked `2` a piece downstream of one stored clean", () => {
       const asOf = write("of:a", "of:other", "computed:b");
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
         record("of:pieceC", {
           reads: [derived("computed:b"), input("of:other")],
         }),
@@ -658,7 +693,10 @@ describe("currency-index", () => {
       expect(markOf("of:pieceC")).toBe(2);
 
       store(changed, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
       ]);
 
       expect(markOf("of:pieceB")).toBe(0);
@@ -668,8 +706,14 @@ describe("currency-index", () => {
     it("leaves marked `1` a piece with a second marked producer", () => {
       const asOf = write("of:a", "of:x", "computed:b", "computed:y");
       store(asOf, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
-        record("of:pieceY", { reads: [input("of:x")], writes: ["computed:y"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
+        record("of:pieceY", {
+          reads: [input("of:x")],
+          produces: ["computed:y"],
+        }),
         record("of:pieceC", {
           reads: [derived("computed:b"), derived("computed:y")],
         }),
@@ -678,7 +722,10 @@ describe("currency-index", () => {
       advance();
 
       store(changed, [
-        record("of:pieceB", { reads: [input("of:a")], writes: ["computed:b"] }),
+        record("of:pieceB", {
+          reads: [input("of:a")],
+          produces: ["computed:b"],
+        }),
       ]);
 
       expect(markOf("of:pieceC")).toBe(1);
@@ -690,11 +737,11 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
         record("of:pieceB", {
           reads: [derived("computed:c")],
-          writes: ["computed:b"],
+          produces: ["computed:b"],
         }),
       ]);
 
@@ -706,7 +753,7 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
       ]);
       expect(markOf("of:pieceC")).toBe(1);
@@ -719,7 +766,7 @@ describe("currency-index", () => {
         records: [
           record("of:pieceB", {
             reads: [derived("computed:c")],
-            writes: ["computed:b"],
+            produces: ["computed:b"],
           }),
         ],
         settle: ["of:pieceC"],
@@ -733,7 +780,7 @@ describe("currency-index", () => {
       store(asOf, [
         record("of:pieceC", {
           reads: [derived("computed:b"), derived("computed:z")],
-          writes: ["computed:c"],
+          produces: ["computed:c"],
         }),
       ]);
 
@@ -745,7 +792,7 @@ describe("currency-index", () => {
         records: [
           record("of:pieceB", {
             reads: [derived("computed:c")],
-            writes: ["computed:b"],
+            produces: ["computed:b"],
           }),
         ],
         settle: ["of:pieceC"],
@@ -811,7 +858,7 @@ describe("currency-index", () => {
         writes: ["computed:out"],
         vouches: [
           { id: "computed:out", scopeKey: "space" },
-          { id: "computed:out", scopeKey: "user:alice" },
+          { id: "computed:out", scopeKey: ALICE_USER },
         ],
       });
       const asOf = write("of:piece", "computed:out");
@@ -917,7 +964,9 @@ describe("currency-index", () => {
       const producer = (...keys: string[]) =>
         record("of:pieceB", {
           writes: ["computed:b"],
-          slices: keys.map((key) => slice(key, [input("of:prefs", key)])),
+          slices: keys.map((key) =>
+            slice(key, [input("of:prefs", key)], ["computed:b"])
+          ),
         });
       store(asOf, [
         producer(ALICE_USER, BOB_USER),
@@ -940,6 +989,118 @@ describe("currency-index", () => {
         markOf("of:pieceC", ALICE_USER),
         markOf("of:pieceC", BOB_USER),
       ]).toEqual([0, 1]);
+    });
+
+    it("leaves the `space` slice as it is for a record that names none, when the piece has one", () => {
+      const asOf = write("of:piece", "of:a");
+      store(asOf, [record("of:piece", { reads: [input("of:a")] })]);
+      write("of:a");
+      advance();
+
+      store(asOf, [{ ...record("of:piece"), slices: [slice(ALICE_USER)] }]);
+
+      expect([markOf("of:piece"), markOf("of:piece", ALICE_USER)]).toEqual([
+        2,
+        0,
+      ]);
+    });
+
+    describe("with a viewer's slice that read what the `space` slice computes", () => {
+      /** The `space` slice computes `x` from `i`, and Bob's reads `x`. */
+      const forBob = record("of:piece", {
+        reads: [input("of:i")],
+        produces: ["computed:x"],
+        writes: ["computed:out"],
+        slices: [slice(BOB_USER, [derived("computed:x")], ["computed:out"])],
+      });
+
+      /** The piece as a visit that runs neither computation records it. */
+      const withoutEither = record("of:piece", {
+        writes: ["computed:x", "computed:out"],
+      });
+
+      const BOB_ROW = { id: "computed:out", scopeKey: BOB_USER };
+
+      /** Stores `forBob`, changes `i`, and stores `withoutEither`. */
+      const recordWithoutTheComputation = (): number => {
+        const asOf = Math.max(
+          write("of:piece", "of:i", "computed:x"),
+          writeAs(BOB, { id: "computed:out", scope: "user" }),
+        );
+        store(asOf, [forBob]);
+        const changed = write("of:i");
+        advance();
+        store(changed, [withoutEither]);
+        return changed;
+      };
+
+      it("marks `1` the viewer's slice once a record of the `space` slice no longer vouches for what it read", () => {
+        recordWithoutTheComputation();
+
+        expect([markOf("of:piece"), markOf("of:piece", BOB_USER)]).toEqual([
+          0,
+          1,
+        ]);
+      });
+
+      it("refuses the root for that viewer", () => {
+        recordWithoutTheComputation();
+
+        expect(
+          judgeCurrencyRoots(engine, {
+            space: SPACE,
+            roots: ["of:piece"],
+            rows: [BOB_ROW],
+            epoch: EPOCH,
+          }).refused,
+        ).toEqual([{ root: "of:piece", reason: "owner-not-clean" }]);
+      });
+
+      it("clears the viewer's slice once the `space` slice vouches for it again with the instance unchanged", () => {
+        const changed = recordWithoutTheComputation();
+
+        store(changed, [{ ...forBob, slices: [forBob.slices[0]] }]);
+
+        expect(markOf("of:piece", BOB_USER)).toBe(0);
+      });
+    });
+
+    it("keeps marked a piece whose overwritten output one record stops vouching for and a later one vouches for again", () => {
+      const vouching = record("of:piece", { produces: ["computed:out"] });
+      const asOf = write("of:piece", "computed:out");
+      store(asOf, [vouching]);
+      const overwritten = write("computed:out");
+      advance();
+      store(overwritten, [
+        record("of:piece", { writes: ["computed:out"] }),
+      ]);
+      expect(markOf("of:piece")).toBe(0);
+
+      store(overwritten, [vouching]);
+
+      expect(markOf("of:piece")).toBe(2);
+    });
+
+    it("stores marked `2` a first record that vouches for an instance overwritten after a derivation wrote it", () => {
+      write("of:piece");
+      const own = write("computed:out");
+      const overwritten = write("computed:out");
+
+      store(
+        overwritten,
+        [record("of:piece", { produces: ["computed:out"] })],
+        [own],
+      );
+
+      expect(markOf("of:piece")).toBe(2);
+    });
+
+    it("stores clean a first record that vouches for an instance no derivation wrote", () => {
+      const asOf = write("of:piece", "computed:out");
+
+      store(asOf, [record("of:piece", { produces: ["computed:out"] })]);
+
+      expect(markOf("of:piece")).toBe(0);
     });
 
     it("replaces a piece's rows as a set", () => {
@@ -1131,7 +1292,7 @@ describe("currency-index", () => {
       expect(
         judge(["of:piece"], [
           ROOT_ROW,
-          { id: "computed:out", scopeKey: "user:alice" },
+          { id: "computed:out", scopeKey: ALICE_USER },
         ]),
       ).toEqual([]);
     });

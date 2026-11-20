@@ -1226,7 +1226,13 @@ executing:
   for it. A vouch row does not move up to a head a commit other than a
   derivation put there: the piece's writer reads nothing it writes, so an
   overwrite does not wake it, and the slice stays marked until it writes
-  the instance again. Nothing is recorded while an effect is outstanding,
+  the instance again. A vouch row a record no longer names is released and
+  kept, so the seq the piece last answered for the instance at survives a
+  record taken while its writer was not running. An instance a recorded
+  piece computes is a current input only while some piece vouches for it: a
+  slice that read one the latest record of its writer's slice no longer
+  vouches for is marked `1`, a slice of the same piece included, until the
+  writer runs clean again. Nothing is recorded while an effect is outstanding,
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
   `currency_read`, `currency_write`, `currency_vouch` and
@@ -2852,7 +2858,8 @@ a leftover.
 The intentional exception: the basis index tables (§3b — a NEW reduced
 schema of ids + seqs only, overwritten in place; correctness-bearing for
 recovery but never payloads, so NOT the evidence log), and the currency
-index tables (§3b — ids + seqs only, overwritten in place per piece).
+index tables (§3b — ids + seqs only, overwritten in place per slice of a
+piece).
 
 One tripwire is positive rather than lexical (labs #5569): scheduler
 liveness is maintained incrementally, and NO global rebuild runs on

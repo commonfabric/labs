@@ -150,7 +150,9 @@ instance of a document, which a change to any viewer's instance of it is
 ahead of.
 A later record does not take an overwrite back: a vouch row moves up only to
 a head a derivation put there, since the piece's writer reads nothing it
-writes and so was not woken by the overwrite.
+writes and so was not woken by the overwrite. A vouch row a record no longer
+names is released and kept for its sequence number, so the overwrite is
+still known when the piece vouches for the instance again.
 
 Each slice that just became marked marks `1` every clean slice of another
 piece that reads an instance it writes, at its own key or narrower beneath
@@ -166,11 +168,21 @@ pays nothing and the cost follows the changes, not the size of the graph.
 ### How a mark is cleared
 
 Only by storing a new record of the slice. After its rows are replaced a
-slice is `2` if it is not vouched for or a row is behind, `1` if a slice that
-decides one of its derived inputs is marked or the input has no recorded
-writer, and `0` otherwise. A slice that became clean is a cleared input: each
-slice marked `1` that reads an instance it writes is judged again, and so on
-outward. A slice marked `2` stays marked until its own record is replaced,
+slice is `2` if it is not vouched for or a row is behind, `1` if one of its
+inputs is stale, and `0` otherwise. An input is stale when:
+
+- a slice that decides it is marked, a broader slice of the same piece
+  included;
+- it is a derived document no recorded piece writes;
+- a recorded piece computes it and no piece vouches for the instance read. A
+  record taken while a computation was not running drops its vouches, and
+  marks `1` each clean slice that read one of those instances. A viewer's
+  retained slice that read what the `space` slice computed is the case this
+  is for: the `space` slice re-recorded without that computation is clean,
+  and what the viewer's slice read is no longer anyone's to vouch for.
+
+A slice that became clean is a cleared input: each slice marked `1` that
+reads an instance it writes is judged again, and so on outward. A slice marked `2` stays marked until its own record is replaced,
 which for a viewer's slice is that viewer's next visit. This is what lets a
 recomputation that wrote an equal value clear the slices below it without
 starting their pieces.
@@ -261,7 +273,7 @@ wrong.
 - `serving-loop.md` §3b and §6: the persisted scheduler state gains the
   currency index beside W, `eventWatermark` and the basis index; the index
   records write links, which §3b calls evidence when kept per run, and here
-  are overwritten in place per piece; its rows are written by the memory
+  are overwritten in place per slice of a piece; its rows are written by the memory
   server on a serving host's request, outside the wave's transaction.
 - §1: a demand for a recorded, clean piece loads nothing, which is a rule for
   which pieces start.
