@@ -1340,13 +1340,33 @@ entry, or when a write of a compiled pattern leaves the value as it was and
 stores its label (`plan-and-label-templates.md` §3.12). The label is stored at a
 reserved member of the document beside its value ([CFC stored
 envelope](../cfc-stored-envelope.md)), and a read of a labeled value consumes
-the label entries. Measured on the branch of milestone 4 of the integration
-(`runtime/runner/test/cfc-plan-labels.test.ts`, "for a write that left the value
-as it was"): a commit that changes the label at a path and writes no value runs
-a sink that reads the value again, and a transaction that read the value before
-the commit fails with a conflict; a commit that would store the label the path
-holds already writes nothing, runs no reader and conflicts with nothing. The
-inventory records one consequence of a label that changes without a value:
+the label entries.
+
+**What today's runtime does.** Measured with the experimental option
+`compiledPatterns` off and with it on, with the same result
+(`runtime/runner/test/cfc-plan-labels.test.ts`, "a commit that changes a
+declared label and no value"): a commit that changes a declared label entry at a
+path and writes no value runs a sink that read the value again, and a
+transaction that read the value before the commit fails with a conflict
+(`StorageTransactionInconsistent`). Both also hold where the changed label is
+that of another value of the same document, because the labels are stored in the
+document: a reader of one value is run again, and an earlier reader refused, for
+a label that does not concern what it read. A label-only commit therefore does
+wake a reader today, and today's runtime wakes more readers than the label
+concerns. What today's runtime does not do is store a label when a write leaves
+the value as it was; that is the rule of `plan-and-label-templates.md` §3.12,
+for compiled patterns. Under that rule, a commit that would store the label the
+path holds already writes nothing, runs no reader and conflicts with nothing
+("for a write that left the value as it was" in the same file).
+
+For soundness the conflict is what is required: a transaction that read a value
+under the earlier label cannot commit on it, since a label read remains a
+dependency of the commit (section 8.10.1, `08-10-validation-at-boundaries.md`).
+A label that a computation derived earlier and that does not run again keeps
+what it had, which section 8.9.4 of `08-09-runtime-label-propagation.md`
+permits.
+
+The inventory records one consequence of a label that changes without a value:
 `inspectConfLabel` is the one structural built-in a re-run does not reproduce,
 because the label it read changes without its inputs changing
 (`REPLAYABLE_BUILTIN_REFS` in
@@ -1381,14 +1401,21 @@ In this design a label-only change does the following.
   with the current label. §8.9.4 permits the delay: "There is **no
   retroactive relabeling obligation**".
 
-As built in milestone 4 of the integration, the prototype's executor does not
-keep which outputs read which label. After a commit changed a label and no
-value, it instantiates the labels of all kept outputs again in a derivation
-transaction of its own, each element of a per-element output counted, over an
-array of references, over an array of plain values in place and over the result
-of another per-element construct alike (`Instance.#relabel` of
-`base/pattern-compiler/exec/executor.ts`). The rule above limits that work to
-the demanded outputs whose template reaches the changed slot.
+As built in milestone 4 of the integration, the prototype's executor keeps, for
+each record of an output it gave, the positions that the inputs of the record
+read, and the collections its template folds over (`Instance.#noteRecord` of
+`base/pattern-compiler/exec/executor.ts`). After a commit changed a label and no
+value, it gives again, in a derivation transaction of its own, the records whose
+inputs read a position at, above or below the changed entry and those that fold
+over a collection with an element whose group changed
+(`Instance.#recordsReading`, `Instance.#relabel`). One changed label among 10
+elements and among 1,000 gives the same records again, measured over an array of
+references; an array of plain values in place and the result of another
+per-element construct were not measured. The records are found by position and
+not by the class of the slot, so an output that holds a link is given again when
+any label of the document the link names changes, although its slot reads the
+reference alone. The rule above limits the work further, to the demanded outputs
+whose template reaches the changed slot in a class that the change concerns.
 
 The rule changes when a label is derived again, not what it is. It is
 *assumed*, pending the owner (question 11 of the continuation plan; open

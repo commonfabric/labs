@@ -6305,11 +6305,55 @@ is relitigated.
   here. Milestone 4 of the integration builds the removal in place. The
   derivation is made (`plan-and-label-templates.md` §2.5, "The label rule of a
   removal through a handle"). For an array of references it gives the ruling as
-  worded. For an array of plain values in place it contradicts the ruling as
-  worded: the specification puts what the removal's decision read on every
-  position from the first removed one on. The contradiction is question 320,
-  open for the owner, and until it is answered the provisional decision P39
-  stands, which is the coordinator's.
+  worded. For an array of plain values in place the kept elements keep their own
+  labels, as the ruling says, and what the removal's decision read is consumed
+  by a read of a position all the same: the three rulings that follow say how.
+- After a removal through a handle from a list of plain values in place, what
+  decided the removal is stored once for the list, as one `*` entry in the
+  `value` class, and a read of a position joins it with the position's own entry
+  (2026-11-20, Z71). The owner's words for this ruling and the two that follow:
+  "go with 3, move the entries, and yes". It is alternative 3 of question 320
+  here, which it settles, and it replaces alternative 1 in the provisional
+  decision P39. It needs a sentence in section 4.6.3 of the specification's
+  label representation chapter (`04-label-representation.md`); the sentence is
+  proposed and pending the specification pull request (question 326).
+  `plan-and-label-templates.md` §2.5 states the rule and the proposed sentence,
+  and milestone 4 of the integration builds it.
+- A kept element that a removal moves keeps its integrity: the runtime moves the
+  stored label entries with the members of an array it splices, and no template
+  is instantiated for the kept element (2026-11-20, Z72). It settles question
+  321 here. Milestone 4 of the integration builds it, for an array of plain
+  values in place and for an array of references.
+- A removal that finds nothing is a label write of the enumeration, as a write
+  that leaves a value as it was stores its label (2026-11-20, Z73). It settles
+  question 322 here. Milestone 4 of the integration builds it.
+- An append through a handle (`push`) does not put the membership of the list,
+  or what else the list holds, on the position it writes or on a position of a
+  per-element result over the list (2026-11-20, Z74). The owner's words, on the
+  findings of the check in `examples/todo-list`: "i looked at the code of
+  addItem and it only pushes on the array. maybe the implementation looks at the
+  length, but the user-land code doesn't and so i don't think we should taint it
+  with the other items. this operation works semantically exactly the same
+  irrespective of what else happened before: it appends a new item, and whether
+  it does that or not doesn't depend on what is there already, nor can it
+  influence the position." Those findings are therefore no soundness finding.
+  The coordinator's reading, which is not the owner's words: the number of
+  members and the enumeration of the list still carry what decided each
+  addition; a read of a position by index consumes the position's own entry
+  alone (section 4.6.3, `04-label-representation.md`), so which member stands at
+  an index after appends is an accepted channel; and the rulings on a removal
+  are not affected, since a removal decides which member stands at the later
+  positions by a comparison that the handler makes. A `push` under a condition
+  that a labeled input decides needs no rule of its own. The owner's words: "i
+  think today handlers are just code and we don't understand the if yet and so
+  b's addition will be tainted by secret no matter what, right?" That is so as
+  built: the write template of a handler joins every slot that its body reads
+  statically, so every write of the handler carries the label of the condition.
+  It settles question 328 here for an addition. `plan-and-label-templates.md`
+  §2.5 ("An addition through a handle") states it. Milestone 4 of the
+  integration at commit `429a62aba5` stores what the list held of its membership
+  on the position of an added member as well, which the ruling does not want;
+  that part is being removed.
 - A state cell whose schema declares a label has a document from the start
   (2026-11-20, Z69). The owner's words: "state cells getting documents is
   generally not problematic, it's all the intermediate values that we want to
@@ -6321,8 +6365,8 @@ is relitigated.
 - The budget of `SPEC-PENDING` markers is raised to 80 (2026-11-20, Z70). The
   owner's words: "increase the budget to 80". It settles question 319 here. The
   constant is `SPEC_PENDING_BUDGET` of `tasks/check-cfc-correspondence.ts`. It
-  is 80 on the branch of milestone 4, where the governed files hold 41 markers
-  at commit `699ba789d2`.
+  is 80 on the branch of milestone 4, where the governed files hold 46 markers
+  at commit `429a62aba5`.
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6342,36 +6386,54 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **The open findings of milestone 4,** at its seventh corpus run. Labels from
+1. **The open findings of milestone 4,** at its eighth corpus run. Labels from
    templates at commit are built (milestone 4 of the integration), with every
    commit of a compiled pattern prepared, and run over the whole corpus with
-   `wish` simulated: of 271 modules 238 run; of 1,695 output rows 1,013 are
-   tighter than today's, 288 equal and 118 looser, and of 199 write rows 129 are
-   equal, 10 tighter and 57 looser. Four findings are serious. *First, an
-   unsound label:* over an array of plain values in place, a `push` through a
-   handle drops the label of what the list already holds, so a list that holds
-   the value of a labeled input can be stored under an empty label. No scenario
-   of the corpus shows it, and the check of stored labels against the values
-   passes over the whole corpus with it. P39 is the rule to build for it
-   (question 323). *Second, a ruling and the specification disagree:* the label
-   rule of a removal through a handle, derived from the CFC specification as the
-   ruling of 2026-11-20 asks, contradicts that ruling as worded for an array of
-   plain values in place (questions 320 to 322; P39). *Third, a cost that grows
-   with the data:* the write records of one transaction over a list of 10,000
-   references held 127 MB, hold 13 MB after one fix, and are still linear in the
-   elements in three places (question 318, open). *Fourth, the cost of the
-   ruling of 2026-11-20 on a write that leaves the value as it was,* which is
-   built: 259 more commits and 226 more preparations over the corpus with the
-   option on, 240 and 208 of them in five modules, cause not established
-   (question 324). Open beside them: the check against the values is a lower
-   bound, covers 204 of the 238 modules and finds no failure there; 448 write
-   records in 8 modules have no label entry stored at their path, not examined
-   (question 325); 38 commits in 24 modules are refused with the option on and
-   not off, one of them by a crash of the preparation; the runtime took a bound
-   342 times for a selection, a choice or a dynamic read that is not reported
-   (P37); today's label holds no clause at 4 rows where the template's holds
-   one, not reproduced in isolation; and the atom on a link is not taken by a
-   read of the value through the link (question 313)
+   `wish` simulated: of 271 modules 238 run; of 1,695 output rows 959 are
+   tighter than today's, 346 equal and 112 looser, and of 203 write rows 130 are
+   equal, 9 tighter and 61 looser. *Open and unsound, three findings.* A check
+   of the stored labels against the values with every event of a scenario sent
+   three times, new in this run, reports 27 values in 3 modules that depend on
+   an input and store no clause of it; the check on each scenario as given
+   reports none. First, 10 values of `examples/map-demo` and 1 of
+   `apps/base/person` are not triaged (question 334). Second, a read of a
+   position that holds no member consumes nothing of the list's membership after
+   additions alone, over an array of plain values in place and over an array of
+   references (question 329). Third, an array inside a value written whole has
+   no entry for its membership (question 330). The other 16 of the 27, at
+   positions of the result of another per-element construct in
+   `examples/todo-list`, are no soundness finding by the owner's ruling Z74: an
+   append puts the membership of the list on no position, and the check, which
+   takes a member appended at another index for a dependency, is being changed
+   (question 328). *Unsound and fixed:* the `push` defect of the seventh run was
+   wider than reported and is fixed in every case found, over an array of plain
+   values in place, over an array of references, for a list that `set` replaced,
+   for a write behind the last member, and for a change that finds nothing to
+   do; the rulings Z71 to Z73 on a removal are built with it. *Cost:* on
+   `dev/experimental/folksonomy-stress-test` the executor's time for an event
+   rises from under 0.5 s to as much as 14.8 s after a `loadActions` sent while
+   a result of about 1 MB is loaded, and a process ran out of memory at 4 GB; it
+   is in the executor and not in the labels, and the cause is not investigated
+   (question 332). After a label changed alone the records to give again are
+   found by position and not by class (question 333). The write records of one
+   transaction over a list of 10,000 references are linear in the elements in
+   three places (question 318). A label for a write that leaves the value as it
+   was costs 61 more commits over the corpus with the option on than with it
+   off, where the seventh run had 207 more (question 324). *For the owner:* the
+   specification sentence that Z71 needs is proposed (question 326), pull
+   request commonfabric/labs#10080, merged to `main`, moves label entries with
+   the members of an array at the same place of `prepare.ts`, so a catch-up
+   merge of the branch conflicts there (question 327), and the owner points to
+   the specification's proposal for a write gate, by which the confidentiality
+   ceiling of every path a handler can write is declared ahead (question 335).
+   The owner's concern about a label-only commit is answered: today's runtime
+   wakes a reader of the value and refuses an earlier reader for such a commit,
+   also when the changed label belongs to another value of the same document
+   (question 331). Open beside them: the check covers 91 of the 238 modules with
+   repeated events and is a lower bound; 44 commits in 24 modules are refused
+   with the option on and not off; the runtime took a bound 499 times (P37); and
+   the atom on a link is not taken by a read of the value through the link
+   (question 313)
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
 2. **A pattern closure used as a value is not translated,** and the
@@ -7454,44 +7516,37 @@ today.
   `base/pattern-compiler/src/footprint.rs`). *If decided otherwise:* that
   passage, and the crate's two rules.
 
-- **P39. A list of plain values in place that a handler adds to or removes from
-  has an enumeration entry, an added element is recorded at its own position,
-  and a removal labels the positions from the first removed one on** (questions
-  320 and 323, which are `plan-and-label-templates.md` questions 187 and 190).
-  The coordinator's decision of 2026-11-20; it is no owner ruling, and for an
-  array of plain values in place it does not follow the ruling Z68 as worded.
-  *The case:* milestone 4 stores one `value` label for such a list, that of its
-  last write, so a `push` drops the label of what the list already holds, which
-  is unsound; and the label rule of a removal, derived from the CFC
-  specification, puts what the removal's decision read on every position from
-  the first removed one on, where Z68 says that the kept elements are not
-  labeled again. *Decision:* the list has an enumeration entry at its own path.
-  An addition (`push`, `pushAll`, `addUnique`) and a removal (`remove`,
-  `removeAll`, `removeByValue`) replace it with the stored enumeration joined
-  with what decided the change. An added element is recorded at its own
-  position, with its own label. For a removal, each position from the first
-  removed one on stores its own label joined with what the decision read; a
-  position before it is not written. That is alternative 1 of question 320,
-  which is what the specification gives as it stands. For an array of references
-  Z68 holds as worded and P39 changes nothing: no kept element is labeled again.
-  The result of another per-element construct has no handle to remove through.
-  *Alternatives:* alternative 3 of question 320, one entry at the list's `*`
-  path in the class `value` that a read of a position joins with the position's
-  own entry, whose cost does not depend on the length of the list and which
-  needs a sentence added to the specification; it is the coordinator's
-  recommendation to the owner. Alternative 2 of that question, the decision on
-  the enumeration alone with every read of a position consuming the list's
-  order, changes the specification and makes every positional read as wide as
-  the enumeration. *Cost of the decision as taken:* one `value` entry written
-  per kept element from the first removed position on, linear in the list. *How
-  it is written:* `plan-and-label-templates.md` §2.5 ("The label rule of a
-  removal through a handle" and "An addition through a handle") and
-  `footprint-analysis.md` §6.1. *Needs:* an enumeration entry for a list of
-  plain values in place in `runtime/runner/src/cfc/prepare.ts`, whose
-  `structureStampPaths` stamps one on containers of links alone, which is a
-  change of what CFC stores and goes through the specification procedure.
-  *Tests:* none; not built at commit `699ba789d2` of the branch of milestone 4.
-  *If decided otherwise:* those passages, and what is built from them.
+- **P39. A list that a handler adds to or removes from has an enumeration entry,
+  and an added element is recorded at its own position** (question 323, which is
+  `plan-and-label-templates.md` question 190). The coordinator's decision of
+  2026-11-20; it is no owner ruling. *The case:* a list of plain values in place
+  had one `value` label, that of its last write, so a change of its members lost
+  what an earlier change decided; over an array of references the same held for
+  the number of members and for which reference stands at a position.
+  *Decision:* the list has an enumeration entry at its own path. An addition
+  (`push`, `pushAll`, `addUnique`) and a removal (`remove`, `removeAll`,
+  `removeByValue`) replace it with the stored enumeration joined with what
+  decided the change. An added element is recorded at its own position, with its
+  own label. By the owner's ruling Z74 the position of an added element does not
+  carry the membership of the list; milestone 4 at commit `429a62aba5` joins
+  what the list stored of its membership into it, and that part is being
+  removed. *What it no longer decides:* for a removal, where what the decision
+  read is stored for the positions from the first removed one on. P39 took
+  alternative 1 of question 320, an entry written per kept element; the owner's
+  ruling Z71 replaces it with alternative 3, one `*` entry that a read of a
+  position joins with the position's own entry, and the rulings Z72 and Z73
+  settle the two questions beside it ([Decided](#decided)). The result of
+  another per-element construct has no handle to add or remove through. *How it
+  is written:* `plan-and-label-templates.md` §2.5 ("An addition through a
+  handle") and `footprint-analysis.md` §6.1. *Built:* in milestone 4 of the
+  integration at commit `429a62aba5`, with the `enumerate` entry stored for a
+  list of plain values in place, which today's runtime stamps on containers of
+  links alone; that is a change of what CFC stores and carries the
+  `SPEC-PENDING` marker for specs pull request 91. *Tests:*
+  `base/pattern-compiler/compare/test/stored-labels.test.ts` and
+  `runtime/runner/test/cfc-plan-labels.test.ts` ("for changes of the members of
+  a list in place"). *If decided otherwise:* those passages, and what is built
+  from them.
 
 **The scope of the storage decisions** (the coordinator's recommendation to
 the owner, 2026-11-18; not an owner ruling). Read in source after round 5:
@@ -12066,9 +12121,9 @@ questions 315, 316, 317 and 319, and question 318 is open.
      the elements behind the removed one do when their values move to another
      position, which is the defect of question 304 for today's runtime; over an
      array of references the link at a position is written again with its entry.
-     Built in milestone 4 at its seventh corpus run: the executor removes in
-     place. The label rule is derived, and what it leaves open is questions 320
-     to 322.
+     Built in milestone 4: the executor removes in place. The label rule is
+     derived, and the three questions it left, 320 to 322, are settled by the
+     rulings Z71 to Z73.
 317. **Whether a state cell whose schema declares a label has a document from
      the start.** Settled by ruling (2026-11-20; [Decided](#decided)): it has.
      `plan-and-label-templates.md` §1.3 and `execution-and-storage.md` §4.1
@@ -12112,138 +12167,269 @@ questions 315, 316, 317 and 319, and question 318 is open.
      place and the result of another per-element construct were not measured.
 319. **The budget of `SPEC-PENDING` markers is used up.** Settled by ruling
      (2026-11-20; [Decided](#decided)): the budget is raised to 80. At commit
-     `699ba789d2` of the branch of milestone 4 the budget is 80 and the governed
-     files hold 41 markers.
+     `429a62aba5` of the branch of milestone 4 the budget is 80 and the governed
+     files hold 46 markers.
 
-**From the seventh corpus run of milestone 4 of the integration.** The removal
-in place and the label for a write that leaves the value as it was are built,
-and the label rule of a removal is derived from the CFC specification
+**From the seventh and the eighth corpus run of milestone 4 of the
+integration.** The removal in place and the label for a write that leaves the
+value as it was are built, and the label rule of a removal is derived from the
+CFC specification
 ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
 "Milestone 4: labels from templates at commit"; `plan-and-label-templates.md`
 §2.5, "The label rule of a removal through a handle"). Questions 320 to 322 are
-the three that the derivation leaves, and each recommendation is the
-coordinator's and no ruling. Whenever a list is named below, the case is named
-with it: an array of references, an array of plain values in place, or the
-result of another per-element construct.
+the three that the derivation left, and the owner's rulings of 2026-11-20 settle
+them. Whenever a list is named below, the case is named with it: an array of
+references, an array of plain values in place, or the result of another
+per-element construct.
 
 320. **Whether the positions from the first removed one on take what the
      removal's decision read, over an array of plain values in place** (PL
-     question 187; for the owner; P39). The ruling Z68 as worded says that the
-     kept elements are not labeled again with what the removal read. The
-     specification says otherwise for this case. A kept element from the first
-     removed position on stands at another position, so the path was overwritten
-     and its `value` label is the element's own label joined with the control
-     restrictions of the write, which is what the decision read (section 8.2.1,
-     `08-02-pass-through-via-references.md`; section 8.12.8,
-     `08-12-store-label-monotonicity.md`). A static read of a position consumes
-     nothing of the list's enumeration (section 4.6.3,
-     `04-label-representation.md`; section 8.9.5.1,
-     `08-09-runtime-label-propagation.md`), so the decision has to be consumed
-     at the position: after `words.removeByValue(secret)` over `["a", "b"]`, a
-     read of `words[0]` gives `"a"` or `"b"` by whether `secret` equals `"a"`.
-     For an array of references the derivation agrees with Z68 as worded, and
-     the result of another per-element construct has no handle to remove
-     through. *Alternatives:* (1) follow the specification: each such position
-     stores its own label joined with the decision, sound for every read, at one
-     `value` entry written per kept element from the removed position on. (2)
-     Put the decision on the enumeration alone, as Z68 says, and require that a
-     read of a position of a list that a handler can remove from consumes the
-     list's order as well; that changes the specification's rule for a static
-     read and makes every positional read of such a list as wide as its
-     enumeration. (3) Store the decision once at the list's `*` path in the
-     class `value` and have a read of a position join it with the position's own
-     entry; section 4.6.3 states such a wildcard entry for `shape` and for slots
-     that hold references, and for the `value` class of a plain value a more
-     specific entry replaces, so it needs a sentence added to that section. It
-     is the one alternative whose cost does not depend on the length of the list
-     and that keeps the rule for a static read. *The coordinator's
-     recommendation:* 3, as an addition to the specification, with 1 as what is
-     sound today. *Assumed,* provisional (P39): alternative 1.
+     question 187). Settled by ruling (2026-11-20, Z71; [Decided](#decided)):
+     what decided the removal is stored once for the list, as one `*` entry in
+     the `value` class, and a read of a position joins it with the position's
+     own entry. It is alternative 3 of the three that were put: (1) each such
+     position stores its own label joined with the decision, at one `value`
+     entry written per kept element; (2) the decision on the enumeration alone,
+     with every read of a position of such a list consuming the list's order;
+     (3) the one entry at the list's `*` path. The reason the decision has to be
+     consumed at a position: after `words.removeByValue(secret)` over `["a",
+     "b"]`, a read of `words[0]` gives `"a"` or `"b"` by whether `secret` equals
+     `"a"`, and a static read of a position consumes nothing of the list's
+     enumeration (section 4.6.3, `04-label-representation.md`; section 8.9.5.1,
+     `08-09-runtime-label-propagation.md`). For an array of references the
+     specification states the `*` entry already, and the result of another
+     per-element construct has no handle to remove through. Not determined by
+     the ruling, and as built: the entry is stored in the classes `shape` and
+     `followRef` as well; it is kept for a list that a removal leaves empty; and
+     a read of a member before the first removed position consumes it too. The
+     specification sentence it needs is question 326.
 321. **Whether a kept element that a removal moves keeps its integrity, over an
-     array of plain values in place** (PL question 188; for the owner). The
-     specification keeps the labels of a value passed on in place "plus" the
-     control restrictions, and requires the exact-copy check of its section 8.4
-     for integrity. A template of the removal's write edge is a `derive`, which
-     takes the meet of the integrity of its inputs and mints the atom of the
-     body, so the moved element loses its own integrity atoms. The specification
-     permits a label that claims less (section 8.12.8), and it is a relabeling
-     of an element that the removal did not change all the same. *Alternatives:*
-     (1) a move is a change of the path of the stored entries, verbatim, with no
-     template instantiated for the kept element, which needs a rule that a
-     runtime may move entries with the members of an array it splices; (2)
-     accept the lower claim. For an array of references the question does not
-     arise: the reference keeps its own restrictions and the target is not
-     written. No recommendation is made. *Assumed:* 2 until it is decided, since
-     it is what P39 gives without a further rule.
+     array of plain values in place** (PL question 188). Settled by ruling
+     (2026-11-20, Z72; [Decided](#decided)): it keeps it. The runtime moves the
+     stored label entries with the members of an array it splices, and no
+     template is instantiated for the kept element. As built the entries of
+     origin `derived` and `structure` move, and the existence entries of the
+     class `shape` stay at their positions. For an array of references the
+     reference keeps its own restrictions and the target is not written; the
+     entries at the positions move the same way. Whether the specification needs
+     a rule that a runtime may move entries with the members of an array it
+     splices is part of question 326.
 322. **Whether a removal that finds nothing writes the enumeration** (PL
-     question 189; for the owner). The list is unchanged, and that it is
-     unchanged reveals what the decision read. By the ruling Z67 a write that
-     leaves the value as it was stores its label. The enumeration of the list
-     then takes the decision on every such event, which grows the label of a
-     list that nothing was removed from, over an array of references and over an
-     array of plain values in place alike. *Alternatives:* (1) yes, as Z67 has
-     it for a value; (2) no, as for a handler of today's runtime that returns
-     early. No recommendation is made. *Assumed:* nothing. As built it is (2):
-     at commit `699ba789d2` the executor returns before any write where no
-     position holds the member (`Handle.#removeAt` of
-     `base/pattern-compiler/exec/executor.ts`), so no label is stored for such a
-     removal.
+     question 189). Settled by ruling (2026-11-20, Z73; [Decided](#decided)): it
+     does, as the ruling Z67 has a write that leaves a value as it was store its
+     label. As built the number of members and the enumeration of the list take
+     what the comparison read, over an array of references and over an array of
+     plain values in place alike, and `addUnique` of a member the list holds
+     does the same, which the ruling does not name and which follows by the same
+     argument. The enumeration label of a list that nothing was removed from
+     grows with every such event that reads something new.
 323. **Where the label of a list of plain values in place is stored when a
      handler adds to it or removes from it** (PL question 190; for the owner;
-     P39). Milestone 4 stores one `value` label at the list's path, that of its
-     last write: the adapter writes a spliced array whole, the write record
-     names the array's path, and the runtime clears the `value` entries below
-     it. After a `push` of a word of the event, a `push` of a labeled input and
-     a `push` of another word of the event, the list is stored under an empty
-     label although it holds the value of the labeled input. That is unsound. No
-     scenario of the corpus shows it. A rule that puts what a decision read on
-     the enumeration, as `footprint-analysis.md` §6.1 has a removal write the
-     enumeration alone, has no entry to store it in for this case either: the
-     runtime stamps enumeration entries on containers of links alone
-     (`structureStampPaths` of `runtime/runner/src/cfc/prepare.ts`), and a count
-     of a list of plain values in place reads the `shape` entry of the list and
-     its `value` entry. Two fixes were tried and withdrawn: a write record per
-     pushed position, after which the count of the list no longer holds what
-     decided the addition; and joining the stored label of the list into the
-     write, which reads the list recursively and is refused as a writer-fit
-     misfit where an element's type declares a clause on a member. *Assumed,*
-     provisional (P39): the list has an enumeration entry at its path that an
+     P39). The seventh run stored one `value` label at the list's path, that of
+     its last write, which was unsound. *Assumed,* provisional (P39), and built
+     at the eighth run: the list has an enumeration entry at its path that an
      addition or a removal replaces with the stored enumeration joined with what
      decided the change, and an added element is recorded at its own position.
-     It changes what the runtime stores, so it goes through the specification
-     procedure. For an array of references the enumeration entry exists today.
+     The adapter writes a splice as the number of members and the positions it
+     changed, so the labels of the positions before it stay. The defect was
+     wider than a `push` after a `push`: it held for `addUnique` and the three
+     removals, for the number of members of an array of references, for a list
+     that `set` replaced, and for a write at the position behind the last
+     member; each is fixed and has a test. It changes what the runtime stores
+     for a list of plain values in place, so it goes through the specification
+     procedure. For the owner: to ratify P39, or to decide otherwise.
 324. **What a label stored for a write that leaves the value as it was may
      cost** (for the owner to accept or bound). Built by the ruling Z67.
-     Measured over the corpus with the option on: 900 write records of such
-     writes in 21 modules, which changed 1,385 label entries; 259 more commits,
-     226 more preparations and 527 ms more preparation time than the run before,
-     under a higher load. The five modules of
-     `examples/cfc-trusted-component-examples` account for 240 of the commits
-     and 208 of the preparations, and why is not established. Two properties are
-     measured in tests. A commit that changes the label at a path runs a reader
-     of the value again and conflicts with a transaction that read the value
-     before; a commit that would store the label the path holds already writes
-     nothing. And after a label changed alone the executor gives the records of
-     every kept output again, each element of a per-element output counted,
-     because it keeps no record of which outputs read which label. *Alternatives
-     for the second:* keep it; or instantiate again only the outputs whose
-     template reaches the changed slot, as `scheduler-and-serving-loop.md` §3.6
-     has it, which needs that index. *Assumed:* the rule as built, with the
-     index as the design.
-325. **Findings of the seventh run that are not examined** (not for the owner
-     until they are). 448 write records in 8 modules have no label entry stored
-     at their path where the template evaluator gives a label, 416 of them in
-     the five modules of question 324; the run before had none. One commit of
-     `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` is refused because
-     the preparation crashed. 30 rows became looser than today's, all in 5
-     modules that record writes that left the value as it was; the attribution
-     to the rule of Z67 was not checked row by row. Over an array of references
-     the label of a removal also holds the values of the targets, because the
-     executor's comparison reads the whole list. And today's runtime keeps a
-     `shape` entry at a position that no longer exists after a whole-array write
-     that shortens the array; that a later creation of the position mints the
-     entry again was not verified. *Assumed:* none is a defect of the design
-     until examined.
+     Measured over the corpus at the eighth run with the option on: 756 write
+     records of such writes in 67 modules, which changed 3,625 label entries;
+     2,760 commits against 2,699 with the option off, where the seventh run had
+     2,902 against 2,695. The 240 commits that five modules of
+     `examples/cfc-trusted-component-examples` added in the seventh run had a
+     cause that is fixed: a label formed again cleared the entries below its
+     path, the next evaluation stored them again, and a relabeling transaction
+     followed every event. After a label changed alone the executor gives again
+     the records of the outputs whose inputs read it, and no others. What
+     remains: the records are found by position and not by class (question 333).
+     *Assumed:* the rule as built.
+325. **Findings of the seventh run, as they stand.** The 448 write records with
+     no label entry stored at their path are 80 in 31 modules at the eighth run;
+     68 are read as the records of a list's membership and number of members,
+     which the evaluator cannot form, and 12 are not examined. The crash of the
+     preparation in `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` is
+     fixed, in the comparison adapter. Of the rows that became looser with the
+     label of an unchanged write, 28 were run again with and without those
+     records: 11 are looser by the rule of Z67, and 17 are no longer looser.
+     Over an array of references the comparison of a removal reads the
+     references and no target. A `shape` entry at a position that a removal
+     leaves without a member is dropped at the removal, and a later creation of
+     the position mints it again, which a test states. *Assumed:* the 12 records
+     are no defect of the design until examined.
+326. **The specification sentence for the ruling Z71** (PL question 191; for the
+     owner, and for the specification pull request). Proposed for section 4.6.3
+     of `04-label-representation.md`, in the paragraph "Wildcard per-class
+     entries (conforming template representation)": where a writer changes the
+     membership of a container of values stored in place by removing members,
+     the runtime may store the join of what decided the removal once, as
+     per-class twins at the container's wildcard child path; such a twin is
+     additive in the `value` class, so the effective `value` label of a child is
+     the join of the twin and the child's own most specific `value` entry;
+     successive membership decisions join into it; and it is cleared only by a
+     write that replaces the container. It is a second exception to the rule
+     that a more specific entry replaces, beside "Frozen existence joins with
+     membership templates". `plan-and-label-templates.md` §2.5 has the sentence
+     in full. Open with it: whether the twin is cleared when a removal leaves
+     the container empty, which needs a read of a position that holds no member
+     to consume the container's enumeration (question 329); and whether the move
+     of entries with the members of a spliced array (Z72) needs a sentence of
+     its own, since the specification keys every entry by path and has no
+     operation that moves the members of an array. *Assumed:* the sentence as
+     proposed and the twin kept for an empty container, until the specification
+     pull request is reviewed. The site that moves the entries carries the
+     `SPEC-PENDING` marker for specs pull request 91, and whether it needs a
+     sentence is open.
+327. **How milestone 4 and `main` share the move of label entries** (for the
+     owner). Pull request commonfabric/labs#10080 is merged to `main`
+     (2026-11-20). It moves stored label entries with the members of an array
+     for today's runtime, with no option. The branch of milestone 4 does not
+     hold it. Both change the same loop of `prepareBoundaryCommitSteps` in
+     `runtime/runner/src/cfc/prepare.ts`, at the same point, with the same
+     result type and the same classes of entries, and both define a type named
+     `ElementEntryPlacement`, so a catch-up merge of the branch conflicts there.
+     They differ in where the alignment of old and new positions comes from:
+     `main` infers it from the values the transaction wrote, and milestone 4
+     takes it from the executor's record of the splice, which is exact where two
+     members are equal. They can share the type and the block that applies a
+     placement. For an array that has a membership record, the record's
+     placement has to win and the alignment by value has to skip that array;
+     otherwise an entry is moved twice or by the wrong pairing. *For the owner:*
+     whether the catch-up merge makes the two one function that takes a list of
+     alignments from either source, with the record winning. The coordinator
+     recommends that form; it is no owner ruling.
+328. **What a position of the result of another per-element construct carries of
+     the membership of its source** (PL question 192). Settled for an addition
+     by ruling (2026-11-20, Z74; [Decided](#decided)): nothing. An append puts
+     the membership of the list on no position, of the list or of a per-element
+     result over it. The check of milestone 4 with every event sent three times
+     reports 16 values of `examples/todo-list/todo-list.tsx`, at the result of a
+     `map` over the array that a `computed` returns; they are an artifact of its
+     criterion, which takes a member appended at another index for a dependency
+     on the list, and the check is being changed. Not settled: what a position
+     of the derived collection carries of a removal from its source, where the
+     removal's decision does choose which element stands at the later positions.
+     *Assumed* for that: nothing is built; the collection's own entry holds the
+     decision through its membership template.
+
+329. **Whether a read of a position that holds no member consumes the list's
+     enumeration** (PL question 193; open finding 3). After additions alone,
+     `words[5] === undefined` reveals the number of members, and a static read
+     of a position consumes nothing of the list's enumeration; after a removal
+     the list's `*` entries cover it. The case is an array of plain values in
+     place and an array of references alike. *Alternatives:* (1) the resolver
+     consumes the enumeration entry of the container where the position holds no
+     member, which needs it to know that; (2) an addition joins what decided it
+     into the `*` entries as a removal does, which widens every read of a
+     member. No recommendation is made. *Assumed:* nothing is built; no test
+     states the case.
+330. **An array inside a value written whole** (PL question 194; open finding
+     4). A write that replaces an array stores its label as the `enumerate`
+     entry of the array. An array at a path below the written one, inside a
+     record written whole, gets no such entry. *Alternatives:* (1) an
+     `enumerate` entry for every array inside the written value, linear in the
+     arrays written; (2) a read of the members, the order or the number of
+     members of an array with no entry of its own consumes the `value` entry of
+     the nearest written path above it. No recommendation is made. *Assumed:*
+     nothing is built.
+331. **The owner's concern about a label-only commit, answered.** The scheduler
+     document said that a label-only commit wakes no reader today, and the
+     owner's remark was that this "might be bad". Measured with the option off
+     and on, with one result: a commit that changes a declared label and writes
+     no value runs a sink that read the value again and conflicts with a
+     transaction that read the value before it, also where the changed label is
+     that of another value of the same document, because the labels are stored
+     in the document. So today's runtime does wake and refuse, and for more
+     readers than the label concerns. What today's runtime does not do is store
+     a label when a write leaves the value as it was; Z67 adds that for compiled
+     patterns. For soundness, a concurrent reader cannot commit on the earlier
+     label (section 8.10.1, `08-10-validation-at-boundaries.md`), and a label
+     derived earlier by a computation that does not run again keeps what it had,
+     which section 8.9.4 of `08-09-runtime-label-propagation.md` permits.
+     `scheduler-and-serving-loop.md` §3.6 states it. *For the owner:* whether
+     the wake of a reader of another value of the same document is to be
+     narrowed, in today's runtime or in the design. *Assumed:* the design's rule
+     of §3.6, by slot.
+332. **The executor's time for an event and its memory on a large result** (not
+     for the owner until examined; open finding 5). On
+     `dev/experimental/folksonomy-stress-test.tsx`, an array of 10,000
+     references, events take 1.1 to 14.8 s after a `loadActions` sent while a
+     result of about 1 MB is loaded, where the same handlers took 21 to 373 ms,
+     and a process ran out of memory at 4 GB. It is the same at the commit
+     before the round, and it is in the executor and not in the labels.
+     *Assumed:* a defect of the prototype's executor, not of the design, until
+     the cause is found.
+333. **After a label changed alone, which records are given again** (open
+     finding 6). As built the executor finds them by the positions that the
+     inputs of a record read, so an output that holds a link is given again when
+     any label of the document the link names changes, though its slot reads the
+     reference alone. `scheduler-and-serving-loop.md` §3.6 has the rule by the
+     slots that a template reaches, with the class of each slot. *Assumed:* the
+     rule of §3.6 as the design, and the build narrowed to it.
+334. **Findings of the eighth run that are not examined** (not for the owner
+     until they are). 10 values of `examples/map-demo/map-demo.tsx` and 1 of
+     `apps/base/person.tsx` depend on an input and store no clause of it. 44
+     commits in 24 modules are refused with the option on and not off, 6 more
+     than in the seventh run. The runtime took a bound 499 times where it took
+     one 342 times. The atom of an output that holds a link is stored on a
+     `value` entry or on the link's `followRef` entry by how the record is
+     given, and 67 rows that were tighter are equal for it. 19 rows are looser
+     that were not, 14 of them read as the rule of a change of a list's members.
+     The comparison adapter reads the stored label entries of every written
+     document. Not verified for a change of a list's members: members removed
+     and added at one position in one transaction, records in place with entries
+     below them, `key(i).set(undefined)`, and a write beyond the end of a list.
+     *Assumed:* the first is unsound until shown otherwise, or shown to be an
+     artifact of the check as the 16 values of question 328 are, and none of the
+     others is a defect of the design until examined.
+335. **Whether the confidentiality ceiling of every path a handler can write is
+     declared ahead** (PL question 195; for the owner; not a ruling). The
+     owner's words (2026-11-20): "independently i think there is a soundness
+     argument that we have to pre-declare the confidentiality ceiling on any
+     writable to a handler which would make this example either not write a or
+     always increase confidentiality anyway". The example is a `push` under a
+     condition that a labeled input decides. The pointer is to a proposal that
+     is merged into the specification as proposed and changes no normative
+     chapter: sections 14.3.5 to 14.3.10 of `14-open-problems-and-proposals.md`,
+     and the proposal `proposals/label-changes-under-secret-context.md` (status:
+     proposed). Its problem: a write made after reading a secret labels the path
+     it writes and not the paths it could have written, so where the secret
+     decides which path is written, the difference between the labeled path and
+     its neighbors is observable without reading a label. Its rule in outline: a
+     handler declares a ceiling on what it may read; when the pattern is
+     instantiated, every path the handler can write is given, or checked to
+     have, a declared label that covers that ceiling; a call then changes no
+     label, and is refused whole where what it read does not fit the ceiling
+     (section 5.9 of the proposal). A computation whose output paths are fixed
+     by its wiring and restamped on every run is exempt, provided it runs again
+     when the label of a cell it read changes. *What the compiled plan gives
+     that rule:* the paths each handler can write are known from its footprint
+     before any call, as the write edges of the plan (`footprint-analysis.md`
+     §6), so the instantiation of a compiled pattern can set or check the
+     declared label of every such path with no annotation beyond the ceiling
+     itself; and the output paths of a cone are fixed by the plan, which is the
+     precondition of the exemption. *What milestone 4 has of the exemption's
+     conditions,* by the coordinator's reading and not checked against the
+     proposal's proofs: a write that leaves the value as it was stores its label
+     (Z67), and after a label changed alone the labels of the outputs that read
+     it are formed again. *What is built of the rule:* nothing. The plan holds
+     the ceiling that a body declares on its inputs as a `maxConfidentiality`
+     constraint, checked against the labels of those inputs
+     (`plan-and-label-templates.md` §4.4); no instantiation gives a handler's
+     writable paths a declared label from it, and a label is raised by a call.
+     Open with it: where the ceiling is authored, since the proposal requires an
+     authored one; what it does to the labels this design stores per written
+     path, which would sit under a declared ceiling; and the proposal's own
+     prior question, whether an absent declaration is an empty ceiling.
+     *Assumed:* nothing changes until the proposal is ruled in the
+     specification.
 
 ## Open, and not needing the owner
 
@@ -12495,45 +12681,55 @@ The open questions each document ends with stay where they are.
   corpus with `wish` simulated
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
   "Milestone 4: labels from templates at commit"). Of 271 modules 238 run.
-  Beside today's, of 1,695 output rows 1,013 are tighter, 288 equal, 263 have an
-  atom that names the pattern, 118 are looser and 13 incomparable; of 199 write
-  rows 129 are equal, 57 looser, 10 tighter and 3 incomparable. Open, most
-  serious first:
-  - over an array of plain values in place, a `push` through a handle drops the
-    label of what the list already holds, because the list has one `value`
-    label, that of its last write; it is unsound, no scenario of the corpus
-    shows it, and the rule to build is P39 (question 323);
-  - the label of a removal through a handle is not the rule derived from the CFC
-    specification: the executor removes in place, and the list still has one
-    `value` label, which is what the removal's decision read; the derived rule
-    contradicts the ruling of 2026-11-20 as worded for an array of plain values
-    in place (questions 320 to 322; P39);
+  Beside today's, of 1,695 output rows 959 are tighter, 346 equal, 265 have an
+  atom that names the pattern, 112 are looser and 13 incomparable; of 203 write
+  rows 130 are equal, 61 looser, 9 tighter and 3 incomparable. Open, the unsound
+  ones first:
+  - 10 values of `examples/map-demo` and 1 of `apps/base/person` depend on an
+    input and store no clause of it, not triaged (question 334);
+  - a read of a position that holds no member consumes nothing of the list's
+    membership after additions alone, over an array of plain values in place and
+    over an array of references (question 329);
+  - an array inside a value written whole has no entry for its membership
+    (question 330);
+  - the position of an added member stores what the list held of its membership,
+    which the ruling Z74 does not want and which is being removed, and the check
+    of stored labels reports 16 values of `examples/todo-list` that are an
+    artifact of its criterion by that ruling (question 328);
+  - the executor's time for an event on
+    `dev/experimental/folksonomy-stress-test` rises to as much as 14.8 s after a
+    `loadActions` sent while a result of about 1 MB is loaded, and a process ran
+    out of memory at 4 GB; cause not investigated (question 332);
+  - after a label changed alone the records to give again are found by position
+    and not by class (question 333);
   - the write records of a transaction grow with the data: 13 MB for one
     transaction over a list of 10,000 references after one fix, with three costs
     linear in the elements left (question 318);
-  - a label stored for a write that leaves the value as it was, by the ruling of
-    2026-11-20, costs 259 more commits and 226 more preparations over the
-    corpus, 240 and 208 of them in five modules for a cause that is not
-    established, and after a label changed alone the records of every kept
-    output are given again (question 324);
+  - the specification sentence that the ruling Z71 needs is proposed and pending
+    the specification pull request (question 326), and pull request
+    commonfabric/labs#10080, merged to `main`, changes the same place of
+    `prepare.ts`, so a catch-up merge of the branch conflicts there (question
+    327);
   - the check of stored labels against the values is a lower bound: one change
-    per input, confidentiality alone, the scenarios it is given, 204 of 238
-    modules, and 59 findings in 11 modules with a refused commit that are not
-    counted and not examined; it finds no failure and does not see the `push`
-    defect; "tighter" in the comparison remains no evidence of correctness;
-  - 448 write records in 8 modules have no label entry stored at their path, not
-    examined (question 325);
-  - 38 commits in 24 modules are refused with the option on and not off, each
-    with a stated reason but one, which is a crash of the preparation, and a
-    module with a refused commit holds the labels of an earlier commit;
-  - the runtime took a bound 342 times, because a selection, a choice or the
+    per input, confidentiality alone, 206 of 238 modules on the scenarios as
+    given and 91 with every event sent three times, and 58 and 43 findings in
+    modules with a refused commit that are not counted and not examined;
+    "tighter" in the comparison remains no evidence of correctness;
+  - 80 write records in 31 modules have no label entry stored at their path, 68
+    of them read as the records of a list's membership and 12 not examined
+    (question 325);
+  - 44 commits in 24 modules are refused with the option on and not off, each
+    with a stated reason, and a module with a refused commit holds the labels of
+    an earlier commit;
+  - the runtime took a bound 499 times, because a selection, a choice or the
     addresses of a dynamic read are not reported (`plan-and-label-templates.md`
     §4.2; P37);
-  - today's label holds no clause at 4 rows where the template's holds one, in
-    `dev/scope-bug-ct1597-reduce/main.tsx`,
+
+  - at the seventh run today's label held no clause at 4 rows where the
+    template's holds one, in `dev/scope-bug-ct1597-reduce/main.tsx`,
     `dev/test/non-idempotent/accumulator.tsx` and
     `showcase/battleship/multiplayer/room.tsx`, not reproduced outside the
-    corpus run;
+    corpus run and not looked at again;
   - the atom of a kept output on a link is not taken by a read of the value
     through the link (question 313);
   - a schema whose declared integrity the crate emits as the text of its type,
@@ -13300,22 +13496,23 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestones 1 and 4, the open findings of milestone 4 (P39, for
-   the label of a list of plain values in place that a handler adds to
-   or removes from, which removes the unsound label of a `push`; the
-   questions of the removal rule; the cost of a label for a write that
-   leaves the value as it was; the bound on the write records of a
-   transaction; the write records with no stored entry; the 59 findings
-   of the check in modules with a refused commit; the refused commits
-   and the crash of a preparation; the reports that
-   remove the bounds with the groups of a scan's prefix (P37); the four
-   rows where today's label holds no clause; and the atom on a link) and
-   its steps
-   11 and 12; the translation of a pattern closure used as a value, once
-   questions 307 to 310 are decided; then Topics at scale on the
-   runtime's storage, a compiled piece in the runner behind the
-   experimental option, value code in the sandbox, and server execution
-   with the network.
+   after milestones 1 and 4, the open findings of milestone 4 (the membership on
+   the position of an added member, which the ruling Z74 removes, and the
+   check's criterion for an appended member; the values of `examples/map-demo`
+   and `apps/base/person` that store no clause of an input they depend on; a
+   read of a position that holds no member; an array inside a value written
+   whole; the executor's time and memory on a large result; the records given
+   again after a label changed alone, by class; the specification sentence for
+   the ruling Z71 and the catch-up merge with `main`, which holds pull request
+   commonfabric/labs#10080; the question of a declared ceiling for the paths a
+   handler can write; the bound on the write records of a transaction; the
+   findings of the check in modules with a refused commit; the refused commits;
+   the reports that remove the bounds with the groups of a scan's prefix (P37);
+   the four rows where today's label holds no clause; and the atom on a link)
+   and its steps 11 and 12; the translation of a pattern closure used as a
+   value, once questions 307 to 310 are decided; then Topics at scale on the
+   runtime's storage, a compiled piece in the runner behind the experimental
+   option, value code in the sandbox, and server execution with the network.
 
 ### Briefing an author
 

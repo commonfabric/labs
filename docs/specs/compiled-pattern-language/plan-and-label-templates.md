@@ -5321,8 +5321,10 @@ the slot is **bound**.
   from the CFC specification and not from today's implementation. The derivation
   follows, with the specification cited by section and chapter file. For an
   array of references it gives the ruling as worded. For an array of plain
-  values in place it contradicts the ruling as worded, which says that the kept
-  elements are not labeled again with what the removal read.
+  values in place the specification, read by its letter, puts what the removal's
+  decision read on every position from the first removed one on, and three
+  further rulings of 2026-11-20 say where it is stored instead, what a moved
+  element keeps, and what a removal that finds nothing writes.
   - *The operations.* All three take a member, no index and no predicate.
     `remove` removes the first position that holds the member, and `removeAll`
     and `removeByValue` every such position. A position holds the member where
@@ -5378,19 +5380,51 @@ the slot is **bound**.
     target is labeled again. This is the ruling as worded.
   - *An array of plain values in place.* A kept element before the first removed
     position is not written, and its entries do not change. A kept element from
-    the first removed position on stands at another position. The value at that
-    path changed, so the path was overwritten, and its `value` label is the
-    element's own label joined with D. A static read of a position consumes
-    nothing of the list's enumeration, so D has to be consumed at the position:
-    after `words.removeByValue(secret)` over `["a", "b"]`, a read of `words[0]`
-    gives `"a"` or `"b"` by whether `secret` equals `"a"`. The element's own
-    label is not joined with the labels of the other elements, except through D,
-    where the comparison read them. **This contradicts the ruling as worded.**
-    The ruling says that the kept elements are not labeled again with what the
-    removal read, and it names the write of `footprint-analysis.md` §6.1, which
-    is the container's enumeration alone. The specification puts D on every
-    position from the first removed one on. Section 8, question 187 has the
-    three alternatives.
+    the first removed position on stands at another position. A static read of a
+    position consumes nothing of the list's enumeration, so D has to be consumed
+    at the position: after `words.removeByValue(secret)` over `["a", "b"]`, a
+    read of `words[0]` gives `"a"` or `"b"` by whether `secret` equals `"a"`.
+    The element's own label is not joined with the labels of the other elements,
+    except through D, where the comparison read them. Read by its letter the
+    specification puts D on the `value` entry of every position from the first
+    removed one on, since the value at that path changed. By ruling (2026-11-20)
+    D is stored once for the list instead, as the next point has it.
+  - *What decided a removal is stored once for the list.* By ruling (2026-11-20;
+    Z71 of the continuation plan), after a removal from a list of plain values
+    in place D is stored once for the list, as one entry at the list's `*` path
+    in the `value` class, and a read of a position joins it with the position's
+    own entry. The kept elements are therefore not labeled again, as the first
+    ruling says, and a read of a position consumes D all the same. Successive
+    removals join into the entry. A write that replaces the list clears it, and
+    the label of that write then covers every member. The cost does not depend
+    on the length of the list. What stays imprecise: a read of a member that
+    stands before the first removed position consumes the entry too, although
+    the removal did not change what that position holds.
+  - *The specification sentence the rule needs,* as proposed, pending the
+    specification pull request (section 8, question 191). Section 4.6.3 states
+    the wildcard entries for a container whose slots hold references, and states
+    the join of a wildcard entry with a concrete entry for the frozen `shape`
+    entry alone ("Frozen existence joins with membership templates"). For the
+    `value` class of a plain value in place a more specific entry replaces, so a
+    member's own `value` entry would replace the entry at `*`. Proposed for the
+    paragraph "Wildcard per-class entries (conforming template representation)",
+    after the sentence that lists what the per-class twins cover:
+
+    > The same holds where a writer changes the membership of a container of
+    > values stored in place by removing members: the runtime MAY store the join
+    > of what decided the removal once, as per-class twins at the container's
+    > wildcard child path, in place of rewriting the `value` entry of every
+    > member the removal moved. A wildcard twin minted this way is *additive* in
+    > the `value` class as well: the effective `value` label of a child is the
+    > join of the twin and the child's own most specific `value` entry, and a
+    > more specific concrete entry does not replace the twin. Successive
+    > membership decisions join into the twin; it is cleared only by a write
+    > that replaces the container, whose own derivation then labels every
+    > member.
+
+    The sentence adds a second exception to the rule that a more specific entry
+    replaces. It could be written as a fourth rule of the wildcard form, "A
+    membership twin of the `value` class joins with a member's own entry".
   - *The result of another per-element construct.* The result of `map`, `filter`
     or `flatMap` is computed, and a body has no handle to remove through it. A
     removal from the source of such a construct is one of the two cases above
@@ -5398,60 +5432,100 @@ the slot is **bound**.
     the elements that remain keep their keys, their state per key and their
     labels, no kept element is evaluated again for the removal, and the
     membership label is the template over the source's enumeration, which holds
-    D.
+    D. After a removal from the source, which element stands at a position of
+    the derived collection depends on D as well, and what a position stores of
+    it is not decided (section 8, question 192). An addition to the source puts
+    nothing on a position of the derived collection ("An addition through a
+    handle" below).
   - *Entries stored per position, when positions shift.* The specification keys
     every entry by path and has no operation that moves the members of an array.
-    Read by its letter, the `value` entries and the entries a link carries
-    follow the value: the position was overwritten, and the entry is replaced by
-    the label of what stands there. The `shape` entries do not move: a position
-    that still exists keeps the entry of its creation, whichever element stands
-    there. That is consistent because the stored enumeration holds every child's
-    `shape`. Whether a kept element that moves keeps its integrity is section 8,
-    question 188.
+    By ruling (2026-11-20; Z72 of the continuation plan) a kept element that
+    moves keeps its integrity: the runtime moves the stored label entries with
+    the members of an array it splices, and no template is instantiated for the
+    kept element. A template of the removal's write edge is a `derive`, which
+    would take the integrity common to its inputs and mint the atom of the body,
+    so an element labeled by it would lose its own integrity atoms. The `shape`
+    entries do not move: a position that still exists keeps the entry of its
+    creation, whichever element stands there. That is consistent because the
+    stored enumeration holds every child's `shape`. The entries of a position
+    that no longer exists after the removal are dropped, and a position created
+    again mints its existence entry again (section 8.12.8).
   - *A removal that finds nothing* leaves the list as it was, and that it is
-    unchanged reveals D. Whether it writes the enumeration, as a write that
-    leaves a value as it was stores its label (section 3.12), is section 8,
-    question 189.
-  - *Provisional (P39 of the continuation plan; the coordinator's decision, no
-    owner ruling).* Over an array of plain values in place, each position from
-    the first removed one on stores its own label joined with D, and the list
-    has an enumeration entry at its own path that the removal replaces with the
-    stored enumeration joined with D. Over an array of references the rule above
-    stands as derived.
+    unchanged reveals D. By ruling (2026-11-20; Z73 of the continuation plan) it
+    is a label write of the enumeration, as a write that leaves a value as it
+    was stores its label (section 3.12): the enumeration of the list takes D and
+    no value is written.
   - *As built in milestone 4 of the integration.* The prototype's executor
-    removes in place: each removed position is one splice of the stored list, no
-    kept member is written by the executor, and a kept reference stays the
-    reference it was (`Handle.#removeAt`). The write record binds the handle's
-    slot, in the class `value`, to what the comparison read
-    (`Instance.readDeciding`). The adapter writes a spliced array whole and the
-    runtime stores one `value` label at the list's path, which is D as the
-    executor computes it. Over an array of plain values in place the kept
-    elements are therefore covered by D and not by labels of their own, the ones
-    before the first removed position included. Over an array of references the
-    comparison reads the whole list, so that label also holds the values of the
-    targets, which is wider than D. The runtime stamps enumeration entries on
-    containers of links alone (`structureStampPaths` of
-    `runtime/runner/src/cfc/prepare.ts`), so for an array of plain values in
-    place the enumeration has no entry of its own.
+    removes in place: each run of removed positions next to each other is one
+    splice of the stored list, no kept member is written by the executor, and a
+    kept reference stays the reference it was (`Handle.#removeAt` of
+    `base/pattern-compiler/exec/executor.ts`). `Handle.#positionsOf` reports
+    what the comparison read: which positions the list has; over an array of
+    references the reference at each compared position, and nothing of the
+    document it names; over an array of plain values in place the value at each
+    compared position. The executor gives two write records for a removal,
+    whatever the length of the list: one for the number of members and one for
+    the membership of the list (`PlanWrite.enumeration` of
+    `runtime/runner/src/cfc/types.ts`), which names the runs of members that
+    moved (`PlanWrite.moves`, `PlanWrite.start`) and that members were removed
+    (`PlanWrite.removes`). Both hold what the comparison read
+    (`PlanWrite.decided`) and what the list stored of its membership
+    (`PlanWrite.observed`). The runtime stores the label of the membership
+    record as the `enumerate` entry at the list's path, for an array of plain
+    values in place as for an array of references. It joins D into the list's
+    `*`-child entries of origin `structure` in the classes `value`, `shape` and
+    `followRef`, confidentiality alone; a member's own entries are of origin
+    `derived`, and the resolution resolves each origin on its own and joins the
+    results (`resolvedEntryGroups` of
+    `runtime/runner/src/cfc/consumed-label.ts`), so the join of the ruling needs
+    no change of the resolver. It carries the `derived` and `structure` entries
+    of a moved member under the member's new path (`memberEntryPlacement` of
+    `runtime/runner/src/cfc/prepare.ts`). A removal that finds no member gives
+    the two records as those of writes that left the value as it was
+    (`Instance.membersKept`). The `*` entries are kept for a list that a removal
+    leaves empty. The deciding sites carry the `SPEC-PENDING` marker for specs
+    pull request 91.
 - **An addition through a handle.** For `push`, `pushAll` and `addUnique` the
   enumeration of the list after the addition is the stored enumeration joined
   with what decided the addition, by the same argument as for a removal. An
   added element is a member at its own position, with its own label, and the
   elements the list held are not written. The template of a `push` holds the
   reference to the list and the pushed value, and nothing of what the list
-  stored, so the label of what the list held has to stay where it is stored.
-  *Provisional (P39):* over an array of plain values in place the list has an
+  stored, so the label of what the list held has to stay where it is stored. By
+  ruling (2026-11-20; Z74 of the continuation plan) an append through a handle
+  does not put the membership of the list, or what else the list holds, on the
+  position it writes or on a position of a per-element result over the list: the
+  operation appends a member whatever the list holds, and what the list holds
+  does not decide whether it appends or where. As the coordinator of this work
+  reads the ruling, which is not the owner's wording: the number of members and
+  the enumeration still carry what decided each addition, and a read of a
+  position by index consumes the position's own entry alone (section 4.6.3), so
+  which member stands at an index after appends is an accepted channel. A
+  removal is not affected, since its comparison decides which member stands at
+  the later positions. A `push` under a condition that a labeled input decides
+  needs no rule of its own: the write template of a handler joins every slot
+  that its body reads statically (section 3.12), so every write of the handler
+  carries the label of the condition. *Provisional (P39 of the continuation
+  plan; the coordinator's decision, no owner ruling):* the list has an
   enumeration entry at its own path, replaced as above, and an added element is
-  recorded at its own position. *As built in milestone 4 of the integration, and
-  unsound:* the adapter writes the array whole, the write record names the
-  array's path, and the runtime stores the record's label in the class `value`
-  there and clears the `value` entries below it. Over an array of plain values
-  in place a `push` therefore drops the label of what the list already holds:
-  after a `push` of a value with no label, a `push` of a labeled input and a
-  `push` of a value with no label, the list is stored under an empty label
-  although it holds the labeled value (section 8, question 190). Over an array
-  of references each element is a document with its own label, which the
-  addition does not write.
+  recorded at its own position, over an array of plain values in place and over
+  an array of references. *As built in milestone 4 of the integration:* a splice
+  of a stored array is written as the number of members and the positions it
+  changed, so the entries of the positions before it stay. The executor gives
+  one record for each added member at its position, one for the number of
+  members and one for the membership (`Instance.#memberWrites`). At commit
+  `429a62aba5` the label of an added member's record is its template's label
+  joined with what the list stored of its membership, which puts what decided
+  earlier additions on positions; the ruling does not want that, and it is being
+  removed. `addUnique` compares as a removal does: where the list holds the
+  member, nothing is added and the number of members and the membership take
+  what the comparison read. A write through `key(n).set` at the position behind
+  the last member is recorded as an addition. A write that replaces an array
+  stores its label as the `enumerate` entry of the array as well. Two cases are
+  open: a read of a position that holds no member consumes nothing of the
+  membership after additions alone (section 8, question 193), and an array
+  inside a value written whole gets no `enumerate` entry (section 8, question
+  194).
 
 A read stays `dynamic` where the plan cannot name its path ahead of the
 evaluation: a read through a handle that happens on some runs only or at a
@@ -8604,9 +8678,26 @@ a write record can be marked as that of a write that left the value as it was
 (`PlanWrite.unchanged` of `runtime/runner/src/cfc/types.ts`), and the
 preparation takes its target as a path the transaction wrote, holding the value
 it held (`valueWriteTargets` of `runtime/runner/src/cfc/prepare.ts`). After a
-label changed alone, the prototype's executor instantiates the labels of all
-kept outputs again and not those of the outputs that read the label
-(`Instance.#relabel`).
+label changed alone, the prototype's executor gives again the records of the
+outputs whose inputs read a position at, above or below the changed entry,
+marked as records whose label alone is formed again (`PlanWrite.relabel`;
+`Instance.#relabel` of `base/pattern-compiler/exec/executor.ts`), and the
+runtime stores each label at its path and leaves the entries below it. The
+records are found by position and not by the class of the slot, which is wider
+than the second condition of section 4.1.
+
+What such a commit does to a reader is no rule of compiled patterns alone.
+Measured with the experimental option off and on, a commit that changes a
+declared label and writes no value runs a sink that read the value again and
+conflicts with a transaction that read the value before it, also where the
+changed label is that of another value of the same document
+(`scheduler-and-serving-loop.md` §3.6). What today's runtime does not do is
+store a label when a write leaves the value as it was.
+
+The rule reaches the membership of a list. By ruling (2026-11-20; Z73 of the
+continuation plan) a removal through a handle that finds no member is a label
+write of the list's enumeration, and milestone 4 builds the same for `addUnique`
+of a member the list holds, which the ruling does not name (section 2.5).
 
 **The label of an event slot.** An event is not stored, so no entry is
 resolved at an address for it. The label of a slot of root `event` is the
@@ -16208,17 +16299,15 @@ this document made.
      of the specification and no ruling. The continuation plan records the
      ruling under its question 315 and the cost under its question 324.
 185. **The label entries of the elements behind a removed one** (section 2.5,
-     "The label rule of a removal through a handle"). The rule is derived from
-     the CFC specification. Over an array of references no kept element is
-     labeled again. Over an array of plain values in place the `value` entry of
-     each position from the first removed one on is replaced by the element's
-     own label joined with what the removal's decision read, and the `shape`
-     entries stay with their positions. That answers the question as it was put,
-     and contradicts the ruling of 2026-11-20 as worded for the second case,
-     which is question 187. Whether a removal in place is a `splice` that
-     removes the one `*` entry of section 2.3 (P31), so that the elements take
-     the list's label, is not answered by the derivation and is open with
-     question 187. The continuation plan records the ruling under its question
+     "The label rule of a removal through a handle"). Answered by the rulings of
+     2026-11-20. Over an array of references no kept element is labeled again.
+     Over an array of plain values in place the entries of a moved element move
+     with it, what the removal's decision read is stored once at the list's `*`
+     path, and the `shape` entries stay with their positions. A removal in place
+     does not remove the one `*` entry of section 2.3 (P31): the entries of
+     origin `structure` at the `*` path that hold what decided a removal are
+     joined with a member's own entries and are cleared by a write that replaces
+     the list. The continuation plan records the first ruling under its question
      316.
 186. **How the write records of a transaction are bounded** (for the project
      owner; sections 2.5 and 4.2). Further bindings with equal labels are
@@ -16236,49 +16325,90 @@ this document made.
      result of another per-element construct were not measured. It is question
      318 of the continuation plan.
 187. **Whether the positions from the first removed one on take what a removal's
-     decision read, over an array of plain values in place** (for the project
-     owner; section 2.5, "The label rule of a removal through a handle"). The
-     ruling of 2026-11-20 as worded says that they do not, and the specification
-     says that they do. The alternatives: (1) follow the specification, at one
-     `value` entry written per kept element from the removed position on; (2)
-     put the decision on the enumeration alone and have a read of a position of
-     a list that a handler can remove from consume the list's order, which
-     changes the specification's rule for a static read and widens every
-     positional read of such a list; (3) store the decision once at the list's
-     `*` path in the class `value` and have a read of a position join it with
-     the position's own entry, which the specification states for `shape` and
-     for positions that hold references and not for the `value` class of a plain
-     value, so it needs an addition to section 4.6.3 of
-     `04-label-representation.md`. The coordinator's recommendation is 3, with 1
-     as what is sound today. *Assumed,* provisional (P39): alternative 1. For an
-     array of references the question does not arise. It is question 320 of the
-     continuation plan.
+     decision read, over an array of plain values in place** (section 2.5, "The
+     label rule of a removal through a handle"). Settled by ruling (2026-11-20;
+     Z71 of the continuation plan): what decided the removal is stored once for
+     the list, as one `*` entry in the `value` class, and a read of a position
+     joins it with the position's own entry. It is alternative 3 of the three
+     that were put; alternative 1 wrote one `value` entry per kept element from
+     the removed position on, and alternative 2 put the decision on the
+     enumeration alone and had every read of a position consume the list's
+     order. For an array of references the question does not arise. It is
+     question 320 of the continuation plan. The specification sentence it needs
+     is question 191.
 188. **Whether a kept element that a removal moves keeps its integrity, over an
-     array of plain values in place** (for the project owner; section 2.5). A
-     template of the removal's write edge is a `derive`, which takes the
-     integrity common to its inputs and mints the atom of the body, so the moved
-     element loses its own integrity atoms. The specification permits a label
-     that claims less, and it is a relabeling all the same. The alternatives:
-     (1) a move changes the path of the stored entries, verbatim, with no
-     template instantiated for the kept element, which needs a rule that a
-     runtime may move entries with the members of an array it splices; (2)
-     accept the lower claim. *Assumed:* (2). It is question 321 of the
+     array of plain values in place** (section 2.5). Settled by ruling
+     (2026-11-20; Z72 of the continuation plan): it keeps it. The runtime moves
+     the stored label entries with the members of an array it splices, and no
+     template is instantiated for the kept element. It is question 321 of the
      continuation plan.
-189. **Whether a removal that finds nothing writes the enumeration** (for the
-     project owner; section 2.5). The list is unchanged, and that it is
-     unchanged reveals what the decision read. By the rule of section 3.12 the
-     label would be stored without a value write, and the enumeration of a list
-     that nothing was removed from would grow with every such event. The
-     alternatives: (1) yes, as section 3.12; (2) no, as for a handler of today's
-     runtime that returns early. *Assumed:* nothing. As built, no label is
-     stored for such a removal. It is question 322 of the continuation plan.
+189. **Whether a removal that finds nothing writes the enumeration** (section
+     2.5). Settled by ruling (2026-11-20; Z73 of the continuation plan): it is a
+     label write of the enumeration, as section 3.12 has a write that leaves a
+     value as it was store its label. The enumeration of a list that nothing was
+     removed from grows with every such event that reads something new. It is
+     question 322 of the continuation plan.
 190. **Where the label of a list of plain values in place is stored when a
      handler adds to it or removes from it** (for the project owner; section
-     2.5, "An addition through a handle"). As built the list has one `value`
-     label, that of its last write, which is unsound for a `push` after a
-     labeled addition, and the runtime has no enumeration entry for such a list.
-     *Assumed,* provisional (P39): an enumeration entry at the list's path,
-     replaced by an addition or a removal with the stored enumeration joined
-     with what decided the change, and an added element recorded at its own
-     position. It changes what the runtime stores and goes through the
-     specification procedure. It is question 323 of the continuation plan.
+     2.5, "An addition through a handle"). *Assumed,* provisional (P39), and
+     built in milestone 4 of the integration: an enumeration entry at the list's
+     path, replaced by an addition or a removal with the stored enumeration
+     joined with what decided the change, and an added element recorded at its
+     own position. Where what decided a removal is stored is not part of it
+     (question 187). It changes what the runtime stores for a list of plain
+     values in place and goes through the specification procedure. It is
+     question 323 of the continuation plan.
+191. **The specification sentence for the entry that holds what decided a
+     removal** (for the project owner, and for the specification pull request;
+     section 2.5). Proposed: an addition to section 4.6.3 of
+     `04-label-representation.md` that lets a runtime store the join of what
+     decided a removal from a container of values stored in place as per-class
+     twins at the container's wildcard child path, additive in the `value`
+     class. *Assumed:* the sentence as proposed. Open with it: whether the twin
+     is cleared when a removal leaves the container empty, which milestone 4
+     does not do; and whether moving entries with the members of a spliced array
+     needs a sentence of its own. It is question 326 of the continuation plan.
+192. **What a position of the result of another per-element construct stores of
+     the membership of its source** (section 2.5; section 3.6). Settled for an
+     addition by ruling (2026-11-20; Z74 of the continuation plan): nothing. An
+     append puts the membership of the list on no position, of the list or of a
+     per-element result over it. Not settled: after a removal from the source,
+     which element stands at a later position of the result of a `map`, a
+     `filter` or a `flatMap` depends on what decided the removal, and the
+     collection's own entry holds it where a position does not. The alternatives
+     for that: (1) store it once at the derived collection's `*` path, as
+     question 187 has it for the source; (2) join it into the entry of every
+     position. *Assumed:* nothing; not built. It is question 328 of the
+     continuation plan.
+193. **Whether a read of a position that holds no member consumes the list's
+     enumeration** (section 2.5, "An addition through a handle"). After
+     additions alone, a read of a position behind the last member reveals the
+     number of members and consumes nothing of it, over an array of plain values
+     in place and over an array of references. After a removal the `*` entries
+     cover the read. *Assumed:* nothing; not built, and no test states the case.
+     It is question 329 of the continuation plan.
+194. **An array inside a value written whole** (section 2.5, "An addition
+     through a handle"). A write that replaces an array stores its label as the
+     `enumerate` entry of the array, and an array at a path below the written
+     one gets none, so a read of its members, their order or their number does
+     not consume the label of the write. *Assumed:* nothing; not built. It is
+     question 330 of the continuation plan.
+195. **Whether the confidentiality ceiling of every path a handler can write is
+     declared ahead** (for the project owner; section 3.12; not a ruling). The
+     specification holds a proposal, not normative, for a write gate (sections
+     14.3.5 to 14.3.10, `14-open-problems-and-proposals.md`;
+     `proposals/label-changes-under-secret-context.md`): a handler declares a
+     ceiling on what it may read, every path it can write is given or checked to
+     have a declared label that covers the ceiling when the pattern is
+     instantiated, and a call changes no label. The plan gives that rule its
+     precondition: the paths each handler can write are known from its footprint
+     as write edges before any call (`footprint-analysis.md` §6), and the output
+     paths of a cone are fixed by the plan. The plan holds the ceiling that a
+     body declares on its inputs as a `maxConfidentiality` constraint, checked
+     against the labels of those inputs, and writer-fit measures what a handler
+     read against the declared label of each store it writes (section 4.4).
+     Neither is the rule: nothing gives the paths a handler can write a declared
+     label from its ceiling when the pattern is instantiated, and the label of a
+     handler's write is formed at the call. *Assumed:* nothing changes until the
+     proposal is ruled in the specification. It is question 335 of the
+     continuation plan.

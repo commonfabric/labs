@@ -601,52 +601,169 @@ the values run finds 6,013 of 6,107.
 
 ## Milestone 4: labels from templates at commit
 
-The figures of this section are those of the seventh run over the corpus, at
-commit `699ba789d2` of branch `claude/compiled-pattern-m4`.
+The figures of this section are those of the eighth run over the corpus, at
+commit `429a62aba5` of branch `claude/compiled-pattern-m4`.
 
-**To read first.** Four results are serious. The first is unsound and open, and
-the corpus does not show it.
+**To read first.** The open soundness findings come first, then the soundness
+defects that are fixed, then cost. Whenever a list is named, the case is named
+with it: an array of references, an array of plain values in place, or the
+result of another per-element construct.
 
-1. *A `push` through a handle drops the label of what the list already holds.*
-   The case is an array of plain values in place. After a `push` of a word of
-   the event, a `push` of the labeled input `note` and a `push` of another word
-   of the event, the list `["x","n","y"]` is stored under an empty label,
-   although it holds the value of `note`. The adapter writes a spliced array
-   whole (`RuntimeTransactions.change` of `compare/runtime-transactions.ts`),
-   the write record of a `push` names the array's path, and the runtime stores
-   the record's label in the class `value` at that path and clears the `value`
-   entries below it. The template of a `push` holds the reference to the list
-   and the pushed value, and nothing of what the list stored. The list therefore
-   has the label of its last write alone. No scenario of the corpus sends such a
-   sequence to a list, so neither the corpus run nor the check over the corpus
-   shows it. A probe of the round with `soundnessOfScenario` reports 2 failures
-   for these three events on the fixture `remove-shift.tsx`; no test of the
-   branch at that commit states it. Two fixes were tried and withdrawn. The
-   provisional decision P39 of the design's plan is the rule to build for it
-   (open finding 1).
-2. *The label rule of a removal through a handle, derived from the CFC
-   specification, contradicts the owner's ruling as worded for one case.* For an
-   array of references the derivation gives what the ruling says: no kept
-   element is labeled again. For an array of plain values in place the
-   specification puts what the removal's decision read on every position from
-   the first removed one on, and the ruling says that the kept elements are not
-   labeled again. The derivation, the three questions it leaves for the owner
-   (questions 320 to 322 of the design's plan) and what limits an implementation
-   today are in "The label rule of a removal" below (open finding 2).
-3. *The work of one commit grows with the data.* The write records of one
-   transaction held 127 MB for a list of 10,000 references. One fix brings them
-   to 13 MB, and three costs that are linear in the number of elements remain.
-   It is open finding 3, and question 318 of the design's plan.
-4. *Storing a label for a write that leaves the value as it was costs commits
-   and preparations.* The rule is the owner's ruling of 2026-11-20 and is built.
-   Over the corpus with the option on, the commits rise from 2,643 to 2,902 and
-   the preparations from 1,284 to 1,510. Five modules account for 240 of the 259
-   added commits, and the cause there is not established (open finding 4).
+*Unsound and open.* The check of the stored labels against the values, run with
+every event of a scenario sent three times ("The check of stored labels against
+the values" below), reports 27 values in 3 modules that depend on an input and
+store no clause of it. The run of each scenario as given reports none in 206
+modules. At the commit before the round the same check, with events generated
+for the two modules, reports 21 such values in `examples/map-demo/map-demo.tsx`
+and 16 in `examples/todo-list/todo-list.tsx`, so the 27 are not caused by the
+changes of the round. 11 of the 27 are open, and 16 are no soundness finding by
+ruling (point 4).
 
-The check of the stored labels against the values (below) finds no value over
-the corpus that depends on an input and stores no clause of it: 0 in the 204
-modules it checks. It found five of the defects listed under "Defects the check
-found, fixed". The comparison beside today's rows could find none of them,
+1. *The findings of `examples/map-demo/map-demo.tsx` and `apps/base/person.tsx`
+   are not triaged.* The first has 10: 9 outputs and 1 write. The output `zoom`,
+   two outputs of the rendered tree and the write of record
+   `{"body":13,"write":3}` depend on `stops`, and the write stores a clause of
+   `zoom` alone; `center` and `center/lng` depend on `areasOfInterest`; two
+   outputs depend on `center` and two on `selectedStopIndex`. The second has 1:
+   an output of the rendered tree that depends on the input `person` and stores
+   no confidentiality. Which rule each one breaks, or whether it is an artifact
+   of the check as point 4 is, is not established (open finding 1).
+2. *A read of a position that holds no member consumes nothing of the list's
+   membership after additions alone.* The case is an array of plain values in
+   place and an array of references alike. Such a read consumes what decided the
+   membership only after a removal, through the list's `*` entries. After
+   additions alone, `words[5] === undefined` reveals the number of members and
+   consumes nothing of it. It is not built: the resolver has to know that the
+   position holds no member. No test states it (open finding 2).
+3. *An array inside a value written whole has no entry for its membership.* A
+   write that replaces an array stores its label as the `enumerate` entry of the
+   array as well. An array at a path below the written one, inside a record
+   written whole, gets no such entry, so a read of its members, their order or
+   their number does not consume the label of the write. It is not built (open
+   finding 3).
+
+*Reported by the check, and no soundness finding by the owner's ruling.*
+
+4. *A position of the result of another per-element construct does not carry the
+   membership of its source.* In `examples/todo-list/todo-list.tsx` the output
+   `mentionable` is the result of a `map` over the array that a `computed`
+   returns, which holds the records of the input `items` that are not done. The
+   check reports `mentionable/1` and the three outputs below it, and the same at
+   the positions 2, 3 and 4, 16 values together: they differ between the run as
+   given and the run with `items` changed, and store no clause of `items`. By
+   the owner's ruling of 2026-11-20 (Z74 of the design's plan) an append through
+   a handle does not put the membership of the list on the position it writes,
+   nor on a position of a per-element result over the list. The owner's words:
+   "i looked at the code of addItem and it only pushes on the array. maybe the
+   implementation looks at the length, but the user-land code doesn't and so i
+   don't think we should taint it with the other items. this operation works
+   semantically exactly the same irrespective of what else happened before: it
+   appends a new item, and whether it does that or not doesn't depend on what is
+   there already, nor can it influence the position." The 16 values are
+   therefore an artifact of the check's criterion: the run with `items` changed
+   starts from a list of another length, so the appended member stands at
+   another index, and the check takes the difference at an index for a
+   dependency on `items`. The check is being changed for it. The coordinator's
+   reading of the ruling, which is not the owner's words: the number of members
+   and the enumeration of the list still carry what decided each addition, and a
+   read of a position by index consumes the position's own entry alone, so which
+   member stands at an index after appends is an accepted channel. The rulings
+   on a removal are not affected: a removal decides which member stands at the
+   later positions by a comparison that the handler makes. A `push` under a
+   condition that a labeled input decides needs no rule of its own: the write
+   template of a handler joins every slot that its body reads statically, so
+   every write of that handler carries the label of the condition. At commit
+   `429a62aba5` the record of an added member also joins what the list stored of
+   its membership, which puts what decided earlier additions on the positions of
+   the list; by the ruling that is not wanted, and it is being removed (open
+   finding 4).
+
+*Unsound, and fixed in this run.* Each stored a label without a clause of what
+the value was computed from, and each has a test.
+
+5. *A change of the members of a list through a handle lost what an earlier
+   change decided.* The seventh run reported it for a `push` after a `push` over
+   an array of plain values in place. It was wider, by case:
+   - *an array of plain values in place:* `push` after `push`, and `addUnique`,
+     `remove`, `removeAll` and `removeByValue` alike, because the list had one
+     `value` label, that of its last write;
+   - *an array of references:* the number of members, and which reference stands
+     at a position. After a `push` that the input decides and one that it does
+     not decide, the count was stored under an empty label
+     (`compare/fixtures/count-of-records.tsx`). The records that the references
+     name were not affected;
+   - *a list that `set` replaced, read by a per-element construct:* after
+     `set([])` on a list that held members, the result of a `map` over it stored
+     no clause of what decided that the list is empty
+     (`compare/fixtures/handle-methods.tsx`, an array of plain values in place);
+   - *`key(n).set(value)` at the position behind the last member,* over an array
+     of plain values in place: the number of members kept its earlier label. The
+     plan holds an envelope for such a write and no write edge with a template,
+     so the write had no record;
+   - *`addUnique` of a member the list holds, and a removal that finds no
+     member:* nothing was stored, although that the list stays as it was reveals
+     what the comparison read.
+
+   The methods examined are `set`, `update`, `increment`, `push`, `remove`,
+   `removeAll`, `removeByValue`, `addUnique` and `send`. `increment`, `update`,
+   `key(name).set` on a record and `send` showed no failure in the scenarios
+   tried, which does not show that they have none. What is built is "A change of
+   a list's members through a handle" under "What is built". One part of it goes
+   beyond the owner's ruling on an append (point 4): the positions of a list
+   also hold what decided earlier additions.
+6. *A label formed again after a label changed alone cleared the label entries
+   below its path.* The runtime stored the label of such a record at its path
+   and cleared what was stored below. The entry of an output below a kept output
+   was cleared with it, and an output with kept outputs below its path, a
+   collection among them, was left out and kept the label of before the change.
+   The record is marked as one whose label alone is formed again
+   (`PlanWrite.relabel`), and the entries below its path stay.
+7. *A record given again for its label alone withdrew the pattern's atom from
+   the entries below its path.* The path counted as written, and a stamp that
+   the runtime carries keeps its `TransformedBy` atom only while no other writer
+   wrote at, above or below it. 85 rows of the corpus, 53 of them in
+   `examples/cfc-spec-gallery/main.tsx`, stored no integrity where they stored
+   the pattern's atom. Such a path is no write (`valueWrittenPrefixes` in
+   `prepareBoundaryCommitSteps` of `runtime/runner/src/cfc/prepare.ts`).
+
+*Cost.*
+
+8. *Serious, in the executor and not in the labels, open.* On
+   `dev/experimental/folksonomy-stress-test.tsx`, run in memory with generated
+   events, a `loadActions` event takes 470 ms and leaves a result of about 1 MB
+   of text. A `loadActions` event sent while such a result is loaded takes 4.4
+   s, and the three events after it take 3.8 s, 14.8 s and 1.1 s, where the same
+   three handlers took 21 ms, 84 ms and 373 ms after the first `loadActions`.
+   The two events after those take 14 ms and 314 ms. The commit before the round
+   gives the same times. A process that held the runs in memory beside the run
+   in storage ran out of memory at a heap of 4 GB. The cause is not investigated
+   (open finding 5).
+9. *The labels formed again after a label changed alone are found by position
+   and not by class.* An output that holds a link is given again when any label
+   of the document the link names changes, although the output's slot reads the
+   reference alone. In `examples/cfc-spec-gallery/main.tsx` the commits with the
+   option on rise from 75 to 93, and the run records 60 writes that left the
+   value as they found it where the seventh run recorded none (open finding 6).
+10. *The comparison adapter reads the stored label entries of every document a
+    transaction writes,* before the transaction and after it, to report which
+    labels changed (`RuntimeTransactions.#noteUnchanged` of
+    `compare/runtime-transactions.ts`). The work grows with the number of
+    entries of each written document (open finding 6).
+11. *A removal at position k of a list of n members,* as built by the rulings of
+    2026-11-20, costs two write records whatever n is and one template
+    instantiation, and writes the entry of the number of members, the
+    `enumerate` entry and three `*` entries. The comparison reads k + 1
+    positions for `remove` and n for `removeAll` and `removeByValue`, the stored
+    entries of the n - k - 1 moved members are carried under another path with
+    no label computed, and the adapter writes n - k - 1 positions to storage
+    ("The label rule of a removal" below).
+12. *The label for a write that leaves the value as it was costs fewer commits
+    than in the seventh run.* With the option on the corpus makes 2,760 commits
+    and 1,438 preparations, against 2,699 and 652 with the option off; the
+    seventh run made 2,902 and 1,510 ("The cost of a label for a write that
+    leaves the value as it was" below).
+
+The comparison beside today's rows could find none of the unsound labels above,
 because it counts a label with fewer clauses as tighter.
 
 **The check of stored labels against the values.** `compare/perturbation.ts`
@@ -662,12 +779,58 @@ check reads no write record, no slot binding and no template. The template
 evaluator of the prototype reads the same slot bindings as the runtime, so it
 cannot find a binding that leaves a read out; this check can.
 
-Over the corpus it checks 204 of the 238 modules that run, in 860 runs in memory
-that take 14.2 s together. It compares 5,791 pairs of a stored position and a
-labeled input, and in 1,206 of them the value depends on the input. None of
-those stores no clause of the input. `compare/test/stored-labels.test.ts` runs
-the check on every fixture scenario and on the fixture of `wish`, and finds no
-such value.
+Over the corpus, with each scenario as given, it checks 206 of the 238 modules
+that run, in 862 runs in memory that take 13.7 s together. It compares 6,021
+pairs of a stored position and a labeled input, and in 1,271 of them the value
+depends on the input. None of those stores no clause of the input.
+`compare/test/stored-labels.test.ts` runs the check on every fixture scenario
+and on the fixture of `wish`.
+
+**The same check with every event sent three times.** A scenario of the corpus
+sends each handler few events, so a defect that needs a handler to run again on
+what an earlier run stored is not seen. `repeatedEvents` of
+`compare/perturbation.ts` gives the events of a scenario three times over: in
+the reverse of the order given, then in the order given with each value changed,
+then in the reverse order with the value changed again.
+`soundnessAfterEachEvent` of `compare/stored-labels.ts` runs the check after
+each event, against runs in memory advanced to the same event, so that a label
+that the write of a later event would cover is found at the event that leaves it
+too narrow. On the fixture `remove-shift.tsx` with generated events it finds the
+`push` defect of the seventh run at commit `699ba789d2`, after the fifth event,
+and nothing at `429a62aba5`.
+
+Over the corpus it checks 91 modules, in 719 runs in memory that take 105 s
+together, and compares 4,871 pairs, of which 884 have a value that depends on
+the input. It finds 27 values in 3 modules that store no clause of the input: 16
+in `examples/todo-list/todo-list.tsx`, 10 in `examples/map-demo/map-demo.tsx`
+and 1 in `apps/base/person.tsx`. The 16 are no soundness finding by ruling, and
+show a limit of the criterion ("To read first", 1 and 4). What it covers and
+what it does not:
+
+- 147 of the 238 modules are not checked this way. 117 have a scenario with no
+  event, so there is nothing to send again. 16 have a commit refused with the
+  option on; what the check finds there is kept apart and not counted, 43
+  findings in 8 modules (`soundness-repeated-unstored.tsv` of the run's tables).
+  In 8 modules two runs on one scenario give different values, and 3 read the
+  clock. 2 runs stop at a write that fails with "expected object but found
+  array" (`examples/scoped-group-chat/main-plain-inputs.tsx` is one), and 1
+  stops because its result exceeds 250,000 characters
+  (`dev/experimental/folksonomy-stress-test.tsx`).
+- It does not reach a branch that one particular value of an input decides. A
+  handler that tests `note === "n"` takes that branch only where the scenario
+  gives `"n"`, and a changed value does not.
+- A scenario whose result exceeds 250,000 characters of text is stopped
+  (`REPEATED_RESULT_LIMIT`). Where the checks after every event would compare
+  more than 20,000 pairs or read more than 2,000,000 characters of results, the
+  check runs after the first event and after the last event of each third of the
+  events, and after no other (`STEPPED_PAIRS` and `STEPPED_SIZE`).
+- In 2 modules the run with the events sent three times has a commit refused for
+  a reason that the run of the scenario as given did not have: a slot with no
+  binding in `apps/contacts/contact-book.tsx`, and an unsupported claim
+  `writeAuthorizedBy` in `dev/test/cfc-trusted-write/frozen.tsx`.
+- The limits of the check as given hold here as well: one other value per input,
+  confidentiality alone, and the kept outputs and the targets of write edges
+  alone.
 
 What the check does not establish:
 
@@ -679,13 +842,15 @@ What the check does not establish:
 - It checks the kept outputs and the targets of write edges, and no other stored
   state.
 - A scenario is a sequence of events that the corpus or a fixture gives. A
-  defect that needs another sequence is not seen: the `push` defect of "To read
-  first" needs an addition of a labeled value to a list followed by an addition
-  of a value with no label, and no scenario has them.
-- 34 of the 238 modules are not checked. 23 have a commit refused with the
+  defect that needs another sequence is not seen by the run of the scenario as
+  given: the `push` defect of the seventh run needs an addition of a labeled
+  value to a list followed by an addition of a value with no label, and no
+  scenario has them. The run with every event sent three times, above, is made
+  for that.
+- 32 of the 238 modules are not checked. 22 have a commit refused with the
   option on, so the storage holds the values of an earlier commit; what the
-  check finds there is kept apart and not counted, 59 findings in 11 modules
-  (`soundness-unstored.tsv` of the run's tables). In 7 modules two runs on one
+  check finds there is kept apart and not counted, 58 findings in 11 modules
+  (`soundness-unstored.tsv` of the run's tables). In 6 modules two runs on one
   scenario give different values, and 4 read the clock.
 - 6 inputs have no run of their own, because no value of their type differs from
   the one the scenario gives.
@@ -721,14 +886,12 @@ the value was computed from.
   the handle and wrote back what they kept with `set`, so each kept value was
   stored at another position under a template that holds the handle's slot and
   the removed member in the class `identity` alone. By the owner's ruling of
-  2026-11-20 a removal removes in place, and it is built: each removed position
-  is one splice of the stored list (`Handle.#removeAt`), the executor writes no
-  member that the list keeps, and a kept reference stays the reference it was,
-  to a document the removal does not write. `Instance.readDeciding` binds the
-  handle's slot, in the class `value`, to what the comparison with each member
-  read, since which members the list keeps depends on it. The label that the
-  write of a removal stores is as wide as before the change, and what it should
-  be is "The label rule of a removal" below.
+  2026-11-20 a removal removes in place, and it is built: each run of removed
+  positions next to each other is one splice of the stored list
+  (`Handle.#removeAt`), the executor writes no member that the list keeps, and a
+  kept reference stays the reference it was, to a document the removal does not
+  write. What the labels of a removal are is "A change of a list's members
+  through a handle" under "What is built".
 - *A chain that ends at a position the transaction wrote.* The adapter replaced
   such a binding by the staged position alone and dropped the positions that a
   link stored there led to. A chain binding can be marked `staged`: each of its
@@ -761,9 +924,30 @@ the value was computed from.
   transactions that read different labeled sources and finds one identifier for
   their values and two for them as references. No row of the corpus was traced
   to this defect; it was found by reading and pinned by the tests.
+- *A change of the members of a list through a handle lost what an earlier
+  change decided,* in the five cases of "To read first", 5. Tests:
+  `compare/test/stored-labels.test.ts` ("after several changes of the members of
+  a list of plain values in place", "after the other methods of a handle changed
+  a list of plain values in place", "after several pushes onto an array of
+  references") and `runtime/runner/test/cfc-plan-labels.test.ts` ("for changes
+  of the members of a list in place").
+- *A label formed again after a label changed alone,* the two defects of "To
+  read first", 6 and 7. Tests: `runtime/runner/test/cfc-plan-labels.test.ts`
+  ("for a record given again because a label changed alone").
+- *The schema input of a write below a member of an array.* The adapter recorded
+  the schema input of a write at `0/done` below an input's array at that path. A
+  schema input is spelled from its path with each segment as a named property,
+  and the envelope that the document stores spells an array as an array, so the
+  two did not merge and the preparation crashed with "type changed incompatibly"
+  in `dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`. The input is
+  recorded at the outermost array on the way, with an index spelled as `items`
+  (`RuntimeTransactions.#recordSchema` of `compare/runtime-transactions.ts`). It
+  is fixed in the adapter and not in `runtime/runner/src/cell.ts`.
 
-The first corpus run of the check found 6 values in 4 modules, the sixth run 3
-in 1 module, and the seventh finds none.
+The check on each scenario as given found 6 values in 4 modules at its first
+corpus run, 3 in 1 module at the sixth, and none at the seventh and the eighth.
+The check with every event sent three times, new in the eighth run, finds 27 in
+3 modules.
 
 **The cost that grows with the data.**
 `dev/experimental/folksonomy-stress-test.tsx` holds a list of 10,000 references.
@@ -796,13 +980,41 @@ Measured there, with the option on:
   transaction of the module, which writes 10,000 elements, records 10,007 write
   records of 11.9 MB together.
 
-The 12 preparations of the module took about 7,700 ms in the fifth run, 941 ms
-in the sixth and 1,221 ms in the seventh, which ran under a higher load; that is
-46% of the preparation time of the whole corpus with the option on. The size of
-the records was measured at the sixth run and not again. The three open costs
-are linear in the number of elements, for an array of references; an array of
-plain values in place and the result of another per-element construct were not
-measured. How a write record is bounded is question 318 of the design's plan.
+The preparations of the module took about 7,700 ms in the fifth run, 941 ms in
+the sixth, 1,221 ms in the seventh and 942 ms in the eighth, which has 14 of
+them; that is 43% of the preparation time of the whole corpus with the option
+on. The size of the records was measured at the sixth run and not again. The
+three open costs are linear in the number of elements, for an array of
+references; an array of plain values in place and the result of another
+per-element construct were not measured. How a write record is bounded is
+question 318 of the design's plan.
+
+*Open, and serious: the executor's time for an event and its memory on the same
+module.* This cost is in the executor and not in the labels. Run in memory with
+generated events (21 events; the times are equal within 5% at commit
+`699ba789d2`):
+
+| Event | Time | Result, characters of text |
+| --- | ---: | ---: |
+| 0, `loadActions` | 470 ms | 1.06 million |
+| 1, `removeTagHandler` | 21 ms | 1.06 million |
+| 2, `addTagHandler` | 84 ms | 1.06 million |
+| 3, `onRemoveTag` | 373 ms | 1.06 million |
+| 6, `clearAction` | 21 ms | 12 thousand |
+| 13, `loadActions` | 462 ms | 1.06 million |
+| 14, `loadActions` | 4,371 ms | 1.06 million |
+| 15, `removeTagHandler` | 3,834 ms | 1.06 million |
+| 16, `addTagHandler` | 14,794 ms | 1.06 million |
+| 17, `onRemoveTag` | 1,123 ms | 1.06 million |
+| 18, `onTagsChanged` | 14 ms | 1.06 million |
+| 19, `handlePostEvent` | 314 ms | 1.06 million |
+
+The slow events begin with the `loadActions` that is sent while the result of
+the `loadActions` before it is loaded, which is the third such event of the run.
+A process that held the runs in memory beside the run in storage stopped with
+"out of memory" at a heap of 4 GB. The list of the module is an array of
+references. The cause is not investigated: whether it is the list replaced a
+second time, the memo entries of the first list, or something else is not known.
 
 **What is built.** On branch `claude/compiled-pattern-m4`, behind the
 experimental option `compiledPatterns`, off by default. The runtime side,
@@ -944,32 +1156,117 @@ Built with it:
   `08-12-store-label-monotonicity.md`).
 - **What a commit that stores a label alone does to readers.** The labels of a
   document are stored in the document, and a read of a labeled value consumes
-  them. A commit that changes the label at a path runs a reader of the value
-  again and conflicts with a transaction that read the value before, which a
-  write of an equal value did not. A commit that would store the label the path
-  holds already writes nothing, runs no reader and conflicts with nothing. The
-  tests of `runtime/runner/test/cfc-plan-labels.test.ts` ("for a write that left
-  the value as it was") state each.
-- **The labels of the kept outputs are formed again after a label changed
-  alone.** An output computed from a value whose label changed without its value
-  is not evaluated again, so its stored label would lack the new clause. After a
-  commit changed labels through a record of an unchanged write, the adapter
-  tells the executor (`watchLabels`, with `alone`), and the executor gives the
-  records of the kept outputs again in a derivation transaction of its own, as
-  those of writes that leave the values as they are (`Instance.#relabel`). The
-  executor keeps no record of which outputs read which label, so the work is the
-  number of kept outputs, each element of a per-element output counted, over an
-  array of references, over an array of plain values in place and over the
-  result of another per-element construct alike. An output with a kept output
-  below its path is left out, because the runtime stores a record's label for
-  its path and clears what is stored below it, and an output below that the plan
-  has no template for has no record to store its label again.
-- **A removal through a handle removes in place** ("Defects the check found,
-  fixed" above, and "The label rule of a removal" below).
+  them. Measured with the option off and with it on, with the same result
+  (`runtime/runner/test/cfc-plan-labels.test.ts`, "a commit that changes a
+  declared label and no value"): a commit that changes a declared label entry
+  and writes no value runs a sink that read the value again, and a transaction
+  that read the value before it fails with `StorageTransactionInconsistent`.
+  Both also hold where the changed label is that of another value of the same
+  document. So today's runtime wakes a reader and refuses an earlier reader for
+  a label-only commit, and for more readers than the changed label concerns.
+  What today's runtime does not do is store a label when a write leaves the
+  value as it was; that is the rule above, for compiled patterns alone. For
+  soundness: a transaction that read the value under the earlier label cannot
+  commit on it, since a label read remains a dependency of the commit (section
+  8.10.1, `08-10-validation-at-boundaries.md`); and a label that a computation
+  derived earlier and that does not run again keeps what it had, which the
+  specification permits (section 8.9.4, `08-09-runtime-label-propagation.md`). A
+  commit that would store the label the path holds already writes nothing, runs
+  no reader and conflicts with nothing ("for a write that left the value as it
+  was" in the same file).
+- **The labels of the outputs that read a label are formed again after it
+  changed alone.** An output computed from a value whose label changed without
+  its value is not evaluated again, so its stored label would lack the new
+  clause. The executor keeps, for each record of an output it gave, the
+  positions that the inputs of the record read and the collections that its
+  template folds over (`Instance.#noteRecord`). After a commit changed labels
+  and no value, the adapter tells the executor (`watchLabels`, with `alone`),
+  and the executor gives again the records whose inputs read a position at,
+  above or below a changed entry and those that fold over a collection with an
+  element whose group changed (`Instance.#recordsReading`), in a derivation
+  transaction of its own (`Instance.#relabel`). Each is marked
+  `PlanWrite.relabel`: the runtime stores the label at the record's path and
+  leaves the entries below it (`PlanLabels.labelOnly` of
+  `runtime/runner/src/cfc/plan-labels.ts`). A record given in the transaction
+  that stored the label is not given again. One changed label among 10 elements
+  and among 1,000 gives the same records again, over an array of references (a
+  test of `exec/test/transaction-hooks.test.ts`); an array of plain values in
+  place and the result of another per-element construct were not measured. The
+  records are found by position and not by class, so an output that holds a link
+  is given again when any label of the document the link names changes ("To read
+  first", 9). The adapter reports the label entries a commit changed for every
+  document the transaction wrote.
+- **A change of a list's members through a handle,** by the owner's rulings of
+  2026-11-20 for a removal (Z71, Z72 and Z73 of the design's plan) and by the
+  provisional decision P39 of that plan, which is the coordinator's, for an
+  addition. It holds for an array of plain values in place and for an array of
+  references; the result of another per-element construct has no handle to
+  change it through.
+  - *The storage write.* The adapter writes a splice of a stored array as the
+    number of members and the positions the splice changed, and no position
+    before it (`RuntimeTransactions.change`). The labels stored for the
+    positions before the splice stay with them.
+  - *The records.* `Instance.#memberWrites` of `exec/executor.ts` gives one
+    record for each member added, at its own position; one for the number of
+    members where it changes; and one for the membership of the list, marked
+    `PlanWrite.enumeration`, which labels no member. Every record holds what the
+    method compared to find the members (`PlanWrite.decided`) and what the list
+    stored of its membership, the label of its number of members and of its
+    enumeration (`PlanWrite.observed`). `Handle.#positionsOf` reports what the
+    comparison read: which positions the list has; at a position that holds a
+    link, the reference and nothing of the document it names; at a position that
+    holds a plain value, the value. A write through `key(n).set` at the position
+    behind the last member is recorded as an addition (`Instance.#changed`). The
+    record of an added member holds what the list stored of its membership as
+    well, so its position stores what decided earlier additions. By the owner's
+    ruling on an append (Z74) a position does not carry that, and this part is
+    being removed; the records of the number of members and of the membership
+    keep it.
+  - *The membership.* The runtime stores the label of the membership record as
+    the `enumerate` entry at the list's path, in place of the one it carried:
+    what the list stored of its membership joined with what decided the change
+    (`prepareBoundaryCommitSteps`, the loop over `memberChanges`). The entries
+    of the positions at or beyond the number of members the list has after the
+    change are dropped, a `shape` entry among them, so a position created again
+    mints its existence entry again. A write that replaces an array stores its
+    label as the `enumerate` entry of the array as well.
+  - *What decided a removal is stored once for the list* (Z71). Where the change
+    removed members (`PlanWrite.removes`), the label of what decided it, the
+    record's template joined with what the comparison read, is joined into the
+    list's `*`-child entries of origin `structure` in the classes `shape`,
+    `value` and `followRef`, confidentiality alone. A member's own entries are
+    of origin `derived`. The resolution resolves each origin on its own and
+    joins the results (`resolvedEntryGroups` of
+    `runtime/runner/src/cfc/consumed-label.ts`), so a read of a position joins
+    the `*` entry with the position's own entry and the resolver is unchanged.
+    Successive removals join into the entries. A write that replaces the list
+    clears them. They are kept for a list that a removal leaves empty. A read of
+    a member that stands before the first removed position consumes them too,
+    although the removal did not change what that position holds; that is the
+    cost of one entry in place of one per moved member. The specification states
+    such a wildcard entry for `shape` and for slots that hold references, and
+    not for the `value` class of a plain value in place, so this needs the
+    sentence of "The label rule of a removal" below.
+  - *A kept member that moves keeps its entries* (Z72). The membership record
+    names the runs of members that the change kept at another position
+    (`PlanWrite.moves`, `PlanWrite.start`). The preparation carries the stored
+    entries of origin `derived` and `structure` at or below a moved member under
+    the member's new path, integrity included, and drops those of a removed
+    member (`memberEntryPlacement`). The existence entries, of the class
+    `shape`, stay at their positions. No template is instantiated for a kept
+    member, and the storage write that puts a moved member at its position
+    stamps nothing (`isMovedMemberWrite`).
+  - *A change that finds nothing to do is a label write of the membership*
+    (Z73). A removal that finds no member, and `addUnique` of a member the list
+    holds, give the records of the number of members and of the membership as
+    those of writes that left the value as it was (`Handle.#kept`,
+    `Instance.membersKept`), so both take what the comparison read.
+
+  The `enumerate` entry and the `*` entries are not measured by writer-fit.
 - **The budget of pending-specification markers is 80,** by the owner's ruling
   of 2026-11-20 (`SPEC_PENDING_BUDGET` of `tasks/check-cfc-correspondence.ts`).
-  The governed files hold 41 markers at commit `699ba789d2`, of which 20 are in
-  `prepare.ts` and 7 in `plan-labels.ts`.
+  The governed files hold 46 markers at commit `429a62aba5`, of which 24 are in
+  `prepare.ts` and 8 in `plan-labels.ts`.
 
 **The acceptance result.** On `examples/cfc-input-cell-demo/briefing.tsx`,
 with the option on, `climate`, which reads `city` alone, stores only the
@@ -999,56 +1296,129 @@ its citations. Its result, by case:
   hold. This agrees with the ruling as worded.
 - *An array of plain values in place.* A kept element before the first removed
   position is not written. A kept element from the first removed position on
-  stands at another position: the path was overwritten, and its `value` label is
-  the element's own label joined with D. A static read of a position consumes
-  nothing of the list's enumeration, so D has to be at the position: after
+  stands at another position. A static read of a position consumes nothing of
+  the list's enumeration, so D has to be consumed at the position: after
   `words.removeByValue(secret)` over `["a", "b"]`, a read of `words[0]` gives
-  `"a"` or `"b"` by whether `secret` equals `"a"`. **This contradicts the ruling
-  as worded,** which says that the kept elements are not labeled again with what
-  the removal read, and which names the write of `footprint-analysis.md` §6.1,
-  the container's enumeration alone.
+  `"a"` or `"b"` by whether `secret` equals `"a"`. Read by its letter the
+  specification puts D on the `value` entry of every such position, one entry
+  written per kept element.
 - *The result of another per-element construct* (`map`, `filter`, `flatMap`) has
   no handle a body can remove through. A removal from its source is one of the
   two cases above, and the derived collection follows from its membership
   template: the elements that remain keep their keys, their state and their
-  labels, and none is evaluated again for the removal.
+  labels, and none is evaluated again for the removal. By the owner's ruling on
+  an append, an addition to the source puts nothing of the source's membership
+  on a position of the derived collection (open finding 4); what a position
+  carries of a removal from the source is not decided.
 
-The derivation leaves three questions for the owner: whether the positions from
-the first removed one on take D over an array of plain values in place (question
-320 of the design's plan, with three alternatives), whether a kept element that
-moves keeps its integrity (question 321), and whether a removal that finds
-nothing writes the enumeration (question 322). The provisional decision P39 of
-that plan, which is the coordinator's and no owner ruling, takes the first
-alternative of question 320: each position from the first removed one on stores
-its own label joined with D.
+The derivation left three questions, and the owner's rulings of 2026-11-20
+settle them (Z71, Z72 and Z73 of the design's plan; the owner's words for the
+three: "go with 3, move the entries, and yes"):
 
-What limits an implementation today, measured on `remove-shift.tsx` and two
-fixtures of the round:
+- *What decided a removal is stored once for the list,* over an array of plain
+  values in place: one `*` entry in the `value` class, which a read of a
+  position joins with the position's own entry. It replaces the first
+  alternative, an entry written per moved element, in the provisional decision
+  P39.
+- *A kept element that moves keeps its integrity:* the runtime moves the stored
+  label entries with the members of an array it splices, and no template is
+  instantiated for the kept element.
+- *A removal that finds nothing is a label write of the enumeration,* as a write
+  that leaves a value as it was stores its label.
 
-- *The adapter writes a spliced array whole,* so every list that a handler adds
-  to or removes from has one `value` label, that of its last write. For a
-  removal that label is D as the executor computes it. Over an array of plain
-  values in place the kept elements are covered by D and not by labels of their
-  own. Over an array of references the executor's comparison reads the whole
-  list with `get`, so D also holds the values of the targets, which is wider
-  than the rule.
-- *The runtime has no enumeration entry for a list of plain values in place.* It
-  stamps `enumerate` entries on containers of links alone (`structureStampPaths`
-  of `runtime/runner/src/cfc/prepare.ts`). A count or an enumeration of a list
-  of plain values in place reads the `shape` entry of the list and, through the
-  path below it, the list's `value` entry. A rule that puts what a decision read
-  on the enumeration therefore has no entry to store it in for this case.
-- *Two fixes of the `push` defect were withdrawn.* A record per pushed position
-  keeps the labels of the elements apart and removes the defect, and then the
-  count of the list no longer holds what decided the addition (1 failure of the
-  check on the round's fixture `count-after-change.tsx`, 0 before). Joining the
-  stored label of the list into the write reads the list recursively, and where
-  an element's type declares a clause on a member the label at the list's path
-  then holds that clause and the write is refused as a writer-fit misfit.
-- *Seen in today's runtime:* after a whole-array write that shortens an array, a
-  `shape` entry stays at a position that no longer exists. That is wider than
-  the rule as long as a later creation of the position mints the entry again,
-  which was not verified.
+All three are built ("A change of a list's members through a handle" under "What
+is built").
+
+**The specification sentence that the first ruling needs,** as proposed, pending
+the specification pull request. It is for section 4.6.3 of the label
+representation chapter (`04-label-representation.md`), in the paragraph
+"Wildcard per-class entries (conforming template representation)", after the
+sentence that lists what the per-class twins cover:
+
+> The same holds where a writer changes the membership of a container of values
+> stored in place by removing members: the runtime MAY store the join of what
+> decided the removal once, as per-class twins at the container's wildcard child
+> path, in place of rewriting the `value` entry of every member the removal
+> moved. A wildcard twin minted this way is *additive* in the `value` class as
+> well: the effective `value` label of a child is the join of the twin and the
+> child's own most specific `value` entry, and a more specific concrete entry
+> does not replace the twin. Successive membership decisions join into the twin;
+> it is cleared only by a write that replaces the container, whose own
+> derivation then labels every member.
+
+The paragraph as it stands states the twins for a container whose slots hold
+references, and states the join of a wildcard entry with a concrete entry for
+the frozen `shape` entry alone ("Frozen existence joins with membership
+templates", the one stated exception to the rule that a more specific entry
+replaces). For the `value` class a member's own entry would replace the twin,
+and a read of the member would not consume what decided which member stands at
+the position. The sentence adds a second exception. The deciding sites carry the
+`SPEC-PENDING` marker for specs pull request 91.
+
+**The cost of a removal at position k of a list of n members,** as built, read
+from the code and not measured as time:
+
+- *The executor.* The comparison reads the positions 0 to k for `remove`, which
+  stops at the first match, and all n positions for `removeAll` and
+  `removeByValue`. Over an array of references it compares the references and
+  reads no document they name. Each run of removed positions next to each other
+  is one splice, so a `removeAll` of r runs makes r splices. It gives two
+  records whatever n is: the number of members, and the membership, which names
+  the runs of moved members.
+- *The pre-pass.* One template instantiation, since the records of one change
+  share their bindings (`sameTemplateInputs` of `plan-labels.ts`). The positions
+  that the comparison read are resolved once, k + 2 or n + 1 label lookups.
+- *The preparation.* The stored entries of the n - k - 1 moved members are
+  carried under another path, one path rewritten per entry that a member has,
+  and a member with no entry of its own costs nothing. No label is computed for
+  them. The entries written are the `value` and `shape` entries of the number of
+  members where they change, the `enumerate` entry of the list, and three `*`
+  entries.
+- *The storage write.* The adapter writes n - k - 1 positions and the number of
+  members. That is the cost of shifting an array stored in one document, and no
+  cost of the labels.
+
+With an entry written per moved element, the first alternative, the same removal
+wrote n - k - 1 `value` entries, each with a label of its own to intern.
+
+**The relation to pull request commonfabric/labs#10080,** an open point for the
+owner. That pull request is merged to `main` (2026-11-20). It moves stored label
+entries with the members of an array for today's runtime, with no option. It
+adds `elementEntryPlacements` to `runtime/runner/src/cfc/prepare.ts` and
+`keptElementIndices` to `runtime/runner/src/storage/array-edit-script.ts`. The
+branch of milestone 4 does not hold it, so the relation is one between the
+branch and `main`, and a catch-up merge of the branch conflicts in `prepare.ts`.
+
+- *The same place.* Both changes apply a placement to a carried entry in the
+  loop of `prepareBoundaryCommitSteps` that carries the stored entries, at the
+  same point of it, with the same result type (an entry is kept, moved to a
+  path, or dropped), for the same classes of entries (`derived` and `structure`,
+  the existence entries excepted), and with the same code for a moved and a
+  dropped entry. Both define a type named `ElementEntryPlacement`. They conflict
+  textually, at the catch-up merge.
+- *Where the alignment comes from.* `main` infers it from the values the
+  transaction wrote: a shortest edit script within 64 edits, then a pairing of
+  equal removed and added members. Milestone 4 takes it from the executor's
+  record of the splice (`PlanWrite.moves`, `PlanWrite.start`), which is exact
+  where two members are equal.
+- *What can be shared.* The type, and the block that applies a placement to a
+  carried entry. A merged form takes a list of alignments, each an array path
+  with a map from old position to new position, from either source.
+- *Which has to win.* After the merge and with the option on, the alignment of
+  `main` would also run on the adapter's writes of single positions. For an
+  array that has a membership record, the record's placement has to win and the
+  alignment by value has to skip that array; otherwise an entry is moved twice,
+  or by the wrong pairing where two members are equal.
+
+For the owner: whether the catch-up merge makes the two one function with two
+sources of alignment, in which the record wins for an array that has one. It is
+question 327 of the design's plan.
+
+**Not verified** for a change of a list's members: members removed and added in
+one transaction at the same position; records in place with entries below them,
+under a `*` entry of origin `structure` that a `structure` entry further down
+could replace; `key(i).set(undefined)`; and a write beyond the end of a list,
+which crashes the executor (`exec/parts.ts`).
 
 **The cost of one changed element.** `compare/template-cost.ts`, a
 `filter` over a list of 100, 1,000 and 10,000 elements with one element
@@ -1128,89 +1498,121 @@ that has no function. Beside today's rows:
 
 | | Equal | Tighter | Looser | Other |
 | --- | ---: | ---: | ---: | --- |
-| 1,695 output rows | 288 | 1,013 | 118 | 263 whose atom names the pattern, 13 incomparable |
-| 199 write rows | 129 | 10 | 57 | 3 incomparable |
+| 1,695 output rows | 346 | 959 | 112 | 265 whose atom names the pattern, 13 incomparable |
+| 203 write rows | 130 | 9 | 61 | 3 incomparable |
 
-45 of today's rows have no stored write and 4 no stored output to compare. The
-175 looser rows, by the cause the run's classification gives each:
+41 of today's rows have no stored write and 4 no stored output to compare. The
+run does not classify the 173 looser rows by cause. Counted from the run's rows
+(`labels.jsonl`), with a row counted under the first condition that holds: 63
+are in a module with a commit refused with the option on, so the storage holds
+the labels of an earlier commit (open finding 9); 50 are looser in
+confidentiality in a module that used the bound of a selection, a pick or a fold
+(open finding 10); 23 are looser in confidentiality with no bound used and no
+refused commit; and 37 are looser in integrity alone. The causes of the seventh
+run for integrity alone, a handler write whose inputs have no label and so mints
+no atom, and the atom of a kept output on the link's entry, were not counted
+again.
 
-| Cause | Rows |
-| --- | ---: |
-| The module has commits refused with the option on, so the storage holds the labels of an earlier commit (open finding 7) | 59 |
-| Confidentiality: the module used the bound of a selection, a pick or a fold (open finding 8) | 46 |
-| Integrity alone: a handler write whose template, the `derive` of its body, has inputs with no label mints no atom (`plan-and-label-templates.md` §3.2), where today stamps `TransformedBy` of the handler from a transaction join that is not empty | 42 |
-| Confidentiality looser with no bound used and no refused commit: 5 rows of `product/primitives/counter.tsx`, 3 of `dev/gideon-tests/test-cross-piece-client.tsx`, and 4 where today's label holds no clause; none attributed (open finding 9) | 12 |
-| Integrity alone: other atoms that today has and the template lacks | 8 |
-| Integrity alone: a kept output whose atom is on the link's entry, which a read of the value through the link does not take, and whose target holds none (open finding 10) | 5 |
-| Confidentiality: the clause is stored at an ancestor path written whole, 3 rows of `product/primitives/counter.tsx` | 3 |
+Against the seventh run, by row:
 
-30 rows are looser that were not looser in the sixth run: 19 output rows that
-were tighter, 9 whose atom named the pattern, and 2 write rows that had no
-stored write to compare. All 30 are in 5 modules that record writes that left
-the value as it was (`apps/base/person.tsx`, `apps/base/family-member.tsx`,
-`product/collection-naming/item.tsx`, `product/primitives/counter.tsx` and
-`apps/cozy-poll/main.tsx`; the 2 write rows are `updateTags` of the first two).
-28 are looser in confidentiality and the 2 write rows in integrity alone. The
-attribution is that the stored label holds a clause of what a run read where
-today's label, by today's rule, lacks it; the rows were not inspected one by
-one, so that is not established for each. 18 of them are counted under the bound
-in the table, because their modules also used one, 2 under a refused commit, and
-the 8 of `product/primitives/counter.tsx` under the two causes that name it.
+- *67 output rows that were tighter are equal,* in 8 modules, 52 of them in
+  `examples/cfc-spec-gallery/main.tsx`. The cause given, not checked row by row:
+  the atom of an output that holds a link is stored on a `value` entry when the
+  result document is written whole, and on the link's `followRef` entry when the
+  record is given for the path alone, as after a label changed alone; the
+  comparison reads the class `value`. The two places are inconsistent, and that
+  is not fixed.
+- *15 output rows that were looser are tighter, and 6 name the pattern's atom:*
+  a record given again after a label changed alone no longer widens.
+- *19 rows are looser that were not:* 15 output rows and 1 write row in 10
+  modules (`rows-moved-to-looser.tsv` of the run's tables), and 3 write rows in
+  3 further modules that had no stored write to compare. 14 of the 16 store
+  clauses of more inputs than in the seventh run, for example `roomCount` of
+  `examples/scoped-group-chat/main-with-writable-inputs.tsx` holds `name` and
+  `rowCount` of `product/primitives/sortable-table.tsx` holds `columns`. That a
+  count or a position holds what decided earlier additions is the rule of a
+  change of a list's members; whether each of the 14 is that rule was not
+  checked row by row. Where a position and not a count holds it, the row is
+  wider than the owner's ruling on an append asks, and narrows when that part is
+  removed. 2 rows of `apps/file-share/main.tsx` are looser in integrity with
+  equal confidentiality and are not explained by it; the module has a refused
+  commit that it did not have.
+- *The rows that became looser with the label of an unchanged write in the
+  seventh run.* Of 28 rows looser in confidentiality there, each run again with
+  and without the records of such writes, 11 are looser at this run and the rule
+  of the owner's ruling is the cause of each: 7 rows of
+  `product/primitives/counter.tsx`, `body` and `references` of
+  `product/collection-naming/item.tsx`, and the `tags` prop of
+  `apps/base/person.tsx` and of `apps/base/family-member.tsx`. 17 are no longer
+  looser. Their cause in the seventh run was therefore not the rule; the cause
+  given is the records of every kept output given again.
 
 The rows looser than today's are not all attributed, and "tighter" is not
-evidence of correctness (open finding 5), so the corpus does not show that the
+evidence of correctness (open finding 7), so the corpus does not show that the
 labels from templates are equal to or tighter than today's outside the
 deliberate exceptions. A label stored for a write that leaves the value as it
 was is such an exception: there the label is wider than today's by rule.
 
-Over the 20 modules that call `wish` and run, 25 rows are looser, in 6 modules.
-With the outcome of each `wish` under its own record and the comparison reading
-user-scoped links, 19 of those modules, run alone at the commit of that change,
-went from 26 looser rows to 11.
+How many of the looser rows are in modules that call `wish` was not counted for
+this run.
 
-Of 4,383 write records checked against the template evaluator of the prototype,
-3,801 agree. For 448 records in 8 modules no entry is stored at the record's
-path, where the evaluator gives a label: 416 of them are in the five modules of
-`examples/cfc-trusted-component-examples`, 26 in `apps/cozy-poll/main.tsx`, 5 in
-`dev/catalog/stories/kitchen-sink-story.tsx` and 1 in
-`apps/work-snapshot/main.tsx`. The sixth run had no such record; the cause is
-not examined (open finding 6). 125 were not evaluated, for dynamic reads that
-the record does not report. 6 records in 3 modules are equal in confidentiality
-and tighter in integrity than the evaluator's label, which is a bound there. 2
-records in 2 modules are equal in confidentiality and tighter in integrity, and
-1, in `examples/scoped-user-directory/main.tsx`, is looser in confidentiality
-than the evaluator's label.
+Of 4,271 write records checked against the template evaluator of the prototype,
+3,947 agree. For 80 records in 31 modules no entry is stored at the record's
+path, where the seventh run had 448 in 8 modules: the entries cleared below a
+path whose label was formed again are no longer cleared. 23 of the 80 are at the
+`length` of a list and 45 at the root path of the cell written. The reading
+given, with the classification of the run not corrected for it: those 68 are
+records of the number of members and of the membership of a list, whose label
+joins labels stored before the commit and which the evaluator cannot form, as it
+cannot for the 77 records in 28 modules that it reports as "not evaluated: joins
+labels stored before the commit". The other 12 are not examined (open finding
+8). 142 records were not evaluated, for dynamic reads that the record does not
+report. 23 records in 6 modules are equal in confidentiality and tighter in
+integrity than the evaluator's label, which is a bound there. 1 record, in
+`apps/contacts/contact-book.tsx`, is equal in confidentiality and tighter in
+integrity, and 1, in `examples/scoped-user-directory/main.tsx`, is looser in
+confidentiality than the evaluator's label.
 
-With the option on and not off, 38 commits in 24 modules are refused: 17 in 14
-modules for a slot bound to an empty chain, 16 in 9 modules for a slot with no
-binding, 3 in 2 modules for a pick whose choice was not reported and that
-chooses from no collection, 1 for a collection with no elements reported, and 1
-because the preparation crashed:
-`dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`, with "type changed
-incompatibly" from an object to an array at the root of a document, which is no
-refusal by a rule. `apps/topic-workbench/main.tsx` has 1 refused commit where it
-had 4. No run stopped after a refusal.
+With the option on and not off, 44 commits in 24 modules are refused: 19 in 10
+modules for a slot with no binding, 18 in 14 modules for a slot bound to an
+empty chain, 6 in 2 modules for a pick whose choice was not reported and that
+chooses from no collection, and 1 for a collection with no elements reported.
+`dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx` has none, with the crash
+of the preparation fixed. `apps/file-share/main.tsx` has one where it had none,
+for a slot with no binding. `apps/base/contacts.tsx` has 6 where it had 3,
+`apps/lunch-poll/participant-identity-card.tsx` 3 where it had 2, and
+`dev/experimental/folksonomy-stress-test.tsx` 7 where it had 5, for the same
+reasons more often. Why they rose is not investigated. No run stopped after a
+refusal.
 
-Over the 238 modules the option off made 2,695 commits and 652 preparations in
-373 ms, and the option on 2,902 commits and 1,510 preparations in 2,639 ms, of
-which `dev/experimental/folksonomy-stress-test.tsx` accounts for 1,221 ms (open
-finding 3). The machine was under load during the run (load averages between 7
-and 12), so the times are an upper bound and not a measurement of the cost. With
-the option on the runtime took a bound 342 times, in 53 modules.
+Over the 238 modules the option off made 2,699 commits and 652 preparations in
+257 ms, and the option on 2,760 commits and 1,438 preparations in 2,176 ms, of
+which `dev/experimental/folksonomy-stress-test.tsx` accounts for 942 ms (open
+finding 11). The machine was under load during the run (load averages between 7
+and 8), so the times are an upper bound and not a measurement of the cost. With
+the option on the runtime took a bound 499 times, in 53 modules, where it took
+one 342 times in the seventh run; why the count rose is not investigated.
 
 **The cost of a label for a write that leaves the value as it was.** With the
-option on, 900 write records in 21 modules are those of a write that left the
-value as it was, and the commits that recorded them changed 1,385 label entries.
-Against the sixth run, which gave no record for such a write, the option on
-makes 259 more commits, 226 more preparations and 527 ms more preparation time
-under a higher load; the option off is unchanged. 14 modules make more commits
-and 2 fewer. The five modules of `examples/cfc-trusted-component-examples`
-account for 240 of the added commits, 208 of the added preparations and 661 of
-the 900 records; `main.tsx` alone makes 120 more commits. Why these modules
-commit so much more is not established. Two mechanisms add commits by
-construction: a derivation transaction that gives the records of every kept
-output again after a label changed alone, and a reader that runs again because
-the label it consumed changed.
+option on, 756 write records in 67 modules are those of a write that left the
+value as it was, and the commits that recorded them changed 3,625 label entries.
+The seventh run had 900 such records in 21 modules and 1,385 changed entries.
+The records are in more modules because a change of a list's members that finds
+nothing to do gives such records, and because the adapter reports the changed
+label entries of every written document. The option on makes 61 more commits
+than the option off, where the seventh run made 207 more. The five modules of
+`examples/cfc-trusted-component-examples`, which accounted for 240 of the added
+commits of the seventh run, make 810 commits with the option on against 806 with
+it off: `main.tsx` 402 against 400, and `confirmation-release-examples.tsx` 27
+against 26, where the seventh run had 522 and 42. The cause was the defect of
+"To read first", 6: an entry cleared below a path whose label was formed again
+was stored again by the next evaluation, which changed labels alone again, so a
+relabeling transaction followed every event.
+`examples/cfc-spec-gallery/main.tsx` makes 18 more commits than in the seventh
+run ("To read first", 9). Two mechanisms add commits by construction: a
+derivation transaction that gives again the records of the outputs that read a
+label that changed alone, and a reader that runs again because the label it
+consumed changed.
 
 Today's runtime committed 1,882 transactions to its storage from the start of
 the instances until every kept output was read, 1,796 from the first event on,
@@ -1301,109 +1703,135 @@ type declares no structure widens where it repeats
   first takes the label of a write further up or the join, and the second the
   label stored at the position.
 
-**Open findings,** most serious first.
+**Open findings.** The open soundness findings come first, then cost, then the
+rest.
 
-1. *A `push` through a handle drops the label of what the list already holds,
-   over an array of plain values in place.* Unsound. The list has one `value`
-   label, that of its last write, because the adapter writes a spliced array
-   whole and the template of a `push` holds nothing of what the list stored ("To
-   read first", 1). The same holds for `pushAll` and `addUnique`, by the same
-   write; that was not measured. No corpus scenario shows it. Two fixes were
-   withdrawn ("The label rule of a removal", what limits an implementation). The
-   rule to build is the provisional decision P39 of the design's plan: an
-   enumeration entry at the list's path that an addition or a removal replaces
-   with the stored enumeration joined with what decided the change, and an added
-   element recorded at its own position. It needs a change of
-   `runtime/runner/src/cfc/prepare.ts`, which stamps no enumeration entry on a
-   list of plain values in place. Question 323 of the design's plan.
-2. *The label of a removal through a handle is not the derived rule.* The
-   executor removes in place. The list still has one `value` label, which for a
-   removal is what its decision read: over an array of plain values in place the
-   kept elements before the first removed position are covered by it although
-   the rule leaves them alone, and over an array of references it also holds the
-   values of the targets, because the comparison reads the whole list with
-   `get`. The derived rule contradicts the owner's ruling as worded for an array
-   of plain values in place ("The label rule of a removal"). Questions 320 to
-   322 of the design's plan are for the owner; P39 is what is built next.
-3. *Write records, and the work on them, grow with the data* ("The cost that
-   grows with the data", above). Three costs are linear in the number of
-   elements: the walk of every position for its label identifier, the one chain
-   of an `identity` slot that holds every position, and one write record per
-   element of a write of many elements. The preparations of
-   `dev/experimental/folksonomy-stress-test.tsx` take 102 ms each, against under
-   1 ms each over the rest of the corpus. Question 318 of the design's plan.
-4. *The cost of a label for a write that leaves the value as it was* ("The cost
-   of a label for a write that leaves the value as it was", above). 259 more
-   commits and 226 more preparations over the corpus, 240 and 208 of them in
-   five modules, cause not established. After a label changed alone the executor
-   gives the records of every kept output again, and not those of the outputs
-   that read the label, so that work grows with the number of kept outputs.
-   `scheduler-and-serving-loop.md` §3.6 has the rule that limits it to the
-   outputs whose template reaches the changed slot. Question 324 of the design's
-   plan.
-5. *The check against the values is a lower bound, and "tighter" in the
+1. *11 values that depend on an input and store no clause of it are not
+   triaged:* 10 of `examples/map-demo/map-demo.tsx` and 1 of
+   `apps/base/person.tsx` ("To read first", 1). Unsound until shown otherwise;
+   any of them may be an artifact of the check, as finding 4 is.
+2. *A read of a position that holds no member* consumes nothing of the list's
+   membership after additions alone, over an array of plain values in place and
+   over an array of references. Unsound: `words[5] === undefined` reveals the
+   number of members. The resolver has to know that the position holds no
+   member. No test states it ("To read first", 2).
+3. *An array inside a value written whole* gets no `enumerate` entry, so a read
+   of its members, their order or their number does not consume the label of the
+   write. Unsound. Not built ("To read first", 3).
+4. *The check takes a member appended at another index for a dependency, and the
+   positions of a list hold what decided earlier additions.* Neither is a
+   soundness finding. By the owner's ruling of 2026-11-20 (Z74 of the design's
+   plan) an append through a handle puts the membership of the list on no
+   position, of the list or of a per-element result over it. The 16 values that
+   the check reports in `examples/todo-list/todo-list.tsx`, at the positions 1
+   to 4 of the result of a `map`, are an artifact of its criterion, and the
+   check is being changed ("To read first", 4). As built at commit `429a62aba5`
+   the record of an added member joins what the list stored of its membership,
+   over an array of plain values in place and over an array of references, which
+   is wider than the ruling; it is being removed. The number of members and the
+   enumeration keep what decided each addition, by the coordinator's reading of
+   the ruling.
+5. *The executor's time for an event and its memory on
+   `dev/experimental/folksonomy-stress-test.tsx`.* Serious, and not a cost of
+   the labels. After a `loadActions` sent while a result of about 1 MB is
+   loaded, events take 1.1 to 14.8 s where they took 21 to 373 ms, and a process
+   with the runs in memory beside the run in storage ran out of memory at 4 GB.
+   The same at commit `699ba789d2`. Cause not investigated ("The cost that grows
+   with the data").
+6. *After a label changed alone, the records to give again are found by position
+   and not by class,* so an output that holds a link is given again when any
+   label of the document the link names changes, though its slot reads the
+   reference alone: 18 more commits in `examples/cfc-spec-gallery/main.tsx`.
+   `scheduler-and-serving-loop.md` §3.6 has the rule, by the slots a template
+   reaches. And the comparison adapter reads the stored label entries of every
+   document a transaction writes, before and after, which grows with the entries
+   of a written document.
+7. *The check against the values is a lower bound, and "tighter" in the
    comparison is not evidence of correctness.* A row counts as tighter where the
    stored label has fewer clauses than today's, and a binding that leaves out a
-   read has exactly that effect. The check changes each input once, covers
-   confidentiality alone, runs the scenarios it is given, and leaves 34 modules
-   out, 23 of them for a refused commit, where it finds 59 values in 11 modules
-   that are not counted because the storage there holds an earlier commit. Those
-   59 are not examined. Finding 1 is a defect that the check passes over the
-   whole corpus.
-6. *448 write records have no entry stored at their path.* The comparison with
-   the template evaluator finds, in 8 modules, records whose path stores no
-   label entry where the evaluator gives a label; the sixth run had none. 416
-   are in the five modules of `examples/cfc-trusted-component-examples`, which
-   are also the modules of finding 4. Whether an entry stored further up covers
-   the path, or a label is missing, is not examined, and the check against the
-   values reports no failure in these modules.
-7. *Refusals that remain.* The 38 commits in 24 modules refused with the option
-   on and not off, with the reasons above. One of them is a crash of the
-   preparation and no refusal by a rule
-   (`dev/nested-map-ifelse-test/nested-map-ifelse-test.tsx`), new in the seventh
-   run and not examined. A module with a refused commit holds the labels of an
-   earlier commit, which accounts for 59 of the looser rows.
-8. *The bounds.* The runtime took a bound 342 times, because the value code or
-   the runtime does not report a selection, a choice or the addresses of a
-   dynamic read: picks through `.key(k)`; the `through` position of a scan; the
-   choice of `find`; the `select` over the keys of a record constructed in
-   place; the optional members of a spread; and dynamic reads of kind `link`
-   through a selected reference. `plan-and-label-templates.md` §4.2 has, for
-   each, who knows the answer, what is reported and where it is kept, and the
-   provisional decision P37 for the groups of a scan's prefix. 46 of the looser
-   rows are in modules that used a bound.
-9. *Looser rows that are not attributed.* 12 rows are looser in confidentiality
-   with no bound used and no refused commit. Today's label holds no clause at 4
-   of them where the template's holds one: one row each of
-   `dev/scope-bug-ct1597-reduce/main.tsx` and
-   `dev/test/non-idempotent/accumulator.tsx`, and two of
-   `showcase/battleship/multiplayer/room.tsx`. Why today's label is empty there
-   is not established: either today's runtime stores too narrow a label, or the
-   comparison reads the wrong position on today's side. None was reproduced in a
-   test outside the corpus run, so none is a finding against the runtime yet. 3
-   are in `dev/gideon-tests/test-cross-piece-client.tsx`, and 5 in
-   `product/primitives/counter.tsx`, which are among the 30 rows that became
-   looser with the label of an unchanged write and were not inspected one by
-   one.
-10. *The atom on a link is not taken by a read of the value through the link.* A
+   read has exactly that effect. The check on a scenario as given changes each
+   input once, covers confidentiality alone and leaves 32 modules out. The check
+   with every event sent three times covers 91 of the 238 modules, does not
+   reach a branch that one value of an input decides, and is cut short for a
+   large scenario. In modules with a refused commit the two find 58 values in 11
+   modules and 43 in 8 that are not counted, because the storage there holds an
+   earlier commit. They are not examined. The findings 1 to 3 were present at
+   the seventh run, which reported no failure.
+8. *80 write records have no entry stored at their path,* in 31 modules, where
+   the evaluator gives a label. 68 are read as records of the number of members
+   and of the membership of a list, which the evaluator cannot form; the
+   classification of the run is not corrected for that, and the reading is not
+   checked record by record. The other 12 are not examined.
+9. *Refusals that remain.* 44 commits in 24 modules are refused with the option
+   on and not off, 6 more than in the seventh run, with the reasons above. The
+   rise in `apps/base/contacts.tsx`,
+   `apps/lunch-poll/participant-identity-card.tsx` and
+   `dev/experimental/folksonomy-stress-test.tsx`, and the new refusal in
+   `apps/file-share/main.tsx`, are not investigated. A module with a refused
+   commit holds the labels of an earlier commit, which accounts for 63 of the
+   looser rows.
+10. *The bounds.* The runtime took a bound 499 times, in 53 modules, where it
+    took one 342 times; the rise is not investigated. A bound is taken because
+    the value code or the runtime does not report a selection, a choice or the
+    addresses of a dynamic read: picks through `.key(k)`; the `through` position
+    of a scan; the choice of `find`; the `select` over the keys of a record
+    constructed in place; the optional members of a spread; and dynamic reads of
+    kind `link` through a selected reference. `plan-and-label-templates.md` §4.2
+    has, for each, who knows the answer, what is reported and where it is kept,
+    and the provisional decision P37 for the groups of a scan's prefix. 50 of
+    the looser rows are looser in confidentiality in modules that used a bound.
+11. *Write records, and the work on them, grow with the data* ("The cost that
+    grows with the data", above). Three costs are linear in the number of
+    elements: the walk of every position for its label identifier, the one chain
+    of an `identity` slot that holds every position, and one write record per
+    element of a write of many elements. The 14 preparations of
+    `dev/experimental/folksonomy-stress-test.tsx` take 67 ms each, against under
+    1 ms each over the rest of the corpus. Question 318 of the design's plan.
+12. *The cost of a label for a write that leaves the value as it was* ("The cost
+    of a label for a write that leaves the value as it was", above). 61 more
+    commits with the option on than with it off, and 786 more preparations,
+    since every commit of a compiled pattern is prepared with the option on. The
+    cause of the 240 added commits of the seventh run in five modules is found
+    and fixed. Question 324 of the design's plan.
+13. *The atom of an output that holds a link is stored in two places.* It is on
+    a `value` entry when the result document is written whole and on the link's
+    `followRef` entry when the record is given for the path alone. 67 rows that
+    were tighter are equal for it. Not fixed, and not checked row by row.
+14. *Looser rows that are not attributed.* 23 rows are looser in confidentiality
+    with no bound used and no refused commit, and 37 in integrity alone. Of all
+    looser rows, 11 are the rule for a write that leaves the value as it was,
+    and up to 14 are read as the rule of a change of a list's members; the rest
+    were not inspected. In the seventh run today's label held no clause at 4
+    rows where the template's holds one (one row each of
+    `dev/scope-bug-ct1597-reduce/main.tsx` and
+    `dev/test/non-idempotent/accumulator.tsx`, and two of
+    `showcase/battleship/multiplayer/room.tsx`); they were not looked at again,
+    and none was reproduced in a test outside the corpus run, so none is a
+    finding against the runtime yet.
+15. *The atom on a link is not taken by a read of the value through the link.* A
     kept output that passes a value on by reference stores its atom on the
     link's entry. A reader that reads the target's content through the link
-    takes the integrity of the target alone, so it does not see the atom, and 5
-    rows are looser in integrity for it. Joining the atom onto the target's
-    content was not built: section 3.7.2 of the specification's core concepts
-    chapter (`03-core-concepts.md`) scopes the endorsement of a link to the
-    selection, and an atom with no scope joined onto the content would claim
-    that the pattern vouches for a value it only chose. Whether the atom on a
-    link is a selection endorsement with a scope, taken when the link is
-    traversed, is question 313 of the design's plan, for the owner.
-11. *A declared integrity that the crate emits as text.* The rows of
+    takes the integrity of the target alone, so it does not see the atom.
+    Joining the atom onto the target's content was not built: section 3.7.2 of
+    the specification's core concepts chapter (`03-core-concepts.md`) scopes the
+    endorsement of a link to the selection, and an atom with no scope joined
+    onto the content would claim that the pattern vouches for a value it only
+    chose. Whether the atom on a link is a selection endorsement with a scope,
+    taken when the link is traversed, is question 313 of the design's plan, for
+    the owner.
+16. *A declared integrity that the crate emits as text.* The rows of
     `examples/cfc-authorship-chat` differ from today's by the atom
     `authored-by`. The schema the crate emits for its cells holds the declared
     integrity as the text of its type, `ifc.integrity: { "$source": "readonly
     [AuthorshipIntegrity<IntegrityAuthor>]" }`, which the runtime refuses as
     malformed integrity. A cell with such a schema gets no document at the start
     and stores no declared label.
-12. *Seen in today's runtime, by reading and not measured:*
+17. *The catch-up merge with pull request commonfabric/labs#10080, which is
+    merged to `main`, the specification sentence, and what is not verified*
+    ("The label rule of a removal", above). The first is for the owner (question
+    327 of the design's plan); the second is proposed and pending the
+    specification pull request.
+18. *Seen in today's runtime, by reading and not measured:*
     `contractCandidatesForWrite` of `runtime/runner/src/cfc/ui-contract.ts`
     scans every write-policy input of the transaction for each write of an
     event's transaction (`recordTrustedEventPolicyInputs`), so its work is the
