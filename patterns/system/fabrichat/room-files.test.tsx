@@ -1,7 +1,8 @@
 /**
- * A FabriChat room's files: a room with a store offers a control that opens
- * the store's view for the session that presses it, and a room with none
- * offers no such control. Until a session opens it, the room holds no view,
+ * A FabriChat room's files: a room that is its space's root and has a store
+ * offers a control that opens the store's view for the session that presses
+ * it, and a room with none, or one that isn't its space's root, offers no such
+ * control. Until a session opens it, the room holds no view,
  * and shows none of the store's entries, though the store has one. Opened, the
  * view lists the entry, with its controls for an OWNER, who may change every
  * entry, and without them for a member who didn't add it. The store here
@@ -90,6 +91,19 @@ const RootRoom = pattern<
   } as RoomArg)
 );
 
+/** A room that isn't its space's root, whose root is `container`. */
+const InnerRoom = pattern<
+  { container: FabriChatRoomCoreOutput },
+  FabriChatRoomCoreOutput
+>(({ container }) =>
+  FabriChatRoomCore({
+    myProfile: Writable.of<ChatProfile>({ name: "Viewer" }),
+    container,
+    messages: Writable.of<MessagesValue>([] as MessagesValue),
+    fileStore: Writable.of<FileStoreRecord>({}),
+  } as RoomArg)
+);
+
 /** Every node under `root` whose `className` is `name`. */
 const withClass = (root: unknown, name: string): unknown[] =>
   findNodes(root, (node) => readValue(propValue(node, "className")) === name);
@@ -125,6 +139,8 @@ export const owner = pattern<{ setup: Setup }>(({ setup }) => {
   const store = StandInStore({ list: setup.list });
   // A room that is its space's root and keeps no store.
   const bare = RootRoom({ record: Writable.of<FileStoreRecord>({}) });
+  // A room whose space's root is `room`, which uses `room`'s store.
+  const inner = InnerRoom({ container: room });
 
   return {
     [TESTS]: [
@@ -145,6 +161,15 @@ export const owner = pattern<{ setup: Setup }>(({ setup }) => {
 
       // A room with no store offers no files control.
       { assertion: assert(() => toggleDisplay(bare[UI]) === "none") },
+
+      // Nor does a room that isn't its space's root, though it uses the
+      // root's store, whose files are the root's to show.
+      {
+        assertion: assert(() =>
+          inner.fileStore?.key("entries").get()?.length === 1
+        ),
+      },
+      { assertion: assert(() => toggleDisplay(inner[UI]) === "none") },
 
       // Unopened, the room holds no view, and lists none of the entries.
       { assertion: assert(() => toggleDisplay(room[UI]) === "block") },

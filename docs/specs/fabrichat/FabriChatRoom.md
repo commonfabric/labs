@@ -126,12 +126,14 @@ store is meant to be reachable and managed directly, through its own view
 removed like any other; the composer's removal keeps the common case tidy, and
 an entry it leaves is not lost.
 
-The room shows its space's files itself. Beside the attach control, a room
-whose space names a store (`fileStore`) offers a **Files** control, and a room
-whose space names none offers none. Pressing it opens the files for that
-session alone, which it keeps in a `PerSession` value of its own, and the room
-then instantiates `FileStoreView` on the store, under the composer. Pressing it
-again, as **Hide files**, closes them. The view is mapped from a list of the
+A room that is its space's root shows its space's files itself, as a root
+offering file storage does ([`FileStoreView`](../fabrifile/FileStoreView.md)).
+Beside the attach control, such a room offers a **Files** control once it names
+a store (`fileStore`). A room that names none offers none, and so does a room
+that isn't its space's root, whose files are its root's to show. Pressing it
+opens the files for that session alone, which it keeps in a `PerSession` value
+of its own, and the room then instantiates `FileStoreView` on the store, under
+the composer. Pressing it again, as **Hide files**, closes them. The view is mapped from a list of the
 session's own that holds the store only while its files are open, so a session
 that hasn't opened them holds no view, and nothing reads the store's entries
 for it. What the view offers each viewer is the view's own decision.

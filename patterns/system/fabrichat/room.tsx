@@ -1927,8 +1927,9 @@ export const FabriChatRoomCore = pattern<
     joined: tellJoined,
   });
   const openAttach = prepareAttach({ ensureFileStore: ensureFileStoreHere });
-  // Whether the space names a store, read from the record itself: the link
-  // `spaceFileStore` holds reads as a value even while it links nothing.
+  // Whether the space names a store, read from the record itself:
+  // `spaceFileStore` compares unequal to `undefined` even where the record
+  // names no store.
   const hasSpaceFileStore = computed(() =>
     (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
       undefined
@@ -1960,13 +1961,16 @@ export const FabriChatRoomCore = pattern<
         : [];
     })
   );
+  // A room that is its space's root, and names a store, shows the store's
+  // files from its own rendering, as a root offering file storage does.
+  const showsFiles = computed(() => ownSpace && hasSpaceFileStore);
   // Whether this session has the space's files open. The store's view is
   // mapped from a list of the session's own that holds the store only while
   // they are, so a session that hasn't opened them holds no view, and nothing
   // reads the store's entries for it.
   const filesOpen = new Writable.perSession(false);
   const filesStores = computed((): PerSession<Cell<FileStoreOutput>[]> =>
-    filesOpen.get() && hasSpaceFileStore && spaceFileStore !== undefined
+    filesOpen.get() && showsFiles && spaceFileStore !== undefined
       ? [spaceFileStore]
       : []
   );
@@ -1974,9 +1978,11 @@ export const FabriChatRoomCore = pattern<
   const filesViewUIs = computed((): PerSession<VNode[]> =>
     filesViews.map((filesView) => filesView[UI])
   );
-  const filesLabel = computed(() => filesOpen.get() ? "Hide files" : "Files");
+  const filesLabel = computed((): PerSession<string> =>
+    filesOpen.get() ? "Hide files" : "Files"
+  );
   const filesToggleDisplay = computed((): ChatDisplay =>
-    hasSpaceFileStore ? "block" : "none"
+    showsFiles ? "block" : "none"
   );
   const toggleFiles = action(() => filesOpen.set(!filesOpen.get()));
   const threadComposers = threadComposerRoots.map((root) =>
