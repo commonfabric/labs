@@ -3,7 +3,7 @@
     "module": "compare/fixtures/wish-home.tsx",
     "patterns": [
       {
-        "line": 8,
+        "line": 9,
         "name": "default",
         "plan": {
           "argumentSchema": "unhashed:schema/0",
@@ -75,6 +75,17 @@
               },
               "sidecar": "profilePicker",
               "within": []
+            },
+            {
+              "callee": {
+                "compiled": null
+              },
+              "name": {
+                "operation": "found",
+                "sidecar": "suggestion"
+              },
+              "sidecar": "suggestion",
+              "within": []
             }
           ],
           "closures": [],
@@ -83,7 +94,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 389
+                "start": 457
               },
               "bodies": [],
               "entry": "profile",
@@ -112,7 +123,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 464
+                "start": 532
               },
               "bodies": [],
               "entry": "name",
@@ -141,7 +152,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 519
+                "start": 587
               },
               "bodies": [],
               "entry": "bio",
@@ -170,7 +181,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 581
+                "start": 649
               },
               "bodies": [],
               "entry": "mentionable",
@@ -199,7 +210,124 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 654
+                "start": 722
+              },
+              "bodies": [],
+              "entry": "registry",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 4
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 794
+              },
+              "bodies": [],
+              "entry": "found",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 5
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 5
+                    },
+                    "path": [
+                      "scope"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 894
+              },
+              "bodies": [],
+              "entry": "quiet",
+              "picks": [],
+              "selectors": [],
+              "slots": [],
+              "within": [],
+              "writes": [
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 6
+                    },
+                    "path": [
+                      "query"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                },
+                {
+                  "constraints": [],
+                  "target": {
+                    "kind": "request",
+                    "of": {
+                      "operation": 6
+                    },
+                    "path": [
+                      "headless"
+                    ]
+                  },
+                  "template": {
+                    "op": "const"
+                  }
+                }
+              ]
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 994
               },
               "bodies": [],
               "entry": "greeting",
@@ -218,7 +346,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 731
+                "start": 1071
               },
               "bodies": [],
               "entry": "about",
@@ -234,7 +362,7 @@
             {
               "at": {
                 "file": "compare/fixtures/wish-home.tsx",
-                "start": 796
+                "start": 1136
               },
               "bodies": [],
               "entry": "count",
@@ -246,6 +374,24 @@
                 5,
                 6,
                 7
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 1205
+              },
+              "bodies": [],
+              "entry": "matches",
+              "picks": [],
+              "selectors": [
+                2
+              ],
+              "slots": [
+                8,
+                9
               ],
               "within": [],
               "writes": []
@@ -275,37 +421,82 @@
               "picks": [],
               "selectors": [],
               "slots": [
-                8
-              ],
-              "within": [],
-              "writes": []
-            },
-            {
-              "at": {
-                "file": "compare/fixtures/wish-home.tsx",
-                "start": 0
-              },
-              "bodies": [],
-              "entry": "result",
-              "picks": [],
-              "selectors": [],
-              "slots": [
-                9
-              ],
-              "within": [],
-              "writes": []
-            },
-            {
-              "at": {
-                "file": "compare/fixtures/wish-home.tsx",
-                "start": 0
-              },
-              "bodies": [],
-              "entry": "result",
-              "picks": [],
-              "selectors": [],
-              "slots": [
                 10
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                11
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                12
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                13
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                14
+              ],
+              "within": [],
+              "writes": []
+            },
+            {
+              "at": {
+                "file": "compare/fixtures/wish-home.tsx",
+                "start": 0
+              },
+              "bodies": [],
+              "entry": "result",
+              "picks": [],
+              "selectors": [],
+              "slots": [
+                15
               ],
               "within": [],
               "writes": []
@@ -335,6 +526,24 @@
               "why": {
                 "kind": "search",
                 "operation": 3
+              }
+            },
+            {
+              "why": {
+                "kind": "search",
+                "operation": 4
+              }
+            },
+            {
+              "why": {
+                "kind": "search",
+                "operation": 5
+              }
+            },
+            {
+              "why": {
+                "kind": "search",
+                "operation": 6
               }
             }
           ],
@@ -386,11 +595,46 @@
               "kind": "wish",
               "name": "mentionable",
               "within": []
+            },
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "registry",
+              "within": []
+            },
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "found",
+              "scope": "user",
+              "within": []
+            },
+            {
+              "implementation": {
+                "builtin": "wish"
+              },
+              "input": {
+                "op": "const"
+              },
+              "kind": "wish",
+              "name": "quiet",
+              "scope": "user",
+              "within": []
             }
           ],
           "outputs": [
             {
-              "cone": 4,
+              "cone": 7,
               "constraints": [],
               "kept": true,
               "path": [
@@ -435,7 +679,7 @@
               }
             },
             {
-              "cone": 5,
+              "cone": 8,
               "constraints": [],
               "kept": true,
               "path": [
@@ -459,7 +703,7 @@
               }
             },
             {
-              "cone": 6,
+              "cone": 9,
               "constraints": [],
               "kept": true,
               "path": [
@@ -500,6 +744,31 @@
               "constraints": [],
               "kept": true,
               "path": [
+                "matches"
+              ],
+              "template": {
+                "branches": [
+                  {
+                    "op": "slot",
+                    "slot": 9
+                  },
+                  {
+                    "op": "const"
+                  }
+                ],
+                "condition": {
+                  "op": "slot",
+                  "slot": 8
+                },
+                "op": "select",
+                "selector": 2
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
                 "mentionable"
               ],
               "template": {
@@ -508,7 +777,19 @@
               }
             },
             {
-              "cone": 10,
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "missing"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 10
+              }
+            },
+            {
+              "cone": 17,
               "constraints": [],
               "kept": true,
               "path": [
@@ -516,11 +797,11 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 8
+                "slot": 11
               }
             },
             {
-              "cone": 10,
+              "cone": 17,
               "constraints": [],
               "kept": true,
               "path": [
@@ -528,11 +809,11 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 9
+                "slot": 12
               }
             },
             {
-              "cone": 10,
+              "cone": 17,
               "constraints": [],
               "kept": true,
               "path": [
@@ -540,15 +821,42 @@
               ],
               "template": {
                 "op": "slot",
-                "slot": 10
+                "slot": 13
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "quiet"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 14
+              }
+            },
+            {
+              "cone": 17,
+              "constraints": [],
+              "kept": true,
+              "path": [
+                "registry"
+              ],
+              "template": {
+                "op": "slot",
+                "slot": 15
               }
             }
           ],
           "patterns": [
-            "sha256:33d80c1365496ea995456b41db964f8e8a10b51fed9b880ec4789bb3b5c2cf88"
+            "sha256:cb1b312d4de1a87689506d2d7380701588eca08b989e7c25c820ca44c53892e8"
           ],
           "picks": [],
           "selectors": [
+            {
+              "arity": 2
+            },
             {
               "arity": 2
             },
@@ -640,6 +948,36 @@
               }
             },
             {
+              "observes": "shape",
+              "path": [
+                "candidates"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 5
+              }
+            },
+            {
+              "observes": "value",
+              "path": [
+                "candidates"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 5
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "error"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 5
+              }
+            },
+            {
               "observes": "identity",
               "path": [
                 "note"
@@ -667,6 +1005,26 @@
               "root": {
                 "kind": "operation",
                 "operation": 0
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "error"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 6
+              }
+            },
+            {
+              "observes": "identity",
+              "path": [
+                "result"
+              ],
+              "root": {
+                "kind": "operation",
+                "operation": 4
               }
             }
           ],
