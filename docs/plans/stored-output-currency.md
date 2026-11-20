@@ -1,7 +1,8 @@
 # Serving a piece's stored outputs while they are current
 
-Status: In progress. Stages 1 to 4 are built, and a toolshed runs `skip`
-unless `SERVER_EXECUTION_CURRENCY_INDEX` says otherwise. Stage 3 measured a
+Status: In progress. Stages 1 to 4 are built, with the index kept per viewer
+slice, and a toolshed runs `skip` unless `SERVER_EXECUTION_CURRENCY_INDEX`
+says otherwise. Stage 3 measured a
 synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
 a deployed space and the production board are not measured. Stages 5 to 8
@@ -38,27 +39,52 @@ case the record cannot decide starts the piece, as today.
 A piece is identified by the raw id of its result document, the
 `pieceRootId` every action of the piece carries
 (`schedulerObservationIdentity`). A nested instance is a piece of its own, and
-its record names the pieces that enclose it (its `demandRootIds`). The index
-holds identifiers and sequence numbers only, overwritten in place per piece:
+its record names the pieces that enclose it (its `demandRootIds`).
 
-- **The piece**: a mark, the enclosing pieces, and the epoch of the build
-  that recorded it.
-- **What it read**: one row per `(input space, input id)`, with the sequence
-  number the piece saw that document at. Scope keys are left out, so a change
-  to any instance of the document counts. The piece's own result document is
-  always among them, so a change of its pattern pointer is a change to an
-  input.
-- **What it writes**: one row per document id in the declared write surface
-  of every computation registered under the piece, whether or not that
-  computation has run, with the sequence number the document stood at. The
-  ids of the cells the piece owns are recorded beside them.
-- **What it vouches for**: one row per document instance `(id, scope key)` a
-  live, clean computation of the piece wrote, for each fan-out instance that
-  is clean.
+A piece is recorded in **slices**, one for each scope key its computations
+ran at. A computation that reads nothing narrower than the space runs once,
+and belongs to the `space` slice. One that reads a user's or a session's
+state runs once for each viewer who demands it, and each of those runs
+belongs to the slice at that viewer's key (`user:<principal>` or
+`session:<principal>:<session>`). The scheduler already keeps each such run's
+reads and its clean bit apart (`FanOutNodeState`), so a slice is that state
+written down.
+
+The index holds identifiers and sequence numbers only, overwritten in place,
+and the slice leads every key, so reading one viewer's slices reads no other
+viewer's rows:
+
+- **The slice**: a mark, and the epoch of the build that recorded it. Every
+  recorded piece has a `space` slice.
+- **What a slice read**: one row per document instance, `(input space, input
+  id, scope key)`, with the sequence number the slice saw that instance at. A
+  read whose instance the run does not name is recorded against every
+  instance of the document. The piece's own result document is among the
+  reads of every slice, so a change of its pattern pointer is a change to an
+  input of each.
+- **What a slice vouches for**: one row per document instance a live, clean
+  computation of the piece wrote, filed under the slice at the instance's own
+  key, with the sequence number the instance stood at. A run for one session
+  that writes a document declared in the space writes its value at that
+  session's key and a redirect at the user's and the space's, so it files a
+  row in each of those three slices. Redirects go no broader than the
+  document's declared scope: a document declared for a user gets the
+  session's row and the user's, and one declared for a session the session's
+  alone.
+- **What the piece writes**, whoever it runs for: one row per document id in
+  the declared write surface of every computation registered under it,
+  whether or not that computation has run, and the ids of the cells it owns.
+  The enclosing pieces are kept beside them.
 
 The write rows are what let a mark travel through a document no session
 demands: they say which pieces a stale piece makes stale, and which absent
 document a piece would write.
+
+A record replaces the slices it names and the piece's write rows, and leaves
+every other slice of the piece as it is. A serving runtime holds the runs of
+the viewers demanding the piece now, so a record taken while one viewer is
+present names the `space` slice and that viewer's, and another viewer's
+slices keep what their last visit recorded.
 
 ### When a record is taken
 
@@ -82,39 +108,60 @@ Its `as_of` is the visible input head the settle covered
 sequence numbers of the loop's own derived commits above it, the wave's
 included, travel with it as seen.
 
-A piece's record says it is **not vouched for**, and is stored marked, when
-any of these hold at the snapshot:
+A slice is **not vouched for**, and is stored marked, when any of these hold
+of its runs at the snapshot:
 
-- a live computation under it is not clean, which covers one a throttle, a
-  debounce or a convergence backoff is holding;
-- it read a document in another space;
-- it read a document whose writer in this runtime names no piece;
-- its root is not space-scoped, or it records a source origin, since a start
-  is where the serving runtime follows that origin.
+- a live computation is not clean, which covers one a throttle, a debounce
+  or a convergence backoff is holding;
+- one read a document in another space;
+- one read a document whose writer in this runtime names no piece.
 
-### How a piece becomes marked
+No slice of a piece is vouched for when its root is not space-scoped, when a
+computation of it declares a write in another space, or when it records a
+source origin, since a start is where the serving runtime follows that
+origin.
 
-A mark is `0` clean, `1` a piece that writes one of its inputs is marked, or
-`2` one of its own rows is behind.
+### How a slice becomes marked
 
-When a record is stored, each read and write row takes the document's head
-sequence number if every revision above `as_of` is one the record names as
-seen, and `as_of` otherwise. A row behind its document's head marks the piece
-`2` then and there, so a commit that landed between the snapshot and the
-store is never lost. The serving runtime can already hold a commit above the
-settle's visible input head, so a piece stored marked this way is snapshotted
-again by the loop's next cycle, whose settle covers that commit.
+A mark is `0` clean, `1` one of its inputs is stale, or `2` one of its own
+rows is behind or the slice was not vouched for. An input is stale while a
+slice that decides it is marked, and in the two cases without a marked
+producer that "How a mark is cleared" lists.
+
+When a record is stored, each read row and each vouch row takes its
+instance's head sequence number if every revision of that instance above
+`as_of` is one the record names as seen, and `as_of` otherwise. A row behind
+its instance's head marks the slice `2` then and there, so a commit that
+landed between the snapshot and the store is never lost. The serving runtime
+can already hold a commit above the settle's visible input head, so a piece
+with a slice stored marked this way is snapshotted again by the loop's next
+cycle, whose settle covers that commit.
 
 A cursor names the sequence number the marks are complete through. Advancing
-it reads the revisions above it (`idx_revision_branch`) and marks `2` every
-clean piece with a read row or a write row for the changed id that is behind
-the revision. Each piece that just became marked marks `1` every clean piece
-that reads an id it writes, and so on, so the walk stops wherever it reaches
-a piece that is already marked. A change to a document a piece writes marks
-the piece itself, which covers an authored overwrite of a derived document.
-A later record does not take that back: a write row moves up only to a head
-a derivation put there, since the piece's writer reads nothing it writes and
-so was not woken by the overwrite.
+it reads the revisions above it (`idx_revision_branch`), and for each
+instance that changed marks `2`:
+
+- every slice with a read row for that instance that is behind the revision;
+- the slice at the instance's own key of each piece that vouches for it,
+  which covers an authored overwrite of a derived document.
+
+A change to one viewer's instance therefore marks the slices that read that
+instance, which are that viewer's, and a change to a shared instance marks
+every slice that read it. The exception is a read recorded against every
+instance of a document, which a change to any viewer's instance of it is
+ahead of.
+A later record does not take an overwrite back: a vouch row moves up only to
+a head a derivation put there, since the piece's writer reads nothing it
+writes and so was not woken by the overwrite. A vouch row a record no longer
+names is released and kept for its sequence number, so the overwrite is
+still known when the piece vouches for the instance again.
+
+Each slice that just became marked marks `1` every clean slice of another
+piece that reads an instance it writes, at its own key or narrower beneath
+it: a `space` slice reaches every reader, a user's slice that user's and
+their sessions', and a session's slice that session's. The walk goes on from
+each slice it marks and stops wherever it reaches one that is already
+marked.
 
 Nothing runs at admission. The serving loop advances the cursor once per
 cycle that drained input and before each judgment below, so a quiet space
@@ -122,13 +169,26 @@ pays nothing and the cost follows the changes, not the size of the graph.
 
 ### How a mark is cleared
 
-Only by storing a new record for the piece. After the rows are replaced the
-piece is `2` if it is not vouched for or a row is behind, `1` if a piece that
-writes one of its inputs is marked or has no record, and `0` otherwise. A
-piece that became clean is a cleared input: each piece marked `1` that reads
-an id it writes is judged again, and so on outward. A piece marked `2` stays
-marked until its own record is replaced. This is what lets a recomputation
-that wrote an equal value clear the pieces below it without starting them.
+Only by storing a new record of the slice. After its rows are replaced a
+slice is `2` if it is not vouched for or a row is behind, `1` if one of its
+inputs is stale, and `0` otherwise. An input is stale when:
+
+- a slice that decides it is marked, a broader slice of the same piece
+  included;
+- it is a derived document no recorded piece writes;
+- a recorded piece computes it and no piece vouches for the instance read. A
+  record taken while a computation was not running drops its vouches, and
+  marks `1` each clean slice that read one of those instances. A viewer's
+  retained slice that read what the `space` slice computed is the case this
+  is for: the `space` slice re-recorded without that computation is clean,
+  and what the viewer's slice read is no longer anyone's to vouch for.
+
+A slice that became clean is a cleared input: each slice marked `1` that
+reads an instance it writes is judged again, and so on outward. A slice
+marked `2` stays marked until its own record is replaced, which for a
+viewer's slice is that viewer's next visit. This is what lets a
+recomputation that wrote an equal value clear the slices below it without
+starting their pieces.
 
 ### What the demand pass does with it
 
@@ -140,12 +200,21 @@ piece's argument makes a root of it, and a load of that root starts the piece
 its `result` back-links lead to. The judgment follows the same links to the
 piece. The store can serve a root when:
 
-- the piece has a record, is clean, and was recorded under the current
+- the piece's `space` slice is clean and was recorded under the current
   epoch;
 - every demand row of every session whose id is written or owned by the
-  piece, or by a recorded piece beneath it, passes: the owner is clean, and a
-  written id is vouched for at the row's scope key, and an owned id is held
-  by the store at the row's scope key.
+  piece, or by a recorded piece beneath it, passes: each slice of the owner
+  the row's instance is resolved under (the slice at the row's scope key and
+  each broader one) is clean and of the current epoch, and a written id is
+  vouched for in the slice at the row's scope key, and an owned id is held by
+  the store at the row's scope key.
+
+Only the slices a demand row is resolved under are read, and the rows are
+those of the sessions demanding now. So a marked slice of a viewer who is
+not present refuses nothing, and a viewer whose slices are clean is served
+from the store. A root is loaded for every session or for none: when a
+viewer who is present has a marked slice the piece starts, and it then runs
+for each viewer demanding it.
 
 A root that passes is not loaded and not started, and stays among the roots
 awaiting a first load. It is judged again when demand changes and when it is
@@ -207,7 +276,7 @@ wrong.
 - `serving-loop.md` §3b and §6: the persisted scheduler state gains the
   currency index beside W, `eventWatermark` and the basis index; the index
   records write links, which §3b calls evidence when kept per run, and here
-  are overwritten in place per piece; its rows are written by the memory
+  are overwritten in place per slice of a piece; its rows are written by the memory
   server on a serving host's request, outside the wave's transaction.
 - §1: a demand for a recorded, clean piece loads nothing, which is a rule for
   which pieces start.
@@ -221,12 +290,17 @@ wrong.
 
 - **A piece is recorded only after a cycle that ran it settled.** A piece
   served before the index was on starts on its first demand.
-- **A piece is marked whole.** A computation that is not live when a record
+- **A slice is marked whole.** A computation that is not live when a record
   is taken contributes no reads and no vouch, so an undemanded part of a
   piece does not keep it marked. A computation that was live then, and that
-  no session demands since, still has its reads in the record: a change to
-  one of them marks the piece, which starts once on its next cold demand,
-  and the record that start leaves no longer holds them.
+  no session demands since, still has its reads in its slice: a change to
+  one of them marks the slice, whose viewers start the piece once on their
+  next cold demand, and the record that start leaves no longer holds them.
+- **A slice outlives its session.** Nothing removes the slices of a session
+  that ended. No judgment reads them, since no demand row is resolved under
+  them, and an advance that finds a shared document changed reads the rows
+  of each of them that read it. Removing them belongs with removing the
+  session's documents.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
 - **A piece with a source origin, a foreign read, or a root narrower than the
@@ -248,7 +322,7 @@ wrong.
 ## Stages
 
 1. **The index.** `runtime/memory/v2/currency-index.ts` and its tables
-   (`currency_piece`, `currency_read`, `currency_write`, `currency_vouch`,
+   (`currency_slice`, `currency_read`, `currency_write`, `currency_vouch`,
    `currency_under`, `currency_cursor`): store a batch of records, advance
    the cursor, judge roots against demand rows. The tables join the SQL
    guard's core names and the engine's table list.
@@ -289,25 +363,28 @@ wrong.
 
 For the index, in `runtime/memory/test/`:
 
-1. A revision above a read row marks the piece `2`; one at or below it marks
-   nothing.
-2. A revision on an id a piece writes, above its write row, marks the piece.
-3. A marked piece marks `1` each clean piece that reads an id it writes,
-   through any number of pieces, and a walk that reaches a marked piece goes
-   no further.
+1. A revision of an instance above a slice's read row for it marks the slice
+   `2`; one at or below it marks nothing.
+2. A revision of an instance a piece vouches for, above its vouch row, marks
+   the slice at the instance's key; a revision of a document the piece
+   writes and does not vouch for marks nothing.
+3. A marked slice marks `1` each clean slice that reads an instance it
+   writes, through any number of pieces, and a walk that reaches a marked
+   slice goes no further.
 4. A record stored after a commit that landed above its `as_of`, and that it
    does not name as seen, is stored marked `2`.
-5. Storing a clean record for a marked piece clears each reader marked `1`
-   that has no other marked producer; a reader marked `2` stays marked.
-6. A piece that reads an id another recorded piece writes is `1` while that
-   piece is marked, and a record that is not vouched for is stored `2`.
+5. Storing a clean record of a marked slice clears each reader marked `1`
+   that is left with no stale input; a reader marked `2` stays marked.
+6. A slice that reads an instance another recorded piece writes is `1` while
+   a slice that decides it is marked, and while no piece vouches for it; a
+   record that is not vouched for is stored `2`.
 7. The cursor advances to the head, and a second advance with no commit reads
    nothing.
-8. A root is judged servable only when its piece and every owner of a demand
-   row beneath it is clean and vouches for the row's instance; an absent
-   instance of an owned cell, a written id with no vouch row, a marked nested
-   piece that owns a demanded row, and a record from another epoch each fail
-   it.
+8. A root is judged servable only when its piece's `space` slice is clean,
+   and every slice a demand row beneath it is resolved under is clean and
+   the row's instance is vouched for; an absent instance of an owned cell, a
+   written id with no vouch row, a marked nested piece that owns a demanded
+   row, and a record from another epoch each fail it.
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
 runtimes over `EmulatedStorageManager`. Tests 9 to 15 exist in
@@ -340,6 +417,23 @@ For stage 5:
     value derived from the new `a`, including where B's writer is narrowed to
     the demanding user.
 18. In that case, when B's recomputation leaves `b` equal, C is not started.
+
+For slices, in the index tests and in `space-server-currency.test.ts`, all
+of which exist:
+
+19. A change to one viewer's instance marks the slices that read it and no
+    other viewer's, and a change to a shared instance marks every slice that
+    read it.
+20. A record leaves a slice it does not name with its rows and its mark.
+21. A root is judged servable for a viewer whose slices are clean while
+    another viewer's slice is marked, and refused for that other viewer.
+22. A piece recorded for one viewer, then started and recorded for a second,
+    is not started when the first returns.
+23. A viewer's slice that read what the `space` slice computed is marked `1`
+    once a record of the `space` slice no longer vouches for it, and cleared
+    once one vouches for it again with the instance unchanged.
+24. An output that was overwritten, that one record stops vouching for and a
+    later one vouches for again, is stored marked.
 
 ## Related
 

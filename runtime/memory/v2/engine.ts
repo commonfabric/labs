@@ -489,23 +489,31 @@ CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
 -- Server-execution v2: the currency index
 -- (docs/specs/server-side-execution/serving-loop.md §3b) — which stored
 -- outputs a serving loop vouched for, and what marks them stale. Ids + seqs
--- ONLY, overwritten in place per piece; never payloads, never per-run
--- history. The writer and every reader is currency-index.ts. Rows are never
--- pushed to subscribers and never read at admission.
+-- ONLY, overwritten in place per slice of a piece; never payloads, never
+-- per-run history. The writer and every reader is currency-index.ts. Rows
+-- are never pushed to subscribers and never read at admission.
 --
--- One row per recorded piece: the raw id of its result document, its mark
--- (0 clean, 1 a piece that writes one of its inputs is marked, 2 one of its
--- own rows is behind or the piece was not vouched for), whether it has been
--- clean since its record was stored, and the epoch of the build that
--- recorded it.
-CREATE TABLE IF NOT EXISTS currency_piece (
+-- A piece is recorded in slices, one per scope key its computations ran at:
+-- 'space' for what every viewer shares, and a user's or a session's key for
+-- what was computed for them alone. The slice leads each key, so reading
+-- one viewer's slices reads no other viewer's rows.
+--
+-- One row per recorded slice: the raw id of the piece's result document, the
+-- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
+-- 2 one of its own rows is behind or it was not vouched for), whether it has
+-- been clean since its record was stored, and the epoch of the build that
+-- recorded it. A recorded piece always has a 'space' slice.
+CREATE TABLE IF NOT EXISTS currency_slice (
   branch    TEXT    NOT NULL,
+  slice     TEXT    NOT NULL,
   piece     TEXT    NOT NULL,
   mark      INTEGER NOT NULL,
   was_clean INTEGER NOT NULL,
   epoch     TEXT    NOT NULL,
-  PRIMARY KEY (branch, piece)
+  PRIMARY KEY (branch, slice, piece)
 );
+CREATE INDEX IF NOT EXISTS idx_currency_slice_piece
+  ON currency_slice (branch, piece);
 -- The pieces that enclose a recorded piece: a demand for one of theirs is a
 -- demand for it.
 CREATE TABLE IF NOT EXISTS currency_under (
@@ -514,43 +522,53 @@ CREATE TABLE IF NOT EXISTS currency_under (
   root   TEXT NOT NULL,
   PRIMARY KEY (branch, piece, root)
 );
--- What a piece read, by document and not by instance, with the seq the piece
--- saw the document at. derived = 1 names a document some computation writes,
--- which a piece is only as current as.
+-- What a slice read: the document instance, with the seq the slice saw it
+-- at. entity_scope_key = '*' is a read whose instance the recording loop
+-- could not name, which a change to any instance of the document is ahead
+-- of. derived = 1 names a document some computation writes, which a slice is
+-- only as current as.
 CREATE TABLE IF NOT EXISTS currency_read (
-  branch       TEXT    NOT NULL,
-  piece        TEXT    NOT NULL,
-  entity_space TEXT    NOT NULL,
-  entity       TEXT    NOT NULL,
-  derived      INTEGER NOT NULL,
-  seq          INTEGER NOT NULL,
-  PRIMARY KEY (branch, piece, entity_space, entity)
+  branch           TEXT    NOT NULL,
+  slice            TEXT    NOT NULL,
+  piece            TEXT    NOT NULL,
+  entity_space     TEXT    NOT NULL,
+  entity           TEXT    NOT NULL,
+  entity_scope_key TEXT    NOT NULL,
+  derived          INTEGER NOT NULL,
+  seq              INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, entity_space, entity, entity_scope_key)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_read_entity
-  ON currency_read (branch, entity_space, entity);
--- What a piece writes: the declared write surface of every computation
--- registered under it (owned = 0), with the seq the document stood at, and
--- the cells it owns (owned = 1), which are state a write to is no staleness
--- of.
+  ON currency_read (branch, entity_space, entity, entity_scope_key);
+-- What a piece writes, whoever it runs for: the declared write surface of
+-- every computation registered under it (owned = 0), and the cells it owns
+-- (owned = 1), which are state a write to is no staleness of.
 CREATE TABLE IF NOT EXISTS currency_write (
   branch TEXT    NOT NULL,
   piece  TEXT    NOT NULL,
   id     TEXT    NOT NULL,
   owned  INTEGER NOT NULL,
-  seq    INTEGER NOT NULL,
   PRIMARY KEY (branch, piece, id)
 );
 CREATE INDEX IF NOT EXISTS idx_currency_write_id
   ON currency_write (branch, id);
--- The document instances a piece vouches for: each one a live, clean
--- computation of it wrote.
+-- The document instances a piece vouches for, each filed under the slice
+-- whose scope key is the instance's: a live, clean computation of the piece
+-- wrote it, and seq is where the instance stood then. held = 0 is a row the
+-- slice's latest record no longer vouches for, kept for its seq: the piece
+-- last answered for the instance there, which says whether a later head is
+-- an overwrite.
 CREATE TABLE IF NOT EXISTS currency_vouch (
-  branch    TEXT NOT NULL,
-  piece     TEXT NOT NULL,
-  id        TEXT NOT NULL,
-  scope_key TEXT NOT NULL,
-  PRIMARY KEY (branch, piece, id, scope_key)
+  branch TEXT    NOT NULL,
+  slice  TEXT    NOT NULL,
+  piece  TEXT    NOT NULL,
+  id     TEXT    NOT NULL,
+  seq    INTEGER NOT NULL,
+  held   INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, id)
 );
+CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
+  ON currency_vouch (branch, slice, id);
 -- The seq the marks are complete through.
 CREATE TABLE IF NOT EXISTS currency_cursor (
   branch TEXT    NOT NULL PRIMARY KEY,
@@ -2454,6 +2472,26 @@ const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Drops the currency index of a store that holds it laid out one row per
+ * piece, ahead of the schema that creates it laid out per slice. The index
+ * holds nothing a serving loop does not record again, so such a store loses
+ * its records once and every piece of it starts on its next demand.
+ */
+const dropUnslicedCurrencyTables = (database: Database): void => {
+  if (!hasTable(database, "currency_piece")) return;
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS currency_piece;
+      DROP TABLE IF EXISTS currency_under;
+      DROP TABLE IF EXISTS currency_read;
+      DROP TABLE IF EXISTS currency_write;
+      DROP TABLE IF EXISTS currency_vouch;
+      DROP TABLE IF EXISTS currency_cursor;
+    `);
+  }).immediate();
+};
+
 export const open = async (
   {
     url,
@@ -2484,6 +2522,7 @@ export const open = async (
   const database = await new Database(toDatabaseAddress(url), { create: true });
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
+  dropUnslicedCurrencyTables(database);
   database.exec(INIT);
   migrateScopedEntityTables(database);
   migrateHeadCurrentOp(database);
