@@ -1503,6 +1503,13 @@ export const checkSoundness = (
 const STEPPED_PAIRS = 20_000;
 
 /**
+ * The length of the text of the result, summed over the checks after every
+ * event of one scenario, at most: a check reads the value at each stored
+ * position from the result of each run.
+ */
+const STEPPED_SIZE = 2_000_000;
+
+/**
  * Runs `events` on the executor with its documents in storage and the option
  * on, and checks the labels it stored against the values (`checkSoundness`)
  * after each event, against runs in memory advanced to the same event
@@ -1512,8 +1519,10 @@ const STEPPED_PAIRS = 20_000;
  * reason of each commit the storage refused; and why the run stopped, where
  * a write after a refused commit failed. With a refused commit the findings
  * are not counted (`unstoredAfter`). A scenario with so many stored
- * positions that the checks would compare more than `STEPPED_PAIRS` pairs is
- * checked after the first event and after each third of its events.
+ * positions that the checks would compare more than `STEPPED_PAIRS` pairs,
+ * or with a result so large that they would read more than `STEPPED_SIZE`
+ * of it, is checked after the first event and after each third of its
+ * events.
  */
 export const soundnessAfterEachEvent = async (
   artifact: Artifact,
@@ -1533,6 +1542,8 @@ export const soundnessAfterEachEvent = async (
   const failures = new Map<string, SoundnessFailure>();
   let last: Soundness | undefined;
   let steps = 0;
+  // The length of the text of the result at the last check.
+  let size = 0;
   let main: string | undefined;
   let failedOn: string | undefined;
   try {
@@ -1559,14 +1570,17 @@ export const soundnessAfterEachEvent = async (
         sent: (runtime, hooks, instance, position) => {
           stepped.advance();
           // Where the checks after every event would compare more pairs
-          // than `STEPPED_PAIRS`, the check runs after the last event of
-          // each third of the events and after no other.
+          // than `STEPPED_PAIRS`, or read more of the result than
+          // `STEPPED_SIZE`, the check runs after the last event of each
+          // third of the events and after no other.
           const third = Math.max(1, Math.floor(events.length / 3));
           if (
             last !== undefined &&
-            last.checked * events.length > STEPPED_PAIRS &&
+            (last.checked * events.length > STEPPED_PAIRS ||
+              size * events.length > STEPPED_SIZE) &&
             (position + 1) % third !== 0 && position !== events.length - 1
           ) return;
+          size = JSON.stringify(instance.result()).length;
           last = checkSoundness(
             runtime,
             hooks,
