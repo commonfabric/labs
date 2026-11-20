@@ -36,6 +36,7 @@ import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno
 import {
   CHAT_START,
   closeMember,
+  directRoomLabel,
   type MemberSession,
   MemberWaits,
   openMember,
@@ -592,13 +593,17 @@ describe("fabrichat-room-list", () => {
   /**
    * Renders the manager's view as a renderer does, holding every cell the
    * view holds, a level at a time, and returns the spaces the view's links
-   * name: the rows link their rooms.
+   * name, since the rows link their rooms, and the labels of the
+   * `cf-cell-link`s it renders, which the rows are.
    */
-  async function renderManagerView(client: Client): Promise<Set<string>> {
+  async function renderManagerView(
+    client: Client,
+  ): Promise<{ linked: Set<string>; labels: string[] }> {
     const view = client.home.key("chatManager").key("$UI").asSchema(
       rendererVDOMSchema,
     );
     const linked = new Set<string>();
+    const labels: string[] = [];
     const held = new Set<string>();
     const visit = async (value: unknown): Promise<void> => {
       if (value === null || typeof value !== "object") return;
@@ -618,9 +623,18 @@ describe("fabrichat-room-list", () => {
         return;
       }
       for (const each of Object.values(value)) await visit(each);
+      const node = value as { name?: unknown; props?: unknown };
+      if (node.name !== "cf-cell-link") return;
+      // A node's props are a cell of their own, which the walk above has
+      // already pulled.
+      const props = (isCell(node.props) ? node.props.get() : node.props) as
+        | { label?: unknown }
+        | undefined;
+      const label = isCell(props?.label) ? props.label.get() : props?.label;
+      if (typeof label === "string") labels.push(label);
     };
     await visit(view);
-    return linked;
+    return { linked, labels };
   }
 
   describe("a fresh client once another has rendered the manager's view", () => {
@@ -633,7 +647,7 @@ describe("fabrichat-room-list", () => {
       rooms = made.rooms;
       const renderer = await bootClient({ person: made.person });
       try {
-        linked = await renderManagerView(renderer);
+        ({ linked } = await renderManagerView(renderer));
       } finally {
         await renderer.controller.dispose();
       }
@@ -656,6 +670,114 @@ describe("fabrichat-room-list", () => {
 
     it("opens no session to any room's space, from bring-up on", () => {
       expect(openedOf(client, rooms)).toEqual([]);
+    });
+  });
+
+  describe("a direct room with a counterpart whose profile is named", () => {
+    let counterpart: Identity;
+    let room: DID;
+    let profileSpace: DID;
+    let rosterNamesThem: boolean;
+    let labels: string[];
+    let renderedOpened: DID[];
+    let renderedArrived: number[];
+    let client: Client;
+
+    beforeAll(async () => {
+      // The counterpart has a Home and a named profile, and the person starts
+      // the room naming that profile, which puts it on the room's roster: a
+      // label read from the roster, or from the profile, would find their
+      // name there, by reading the room's space and the profile's.
+      const made = await personWithRooms("erin", 0);
+      counterpart = await Identity.fromPassphrase(
+        `fabrichat-room-list fay ${crypto.randomUUID()}`,
+        { implementation: "noble" },
+      );
+      const theirs = await openMember(server.url, counterpart, 1);
+      let profile: Cell<unknown>;
+      try {
+        profile = await theirs.home.key("profiles").key(0)
+          .asSchema<Cell<unknown>>({ asCell: ["cell"] }).pull();
+      } finally {
+        await closeMember(theirs);
+      }
+      profileSpace = profile.space as DID;
+      const member = await openMember(server.url, made.person, 0);
+      try {
+        const manager = member.home.key("chatManager");
+        await sendTrusted(member.controller, manager.key("openDirect"), {
+          requestId: "direct-fay",
+          counterpart: counterpart.did(),
+          profile: member.controller.runtime.getCellFromLink(
+            profile.getAsNormalizedFullLink(),
+          ),
+        }, CHAT_START);
+        const outcome = await member.waits.until(
+          "the direct room with Fay",
+          manager.key("requests").key("direct-fay") as Cell<
+            { status?: string; reason?: string } | undefined
+          >,
+          (value) => value?.status !== undefined,
+        );
+        if (outcome.status !== "done") {
+          throw new Error(`The manager refused the room: ${outcome.reason}`);
+        }
+        await settle(member.controller);
+        const link = await manager.key("requests").key("direct-fay")
+          .key("entry").key("room").asSchema<Cell<unknown>>(HANDLE).pull();
+        room = link.space as DID;
+        const roster = await member.waits.until(
+          "the room's roster listing Fay's profile",
+          link.key("roster").asSchema<Cell<unknown>[]>({
+            type: "array",
+            items: { asCell: ["cell"] },
+          }),
+          (value) =>
+            (value ?? []).some((entry) => entry.space === profileSpace),
+        );
+        rosterNamesThem = roster.some((entry) => entry.space === profileSpace);
+      } finally {
+        await closeMember(member);
+      }
+      const renderer = await bootClient({ person: made.person });
+      try {
+        await listRooms(renderer, 1);
+        ({ labels } = await renderManagerView(renderer));
+        renderedOpened = openedOf(renderer, [profileSpace]);
+        renderedArrived = arrivedIn(renderer, [profileSpace]);
+      } finally {
+        await renderer.controller.dispose();
+      }
+      client = await bootClient({ person: made.person });
+      await listRooms(client, 1);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("finds the room's roster listing the counterpart's profile", () => {
+      expect(rosterNamesThem).toBe(true);
+    });
+
+    it("labels the room with the counterpart's principal, shortened", () => {
+      expect(labels).toEqual([directRoomLabel(counterpart.did())]);
+    });
+
+    it("receives no document from the counterpart's profile space while it renders the list", () => {
+      expect(renderedArrived).toEqual([0]);
+    });
+
+    it("opens no session to the counterpart's profile space while it renders the list", () => {
+      expect(renderedOpened).toEqual([]);
+    });
+
+    it("lists the room in a fresh client without receiving a document from either space", () => {
+      expect(arrivedIn(client, [room, profileSpace])).toEqual([0, 0]);
+    });
+
+    it("lists the room in a fresh client without opening a session to either space", () => {
+      expect(openedOf(client, [room, profileSpace])).toEqual([]);
     });
   });
 

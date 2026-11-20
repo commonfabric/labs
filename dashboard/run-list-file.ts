@@ -7,7 +7,9 @@
  * read or wrote, and parses the file again only once another process has
  * replaced it. A head taken from the file reads its list from the top until it
  * reaches a run it holds, so any head that was whole when it was saved can be
- * taken, however old.
+ * taken, however old. No head taken from the file is known to reach the end of
+ * its list, so a reading that needs runs past the last one held reads one page
+ * further down to find out.
  *
  * Every version of the dashboard reads the file the same way, whichever
  * version wrote it. A run that lacks a field this version reads, or holds one
@@ -31,8 +33,12 @@ export interface SavedHead {
   workflow: string | number;
   /** The runs from the newest down, newest first, with none missing. */
   runs: GitHubRun[];
-  /** Whether `runs` reaches the end of the list. */
-  complete: boolean;
+  /**
+   * Whether `runs` is known to reach the end of the list, which no head is
+   * taken as: a reading reads on down the list to find out. Every head is
+   * written with it, as false, for the dashboards that read it.
+   */
+  complete: false;
   /**
    * How many places nearer the top of the list than its place in `runs` the
    * last run was found, which is less than zero when it was found further
@@ -177,12 +183,11 @@ const isNullableString = (value: unknown): value is string | null =>
  */
 function savedHead(value: unknown, now: number): SavedHead | undefined {
   if (!isObjectNotArray(value)) return undefined;
-  const { repo, workflow, runs, complete, drift, readAt, usedAt, readers } =
-    value;
+  const { repo, workflow, runs, drift, readAt, usedAt, readers } = value;
   if (
     typeof repo !== "string" ||
     !(typeof workflow === "string" || isWhole(workflow, 1)) ||
-    !Array.isArray(runs) || typeof complete !== "boolean" ||
+    !Array.isArray(runs) ||
     !isWhole(drift, -Infinity) || !isPast(readAt, now) ||
     !isPast(usedAt, now) ||
     !Array.isArray(readers)
@@ -208,7 +213,7 @@ function savedHead(value: unknown, now: number): SavedHead | undefined {
     repo,
     workflow,
     runs: kept,
-    complete: whole && complete,
+    complete: false,
     drift: whole ? drift : 0,
     readAt,
     usedAt,

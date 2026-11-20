@@ -60,6 +60,7 @@ import {
 } from "../ci-job-history.ts";
 import { PERFORMANCE_VIEW_STYLES } from "../performance-views.ts";
 import { artifactZip, bytes, makeZip } from "../test/artifact-zip.ts";
+import { runList } from "../test/run-list.ts";
 
 // The history store falls back to the system temporary directory when no cache
 // directory is named. The package's test task preloads a module that names a
@@ -217,7 +218,10 @@ function serve(api: Api): (url: URL) => Response {
       );
       const size = Number(url.searchParams.get("per_page") ?? 30);
       const from = (Number(url.searchParams.get("page") ?? 1) - 1) * size;
-      return Response.json({ workflow_runs: runs.slice(from, from + size) });
+      return Response.json({
+        total_count: runs.length,
+        workflow_runs: runs.slice(from, from + size),
+      });
     }
     const runId = url.pathname.match(/\/actions\/runs\/(\d+)\/artifacts$/)?.[1];
     if (runId) {
@@ -446,7 +450,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
     releaseDashboard(new Response("unavailable", { status: 503 }));
     await dashboardResult;
     await performanceStarted;
-    releasePerformance(Response.json({ workflow_runs: [] }));
+    releasePerformance(Response.json(runList([])));
     const events = await progressText;
     assertStringIncludes(events, '"phase":"complete"');
     assertEquals(events.includes('"phase":"error"'), false);
@@ -457,7 +461,7 @@ Deno.test("dashboard and /bench benchmark refreshes keep separate request scopes
   } finally {
     dashboardReleased = true;
     releaseDashboard(new Response("unavailable", { status: 503 }));
-    releasePerformance(Response.json({ workflow_runs: [] }));
+    releasePerformance(Response.json(runList([])));
     await dashboardResult?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -493,7 +497,7 @@ Deno.test("benchmark: a fresh disk cache prevents artifact rediscovery after a r
       return Promise.resolve(serve({})(url));
     }
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Promise.resolve(Response.json({ workflow_runs: [] }));
+      return Promise.resolve(Response.json(runList([])));
     }
     throw new Error(`unexpected request ${url.pathname}`);
   }) as typeof fetch;
@@ -619,17 +623,15 @@ Deno.test("benchmark: a startup collection waits for the run list, then times it
     await Promise.resolve();
     assertEquals(settled, false);
 
-    releaseDiscovery(Response.json({
-      workflow_runs: [
-        ghRun(81_004, Date.now() - HOUR),
-        ghRun(81_003, Date.now() - DAY),
-      ],
-    }));
+    releaseDiscovery(Response.json(runList([
+      ghRun(81_004, Date.now() - HOUR),
+      ghRun(81_003, Date.now() - DAY),
+    ])));
     const view = await observed;
     assertStringIncludes(view.value ?? "", "new"); // two runs is under a week, so the trend reads "new"
     assertEquals(view.status, "good");
   } finally {
-    releaseDiscovery(Response.json({ workflow_runs: [] }));
+    releaseDiscovery(Response.json(runList([])));
     await collection?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -656,7 +658,7 @@ Deno.test("benchmark: a future refresh marker cannot suppress discovery", async 
     if (url.pathname === "/rate_limit") {
       return Promise.resolve(serve({})(url));
     }
-    return Promise.resolve(Response.json({ workflow_runs: [] }));
+    return Promise.resolve(Response.json(runList([])));
   }) as typeof fetch;
 
   try {
@@ -763,9 +765,7 @@ Deno.test("runtime history shows live artifact progress and keeps collection run
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.pathname === "/rate_limit") return Promise.resolve(serve({})(url));
     if (url.pathname.endsWith("/actions/workflows/benchmarks.yml/runs")) {
-      return Promise.resolve(Response.json({
-        workflow_runs: [ghRun(runId, BASE)],
-      }));
+      return Promise.resolve(Response.json(runList([ghRun(runId, BASE)])));
     }
     if (url.pathname.endsWith(`/actions/runs/${runId}/artifacts`)) {
       artifactRequested();
@@ -983,14 +983,12 @@ Deno.test("benchmark: the end of the run list ends the paging", async () => {
   await withApi({ pages: { 1: page1 } }, async (calls) => {
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertEquals(v.sub, "last 100 runs failed"); // every run in the window failed
-    // A full page still inside the window is followed. The page after it,
-    // which starts at the last run read, holds only that run, so the list
-    // ends there.
+    // A full page still inside the window is followed. GitHub counts 100
+    // runs in the list, so the page that reaches the hundredth ends it.
     assertEquals(runListCalls(calls), [
       `${runsPath}?per_page=20&page=1`,
       mainRecheck,
       `${runsPath}?per_page=100&page=1`,
-      `${runsPath}?per_page=99&page=2`,
     ]);
 
     // The next collection reads the top of the list, which reaches the runs
@@ -1564,19 +1562,17 @@ Deno.test("benchmark: returns a failed view after the run list settles", async (
     collection = active;
     await runsRequested;
 
-    releaseRuns(Response.json({
-      workflow_runs: [
-        failedRun,
-        ...cachedRuns.toReversed().map((run) => ghRun(run.runId, run.at)),
-      ],
-    }));
+    releaseRuns(Response.json(runList([
+      failedRun,
+      ...cachedRuns.toReversed().map((run) => ghRun(run.runId, run.at)),
+    ])));
     const final = await active;
     expect(final.status).toBe("bad");
     expect(final.value?.replace(/<[^>]*>/g, "")).toMatch(
       /^failed \(was ▲[\d.]+[%×]\)$/,
     );
   } finally {
-    releaseRuns(Response.json({ workflow_runs: [] }));
+    releaseRuns(Response.json(runList([])));
     await collection?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
@@ -3632,7 +3628,7 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
     await reader.read();
     await reader.cancel();
 
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     assertStringIncludes(await completion, '"phase":"complete"');
     assertEquals(listenerCalls, 2);
     assertStringIncludes(
@@ -3640,7 +3636,7 @@ Deno.test("runtime benchmark progress removes failed listeners and closes cleanl
       '"phase":"complete"',
     );
   } finally {
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {
       Deno.env.delete("DASHBOARD_CACHE_DIR");
@@ -3857,13 +3853,13 @@ Deno.test("a queued runtime history refresh reuses a dashboard refresh that just
       new URL(`http://x/bench/runtime-progress?id=${id}`),
     ).text();
 
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     await dashboard;
     assertStringIncludes(await completion, '"phase":"complete"');
     assertEquals(workflowRequests, 1);
     assertEquals(rateRequests, 0);
   } finally {
-    resolveRuns(Response.json({ workflow_runs: [] }));
+    resolveRuns(Response.json(runList([])));
     await dashboard?.catch(() => {});
     globalThis.fetch = originalFetch;
     if (previousCacheDirectory === undefined) {

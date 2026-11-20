@@ -8,6 +8,7 @@ import {
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -162,6 +163,17 @@ import {
   SessionReportLog,
   type SessionReportsReport,
 } from "./session-reports.ts";
+import {
+  advanceCurrencyCursor,
+  type CurrencyBatch,
+  type CurrencyInstance,
+  type CurrencyMarked,
+  type CurrencyRefusal,
+  type CurrencyStored,
+  judgeCurrencyRoots,
+  selectCurrencyPiece,
+  storeCurrencyRecords,
+} from "./currency-index.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -238,6 +250,7 @@ import {
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  type FullResyncCause,
   isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -376,6 +389,13 @@ const echoBreakerReportCount = operationMeter.createCounter(
 const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
+
+/**
+ * How many `result` back-links the currency judgment follows from a root to
+ * the piece it belongs to: as many as a start follows
+ * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
+ */
+const CURRENCY_ROOT_HOPS_MAX = 10;
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -458,9 +478,32 @@ export type SlowQuery = {
   roots?: number;
   watches?: number;
 
-  /** session.watch.refresh only: the refreshed session's principal, so a
-   * slow refresh names whose watch set cost it. */
+  /** Watch operations: the principal of the session whose watch set the
+   * entry evaluated or refreshed, so a slow entry names whose watches cost
+   * it. */
   principal?: string;
+
+  /** Watch evaluations: the session whose watch set was evaluated. */
+  sessionId?: string;
+
+  /** Watch evaluations: how many views the session held. A view's root is
+   * one of the watches `watches` counts. */
+  views?: number;
+
+  /** Watch evaluations: why the evaluation ran. `request` for a watch
+   * request the session sent, `selection` for checking a planner selection
+   * before it is accepted, `support-replaced` for a selection that dropped
+   * a delivered root, `unscoped-flush` for a refresh pass that names no
+   * dirty documents, and otherwise the {@link FullResyncCause} that marked
+   * the session for a full evaluation. */
+  cause?: WatchEvaluationCause;
+
+  /** Watch evaluations: which of the session's graphs the entry evaluated.
+   * `demand` is its ordinary watches and its views' roots, `support` the
+   * delivery its views' planner selections add, and `selection` a planner
+   * selection checked before it is accepted. One request or refresh pass
+   * records an entry per part it evaluated. */
+  part?: "demand" | "support" | "selection";
 
   /** transact only: milliseconds the commit waited for the space
    * publication lock before evaluation began. Flush passes hold the same
@@ -491,9 +534,11 @@ export type SlowQuery = {
    * so a slow entry reporting zero spent it somewhere else — assembling
    * the response, or attaching operation fields.
    *
-   * `session.watch.refresh` carries none of these fields. It re-evaluates
-   * by dirty document rather than by root, so it has no roots to
-   * attribute; absent is the honest answer there, not zero. */
+   * A `session.watch.refresh` entry for a refresh by dirty document carries
+   * none of these fields. It re-evaluates by document rather than by root,
+   * so it has no roots to attribute; absent is the honest answer there, not
+   * zero. A `session.watch.refresh` entry for a pass that evaluated a
+   * session whole carries them, as a request's entry does. */
   rootsVisited?: number;
 
   /** Query and watch operations: summed elapsed time of those root visits.
@@ -510,12 +555,14 @@ export type SlowQuery = {
    * the complete request rather than only its costliest root. */
   managerReads?: number;
 
-  /** watch.add and watch.refresh: changed entity snapshots delivered to the
-   * client. This is the delivered-width counterpart to `watches` and
-   * `managerReads`: a wide traversal that yields few upserts is repeated
-   * server work, while a wide frame is also transport and client-ingest
-   * work. A refresh that produced no upserts answers with an empty catch-up
-   * and is not recorded, so a refresh entry never reports zero here. */
+  /** watch.add, watch.remove, and a refresh by dirty document: changed
+   * entity snapshots delivered to the client. This is the delivered-width
+   * counterpart to `watches` and `managerReads`: a wide traversal that
+   * yields few upserts is repeated server work, while a wide frame is also
+   * transport and client-ingest work. A refresh with no upserts, removals,
+   * or new crossings answers with an empty catch-up and is not recorded; a
+   * refresh entry reporting zero here delivered removals or crossings
+   * alone. */
   upserts?: number;
 
   /** Query and watch operations: the costliest single root, which is what
@@ -607,6 +654,49 @@ const recordSlowQueryDuration = (
     ...details,
   });
 };
+
+/** Why a watch evaluation ran ({@link SlowQuery}'s `cause` defines each). */
+export type WatchEvaluationCause =
+  | "request"
+  | "selection"
+  | "support-replaced"
+  | "unscoped-flush"
+  | FullResyncCause;
+
+/**
+ * What a watch evaluation's slow-query entry records about why it ran:
+ * the operation it is filed under, the cause, the part of the session's
+ * graphs it evaluated, and how many views the session held
+ * ({@link SlowQuery} defines each).
+ */
+export type WatchEvaluationRecord = {
+  operation: string;
+  cause: WatchEvaluationCause;
+  part: "demand" | "support" | "selection";
+  views?: number;
+};
+
+/** The operation and cause a caller files a session's watch evaluations under. */
+type WatchEvaluationContext = Pick<
+  WatchEvaluationRecord,
+  "operation" | "cause"
+>;
+
+/** The session and cause fields of a watch evaluation's slow-query entry. */
+const watchEvaluationDetails = (
+  scopeContext: { principal?: string; sessionId?: string },
+  record: WatchEvaluationRecord,
+): Pick<SlowQuery, "principal" | "sessionId" | "views" | "cause" | "part"> => ({
+  ...(scopeContext.principal === undefined
+    ? {}
+    : { principal: scopeContext.principal }),
+  ...(scopeContext.sessionId === undefined
+    ? {}
+    : { sessionId: scopeContext.sessionId }),
+  views: record.views ?? 0,
+  cause: record.cause,
+  part: record.part,
+});
 
 /** Returns the last N slow query, watch, commit, and SQLite read operations —
  * those over `CF_SLOW_QUERY_THRESHOLD_MS`, 100 ms unless set. */
@@ -1537,6 +1627,12 @@ class Connection {
   readonly #inProcess: boolean;
   readonly #leaseHolderInstance: string | undefined;
 
+  /** The most slots a message from this connection's client may stand for. */
+  get #slotLimit(): number {
+    return this.#server.options.untrustedMessageSlots ??
+      MAX_UNTRUSTED_MESSAGE_SLOTS;
+  }
+
   constructor(
     readonly id: string,
     server: Server,
@@ -2078,6 +2174,7 @@ class Connection {
   async receive(payload: string): Promise<void> {
     const parsed = parseClientMessage(payload, {
       commitLabelTableV1: this.#commitLabelTable,
+      slotLimit: this.#slotLimit,
     });
     // A presence message or a session report is handled as it is handed
     // over, not behind the frames already queued here: it carries no seq and
@@ -2526,7 +2623,7 @@ class Connection {
         error: toError(
           "MessageTooLargeError",
           "Memory message stands for more than " +
-            `${MAX_UNTRUSTED_MESSAGE_SLOTS} array slots and record members`,
+            `${this.#slotLimit} array slots and record members`,
         ),
       });
       return;
@@ -3785,6 +3882,17 @@ export class Server {
        * instance, see there), held least-recently-used space first. */
       documentCacheTotalBudgetBytes?: number;
 
+      /** The most slots one client message may stand for (default
+       * MAX_UNTRUSTED_MESSAGE_SLOTS in ../v2.ts, which says what a slot
+       * is). It bounds the work one message can cost the server, so a
+       * higher one is for a bounded operation that needs it, such as moving
+       * the source of a holder with thousands of members, whose update
+       * sends one watch per member document. It may only raise the default,
+       * and construction throws for one below it: a direct client sizes the
+       * parts it stages a watch set in by the default, and nothing tells it
+       * of a lower limit, so a set it would send in parts would be refused. */
+      untrustedMessageSlots?: number;
+
       authorizeSessionOpen: (
         message: SessionOpenRequest,
         context: SessionOpenAuthContext,
@@ -3819,6 +3927,16 @@ export class Server {
        * that does not, and `false` is how a deployment turns them off.
        */
       syncCidReferences?: boolean;
+
+      /**
+       * Whether this server advertises `markedSplicesV1`, so that clients
+       * send array changes as marked splices (`PatchOp`'s `pinned`). Off
+       * unless `true`. This server reads marked splices whether or not it
+       * advertises them; a deployment turns this on only once every serving
+       * worker that may read its rows, a rollback's included, does too
+       * (docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`).
+       */
+      markedSplices?: boolean;
 
       /**
        * Whether this server's posture names instances (INV-16): the
@@ -3931,6 +4049,16 @@ export class Server {
     ) {
       throw new RangeError(
         "Client retirement is disabled; `minimumClientGeneration` must be `0`",
+      );
+    }
+    if (
+      options.untrustedMessageSlots !== undefined &&
+      !(Number.isSafeInteger(options.untrustedMessageSlots) &&
+        options.untrustedMessageSlots >= MAX_UNTRUSTED_MESSAGE_SLOTS)
+    ) {
+      throw new RangeError(
+        "`untrustedMessageSlots` may only raise the limit: it must be an " +
+          `integer of at least ${MAX_UNTRUSTED_MESSAGE_SLOTS}`,
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
@@ -4079,6 +4207,7 @@ export class Server {
       routedAuthV1: false,
       routedCompressionV1: false,
       syncCidReferencesV1: this.options.syncCidReferences !== false,
+      markedSplicesV1: this.options.markedSplices === true,
     };
   }
 
@@ -5448,7 +5577,7 @@ export class Server {
   markSessionForFullResync(space: string, sessionId: string): void {
     const session = this.#sessions.get(space, sessionId);
     if (session !== null) {
-      session.forceFullResync = true;
+      session.forceFullResync = "failed-pass";
     }
   }
 
@@ -7114,7 +7243,7 @@ export class Server {
           // The catch-up below evaluates only when something is dirty or
           // owed; a replaced diff base is neither, so the full evaluation
           // that diffs against it is forced explicitly.
-          resumed.forceFullResync = true;
+          resumed.forceFullResync = "resume";
         }
       }
       const session = opened;
@@ -9039,6 +9168,12 @@ export class Server {
           })),
           engine,
           { principal: session!.principal, sessionId: session!.id },
+          {
+            operation: "view.selection",
+            cause: "selection",
+            part: "selection",
+            views: session!.views.length,
+          },
         );
         if (!current()) return false;
       }
@@ -9075,7 +9210,7 @@ export class Server {
         }
         session!.viewPlansPending = true;
       } else {
-        session!.forceFullResync = true;
+        session!.forceFullResync = "first-selection";
       }
       this.markSpaceDirty(space, []);
       return true;
@@ -9104,11 +9239,16 @@ export class Server {
     });
   }
 
-  /** Evaluates demand independently from delivery-only supporting roots. */
+  /**
+   * Evaluates demand independently from delivery-only supporting roots.
+   * `context` names the operation and cause each evaluation's slow-query
+   * entry records.
+   */
   async #evaluateViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9126,6 +9266,7 @@ export class Server {
       renderWatches,
       engine,
       identity,
+      { ...context, part: "demand", views: views.length },
     );
     const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
@@ -9135,6 +9276,7 @@ export class Server {
         selected,
         engine,
         identity,
+        { ...context, part: "support", views: views.length },
       );
     const graphs = new Map([...demand.graphs].map(([branch, graph]) => [
       views.length === 0 ? branch : `view-demand:${branch}`,
@@ -9183,6 +9325,12 @@ export class Server {
         selected,
         engine,
         identity,
+        {
+          operation: "session.watch.refresh",
+          cause: "support-replaced",
+          part: "support",
+          views: session.views.length,
+        },
       );
     const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
       `view-demand:${branch}`,
@@ -9227,11 +9375,13 @@ export class Server {
    * the replacement's views (`#moveWatchGraphs()`). What it returns is what
    * `#evaluateViewWatchSet()` returns for the same request, and only the
    * roots the replacement adds and documents awaiting refresh are walked.
+   * `context` names the operation and cause its slow-query entries record.
    */
   async #replaceViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9239,7 +9389,13 @@ export class Server {
     this.#assertRoutedAuthority(session);
     const dirtyIds = this.#dirtyDocsBySpace.get(session.space);
     if (this.#dirtySpaces.has(session.space) && dirtyIds === undefined) {
-      return await this.#evaluateViewWatchSet(session, watches, views, engine);
+      return await this.#evaluateViewWatchSet(
+        session,
+        watches,
+        views,
+        context,
+        engine,
+      );
     }
     const startedAt = performance.now();
     const renderWatches = [...watches, ...viewWatches(views)];
@@ -9250,27 +9406,49 @@ export class Server {
         previousSupport.set(key.slice("view-support:".length), graph);
       }
     }
-    const attribution = createRootAttribution();
+    const identity = { principal: session.principal, sessionId: session.id };
+    const demandAttribution = createRootAttribution();
     const demandGraphs = this.#moveWatchGraphs(
       session,
       engine,
       renderWatches,
       session.viewDemandGraphs,
-      attribution,
+      demandAttribution,
       dirtyIds,
     );
+    recordSlowQueryDuration(context.operation, session.space, startedAt, {
+      watches: renderWatches.length,
+      ...watchEvaluationDetails(identity, {
+        ...context,
+        part: "demand",
+        views: views.length,
+      }),
+      ...demandAttribution,
+    });
+    const supportStartedAt = performance.now();
+    const supportAttribution = createRootAttribution();
     const supportGraphs = this.#moveWatchGraphs(
       session,
       engine,
       selected,
       previousSupport,
-      attribution,
+      supportAttribution,
       dirtyIds,
     );
-    recordSlowQueryDuration("session.watch.set", session.space, startedAt, {
-      watches: renderWatches.length + selected.length,
-      ...attribution,
-    });
+    recordSlowQueryDuration(
+      context.operation,
+      session.space,
+      supportStartedAt,
+      {
+        watches: selected.length,
+        ...watchEvaluationDetails(identity, {
+          ...context,
+          part: "support",
+          views: views.length,
+        }),
+        ...supportAttribution,
+      },
+    );
     const graphs = new Map<string, TrackedGraphState>();
     for (const [branch, graph] of demandGraphs) {
       graphs.set(`view-demand:${branch}`, graph);
@@ -9278,7 +9456,6 @@ export class Server {
     for (const [branch, graph] of supportGraphs) {
       graphs.set(`view-support:${branch}`, graph);
     }
-    const identity = { principal: session.principal, sessionId: session.id };
     return {
       serverSeq: Engine.serverSeq(engine),
       graphs,
@@ -9774,6 +9951,12 @@ export class Server {
       // replacement or a removal, and walks only the roots it adds.
       const moved = views.length > 0 && !incremental &&
         session.views.length > 0 && !session.forceFullResync;
+      // A request evaluated whole because the session owed a full
+      // evaluation is filed under that cause.
+      const context: WatchEvaluationContext = {
+        operation: `session.watch.${mode === "replace" ? "set" : mode}`,
+        cause: session.forceFullResync || "request",
+      };
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -9786,6 +9969,7 @@ export class Server {
             principal: session.principal,
             sessionId: message.sessionId,
           },
+          { ...context, part: "demand", views: 0 },
         )
         : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
@@ -9794,12 +9978,14 @@ export class Server {
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         )
         : await this.#evaluateViewWatchSet(
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         );
       this.#assertRoutedAuthority(session);
@@ -10629,6 +10815,11 @@ export class Server {
     watches: readonly WatchSpec[],
     engine?: Engine.Engine,
     scopeContext: { principal?: string; sessionId?: string } = {},
+    record: WatchEvaluationRecord = {
+      operation: "session.watch.set",
+      cause: "request",
+      part: "demand",
+    },
   ): Promise<{
     serverSeq: number;
     graphs: Map<string, TrackedGraphState>;
@@ -10660,8 +10851,9 @@ export class Server {
       graphs.set(branch, result.state);
     }
 
-    recordSlowQueryDuration("session.watch.set", space, startedAt, {
+    recordSlowQueryDuration(record.operation, space, startedAt, {
       watches: watches.length,
+      ...watchEvaluationDetails(scopeContext, record),
       ...attribution,
     });
     return {
@@ -10822,7 +11014,7 @@ export class Server {
       return;
     }
     const sync = undelivered.effect;
-    if (sync.viewPlans !== undefined) session.forceFullResync = true;
+    if (sync.viewPlans !== undefined) session.forceFullResync = "lost-frame";
     // Both arms below rewrite the delivered entities and the tracked set.
     this.#touchDemand(session);
     const identity = this.#sessionScopeIdentity(session);
@@ -10882,7 +11074,7 @@ export class Server {
           },
         );
         session.trackedIds.add(toDirtyKey(entry.id, entry.scopeKey));
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
         ids.push(toDirtyKey(entry.id, entry.scopeKey));
       }
       this.#rollbackCaughtUpMarker(session, sync);
@@ -10907,7 +11099,7 @@ export class Server {
         session.leaseHolderReads === true &&
         upsert.scope !== undefined && upsert.scope !== "space"
       ) {
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
       }
     }
     for (const remove of sync.removes) {
@@ -10931,7 +11123,7 @@ export class Server {
         },
       );
       session.trackedIds.add(toDirtyKey(remove.id, scopeKey));
-      session.forceFullResync = true;
+      session.forceFullResync = "lost-frame";
       ids.push(toDirtyKey(remove.id, scopeKey));
     }
     this.#rollbackCaughtUpMarker(session, sync);
@@ -11669,6 +11861,10 @@ export class Server {
                 session,
                 session.watches,
                 session.views,
+                {
+                  operation: "session.watch.refresh",
+                  cause: preCallForceFullResync || "unscoped-flush",
+                },
               )
               : await this.#reevaluateViewSupport(
                 session,
@@ -12216,6 +12412,118 @@ export class Server {
       demand.push(share);
     }
     return demand;
+  }
+
+  /**
+   * Brings the marks of `space`'s currency index up to its store's head
+   * (serving-loop.md §3b), and returns the pieces the advance marked.
+   * Server-internal machinery and tests only, as `engineForSpace()` is.
+   */
+  async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
+    const engine = await this.#openEngine(space);
+    return advanceCurrencyCursor(engine, { space });
+  }
+
+  /**
+   * Stores the records a serving loop took of `space`'s pieces at a quiescent
+   * point in its currency index (serving-loop.md §3b). Server-internal
+   * machinery and tests only.
+   */
+  async storeCurrencyRecords(
+    space: string,
+    batch: Omit<CurrencyBatch, "space">,
+  ): Promise<CurrencyStored> {
+    const engine = await this.#openEngine(space);
+    return storeCurrencyRecords(engine, { ...batch, space });
+  }
+
+  /**
+   * Judges which of `roots`, ids of space-scoped documents awaiting a
+   * structure load, the store can serve with no piece started
+   * (serving-loop.md §1), against the demand rows of `space`'s client
+   * sessions as `demandForSpace()` reads them, after bringing the currency
+   * index's marks up to the store's head. A root that is no result document
+   * is judged as the piece its `result` back-links lead to, which is the
+   * piece a structure load of it starts.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, how
+   * many roots each reason refused, and the pieces the advance marked.
+   */
+  async judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: { excludePrincipal?: string; epoch: string },
+  ): Promise<{
+    servable: Array<{ root: string; piece: string }>;
+    refused: Partial<Record<CurrencyRefusal, number>>;
+    marked: CurrencyMarked[];
+  }> {
+    const engine = await this.#openEngine(space);
+    const marked = advanceCurrencyCursor(engine, { space });
+    const refused: Partial<Record<CurrencyRefusal, number>> = {};
+    if (roots.length === 0) return { servable: [], refused, marked };
+
+    /** The recorded piece `root` leads to, if its back-links reach one. */
+    const pieceOf = (root: string): string | undefined => {
+      let id = root;
+      for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
+        if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
+          return id;
+        }
+        const document = Engine.read(engine, {
+          id,
+          scopeKey: "space",
+        });
+        const link = document === null
+          ? undefined
+          : (document as Record<string, unknown>).result;
+        if (!isLinkRef(link)) return undefined;
+        const target = linkRefPayload(link).id;
+        if (typeof target !== "string") return undefined;
+        id = target;
+      }
+      return undefined;
+    };
+    const pieces = new Map<string, string>();
+    for (const root of roots) {
+      const piece = pieceOf(root);
+      if (piece !== undefined) pieces.set(root, piece);
+      else refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+    }
+    if (pieces.size === 0) return { servable: [], refused, marked };
+    const demand = this.demandForSpace(
+      space,
+      options.excludePrincipal === undefined
+        ? {}
+        : { excludePrincipal: options.excludePrincipal },
+    );
+    const rows = function* (): Generator<CurrencyInstance> {
+      for (const share of demand) {
+        for (const row of share.rows.values()) {
+          yield { id: row.id, scopeKey: row.scopeKey };
+        }
+      }
+    };
+    const judgment = judgeCurrencyRoots(engine, {
+      space,
+      roots: [...new Set(pieces.values())],
+      rows: rows(),
+      epoch: options.epoch,
+    });
+    const passing = new Set(judgment.servable);
+    const reasons = new Map(
+      judgment.refused.map(({ root, reason }) => [root, reason]),
+    );
+    const servable: Array<{ root: string; piece: string }> = [];
+    for (const [root, piece] of pieces) {
+      if (passing.has(piece)) {
+        servable.push({ root, piece });
+        continue;
+      }
+      const reason = reasons.get(piece);
+      if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
+    }
+    return { servable, refused, marked };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -13466,8 +13774,8 @@ function isSqliteNamedParamEntries(
 /**
  * A client message refused before it was understood, with the id of the
  * request it carried so that the refusal can be answered on that request:
- * `oversized` for one standing for more than `MAX_UNTRUSTED_MESSAGE_SLOTS`
- * slots, `invalid` for one that decoded but failed metadata expansion or
+ * `oversized` for one standing for more slots than the server admits
+ * (`MAX_UNTRUSTED_MESSAGE_SLOTS` unless it was given another limit), `invalid` for one that decoded but failed metadata expansion or
  * request-shape validation.
  */
 export type RejectedClientMessage = {
@@ -13499,11 +13807,11 @@ export const deleteInapplicableEntries = (
  */
 export const parseClientMessage = (
   payload: string,
-  options: { commitLabelTableV1?: boolean } = {},
+  options: { commitLabelTableV1?: boolean; slotLimit?: number } = {},
 ): ClientMessage | RejectedClientMessage | null => {
   let parsed: FabricValue;
   try {
-    parsed = decodeMemoryBoundary(payload);
+    parsed = decodeMemoryBoundary(payload, options.slotLimit);
   } catch (error) {
     if (error instanceof SlotLimitError) {
       const requestId = error.rootScalar("requestId");

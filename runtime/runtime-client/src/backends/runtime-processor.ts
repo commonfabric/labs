@@ -2770,12 +2770,33 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
-    return {
-      cell: resolvedCellRef(
-        getCell(this.#runtime, request.cell).resolveAsCell(),
-      ),
-    };
+  /**
+   * Answers where `request.cell`'s links lead, from what the replica holds
+   * now. With `loaded`, the documents they pass through that the replica has
+   * no basis for are loaded first, as a send's are, so a cold chain answers
+   * its end rather than the first document still to arrive; only then is the
+   * answer a promise.
+   *
+   * @throws The promise rejects with a `DocumentLoadError` when such a load
+   *   fails.
+   */
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest & { loaded?: undefined },
+  ): CellResponse;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse>;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse> {
+    const target = getCell(this.#runtime, request.cell);
+    const answer = (): CellResponse => ({
+      cell: resolvedCellRef(target.resolveAsCell()),
+    });
+    const loading = request.loaded === true
+      ? this.#loadLinkedDocuments(target)
+      : undefined;
+    return loading === undefined ? answer() : loading.then(answer);
   }
 
   /** Keeps release authority in this backend while the host shows a preview. */
@@ -4667,7 +4688,7 @@ export class RuntimeProcessor {
       case RequestType.CellUnsubscribe:
         return this.handleCellUnsubscribe(request, client);
       case RequestType.CellResolveAsCell:
-        return this.handleCellResolveAsCell(request);
+        return await this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
       case RequestType.CellFields:
