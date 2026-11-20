@@ -1503,6 +1503,12 @@ export const checkSoundness = (
 const STEPPED_PAIRS = 20_000;
 
 /**
+ * The length of the text of a scenario's result above which the scenario is
+ * not run again with its events sent three times (`compareModule`).
+ */
+const REPEATED_RESULT_LIMIT = 250_000;
+
+/**
  * The length of the text of the result, summed over the checks after every
  * event of one scenario, at most: a check reads the value at each stored
  * position from the result of each run.
@@ -1838,7 +1844,27 @@ export const compareModule = async (
   // on what its earlier run and the runs of the other handlers stored. The
   // rows beside today's are those of the scenario as given.
   let repeated: ModuleLabels["repeated"];
-  if (events.length > 0) {
+  // A scenario with a large result is not run again: each of its runs in
+  // memory holds the result, and the events sent again add to it.
+  const resultSize = runs.baseline === undefined
+    ? 0
+    : JSON.stringify(runs.baseline.result()).length;
+  if (events.length > 0 && resultSize > REPEATED_RESULT_LIMIT) {
+    repeated = {
+      refused: [],
+      soundness: {
+        skipped:
+          `the result is larger than ${REPEATED_RESULT_LIMIT} characters`,
+        runs: 0,
+        ms: 0,
+        sources: [],
+        unchanged: {},
+        checked: 0,
+        dependent: 0,
+        failures: [],
+      },
+    };
+  } else if (events.length > 0) {
     const all = repeatedEvents(artifact.plan, artifact.schemas, events);
     const again: Sent[] = all.map(({ binding, event }, index) => ({
       index,
