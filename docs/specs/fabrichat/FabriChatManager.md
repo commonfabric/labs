@@ -80,7 +80,11 @@ accepting a standalone room does, so a deleted room is listed under
 `deletedRooms` by its record.
 
 The manager's rendering labels each listed room with its entry's `title`, or,
-for a direct room with no title, by its counterpart. A standalone room's
+for a direct room with no title, with its counterpart's principal, as the entry
+holds it, shortened for display by `shortDid()`
+(`patterns/system/social-space/short-did.ts`). Labeling the rooms reads nothing
+but their entries, so it opens no room's space and no profile's (see the
+[implementation status](README.md#access-and-principals)). A standalone room's
 catalog entry holds its title too, as a display hint for readers of the
 catalog. Registration takes the room's title, whatever its kind. Whenever the
 manager handles `accept` or `joinRoom` for a room, it reads the room's `about`,
