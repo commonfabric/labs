@@ -74,13 +74,11 @@ import {
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import {
-  counted,
   type Figure,
   instanceOptions,
   inStorage,
   type Sent,
 } from "./integrated.ts";
-import { resetAllTimingStats } from "../../logger/src/logger.ts";
 import type {
   RecordedPlanWrite,
   RuntimeTransactions,
@@ -485,6 +483,11 @@ export const checkWrites = (
    * has (`generateInputs`), as text, by the input's name.
    */
   inputClauses: ReadonlyMap<string, string> = new Map(),
+  /**
+   * The instance the scenario's inputs are the argument of. The argument
+   * of another instance, one a handler made, holds what its maker gave it.
+   */
+  main?: string,
 ): OracleCheck[] => {
   const tx = runtime.edit();
   try {
@@ -720,7 +723,8 @@ export const checkWrites = (
      * its chains ends at holds no link (PL §2.5). Returns each binding of
      * `inputs`, and of the places in it, for which one of the two fails.
      */
-    const unsoundBindings = (inputs: PlanInputs): string[] => {
+    const unsoundBindings = (write: RecordedPlanWrite): string[] => {
+      const inputs: PlanInputs = write;
       const found: string[] = [];
       const visit = (place: PlanInputs) => {
         for (const [slot, binding] of Object.entries(place.slots ?? {})) {
@@ -743,7 +747,9 @@ export const checkWrites = (
               );
             }
           }
-          const clause = inputClauses.get(record.path[0]);
+          const clause = write.instance === main
+            ? inputClauses.get(record.path[0])
+            : undefined;
           if (
             clause === undefined || chains.some((each) => each.length === 0)
           ) {
@@ -752,7 +758,7 @@ export const checkWrites = (
           const label = chainsLabel(binding);
           if (
             !label.confidentiality.some((held) =>
-              JSON.stringify(ordered(held)) === clause
+              atomKey(ordered(held)) === clause
             )
           ) {
             found.push(
@@ -906,10 +912,18 @@ export type ModuleLabels = {
   /** Commits refused with the option off. */
   refusedOff?: number;
   /**
-   * The commits today's runtime made in its run of the module: the setup,
-   * the reads of the rows, and the events, one transaction per node.
+   * The transactions today's runtime committed to its storage in its run
+   * of the module, counted at the storage layer: before the instance was
+   * started, which is the compile cache; from there until every kept
+   * output was read, one transaction per node that ran; and from the first
+   * event on. `reverted` counts the commits the storage took back.
    */
-  todayCommits?: number;
+  todayCommits?: {
+    compile: number;
+    settle: number;
+    events: number;
+    reverted: number;
+  };
   /**
    * Why the run with the option on stopped before its last event, where it
    * did: a write the executor made after a refused commit, which the
@@ -1140,21 +1154,47 @@ export const compareModule = async (
       input.declared?.clause === undefined ? [] : [
         [
           name,
-          JSON.stringify(ordered(input.declared.clause as Atom)),
+          atomKey(ordered(input.declared.clause as Atom)),
         ] as const,
       ]
     ),
   );
   // Today's run finds each stream where the executor stored it (ruling
-  // Z43). Its commits are counted as the labeled arm's are.
-  resetAllTimingStats();
+  // Z43). Its commits are counted at the storage layer: each notification
+  // of a commit the storage manager of the run broadcasts is one
+  // transaction written to the replica, and a revert takes one back. The
+  // counts are kept at the points of the run, so that the commits of the
+  // compile cache, of the start with the reads of the rows, and of the
+  // events are told apart.
+  const seen = { commits: 0, reverted: 0 };
+  const at: Record<string, number> = {};
+  let subscribed = false;
   const today = await runModule(
     module,
     "outside first",
-    undefined,
+    {
+      at: (point, { storageManager }) => {
+        if (!subscribed) {
+          subscribed = true;
+          storageManager.subscribe({
+            next: (notification) => {
+              if (notification.type === "commit") seen.commits += 1;
+              if (notification.type === "revert") seen.reverted += 1;
+              return undefined;
+            },
+          });
+        }
+        at[point] ??= seen.commits;
+      },
+    },
     new ExecutorRun(artifact, argument, artifacts),
   );
-  const todayCommits = counted().commits;
+  const todayCommits = {
+    compile: at["compiled"] ?? 0,
+    settle: (at["settled"] ?? seen.commits) - (at["compiled"] ?? 0),
+    events: seen.commits - (at["settled"] ?? seen.commits),
+    reverted: seen.reverted,
+  };
   if (today.skipped !== undefined) return { ...base, skipped: today.skipped };
   const events: Sent[] = (today.outcomes ?? []).flatMap((outcome, index) =>
     outcome.outcome !== "committed" ? [] : [{
@@ -1183,6 +1223,7 @@ export const compareModule = async (
   // and a later write of the executor can fail on that: the run with the
   // option on reports what it found up to there.
   let failed: string | undefined;
+  let main: string | undefined;
   let on: Awaited<ReturnType<typeof inStorage>> | undefined;
   try {
     on = await inStorage(
@@ -1195,7 +1236,11 @@ export const compareModule = async (
       true,
       {
         committed: (runtime, _hooks, writes) => {
-          for (const check of checkWrites(runtime, plan, writes, clauses)) {
+          // The first commit is of the instance the scenario starts.
+          main ??= writes[0]?.instance;
+          for (
+            const check of checkWrites(runtime, plan, writes, clauses, main)
+          ) {
             checks.push(check);
           }
         },
@@ -1488,6 +1533,17 @@ const report = async (file: string, tables: string | undefined) => {
       }`,
     );
   }
+  const today = (key: "compile" | "settle" | "events" | "reverted") =>
+    ran.reduce((total, result) => total + (result.todayCommits?.[key] ?? 0), 0);
+  console.log(
+    `today's runtime, transactions committed to storage: ${
+      today("settle")
+    } from the start of the instance until every kept output was read, ${
+      today("events")
+    } from the first event on, ${
+      today("compile")
+    } before the start (the compile cache), ${today("reverted")} reverted`,
+  );
   if (tables === undefined) return;
   await Deno.mkdir(tables, { recursive: true });
   await writeTable(`${tables}/rows-beside-today.tsv`, rows);
@@ -1508,6 +1564,10 @@ const report = async (file: string, tables: string | undefined) => {
       onPreparations: result.on?.preparations ?? 0,
       onPrepareMs: (result.on?.prepareMs ?? 0).toFixed(1),
       bounds: result.on?.planLabelBounds ?? 0,
+      offCommits: result.off?.commits ?? 0,
+      onCommits: result.on?.commits ?? 0,
+      todayStartCommits: result.todayCommits?.settle ?? 0,
+      todayEventCommits: result.todayCommits?.events ?? 0,
     })),
   );
 };
