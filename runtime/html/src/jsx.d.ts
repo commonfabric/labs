@@ -4408,6 +4408,11 @@ interface CFBadgeAttributes<T> extends CFHTMLAttributes<T> {
 interface CFAvatarAttributes<T> extends CFHTMLAttributes<T> {
   /** The bytes of a raster image, such as a profile's picture. */
   "bytes"?: FabricBytes | CellLike<FabricBytes | undefined>;
+  /** A blob holding the image, by its space and id, where there are no
+   * `bytes`. */
+  "blob"?:
+    | { space: string; id: string }
+    | CellLike<{ space: string; id: string } | undefined>;
   "src"?: string | CellLike<string>;
   "name"?: string | CellLike<string>;
   "alt"?: string | CellLike<string>;
@@ -4417,8 +4422,12 @@ interface CFAvatarAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFAvatarInputAttributes<T> extends CFHTMLAttributes<T> {
   "disabled"?: boolean | CellLike<boolean>;
-  /** Fired with the picked image, scaled down to avatar size. */
-  "oncf-change"?: EventHandler<{ bytes: FabricBytes }>;
+  /** Fired with the picked image, scaled down to avatar size: its bytes, and
+   * the blob they are stored in, in the blob store of the space it is shown
+   * in. */
+  "oncf-change"?: EventHandler<
+    { bytes: FabricBytes; blob: { space: string; id: string } }
+  >;
   "oncf-error"?: EventHandler<{ message: string }>;
 }
 

@@ -117,11 +117,27 @@ export type SetProfileAvatarEvent = {
   target?: { value?: string };
 };
 
-/** The profile picture's bytes, sent directly as `picture` or carried as
- * `detail.bytes` by the change event of `<cf-avatar-input>`. */
+/**
+ * A profile picture held as a blob in a space's blob store: the DID of that
+ * space, and the blob's id there. Empty, `{}`, for no picture.
+ */
+export type ProfilePictureBlob = { space?: string; id?: string };
+
+/**
+ * A blob holding a picture, by its space's DID and its id there, as a host
+ * that uploaded the picture names it.
+ */
+export type PictureBlobReference = { space: string; id: string };
+
+/**
+ * A profile picture: the blob a host uploaded it to, sent as `pictureBlob` or
+ * carried as `detail.blob` by the change event of `<cf-avatar-input>`, or else
+ * its bytes, sent as `picture` or carried as `detail.bytes`.
+ */
 export type SetProfilePictureEvent = {
+  pictureBlob?: PictureBlobReference;
   picture?: FabricBytes;
-  detail?: { bytes?: FabricBytes };
+  detail?: { blob?: PictureBlobReference; bytes?: FabricBytes };
 
   /** Removes the picture. A host removing it says so outright. */
   clear?: boolean;
@@ -316,14 +332,25 @@ export type ProfileHomeOutput = {
   // Free text: a URL, a `data:` URL, or a glyph. Kept for the readers that
   // read it; the profile shows `picture` in its place when it has one.
   avatar: OwnerProtectedProfileWrite<string, typeof setAvatar>;
-  // The profile picture: the bytes of a raster image in any format an `<img>`
-  // decodes, the format being sniffed from the bytes. Empty until the owner
-  // sets one, and absent on a stored profile that predates its default.
-  // `setPicture` takes a picture from the owner alone, but earlier releases
-  // took one from anyone, and bytes can be stored without a label, so a reader
-  // showing it as the owner's face reads it through `writtenPrincipalOf()`,
-  // which reads the picture's own label, not the profile's label at
-  // `picture`.
+  // The profile picture, as a reference to the blob a host uploaded it to: a
+  // raster image in any format an `<img>` decodes, whose bytes stay out of
+  // every list and feed that carries the profile, and which a reader fetches
+  // from the blob's space's blob store. `{}` while the profile holds no
+  // picture this way, and absent on a stored profile that predates the
+  // field. `setPicture` takes a picture from the owner alone, but a value can
+  // be stored without a label, so a reader showing it as the owner's face
+  // reads it through `writtenPrincipalOf()`, which reads the reference's own
+  // label, not the profile's label at `pictureBlob`.
+  pictureBlob?: OwnerProtectedProfileWrite<
+    ProfilePictureBlob,
+    typeof setPicture
+  >;
+  // The profile picture as bytes held inline, the format being sniffed from
+  // the bytes, for a picture sent as bytes rather than uploaded. Empty while
+  // the profile holds no picture this way, and absent on a stored profile
+  // that predates its default. Earlier releases took a picture from anyone,
+  // so a reader reads this through `writtenPrincipalOf()` too, and shows it
+  // only where the owner's `pictureBlob` names no blob.
   picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;
   // A short, human-authored free-text description of the profile owner
   // (CT-1648). Owner-protected like name/avatar; the canonical shared-profile
@@ -821,9 +848,28 @@ const setAvatar = handler<SetProfileAvatarEvent, { avatar: Writable<string> }>(
   },
 );
 
-// No picture: the bytes the `picture` field holds until the owner sets one, and
-// once they clear it.
+// No picture: the bytes the `picture` field holds while the profile holds no
+// picture as bytes.
 const NO_PICTURE = new FabricBytes(new Uint8Array(0));
+
+// No picture: the reference the `pictureBlob` field holds while the profile
+// holds no picture as a blob.
+const NO_PICTURE_BLOB: ProfilePictureBlob = {};
+
+/**
+ * `reference` when it names a blob, by a space's DID and a non-empty id, or
+ * `undefined` when it names none.
+ */
+const namedBlob = (
+  reference: ProfilePictureBlob | undefined,
+): PictureBlobReference | undefined => {
+  const space = reference?.space;
+  const id = reference?.id;
+  return typeof space === "string" && space.startsWith("did:") &&
+      typeof id === "string" && id !== ""
+    ? { space, id }
+    : undefined;
+};
 
 /**
  * The policy `setPicture` declares for the `picture` field: it alone writes the
@@ -837,12 +883,23 @@ type ProfilePictureWrite = RepresentsCurrentUser<
   WriteAuthorizedBy<FabricBytes | undefined, typeof setPicture>
 >;
 
-// The authorized writer for the `picture` field, which only the person whose
-// own profile it is (`profileOwnerOf()`) may use. An event without bytes is a
-// no-op, not a clear; `clear: true` is how the picture is removed. The explicit
-// `HandlerFactory` type lets the state name the handler as its own writer.
+/** The policy `setPicture` declares for the `pictureBlob` field, as for
+ * `picture`. */
+type ProfilePictureBlobWrite = RepresentsCurrentUser<
+  WriteAuthorizedBy<ProfilePictureBlob, typeof setPicture>
+>;
+
+// The authorized writer for the picture fields, which only the person whose
+// own profile it is (`profileOwnerOf()`) may use. It stores a picture sent as
+// the blob a host uploaded it to in `pictureBlob`, and one sent as bytes in
+// `picture`, preferring the blob when an event carries both, and empties the
+// other field, so that no reader shows an earlier picture there. An event
+// without a picture is a no-op, not a clear; `clear: true` is how the picture
+// is removed, from both fields. The explicit `HandlerFactory` type lets the
+// state name the handler as its own writer.
 export type SetProfilePictureState = {
   picture: Writable<ProfilePictureWrite>;
+  pictureBlob: Writable<ProfilePictureBlobWrite>;
   // Read for whose own profile it is, and nothing else.
   profile: Cell<{ name?: string }>;
 };
@@ -856,6 +913,19 @@ const setPicture: HandlerFactory<
     throw new Error("Only the profile's owner can set its picture.");
   }
   if (event.clear === true) {
+    state.pictureBlob.set(NO_PICTURE_BLOB);
+    state.picture.set(NO_PICTURE);
+    return;
+  }
+  const reference = event.pictureBlob ?? event.detail?.blob;
+  if (reference !== undefined) {
+    const blob = namedBlob(reference);
+    if (blob === undefined) {
+      throw new Error(
+        "A picture's blob is named by its space's DID and its id there.",
+      );
+    }
+    state.pictureBlob.set(blob);
     state.picture.set(NO_PICTURE);
     return;
   }
@@ -864,6 +934,7 @@ const setPicture: HandlerFactory<
     return;
   }
   state.picture.set(picture);
+  state.pictureBlob.set(NO_PICTURE_BLOB);
 });
 
 // THE authorized writer for the owner-protected `bio` field (CT-1648). Bio is
@@ -1045,10 +1116,19 @@ const toggleProfileEditing = handler<void, { editing: Writable<boolean> }>(
 // `../profile-face/profile-face.ts` states for every pattern.
 const faceOf = lift<
   { profile: Cell<ProfileHomeOutput> },
-  { picture?: FabricBytes; avatar?: string }
+  {
+    pictureBlob?: { space: string; id: string };
+    picture?: FabricBytes;
+    avatar?: string;
+  }
 >(({ profile }) => {
   const owner = profileOwnerOf(profile);
   if (owner === undefined) return {};
+  const pictureBlob = profile.key("pictureBlob");
+  if (writtenPrincipalOf(pictureBlob) === owner) {
+    const blob = namedBlob(pictureBlob.get());
+    if (blob !== undefined) return { pictureBlob: blob };
+  }
   const picture = profile.key("picture");
   const bytes = picture.get();
   if (
@@ -1087,6 +1167,9 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const picture = new Writable<
       OwnerProtectedProfileWrite<FabricBytes | undefined, typeof setPicture>
     >(NO_PICTURE).for("picture");
+    const pictureBlob = new Writable<
+      OwnerProtectedProfileWrite<ProfilePictureBlob, typeof setPicture>
+    >(NO_PICTURE_BLOB).for("pictureBlob");
     const bio = new Writable<
       OwnerProtectedProfileWrite<string, typeof setBio>
     >("").for("bio");
@@ -1190,6 +1273,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       name,
       avatar,
       picture,
+      pictureBlob,
       bio,
       inbox,
       externalLinks,
@@ -1197,7 +1281,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       elements,
       setName: setName({ name }),
       setAvatar: setAvatar({ avatar }),
-      setPicture: setPicture({ picture, profile: self }),
+      setPicture: setPicture({ picture, pictureBlob, profile: self }),
       setBio: setBio({ bio, draft: bioDraft }),
       setInbox: setInbox({ inbox }),
       addExternalLink: mutateExternalProfileLinks({
@@ -1388,6 +1472,7 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                 <cf-vstack gap="2">
                   <label>Picture</label>
                   <cf-avatar
+                    blob={face.pictureBlob}
                     bytes={face.picture}
                     src={face.avatar ?? ""}
                     name={name}
@@ -1395,7 +1480,11 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                   />
                   <cf-avatar-input
                     data-ui-action={TRUSTED_PROFILE_EDIT_ACTION}
-                    oncf-change={setPicture({ picture, profile: self })}
+                    oncf-change={setPicture({
+                      picture,
+                      pictureBlob,
+                      profile: self,
+                    })}
                   />
                 </cf-vstack>
 

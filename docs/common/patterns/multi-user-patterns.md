@@ -287,11 +287,17 @@ user's home space):
 ```tsx
 // Shown inside a pattern body.
 const profileWish = wish<
-  Writable<{ name?: string; picture?: FabricBytes; avatar?: string }>
+  Writable<{
+    name?: string;
+    pictureBlob?: { space?: string; id?: string };
+    picture?: FabricBytes;
+    avatar?: string;
+  }>
 >({ query: "#profile" }); // the viewer's profile CELL
 const profileNameWish = wish<string>({ query: "#profileName" });
 const myName = computed(() => (profileNameWish.result ?? "").trim());
-const myFace = computed(() => profileFace(profileWish.result)); // { picture } or { avatar } or {}
+// { pictureBlob }, { picture }, { avatar } or {}
+const myFace = computed(() => profileFace(profileWish.result));
 const hasProfile = computed(() => profileWish.result !== undefined);
 ```
 
@@ -312,7 +318,7 @@ The viewer is whoever the runtime says they are; `#profile` is how you read it.
 `cf-profile-badge` renders **any** participant, not just the viewer: bind the live
 profile cell you stored for them on join. Cross-space profile reads resolve for
 every authorized viewer (CT-1667/1687), so each badge stays current and carries the
-verified seal. Fall back to `<cf-avatar bytes={p.picture} src={p.avatar} name={p.name} />` only when
+verified seal. Fall back to `<cf-avatar blob={p.pictureBlob} bytes={p.picture} src={p.avatar} name={p.name} />` only when
 you deliberately hold just a snapshot — a self-contained piece, or a participant
 whose remote profile space is offline.
 

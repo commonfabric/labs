@@ -29,6 +29,7 @@ import {
   loadProfileOwnerDocuments,
   orderProfileCandidates,
   profileOwnership,
+  type Runtime,
   sendEvent,
   transactionFailureMessage,
   writtenPrincipalAt,
@@ -38,6 +39,14 @@ import {
   cfcLabelViewForResolvedTargetWithStatus,
 } from "@commonfabric/runner/cfc";
 import { exactPrincipalAttestations } from "@commonfabric/runner/cfc/represents-principal";
+import {
+  asStoredBlobRecord,
+  blobDocumentId,
+  type BlobReference,
+  blobReferenceOf,
+  storeBlob,
+} from "@commonfabric/runner/blob-record";
+import { isDID } from "@commonfabric/identity/did";
 
 import { canonicalAddress } from "./callable.ts";
 import { loadPieces, type SpaceConfig } from "./piece.ts";
@@ -344,21 +353,24 @@ export interface ListedProfile {
 
   /**
    * The bytes of the profile's picture, a raster image, or `undefined` when
-   * it has none.
+   * it has none: those of the blob its owner named in `pictureBlob`, read
+   * from that blob's space, or else those its `picture` holds inline, whoever
+   * set them. It is `undefined` too where that blob's space holds no record
+   * of it.
    */
   picture: Uint8Array | undefined;
 
   /**
-   * Whether the picture is attested to its owner: the label its value carries
-   * names the person whose profiles these are, and no one else, as the
-   * principal it represents, and the picture is the whole of the cell a write
-   * to the field lands in, in the profile's space (`writtenPrincipalAt()`).
-   * `false` when there is no picture, for one another principal set before
-   * only the owner could set one, and for one stored without a label. A host
-   * showing the picture as the person's face shows it only where this is
-   * `true`. A picture stored before writes to it were labeled carries no
-   * label, so it is `false` until its owner sets it again, as
-   * `setProfilePicture()` does with `keepCurrent`.
+   * Whether the picture is attested to its owner: the label the value naming
+   * or holding it carries names the person whose profiles these are, and no
+   * one else, as the principal it represents, and that value is the whole of
+   * the cell a write to its field lands in, in the profile's space
+   * (`writtenPrincipalAt()`). `false` when there is no picture, for one
+   * another principal set before only the owner could set one, and for one
+   * stored without a label. A host showing the picture as the person's face
+   * shows it only where this is `true`. A picture stored before writes to it
+   * were labeled carries no label, so it is `false` until its owner sets it
+   * again, as `setProfilePicture()` does with `keepCurrent`.
    */
   pictureByOwner: boolean;
 
@@ -406,13 +418,17 @@ export interface ListProfilesOptions {
 }
 
 /**
- * A profile's stored name, picture and avatar, read without running the
+ * A profile's stored name, pictures and avatar, read without running the
  * profile.
  */
 const profileFieldsSchema = {
   type: "object",
   properties: {
     name: { type: "string" },
+    pictureBlob: {
+      type: "object",
+      properties: { space: { type: "string" }, id: { type: "string" } },
+    },
     picture: { type: "FabricBytes" },
     avatar: { type: "string" },
   },
@@ -423,6 +439,27 @@ function pictureBytes(value: unknown): Uint8Array | undefined {
   return value instanceof FabricBytes && value.length > 0
     ? value.slice()
     : undefined;
+}
+
+/**
+ * The bytes of the blob `blob`, read from its space through `runtime`;
+ * `undefined` when the space holds no record of it.
+ *
+ * @throws Error when the blob's record fails to load.
+ */
+async function blobBytes(
+  runtime: Runtime,
+  { space, id }: BlobReference,
+): Promise<Uint8Array | undefined> {
+  const record = runtime.getCellFromLink({
+    space,
+    id: blobDocumentId(id),
+    path: [],
+    scope: "space",
+  });
+  await record.sync();
+  const body = asStoredBlobRecord(record.get())?.body;
+  return body !== undefined && body.length > 0 ? body.slice() : undefined;
 }
 
 /**
@@ -512,9 +549,11 @@ async function listedRow(
   const value = fields.get();
   const runtime = cellRuntime(profile);
   const tx = runtime.edit();
+  let pictureBlobBy: string | undefined;
   let pictureBy: string | undefined;
   let avatarBy: string | undefined;
   try {
+    pictureBlobBy = writtenPrincipalAt(tx, profile.key("pictureBlob"));
     pictureBy = writtenPrincipalAt(tx, profile.key("picture"));
     avatarBy = writtenPrincipalAt(tx, profile.key("avatar"));
   } finally {
@@ -522,12 +561,20 @@ async function listedRow(
   }
   const link = profile.getAsNormalizedFullLink();
   const scope = link.scope ?? "space";
-  const picture = pictureBytes(value?.picture);
+  // The blob is the picture only where its owner named it, even where its
+  // record is absent; else the inline bytes are, whoever set them.
+  const blob = pictureBlobBy === owner
+    ? blobReferenceOf(value?.pictureBlob)
+    : undefined;
+  const picture = blob === undefined
+    ? pictureBytes(value?.picture)
+    : await blobBytes(runtime, blob);
+  const by = blob === undefined ? pictureBy : pictureBlobBy;
   const avatar = value?.avatar ?? "";
   return {
     name: value?.name ?? "",
     picture,
-    pictureByOwner: picture !== undefined && pictureBy === owner,
+    pictureByOwner: picture !== undefined && by === owner,
     avatar,
     avatarByOwner: avatar !== "" && avatarBy === owner,
     space: link.space,
@@ -794,10 +841,11 @@ interface ProfileSend {
 }
 
 /**
- * Sends each of `sends`, in order and each in a commit of its own, to the
- * profile of `config.identity` whose space is `config.profileSpace`, which
- * the home lists and has not retired, running the profile so that its
- * handlers exist, and waits for the commits to reach storage. The home root
+ * Sends each of the events `sends` returns, given the runtime acting on the
+ * profile's space, in order and each in a commit of its own, to the profile
+ * of `config.identity` whose space is `config.profileSpace`, which the home
+ * lists and has not retired, running the profile so that its handlers exist,
+ * and waits for the commits to reach storage. The home root
  * is read and not started. `doing` names the act in a failure's message.
  *
  * @throws Error when the home lists no such profile or retired it, when a
@@ -808,10 +856,10 @@ interface ProfileSend {
  */
 async function sendToProfile(
   config: ProfileTargetConfig,
-  sends: readonly ProfileSend[],
+  sends: (runtime: Runtime) => Promise<readonly ProfileSend[]>,
   doing: string,
   landed: (
-    stored: { name?: string; picture?: unknown; avatar?: string },
+    stored: { name?: string; picture?: Uint8Array; avatar?: string },
   ) => boolean,
   deps: CreateProfileDeps,
 ): Promise<void> {
@@ -843,7 +891,7 @@ async function sendToProfile(
       undefined,
       target.scope,
     );
-    for (const { stream, event } of sends) {
+    for (const { stream, event } of await sends(pieces.runtime)) {
       const committed = await sendAndCommit(
         piece.asSchema(undefined).key(stream),
         event,
@@ -855,7 +903,12 @@ async function sendToProfile(
     const stored = piece.asSchema(profileFieldsSchema);
     await stored.sync();
     await pieces.stopPiece(piece);
-    if (!landed(stored.get() ?? {})) {
+    const value = stored.get() ?? {};
+    const blob = blobReferenceOf(value.pictureBlob);
+    const picture = blob === undefined
+      ? pictureBytes(value.picture)
+      : await blobBytes(pieces.runtime, blob);
+    if (!landed({ name: value.name, picture, avatar: value.avatar })) {
       throw new Error(`${doing} committed, but the profile did not change.`);
     }
   } finally {
@@ -878,7 +931,7 @@ export async function renameProfile(
   const name = profileName(config.name);
   await sendToProfile(
     config,
-    [{ stream: "setName", event: { name } }],
+    () => Promise.resolve([{ stream: "setName", event: { name } }]),
     `Renaming profile ${config.profileSpace}`,
     (stored) => stored.name === name,
     deps,
@@ -990,8 +1043,7 @@ export async function attestProfileName(
  * 256 KiB. The shell's picture picker stores a 128-pixel square, which even
  * as uncompressed RGBA is 64 KiB, so this admits four times that, a larger
  * square or a less compressed one, and refuses a photograph straight off a
- * camera. Every list, cache and feed that carries a profile carries its
- * picture.
+ * camera.
  */
 export const PROFILE_PICTURE_MAX_BYTES = 256 * 1024;
 
@@ -999,8 +1051,9 @@ export const PROFILE_PICTURE_MAX_BYTES = 256 * 1024;
 const BMP_DIB_HEADER_SIZES = new Set([12, 40, 52, 56, 64, 108, 124]);
 
 /**
- * Whether `bytes` opens as a raster image an `<img>` decodes, by its leading
- * bytes:
+ * The media type of the raster image `bytes` opens as, an image an `<img>`
+ * decodes, by its leading bytes, or `undefined` for bytes that do not open as
+ * one:
  *
  * - PNG: the eight-byte signature `89 50 4E 47 0D 0A 1A 0A`;
  * - JPEG: `FF D8 FF`;
@@ -1017,7 +1070,7 @@ const BMP_DIB_HEADER_SIZES = new Set([12, 40, 52, 56, 64, 108, 124]);
  * and is not one passes; what it keeps out is anything that does not open
  * like one, SVG among them.
  */
-export function isRasterImage(bytes: Uint8Array): boolean {
+export function rasterImageType(bytes: Uint8Array): string | undefined {
   const ascii = (start: number, text: string) =>
     start + text.length <= bytes.length &&
     [...text].every((char, index) =>
@@ -1034,16 +1087,28 @@ export function isRasterImage(bytes: Uint8Array): boolean {
       ascii(offset, "avif") || ascii(offset, "avis")
     );
   };
-  return [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) =>
-    bytes[index] === byte
-  ) ||
-    (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 &&
-      bytes[2] === 0xff) ||
-    ascii(0, "GIF87a") || ascii(0, "GIF89a") ||
-    (ascii(0, "RIFF") && ascii(8, "WEBP")) ||
-    (ascii(0, "BM") && bytes.length >= 18 &&
-      BMP_DIB_HEADER_SIZES.has(view.getUint32(14, true))) ||
-    isAvif();
+  if (
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, index) =>
+      bytes[index] === byte
+    )
+  ) {
+    return "image/png";
+  }
+  if (
+    bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return "image/gif";
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
+  if (
+    ascii(0, "BM") && bytes.length >= 18 &&
+    BMP_DIB_HEADER_SIZES.has(view.getUint32(14, true))
+  ) {
+    return "image/bmp";
+  }
+  return isAvif() ? "image/avif" : undefined;
 }
 
 /**
@@ -1081,7 +1146,7 @@ export type ProfilePictureConfig =
  * to be shown.
  *
  * @throws Error when the bytes are more than `PROFILE_PICTURE_MAX_BYTES` or
- * are not a raster image (`isRasterImage()`), when `config.keepCurrent` is
+ * are not a raster image (`rasterImageType()`), when `config.keepCurrent` is
  * given for a profile with no picture, when the home lists no such profile of
  * the identity's own or has retired it, or when a write fails or does not
  * land, as when `setPicture` refuses an identity that is not the profile's
@@ -1096,6 +1161,8 @@ export async function setProfilePicture(
     : "bytes" in config
     ? config.bytes
     : undefined;
+  // The picture to store, with the media type it opens as; none to clear.
+  let stored: { bytes: Uint8Array; type: string } | undefined;
   if (expected !== undefined) {
     if (expected.length > PROFILE_PICTURE_MAX_BYTES) {
       throw new Error(
@@ -1104,30 +1171,46 @@ export async function setProfilePicture(
           "shell stores a 128-pixel square; scale the image down first.",
       );
     }
-    if (!isRasterImage(expected)) {
+    const type = rasterImageType(expected);
+    if (type === undefined) {
       throw new Error(
         "A profile picture must be a PNG, JPEG, GIF, WebP, AVIF or BMP image.",
       );
     }
+    stored = { bytes: expected, type };
   }
   await sendToProfile(
     config,
-    expected === undefined
-      ? [
-        { stream: "setPicture", event: { clear: true } },
-        { stream: "setAvatar", event: { clear: true } },
-      ]
-      : [{
+    async (runtime) => {
+      if (stored === undefined) {
+        return [
+          { stream: "setPicture", event: { clear: true } },
+          { stream: "setAvatar", event: { clear: true } },
+        ];
+      }
+      // The picture is stored as a blob in the profile's own space, and sent
+      // both ways: the profile keeps the blob, and a profile whose
+      // `setPicture` predates blobs keeps the bytes.
+      const space = config.profileSpace;
+      if (!isDID(space)) {
+        throw new Error(`${space} names no space.`);
+      }
+      const picture = new FabricBytes(stored.bytes);
+      const id = await storeBlob(runtime, space, {
+        type: stored.type,
+        body: picture,
+      });
+      return [{
         stream: "setPicture",
-        event: { picture: new FabricBytes(expected) },
-      }],
+        event: { pictureBlob: { space, id }, picture },
+      }];
+    },
     expected === undefined
       ? `Removing the picture of profile ${config.profileSpace}`
       : `Setting the picture of profile ${config.profileSpace}`,
-    (stored) => {
-      const picture = pictureBytes(stored.picture);
+    ({ picture, avatar }) => {
       return expected === undefined
-        ? picture === undefined && (stored.avatar ?? "") === ""
+        ? picture === undefined && (avatar ?? "") === ""
         : picture !== undefined && picture.length === expected.length &&
           picture.every((byte, index) => byte === expected[index]);
     },

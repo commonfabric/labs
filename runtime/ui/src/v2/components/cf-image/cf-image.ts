@@ -30,6 +30,10 @@ import { type BlobReference, BlobUrlResolver } from "../../utils/blob-url.ts";
  * @property {object} blob - A blob reference, `{ space, id }`, shown where there are no bytes
  * @attr {string} media-type - Media type for the Blob, e.g. "image/png"
  * @attr {string} alt - Alternative text for the image
+ *
+ * @fires cf-error - The image failed to load or decode, or the runtime could
+ *   not give its blob's URL. It neither bubbles nor crosses a shadow root, so
+ *   only a listener on the element hears it.
  */
 export class CFImage extends BaseElement {
   static override styles = [
@@ -68,7 +72,11 @@ export class CFImage extends BaseElement {
 
   private _objectUrl: string | null = null;
 
-  #blobUrl = new BlobUrlResolver(this);
+  #blobUrl = new BlobUrlResolver(this, { onFailure: () => this.#onError() });
+
+  #onError = (): void => {
+    this.emit("cf-error", undefined, { bubbles: false, composed: false });
+  };
 
   private _revokeObjectUrl() {
     if (this._objectUrl) {
@@ -119,7 +127,14 @@ export class CFImage extends BaseElement {
   override willUpdate(changedProperties: PropertyValues) {
     super.willUpdate(changedProperties);
 
-    if (changedProperties.has("blob") || changedProperties.has("runtime")) {
+    // A reference to the same blob, given again as another object, names the
+    // same bytes, so the URL already resolved for it stands.
+    const before: BlobReference | undefined = changedProperties.get("blob");
+    if (
+      changedProperties.has("runtime") ||
+      (changedProperties.has("blob") &&
+        (before?.space !== this.blob?.space || before?.id !== this.blob?.id))
+    ) {
       this.#blobUrl.resolve(this.runtime, this.blob);
     }
 
@@ -143,7 +158,7 @@ export class CFImage extends BaseElement {
     const src = this._objectUrl ?? this.#blobUrl.url;
     if (!src) return null;
     return html`
-      <img src="${src}" alt="${this.alt}" />
+      <img src="${src}" alt="${this.alt}" @error="${this.#onError}" />
     `;
   }
 }

@@ -16,6 +16,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  type PictureBlob,
   profileFace,
   type ProfileFaceFields,
 } from "../../system/profile-face/profile-face.ts";
@@ -71,7 +72,11 @@ export interface Participant {
    * picture; otherwise "". */
   avatar: string;
 
-  /** Picture bytes, snapshotted from the joiner's profile, if it has one. */
+  /** Picture blob, snapshotted from the joiner's profile, if it has one. */
+  pictureBlob?: PictureBlob;
+
+  /** Picture bytes, snapshotted instead when the joiner's profile holds its
+   * picture as bytes. */
   picture?: FabricBytes;
   joinedAt: number;
 }
@@ -232,6 +237,7 @@ export default pattern<RosterDemoInput, RosterDemoOutput>(
               {participants.map((p) => (
                 <cf-hstack gap="2" align="center">
                   <cf-avatar
+                    blob={p.pictureBlob}
                     bytes={p.picture}
                     src={p.avatar}
                     name={p.name}
