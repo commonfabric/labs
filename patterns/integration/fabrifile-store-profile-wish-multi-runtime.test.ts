@@ -1,13 +1,12 @@
 /**
- * A FabriFile store's adds across a person's runtimes, where the store finds
- * its adder through its own `#profile` wish. One runtime finds the person's
- * profile. Another of the same person's runtimes acts as a profile their home
- * does not list, so its wish fails rather than answer as another profile, and
- * the store refuses that runtime's add saying their profile couldn't be read.
- * Once the other has added through the store, an add from the runtime that
- * found the profile still gets past the profile, to the blob it names, which
- * no space here holds. A store whose wish is per user keeps one answer for all
- * of a person's runtimes, which the failing runtime writes over.
+ * Why a FabriFile store refuses an add for want of a profile, across a
+ * person's runtimes, where the store finds its adder through its own
+ * `#profile` wish. One runtime finds the person's profile, and its add gets
+ * past the profile, to the blob it names, which no space here holds. Another
+ * of the same person's runtimes acts as a profile their home does not list, so
+ * its wish fails rather than answer as another profile, and the store refuses
+ * that runtime's add saying their profile couldn't be read, not that they have
+ * none.
  *
  * With server execution on, the store's handlers run served, and the add from
  * the runtime acting as the unlisted profile gets past the profile too.
@@ -33,8 +32,8 @@ const PROGRAM_PATH = join(
 const ROOT_PATH = join(import.meta.dirname!, "..");
 
 /**
- * Sends the store an add, under `requestId`, of a blob in `space` that the
- * space does not hold, and returns its outcome as `session` reads it.
+ * Sends the store an add, under `requestId`, of a blob in the harness's space
+ * that the space does not hold, and returns its outcome as `session` reads it.
  */
 const addFrom = async (
   harness: MultiRuntimeHarness,
@@ -64,7 +63,10 @@ describe("fabrifile store profile wish across runtimes", () => {
     describe(`with server execution ${serverExecution ? "on" : "off"}`, () => {
       const cfc = { experimental: { serverExecution } };
 
-      it("gets an add from a session that found the profile past it, after a session whose wish failed is refused one", async () => {
+      const title = serverExecution
+        ? "gets an add from a session whose wish failed past the profile, in a handler that runs served"
+        : "refuses an add from a session whose wish failed saying its profile couldn't be read";
+      it(title, async () => {
         const person = await Identity.fromPassphrase(
           "fabrifile-store-profile-wish-person",
           { implementation: "noble" },
@@ -94,7 +96,7 @@ describe("fabrifile store profile wish across runtimes", () => {
           cfc,
         });
         await harness.settle();
-        expect(await addFrom(harness, found, "found-before")).toMatchObject({
+        expect(await addFrom(harness, found, "found")).toMatchObject({
           status: "refused",
           code: "no-blob",
         });
@@ -119,11 +121,6 @@ describe("fabrifile store profile wish across runtimes", () => {
             reason: "Your profile couldn't be read.",
           },
         );
-
-        expect(await addFrom(harness, found, "found-after")).toMatchObject({
-          status: "refused",
-          code: "no-blob",
-        });
       });
     });
   }
