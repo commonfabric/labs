@@ -69,7 +69,8 @@ if (DIAGNOSTICS) {
           `object=${m.traverseObjectCalls} dag=${m.traverseDAGCalls} ` +
           `anyOf=${m.anyOfBranches} anyOfFastRejects=${m.anyOfFastRejects} ` +
           `getDocAtPath=${m.getDocAtPathCalls} ` +
-          `memoHits=${m.schemaMemoHits}`,
+          `memoHits=${m.schemaMemoHits} ` +
+          `nativeDepthHandoffs=${m.nativeDepthHandoffs}`,
       );
       const latency = lastLatency.get(name);
       if (latency !== undefined) {

@@ -30,6 +30,7 @@ import { StoreObjectManager } from "../src/storage/query.ts";
 import {
   createDefaultTraversalContext,
   getAtPath,
+  type IMemorySpaceValueAttestation,
   ManagedStorageTransaction,
   SchemaObjectTraverser,
 } from "../src/traverse.ts";
@@ -80,21 +81,29 @@ const readerOf = (store: Map<string, Revision<State>>, schema: JSONSchema) => {
   return { context, traverser, tx };
 };
 
+/** Document `id` of `values`, as a traversal starts from it. */
+const attestationOf = (
+  values: Map<string, FabricValue>,
+  id: string,
+): IMemorySpaceValueAttestation => ({
+  address: {
+    space: SPACE,
+    id: id as URI,
+    type: "application/json",
+    path: ["value"],
+  },
+  value: values.get(id),
+});
+
 /** Reads document `id` of `values` under `schema`. */
 const read = (
   values: Map<string, FabricValue>,
   id: string,
   schema: JSONSchema,
 ) =>
-  readerOf(storeOf(values), schema).traverser.traverse({
-    address: {
-      space: SPACE,
-      id: id as URI,
-      type: "application/json",
-      path: ["value"],
-    },
-    value: values.get(id),
-  });
+  readerOf(storeOf(values), schema).traverser.traverse(
+    attestationOf(values, id),
+  );
 
 /** A node of a chain: a label and the node after it, recursively. */
 const chainNode: JSONSchema = {
@@ -500,6 +509,87 @@ describe("traverse", () => {
       );
 
       expect(doc.value).toBeUndefined();
+    });
+  });
+
+  describe("counting positions handed to the traversal's own stack", () => {
+    /** A recursive record whose every level reaches the next through `child`. */
+    const recordTree: JSONSchema = {
+      $defs: {
+        Tree: {
+          type: "object",
+          properties: { child: { $ref: "#/$defs/Tree" } },
+        },
+      },
+      $ref: "#/$defs/Tree",
+    };
+
+    /**
+     * A traverser that has read a document nested `depth` levels under
+     * `schema`.
+     */
+    const traverserAfter = (depth: number, schema: JSONSchema) => {
+      const values = new Map<string, FabricValue>([
+        ["of:tree", nestedOf(depth, { a: "leaf" })],
+      ]);
+      const { traverser } = readerOf(storeOf(values), schema);
+      const { ok } = traverser.traverse(attestationOf(values, "of:tree"));
+      expect(depthOf(ok!)).toBe(depth);
+      return traverser;
+    };
+
+    it("counts none for a document a few levels deep", () => {
+      for (const schema of [unionTree, recordTree, true]) {
+        expect(traverserAfter(5, schema).nativeDepthHandoffs).toBe(0);
+      }
+    });
+
+    it("counts more for a document nested more levels past the native depth", () => {
+      for (const schema of [unionTree, recordTree, true]) {
+        const deep = traverserAfter(200, schema).nativeDepthHandoffs;
+        const deeper = traverserAfter(400, schema).nativeDepthHandoffs;
+
+        expect(deep).toBeGreaterThan(0);
+        expect(deeper).toBeGreaterThan(deep);
+      }
+    });
+
+    it("counts afresh for each traversal", () => {
+      const values = new Map<string, FabricValue>([
+        ["of:deep", nestedOf(200, { a: "leaf" })],
+        ["of:shallow", nestedOf(5, { a: "leaf" })],
+      ]);
+      const { traverser } = readerOf(storeOf(values), unionTree);
+
+      traverser.traverse(attestationOf(values, "of:deep"));
+      expect(traverser.nativeDepthHandoffs).toBeGreaterThan(0);
+      traverser.traverse(attestationOf(values, "of:shallow"));
+      expect(traverser.nativeDepthHandoffs).toBe(0);
+    });
+
+    it("reports the count in the slow-traverse warning", () => {
+      const values = new Map<string, FabricValue>([
+        ["of:tree", nestedOf(200, { a: "leaf" })],
+      ]);
+      const { traverser } = readerOf(storeOf(values), unionTree);
+      const doc = attestationOf(values, "of:tree");
+      traverser.traverse(doc);
+      const warnings: string[] = [];
+      const savedWarn = console.warn;
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.map(String).join(" "));
+      };
+      try {
+        traverser.maybeReportSlowTraverse(Number.MAX_SAFE_INTEGER, doc);
+      } finally {
+        console.warn = savedWarn;
+      }
+
+      expect(traverser.nativeDepthHandoffs).toBeGreaterThan(0);
+      expect(warnings.length).toBe(1);
+      expect(warnings[0]).toContain(
+        `nativeDepthHandoffs=${traverser.nativeDepthHandoffs}`,
+      );
     });
   });
 });
