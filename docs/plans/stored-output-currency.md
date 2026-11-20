@@ -65,8 +65,12 @@ viewer's rows:
 - **What a slice vouches for**: one row per document instance a live, clean
   computation of the piece wrote, filed under the slice at the instance's own
   key, with the sequence number the instance stood at. A run for one session
-  writes its value at that session's key and a redirect at the user's and
-  the space's, so it files a row in each of those three slices.
+  that writes a document declared in the space writes its value at that
+  session's key and a redirect at the user's and the space's, so it files a
+  row in each of those three slices. Redirects go no broader than the
+  document's declared scope: a document declared for a user gets the
+  session's row and the user's, and one declared for a session the session's
+  alone.
 - **What the piece writes**, whoever it runs for: one row per document id in
   the declared write surface of every computation registered under it,
   whether or not that computation has run, and the ids of the cells it owns.
@@ -139,8 +143,11 @@ instance that changed marks `2`:
 - the slice at the instance's own key of each piece that vouches for it,
   which covers an authored overwrite of a derived document.
 
-A change to one viewer's instance therefore marks that viewer's slices and no
-other's, and a change to a shared instance marks every slice that read it.
+A change to one viewer's instance therefore marks the slices that read that
+instance, which are that viewer's, and a change to a shared instance marks
+every slice that read it. The exception is a read recorded against every
+instance of a document, which a change to any viewer's instance of it is
+ahead of.
 A later record does not take an overwrite back: a vouch row moves up only to
 a head a derivation put there, since the piece's writer reads nothing it
 writes and so was not woken by the overwrite.
@@ -187,9 +194,12 @@ piece. The store can serve a root when:
   vouched for in the slice at the row's scope key, and an owned id is held by
   the store at the row's scope key.
 
-Only the slices a demand row is resolved under are read. A viewer whose own
-slice is marked starts the piece, and a viewer whose slices are clean is
-served from the store while another viewer's is marked.
+Only the slices a demand row is resolved under are read, and the rows are
+those of the sessions demanding now. So a marked slice of a viewer who is
+not present refuses nothing, and a viewer whose slices are clean is served
+from the store. A root is loaded for every session or for none: when a
+viewer who is present has a marked slice the piece starts, and it then runs
+for each viewer demanding it.
 
 A root that passes is not loaded and not started, and stays among the roots
 awaiting a first load. It is judged again when demand changes and when it is

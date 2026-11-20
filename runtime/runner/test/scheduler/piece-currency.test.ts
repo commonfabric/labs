@@ -254,6 +254,22 @@ describe("piece-currency", () => {
       });
     });
 
+    it("vouches for a clean instance of a computation whose status is invalid for another instance", () => {
+      const taken = snapshotOf({
+        status: "invalid",
+        instances: [{ key: user }, { key: bobUser, identity: BOB }],
+        clean: [user],
+      });
+
+      expect(sliceOf(taken, user)).toEqual({
+        key: user,
+        unvouched: [],
+        reads: [],
+        vouches: ["computed:out"],
+      });
+      expect(sliceOf(taken, bobUser)?.unvouched).toEqual(["not-clean"]);
+    });
+
     it("reports the slice of a stale instance as not clean, and vouches for what the clean one wrote", () => {
       const taken = snapshotOf({
         instances: [{ key: user }, { key: bobUser, identity: BOB }],

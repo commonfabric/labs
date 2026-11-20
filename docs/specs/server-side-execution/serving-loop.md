@@ -385,9 +385,11 @@ demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
 instance is resolved under, the one at its scope key and each broader one,
 is clean and of the epoch, with a vouch row in the slice at that key for a
-written id, and a live document for an owned cell. A slice no demand row is
-resolved under is not read, so a viewer whose own slice is marked starts the
-piece and another viewer is served from the store. Such a root is neither
+written id, and a live document for an owned cell. The rows are those of the
+sessions demanding then, and a slice none of them is resolved under is not
+read: a marked slice of a viewer who is not present refuses nothing, and a
+present viewer whose own slice is marked has the root loaded, for every
+session. Such a root is neither
 loaded nor started, and neither the arrival seed nor the arrival re-arm runs
 for it. It stays among the roots awaiting a first load and is judged again
 when demand changes, when it is found running, and when a commit marks its

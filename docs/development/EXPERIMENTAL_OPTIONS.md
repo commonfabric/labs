@@ -2494,9 +2494,10 @@ the per-epic implementation notes).
   `currency.falseClean` counts the pieces that were held clean and then
   wrote a vouched output again with no input changed, each one a judgment
   that would have served a stale value. `skip` acts on the judgment: a root
-  whose piece is clean and vouches for every demanded instance of it is
-  neither loaded nor started, until an input marks the piece or a session's
-  demand reaches an instance it does not vouch for
+  whose piece vouches for every demanded instance of it, in slices that are
+  clean, is neither loaded nor started, until an input marks a slice a
+  demanded instance is resolved under or a session's demand reaches an
+  instance the piece does not vouch for
   ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
   [The plan](../plans/stored-output-currency.md) carries the design, its
   limits and the stages after this one.

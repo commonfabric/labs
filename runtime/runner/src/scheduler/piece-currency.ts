@@ -179,21 +179,24 @@ type NodeRun = {
  * for each instance of a node that runs for each demander.
  */
 const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
-  const clean = node.status === "clean";
   const fanOut = node.fanOut;
   if (fanOut === undefined) {
     return [{
       key: "space",
       identity: undefined,
       log: state.dependencies.get(node.action),
-      clean,
+      clean: node.status === "clean",
     }];
   }
+  // The node's one status is invalid while any instance is owed a run. Which
+  // instances are current is what its per-instance record says: every
+  // invalidation dirties the keys it covers there (`markInvalid()`), so one
+  // viewer's stale instance does not make another's unclean.
   return [...fanOut.instances].map(([key, instance]) => ({
     key,
     identity: instance.identity,
     log: instance.log,
-    clean: clean && fanOut.clean.has(key),
+    clean: fanOut.clean.has(key),
   }));
 };
 

@@ -1068,7 +1068,9 @@ export type CurrencyJudgment = {
  * instance is resolved under is clean and of `epoch`, and the slice at the
  * instance's own key holds a vouch row for a written id, or the store holds
  * a live document for an owned one. A slice no demanded instance is resolved
- * under is not read, so one viewer's stale slice refuses no other viewer.
+ * under is not read, so the stale slice of a viewer who demands nothing
+ * refuses no root. A root is served for every session `rows` covers or for
+ * none, so one of them with a stale slice refuses it for all.
  * The marks are read as they stand, so a caller that needs them current
  * advances the cursor first.
  */
