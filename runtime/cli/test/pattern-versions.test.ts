@@ -985,7 +985,7 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
           undefined,
           deps as never,
         ),
-      ).rejects.toThrow(/--from-index keeps none/);
+      ).rejects.toThrow(/a piece from the index keeps none/);
       expect(recorded).toHaveLength(1);
     });
 

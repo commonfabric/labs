@@ -3596,6 +3596,10 @@ pseudonym, which shows the person's name only on a lineage published under it:
 which never changes. It checks the link with the index first, so it never prints
 one that opens nothing.
 
+`cf piece new --from-link <link>` makes a piece from what a link names now: it
+asks the index which shared version that is, then deploys it and remembers where
+it came from exactly as `--from-index` does with that version's id.
+
 `cf pattern unshare <entry>` takes the pattern out of others' searches and
 listings and shares no later version until `cf pattern share` runs again. A
 version already shared stays readable by its id, so imports of it keep working.
