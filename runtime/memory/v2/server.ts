@@ -502,9 +502,11 @@ export type SlowQuery = {
    * so a slow entry reporting zero spent it somewhere else — assembling
    * the response, or attaching operation fields.
    *
-   * `session.watch.refresh` carries none of these fields. It re-evaluates
-   * by dirty document rather than by root, so it has no roots to
-   * attribute; absent is the honest answer there, not zero. */
+   * A `session.watch.refresh` entry for a refresh by dirty document carries
+   * none of these fields. It re-evaluates by document rather than by root,
+   * so it has no roots to attribute; absent is the honest answer there, not
+   * zero. A `session.watch.refresh` entry for a pass that evaluated a
+   * session whole carries them, as a request's entry does. */
   rootsVisited?: number;
 
   /** Query and watch operations: summed elapsed time of those root visits.
@@ -521,12 +523,13 @@ export type SlowQuery = {
    * the complete request rather than only its costliest root. */
   managerReads?: number;
 
-  /** watch.add and watch.refresh: changed entity snapshots delivered to the
-   * client. This is the delivered-width counterpart to `watches` and
-   * `managerReads`: a wide traversal that yields few upserts is repeated
-   * server work, while a wide frame is also transport and client-ingest
-   * work. A refresh that produced no upserts answers with an empty catch-up
-   * and is not recorded, so a refresh entry never reports zero here. */
+  /** watch.add, watch.remove, and a refresh by dirty document: changed
+   * entity snapshots delivered to the client. This is the delivered-width
+   * counterpart to `watches` and `managerReads`: a wide traversal that
+   * yields few upserts is repeated server work, while a wide frame is also
+   * transport and client-ingest work. A refresh that produced no upserts
+   * answers with an empty catch-up and is not recorded, so a refresh entry
+   * never reports zero here. */
   upserts?: number;
 
   /** Query and watch operations: the costliest single root, which is what
