@@ -8,9 +8,9 @@
  * the requesting run's own commit, so there is no transaction in which such a
  * parameter is untainted, and an author cannot know which atoms a given
  * transaction will carry. The runtime-owned control paths carry the
- * transaction's join in their derived component. The builtin refuses a
- * request carrying confidentiality bound for a database in another space
- * before it is staged, and declares the membership of a shared result.
+ * transaction's join in their derived component. A database in another space
+ * answers a labeled request as one in this space does, and the builtin
+ * declares the membership of a shared result.
  *
  * The fixture labels the column a parameter is read OUT of differently from
  * the column the second query projects, so an implementation that widened the
@@ -33,8 +33,6 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { defer } from "@commonfabric/async/defer";
 
-import {
-} from "../src/builtins/sqlite-builtins.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { deriveFlowJoin } from "../src/cfc/prepare.ts";
@@ -1109,13 +1107,19 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       // for a database in this space.
       expect(hasClause(derivedAt(bodies, ["requestHash"]), KEY_CLAUSE))
         .toBe(true);
+      // And each row keeps its own column's label: what a reader is shown is
+      // still decided by the rows' labels, not by where the database lives.
+      const row = bodies.key("result").key(0) as Cell<unknown>;
+      const declared = declaredAt(row, ["body"]);
+      expect(hasClause(declared, BODY_CLAUSE)).toBe(true);
+      expect(hasClause(declared, KEY_CLAUSE)).toBe(false);
     });
 
     it("issues again once its own result has carried a label", async () => {
       // A cross-space query's own settled result carries the labels of the
       // columns it projected, and the next issue reads that result to decide
-      // whether its writeback is stale. That read must not stop the next
-      // issue from going out.
+      // whether its writeback is stale. At enforce-strict that read must not
+      // turn into a writer-fit refusal of the next issue.
 
       const db = labeledDb();
       await seedMessages(db, elsewhere);

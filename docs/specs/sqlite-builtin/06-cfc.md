@@ -777,11 +777,6 @@ path with no recorded existence entry can receive a legacy backfill at its
 first labeled write even when its value already existed. That frozen entry
 also remains after a clean settle.
 
-The issuing transaction writes a foreign-space refusal, so its `/error`
-value carries the clause that caused the refusal. Rendering that error
-therefore consumes the issuing transaction's label. The same value-stamp
-replacement and existence rules apply to a later write there.
-
 `/result`'s per-column and selection entries keep their authored policy.
 The runtime-owned route declines at a path whose schema declares a policy,
 and the transaction settling rows adds no flow clause of its own. A
@@ -909,8 +904,10 @@ Three residuals are recorded against §8.17.6:
 A query whose database lies in another space is answered like one in the
 same space, labeled request or not. Its statement and parameters reach that
 space's provider, which serves the database for the trusted runtime and is
-inside the trusted base; what each reader is shown is still decided by the
-rows' labels in that reader's runtime. An earlier refusal of a labeled
+inside the trusted base under this deployment's assumption (the
+specification's trusted-base list does not name storage providers); what
+each reader is shown is still decided by the rows' labels in that reader's
+runtime. An earlier refusal of a labeled
 request against a database in another space was a rule of this document
 alone, with no section of the specification behind it, and it is withdrawn.
 
