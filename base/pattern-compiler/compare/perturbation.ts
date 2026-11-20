@@ -184,8 +184,9 @@ const firstLine = (error: unknown): string =>
  * The runs in memory of one scenario, advanced one event at a time: the
  * scenario as given, twice, and once for each labeled input with that
  * input alone changed (`perturbed`). `start` makes the runs with no event
- * sent, each call of `advance` sends the next event to every run, and
- * `runs` gives the runs as they then are. Where the two runs as given
+ * sent, each call of `advance` sends the next event to every run, `finish`
+ * sends the events left to each run, one run after the other, and `runs`
+ * gives the runs as they then are. Where the two runs as given
  * differ when `runs` is called, or the scenario read the clock, there are no
  * determined dependencies from then on, and `runs` gives the reason.
  */
@@ -195,7 +196,12 @@ export const steppedRuns = (
   events: readonly Sent[],
   options: ReturnType<typeof instanceOptions>,
   inputs: Record<string, LabeledInput>,
-): { start(): Promise<void>; advance(): void; runs(): PerturbedRuns } => {
+): {
+  start(whole?: boolean): Promise<void>;
+  advance(): void;
+  finish(): void;
+  runs(): PerturbedRuns;
+} => {
   const began = performance.now();
   let runs = 0;
   let sent = 0;
@@ -244,6 +250,8 @@ export const steppedRuns = (
   let baseline: Instance | undefined;
   let again: Instance | undefined;
   let skipped: string | undefined;
+  // Whether the two runs as given handled every event at their start.
+  let advanced = false;
   const sources: Source[] = [];
   const current = (): PerturbedRuns => {
     if (skipped === undefined && baseline !== undefined) {
@@ -257,10 +265,31 @@ export const steppedRuns = (
       : done({ baseline, sources: sources.map((source) => ({ ...source })) });
   };
   return {
-    start: async () => {
+    start: async (whole = false) => {
       try {
-        baseline = await start(argument);
-        again = await start(argument);
+        // Two runs that `advance` takes through each event one after the
+        // other handle the event within the same millisecond, and so agree
+        // on a value made from the time of day. So two runs handle every
+        // event one run after the other first, and where they differ no
+        // dependency is determined. With `whole`, they are the two runs as
+        // given, and `finish` sends the events to the other runs alone.
+        const first = await start(argument);
+        for (const event of events) send(first, event);
+        const second = await start(argument);
+        for (const event of events) send(second, event);
+        if (first.store.docs.has(CLOCK)) {
+          skipped = "reads the clock";
+          return;
+        }
+        if (
+          JSON.stringify(first.result()) !== JSON.stringify(second.result())
+        ) {
+          skipped = "two runs on one scenario give different values";
+          return;
+        }
+        advanced = whole;
+        baseline = whole ? first : await start(argument);
+        again = whole ? second : await start(argument);
       } catch (error) {
         skipped = `the run in memory fails: ${firstLine(error)}`;
         return;
@@ -316,6 +345,29 @@ export const steppedRuns = (
         }
       }
     },
+    finish: () => {
+      const rest = events.slice(sent);
+      sent = events.length;
+      if (skipped !== undefined) return;
+      try {
+        if (!advanced) {
+          for (const event of rest) send(baseline!, event);
+          for (const event of rest) send(again!, event);
+        }
+      } catch (error) {
+        skipped = `the run in memory fails: ${firstLine(error)}`;
+        return;
+      }
+      for (const source of sources) {
+        if (source.instance === undefined) continue;
+        try {
+          for (const event of rest) send(source.instance, event);
+        } catch (error) {
+          source.instance = undefined;
+          source.failed = firstLine(error);
+        }
+      }
+    },
     runs: current,
   };
 };
@@ -334,8 +386,8 @@ export const perturbedRuns = async (
   inputs: Record<string, LabeledInput>,
 ): Promise<PerturbedRuns> => {
   const stepped = steppedRuns(artifact, argument, events, options, inputs);
-  await stepped.start();
-  for (const _ of events) stepped.advance();
+  await stepped.start(true);
+  stepped.finish();
   return stepped.runs();
 };
 
