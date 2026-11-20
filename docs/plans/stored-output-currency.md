@@ -7,6 +7,9 @@ synthetic Topics board and a counter in the browser
 ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md));
 a deployed space and the production board are not measured. Stages 5 to 8
 are not started.
+[`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
+continues this plan for a piece that reads another space or a wish, and its
+steps 1 to 3 come before stage 5.
 
 A serving loop starts a piece whenever a session's demand reaches one of its
 documents, and a fresh serving runtime runs every demanded computation of the
@@ -303,8 +306,10 @@ wrong.
   session's documents.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
-- **A piece with a source origin, a foreign read, or a root narrower than the
-  space always starts.**
+- **A piece with a source origin, or a root narrower than the space, always
+  starts, and so does a viewer's slice that read another space.**
+  [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
+  is the plan for the read in another space.
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.
@@ -315,7 +320,8 @@ wrong.
 - **A judgment reads every demand row of the space's sessions**, at about
   15 µs each on the memory server's thread.
 - **A piece whose output depends on something that is not a read**, such as
-  a clock, is held clean while what it would compute moves.
+  a clock, is held clean while what it would compute moves. The same plan
+  gives the interval clock of a wish an expiry.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -347,7 +353,10 @@ wrong.
 4. **Not starting a current piece.** `skip` mode: the demand pass leaves a
    servable root unloaded, re-judges it, and re-arms it when it is marked.
 5. **Starting stale producers.** The index lists the marked producers of a
-   set of pieces, and the loop demands them itself.
+   set of pieces, and the loop demands them itself. A producer in another
+   space is demanded through the same step
+   ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+   step 5), so the two are built together.
 6. **Judging before activation.** The host judges when a session opens a
    parked space and activates only when a root fails or events are pending. A
    commit into a space with live sessions and no serving loop advances the
@@ -355,9 +364,10 @@ wrong.
    is marked.
 7. **Releasing a piece when its last demand leaves**, the loop's own demand
    included (`serving-worker-heap.md`, step 3).
-8. **Narrowing what always starts**: reads across spaces through the owner
-   route, effects attributed to their piece, and an origin followed without a
-   start.
+8. **Narrowing what always starts**: effects attributed to their piece, and
+   an origin followed without a start. Reads across spaces have a plan of
+   their own
+   ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)).
 
 ## Acceptance tests
 
@@ -437,6 +447,9 @@ of which exist:
 
 ## Related
 
+- [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md):
+  the index for a slice that read another space, a wish's own computations,
+  and the interval clock.
 - `served-reference-reads.md` (labs #9998): the cost this removes for a
   recorded board. Its question 1(a), a resolution watch that is not demand,
   and its question 2, a narrower arrival seed, save a start only for a piece
