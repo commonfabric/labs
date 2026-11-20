@@ -1475,6 +1475,65 @@ describe("cfc-plan-labels", () => {
       return counters;
     };
 
+    /**
+     * Registers a plan whose one write is a derivation of `nodes` `shared`
+     * nodes that each name the template of slot 0, records a write of it,
+     * and returns the content keys of inputs the pre-pass formed.
+     */
+    const inputKeysFor = async (nodes: number): Promise<number> => {
+      let formed = -1;
+      await withRuntime(true, (runtime) => {
+        const identity = runtime.compiledPlans.register(
+          {
+            ...plan,
+            templates: [{ op: "slot", slot: 0 }],
+            bodies: [{
+              writes: [{
+                template: {
+                  op: "derive",
+                  by: { expression: true },
+                  inputs: Array.from(
+                    { length: nodes },
+                    () => ({ op: "shared", template: 0 }) as const,
+                  ),
+                },
+              }],
+            }],
+          },
+          "code",
+          runtimeWritePolicyAuthorization,
+        );
+        const tx = runtime.edit();
+        try {
+          const cell = runtime.getCell(space, "shared-target", undefined, tx);
+          cell.set({ total: 1 });
+          const link = cell.getAsNormalizedFullLink();
+          tx.recordCfcWritePolicyInput(
+            planWrite(
+              identity,
+              { space, id: link.id, scope: "space", path: ["total"] },
+              0,
+              address("of:nothing"),
+            ),
+            runtimeWritePolicyAuthorization,
+          );
+          const before = runtime.getCfcStats().planInputKeys;
+          expect(planLabelsFor(tx, deriveFlowJoin(tx)).reasons).toEqual([]);
+          formed = runtime.getCfcStats().planInputKeys - before;
+        } finally {
+          tx.abort();
+        }
+      });
+      return formed;
+    };
+
+    it("forms the content key of a place's inputs once, however many `shared` nodes its template has", async () => {
+      const two = await inputKeysFor(2);
+
+      expect(two).toBeGreaterThan(0);
+      expect(await inputKeysFor(40)).toBe(two);
+    });
+
     it("counts the same work for one changed element among 10 and among 1,000 in the uniform form", async () => {
       // An array of plain values in place: one set of bindings at `*`.
       const uniform = (list: string): PlanElements => ({

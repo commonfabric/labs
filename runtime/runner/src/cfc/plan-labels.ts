@@ -723,6 +723,8 @@ const noteWork = (
   env.noteWork("planSlotLabels", work.slotLabels);
   env.noteWork("planLabelMemoHits", work.memoHits);
   env.noteWork("planLabelBounds", bounds);
+  env.noteWork("planInputKeys", inputKeysFormed);
+  inputKeysFormed = 0;
 };
 
 /** The template and keep flag of the plan record a write names. */
@@ -763,24 +765,52 @@ const isFoldOver = (
   return expanded?.op === "fold" && expanded.collection === collection;
 };
 
-/** The content key of a place's inputs. */
-const inputsKey = (inputs: object): string =>
-  hashStringOf(inputs as unknown as FabricValue);
+/** The content keys `inputsKey` formed since the last pass reported them. */
+let inputKeysFormed = 0;
+
+/**
+ * The content key of each place's inputs formed so far, by the object. A
+ * write-policy input is frozen when it is recorded, so the key of one
+ * object stays what it is.
+ */
+const inputKeys = new WeakMap<object, string>();
+
+/** The content key of a place's inputs, formed once per object. */
+const inputsKey = (inputs: object): string => {
+  let key = inputKeys.get(inputs);
+  if (key === undefined) {
+    inputKeysFormed++;
+    key = hashStringOf(inputs as unknown as FabricValue);
+    inputKeys.set(inputs, key);
+  }
+  return key;
+};
+
+/** The key `writeKey` formed for each write so far, by the write. */
+const writeKeys = new WeakMap<PlanWrite, string>();
 
 /**
  * The content key of a write's own inputs, without its target and record,
  * so that two writes with equal inputs share their `output` and `shared`
  * labels.
  */
-const writeKey = (write: PlanWrite): string =>
-  inputsKey({
-    slots: write.slots,
-    ...(write.selections === undefined ? {} : { selections: write.selections }),
-    ...(write.picks === undefined ? {} : { picks: write.picks }),
-    ...(write.elements === undefined ? {} : { elements: write.elements }),
-    ...(write.dynamic === undefined ? {} : { dynamic: write.dynamic }),
-    ...(write.outputs === undefined ? {} : { outputs: write.outputs }),
-  });
+const writeKey = (write: PlanWrite): string => {
+  let key = writeKeys.get(write);
+  if (key === undefined) {
+    key = inputsKey({
+      slots: write.slots,
+      ...(write.selections === undefined
+        ? {}
+        : { selections: write.selections }),
+      ...(write.picks === undefined ? {} : { picks: write.picks }),
+      ...(write.elements === undefined ? {} : { elements: write.elements }),
+      ...(write.dynamic === undefined ? {} : { dynamic: write.dynamic }),
+      ...(write.outputs === undefined ? {} : { outputs: write.outputs }),
+    });
+    writeKeys.set(write, key);
+  }
+  return key;
+};
 
 /** Joins key parts unambiguously. */
 const stringKey = (parts: readonly string[]): string =>

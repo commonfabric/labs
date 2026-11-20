@@ -1516,4 +1516,5 @@ export type CfcPreparationWork =
   | "planTemplateNodes"
   | "planSlotLabels"
   | "planLabelMemoHits"
-  | "planLabelBounds";
+  | "planLabelBounds"
+  | "planInputKeys";
