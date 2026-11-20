@@ -115,7 +115,10 @@ describe("space history", () => {
         ),
       },
     );
-    const piece = await cc.create(program, { start: true });
+    // The piece is left for the shell to start: a pattern running here would
+    // compute ahead of the server, and a source change cannot commit on top
+    // of values this process only speculated.
+    const piece = await cc.create(program, { start: false });
     await piece.setPattern({
       ...program,
       files: program.files.map((file) => ({

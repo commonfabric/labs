@@ -2662,6 +2662,7 @@ describe("RuntimeInternals", () => {
           {
             pieceId: "fid1:a",
             revisionId: "revision-of-fid1:a",
+            madeAt: Date.parse(at),
             operation: "edit",
             label: "Direct source edit",
             pattern: {
@@ -2674,6 +2675,7 @@ describe("RuntimeInternals", () => {
           {
             pieceId: "fid1:b",
             revisionId: "revision-of-fid1:b",
+            madeAt: Date.parse(at),
             operation: "edit",
             label: "Direct source edit",
             pattern: {

@@ -35,6 +35,7 @@ import {
   type PatternChange,
   type PieceSourceOfScope,
   type SpaceHistoryStep,
+  withOlderSteps,
   withPatternChanges,
 } from "./space-history.ts";
 
@@ -85,6 +86,7 @@ export function defaultRenderConfidentialityCeiling(
 }
 
 export type { HistoryStep, PatternChange, SpaceHistoryStep };
+export { withOlderSteps };
 
 export type RuntimeNavigationTarget = { spaceDid: DID; pieceId: string };
 

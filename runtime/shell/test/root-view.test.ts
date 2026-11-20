@@ -1734,6 +1734,7 @@ describe("XRootView", () => {
     type RestoreAnswer = {
       compatibilityWarning?: string;
       confirmationToken?: string;
+      executionWarning?: string;
     };
 
     /**
@@ -1939,6 +1940,38 @@ describe("XRootView", () => {
         expect(errors.calls[0].args[0]).toBe(
           "[RootView] Failed to restore a pattern:",
         );
+      } finally {
+        restore();
+      }
+    });
+
+    it("hands the panel the runtime's execution warning as the restore's failure, and counts the change all the same", async () => {
+      const { view, changes, errors, patternRestore, restore } = await mounted(
+        () =>
+          Promise.resolve({
+            executionWarning: "The restored pattern threw as it started.",
+          }),
+      );
+      try {
+        await view.restorePattern({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          scope: "user",
+        });
+
+        expect(patternRestore()).toStrictEqual({
+          pieceId: "fid1:a",
+          revisionId: "r1",
+          busy: false,
+          error: "The restored pattern threw as it started.",
+        });
+        expect(changes()).toBe(1);
+        // The restore landed, so nothing is logged as a failure of it.
+        expect(errors.calls).toHaveLength(0);
+
+        // A restore that is not busy leaves the way open for another.
+        await view.restorePattern({ pieceId: "fid1:a", revisionId: "r0" });
+        expect(changes()).toBe(2);
       } finally {
         restore();
       }

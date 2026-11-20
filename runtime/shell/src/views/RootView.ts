@@ -956,7 +956,9 @@ export class XRootView extends BaseView implements ShellApp {
    * Restores a piece's pattern code to the source revision `change` names,
    * and leaves the piece's data as it is. Where the earlier source does not
    * fit the data, the history panel is given the runtime's warning and the
-   * token that confirms the restore, which a second call carries.
+   * token that confirms the restore, which a second call carries. Where the
+   * source was restored and the piece could not then be run on it, the panel
+   * is given the runtime's warning of that.
    */
   async restorePattern(
     change: {
@@ -995,7 +997,16 @@ export class XRootView extends BaseView implements ShellApp {
         };
         return;
       }
-      this._patternRestore = undefined;
+      // The source changed whether or not the piece then ran on it, so the
+      // history is listed again either way.
+      this._patternRestore = response.executionWarning === undefined
+        ? undefined
+        : {
+          pieceId,
+          revisionId,
+          busy: false,
+          error: response.executionWarning,
+        };
       this._historyChanges++;
     } catch (error) {
       console.error("[RootView] Failed to restore a pattern:", error);

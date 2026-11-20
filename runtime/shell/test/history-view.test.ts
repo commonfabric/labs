@@ -40,6 +40,12 @@ describe("XHistoryView", () => {
       holds: (markup: string) => boolean,
     ): Promise<string>;
 
+    /**
+     * Calls `act`, and resolves with the markup of the first render `holds`
+     * is true of.
+     */
+    until(act: () => void, holds: (markup: string) => boolean): Promise<string>;
+
     /** Returns the view's markup as it stands. */
     markup(): string;
   }
@@ -60,6 +66,9 @@ describe("XHistoryView", () => {
 
   afterEach(() => restoreGlobals());
 
+  /** When every step and change of these cases was made, unless it says. */
+  const AT = "2026-03-01T12:00:00.000Z";
+
   /** A settled `write` step numbered `seq`, with `patternChanges`. */
   function step(
     seq: number,
@@ -68,7 +77,7 @@ describe("XHistoryView", () => {
     return {
       seq,
       startSeq: seq,
-      at: "2026-03-01T12:00:00.000Z",
+      at: AT,
       kind: "write",
       events: 0,
       writes: 1,
@@ -86,6 +95,7 @@ describe("XHistoryView", () => {
     return {
       pieceId,
       revisionId,
+      madeAt: Date.parse(AT),
       operation: "edit",
       label: "Direct source edit",
       pattern: { identity: `identity-of-${revisionId}`, symbol: "default" },
@@ -131,24 +141,31 @@ describe("XHistoryView", () => {
     });
     const markup = () =>
       templateMarkup(view.render(), { elideListeners: true });
+    const until: Mounted["until"] = (act, holds) => {
+      const held = Promise.withResolvers<string>();
+      moved = () => {
+        const now = markup();
+        if (holds(now)) held.resolve(now);
+      };
+      act();
+      moved();
+      return held.promise;
+    };
     return {
       view,
       listings,
       pieceIds,
       commands,
       markup,
-      update(names, holds) {
-        const held = Promise.withResolvers<string>();
-        moved = () => {
-          const now = markup();
-          if (holds(now)) held.resolve(now);
-        };
-        (view as unknown as {
-          willUpdate(changed: Map<string, unknown>): void;
-        }).willUpdate(new Map(names.map((name) => [name, undefined])));
-        moved();
-        return held.promise;
-      },
+      until,
+      update: (names, holds) =>
+        until(
+          () =>
+            (view as unknown as {
+              willUpdate(changed: Map<string, unknown>): void;
+            }).willUpdate(new Map(names.map((name) => [name, undefined]))),
+          holds,
+        ),
     };
   }
 
@@ -417,6 +434,50 @@ describe("XHistoryView", () => {
       expect(changeMarkup(markup(), "r1")).toContain("the piece is gone");
       expect(changeMarkup(markup(), "r2")).not.toContain("the piece is gone");
       expect(changeMarkup(markup(), "r2")).not.toContain('role="alert"');
+    });
+  });
+
+  describe("the older steps", () => {
+    it("moves a change the newest stretch showed on its oldest step to the older step it was made during, rendering it once", async () => {
+      // The change was made half a minute before the newest stretch's oldest
+      // step, which shows it until the step it was made during is listed.
+      const madeAt = Date.parse(AT) - 30_000;
+      const moved = change("fid1:a", "r1", { madeAt });
+      const pages: Page[] = [
+        { steps: [step(4, [moved])], next: 4 },
+        {
+          steps: [{
+            ...step(2, [moved]),
+            at: new Date(madeAt).toISOString(),
+          }],
+        },
+      ];
+      const { view, until, update } = mount(
+        () => Promise.resolve(pages.shift()!),
+      );
+      const first = await update(
+        ["rt", "space"],
+        (markup) => markup.includes("Show older steps"),
+      );
+      expect(first.indexOf('data-revision="r1"')).toBeGreaterThan(
+        first.indexOf('data-seq="4"'),
+      );
+
+      const [older] = templateListeners(view.render(), "click", view).filter((
+        { text },
+      ) => text === "Show older steps");
+      const extended = await until(
+        () => older.dispatch(new Event("click")),
+        (markup) => markup.includes('data-seq="2"'),
+      );
+
+      expect(extended.split('data-revision="r1"')).toHaveLength(2);
+      expect(extended.indexOf('data-seq="4"')).toBeLessThan(
+        extended.indexOf('data-seq="2"'),
+      );
+      expect(extended.indexOf('data-revision="r1"')).toBeGreaterThan(
+        extended.indexOf('data-seq="2"'),
+      );
     });
   });
 

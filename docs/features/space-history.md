@@ -180,7 +180,8 @@ that step began within a minute of it. The revision's time is read from the
 clock of the runtime that changed the source and a step's from the memory
 server's, so clocks that disagree can place a change on a neighboring step. A
 revision made during a stretch of history the listing does not cover is left
-out. `RuntimeInternals.restorePiecePattern()` puts a piece back on one of
+out, and one made within a minute before the oldest step listed is shown on
+that step until the older step it belongs to is listed. `RuntimeInternals.restorePiecePattern()` puts a piece back on one of
 those revisions through the same source restore the piece menu's "Origin and
 history" uses, which changes the pattern the piece runs and leaves the
 space's data as it is.

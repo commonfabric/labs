@@ -30,6 +30,12 @@ export type PatternChange = {
   /** The source revision the change recorded. */
   revisionId: string;
 
+  /**
+   * When the revision was made, in milliseconds since the epoch, by the
+   * clock of the runtime that made it.
+   */
+  madeAt: number;
+
   /** What produced the revision. */
   operation: PieceSourceRevisionOperation;
 
@@ -84,6 +90,56 @@ export function withPatternChanges(
   steps: readonly HistoryStep[],
   sources: readonly PieceSourceOfScope[],
 ): SpaceHistoryStep[] {
+  const changes: PatternChange[] = [];
+  for (const { source, scope } of sources) {
+    for (const revision of source.history) {
+      changes.push({
+        pieceId: source.pieceId,
+        ...(scope !== undefined ? { scope } : {}),
+        ...(source.name !== undefined ? { pieceName: source.name } : {}),
+        revisionId: revision.revisionId,
+        madeAt: revision.timestamp,
+        operation: revision.operation,
+        label: sourceOperationLabel(revision.operation),
+        pattern: revision.pattern,
+        ...(revision.origin !== undefined ? { origin: revision.origin } : {}),
+        originLabel: describeOrigin(revision.origin).label,
+        current: revision.revisionId === source.currentRevisionId,
+      });
+    }
+  }
+  return placeChanges(steps, changes);
+}
+
+/**
+ * Returns the steps listed so far followed by an `older` stretch of the same
+ * history, with the pattern changes of both placed over the whole. A change
+ * made shortly before the oldest step of a stretch is placed on that step
+ * while the stretch stands alone, and on the older step it belongs to once
+ * that one is listed.
+ */
+export function withOlderSteps(
+  listed: readonly SpaceHistoryStep[],
+  older: readonly SpaceHistoryStep[],
+): SpaceHistoryStep[] {
+  const steps = [...listed, ...older];
+  const changes = new Map<string, PatternChange>();
+  for (const step of steps) {
+    for (const change of step.patternChanges) {
+      changes.set(`${change.pieceId}\n${change.revisionId}`, change);
+    }
+  }
+  return placeChanges(steps, [...changes.values()]);
+}
+
+/**
+ * Returns `steps`, newest first, each with those of `changes` placed on it
+ * by the rule {@link withPatternChanges} states, oldest first.
+ */
+function placeChanges(
+  steps: readonly HistoryStep[],
+  changes: readonly PatternChange[],
+): SpaceHistoryStep[] {
   const result: SpaceHistoryStep[] = steps.map((step) => ({
     ...step,
     patternChanges: [],
@@ -93,36 +149,21 @@ export function withPatternChanges(
     step,
     began: Date.parse(step.at),
   })).reverse();
-  const found = new Map<SpaceHistoryStep, [number, PatternChange][]>();
-  for (const { source, scope } of sources) {
-    for (const revision of source.history) {
-      const first = byTime.find(({ began }) =>
-        began + COMMIT_TIME_GRAIN_MS > revision.timestamp
-      );
-      if (
-        first === undefined ||
-        first.began - revision.timestamp >= REVISION_COMMIT_WINDOW_MS
-      ) continue;
-      const changes = found.get(first.step) ?? [];
-      found.set(first.step, changes);
-      changes.push([revision.timestamp, {
-        pieceId: source.pieceId,
-        ...(scope !== undefined ? { scope } : {}),
-        ...(source.name !== undefined ? { pieceName: source.name } : {}),
-        revisionId: revision.revisionId,
-        operation: revision.operation,
-        label: sourceOperationLabel(revision.operation),
-        pattern: revision.pattern,
-        ...(revision.origin !== undefined ? { origin: revision.origin } : {}),
-        originLabel: describeOrigin(revision.origin).label,
-        current: revision.revisionId === source.currentRevisionId,
-      }]);
-    }
-  }
-  for (const [step, changes] of found) {
-    step.patternChanges = changes.sort(([a], [b]) => a - b).map(([, change]) =>
-      change
+  const found = new Map<SpaceHistoryStep, PatternChange[]>();
+  for (const change of changes) {
+    const first = byTime.find(({ began }) =>
+      began + COMMIT_TIME_GRAIN_MS > change.madeAt
     );
+    if (
+      first === undefined ||
+      first.began - change.madeAt >= REVISION_COMMIT_WINDOW_MS
+    ) continue;
+    const placed = found.get(first.step) ?? [];
+    found.set(first.step, placed);
+    placed.push(change);
+  }
+  for (const [step, placed] of found) {
+    step.patternChanges = placed.sort((a, b) => a.madeAt - b.madeAt);
   }
   return result;
 }

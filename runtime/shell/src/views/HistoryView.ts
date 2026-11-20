@@ -4,10 +4,11 @@ import { css, html, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { iconClose } from "../components/icons.ts";
-import type {
-  PatternChange,
-  RuntimeInternals,
-  SpaceHistoryStep,
+import {
+  type PatternChange,
+  type RuntimeInternals,
+  type SpaceHistoryStep,
+  withOlderSteps,
 } from "../lib/runtime.ts";
 import { BaseView } from "./BaseView.ts";
 
@@ -266,7 +267,7 @@ export class XHistoryView extends BaseView {
       if (listing !== this.#listing) return;
       this._steps = before === undefined
         ? page.steps
-        : [...this._steps, ...page.steps];
+        : withOlderSteps(this._steps, page.steps);
       this._next = page.next;
     },
   });
