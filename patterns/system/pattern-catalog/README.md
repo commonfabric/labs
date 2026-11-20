@@ -114,8 +114,10 @@ then one final state (`placed`, `failed` or `cancelled`) that it never changes.
   nothing here needs a transaction across spaces.
 - `getItAnswers` carries no write policy, so another caller could change what a
   button shows (though not what gets placed).
-- Nothing removes handled requests from `getItRequests`; the write policy that
-  keeps others from adding to it also keeps the host from trimming it.
+- Nothing removes handled requests from `getItRequests`. The write policy sits
+  on each request, not on the list, yet the runtime still refuses a write to the
+  list from any other handler, one that clears it included: what keeps others
+  from adding a request also keeps the host from trimming the list.
 - The test runs against the fake only. A host checks its own implementation with
   its own tests until the shared behavior is factored into a suite any
   implementation can run.
@@ -131,10 +133,10 @@ far as the following allow, and each is left to mechanism the runtime does not
 have yet:
 
 - The `data-ui-pattern`, `data-ui-event-integrity` and `data-ui-action` markers
-  are strings any pattern can write on its own elements. The write policy on
-  `getItRequests` names the button's handler, so another pattern's tap cannot
-  add a request, but nothing proves that the markers on a tap came from this
-  pattern's own view.
+  are strings any pattern can write on its own elements. Each request's write
+  policy names the button's handler, so another pattern's tap cannot add a
+  request, but nothing proves that the markers on a tap came from this pattern's
+  own view.
 - The title comes from the catalog the caller hands the button. A caller can
   pass a forged catalog whose entry gives the pattern another title, and the
   viewer's `#patternCatalog` favorite can be repointed at another piece. The

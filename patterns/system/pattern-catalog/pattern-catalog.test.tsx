@@ -7,11 +7,12 @@
  * forged push and an untrusted send leave the list alone, a second tap while
  * a request is open adds nothing, and a failed request can be tapped again.
  * The host's answer shows on the button. Each request is labelled with who
- * tapped, on the request itself. A request names the host and the time of
- * its tap, a host leaves a request naming another host alone, and
- * with no host or no pattern id the button says so and adds nothing. The button names the
- * pattern by the catalog's own title for its id, whatever text a caller
- * passes, and the place it installs onto by the name the caller gives.
+ * tapped, on the request itself, and another pattern cannot clear the list.
+ * A request names the host and the time of its tap, a host leaves a request
+ * naming another host alone, and with no host or no pattern id the button
+ * says so and adds nothing. The button names the pattern by the catalog's own
+ * title for its id, whatever text a caller passes, and the place it installs
+ * onto by the name the caller gives.
  *
  * Run: deno task cf test patterns/system/pattern-catalog/pattern-catalog.test.tsx --verbose
  */
@@ -88,6 +89,14 @@ const forgeRequest = handler<void, { getItRequests: Writable<GetItRequest[]> }>(
   },
 );
 
+/** A pattern that tries to clear the requests without the button. */
+const clearRequests = handler<
+  void,
+  { getItRequests: Writable<GetItRequest[]> }
+>((_, { getItRequests }) => {
+  getItRequests.set([]);
+});
+
 export default pattern(() => {
   const entries = new Writable<CatalogEntry[]>(ENTRIES);
   const status = new Writable<CatalogStatus>({ state: "ready" });
@@ -140,6 +149,7 @@ export default pattern(() => {
     label: "Bill splitter",
   } as GetItButtonInput);
   const forge = forgeRequest({ getItRequests: catalog.getItRequests });
+  const clear = clearRequests({ getItRequests: catalog.getItRequests });
 
   const samProfile: CatalogProfile = new Writable<Record<string, never>>({});
   const anonymous = CatalogByline({
@@ -294,6 +304,12 @@ export default pattern(() => {
     principalOf(getItRequests.key(0), "authored-by") === me.get() &&
     principalOf(getItRequests.key(1), "authored-by") === me.get()
   );
+  const action_clear = action(() => {
+    clear.send();
+  });
+  const assert_clearing_the_list_refused = assert(() =>
+    catalog.getItRequests.length === 2
+  );
   const assert_open_request_shows = assert(() =>
     split.answer?.state === "started" && hasText(split[UI], "Getting it…")
   );
@@ -405,6 +421,8 @@ export default pattern(() => {
       { assertion: assert_tap_appends_one_request },
       { action: action_note_me },
       { assertion: assert_each_request_labelled_with_who_tapped },
+      { action: action_clear },
+      { assertion: assert_clearing_the_list_refused },
       { assertion: assert_open_request_shows },
       { action: split.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_second_tap_while_open_adds_nothing },
