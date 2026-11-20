@@ -642,12 +642,12 @@ export class WebSocketTransport implements MemoryClient.Transport {
   /**
    * Sends in submission order using the compression mode active at submission.
    * Every payload stays on the queue because a later text frame must not
-   * overtake earlier asynchronous compression. A payload lost with its
-   * connection — one queued when the socket closes, one whose write fails, or
-   * one sent on a socket that fails to open — rejects with a `ConnectionError`.
-   * One whose socket was replaced while it waited its turn, before any of it
-   * was written, rejects with an `unsentConnectionError()`: no server holds
-   * it.
+   * overtake earlier asynchronous compression. A payload whose socket closed
+   * or was replaced before its turn came, so that none of it was written,
+   * rejects with an `unsentConnectionError()`: no server holds it. One lost
+   * once its write began (a write that fails, or a socket replaced between a
+   * routed payload's records), or one sent on a socket that fails to open,
+   * rejects with a plain `ConnectionError`.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
