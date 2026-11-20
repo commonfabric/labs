@@ -88,6 +88,7 @@ import {
   type SharedSpaceCatalogStorage,
   type SharedSpaceEntry,
 } from "../shared-space/shared-space-catalog.ts";
+import { shortDid } from "../social-space/short-did.ts";
 import { sameNameMarks } from "./logic.ts";
 import { listsRoomIn } from "./room-records.tsx";
 import FabriChatRoom from "./room.tsx";
@@ -2281,36 +2282,59 @@ const peopleIn = (
     {},
   );
 
-/** A notice, its room a link that declares the room's roster. */
-interface LinkedNotice extends Omit<ChatManagerNotice, "room"> {
-  /** The room the recipient was admitted to. */
+/**
+ * What telling whether one notice has anything left to tell needs: the
+ * notice's id and recipient, and its room, as the notice holds it. The
+ * argument is stored, so the room stays a handle there, as `RoomRoster`'s
+ * does, and the read re-types it where it reads.
+ */
+interface NoticeToldInput {
+  /** The notice's id. */
+  id: string;
+
+  /** The room the recipient was admitted to, as the notice holds it. */
   // `Cell<…>` is written out rather than reached through an alias: a schema
   // marks a reference position only where the wrapper is written in the type.
-  room: Cell<ChatRoomLink>;
+  room: Cell<unknown>;
+
+  /** The DID of the person admitted. */
+  recipient: string;
 }
 
-/** `notice`, its room re-typed by `linkedRoom()`; it reads nothing. */
-const linkedNoticeOf = (notice: ChatManagerNotice): LinkedNotice => ({
-  ...notice,
-  room: linkedRoom(notice.room),
-});
+/** Whether one notice has anything left to tell, once its room is read. */
+interface NoticeToldOutput {
+  /** The notice's id. */
+  id: string;
+
+  /**
+   * Whether the notice has nothing left to tell: its room's roster lists a
+   * profile attesting its recipient, since they are in the room, or the
+   * memory server says its room's space is deleted. Absent until the room is
+   * read.
+   */
+  told?: boolean;
+}
 
 /**
- * The ids of the notices of `notices` with nothing left to tell: a notice
- * whose room's roster lists a profile attesting its recipient, since they are
- * in the room, or whose room the memory server says is deleted. It reads each
- * notice's room, so it is handed notices whose links declare their rosters,
- * and nothing else, so that what changes only the catalog reads no room.
+ * Whether the notice `id` has anything left to tell, each notice's room read
+ * on its own, so that a room this replica can't serve, such as one that
+ * refuses the reader, holds back its own notice's answer alone, and the other
+ * notices are listed all the same.
  */
-const noticesTold = (notices: readonly LinkedNotice[]): string[] =>
-  notices.flatMap((notice) =>
-    spaceDeleted(notice.room) === true ||
-      (notice.room.key("roster").get() ?? []).some((member) =>
-        profileOwnerOf(member) === notice.recipient
-      )
-      ? [notice.id]
-      : []
-  );
+const NoticeTold = pattern<NoticeToldInput, NoticeToldOutput>(
+  ({ id, room, recipient }) => {
+    const linked = linkedRoom(room);
+    return {
+      id,
+      told: computed((): boolean =>
+        spaceDeleted(linked) === true ||
+        (linked.key("roster").get() ?? []).some((member) =>
+          profileOwnerOf(member) === recipient
+        )
+      ),
+    };
+  },
+);
 
 /** What a manager's core needs: what it stores, and whose it is. */
 export interface FabriChatManagerCoreInput
@@ -2481,15 +2505,25 @@ export const FabriChatManagerCore = pattern<
       startRefusal,
     };
     // Per user, as `roomsForUser` is: a room's label is the title its entry
-    // holds, which a direct room has only once a member sets one. Its
-    // binding's name is its cause, as `roomsForUser`'s is.
+    // holds, which a direct room has only once a member sets one. Until then
+    // a direct room is labeled with its counterpart's principal, shortened by
+    // `shortDid()`, the one name for them the entry holds: the label reads
+    // nothing beyond the manager's records, so listing the rooms opens no
+    // other space. Its binding's name is its cause, as `roomsForUser`'s is.
+    // TODO(direct-room-label): Label a direct room with its counterpart's
+    // profile name, once one can be shown without reading another space while
+    // the rooms are listed.
     const shownForUser = computed((): PerUser<ShownEntry[]> =>
       roomsForUser.map((entry) => ({
         room: entry.room,
         ...(entry.revision === undefined ? {} : { revision: entry.revision }),
         label: entry.title ??
           (entry.kind === "direct"
-            ? `With ${entry.counterpart ?? "someone"}`
+            ? `With ${
+              entry.counterpart === undefined
+                ? "someone"
+                : shortDid(entry.counterpart)
+            }`
             : "Group chat"),
       }))
     );
@@ -2537,28 +2571,34 @@ export const FabriChatManagerCore = pattern<
     // A notice whose room's roster lists a profile attesting its recipient
     // has nothing left to tell them: they are in the room. A notice of a
     // deleted room has nothing to tell them either: no one can open the room,
-    // and its roster can't be read. `toldNotices` reads the rooms, and
-    // `noticesForUser`, which also reads the catalog, reads none, so that a
-    // change to the catalog reads no notice's room; a room act drops a notice
-    // of a room the catalog says is deleted (`dropDeletedNotices()`), so
-    // `toldNotices` asks after a deleted room's space only until then. Per
-    // user, as `roomsForUser` is: the roster is read under the reader's
-    // access, and a profile attests no one to a reader its space refuses.
-    // Each binding's name is its cause, as `roomsForUser`'s is.
-    const linkedNotices = computed((): PerUser<LinkedNotice[]> =>
-      ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).map(
-        linkedNoticeOf,
-      )
+    // and its roster can't be read. Each notice's room is read in a
+    // `NoticeTold` of its own, so that a room the reader can't read holds
+    // back that notice's answer alone, and `noticesForUser`, which also reads
+    // the catalog, reads no room, so that a change to the catalog reads no
+    // notice's room; a room act drops a notice of a room the catalog says is
+    // deleted (`dropDeletedNotices()`), so its `NoticeTold` asks after the
+    // deleted room's space only until then. Per user, as `roomsForUser` is:
+    // the roster is read under the reader's access, and a profile attests no
+    // one to a reader its space refuses. Each binding's name is its cause, as
+    // `roomsForUser`'s is.
+    const noticesHeldForUser = computed((): PerUser<ChatManagerNotice[]> => [
+      ...((outgoingNotices.get() ?? []) as ChatManagerNotice[]),
+    ]);
+    const toldForUser = noticesHeldForUser.map((notice) =>
+      NoticeTold.asScope("user")({
+        id: notice.id,
+        room: notice.room,
+        recipient: notice.recipient,
+      })
     );
-    const toldNotices = computed((): PerUser<string[]> =>
-      noticesTold(linkedNotices)
-    );
-    const noticesForUser = computed((): PerUser<ChatManagerNotice[]> =>
-      ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((notice) =>
-        !roomDeleted(catalogEntries, notice.room) &&
-        !toldNotices.includes(notice.id)
-      )
-    );
+    const noticesForUser = computed((): PerUser<ChatManagerNotice[]> => {
+      const told = new Set(
+        toldForUser.flatMap((each) => each?.told === true ? [each.id] : []),
+      );
+      return ((outgoingNotices.get() ?? []) as ChatManagerNotice[]).filter((
+        notice,
+      ) => !roomDeleted(catalogEntries, notice.room) && !told.has(notice.id));
+    });
     // Whether this reader can start a chat, and their address, are each
     // session's own, as the profile they are derived from is. A session
     // whose profile hasn't resolved, or which finds none, would otherwise

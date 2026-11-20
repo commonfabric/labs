@@ -198,8 +198,11 @@ the Loom's space uses the Loom's (see
 [`FileStore.md`](FileStore.md#where-it-lives)).
 
 - **The store and its core.** `FileStore` resolves the viewer's profile with
-  `#profile` and hands it to `FileStoreCore`, which takes it as an input, so a
-  test can name one.
+  `#profile` and hands `FileStoreCore` the wish's result and its `errorCode`,
+  which the core takes as inputs, so a test can name them. An `add` refused for
+  want of a profile says "no profile yet" only for a wish that reports
+  `no-match`: any other code is a profile that couldn't be read, and no code at
+  all is one that hasn't loaded yet.
 - **Writers and labels.** An entry's write policy is the element's, at its
   position in the list, and names `commitAdd`, `commitRename` and
   `commitRemove`, since a removal is a write to the element removed. The
