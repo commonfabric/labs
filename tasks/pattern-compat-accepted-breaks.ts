@@ -3044,4 +3044,20 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
     record: MENTIONABLE_OBJECT_ALTERNATIVE_RECORD,
   },
+  {
+    // The suggestion's `context` argument moved from `any` to
+    // `Record<string, Writable<unknown>>`, the type `llmDialog` declares for
+    // the context it is passed, so each entry now carries `asCell`. A stored
+    // literal or link reads as a cell either way.
+    pattern: "system/suggestion/suggestion.tsx",
+    baselines: [
+      "20260729T022742Z-Rgx51FDumoAK2D04",
+      "20261004T000823Z-aBL2DgOoWmZwOMwI",
+      "20261112T153000Z-GA_jHVqd2oeitMwF",
+    ],
+    paths: ["argument.context.*"],
+    reason:
+      "the context argument moved from any to the cell record llmDialog declares, so each entry is read as a cell; a stored literal or link reads as one",
+    record: "docs/history/suggestion-context-cell-entries-break.md",
+  },
 ];

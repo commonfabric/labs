@@ -5,11 +5,12 @@ export type PromptAttachment = {
   name: string;
   type: "file" | "clipboard" | "mention";
   /**
-   * The pasted text, for a clipboard attachment. `cf-prompt-input` also puts a
-   * `File` or `Blob` here for a file it has not uploaded, which does not cross
-   * to the worker, so what a handler reads here is text or nothing.
+   * The pasted text, for a clipboard attachment. `cf-prompt-input` declares
+   * this `unknown`, and a schema field typed `unknown` reads as a reference
+   * rather than the value, so `any` is what lets a handler read the text.
    */
-  data?: string;
+  // deno-lint-ignore no-explicit-any
+  data?: any;
 };
 
 export type PromptSendEvent = {
