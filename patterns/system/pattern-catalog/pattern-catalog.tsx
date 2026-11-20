@@ -221,16 +221,16 @@ export const requestGetIt = handler<
   // admits again derives the same key, and finds its request already there.
   const requestId = eventKey();
   if (requests.some((request) => request?.requestId === requestId)) return;
-  // Pushed, not set: each request becomes a document of its own, which
-  // stores its own `authored-by` and writer, so a host can check both on the
-  // request it acts on rather than on the list.
-  getItRequests.push({
+  // The new request is a `GetItEntry`, so it is stored as a document of its
+  // own with its own `authored-by` and writer; the requests already there
+  // stay the documents they are.
+  getItRequests.set([...requests, {
     requestId,
     patternId,
     destination,
     requestedAt: Date.now(),
     host,
-  } as GetItEntry);
+  } as GetItEntry]);
 });
 
 /** The id of `GetItButton`'s surface, as its trusted writes name it. */
