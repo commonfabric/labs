@@ -1096,3 +1096,52 @@ Deno.test("a wire match without the global flag still evaluates (forced, no thro
   if ("error" in res) throw new Error(res.error);
   assertEquals(res.confidentiality, ["did:mailto:a@b.example"]);
 });
+
+// CFC spec §4.1.1 / §15.2: a reader principal is the structured
+// `User{subject}` atom, never a bare DID string (§13.12.1 writes the db owner
+// as `O = User(did:key:owner)`, §4.2 an OR-clause participant as
+// `User(did:mailto:…)`). A bare string meets no `User` ceiling under the fit
+// test's exact atom comparison, so the owner's own run could not read rows its
+// own `dbOwner()` labels.
+Deno.test("dbOwner() and principal() name readers as User{subject} atoms", () => {
+  const OWNER = "did:key:zOwner";
+  const user = (subject: string) => ({
+    type: "https://commonfabric.org/cfc/atom/User",
+    subject,
+  });
+  const spec = table(
+    { id: "integer primary key", from: "text", to: "text" },
+    (f) => ({
+      confidentiality: any(
+        principal("mailto", match(f.from, ADDR)),
+        principal("mailto", match(f.to, ADDR)),
+        dbOwner(),
+      ),
+      integrity: authoredBy(principal("mailto", match(f.from, ADDR))),
+    }),
+  ).rowLabel as RowLabelSpec;
+  const res = evaluateRowLabel(
+    spec,
+    { from: "alice@a.example", to: "bob@b.example" },
+    { dbOwner: OWNER },
+  );
+  if ("error" in res) throw new Error(res.error);
+  assertEquals(res.confidentiality, [{
+    anyOf: [
+      user("did:mailto:alice@a.example"),
+      user("did:mailto:bob@b.example"),
+      user(OWNER),
+    ],
+  }]);
+  // Integrity names a provenance SUBJECT, not a reader: it stays the DID.
+  assertEquals(res.integrity, [{
+    kind: "claimed-authored-by",
+    subject: "did:mailto:alice@a.example",
+  }]);
+  // The common-alternative set names the same atom the rows carry, so the
+  // owner's aggregate read meets the owner's per-row reads.
+  assertEquals(
+    ruleCommonAlternatives(spec, { dbOwner: OWNER }),
+    [user(OWNER)],
+  );
+});

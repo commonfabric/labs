@@ -600,7 +600,14 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe", owner: OWNER },
     );
     if ("error" in res) throw new Error(res.error);
-    assertEquals(res.atoms, ["did:key:zMe", OWNER, "pii"]);
+    assertEquals(res.atoms, [
+      {
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: "did:key:zMe",
+      },
+      { type: "https://commonfabric.org/cfc/atom/User", subject: OWNER },
+      "pii",
+    ]);
   });
 
   it("resolves a placeholder inside an `anyOf` alternative", () => {
@@ -609,7 +616,15 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe", owner: OWNER },
     );
     if ("error" in res) throw new Error(res.error);
-    assertEquals(res.atoms, [{ anyOf: ["did:key:zMe", OWNER] }]);
+    assertEquals(res.atoms, [{
+      anyOf: [
+        {
+          type: "https://commonfabric.org/cfc/atom/User",
+          subject: "did:key:zMe",
+        },
+        { type: "https://commonfabric.org/cfc/atom/User", subject: OWNER },
+      ],
+    }]);
   });
 
   it("an unresolvable placeholder inside an `anyOf` fails closed", () => {
@@ -631,6 +646,58 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe" },
     );
     assert("error" in noOwner);
+  });
+});
+
+// CFC spec §15.2: the reader principal is `User{subject}`. An owner agent
+// run's read ceiling is `[User(owner)]`, and the fit test compares atoms
+// exactly, so a `dbOwner()` row fits it only when the row names the owner in
+// that same form — a bare DID string never does.
+describe("computeRowLabelRead — dbOwner() rows meet a User(owner) ceiling", () => {
+  const user = (subject: string) => ({
+    type: "https://commonfabric.org/cfc/atom/User",
+    subject,
+  });
+  const ownedTables = {
+    notes: table(
+      { id: "integer", body: "text" },
+      () => ({ confidentiality: dbOwner() }),
+    ),
+  };
+  const COLS = [col("id", "notes", "id"), col("body", "notes", "body")];
+  const ROWS_1 = [{ id: 1, body: "x" }];
+
+  it("a row labelled by dbOwner() fits the owner run's [User(owner)] ceiling", () => {
+    const res = expectOk(computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [user(OWNER)],
+    }));
+    assertEquals(res.labels[0]?.confidentiality, [user(OWNER)]);
+  });
+
+  it("a bare-DID ceiling is no reader atom and admits nothing", () => {
+    const res = computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [OWNER],
+    });
+    assert("error" in res);
+  });
+
+  it("another user's ceiling does not admit the owner's row", () => {
+    const res = computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [user("did:key:zSomeoneElse")],
+    });
+    assert("error" in res);
   });
 });
 
@@ -699,12 +766,34 @@ describe("computeRowLabelRead — read-time clearance (Phase 3.b, Epic E3)", () 
       columns: MB_COLS,
       rows: MB_ROWS,
       owner: OWNER,
-      ceiling: [OWNER],
+      ceiling: [{
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: OWNER,
+      }],
       onExceed: "skip",
       readClearance: { reader: BOB },
     }));
     assertEquals(res.keep, [true, false, true]);
     assertEquals(res.withheld, 1);
+  });
+
+  it("a bare-DID alternative admits nobody — only the User atom names a reader", () => {
+    const bareTables = {
+      msgs: table(
+        { id: "integer", from: "text", to: "text", body: "text" },
+        () => ({ confidentiality: any(constant(OWNER)) }),
+        { allowReadClearance: true },
+      ),
+    };
+    const res = expectOk(computeRowLabelRead({
+      tables: bareTables,
+      columns: MB_COLS,
+      rows: MB_ROWS,
+      owner: OWNER,
+      readClearance: { reader: OWNER },
+    }));
+    assertEquals(res.keep, [false, false, false]);
+    assertEquals(res.withheld, 3);
   });
 
   it("refuses when the table's policy does not opt into clearance", () => {

@@ -10,6 +10,7 @@ import type { CfcAtom, CfcAtomObject } from "@commonfabric/api/cfc";
 import {
   atomKey,
   evaluateRowLabel,
+  readerAtom,
   type RowLabelSpec,
   ruleCommonAlternatives,
   ruleConstrainsConfidentiality,
@@ -144,15 +145,19 @@ function intersectCommonAlternatives(
 // its alternatives (an AND of ORs). A public row (no confidentiality) is
 // readable by all. Per-row labels store concrete principals (dbOwner() is
 // resolved to the owner at eval time), so an alternative admits the reader iff
-// it is exactly the reader principal; a non-principal alternative
-// (Caveat/Expires/material-risk marker) never admits a plain reader, so the row
-// is withheld — fail closed.
+// it is exactly the reader's canonical `User(<reader DID>)` atom (CFC spec
+// §15.2). A bare DID string is no atom (§4.1.1) and admits nobody; neither does
+// a non-principal alternative (Caveat/Expires/material-risk marker) — the row
+// is withheld, fail closed.
 function readerAdmitsLabel(
   confidentiality: readonly CfcConfClause[],
   reader: string,
 ): boolean {
+  const readerKey = atomKey(readerAtom(reader));
   return confidentiality.every((clause) =>
-    clauseAlternatives(clause as CfcConfClause).some((alt) => alt === reader)
+    clauseAlternatives(clause as CfcConfClause).some((alt) =>
+      atomKey(alt) === readerKey
+    )
   );
 }
 
@@ -431,7 +436,9 @@ export function computeRowLabelRead(
  * Resolve placeholder principals in a declared ceiling: the acting user
  * (`{__ctCurrentPrincipal:true}`, prepare-time identity) and the db owner
  * (`{__ctDbOwner:true}`, from the db ref), whether an entry is the
- * placeholder or an `anyOf` whose alternative is. Unresolvable placeholders
+ * placeholder or an `anyOf` whose alternative is. Each resolves to the
+ * reader atom `User(<DID>)`, the same atom `dbOwner()`/`principal()` label
+ * rows with, so the ceiling and the rows meet under the exact fit test. Unresolvable placeholders
  * fail closed — a ceiling that can't be pinned must not silently widen.
  */
 export function resolveCeilingPlaceholders(
@@ -451,7 +458,7 @@ export function resolveCeilingPlaceholders(
             "principal is available — refusing (fail closed)",
         };
       }
-      return { atom: ctx.actingPrincipal };
+      return { atom: readerAtom(ctx.actingPrincipal) };
     }
     if (
       isObjectNotArray(atom) && (atom as CfcAtomObject).__ctDbOwner === true
@@ -462,7 +469,7 @@ export function resolveCeilingPlaceholders(
             "carries no owner — refusing (fail closed)",
         };
       }
-      return { atom: ctx.owner };
+      return { atom: readerAtom(ctx.owner) };
     }
     return { atom };
   };
