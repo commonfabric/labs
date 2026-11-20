@@ -385,6 +385,77 @@ describe("refused-run-keeps-result", () => {
     cancel();
   });
 
+  it("clears a result it kept through its input's transit once the input's space refuses it, and asks for the load once", async () => {
+    // The input space is deleted while the cold runtime waits on it, so the
+    // space refuses the runtime's session and the input never arrives. A
+    // refused space neither delivers the document nor reports it absent, so
+    // a run that kept the result and asked for the load again would do so
+    // for as long as the runtime ran. The case counts the loads the runner
+    // asks for once the space is deleted, as the case above does, and races
+    // a second one against the result's clearing, so a run that keeps asking
+    // fails the case rather than holding it.
+
+    const { warm, compiled, ref, result, outId } = await standUp("abc", true);
+    warm.runner.stop(result);
+    await rename(warm, ref, "def");
+    const before = await storedValues(outId);
+
+    let deleted = false;
+    // The refusal the server gives every command to a deleted space.
+    const refusal: NonNullable<
+      Awaited<ReturnType<MemoryV2Server.Server["deletedSpaceRefusal"]>>
+    > = {
+      name: "AuthorizationError",
+      message: `Space ${inputSpace} is deleted`,
+      deleted: true,
+      permanentEvidence: true,
+      aclRevision: 1,
+    };
+    const deletedSpaceRefusal = server.deletedSpaceRefusal.bind(server);
+    server.deletedSpaceRefusal = (asked) =>
+      deleted && asked === inputSpace
+        ? Promise.resolve(refusal)
+        : deletedSpaceRefusal(asked);
+
+    let loadsSinceDeletion = 0;
+    const secondLoad = Promise.withResolvers<"asked again">();
+    const { cold, coldResult, cancel } = await startCold(
+      compiled,
+      (storage) => {
+        const syncCell = storage.syncCell.bind(storage);
+        storage.syncCell = (cell, options) => {
+          const link = cell.getAsNormalizedFullLink();
+          if (
+            deleted && link.space === inputSpace && link.schema === undefined
+          ) {
+            loadsSinceDeletion += 1;
+            if (loadsSinceDeletion > 1) secondLoad.resolve("asked again");
+          }
+          return syncCell(cell, options);
+        };
+      },
+    );
+    expect(outRuns(cold)).toBe(1);
+    expect(coldResult.key("out").get()).toBe("out:abc");
+    const cleared = Promise.withResolvers<"cleared">();
+    const cancelCleared = coldResult.key("out").sink((value) => {
+      if (value === undefined) cleared.resolve("cleared");
+    });
+
+    deleted = true;
+    inputSpaceHeld!.resolve();
+    expect(await Promise.race([cleared.promise, secondLoad.promise]))
+      .toBe("cleared");
+    await cold.idle();
+    expect(loadsSinceDeletion).toBeLessThanOrEqual(1);
+    await cold.storageManager.synced();
+    const after = await storedValues(outId);
+    expect(after.slice(0, before.length)).toEqual(before);
+    expect(after.at(-1)).toContain("Undefined");
+    cancelCleared();
+    cancel();
+  });
+
   describe("a lift whose argument is read eagerly", () => {
     // Read eagerly, an argument whose document has not arrived reads as
     // undefined rather than refusing, and the lift's body is not run.
