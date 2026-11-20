@@ -547,6 +547,22 @@ the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
 without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
 records it.
 
+The carry of a kept member's per-element entries in an array write the value
+diff persists index by index (`elementEntryPlacements` in `cfc/prepare.ts`)
+implements [specs#106](https://github.com/commonfabric/specs/pull/106) ahead
+of its ruling. Old and new members are paired by equal value, a paired old
+member's `derived` and `structure` entries, existence entries excepted, move
+to its new index, and an unpaired old member's are dropped, except for a
+member edited in place. The attempt's join is stamped only where the diff
+writes, as before. Whether such a write is one attempted write at the array,
+whose join would then reach every index, is the question specs#106 asks. The
+change moves stored entries at strict, with no default-off dial, and it is not
+fail-closed: an entry at an unwritten index can leave it with the element it
+labels. So it does not satisfy step 4 above. Its deciding site carries the
+`SPEC-PENDING` marker. @seefeldb ruled on 2026-11-20 that it lands at the
+strict default, recorded here as a nonconforming semantic gap. The
+conformance statement's §8 records the gap.
+
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by
 `runtime/runner/src/cfc/kernel/spec-header.ts`. The hash is the snapshot's

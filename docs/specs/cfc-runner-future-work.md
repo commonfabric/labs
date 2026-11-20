@@ -59,8 +59,10 @@ numbers are the statement's.
 7. §7: whether every non-scheduler entry point carries its gating reads.
 8. §8: whether an explicit `undefined` write at a recorded deleted path counts
    as a re-creation, and so whether the un-minted join under-taints.
-9. §8: whether the attempted write of an array the value diff writes index by
-   index is the whole array, and so whether the elements it keeps under-taint.
+9. §8: a ruling on [specs#106](https://github.com/commonfabric/specs/pull/106),
+   which proposes the carry of a kept member's entries for an array the value
+   diff writes index by index, and accepts that an unwritten index takes none
+   of the attempt's join.
 
 ---
 

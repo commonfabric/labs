@@ -3938,6 +3938,7 @@ const setSlotIn = (
  * each written path's value before the transaction put back, deepest first.
  * Returns `undefined` where no stored entry is beneath such an array.
  */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/106
 const elementEntryPlacements = (
   tx: IExtendedStorageTransaction,
   target: {

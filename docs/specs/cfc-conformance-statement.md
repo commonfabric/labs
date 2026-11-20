@@ -712,7 +712,12 @@ places with others is carried, and the entries beneath an element left
 unpaired are dropped. Without the move, an element moved onto an index holding an
 equal value would take the entries of the element that stood there, and its
 own would be lost. Declared entries stay with their position, and link entries
-follow the reference their slot holds.
+follow the reference their slot holds. The move implements
+[specs#106](https://github.com/commonfabric/specs/pull/106), which proposes it
+as §8.10.2.3, ahead of its ruling: a nonconforming semantic gap at the strict
+default, whose deciding site carries the `SPEC-PENDING` marker and which
+[`cfc-spec-correspondence.md`](../development/cfc-spec-correspondence.md)
+records.
 
 **Residuals, with direction.**
 
@@ -739,8 +744,8 @@ follow the reference their slot holds.
   attempt's join only at the indices the diff wrote. §8.12.8 replaces the
   derived component at a written path and clears it beneath; whether the
   attempted write of an array set this way is the whole array, whose join
-  would then reach every element, or the indices the diff writes, is not
-  established. If it is the whole array, an element whose entries lack a
+  would then reach every element, or the indices the diff writes, is the
+  question specs#106 asks. If it is the whole array, an element whose entries lack a
   clause of the join under-taints. The alignment matches elements by value, so
   a write that sets an element equal to one stored elsewhere in the array,
   without reading it, carries that element's entries to it, an over-taint.
