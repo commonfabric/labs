@@ -46,7 +46,9 @@ meeting it. `people`
 re-types each link where it reads that room's roster, in an instance of its
 own per room whose argument holds the handle, so no list the manager stores
 types a room as more than a handle; a reader that syncs such a list would walk
-into every room it names.
+into every room it names. Each instance is keyed by the room it reads, so a
+newly listed room, which `rooms` lists first, runs its own instance and leaves
+every other room's as it was.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
