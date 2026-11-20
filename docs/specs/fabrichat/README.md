@@ -321,6 +321,14 @@ design, as below.
   with `#chatManager`. `accept` takes a direct room's counterpart from the
   label on its `about.record`, and refuses one the event names otherwise (see
   [writers and labels](#writers-and-labels)).
+- **A direct room is labeled by its counterpart's principal.** The manager's
+  rendering labels a direct room with no title `With` and its counterpart's
+  principal, shortened by `shortDid()`, rather than by the counterpart's
+  profile name, as [`ChatRoomAbout`](ChatRoomAbout.md) says a client shows it.
+  The room's entry names the counterpart by principal alone. Their profile is
+  reached through the room's roster, in the room's space, or through `people`,
+  which reads every listed room's roster, so a label read from it would open
+  the room's space and the profile's whenever the rooms are listed.
 - **Creation takes one transaction.** The space comes with its grants, so
   writing the room, the manager's notices, and its index entry happens in one
   commit, rather than in the design's resumable steps, and a request's outcome
