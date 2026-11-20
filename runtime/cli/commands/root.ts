@@ -106,6 +106,15 @@ export const TOP_LEVEL_COMMANDS: readonly TopLevelCommand[] = [
     load: async () => (await import("./pattern-index.ts")).index,
   },
   {
+    name: "fetch",
+    description:
+      "Send one request to a first-party Common Fabric service, signed as " +
+      "your identity, and print what it answers. A body, as JSON, is read " +
+      "from stdin for any method but GET and HEAD.",
+    arguments: "<url:string>",
+    load: async () => (await import("./fetch.ts")).fetchCommand,
+  },
+  {
     name: "inspect",
     description:
       "Offline autopsy of local memory v2 space DBs (state, history, " +
