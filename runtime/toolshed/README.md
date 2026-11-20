@@ -248,11 +248,16 @@ space, which is refused but still commits. Reading the ledger, repeating a
 nothing; expiry because every reader compares `expiresAt` with the time itself.
 A client holding a session on the space watches the document to learn of changes
 it did not make, such as another owner's invitation, and reads `list` and
-`receipts` again when it moves. The document says only that the ledger moved, so
-every principal that may read the space may read it. Only the service writes it:
-the store refuses it in an authored or derived commit, and a branch restore
-leaves it as it is. A response without the field comes from a host that writes
-no such document.
+`receipts` again when it moves. The memory server that ran the operation tells
+its own sessions on the space of the move, and no other process: a deployment
+that holds a space's sessions in one process routes that space's invitation
+requests, over HTTP as well as on a session, to the same process, as it routes
+Gmail ingest. The document says only that the ledger moved, so every principal
+that may read the space may read it, and its commit names no principal, so the
+space's history does not name whoever's operation moved it. Only the service
+writes it: the store refuses it in an authored or derived commit, and a branch
+restore leaves it as it is. A response without the field comes from a host that
+writes no such document.
 
 Over HTTP, every invitation operation is a signed JSON POST under
 `/api/spaces/:space/invites/`: `create`, `redeem`, `preview`, `list`, `revoke`,

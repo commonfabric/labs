@@ -646,12 +646,15 @@ export function executeInvite(
 /**
  * Helper for {@link applyInvite}, which moves the ledger's revision document on
  * by one in a system commit of its own, so that a redemption's grant stays the
- * ACL-only commit INV-12 requires.
+ * ACL-only commit INV-12 requires. The commit is the service's and names no
+ * principal: a space's history, which every reader of the space may list,
+ * would otherwise name whoever's operation moved the ledger, a stranger whose
+ * refused preview retired an invitation among them.
  */
 function moveRevision(
   engine: Engine,
   apply: Apply,
-  { space, principal }: InviteRequest,
+  { space }: InviteRequest,
 ): AppliedCommit {
   const held = read(engine, { id: SPACE_INVITES_REVISION_DOC_ID })?.value;
   const value: InviteLedgerRevision = {
@@ -663,7 +666,6 @@ function moveRevision(
   return apply({
     sessionId: "invite-service",
     space,
-    principal,
     commitClass: "system",
     commit: {
       localSeq: serverSeq(engine) + 1,
