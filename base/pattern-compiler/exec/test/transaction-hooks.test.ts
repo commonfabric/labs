@@ -758,3 +758,31 @@ describe("a binding's state that the pattern computes", () => {
     }
   });
 });
+
+describe("an element at no stored position", () => {
+  it("binds the slot of an element of an array a computation returned to the one position that computation read", async () => {
+    // `items.get() || []` over an array of plain values in place: the
+    // elements the `filter` sees are values in memory. The computation read
+    // the stored array whole, whose label covers every element of it.
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("filter-of-computed"),
+      { items: [{ done: true, text: "a" }, { done: false, text: "b" }] },
+      { transactions: recorder },
+    );
+    const groups = recorder.changed.flatMap(({ writes }) => writes ?? [])
+      .flatMap((write) => {
+        const elements = write.outputs?.[0]?.elements?.[0];
+        return elements !== undefined && "groups" in elements
+          ? elements.groups
+          : [];
+      });
+    expect(groups.length).toBeGreaterThan(0);
+    for (const group of groups) {
+      expect(group.slots[2]).toEqual({
+        chain: [{ doc: instance.argument, path: ["items"] }],
+        observes: "value",
+      });
+    }
+  });
+});

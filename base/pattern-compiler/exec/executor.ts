@@ -7898,7 +7898,50 @@ export class Instance {
       }
       return { chain: [], observes: this.plan.slots[slot].observes };
     }
-    return { chain: this.#addressesOf(bound.at), observes: bound.observes };
+    const chain = this.#addressesOf(bound.at);
+    if (chain.length === 0) {
+      const source = this.#sourceReadBinding(slot, keys);
+      if (source !== undefined) return source;
+    }
+    return { chain, observes: bound.observes };
+  }
+
+  /**
+   * What the slot of an element at no stored position is bound to, as an
+   * element of an array that a computation returned from what it read:
+   * where the computation the collection takes its elements from read one
+   * position, the value at that position, whose label covers every element
+   * of what it returned. A wider bound than the element's own position,
+   * which the computation does not report. Where it read several, the slot
+   * stays unbound and the preparation refuses the commit.
+   */
+  #sourceReadBinding(
+    slot: number,
+    keys: readonly [number, string][],
+  ): SlotBinding | undefined {
+    const { root } = this.plan.slots[slot];
+    if (root.kind !== "element") return undefined;
+    const output = this.plan.collections[root.collection ?? -1]?.source.output;
+    if (output === undefined) return undefined;
+    const { cone } = this.plan.outputs[output];
+    const inputs = this.#inputsOf(cone, this.#keysFor(cone, keys));
+    let found: Address[] | undefined;
+    for (const bound of inputs?.slots.values() ?? []) {
+      if (!("at" in bound)) return undefined;
+      const chain = this.#addressesOf(bound.at);
+      const last = chain.at(-1);
+      if (last === undefined) continue;
+      const known = found?.at(-1);
+      if (
+        known !== undefined &&
+        (known.doc !== last.doc ||
+          canonical(known.path) !== canonical(last.path))
+      ) return undefined;
+      found ??= chain;
+    }
+    return found === undefined
+      ? undefined
+      : { chain: found, observes: "value" };
   }
 
   /**
