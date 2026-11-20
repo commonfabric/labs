@@ -3304,7 +3304,11 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
-      await this.#deleteForkBranches();
+      // Each provider's `destroy()` marks it destroyed and aborts its route
+      // before its first await, so a host hint or a session ending during the
+      // close sees a closing provider. Awaiting here only when there is a
+      // fork branch to delete keeps that synchronous for every other manager.
+      if (this.#forkBranch !== undefined) await this.#deleteForkBranches();
       // allSettled: one rejecting teardown must not release the lease (the
       // finally below) while sibling teardowns are still draining frames.
       const outcomes = await Promise.allSettled(
