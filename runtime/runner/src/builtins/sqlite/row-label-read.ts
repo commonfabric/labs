@@ -437,6 +437,15 @@ export function computeRowLabelRead(
   return { labels, keep, withheld };
 }
 
+// Exactly `{__ctCurrentPrincipal: true}` or `{__ctDbOwner: true}`.
+function isPlaceholder(value: unknown): boolean {
+  if (!isObjectNotArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length === 1 &&
+    (keys[0] === "__ctCurrentPrincipal" || keys[0] === "__ctDbOwner") &&
+    (value as Record<string, unknown>)[keys[0]] === true;
+}
+
 /**
  * Resolve placeholder principals in a declared ceiling: the acting user
  * (`{__ctCurrentPrincipal:true}`, prepare-time identity) and the db owner
@@ -457,13 +466,14 @@ export function resolveCeilingPlaceholders(
     // (`{type: User, subject: {__ctCurrentPrincipal: true}}`,
     // current-principal-confidentiality.ts); it names the same reader as the
     // bare placeholder, so it resolves to the same atom. Only the canonical
-    // two-field User qualifies.
+    // two-field User qualifies, and only when its subject IS one of the two
+    // placeholders: any other object subject (a §4.6.4.1 `{digestOf}`
+    // commitment, say) is a real atom and stays whole.
     if (
       isObjectNotArray(atom) &&
       Object.keys(atom).length === 2 &&
       (atom as CfcAtomObject).type === CFC_ATOM_TYPE.User &&
-      isObjectNotArray((atom as CfcAtomObject).subject) &&
-      Object.keys((atom as CfcAtomObject).subject as object).length === 1
+      isPlaceholder((atom as CfcAtomObject).subject)
     ) {
       atom = (atom as CfcAtomObject).subject as CfcAtom;
     }

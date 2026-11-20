@@ -641,6 +641,9 @@ describe("resolveCeilingPlaceholders", () => {
         { anyOf: [{ type: U, subject: { __ctDbOwner: true } }] },
         // Not the canonical two-field User: left as written, and so unresolved.
         { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+        // A one-key subject that is not a placeholder (a committed subject):
+        // a real atom, kept whole rather than stripped of its User type.
+        { type: U, subject: { digestOf: "sha256:abc" } },
       ],
       { actingPrincipal: "did:key:zMe", owner: OWNER },
     );
@@ -649,6 +652,7 @@ describe("resolveCeilingPlaceholders", () => {
       { type: U, subject: "did:key:zMe" },
       { anyOf: [{ type: U, subject: OWNER }] },
       { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+      { type: U, subject: { digestOf: "sha256:abc" } },
     ]);
     const noActing = resolveCeilingPlaceholders(
       [{ type: U, subject: { __ctCurrentPrincipal: true } }],
