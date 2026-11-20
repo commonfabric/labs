@@ -217,13 +217,22 @@ export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
   }
 }
 
+/**
+ * Returns the first reference with a type argument in the hierarchy of
+ * `type`, which is the wrapper's own where the wrapper is what was written.
+ * With `named`, only a reference to the type of that name counts.
+ */
 function extractWrapperTypeReference(
   type: ts.Type,
   checker: ts.TypeChecker,
   seen: Set<ts.Type>,
+  named?: string,
 ): ts.TypeReference | undefined {
   return traverseTypeHierarchy(type, {
     checker,
+    // A named type is looked for among the types the given one extends.
+    visitTypeReferenceTarget: named !== undefined,
+    visitBaseTypes: named !== undefined,
     checkType: (t) => {
       if (t.flags & ts.TypeFlags.Object) {
         const objectType = t as ts.ObjectType;
@@ -231,7 +240,10 @@ function extractWrapperTypeReference(
           const typeRef = objectType as ts.TypeReference;
           const typeArgs = typeRef.typeArguments ??
             checker.getTypeArguments(typeRef);
-          if (typeArgs && typeArgs.length > 0) {
+          if (
+            typeArgs && typeArgs.length > 0 &&
+            (named === undefined || typeRef.target.symbol?.name === named)
+          ) {
             return typeRef;
           }
         }
@@ -251,7 +263,13 @@ export function getCellWrapperInfo(
   const kind = brandToWrapperKind(brand);
   if (!kind) return undefined;
 
-  const typeRef = extractWrapperTypeReference(type, checker, new Set());
+  // A database handle has subtypes with type parameters of their own, as
+  // `IndexedCollections<Kinds>` has, and the first of those is not the value
+  // the handle reads as. The reference to `SqliteDb` itself carries that.
+  const typeRef =
+    (kind === "SqliteDb"
+      ? extractWrapperTypeReference(type, checker, new Set(), "SqliteDb")
+      : undefined) ?? extractWrapperTypeReference(type, checker, new Set());
   if (!typeRef) return undefined;
 
   return { brand, kind, typeRef };

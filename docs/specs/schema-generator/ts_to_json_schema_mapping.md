@@ -689,6 +689,13 @@ Because the claim is by brand rather than by name, this one keeps its ordinary
 `$defs` hoisting: every `SqliteDb` position emits
 `$ref: "#/$defs/SqliteDatabase"` against one descriptor.
 
+A handle type that extends `SqliteDb` and has type parameters of its own, as
+`IndexedCollections<Kinds>` has, emits the same descriptor. The payload is
+read off the reference to `SqliteDb` in the type's hierarchy
+(`getCellWrapperInfo`), and the type arguments written on the subtype are
+left unread: they are the subtype's own, and none is the value the handle
+reads as.
+
 The remaining typed arrays and the buffer types map to `true` (accept
 anything), which overclaims: none of them is representable as a `FabricValue`,
 so a value of one of those types is rejected at the storage boundary rather

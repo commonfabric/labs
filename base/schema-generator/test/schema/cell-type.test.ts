@@ -92,6 +92,22 @@ describe("Schema: Cell types", () => {
     expect(handle.additionalProperties).toBe(true);
   });
 
+  it("describes a handle type that extends SqliteDb by the descriptor, whatever its own type arguments", async () => {
+    // A subtype's type arguments are its own. They say nothing of the value
+    // the handle reads as, which is the database's.
+
+    const code = `
+      interface Board<Kinds> extends SqliteDb { kinds?: Kinds; }
+      interface X { db: Board<{ topics: string }>; }
+    `;
+    const { type, checker } = await getTypeFromCode(code, "X");
+    const gen = new SchemaGenerator();
+    const result = asObjectSchema(gen.generateSchema(type, checker));
+    const db = result.properties?.db as Record<string, unknown>;
+    expect(db.asCell).toEqual(["sqlite"]);
+    expect(db.$ref).toBe("#/$defs/SqliteDatabase");
+  });
+
   it("leaves a type carrying some other brand structural", async () => {
     const code = `
       declare const OTHER_BRAND: unique symbol;
