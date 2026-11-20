@@ -2594,7 +2594,10 @@ the per-epic implementation notes).
   as it opens each store and before serving it, every such atom in every
   label-map entry of every origin, for the current instances of the default
   branch at space and user scope, through `system` commits that patch only
-  the `cfc` member. Session-scoped instances are left as they are: a
+  the `cfc` member. A walk that fails is logged and the store is served as
+  it stands, unmarked, so the walk runs again at the next opening; a bare
+  DID it left behind only refuses more readers than the respelled form
+  would, never fewer. Session-scoped instances are left as they are: a
   session's instances are read by that session alone, and a client mints a
   fresh session id for each process. Branches other than the default are
   left as well. Each batch is read and rewritten under the store's write

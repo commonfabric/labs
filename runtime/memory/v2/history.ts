@@ -292,6 +292,11 @@ const isRestored = (id: EntityId, space: string): boolean =>
  * A collaborative field of a document the commit sets ends there, and its
  * editors start it again from the restored value.
  *
+ * On a store whose bare-DID labels have been respelled
+ * (`cfc-bare-did-migration.ts`), a document set from `source` carries its
+ * labels respelled the same way, so a restore does not bring back a spelling
+ * the store has retired.
+ *
  * @throws When either branch does not exist, or when `sourceSeq` lies outside
  * `source`'s history or below the store's compaction floor.
  */
