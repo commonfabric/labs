@@ -39,9 +39,10 @@
  * modules from a file that holds what `pattern-compiler emit --corpus`
  * printed, and does not run the crate.
  */
-import type { CfcAtom } from "@commonfabric/api/cfc";
+import { type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
+import type { JSONSchema } from "../../../runtime/runner/src/builder/types.ts";
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
 import {
   consumedEntriesForRead,
@@ -64,6 +65,7 @@ import { normalizeCellScope } from "../../../runtime/runner/src/scope.ts";
 import type { URI } from "../../../runtime/runner/src/sigil-types.ts";
 import type { IExtendedStorageTransaction } from "../../../runtime/runner/src/storage/interface.ts";
 import type { Artifact, Instance } from "../exec/executor.ts";
+import { Ref } from "../exec/store.ts";
 import {
   artifactsOf,
   type CorpusModule,
@@ -74,13 +76,21 @@ import {
   wishStubs,
 } from "./corpus.ts";
 import { generateInputs } from "./generate.ts";
-import { scenarioAudience } from "./harness.ts";
+import { type LabeledInput, scenarioAudience } from "./harness.ts";
 import {
   type Figure,
   instanceOptions,
   inStorage,
   type Sent,
 } from "./integrated.ts";
+import {
+  concretePaths,
+  type PerturbedRuns,
+  perturbedRuns,
+  PROFILE_SOURCE,
+  sentEvents,
+  valueAt,
+} from "./perturbation.ts";
 import type {
   RecordedPlanWrite,
   RuntimeTransactions,
@@ -131,6 +141,8 @@ export type OracleCheck = {
   record: PlanRecord;
   /** The written path of the executor's document. */
   path: string[];
+  /** The written position, as the runtime addresses it. */
+  target: CfcAddress;
   /**
    * The label stored at the path after the commit: the entry of origin
    * `derived` and class `value` there (`templateEntryAt`).
@@ -804,6 +816,7 @@ export const checkWrites = (
       const base = {
         record: write.record,
         path: [...write.target.path],
+        target: write.target,
         stored,
         entry: entry !== undefined,
         read: storedLabelAt(tx, write.target),
@@ -946,6 +959,8 @@ export type ModuleLabels = {
   failedOn?: string;
   off?: Totals;
   on?: Totals;
+  /** The check of the stored labels against the values (`soundnessOf`). */
+  soundness?: Soundness;
 };
 
 const totals = (figures: readonly Figure[]): Totals => {
@@ -1142,10 +1157,340 @@ const readStored = (
   }
 };
 
+/** A value that depends on a labeled input and stores no clause of it. */
+export type SoundnessFailure = {
+  kind: "output" | "write";
+  /** The path of the result, or the record of the write and its path. */
+  path: string;
+  /** The labeled input the value depends on (`Source.name`). */
+  input: string;
+  /** The clause of the input the stored label does not hold. */
+  missing: string;
+  /** The label stored for the value, read with every link followed. */
+  stored: string;
+  /** The template of the output or of the write. */
+  template: string;
+  /**
+   * For an output that today's run has a row for: whether today's label of
+   * the row, read with every link followed, holds the clause.
+   */
+  today?: "holds the clause" | "lacks the clause";
+};
+
+/** What the check of `soundnessOf` found for one module. */
+export type Soundness = {
+  /** Why the module was not checked, where it was not. */
+  skipped?: string;
+  /** The runs in memory the check made, and the milliseconds they took. */
+  runs: number;
+  ms: number;
+  /** The labeled inputs whose value was changed in a run of its own. */
+  sources: string[];
+  /** The labeled inputs that have no such run, each with the reason. */
+  unchanged: Record<string, string>;
+  /** The pairs of a stored position and a labeled input compared. */
+  checked: number;
+  /** The pairs whose value differs when the input alone is changed. */
+  dependent: number;
+  failures: SoundnessFailure[];
+  /**
+   * What `failures` held in a run with a refused commit: the storage does
+   * not hold the values of the run in memory then, so a label it lacks is
+   * no finding (`unstoredAfter`).
+   */
+  unstored?: SoundnessFailure[];
+};
+
+/**
+ * The clauses the document of a labeled input declares: `root` at its root,
+ * and `below` at a path below it. A declared entry below the root replaces
+ * the root's for a read at or below its path (the runtime's
+ * `labelForEntriesAtPath`), so a value that depends on the input holds
+ * every clause of `root` or one of `below`.
+ */
+export type InputClauses = { root: readonly Atom[]; below?: readonly Atom[] };
+
+/** The clauses a schema declares below its root, `$defs` included. */
+const clausesBelow = (schema: unknown, root = true): Atom[] => {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((member) => clausesBelow(member, false));
+  }
+  if (typeof schema !== "object" || schema === null) return [];
+  const { ifc, ...rest } = schema as {
+    ifc?: { confidentiality?: Atom[] };
+  };
+  return [
+    ...(root ? [] : ifc?.confidentiality ?? []),
+    ...Object.values(rest).flatMap((member) => clausesBelow(member, false)),
+  ];
+};
+
+/** A clause as the text two labels are compared by. */
+const clauseKey = (clause: Atom): string =>
+  atomKey(ordered(cfcCommitmentNormalForm(clause as CfcAtom)));
+
+/**
+ * Checks the labels stored with the option on against a lower bound that
+ * reads no write record: where the value at a kept output's path, or at
+ * the target of a write edge, differs between the run in memory on the
+ * scenario and the run with one labeled input alone changed (`runs`), the
+ * label stored for it, read with every link followed, holds the clauses of
+ * that input (`clauses`, by the input's name). `inputDocuments` names the
+ * input each document the scenario wrote an input into holds.
+ */
+export const soundnessOf = (
+  tx: IExtendedStorageTransaction,
+  hooks: RuntimeTransactions,
+  instance: Instance,
+  plan: LabelPlan,
+  runs: PerturbedRuns,
+  clauses: ReadonlyMap<string, InputClauses>,
+  inputDocuments: ReadonlyMap<string, string>,
+  checks: readonly OracleCheck[],
+): Soundness => {
+  const result: Soundness = {
+    ...(runs.skipped === undefined ? {} : { skipped: runs.skipped }),
+    runs: runs.runs,
+    ms: runs.ms,
+    sources: runs.sources.flatMap(({ name, instance }) =>
+      instance === undefined ? [] : [name]
+    ),
+    unchanged: Object.fromEntries(
+      runs.sources.flatMap(({ name, failed }) =>
+        failed === undefined ? [] : [[name, failed]]
+      ),
+    ),
+    checked: 0,
+    dependent: 0,
+    failures: [],
+  };
+  const { baseline } = runs;
+  if (baseline === undefined) return result;
+  const patterns = plan.patterns ?? [];
+  const space = instance.options.space as CfcAddress["space"];
+  /**
+   * Compares one stored position: `read` gives its value in a run in
+   * memory, and `address` is where the storage holds it.
+   */
+  const compare = (
+    kind: "output" | "write",
+    path: string,
+    address: CfcAddress,
+    template: Template | undefined,
+    read: (run: Instance) => unknown,
+  ) => {
+    const given = JSON.stringify(read(baseline));
+    let stored: Label | undefined;
+    for (const source of runs.sources) {
+      if (source.instance === undefined) continue;
+      result.checked += 1;
+      if (JSON.stringify(read(source.instance)) === given) continue;
+      result.dependent += 1;
+      stored ??= orderedLabel(deepStoredAt(tx, address, patterns).label);
+      const held = new Set(stored.confidentiality.map(atomKey));
+      const { root = [], below = [] } = clauses.get(source.name) ?? {};
+      if (below.some((clause) => held.has(clauseKey(clause)))) continue;
+      for (const clause of root) {
+        if (held.has(clauseKey(clause))) continue;
+        result.failures.push({
+          kind,
+          path,
+          input: source.name,
+          missing: JSON.stringify(clause),
+          stored: show(stored),
+          template: JSON.stringify(template ?? null).slice(0, 600),
+        });
+      }
+    }
+  };
+  const whole = new Map<Instance, unknown>();
+  const resultOf = (run: Instance) => {
+    if (!whole.has(run)) whole.set(run, run.result());
+    return whole.get(run);
+  };
+  const id = hooks.entityOf(instance.id);
+  for (const output of plan.outputs) {
+    if (!output.kept) continue;
+    for (const path of concretePaths(output.path, resultOf(baseline))) {
+      compare(
+        "output",
+        path.join("/"),
+        { space, id, scope: "space", path },
+        output.template,
+        (run) => valueAt(resultOf(run), path),
+      );
+    }
+  }
+  // The last record of each target of a write edge.
+  const seen = new Set<string>();
+  for (const check of [...checks].reverse()) {
+    if (!("body" in check.record)) continue;
+    const key = JSON.stringify([check.target.id, check.target.path]);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const doc = hooks.documentOf(check.target.id);
+    const input = inputDocuments.get(doc);
+    // An input is a member of the argument in a run in memory.
+    const refOf = (run: Instance) =>
+      input === undefined
+        ? new Ref(doc, check.path)
+        : new Ref(run.argument, [input, ...check.path]);
+    const held = (run: Instance | undefined) =>
+      run === undefined || run.store.docs.has(refOf(run).doc);
+    if (!held(baseline) || !runs.sources.every((each) => held(each.instance))) {
+      continue;
+    }
+    compare(
+      "write",
+      `${JSON.stringify(check.record)} /${check.path.join("/")}`,
+      check.target,
+      templateOfRecord(plan, check.record).template,
+      (run) => run.store.read(refOf(run)),
+    );
+  }
+  return result;
+};
+
+/**
+ * What a check found, for a run in which the storage refused a commit: a
+ * refused commit leaves the storage with the values and the labels of an
+ * earlier commit, which the values of the run in memory say nothing about,
+ * so the module counts as not checked and its findings are kept apart.
+ */
+export const unstoredAfter = (
+  soundness: Soundness | undefined,
+  refused: readonly string[],
+): Soundness | undefined =>
+  soundness === undefined || refused.length === 0 ||
+    soundness.skipped !== undefined
+    ? soundness
+    : {
+      ...soundness,
+      skipped: "a commit was refused with the option on",
+      failures: [],
+      unstored: soundness.failures,
+    };
+
+/**
+ * `soundnessOf` for a run of `inStorage` with the option on, at its end:
+ * the clauses of each input are the one the scenario gave it, or those its
+ * type declares at its root, and the clause of the seeded profile is the
+ * user atom of the run's space (`seedHome`).
+ */
+export const checkSoundness = (
+  runtime: Runtime,
+  hooks: RuntimeTransactions,
+  instance: Instance,
+  plan: LabelPlan,
+  runs: PerturbedRuns,
+  inputs: Record<string, LabeledInput>,
+  checks: readonly OracleCheck[],
+): Soundness => {
+  const space = instance.options.space as CfcAddress["space"];
+  const clauses = new Map<string, InputClauses>([
+    ...Object.entries(inputs).map(([name, input]): [string, InputClauses] => [
+      name,
+      {
+        root: input.declared?.clause !== undefined
+          ? [input.declared.clause as Atom]
+          : (input.schema as { ifc?: { confidentiality?: Atom[] } }).ifc
+            ?.confidentiality ?? [],
+        below: clausesBelow(input.schema),
+      },
+    ]),
+    [PROFILE_SOURCE, { root: [cfcAtom.user(space) as Atom] }],
+  ]);
+  const tx = runtime.edit();
+  try {
+    const inputDocuments = new Map(
+      Object.entries(inputs).map(([name, input]) => [
+        runtime.getCell(
+          space,
+          { compareInput: name },
+          input.schema as JSONSchema,
+          tx,
+        ).getAsNormalizedFullLink().id as string,
+        name,
+      ]),
+    );
+    return soundnessOf(
+      tx,
+      hooks,
+      instance,
+      plan,
+      runs,
+      clauses,
+      inputDocuments,
+      checks,
+    );
+  } finally {
+    tx.abort();
+  }
+};
+
+/**
+ * Runs one scenario on the executor with its documents in storage and the
+ * option on, and checks the labels it stored against the values
+ * (`checkSoundness`). `name` names the instance. Returns what the check
+ * found and the reason of each commit the storage refused.
+ */
+export const soundnessOfScenario = async (
+  name: string,
+  artifact: Artifact,
+  artifacts: (id: string) => Artifact | undefined,
+  argument: Record<string, unknown>,
+  events: readonly { binding: number; event: unknown }[],
+): Promise<{ soundness: Soundness | undefined; refused: string[] }> => {
+  const plan = artifact.plan as unknown as LabelPlan;
+  const inputs = generateInputs(
+    artifact.plan as Parameters<typeof generateInputs>[0],
+    artifact.schemas as Parameters<typeof generateInputs>[1],
+    await scenarioAudience(),
+  );
+  const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+    .did();
+  const options = instanceOptions(name, space, artifacts);
+  const sent = sentEvents(artifact, argument, events, options);
+  const runs = await perturbedRuns(artifact, argument, sent, options, inputs);
+  const checks: OracleCheck[] = [];
+  const refused: string[] = [];
+  let soundness: Soundness | undefined;
+  await inStorage(artifact, argument, sent, options, undefined, true, true, {
+    committed: (runtime, _hooks, writes) => {
+      for (const check of checkWrites(runtime, plan, writes)) {
+        checks.push(check);
+      }
+    },
+    refused: (reasons) => {
+      for (const reason of reasons) refused.push(reason);
+    },
+    end: (runtime, hooks, instance) => {
+      soundness = checkSoundness(
+        runtime,
+        hooks,
+        instance,
+        plan,
+        runs,
+        inputs,
+        checks,
+      );
+    },
+  });
+  return { soundness: unstoredAfter(soundness, refused), refused };
+};
+
 /** Runs one module of the corpus, as the head of this file says. */
 export const compareModule = async (
   module: CorpusModule,
   artifacts: (id: string) => Artifact | undefined,
+  /**
+   * Hears, as each commit of the run with the option on settles, its write
+   * records and what `checkWrites` found for each.
+   */
+  watch?: (
+    writes: readonly RecordedPlanWrite[],
+    checks: readonly OracleCheck[],
+  ) => void,
 ): Promise<ModuleLabels> => {
   const chosen = await mainPattern(module);
   if (chosen === undefined) {
@@ -1229,6 +1574,8 @@ export const compareModule = async (
   const checks: OracleCheck[] = [];
   const stored = new Map<string, { shallow: Label; deep: Stored }>();
   const refusedOn: string[] = [];
+  const runs = await perturbedRuns(artifact, argument, events, options, inputs);
+  let soundness: Soundness | undefined;
   const off = await inStorage(
     artifact,
     argument,
@@ -1257,17 +1604,25 @@ export const compareModule = async (
         committed: (runtime, _hooks, writes) => {
           // The first commit is of the instance the scenario starts.
           main ??= writes[0]?.instance;
-          for (
-            const check of checkWrites(runtime, plan, writes, clauses, main)
-          ) {
-            checks.push(check);
-          }
+          const found = checkWrites(runtime, plan, writes, clauses, main);
+          for (const check of found) checks.push(check);
+          watch?.(writes, found);
         },
         refused: (reasons) => {
           for (const reason of reasons) refusedOn.push(reason);
         },
-        end: (runtime, hooks, instance) =>
-          readStored(runtime, hooks, instance, plan, checks, stored),
+        end: (runtime, hooks, instance) => {
+          readStored(runtime, hooks, instance, plan, checks, stored);
+          soundness = checkSoundness(
+            runtime,
+            hooks,
+            instance,
+            plan,
+            runs,
+            inputs,
+            checks,
+          );
+        },
       },
     );
   } catch (error) {
@@ -1279,6 +1634,21 @@ export const compareModule = async (
     today.rows ?? [],
     (record, path) => stored.get(storedKey(record, path)),
   );
+  // Whether today's label of the same row holds the clause a finding misses.
+  for (const failure of soundness?.failures ?? []) {
+    const row = failure.kind !== "output"
+      ? undefined
+      : (today.rows ?? []).find((row) =>
+        row.kind === "output" && row.path === failure.path
+      );
+    const label = row?.runtimeDeepLabel ?? row?.runtimeLabel;
+    if (label === undefined) continue;
+    failure.today = orderedLabel(label).confidentiality.some((clause) =>
+        atomKey(clause) === clauseKey(JSON.parse(failure.missing))
+      )
+      ? "holds the clause"
+      : "lacks the clause";
+  }
   const refused = (arm: typeof off) =>
     [arm.arm.settle, ...arm.arm.events].flatMap((figure) => figure.refused);
   const offReasons = new Set(refused(off).map(refusalReason));
@@ -1315,6 +1685,9 @@ export const compareModule = async (
       on: totals([on.arm.settle, ...on.arm.events]),
     }),
     ...(failed === undefined ? {} : { failedOn: failed }),
+    ...(soundness === undefined
+      ? {}
+      : { soundness: unstoredAfter(soundness, refusedOn) }),
   };
 };
 
@@ -1534,6 +1907,70 @@ const report = async (file: string, tables: string | undefined) => {
       } modules: ${reason}\n      e.g. ${group[0].module}`,
     );
   }
+  const checkedModules = ran.filter((result) =>
+    result.soundness !== undefined && result.soundness.skipped === undefined
+  );
+  const total = (key: "runs" | "ms" | "checked" | "dependent") =>
+    ran.reduce((sum, result) => sum + (result.soundness?.[key] ?? 0), 0);
+  console.log(
+    `stored labels checked against the values: ${checkedModules.length} modules, ${
+      total("runs")
+    } runs in memory in ${total("ms").toFixed(0)} ms, ${
+      total("checked")
+    } pairs of a stored position and a labeled input, ${
+      total("dependent")
+    } with a value that depends on the input`,
+  );
+  for (
+    const [reason, group] of count(
+      ran.filter((result) => result.soundness?.skipped !== undefined),
+      (result) => result.soundness!.skipped!,
+    )
+  ) console.log(`  not checked, ${group.length}: ${reason}`);
+  const unchanged = ran.flatMap((result) =>
+    Object.values(result.soundness?.unchanged ?? {})
+  );
+  for (const [reason, group] of count(unchanged, (reason) => reason)) {
+    console.log(
+      `  an input without a run of its own, ${group.length}: ${reason}`,
+    );
+  }
+  const failuresOf = (member: "failures" | "unstored") =>
+    ran.flatMap((result) =>
+      (result.soundness?.[member] ?? []).map((failure) => ({
+        module: result.module,
+        ...failure,
+      }))
+    );
+  const failures = failuresOf("failures");
+  console.log(
+    `soundness failures, a value that depends on an input and stores no clause of it: ${failures.length} in ${
+      new Set(failures.map(({ module }) => module)).size
+    } modules`,
+  );
+  for (
+    const [kind, group] of count(
+      failures,
+      (failure) =>
+        `${failure.kind}, today's label ${failure.today ?? "is not compared"}`,
+    )
+  ) {
+    console.log(
+      `  ${group.length} in ${
+        new Set(group.map(({ module }) => module)).size
+      } modules: ${kind}\n      e.g. ${group[0].module} /${
+        group[0].path
+      } input ${group[0].input}\n      stored ${
+        group[0].stored.slice(0, 300)
+      }\n      template ${group[0].template.slice(0, 300)}`,
+    );
+  }
+  const unstored = failuresOf("unstored");
+  console.log(
+    `  in runs with a refused commit, not counted: ${unstored.length} in ${
+      new Set(unstored.map(({ module }) => module)).size
+    } modules`,
+  );
   const stopped = ran.filter((result) => result.failedOn !== undefined);
   console.log(
     `runs with the option on that stopped after a refused commit: ${stopped.length}`,
@@ -1568,6 +2005,8 @@ const report = async (file: string, tables: string | undefined) => {
   await writeTable(`${tables}/rows-beside-today.tsv`, rows);
   await writeTable(`${tables}/evaluator-differences.tsv`, differs);
   await writeTable(`${tables}/unsound-bindings.tsv`, unsound);
+  await writeTable(`${tables}/soundness-failures.tsv`, failures);
+  await writeTable(`${tables}/soundness-unstored.tsv`, unstored);
   await writeTable(`${tables}/refused-with-option-on.tsv`, refusedOnly);
   await writeTable(
     `${tables}/modules.tsv`,
@@ -1587,6 +2026,14 @@ const report = async (file: string, tables: string | undefined) => {
       onCommits: result.on?.commits ?? 0,
       todayStartCommits: result.todayCommits?.settle ?? 0,
       todayEventCommits: result.todayCommits?.events ?? 0,
+      soundness: result.soundness === undefined
+        ? "not run"
+        : result.soundness.skipped ?? "checked",
+      soundnessFailures: result.soundness?.failures.length ?? 0,
+      soundnessDependent: result.soundness?.dependent ?? 0,
+      soundnessChecked: result.soundness?.checked ?? 0,
+      soundnessRuns: result.soundness?.runs ?? 0,
+      soundnessMs: (result.soundness?.ms ?? 0).toFixed(1),
     })),
   );
 };
