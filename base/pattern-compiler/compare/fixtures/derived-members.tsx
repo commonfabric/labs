@@ -69,9 +69,7 @@ export default pattern<{ note: string; secret: string }>(
       shouted: words.map((word) => word.toUpperCase()),
       long: words.filter((word) => word.length > 1),
       doubled: words.flatMap((word) => [word, word]),
-      openTitles: items.filter((item) => !item.done).map((item) =>
-        item.title
-      ),
+      openTitles: items.filter((item) => !item.done).map((item) => item.title),
       longShouted: words.filter((word) => word.length > 1).map((word) =>
         word.toUpperCase()
       ),

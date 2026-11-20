@@ -9145,8 +9145,10 @@ export class Instance {
       // A write edge the plan has no template for has no record either.
       if (template === undefined) return [];
       const writes: PlanWrite[] = [];
-      // The position of a member added is one the membership of the list
-      // decided, so its record keeps what the list stored of that.
+      // A member added is recorded at its own position with the label of
+      // the write and of what the method compared, and with nothing of
+      // what the list stored of its membership: an addition at the end
+      // reads no member (ruling Z74).
       for (let at = splice.start; at < end; at++) {
         const target = { doc, path: [...path, `${at}`] };
         writes.push({
@@ -9158,7 +9160,6 @@ export class Instance {
             target,
           ),
           ...held,
-          observed: membership,
         });
       }
       const inputs = inputsOf(template);

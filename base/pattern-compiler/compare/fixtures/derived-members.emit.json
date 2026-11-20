@@ -43,7 +43,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/derived-members.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst add = handler(\n  (event, { items, words }) => {\n    items.push({ title: event.title, done: false });\n    words.push(event.title);\n  },\n);\nconst addSecret = handler(\n  (_, { secret, items, words }) => {\n    items.push({ title: secret, done: false });\n    words.push(secret);\n  },\n);\nconst addIfNoted = handler(\n  (_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.push({ title: \"noted\", done: false });\n      words.push(\"noted\");\n    }\n  },\n);\nconst dropFirstIfNoted = handler(\n  (_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.remove(items.get()[0]);\n      words.removeByValue(words.get()[0]);\n    }\n  },\n);\nconst $default = (pattern(\n  \"sha256:101813910207096a027226a5c5699aa3165dd8fabcbf604b0fa67b9cf111afbd\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(2)))));\n}\n{\n$rt.element(2, ($h) => ([$h.slot(4), $h.slot(4)]));\n}\n{\n$rt.element(3, ($h) => (({ name: $h.slot(5), kind: (\"card\") })));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n{\n$rt.element(5, ($h) => (($h.v($h.slot(8)).length > (1))));\n}\n{\n$rt.element(6, ($h) => ([$h.slot(10), $h.slot(10)]));\n}\n{\n$rt.element(7, ($h) => ((!$h.v($h.slot(11)))));\n}\n{\n$rt.element(8, ($h) => ($h.slot(13)));\n}\n{\n$rt.element(9, ($h) => (($h.v($h.slot(14)).length > (1))));\n}\n{\n$rt.element(10, ($h) => (($h.v($h.slot(16)).toUpperCase())));\n}\n{\n$rt.element(11, ($h) => (($h.v($h.slot(17)).toUpperCase())));\n}\n{\n$rt.element(12, ($h) => (($h.v($h.slot(18)) + $h.v($h.slot(18)))));\n}\nreturn $rt.thunk(($h) => (({ titles: $h.output(0), open: $h.output(2), twice: $h.output(4), cards: $h.output(6), shouted: $h.output(9), long: $h.output(11), doubled: $h.output(13), openTitles: $h.output(17), longShouted: $h.output(21), shoutedTwice: $h.output(25), add: $h.stream(0), addSecret: $h.stream(1), addIfNoted: $h.stream(2), dropFirstIfNoted: $h.stream(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items, words }) => {\n    items.push({ title: event.title, done: false });\n    words.push(event.title);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((_, { secret, items, words }) => {\n    items.push({ title: secret, done: false });\n    words.push(secret);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.push({ title: \"noted\", done: false });\n      words.push(\"noted\");\n    }\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.remove(items.get()[0]);\n      words.removeByValue(words.get()[0]);\n    }\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\n\nconst add = handler(\n  (event, { items, words }) => {\n    items.push({ title: event.title, done: false });\n    words.push(event.title);\n  },\n);\nconst addSecret = handler(\n  (_, { secret, items, words }) => {\n    items.push({ title: secret, done: false });\n    words.push(secret);\n  },\n);\nconst addIfNoted = handler(\n  (_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.push({ title: \"noted\", done: false });\n      words.push(\"noted\");\n    }\n  },\n);\nconst dropFirstIfNoted = handler(\n  (_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.remove(items.get()[0]);\n      words.removeByValue(words.get()[0]);\n    }\n  },\n);\nconst $default = (pattern(\n  \"sha256:55d65f8f4ff5673ebf2a1d432e5a6fb5217a7c3a68bcc359ef862bd7147b1399\",\n));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n{\n$rt.element(0, ($h) => ($h.slot(1)));\n}\n{\n$rt.element(1, ($h) => ((!$h.v($h.slot(2)))));\n}\n{\n$rt.element(2, ($h) => ([$h.slot(4), $h.slot(4)]));\n}\n{\n$rt.element(3, ($h) => (({ name: $h.slot(5), kind: (\"card\") })));\n}\n{\n$rt.element(4, ($h) => (($h.v($h.slot(7)).toUpperCase())));\n}\n{\n$rt.element(5, ($h) => (($h.v($h.slot(8)).length > (1))));\n}\n{\n$rt.element(6, ($h) => ([$h.slot(10), $h.slot(10)]));\n}\n{\n$rt.element(7, ($h) => ((!$h.v($h.slot(11)))));\n}\n{\n$rt.element(8, ($h) => ($h.slot(13)));\n}\n{\n$rt.element(9, ($h) => (($h.v($h.slot(14)).length > (1))));\n}\n{\n$rt.element(10, ($h) => (($h.v($h.slot(16)).toUpperCase())));\n}\n{\n$rt.element(11, ($h) => (($h.v($h.slot(17)).toUpperCase())));\n}\n{\n$rt.element(12, ($h) => (($h.v($h.slot(18)) + $h.v($h.slot(18)))));\n}\nreturn $rt.thunk(($h) => (({ titles: $h.output(0), open: $h.output(2), twice: $h.output(4), cards: $h.output(6), shouted: $h.output(9), long: $h.output(11), doubled: $h.output(13), openTitles: $h.output(17), longShouted: $h.output(21), shoutedTwice: $h.output(25), add: $h.stream(0), addSecret: $h.stream(1), addIfNoted: $h.stream(2), dropFirstIfNoted: $h.stream(3) })));\n});\n$rt.body(0, ($e, $s) => ((event, { items, words }) => {\n    items.push({ title: event.title, done: false });\n    words.push(event.title);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((_, { secret, items, words }) => {\n    items.push({ title: secret, done: false });\n    words.push(secret);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.push({ title: \"noted\", done: false });\n      words.push(\"noted\");\n    }\n  })($e, $s));\n$rt.body(3, ($e, $s) => ((_, { note, items, words }) => {\n    if (note === \"n\") {\n      items.remove(items.get()[0]);\n      words.removeByValue(words.get()[0]);\n    }\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -978,7 +978,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2339
+                "start": 2324
               },
               "bodies": [],
               "entry": "filter",
@@ -998,7 +998,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2370
+                "start": 2355
               },
               "bodies": [],
               "entry": "map",
@@ -1017,7 +1017,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2446
+                "start": 2431
               },
               "bodies": [],
               "entry": "map",
@@ -1036,7 +1036,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2480
+                "start": 2465
               },
               "bodies": [],
               "entry": "map",
@@ -1459,7 +1459,7 @@
             }
           ],
           "patterns": [
-            "sha256:101813910207096a027226a5c5699aa3165dd8fabcbf604b0fa67b9cf111afbd"
+            "sha256:55d65f8f4ff5673ebf2a1d432e5a6fb5217a7c3a68bcc359ef862bd7147b1399"
           ],
           "picks": [],
           "selectors": [],

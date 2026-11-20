@@ -1009,7 +1009,7 @@ describe("the records of a change of a list's members through a handle", () => {
       return { send };
     };
 
-    it("records a push at the position added, at the number of members and for the membership, each with what the list stored of its membership", async () => {
+    it("records a push at the position added, at the number of members and for the membership, the last two with what the list stored of its membership", async () => {
       const { send } = await pushed();
       const records = send("addWord", { word: "y" });
 
@@ -1018,7 +1018,8 @@ describe("the records of a change of a list's members through a handle", () => {
           `${enumeration ? "enumeration " : ""}/${target.path.join("/")}`
         ),
       ).toEqual(["/2", "/length", "enumeration /"]);
-      for (const { observed } of records) {
+      expect(records[0].observed).toBeUndefined();
+      for (const { observed } of records.slice(1)) {
         expect(observedBy(observed)).toEqual([
           "value /length",
           "enumeration /",

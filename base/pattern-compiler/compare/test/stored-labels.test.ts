@@ -455,6 +455,116 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/derived-members.tsx`: the results of `map`, `filter` and
+  // `flatMap` as kept outputs, over an array of references, over a list of
+  // plain values in place and over the result of another per-element
+  // construct, with handlers that add to and remove from both lists where
+  // the input `note` holds one text.
+  describe("soundnessOfScenario() on the results of per-element constructs over lists that handlers change", () => {
+    const check = async (events: { binding: string; event: unknown }[]) => {
+      const artifact = await artifactOf("derived-members");
+      const { soundness, refused } = await soundnessOfScenario(
+        "derived-members",
+        artifact,
+        () => undefined,
+        { note: "n", secret: "ssss" },
+        events.map(({ binding, event }) => ({
+          binding: artifact.plan.bindings.findIndex(({ name }) =>
+            name === binding
+          ),
+          event,
+        })),
+      );
+      return {
+        refused,
+        found: lines("derived-members", soundness),
+        appended: (soundness?.appended ?? []).map((
+          { path, input, afterOtherChange },
+        ) =>
+          `${path} ${input}${afterOtherChange ? " after another change" : ""}`
+        ),
+      };
+    };
+
+    it("commits every transaction, the result of a `flatMap` over an array of references included", async () => {
+      const { refused } = await check([
+        { binding: "addIfNoted", event: {} },
+        { binding: "add", event: { title: "xx" } },
+      ]);
+
+      expect(refused).toEqual([]);
+    });
+
+    it("counts as no failure a member that an append put at another position than in the run with the input changed", async () => {
+      const { found, appended } = await check([
+        { binding: "addIfNoted", event: {} },
+        { binding: "add", event: { title: "xx" } },
+      ]);
+
+      expect(found).toEqual([]);
+      expect(appended).toEqual([
+        "titles/1 note",
+        "open/1 note",
+        "twice/2 note",
+        "twice/3 note",
+        "cards/1 note",
+        "cards/1/name note",
+        "shouted/1 note",
+        "doubled/2 note",
+        "doubled/3 note",
+        "openTitles/1 note",
+        "longShouted/1 note",
+        "shoutedTwice/1 note",
+        '{"body":0,"write":1} /1 note',
+      ]);
+    });
+
+    it("finds the clause of the input that decided a removal at each position of a result that holds a member the removal moved", async () => {
+      const { refused, found, appended } = await check([
+        { binding: "add", event: { title: "aa" } },
+        { binding: "addSecret", event: {} },
+        { binding: "dropFirstIfNoted", event: {} },
+      ]);
+
+      expect(refused).toEqual([]);
+      expect(found).toEqual([]);
+      expect(appended).toEqual([]);
+    });
+
+    it("says of a member appended after a removal that its position differs for another change than additions", async () => {
+      const { found, appended } = await check([
+        { binding: "add", event: { title: "aa" } },
+        { binding: "add", event: { title: "bb" } },
+        { binding: "dropFirstIfNoted", event: {} },
+        { binding: "add", event: { title: "cc" } },
+      ]);
+
+      expect(found).toEqual([]);
+      expect(appended).toContain("titles/1 note after another change");
+      expect(appended.every((line) => line.endsWith("after another change")))
+        .toBe(true);
+    });
+  });
+
+  // `fixtures/push-under-condition.tsx`: one handler that adds a word where
+  // the input `note` holds one text and then adds the word of its event.
+  describe("soundnessOfScenario() after two additions of one handler, the first under a condition on an input", () => {
+    it("finds the clause of the input in the stored labels of both positions and of the number of members, with no member counted as appended elsewhere", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "push-under-condition",
+        await artifactOf("push-under-condition"),
+        () => undefined,
+        { note: "n" },
+        [{ binding: 0, event: { word: "b" } }],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("push-under-condition", soundness)).toEqual([]);
+      expect(soundness?.appended).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(3);
+    });
+  });
+
   // `fixtures/state-declared.tsx`: a state cell whose type declares the
   // clause `alice`, with a constant as its first value, returned by
   // reference.

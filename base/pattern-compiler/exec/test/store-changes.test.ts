@@ -70,4 +70,81 @@ describe("Store", () => {
       ).toEqual([{ path: ["a"], schema }]);
     });
   });
+
+  describe("appendedFrom()", () => {
+    const tracked = (value: unknown) => {
+      const store = new Store({ parts: false });
+      store.create("doc", "state", value);
+      store.appended = new Map();
+      return store;
+    };
+    const list = new Ref("doc", ["list"]);
+
+    it("gives the first position of the members that splices at the end of a list added", () => {
+      const store = tracked({ list: ["a"] });
+      store.splice(list, 1, 0, ["b"]);
+      store.splice(list, 2, 0, ["c"]);
+
+      expect(store.appendedFrom(list)).toBe(1);
+      expect(store.changedOtherwiseAt(list)).toBe(false);
+    });
+
+    it("gives nothing for a list that nothing was added to", () => {
+      const store = tracked({ list: ["a"] });
+
+      expect(store.appendedFrom(list)).toBeUndefined();
+    });
+
+    it("gives nothing after a removal, and the position of a later addition with the removal noted", () => {
+      const store = tracked({ list: ["a"] });
+      store.splice(list, 1, 0, ["b"]);
+      store.splice(list, 0, 1, []);
+
+      expect(store.appendedFrom(list)).toBeUndefined();
+
+      store.splice(list, 1, 0, ["c"]);
+
+      expect(store.appendedFrom(list)).toBe(1);
+      expect(store.changedOtherwiseAt(list)).toBe(true);
+    });
+
+    it("gives nothing after a write of the whole list with other members", () => {
+      const store = tracked({ list: ["a"] });
+      store.splice(list, 1, 0, ["b"]);
+      store.write(list, ["b", "a"]);
+
+      expect(store.appendedFrom(list)).toBeUndefined();
+    });
+
+    it("takes a write of the whole list with members added at its end as an addition", () => {
+      const store = tracked({ list: ["a"] });
+      store.write(list, ["a", "b"]);
+
+      expect(store.appendedFrom(list)).toBe(1);
+    });
+
+    it("gives nothing after a write of a position at or behind the first added one", () => {
+      const store = tracked({ list: ["a"] });
+      store.splice(list, 1, 0, ["b"]);
+      store.write(list.key("1"), "c");
+
+      expect(store.appendedFrom(list)).toBeUndefined();
+    });
+
+    it("keeps the position after a write below a member", () => {
+      const store = tracked({ list: [{ done: false }] });
+      store.splice(list, 1, 0, [{ done: false }]);
+      store.write(list.key("0", "done"), true);
+
+      expect(store.appendedFrom(list)).toBe(1);
+    });
+
+    it("gives nothing where the store keeps no track", () => {
+      const store = new Store({ parts: false });
+      store.create("doc", "state", { list: [] });
+      store.splice(list, 0, 0, ["a"]);
+
+      expect(store.appendedFrom(list)).toBeUndefined();
+    });
+  });
 });

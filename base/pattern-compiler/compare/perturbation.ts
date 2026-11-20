@@ -15,7 +15,7 @@
  * the seeded home (`wish-home.ts`), which a `wish` reads.
  */
 import { type Artifact, Instance } from "../exec/executor.ts";
-import { linkedSchema } from "../exec/store.ts";
+import { linkedSchema, Ref } from "../exec/store.ts";
 import { generateValue, type Schema } from "./generate.ts";
 import type { LabeledInput } from "./harness.ts";
 import type { instanceOptions, Sent } from "./integrated.ts";
@@ -220,7 +220,7 @@ export const steppedRuns = (
     // that two runs draw alike.
     seedRandom(eventSeed(-1));
     try {
-      return drawing(() =>
+      const instance = drawing(() =>
         new Instance(artifact, structuredClone(given), {
           ...options,
           // The clock holds one time in every run.
@@ -230,6 +230,10 @@ export const steppedRuns = (
             : { documents: stubs.documents, wishes: stubs.wishes }),
         })
       );
+      // From here on the store keeps which members of each array the
+      // events appended (`appendedElsewhere`).
+      instance.store.appended = new Map();
+      return instance;
     } finally {
       restoreRandom();
     }
@@ -456,4 +460,68 @@ export const concretePaths = (
     });
   }
   return found.map(({ path }) => path);
+};
+
+/**
+ * Whether the member that the run `checked` holds at a position on the way
+ * to `path` stands at another position of the same array in the run
+ * `other`, and appends alone put it where it stands in both.
+ *
+ * `path` is a path below a root that `valueOf` reads in a run, with every
+ * link followed, and that `refOf` names in the run's store. For each
+ * segment of `path` that is a position `p` of an array `L` of `checked`,
+ * the answer is yes where all of these hold:
+ *
+ * - `L` is an array in both runs;
+ * - `p` is at or behind the first position that the store of `checked`
+ *   records for `L` as placed by additions at its end, with no member of
+ *   `L` removed, moved or replaced at or behind that position since
+ *   (`Store.appendedFrom`);
+ * - the member at `p` equals the member at a position `q` of `L` in
+ *   `other`, `q` differs from `p`, and `q` is at or behind the first such
+ *   position that the store of `other` records for `L`.
+ *
+ * A removal or a reorder in either run takes the record of the array away
+ * in that run, so a member one of them moved is never found this way: the
+ * criterion reads what the stores recorded of each change, and not the
+ * values alone, which a removal and a missing addition can leave the same.
+ * A member appended after such a change is found: `afterOtherChange` of
+ * the answer says that one of the two runs made a change of `L` other than
+ * an addition at its end, so the position of the member differs for that
+ * change too and not for additions alone.
+ */
+export const appendedElsewhere = (
+  checked: Instance,
+  other: Instance,
+  path: readonly string[],
+  valueOf: (run: Instance, path: readonly string[]) => unknown,
+  refOf: (run: Instance, path: readonly string[]) => Ref,
+): { afterOtherChange: boolean } | undefined => {
+  for (let at = 0; at < path.length; at++) {
+    if (!/^(0|[1-9][0-9]*)$/.test(path[at])) continue;
+    const list = path.slice(0, at);
+    const position = Number(path[at]);
+    const here = valueOf(checked, list);
+    const there = valueOf(other, list);
+    if (
+      !Array.isArray(here) || !Array.isArray(there) ||
+      position >= here.length
+    ) continue;
+    const from = checked.store.appendedFrom(refOf(checked, list));
+    const otherFrom = other.store.appendedFrom(refOf(other, list));
+    if (
+      from === undefined || otherFrom === undefined || position < from
+    ) continue;
+    const member = JSON.stringify(here[position]);
+    for (let found = otherFrom; found < there.length; found++) {
+      if (found !== position && JSON.stringify(there[found]) === member) {
+        return {
+          afterOtherChange:
+            checked.store.changedOtherwiseAt(refOf(checked, list)) ||
+            other.store.changedOtherwiseAt(refOf(other, list)),
+        };
+      }
+    }
+  }
+  return undefined;
 };

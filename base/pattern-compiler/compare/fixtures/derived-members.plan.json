@@ -837,7 +837,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2339
+                "start": 2324
               },
               "bodies": [],
               "entry": "filter",
@@ -857,7 +857,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2370
+                "start": 2355
               },
               "bodies": [],
               "entry": "map",
@@ -876,7 +876,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2446
+                "start": 2431
               },
               "bodies": [],
               "entry": "map",
@@ -895,7 +895,7 @@
             {
               "at": {
                 "file": "compare/fixtures/derived-members.tsx",
-                "start": 2480
+                "start": 2465
               },
               "bodies": [],
               "entry": "map",
@@ -1318,7 +1318,7 @@
             }
           ],
           "patterns": [
-            "sha256:101813910207096a027226a5c5699aa3165dd8fabcbf604b0fa67b9cf111afbd"
+            "sha256:55d65f8f4ff5673ebf2a1d432e5a6fb5217a7c3a68bcc359ef862bd7147b1399"
           ],
           "picks": [],
           "selectors": [],
