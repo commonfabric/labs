@@ -126,19 +126,29 @@ command names the service and the key itself: `<key>` is
   `cf pattern checkpoint --cell my-<name> <entry>`. It keeps a version, the
   point undo goes back to: one per request, never one per save. Like any
   version, their sharing setting may share it once it has been in use for a day
-  with no newer version and passes the privacy check.
+  with no newer version and passes the privacy check: findable, or on beta if
+  they last shared this pattern on beta themselves.
 - **undo**: `cf pattern history <entry>` lists the checkpoints;
   `cf pattern rollback <entry> <version>` writes one back, then save. It refuses
   when there are edits no version keeps; ask before forcing it, since forcing
   loses them.
-- **share**: `cf pattern share <entry>`, anonymous. The privacy check may
-  rewrite the files into a general version; tell them what changed, then save,
-  so their Weaver runs what was shared. `cf pattern unshare <entry>` stops
-  sharing, though a version already shared stays readable by anyone who has it.
-  Putting their name on it is
+- **share** ("it's good, share it"): `cf pattern share <entry>`, anonymous, on
+  **beta**: once the privacy check passes, it is reachable by its link, and
+  nobody finds it. The privacy check may rewrite the files into a general
+  version; tell them what changed, then save, so their Weaver runs what was
+  shared. `cf pattern unshare <entry>` stops sharing, though a version already
+  shared stays readable by anyone who has it. Putting their name on it is
   `cf pattern publish <entry> --as "<profile name>"`, only when they ask for
   that and confirm the name it shows; it runs the same privacy check, so the
   same tell-then-save follows.
+- **stable** ("it's stable", "release it"): `cf pattern stable <entry>` makes
+  the newest shared version what search and the catalog show. Nothing new is
+  exposed. To go back to an older shared version: rollback, save, share, then
+  stable; numbers only move forward.
+- **link** ("a link for Ana"): `cf pattern link <entry>` gives stable, or beta
+  when nothing is stable yet; `--beta` when they ask for beta. It names the
+  pattern, not them, unless they published it under their name. Opening a link
+  in Weaver is not built yet; say so.
 - **open**: getting a pattern into a folder, with commands that already exist.
   `cf` reads paths from the folder the session started in, `my-patterns/`, so a
   pattern's folder is `<name>/`.
@@ -162,4 +172,4 @@ command names the service and the key itself: `<key>` is
 
 When nothing here does what they ask, say it is not built yet rather than
 improvising links, copies or Weaver deep links. Not built yet, e.g.: bringing
-the Making loom forward in Weaver by itself, beta and stable channels, links.
+the Making loom forward in Weaver by itself, opening a link in Weaver.

@@ -90,7 +90,9 @@ const stubClient = (answers: {
       return answers.publish?.() ?? Promise.resolve(RECORDED);
     },
     getPattern: ({ patternId }) => {
-      const found = answers.patterns?.[patternId];
+      const found = patternId === undefined
+        ? undefined
+        : answers.patterns?.[patternId];
       return found === undefined
         ? Promise.reject(new PatternIndexError("getPattern", 404))
         : Promise.resolve(found as PatternIndexPattern);
