@@ -2516,10 +2516,17 @@ export class Instance {
        * What each `wish` resolves to, by its operands: a test's stand-in
        * for the targets of a space. `result` is stored in a document of
        * its own, and the result of the `wish` is a reference to it.
+       * `outcome` is what the state document holds as the outcome, member
+       * by member, for a target that is a document of `documents`: a
+       * link in it is stored as the reference it is.
        */
       wishes?: (
         operands: Record<string, unknown>,
-      ) => { result?: unknown; error?: unknown } | undefined;
+      ) => {
+        result?: unknown;
+        error?: unknown;
+        outcome?: Record<string, unknown>;
+      } | undefined;
       /** What the clock holds when the executor starts. */
       now?: number;
       /**
@@ -2556,8 +2563,15 @@ export class Instance {
        * its identifier, its kind and its value: the documents of the
        * inputs that the argument links to. They are made outside any
        * transaction, so `transactions` is told of no change to them.
+       * `space` is the space of a document that is in another space than
+       * the instance.
        */
-      documents?: { id: string; kind: string; value: unknown }[];
+      documents?: {
+        id: string;
+        kind: string;
+        value: unknown;
+        space?: string;
+      }[];
     } = {},
   ) {
     this.store = options.parent?.store ??
@@ -2592,8 +2606,9 @@ export class Instance {
         hooks.watchLabels?.((changes) => this.labelsChanged(changes));
       }
     }
-    for (const { id, kind, value } of options.documents ?? []) {
+    for (const { id, kind, value, space } of options.documents ?? []) {
       this.store.create(id, kind, value);
+      if (space !== undefined) this.store.spaces.set(id, space);
     }
     // The creation of an instance by something that is no handler is a
     // transaction that writes its two documents and evaluates nothing
@@ -3582,8 +3597,9 @@ export class Instance {
    * clock is a document that the runtime writes: `#now` reads it once,
    * into the state document, where that holds no time yet, and `#now/N`
    * resolves to a reference to it. Any other target is what the table of
-   * the executor gives for the operands, stored in a document of its
-   * own, which the result is a reference to.
+   * the executor gives for the operands: an outcome whose links lead to
+   * documents the executor was given, or a value, stored in a document of
+   * its own, which the result is a reference to.
    */
   #resolveWish(state: Ref, operands: unknown): void {
     const { store } = this;
@@ -3605,6 +3621,12 @@ export class Instance {
     const answer = this.root.options.wishes?.(
       isRecord(operands) ? operands : { query: operands },
     );
+    if (answer?.outcome !== undefined) {
+      for (const [name, member] of Object.entries(answer.outcome)) {
+        store.write(state.key(OUTCOME, name), this.stored(member));
+      }
+      return;
+    }
     if (answer?.result === undefined) {
       store.write(
         state.key(OUTCOME, "error"),

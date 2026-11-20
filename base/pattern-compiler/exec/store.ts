@@ -693,6 +693,13 @@ export class Store {
   readonly #space: string | undefined;
 
   /**
+   * The space of each document that is in another space than the store's:
+   * one that exists outside the instances of the store, which a reference
+   * leads to.
+   */
+  readonly spaces = new Map<string, string>();
+
+  /**
    * Constructs an instance with no document. `secret` is the secret of
    * the space; without it the store mints one, and its keys of plain
    * values then differ from those of every other store. `space` is the
@@ -1480,8 +1487,9 @@ export class Store {
   addressOf(named: Ref): ElementPart {
     const at = named.path.findLastIndex(isKeySegment);
     if (at < 0) {
+      const space = this.spaces.get(named.doc) ?? this.#space;
       return {
-        ...(this.#space === undefined ? {} : { space: this.#space }),
+        ...(space === undefined ? {} : { space }),
         document: named.doc,
         path: [...named.path],
       };
