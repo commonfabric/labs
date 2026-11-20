@@ -111,15 +111,15 @@ describe("currency-index", () => {
       }
       return slice;
     };
-    sliceAt("space").reads.push(...(parts.reads ?? []));
+    for (const read of parts.reads ?? []) sliceAt("space").reads.push(read);
     for (const { id, scopeKey } of parts.vouches ?? []) {
       sliceAt(scopeKey).vouches.push(id);
     }
     for (const given of parts.slices ?? []) {
       const merged = sliceAt(given.key);
       merged.vouched &&= given.vouched;
-      merged.reads.push(...given.reads);
-      merged.vouches.push(...given.vouches);
+      for (const read of given.reads) merged.reads.push(read);
+      for (const id of given.vouches) merged.vouches.push(id);
     }
     return {
       piece,
