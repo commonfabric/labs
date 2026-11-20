@@ -375,14 +375,6 @@ function completionSettles(view: EditorView): Promise<string | null> {
 
 describe("CFCodeEditor", () => {
   afterEach(async () => {
-    // happy-dom keeps the document's focus on a removed editor's content,
-    // where the editor's own focus timer then fails to read it, so focus
-    // leaves first.
-    for (
-      const editor of document.querySelectorAll<CFCodeEditor>("cf-code-editor")
-    ) {
-      editor.editorView?.contentDOM.blur();
-    }
     document.body.replaceChildren();
     await settle();
   });
