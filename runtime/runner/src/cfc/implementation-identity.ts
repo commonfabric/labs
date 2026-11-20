@@ -18,7 +18,9 @@ import { normalizeIdentitySource } from "./writer-claim-correspondence.ts";
  *   - reviewed snapshot copies (cfc/share-snapshot.ts);
  *   - the builtin-name arm of `writeAuthorizedBy` (cfc/prepare.ts);
  *   - `gateRuntimeMintedIntegrity`, under which a builtin's writes keep
- *     runtime-minted atoms (cfc/prepare.ts).
+ *     runtime-minted atoms, except a `TransformedBy` a schema declares or
+ *     stamps, which `gateSchemaIntegrity` drops whatever the author
+ *     (cfc/prepare.ts).
  * So it never comes from a member the module carries. A module that arrives
  * as data — a stored graph or an op pattern's plain graph run as-is, whose
  * module may carry any `debugName` — resolves as what it is: verified when its

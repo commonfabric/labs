@@ -123,12 +123,15 @@ describe("CFC projection claims", () => {
     }
   });
 
-  it("carries value-bound TransformedBy and Builtin scoped onto a projection and drops PromptSlotBound", async () => {
-    // §15.4 registers `TransformedBy` and `Builtin` value-bound, so a verified
-    // projection keeps a form of each scoped to the projected path
-    // (§3.1.6.1, §8.3.2). It registers `PromptSlotBound` provenance, which no
-    // projection carries (§15.1.1). All three are runtime-minted, and only a
-    // builtin author's write keeps them, so the write is attributed to one.
+  it("carries a value-bound Builtin scoped onto a projection, drops PromptSlotBound, and carries no TransformedBy a schema declared", async () => {
+    // §15.4 registers `Builtin` value-bound, so a verified projection keeps a
+    // form of it scoped to the projected path (§3.1.6.1, §8.3.2). It
+    // registers `PromptSlotBound` provenance, which no projection carries
+    // (§15.1.1). Both are runtime-minted, and only a builtin author's write
+    // keeps them, so the write is attributed to one. `TransformedBy` is
+    // value-bound too, and a schema declaration never carries it, whatever
+    // the author (§15.4): the gate strips it at the declaring path, so the
+    // projection has none to carry.
 
     const transformedBy = {
       type: CFC_ATOM_TYPE.TransformedBy,
@@ -188,9 +191,13 @@ describe("CFC projection claims", () => {
         e.path.length === 1 && e.path[0] === "latitude"
       )?.label.integrity;
       expect(integrity).toEqual([
-        { ...transformedBy, scope: { projection: "/lat" } },
         { ...builtin, scope: { projection: "/lat" } },
       ]);
+      const measurement = entries?.find((e) =>
+        e.path.length === 1 && e.path[0] === "measurement"
+      )?.label.integrity;
+      expect(measurement).toContainEqual(builtin);
+      expect(measurement).not.toContainEqual(transformedBy);
     } finally {
       await runtime.dispose();
       await storageManager.close();
