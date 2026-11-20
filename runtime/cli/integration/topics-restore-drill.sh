@@ -132,11 +132,12 @@ BODY='# Drill\n\n    indented code block\n    second line\n\ntrailing prose'
 TOPIC_ALIAS="$(jq -r '.result.topic["$link"] // empty' "$WORK/create.json")"
 # The create may or may not render an address depending on selection; the
 # canonical fid comes from the export below either way. Seed through the
-# board-published topic address when present, else re-read it.
+# address the create returned when present, else through the one the board
+# publishes: its `topics` output, which is where the board lists its topics.
 if [ -z "$TOPIC_ALIAS" ]; then
   TOPIC_ALIAS="$(
     "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
-      topics --input --select '@' 2> /dev/null | jq -r '.[0]["$link"]'
+      topics --select '@' 2> /dev/null | jq -r '.[0]["$link"] // empty'
   )"
 fi
 [ -n "$TOPIC_ALIAS" ] && ok "topic address in hand" || {
