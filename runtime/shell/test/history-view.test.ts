@@ -25,6 +25,9 @@ describe("XHistoryView", () => {
     /** The `before` of each listing the view asked the runtime for. */
     listings: (number | undefined)[];
 
+    /** The piece ids each listing handed the runtime, beside `before`. */
+    pieceIds: (readonly string[] | undefined)[];
+
     /** The commands the view sent. */
     commands: Command[];
 
@@ -100,6 +103,7 @@ describe("XHistoryView", () => {
    */
   function mount(list: (before?: number) => Promise<Page>): Mounted {
     const listings: (number | undefined)[] = [];
+    const pieceIds: (readonly string[] | undefined)[] = [];
     let moved = () => {};
     class Observed extends HistoryView {
       override requestUpdate(...args: unknown[]): void {
@@ -110,8 +114,13 @@ describe("XHistoryView", () => {
     const view = new Observed();
     // A history is all these cases ask of the runtime.
     view.rt = {
-      spaceHistory: (_space: DID, before?: number) => {
+      spaceHistory: (
+        _space: DID,
+        before?: number,
+        ids?: readonly string[],
+      ) => {
         listings.push(before);
+        pieceIds.push(ids);
         return list(before);
       },
     } as XHistoryView["rt"];
@@ -125,6 +134,7 @@ describe("XHistoryView", () => {
     return {
       view,
       listings,
+      pieceIds,
       commands,
       markup,
       update(names, holds) {
@@ -407,6 +417,65 @@ describe("XHistoryView", () => {
       expect(changeMarkup(markup(), "r1")).toContain("the piece is gone");
       expect(changeMarkup(markup(), "r2")).not.toContain("the piece is gone");
       expect(changeMarkup(markup(), "r2")).not.toContain('role="alert"');
+    });
+  });
+
+  describe("pieceId", () => {
+    it("hands the runtime no piece id with a listing while it has none", async () => {
+      const { pieceIds } = await listed([step(4)]);
+
+      expect(pieceIds).toEqual([[]]);
+    });
+
+    it("hands the runtime its piece id with each listing, an older stretch's included", async () => {
+      const pages: Page[] = [{ steps: [step(4)], next: 4 }, {
+        steps: [step(2)],
+      }];
+      const { view, listings, pieceIds, update } = mount(
+        () => Promise.resolve(pages.shift()!),
+      );
+      view.pieceId = "fid1:viewed";
+      await update(
+        ["rt", "space"],
+        (markup) => markup.includes("Show older steps"),
+      );
+
+      const [older] = templateListeners(view.render(), "click", view).filter((
+        { text },
+      ) => text === "Show older steps");
+      older.dispatch(new Event("click"));
+
+      expect(listings).toEqual([undefined, 4]);
+      expect(pieceIds).toEqual([["fid1:viewed"], ["fid1:viewed"]]);
+    });
+
+    it("lists the history again from its newest step with the new piece id when it changes, and with none once it is gone", async () => {
+      const pages: Page[] = [
+        { steps: [step(4)] },
+        { steps: [step(5, [change("fid1:viewed", "r1")])] },
+        { steps: [step(6)] },
+      ];
+      const { view, listings, pieceIds, update } = mount(
+        () => Promise.resolve(pages.shift()!),
+      );
+      await update(
+        ["rt", "space"],
+        (markup) => markup.includes('data-seq="4"'),
+      );
+
+      view.pieceId = "fid1:viewed";
+      const relisted = await update(
+        ["pieceId"],
+        (markup) => markup.includes('data-seq="5"'),
+      );
+      expect(changeMarkup(relisted, "r1")).toContain("Direct source edit");
+      expect(relisted).not.toContain('data-seq="4"');
+
+      view.pieceId = undefined;
+      await update(["pieceId"], (markup) => markup.includes('data-seq="6"'));
+
+      expect(listings).toEqual([undefined, undefined, undefined]);
+      expect(pieceIds).toEqual([[], ["fid1:viewed"], []]);
     });
   });
 

@@ -1683,6 +1683,50 @@ describe("XRootView", () => {
     });
   });
 
+  describe("the history panel's piece", () => {
+    const space = "did:key:z6Mk-shell-history-piece";
+
+    /**
+     * Returns what a root view showing `shown` in `space`, with the history
+     * panel open, hands the panel as its `pieceId`: one entry, the panel
+     * being rendered once.
+     */
+    async function boundPieceId(shown: object): Promise<unknown[]> {
+      const restore = installBrowserGlobals();
+      try {
+        const { XRootView } = await import("../src/views/RootView.ts");
+        const view = new XRootView();
+        view.app = {
+          ...view.app,
+          identity: await Identity.fromPassphrase("root-view-history-piece"),
+          config: { ...view.app.config, showHistoryView: true },
+          view: { spaceDid: space, ...shown } as typeof view.app.view,
+        };
+        return templateBindings(view.render(), "pieceId");
+      } finally {
+        restore();
+      }
+    }
+
+    it("is the piece a view names by id", async () => {
+      expect(await boundPieceId({ pieceId: "fid1:viewed" })).toEqual([
+        "fid1:viewed",
+      ]);
+    });
+
+    it("is none for a view that names its piece by slug, though it carries an id as well", async () => {
+      expect(
+        await boundPieceId({ pieceSlug: "lunch", pieceId: "fid1:viewed" }),
+      ).toEqual([undefined]);
+      expect(await boundPieceId({ pieceSlug: "lunch" })).toEqual([undefined]);
+    });
+
+    it("is none for a view of a space with no piece, or with an empty piece id", async () => {
+      expect(await boundPieceId({})).toEqual([undefined]);
+      expect(await boundPieceId({ pieceId: "" })).toEqual([undefined]);
+    });
+  });
+
   describe("restorePattern()", () => {
     const space = "did:key:z6Mk-shell-restore-pattern";
     const otherSpace = "did:key:z6Mk-shell-restore-pattern-other";

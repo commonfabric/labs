@@ -2797,6 +2797,107 @@ describe("RuntimeInternals", () => {
       }
     });
 
+    describe("given ids of pieces to read beside the listed ones", () => {
+      /** The pieces whose sources `calls` asked for, in order. */
+      const sourcesAsked = (calls: Array<[string, unknown[]]>) =>
+        calls.filter(([name]) => name === "getPieceSource").map(([, args]) =>
+          args[0]
+        );
+
+      it("reads the source of a piece the space does not list, after the listed ones, and returns its changes", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("of:fid1:a")]);
+        try {
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            "fid1:extra",
+          ]);
+
+          expect(calls.filter(([name]) => name === "getPieceSource")).toEqual([
+            ["getPieceSource", ["of:fid1:a", space, undefined]],
+            ["getPieceSource", ["fid1:extra", space, undefined]],
+          ]);
+          expect(steps[0].patternChanges.map((change) => change.pieceId))
+            .toEqual(["of:fid1:a", "fid1:extra"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a listed piece once, by the id and scope the list gives, whether the two ids differ by a leading `of:` either way or not at all", async () => {
+        const { calls, runtime } = historyClient([
+          { id: () => "of:fid1:a", ref: () => ({ scope: "user" }) },
+          pieceHandle("fid1:b"),
+          pieceHandle("of:fid1:c"),
+        ]);
+        try {
+          await runtime.spaceHistory(space, undefined, [
+            "fid1:a",
+            "of:fid1:b",
+            "of:fid1:c",
+          ]);
+
+          expect(calls.filter(([name]) => name === "getPieceSource")).toEqual([
+            ["getPieceSource", ["of:fid1:a", space, "user"]],
+            ["getPieceSource", ["fid1:b", space, undefined]],
+            ["getPieceSource", ["of:fid1:c", space, undefined]],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads an id given more than once a single time, as it was first given", async () => {
+        const { calls, runtime } = historyClient([]);
+        try {
+          await runtime.spaceHistory(space, undefined, [
+            "fid1:extra",
+            "fid1:extra",
+            "of:fid1:extra",
+            "fid1:other",
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual(["fid1:extra", "fid1:other"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("returns the other pieces' changes when the source of a given id cannot be read", async () => {
+        const { runtime } = historyClient([pieceHandle("fid1:a")], {
+          sourceOf: "fid1:extra",
+        });
+        try {
+          const { steps } = await runtime.spaceHistory(space, 9, [
+            "fid1:extra",
+          ]);
+
+          expect(steps[0].patternChanges.map((change) => change.pieceId))
+            .toEqual(["fid1:a"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      for (const request of ["getPiecesListCell", "sync"]) {
+        it(`reads the given id's source and returns its changes, and no listed piece's, when \`${request}\` rejects`, async () => {
+          const { calls, runtime } = historyClient(
+            [pieceHandle("fid1:a")],
+            { request },
+          );
+          try {
+            const { steps } = await runtime.spaceHistory(space, undefined, [
+              "fid1:extra",
+            ]);
+
+            expect(sourcesAsked(calls)).toEqual(["fid1:extra"]);
+            expect(steps[0].patternChanges.map((change) => change.revisionId))
+              .toEqual(["revision-of-fid1:extra"]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+      }
+    });
+
     it("returns the steps with no pattern changes for a pieces list that holds no value", async () => {
       const { calls, runtime } = historyClient(undefined);
       try {
