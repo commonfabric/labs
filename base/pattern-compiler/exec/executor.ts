@@ -1057,13 +1057,37 @@ export class Handle {
     );
   }
 
+  /**
+   * Removes the members at `positions` from the stored list in place, each
+   * as a splice of the list: no member the list keeps is written, and one
+   * that is a reference stays the reference it was, to a document the
+   * removal does not write.
+   */
+  #removeAt(positions: readonly number[]): void {
+    if (this.target instanceof StreamRef || positions.length === 0) return;
+    if (this.fixed) {
+      throw new Unsupported(
+        "a write through a handle to a value the instance holds no address for",
+      );
+    }
+    const recorded = this.instance.written(this);
+    try {
+      // From the last position on, so that each position named is the one
+      // the member holds when it is removed.
+      for (const at of [...positions].sort((a, b) => b - a)) {
+        this.instance.store.splice(this.target, at, 1, []);
+      }
+    } finally {
+      recorded();
+    }
+  }
+
   remove(member: unknown): void {
-    const [at] = this.#positionsOf(member);
-    if (at === undefined) return;
-    this.set(
-      (this.instance.readWritingBack(this, () => this.get()) as unknown[])
-        .filter((_, index) => index !== at),
+    const [at] = this.instance.readDeciding(
+      this,
+      () => this.#positionsOf(member),
     );
+    if (at !== undefined) this.#removeAt([at]);
   }
 
   send(event: unknown): void {
@@ -1091,11 +1115,8 @@ export class Handle {
   }
 
   removeAll(member: unknown): void {
-    const found = this.#positionsOf(member);
-    if (found.length === 0) return;
-    this.set(
-      (this.instance.readWritingBack(this, () => this.get()) as unknown[])
-        .filter((_, index) => !found.includes(index)),
+    this.#removeAt(
+      this.instance.readDeciding(this, () => this.#positionsOf(member)),
     );
   }
 
@@ -7170,14 +7191,14 @@ export class Instance {
   }
 
   /**
-   * Runs the read of a list that a removal through `handle` makes to write
-   * back what it keeps, and binds the slot of the handle in the class
-   * `value` to every position that read went through. The write stores what
-   * the read gave, at other positions of the list and through the links the
-   * list holds, so its label is that of what the list held, and not that of
-   * the reference to the list alone.
+   * Runs the read of a list by which a removal through `handle` finds the
+   * members to remove, and binds the slot of the handle in the class
+   * `value` to every position that read went through. Which members the
+   * list keeps, and at which positions, depends on what the comparison with
+   * each member read, so the label of the removal's write holds it, and
+   * not that of the reference to the list alone.
    */
-  readWritingBack<T>(handle: Handle, run: () => T): T {
+  readDeciding<T>(handle: Handle, run: () => T): T {
     const invoking = this.#invoking.at(-1);
     const host = this.#handling === undefined
       ? invoking?.host

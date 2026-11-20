@@ -22,7 +22,7 @@ const drop = handler<{ word: string }, { words: Writable<string[]> }>(
 // A removal from a list of plain values in place: `drop` removes a word a
 // handler pushed from its event, and the word `addNote` pushed from the
 // input `note` then stands at the position before its own. The removal
-// reads the list and writes back what it keeps.
+// reads the list to find the word, and removes it in place.
 export default pattern<{ note: string }>(({ note }) => {
   const words = Writable.of<string[]>([]);
   return {

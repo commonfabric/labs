@@ -835,3 +835,71 @@ describe("the positions a slot's read reached through links", () => {
     expect(await chainsBelow(30, (doc) => doc)).toBe(few * 10);
   });
 });
+
+// `fixtures/remove-reference.tsx`: `add` pushes a record, which has a
+// document of its own, and `dropFirst` removes the first record of the
+// list.
+describe("TransactionHooks for a removal from an array of references", () => {
+  /** The run after two records were added, with what the removal changed. */
+  const removed = async () => {
+    const recorder = new Recorder();
+    const instance = new Instance(
+      await artifactOf("remove-reference"),
+      { note: "n" },
+      { transactions: recorder },
+    );
+    instance.send(bindingOf(instance, "add"), { title: "a" });
+    instance.send(bindingOf(instance, "add"), { title: "b" });
+    const records = [...instance.store.docs].flatMap(([doc, { value }]) =>
+      typeof value === "object" && value !== null && "title" in value
+        ? [{ doc, title: (value as { title: string }).title }]
+        : []
+    );
+    const before = recorder.changed.length;
+    instance.send(bindingOf(instance, "dropFirst"), {});
+    return {
+      instance,
+      records,
+      changed: recorder.changed.slice(before).filter(({ cause }) =>
+        cause === "event"
+      ),
+      // The transaction of the event is the one that changed the list.
+      undone: recorder.ends.flatMap(({ changes }) => changes).filter((
+        undo,
+      ) => "splice" in undo && undo.splice.inserted === 0),
+    };
+  };
+
+  it("removes the member in place, as one splice of the list", async () => {
+    const { records, undone } = await removed();
+    const first = records.find(({ title }) => title === "a")!;
+
+    expect(undone.map((undo) => "splice" in undo && undo.splice)).toEqual([{
+      start: 0,
+      inserted: 0,
+      removed: [{ $link: { doc: first.doc, path: [] } }],
+    }]);
+  });
+
+  it("changes the list alone, and no document of a record the list keeps", async () => {
+    const { records, changed } = await removed();
+    const kept = records.find(({ title }) => title === "b")!;
+    const first = records.find(({ title }) => title === "a")!;
+
+    const documents = new Set(changed.map(({ doc }) => doc));
+    expect(documents.has(kept.doc)).toBe(false);
+    expect(documents.has(first.doc)).toBe(false);
+  });
+
+  it("leaves in the list the reference to the record it keeps", async () => {
+    const { instance, records, changed } = await removed();
+    const kept = records.find(({ title }) => title === "b")!;
+
+    const list = changed.find(({ value }) => Array.isArray(value));
+    expect(list?.value).toEqual([{ $link: { doc: kept.doc, path: [] } }]);
+    expect(instance.store.docs.get(kept.doc)?.value).toEqual({
+      title: "b",
+      note: "n",
+    });
+  });
+});

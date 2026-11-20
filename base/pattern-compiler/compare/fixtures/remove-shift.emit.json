@@ -25,7 +25,7 @@
             {
               "module": 0,
               "path": "compare/fixtures/remove-shift.tsx",
-              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst addNote = handler(\n  (_, { note, words }) => {\n    words.push(note);\n  },\n);\nconst addWord = handler(\n  (event, { words }) => {\n    words.push(event.word);\n  },\n);\nconst drop = handler(\n  (event, { words }) => {\n    words.removeByValue(event.word);\n  },\n);\nconst $default = (pattern(\"sha256:0db18de686f2f4dc36ed904b0ed57e23307ad75b80bb006e4dd290e18d2b653f\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ words: $h.slot(3), addNote: $h.stream(0), addWord: $h.stream(1), drop: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { note, words }) => {\n    words.push(note);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { words }) => {\n    words.push(event.word);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { words }) => {\n    words.removeByValue(event.word);\n  })($e, $s));"
+              "source": "const { \"handler\": handler, \"pattern\": pattern, \"Writable\": Writable } = $rt.external(\"commonfabric\");\nconst addNote = handler(\n  (_, { note, words }) => {\n    words.push(note);\n  },\n);\nconst addWord = handler(\n  (event, { words }) => {\n    words.push(event.word);\n  },\n);\nconst drop = handler(\n  (event, { words }) => {\n    words.removeByValue(event.word);\n  },\n);\nconst $default = (pattern(\"sha256:3db91a9a769bfb01af726fb4a7982cef2fad24441e44a3b1b6500f68847b58d9\"));\nObject.defineProperty($exports, \"default\", { enumerable: true, get: () => $default });\n$rt.setup(0, function ($arg, $h) {\n\nreturn $rt.thunk(($h) => (({ words: $h.slot(3), addNote: $h.stream(0), addWord: $h.stream(1), drop: $h.stream(2) })));\n});\n$rt.body(0, ($e, $s) => ((_, { note, words }) => {\n    words.push(note);\n  })($e, $s));\n$rt.body(1, ($e, $s) => ((event, { words }) => {\n    words.push(event.word);\n  })($e, $s));\n$rt.body(2, ($e, $s) => ((event, { words }) => {\n    words.removeByValue(event.word);\n  })($e, $s));"
             }
           ],
           "outputsBelow": [],
@@ -328,7 +328,7 @@
             }
           ],
           "patterns": [
-            "sha256:0db18de686f2f4dc36ed904b0ed57e23307ad75b80bb006e4dd290e18d2b653f"
+            "sha256:3db91a9a769bfb01af726fb4a7982cef2fad24441e44a3b1b6500f68847b58d9"
           ],
           "picks": [],
           "selectors": [],

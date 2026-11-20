@@ -125,7 +125,7 @@ describe("stored-labels", () => {
 
   // `fixtures/remove-shift.tsx`: a word pushed from the event, the input
   // `note` pushed after it, and the removal of the first, which reads the
-  // list and writes back the rest.
+  // list to find it and removes it in place.
   describe("soundnessOfScenario() after a removal from a list of plain values in place", () => {
     it("finds the clause of the input in the stored label of the list that holds its value at another position", async () => {
       const { soundness, refused } = await soundnessOfScenario(
@@ -142,6 +142,28 @@ describe("stored-labels", () => {
 
       expect(refused).toEqual([]);
       expect(lines("remove-shift", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // `fixtures/remove-reference.tsx`: two records pushed, each a document of
+  // its own that holds the input `note`, and the removal of the first.
+  describe("soundnessOfScenario() after a removal from an array of references", () => {
+    it("finds the clause of the input in the stored label of the record the list keeps", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "remove-reference",
+        await artifactOf("remove-reference"),
+        () => undefined,
+        { note: "n" },
+        [
+          { binding: 0, event: { title: "a" } },
+          { binding: 0, event: { title: "b" } },
+          { binding: 1, event: {} },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("remove-reference", soundness)).toEqual([]);
       expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
     });
   });
