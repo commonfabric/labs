@@ -241,6 +241,16 @@ export interface HarnessJobSpec extends HarnessModelLimits {
  * environment the harness is handed; the enforcement mode is then the one
  * `argvOf` pins.
  */
+/**
+ * The gateway's settings in the runner's environment, which a job pinned to
+ * `openai-codex` runs without: the harness refuses a gateway URL or auth mode
+ * beside that provider.
+ */
+export const HARNESS_GATEWAY_ENV_KEYS = [
+  "CF_HARNESS_GATEWAY_BASE_URL",
+  "CF_HARNESS_GATEWAY_AUTH_MODE",
+] as const;
+
 export const HARNESS_JOB_GRANT_ENV_KEYS = [
   "CF_HARNESS_FABRIC_API_URL",
   "CF_HARNESS_FABRIC_IDENTITY",
@@ -609,6 +619,11 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const env = { ...(options.harnessDeps?.env ?? processCfHarnessCliEnv()) };
   for (const key of HARNESS_JOB_GRANT_ENV_KEYS) delete env[key];
+  if (spec.modelProvider === "openai-codex") {
+    // A runner serving gateway profiles too may carry the gateway's settings;
+    // the harness refuses them beside `--model-provider openai-codex`.
+    for (const key of HARNESS_GATEWAY_ENV_KEYS) delete env[key];
+  }
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,

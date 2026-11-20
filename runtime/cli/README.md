@@ -2483,7 +2483,10 @@ its predecessor's recorded provider therefore fails `PROVIDER_FAILURE` before
 any model call, with the `errorDetail`
 `continue provider mismatch: run uses <recorded>, requested <profile's>`. It
 records no run, so the conversation it ends can open no further follow-up; a
-host that changes a profile's provider starts a new job instead.
+host that changes a profile's provider starts a new job instead. A job pinned to
+`openai-codex` runs without `CF_HARNESS_GATEWAY_BASE_URL` and
+`CF_HARNESS_GATEWAY_AUTH_MODE`, which the harness refuses beside that provider,
+so one runner can serve gateway and Codex profiles alike.
 
 A host profile may bound each model call with `maxInputBytes` and
 `maxOutputTokens`; a caller may only narrow either ceiling. Bounded calls use
@@ -2494,12 +2497,15 @@ provider's output-token ceiling, including reasoning tokens. The byte check
 includes instructions, history and tool schemas and rejects oversized context
 without discarding it. The same model client carries these limits into research
 and delegated calls. A run under the gateway provider refuses these limits as
-its model client is built, before any model call. An input-byte ceiling is not a
-token count; callers budgeting tokens must reserve separate provider framing
-headroom. Provider-added native-search context and image token expansion require
-separate accounting; the serialized byte check does not bound them. A response
-that reaches its output-token ceiling ends as a provider failure, with no
-partial structured result admitted.
+its model client is built, before any model call; a profile pinned to
+`openai-compatible-gateway` that sets either is refused when the profile file is
+read, and a request naming either under such a profile is refused
+`beyond_profile`. An input-byte ceiling is not a token count; callers budgeting
+tokens must reserve separate provider framing headroom. Provider-added
+native-search context and image token expansion require separate accounting; the
+serialized byte check does not bound them. A response that reaches its
+output-token ceiling ends as a provider failure, with no partial structured
+result admitted.
 
 `imageAttachments` contains at most eight `{mediaType, base64}` objects, using
 PNG, JPEG, GIF or WebP bytes. Canonical base64 and the declared image signature

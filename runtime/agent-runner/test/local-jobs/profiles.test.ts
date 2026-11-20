@@ -157,6 +157,22 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("refuses a request that names a bound under a profile pinned to the gateway", async () => {
+      const profiles = await read({
+        gateway: { ...ASK, modelProvider: "openai-compatible-gateway" },
+        codex: { ...ASK, modelProvider: "openai-codex" },
+      });
+      for (const bound of [{ maxInputBytes: 4096 }, { maxOutputTokens: 64 }]) {
+        expect(narrowLocalJobProfile(profiles.get("gateway")!, bound))
+          .toEqual({
+            refusal:
+              "The profile runs on `openai-compatible-gateway`, which cannot verify `maxInputBytes` or `maxOutputTokens`, so a request may name neither.",
+          });
+        expect(narrowLocalJobProfile(profiles.get("codex")!, bound))
+          .toMatchObject({ profile: bound });
+      }
+    });
+
     it("refuses a model provider `cf-harness` does not accept, naming the ones it does", async () => {
       await expect(read({ ask: { ...ASK, modelProvider: "anthropic" } }))
         .rejects.toThrow(
@@ -282,6 +298,15 @@ describe("local-jobs/profiles", () => {
         "a model provider that is not a string",
         { ...ASK, modelProvider: 7 },
         "`modelProvider`",
+      ],
+      [
+        "model call bounds on a provider that cannot verify them",
+        {
+          ...ASK,
+          modelProvider: "openai-compatible-gateway",
+          maxOutputTokens: 64,
+        },
+        "`maxInputBytes` and `maxOutputTokens`",
       ],
       [
         "a reasoning effort it does not know",

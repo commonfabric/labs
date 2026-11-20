@@ -697,6 +697,47 @@ describe("runHarnessJob()", () => {
       );
     }
 
+    it("runs a job pinned to openai-codex on a runner whose environment names a gateway", async () => {
+      // A runner that also serves gateway profiles keeps the gateway's settings
+      // in its environment; the harness refuses them beside openai-codex.
+      const settings = new FileHarnessProviderSettingsStore({
+        path: join(runRoot, "harness-home", "config.json"),
+      });
+      await settings.initialize("openai-compatible-gateway");
+      const { CF_HARNESS_MODEL_PROVIDER: _provider, ...sandbox } = SCRIPTED_ENV;
+      let ranOn: string | undefined;
+      const result = await runHarnessJob(
+        plainSpec({ resultSchema: undefined, modelProvider: "openai-codex" }),
+        {
+          runRoot,
+          signal: new AbortController().signal,
+          harnessDeps: {
+            env: {
+              ...sandbox,
+              CF_HARNESS_API_KEY: "unused-test-key",
+              CF_HARNESS_GATEWAY_BASE_URL: "https://gateway.example.test",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "bearer",
+            },
+            providerSettingsStore: settings,
+            createModelClient: ({ provider }) => ({
+              providerId: provider,
+              complete: () => Promise.reject(new Error("no model call")),
+            }),
+            createPromptLoop: (loopOptions) => {
+              ranOn = loopOptions.engine?.config.modelProvider;
+              return {
+                runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                runTranscript: () => Promise.reject(new Error("not a resume")),
+              };
+            },
+          },
+        },
+      );
+
+      expect(result.outcome).toBe("completed");
+      expect(ranOn).toBe("openai-codex");
+    });
+
     it("leaves usage out of the report when the loop reports none", async () => {
       const { result } = await runScripted(plainSpec(), async (context) => {
         await answering("Titan")(context);

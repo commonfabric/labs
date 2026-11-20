@@ -10,8 +10,10 @@
  * set its role, its model provider or its fabric.
  *
  * A profile is refused when it is read if it grants a tool nothing in it
- * backs, the same contradiction `cf-harness` refuses a run for, so a bad
- * grant stops the runner's start rather than failing every job.
+ * backs, or bounds model calls on a provider that cannot verify the bounds:
+ * the same contradictions `cf-harness` refuses a run for, so a bad profile
+ * stops the runner's start rather than failing every job. A request is
+ * refused for the same bound contradiction when it is enqueued.
  */
 
 import { dirname, isAbsolute } from "@std/path";
@@ -56,6 +58,16 @@ import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 /** One profile, as the host file states it. */
+/**
+ * The provider that cannot verify `maxInputBytes` or `maxOutputTokens`: the
+ * harness refuses a run under it with either, as its model client is built.
+ */
+const GATEWAY_PROVIDER: HarnessModelProviderId = "openai-compatible-gateway";
+
+/** Why a gateway-pinned profile may set no bound. */
+const GATEWAY_BOUNDS_REFUSAL =
+  "`maxInputBytes` and `maxOutputTokens` need a provider that verifies them, which `openai-compatible-gateway` does not";
+
 export interface LocalJobProfile extends HarnessModelLimits {
   /** The tools a job may use; a result schema adds `submit_result`. */
   tools: string[];
@@ -381,6 +393,12 @@ const profileOf = async (
         createCfHarnessCliCapabilities().modelProviders.join(", ")
       }`,
     );
+  }
+  if (
+    provider === GATEWAY_PROVIDER &&
+    (maxInputBytes !== undefined || maxOutputTokens !== undefined)
+  ) {
+    fail(GATEWAY_BOUNDS_REFUSAL);
   }
   const effort = reasoningEffortOf(reasoningEffort);
   if (reasoningEffort !== undefined && effort === undefined) {
@@ -751,6 +769,16 @@ export const narrowLocalJobProfile = (
       };
     }
     mounts.push({ ...granted, mode: selected.mode ?? granted.mode });
+  }
+  if (
+    profile.modelProvider === GATEWAY_PROVIDER &&
+    (narrowing.maxInputBytes !== undefined ||
+      narrowing.maxOutputTokens !== undefined)
+  ) {
+    return {
+      refusal:
+        "The profile runs on `openai-compatible-gateway`, which cannot verify `maxInputBytes` or `maxOutputTokens`, so a request may name neither.",
+    };
   }
   for (const name of ["maxInputBytes", "maxOutputTokens"] as const) {
     const value = narrowing[name];
