@@ -718,6 +718,31 @@ type Writing = {
   }[];
 };
 
+/**
+ * Whether a schema declares a label, at its root or below it, with every
+ * atom written out. The crate leaves a declaration it did not resolve to
+ * atoms as the text of its type (`$source`), which no store can take: a
+ * schema that holds one declares nothing here.
+ */
+const declaresLabel = (schema: unknown): boolean => {
+  let declared = false;
+  let unresolved = false;
+  const visit = (value: unknown, inLabel: boolean, depth: number) => {
+    if (typeof value !== "object" || value === null || depth > 32) return;
+    if (Array.isArray(value)) {
+      for (const member of value) visit(member, inLabel, depth + 1);
+      return;
+    }
+    for (const [name, member] of Object.entries(value)) {
+      if (name === "ifc") declared = true;
+      if (inLabel && name === "$source") unresolved = true;
+      visit(member, inLabel || name === "ifc", depth + 1);
+    }
+  };
+  visit(schema, false, 0);
+  return declared && !unresolved;
+};
+
 const sameRoot = (a: Root, b: Root): boolean =>
   a.kind === b.kind && a.cell === b.cell && a.collection === b.collection &&
   a.handler === b.handler && a.operation === b.operation &&
@@ -3304,6 +3329,11 @@ export class Instance {
    * document until something writes it, and a read of it reads the
    * default. A first value that is not a constant is computed by the
    * cone `StateCell.first` names and written once, here.
+   *
+   * A cell whose schema declares a label is the exception to the first
+   * rule: a label is stored with a document, so the constant is written
+   * here under the schema, as the first value of the other kind is, and
+   * the store that keeps the documents stores what the schema declares.
    */
   stateCell(cell: number, host: Host): Ref {
     const record = this.plan.stateCells[cell];
@@ -3343,10 +3373,21 @@ export class Instance {
           }],
         });
         try {
-          this.store.write(new Ref(id, []), value);
+          this.store.write(
+            new Ref(id, [], declaresLabel(schema) ? schema : undefined),
+            value,
+          );
         } finally {
           recorded();
         }
+      } else if (
+        typeof schema === "object" && schema.default !== undefined &&
+        declaresLabel(schema) && this.root.#tx !== undefined
+      ) {
+        this.store.write(
+          new Ref(id, [], schema),
+          structuredClone(schema.default),
+        );
       }
     }
     return new Ref(id, []);

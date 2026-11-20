@@ -9,12 +9,13 @@ import { instanceOptions, inStorage } from "../integrated.ts";
 import { perturbedRuns } from "../perturbation.ts";
 import {
   checkSoundness,
+  deepStoredAt,
   type LabelPlan,
   type Soundness,
   soundnessOf,
   soundnessOfScenario,
 } from "../stored-labels.ts";
-import type { Atom } from "../template.ts";
+import type { Atom, Label } from "../template.ts";
 import { fixtureScenarios } from "../values-fixtures.ts";
 
 const artifactOf = async (name: string): Promise<Artifact> => {
@@ -142,6 +143,44 @@ describe("stored-labels", () => {
       expect(refused).toEqual([]);
       expect(lines("remove-shift", soundness)).toEqual([]);
       expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // `fixtures/state-declared.tsx`: a state cell whose type declares the
+  // clause `alice`, with a constant as its first value, returned by
+  // reference.
+  describe("deepStoredAt() of an output that is a state cell whose type declares a label", () => {
+    it("holds the clause the type declares, which the document of the cell stores", async () => {
+      const artifact = await artifactOf("state-declared");
+      const space = (await Identity.fromPassphrase("pattern-compiler-compare"))
+        .did();
+      let label: Label | undefined;
+      await inStorage(
+        artifact,
+        { note: "n" },
+        [],
+        instanceOptions("state-declared", space, () => undefined),
+        undefined,
+        true,
+        true,
+        {
+          end: (runtime, hooks, instance) => {
+            const tx = runtime.edit();
+            try {
+              label = deepStoredAt(tx, {
+                space,
+                id: hooks.entityOf(instance.id),
+                scope: "space",
+                path: ["pinned"],
+              }, []).label;
+            } finally {
+              tx.abort();
+            }
+          },
+        },
+      );
+
+      expect(label?.confidentiality).toContainEqual("alice");
     });
   });
 
