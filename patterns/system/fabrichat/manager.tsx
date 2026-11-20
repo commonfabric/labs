@@ -13,7 +13,9 @@
  * its membership is recorded: by a visit to it, which sends `joinRoom`, or by
  * the host's adoption of the catalog's rooms (`adoptCatalogRoomsOf()` in
  * `@commonfabric/piece`). Forgetting a container conversation archives only
- * that conversation; accepting or joining it restores it.
+ * that conversation; accepting or joining it restores it. Archiving its
+ * container in the catalog leaves it out of the rooms listed until the
+ * container is restored.
  *
  * It creates each room with `inSpace()` as the root of a space of its own,
  * which declares itself a `fabrichat-room`. The space grants the room's
