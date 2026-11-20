@@ -74,11 +74,13 @@ import {
 import { generateInputs } from "./generate.ts";
 import { scenarioAudience } from "./harness.ts";
 import {
+  counted,
   type Figure,
   instanceOptions,
   inStorage,
   type Sent,
 } from "./integrated.ts";
+import { resetAllTimingStats } from "../../logger/src/logger.ts";
 import type {
   RecordedPlanWrite,
   RuntimeTransactions,
@@ -809,6 +811,11 @@ export type ModuleLabels = {
   /** Commits refused with the option off. */
   refusedOff?: number;
   /**
+   * The commits today's runtime made in its run of the module: the setup,
+   * the reads of the rows, and the events, one transaction per node.
+   */
+  todayCommits?: number;
+  /**
    * Why the run with the option on stopped before its last event, where it
    * did: a write the executor made after a refused commit, which the
    * storage does not hold the document of.
@@ -1034,13 +1041,15 @@ export const compareModule = async (
   );
   const argument = argumentOf({ argument: {}, inputs });
   // Today's run finds each stream where the executor stored it (ruling
-  // Z43).
+  // Z43). Its commits are counted as the labeled arm's are.
+  resetAllTimingStats();
   const today = await runModule(
     module,
     "outside first",
     undefined,
     new ExecutorRun(artifact, argument, artifacts),
   );
+  const todayCommits = counted().commits;
   if (today.skipped !== undefined) return { ...base, skipped: today.skipped };
   const events: Sent[] = (today.outcomes ?? []).flatMap((outcome, index) =>
     outcome.outcome !== "committed" ? [] : [{
@@ -1124,6 +1133,7 @@ export const compareModule = async (
       !offReasons.has(refusalReason(reason))
     ),
     refusedOff: refused(off).length,
+    todayCommits,
     off: totals([off.arm.settle, ...off.arm.events]),
     ...(on === undefined ? {} : {
       on: totals([on.arm.settle, ...on.arm.events]),

@@ -114,7 +114,7 @@ type ModuleTimes = {
   today?: { compared: number; equal: number };
 };
 
-const counted = (): Counted => {
+export const counted = (): Counted => {
   const breakdown = getTimingStatsBreakdown();
   const count = (key: string) => {
     const [logger, ...rest] = key.split("/");
