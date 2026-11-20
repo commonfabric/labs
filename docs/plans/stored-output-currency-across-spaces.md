@@ -598,11 +598,11 @@ One is owed:
 For the index, in `runtime/memory/test/`, with two stores. Tests 1 to 4
 exist in `v2-currency-index.test.ts`, with the readers a source finds to
 tell after each kind of change. Tests 5, 7 and 8 exist in
-`v2-server-currency.test.ts`, which has the memory server register, pull,
-arm and tell, with a source it holds and one another owner holds. It also
-has a chain of ten spaces that is never held, and two spaces that read each
-other held after eight laps, for longer each time, and released by a change
-with no trigger behind it:
+`v2-server-currency-across-spaces.test.ts`, which has the memory server
+register, pull, arm and tell, with a source it holds and one another owner
+holds. It also has a chain of ten spaces that is never held, and two spaces
+that read each other held after eight laps, for longer each time, and
+released by a change with no trigger behind it:
 
 1. A slice that read an instance in another space is stored clean when the
    source's head is the sequence number it read at and the source reports

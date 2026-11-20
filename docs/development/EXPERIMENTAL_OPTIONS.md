@@ -2514,7 +2514,8 @@ the per-epic implementation notes).
 - **Status on 2026-11-20.** Implemented, and `skip` by default on toolshed.
   The index and its marks are covered in
   `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
-  spaces' indexes in `runtime/memory/test/v2-server-currency.test.ts`, and
+  spaces' indexes in
+  `runtime/memory/test/v2-server-currency-across-spaces.test.ts`, and
   recording, the judgment, and a skipped root's re-arm in
   `runtime/runner/test/executor/space-server-currency.test.ts` and
   `space-server-currency-wish.test.ts` beside it. Measured on a

@@ -1279,7 +1279,7 @@ executing:
   `runtime/memory/v2/currency-index.ts` is their only writer and reader,
   pinned in `runtime/memory/test/v2-currency-index.test.ts`, and what
   passes between two spaces' indexes in
-  `runtime/memory/test/v2-server-currency.test.ts`.
+  `runtime/memory/test/v2-server-currency-across-spaces.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables
