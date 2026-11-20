@@ -30,7 +30,16 @@ export type Address = { doc: string; path: readonly string[] };
  * in the bindings of the `uniform` form.
  */
 export type SlotBinding =
-  | { chain: Address[]; observes: string }
+  | {
+    chain: Address[];
+    observes: string;
+    /**
+     * The further chains of a read of a value that holds links: for each
+     * position the read reached through a link stored in the value, the
+     * link positions crossed on the way to it first and the position last.
+     */
+    below?: Address[][];
+  }
   | { staged: Address }
   | { output: number }
   /** A constant of the plan, which contributes no label. */

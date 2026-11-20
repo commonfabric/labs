@@ -7701,8 +7701,67 @@ export class Instance {
       }
     }
     if (doc === undefined) return undefined;
-    const chain = this.#addressesOf([new Ref(doc, path)]);
-    return chain.length === 0 ? undefined : { chain, observes };
+    // Every class but `identity` resolves through a link at the last
+    // segment (PL §2.5).
+    const chain = this.#addressesOf(
+      [new Ref(doc, path)],
+      observes !== "identity",
+    );
+    return chain.length === 0 ? undefined : this.#chainsOf(chain, observes);
+  }
+
+  /**
+   * The binding of a slot to the positions its read went through, in
+   * order. A position that holds a link is one the read crossed, and a
+   * position that holds none is one it observed: the positions up to the
+   * first observed one are the slot's chain, and each further run of
+   * crossed links with the position it ends in is a chain below it, which
+   * a read of a value that holds links makes. An `identity` slot observes
+   * the reference at its last position and has one chain.
+   */
+  #chainsOf(addresses: Address[], observes: string): SlotBinding {
+    if (observes === "identity") return { chain: addresses, observes };
+    const chains: Address[][] = [];
+    let current: Address[] = [];
+    for (const address of addresses) {
+      current.push(address);
+      if (!isLink(this.store.peek(address.doc, address.path))) {
+        chains.push(current);
+        current = [];
+      }
+    }
+    // The positions end at a link where they are those of another slot's
+    // read that stopped there, as an `identity` slot's does. Every other
+    // class resolves through a link at the last segment (PL §2.5): the
+    // chain goes on to where the link leads.
+    const stopped = current.at(-1);
+    if (stopped !== undefined) {
+      const seen = new Set(
+        addresses.map(({ doc, path }) => JSON.stringify([doc, path])),
+      );
+      this.#quietly(() => {
+        const crossed: Position[] = [];
+        const located = this.store.locate(
+          new Ref(stopped.doc, stopped.path),
+          true,
+          crossed,
+        );
+        for (
+          const { doc, path } of [
+            ...crossed.filter(({ keyed }) => keyed === undefined),
+            located.ref,
+          ]
+        ) {
+          const id = JSON.stringify([doc, path]);
+          if (seen.has(id)) continue;
+          seen.add(id);
+          current.push({ doc, path: [...path] });
+        }
+      });
+      chains.push(current);
+    }
+    const [chain = [], ...below] = chains;
+    return { chain, observes, ...(below.length === 0 ? {} : { below }) };
   }
 
   /** The other slots with the root and the path of `slot`, by its index. */
@@ -7802,7 +7861,11 @@ export class Instance {
    * order: a reference by key is resolved to the position that holds the
    * key now, and a reference to the links it crosses and its position.
    */
-  #addressesOf(at: readonly (Position | Ref)[]): Address[] {
+  #addressesOf(
+    at: readonly (Position | Ref)[],
+    /** Whether a link at the last segment of a reference is followed. */
+    through = false,
+  ): Address[] {
     const found: Address[] = [];
     const seen = new Set<string>();
     const add = (doc: string, path: readonly string[]) => {
@@ -7820,7 +7883,11 @@ export class Instance {
           // The links crossed, and the position that holds the key now
           // in the place of the read by key.
           const crossed: Position[] = [];
-          const located = this.store.locate(ref, false, crossed);
+          const located = this.store.locate(
+            ref,
+            through && position instanceof Ref,
+            crossed,
+          );
           for (const { doc, path, keyed } of crossed) {
             if (keyed === undefined) add(doc, path);
           }
@@ -7903,7 +7970,7 @@ export class Instance {
       const source = this.#sourceReadBinding(slot, keys);
       if (source !== undefined) return source;
     }
-    return { chain, observes: bound.observes };
+    return this.#chainsOf(chain, bound.observes);
   }
 
   /**
@@ -7939,9 +8006,7 @@ export class Instance {
       ) return undefined;
       found ??= chain;
     }
-    return found === undefined
-      ? undefined
-      : { chain: found, observes: "value" };
+    return found === undefined ? undefined : this.#chainsOf(found, "value");
   }
 
   /**

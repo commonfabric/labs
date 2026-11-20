@@ -866,6 +866,13 @@ export type SlotBinding =
   | {
     readonly chain: readonly CfcAddress[];
     readonly observes: "value" | "shape" | "followRef";
+    /**
+     * The further chains of a read of a value that holds links: for each
+     * position the read reached through a link stored in the value, the
+     * link positions crossed on the way to it first and the position last,
+     * read in the class of `observes`.
+     */
+    readonly below?: readonly (readonly CfcAddress[])[];
   }
   | { readonly staged: CfcAddress }
   | { readonly output: number }

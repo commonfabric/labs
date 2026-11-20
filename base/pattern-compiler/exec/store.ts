@@ -1967,6 +1967,11 @@ export class Store {
   ): unknown {
     if (isLink(value)) {
       const { doc, path, schema } = value.$link;
+      // The position of a link the value holds is one the read crossed,
+      // where its path names the position and not an element by its key.
+      if (!at.path.some(isKeySegment)) {
+        reads?.push({ doc: at.doc, path: at.path });
+      }
       return this.#deep(new Ref(doc, path, schema), reads, open, copies);
     }
     if (isStream(value)) return { $stream: true };

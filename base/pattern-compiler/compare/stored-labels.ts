@@ -560,18 +560,23 @@ export const checkWrites = (
           return { confidentiality: [], integrity: [] };
         }
         const { chain, observes } = binding;
-        if (chain.length === 0) throw new NotEvaluated("an empty chain");
-        const links = chain.slice(0, -1).map((link) =>
-          observed(link, "followRef")
-        );
-        const last = observed(chain[chain.length - 1], observes);
-        return {
-          confidentiality: union([
-            ...links.map((link) => link.confidentiality),
-            last.confidentiality,
-          ]),
-          integrity: last.integrity,
-        };
+        // Every chain of the binding, as `slotLabel` of
+        // `runtime/runner/src/cfc/plan-labels.ts` reads them.
+        const clauses: Atom[][] = [];
+        let integrity: Atom[] | undefined;
+        for (const each of [chain, ...(binding.below ?? [])]) {
+          if (each.length === 0) throw new NotEvaluated("an empty chain");
+          for (const link of each.slice(0, -1)) {
+            clauses.push(observed(link, "followRef").confidentiality);
+          }
+          const last = observed(each[each.length - 1], observes);
+          clauses.push(last.confidentiality);
+          const held = new Set(last.integrity.map(atomKey));
+          integrity = integrity === undefined
+            ? last.integrity
+            : integrity.filter((atom) => held.has(atomKey(atom)));
+        }
+        return { confidentiality: union(clauses), integrity: integrity ?? [] };
       };
       const slotLabel = (slot: number, from: Place): Label => {
         if (slot >= OUTPUT_SLOT) return outputLabel(slot - OUTPUT_SLOT, from);

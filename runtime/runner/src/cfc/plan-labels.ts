@@ -292,17 +292,35 @@ export const instantiatePlanLabels = (
     if (chain.length === 0) {
       throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
     }
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // A read of a value that holds links observes, in the slot's class,
+    // each position a link in the value led to, as a recursive read does:
+    // the slot's confidentiality joins what every chain consumes, and its
+    // integrity is the atoms the observation at the end of every chain
+    // carries.
     const clauses: CfcConfClause[] = [];
-    for (const link of chain.slice(0, -1)) {
-      for (const clause of observed(link, "followRef").confidentiality) {
-        clauses.push(clause);
+    let integrity: CfcAtom[] | undefined;
+    for (const each of [chain, ...(binding.below ?? [])]) {
+      if (each.length === 0) {
+        throw new PlanLabelError(`slot ${slot} is bound to an empty chain`);
       }
+      for (const link of each.slice(0, -1)) {
+        for (const clause of observed(link, "followRef").confidentiality) {
+          clauses.push(clause);
+        }
+      }
+      const last = observed(each[each.length - 1], observes);
+      for (const clause of last.confidentiality) clauses.push(clause);
+      // The table holds each atom once, so two are equal where they are
+      // one object.
+      const atoms = table.intern({ integrity: last.integrity }).integrity;
+      integrity = integrity === undefined
+        ? [...atoms]
+        : integrity.filter((atom) => atoms.includes(atom));
     }
-    const last = observed(chain[chain.length - 1], observes);
-    for (const clause of last.confidentiality) clauses.push(clause);
     return table.intern({
       confidentiality: clauses,
-      integrity: last.integrity,
+      integrity: integrity ?? [],
     });
   };
 

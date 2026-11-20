@@ -366,6 +366,38 @@ describe("cfc-plan-labels", () => {
       });
     });
 
+    it("joins, for a slot whose read reached further positions through links in its value, the label of each of them", async () => {
+      // The read of a value that holds a link observes the value and what
+      // the link leads to: the binding lists the second position as a chain
+      // below the slot's own, and the label holds the clauses of both.
+      await withSources((_runtime, tx, identity, target) => {
+        tx.recordCfcWritePolicyInput(
+          {
+            ...planWrite(
+              identity,
+              { ...target, path: ["a"] },
+              0,
+              address("of:src-a"),
+            ),
+            slots: {
+              0: {
+                chain: [address("of:src-a")],
+                observes: "value",
+                below: [[address("of:src-b")]],
+              },
+            },
+          },
+          runtimeWritePolicyAuthorization,
+        );
+        const labels = planLabelsFor(tx, deriveFlowJoin(tx));
+        expect(labels.reasons).toEqual([]);
+        expect(confidentialityAt(labels, target, "a").sort()).toEqual([
+          "secret-a",
+          "secret-b",
+        ]);
+      });
+    });
+
     it("returns the label staged at an address the transaction wrote", async () => {
       await withSources((_runtime, tx, identity, target) => {
         tx.recordCfcWritePolicyInput(

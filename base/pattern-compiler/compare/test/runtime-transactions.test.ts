@@ -670,7 +670,11 @@ describe("write records the runtime instantiates with the option on", () => {
             ? undefined
             : { ...link, path: [...link.path, ...at.path.slice(reached)] };
         }
-        return { refused, label, through };
+        // The entries stored at `path` itself.
+        const entries = (metadata?.labelMap.entries ?? []).filter((entry) =>
+          JSON.stringify(entry.path) === JSON.stringify(path)
+        );
+        return { refused, label, through, entries };
       } finally {
         read.abort();
       }
@@ -753,6 +757,45 @@ describe("write records the runtime instantiates with the option on", () => {
     const clauses = JSON.stringify(label?.confidentiality ?? []);
     expect(clauses).toContain('"input:items"');
     expect(clauses).not.toContain("item-note");
+  });
+
+  it("stores at a text of a whole list the clauses of the list and of a record the list holds a link to", async () => {
+    // The handler appends a record, which is a document of its own that
+    // the list links to. The read of the list's value goes through the
+    // list's array and through that link: the label of `all` holds the
+    // clause of the list, and the clause its elements declare on `note`.
+    const { refused, entries } = await commitWithOptionOn(
+      "whole-after-push",
+      { items: [{ note: "a", amount: 1 }] },
+      ["all"],
+      0,
+    );
+    expect(refused).toEqual([]);
+    const value = JSON.stringify(
+      entries.filter((entry) => entry.observes === "value")
+        .map((entry) => entry.label.confidentiality ?? []),
+    );
+    expect(value).toContain('"input:items"');
+    expect(value).toContain("item-note");
+  });
+
+  it("binds a `value` slot that no evaluation bound through the link at its position, where a slot that observes the reference there was bound", async () => {
+    // The pattern compiled in binds a handler to `items`, which observes
+    // the reference the argument holds, and computes a text of the list.
+    // The `value` slot of the text resolves through that reference (PL
+    // §2.5): its label is the list's, with the clause an element declares.
+    const { refused, entries } = await commitWithOptionOn(
+      "whole-in-child",
+      { items: [{ note: "a", amount: 1 }] },
+      ["$UI", "children", "0", "children", "0"],
+    );
+    expect(refused).toEqual([]);
+    const value = JSON.stringify(
+      entries.filter((entry) => entry.observes === "value")
+        .map((entry) => entry.label.confidentiality ?? []),
+    );
+    expect(value).toContain('"input:items"');
+    expect(value).toContain("item-note");
   });
 
   it("binds the slot of a handler's write edge that read the position the edge writes to what it read, and commits", async () => {

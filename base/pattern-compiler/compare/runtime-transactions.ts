@@ -578,6 +578,11 @@ export class RuntimeTransactions implements TransactionHooks {
     return {
       chain: binding.chain.map((address) => this.#cfcAddress(address)),
       observes,
+      ...(binding.below === undefined ? {} : {
+        below: binding.below.map((chain) =>
+          chain.map((address) => this.#cfcAddress(address))
+        ),
+      }),
     };
   }
 
