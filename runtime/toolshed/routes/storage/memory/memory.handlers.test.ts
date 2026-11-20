@@ -6,6 +6,7 @@ import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
   type ServerMessage,
 } from "@commonfabric/memory/v2";
@@ -937,6 +938,65 @@ describe("memory.handlers", () => {
         requestId: "traced",
       });
       fake.dispatchEvent(new CloseEvent("close"));
+    });
+
+    it("traces a commit under the slot limit its server admits", async () => {
+      const envGet = Deno.env.get.bind(Deno.env);
+      using _env = stub(
+        Deno.env,
+        "get",
+        (name) => name === "CF_DEBUG_MEMORY_WRITES" ? "1" : envGet(name),
+      );
+      const traced: string[] = [];
+      using _console = stub(console, "error", (...args: unknown[]) => {
+        if (String(args[0]).startsWith("[memwrite]")) {
+          traced.push(String(args[0]));
+        }
+      });
+      // A write standing for one slot past the default, a few bytes encoded.
+      const items: unknown[] = [];
+      items[MAX_UNTRUSTED_MESSAGE_SLOTS] = 1;
+      const commit = encodeMemoryBoundary({
+        type: "transact",
+        requestId: "past-default",
+        space: "did:key:diagnostic",
+        sessionId: "missing-session",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:large",
+            value: { value: { items } } as never,
+          }],
+        },
+      });
+      const hello = encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: { ...getMemoryProtocolFlags(), messageCompressionV1: false },
+      });
+
+      for (
+        const untrustedMessageSlots of [
+          undefined,
+          MAX_UNTRUSTED_MESSAGE_SLOTS * 2,
+        ]
+      ) {
+        traced.length = 0;
+        const fake = new FakeSocket();
+        const { server } = recordingServer();
+        await attachOver(fake, {
+          ...server,
+          options: { untrustedMessageSlots },
+        }, hello);
+        fake.dispatchEvent(new MessageEvent("message", { data: commit }));
+        await Promise.race([fake.whenSent(2), fake.whenClosed()]);
+        expect(traced).toHaveLength(
+          untrustedMessageSlots === undefined ? 0 : 1,
+        );
+        fake.dispatchEvent(new CloseEvent("close"));
+      }
     });
   });
 

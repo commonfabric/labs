@@ -649,8 +649,9 @@ with them.
 
 - **Admitted:** as a trusted gesture on `ChatAddMemberSurface`, from the room's
   rendered add control, which takes an address or a pick from the people the
-  reader's manager lists who aren't in the room yet, or from a client's own
-  control through the sanctioned issuing path (see
+  reader's manager lists in `askedPeople` who aren't in the room yet, once its
+  "Add people from your chats" control has sent the manager `askForPeople`, or
+  from a client's own control through the sanctioned issuing path (see
   [`clients.md`](clients.md#the-sanctioned-issuing-path)), from an OWNER of the
   room's space, for a group room in a space of its own.
 - **Effect:** grants the principal OWNER on the room's space, so they too may
