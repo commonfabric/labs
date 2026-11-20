@@ -147,8 +147,9 @@ command names the service and the key itself: `<key>` is
   stable; numbers only move forward.
 - **link** ("a link for Ana"): `cf pattern link <entry>` gives stable, or beta
   when nothing is stable yet; `--beta` when they ask for beta. It names the
-  pattern, not them, unless they published it under their name. Opening a link
-  in Weaver is not built yet; say so.
+  pattern, not them, unless they published it under their name. Someone with
+  Claude Code opens a link as below (**open**, from a link); opening one in
+  Weaver is not built yet, so say so.
 - **open**: getting a pattern into a folder, with commands that already exist.
   `cf` reads paths from the folder the session started in, `my-patterns/`, so a
   pattern's folder is `<name>/`.
@@ -167,6 +168,9 @@ command names the service and the key itself: `<key>` is
     own piece of it, then `cf piece getsrc --cell my-<name> <name>/` writes the
     files. `cf` remembers where that piece came from, so sharing it later
     credits the original.
+  - **From a link** someone sent (`a-k3x9`, `a-k3x9@beta`, `a-k3x9@3`): the
+    same, with `cf piece new --from-link <link> --slug my-<name>`. It takes the
+    version the link names now, and credits it the same way.
 - **list**: `cf pattern history` (all of theirs) and `cf pattern mine` (what
   they share, and how many people use it).
 
