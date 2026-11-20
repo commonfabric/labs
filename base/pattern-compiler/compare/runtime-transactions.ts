@@ -530,11 +530,7 @@ export class RuntimeTransactions implements TransactionHooks {
     // labels, and otherwise the schema the document's stored labels name.
     // A schema of a plan is a JSON schema with the members the executor
     // reads typed (`Schema` of `exec/store.ts`).
-    recordRelevantSchemaWritePolicyInput(
-      tx,
-      this.#address(doc, path),
-      schema as JSONSchema | undefined,
-    );
+    this.#recordSchema(tx, doc, path, schema, store);
     if (this.#compiledPattern === undefined) return;
     // A write of the value the storage holds is no write of the
     // transaction: its records are given as those of a write that left the
@@ -545,6 +541,50 @@ export class RuntimeTransactions implements TransactionHooks {
       tx,
       writes ?? [],
       attempts !== undefined && tx.getWriteAttemptLog?.().length === attempts,
+    );
+  }
+
+  /**
+   * Records the schema write-policy input of a write at `path` of `doc`
+   * under `schema`, the schema of the reference the write was made through.
+   * A write at or below a member of an array is recorded at the outermost
+   * array on the way: a schema input is spelled from its path with each
+   * segment as a named property, and the envelope the document stores
+   * spells an array as an array, so an input at a path through an index
+   * does not merge with it. The schema of the write is then spelled from
+   * that array, an index as its `items`; a write under a schema that
+   * declares no label answers to the schema the document stores there.
+   */
+  #recordSchema(
+    tx: IExtendedStorageTransaction,
+    doc: string,
+    path: readonly string[],
+    schema: Schema | undefined,
+    store: Store,
+  ): void {
+    const isIndex = (at: number) =>
+      /^(0|[1-9][0-9]*)$/.test(path[at]) &&
+      Array.isArray(store.peek(doc, path.slice(0, at)));
+    const first = path.findIndex((_, at) => isIndex(at));
+    if (first < 0) {
+      recordRelevantSchemaWritePolicyInput(
+        tx,
+        this.#address(doc, path),
+        schema as JSONSchema | undefined,
+      );
+      return;
+    }
+    let spelled = schema as JSONSchema | undefined;
+    for (let at = path.length - 1; at >= first; at--) {
+      if (typeof spelled !== "object") break;
+      spelled = isIndex(at)
+        ? { type: "array", items: spelled }
+        : { type: "object", properties: { [path[at]]: spelled } };
+    }
+    recordRelevantSchemaWritePolicyInput(
+      tx,
+      this.#address(doc, path.slice(0, first)),
+      typeof spelled === "object" ? spelled : undefined,
     );
   }
 
@@ -595,7 +635,7 @@ export class RuntimeTransactions implements TransactionHooks {
   unchanged(
     doc: string,
     path: readonly string[],
-    _store: Store,
+    store: Store,
     schema: Schema | undefined,
     writes: readonly PlanWrite[],
   ): void {
@@ -605,13 +645,15 @@ export class RuntimeTransactions implements TransactionHooks {
     // for a write: the label is stored under the policy a write of the
     // path is held to.
     for (const target of new Set(writes.map((write) => write.target))) {
-      recordRelevantSchemaWritePolicyInput(
+      this.#recordSchema(
         tx,
-        this.#address(target.doc, target.path),
+        target.doc,
+        target.path,
         target.doc === doc &&
           JSON.stringify(target.path) === JSON.stringify(path)
-          ? schema as JSONSchema | undefined
+          ? schema
           : undefined,
+        store,
       );
     }
     this.#record(tx, writes, true);

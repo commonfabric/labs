@@ -102,7 +102,7 @@ describe("stored-labels", () => {
 
   describe("soundnessOfScenario() on a fixture whose commits were refused", () => {
     /** The refusals and the findings of each scenario of a fixture. */
-    const ran = async (fixture: string) => {
+    const ran = async (fixture: string, repeated = false) => {
       const refusals: string[] = [];
       const found: string[] = [];
       let dependent = 0;
@@ -114,6 +114,7 @@ describe("stored-labels", () => {
           scenario.artifacts,
           scenario.argument,
           scenario.events,
+          repeated,
         );
         for (const reason of refused) {
           refusals.push(reason.slice(reason.lastIndexOf(": ") + 2));
@@ -133,6 +134,16 @@ describe("stored-labels", () => {
       expect(refusals).toEqual([]);
       expect(found).toEqual([]);
       expect(dependent).toBeGreaterThan(0);
+    });
+
+    // A handler writes a member of a record that an input's array holds in
+    // place, a second time: the document then stores an envelope that
+    // spells the input as an array.
+    it("commits every transaction of `value-identity` with its events sent three times, whose handlers write below a member of an array of an input", async () => {
+      const { refusals, found } = await ran("value-identity", true);
+
+      expect(refusals).toEqual([]);
+      expect(found).toEqual([]);
     });
 
     // A handler that reads a list and then writes one of its records reads
