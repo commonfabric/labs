@@ -82,10 +82,10 @@ export const KERNEL_LEDGER_FILES: ReadonlySet<string> = new Set([
 
 /**
  * The most `SPEC-PENDING` markers the governed files may hold at once. Set
- * by the CFC owner (2026-10-30: three was too low to let labs changes land
- * while their rulings wait).
+ * by the CFC owner (2026-11-20: eighty, so that labs changes land while their
+ * rulings wait).
  */
-export const SPEC_PENDING_BUDGET = 40;
+export const SPEC_PENDING_BUDGET = 80;
 
 /**
  * The memory package's CFC sources: the release authority and the label-field
