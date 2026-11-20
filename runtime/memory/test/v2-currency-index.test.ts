@@ -14,6 +14,7 @@ import {
   pullCurrencyExports,
   registerCurrencyReads,
   selectCurrencyPiece,
+  selectCurrencyReadersMoved,
   selectCurrencySourcePosition,
   selectCurrencySources,
   storeCurrencyRecords,
@@ -1577,8 +1578,20 @@ describe("currency-index", () => {
           space: SOURCE,
           reader: SPACE,
           reads: ids.map((id) => ({ id, scopeKey: "space" })),
-        }),
+        }).entries,
       });
+
+    /**
+     * The spaces the source would tell of what moved since `since`, a
+     * position of its own.
+     */
+    const movedSince = (since: number): string[] =>
+      selectCurrencyReadersMoved(source, { space: SOURCE, since }).readers
+        .map(({ reader }) => reader);
+
+    /** The source's highest position. */
+    const position = (): number =>
+      selectCurrencyReadersMoved(source, { space: SOURCE, since: 0 }).position;
 
     /** Pulls from the source what changed, and applies it. */
     const pull = () => {
@@ -1669,50 +1682,20 @@ describe("currency-index", () => {
         expect(markOf("of:piece")).toBe(2);
       });
 
-      it("stores marked `1` a slice that reads what a clean slice that read another space writes, in one batch and in a later one", () => {
-        // What the other space last said is asked for again before a
-        // judgment that may rest on the slice that read it, and not when
-        // that space changes, so what the slice writes is no current input.
-
+      it("stores clean a slice that reads what a clean slice that read another space writes", () => {
         const head = writeSource("of:far");
         register("of:far");
-        const producing = record("of:piece", {
-          reads: [far("of:far", head)],
-          produces: ["computed:out"],
-        });
         const asOf = write("of:piece", "computed:out");
-        store(asOf, [
-          producing,
-          record("of:together", { reads: [derived("computed:out")] }),
-        ]);
-
-        store(asOf, [record("of:later", { reads: [derived("computed:out")] })]);
-
-        expect([
-          markOf("of:piece"),
-          markOf("of:together"),
-          markOf("of:later"),
-        ]).toEqual([0, 1, 1]);
-      });
-
-      it("marks `1` a clean slice that reads what a piece writes once a record of that piece reads another space", () => {
-        const asOf = write("of:piece", "computed:out");
-        store(asOf, [
-          record("of:piece", { produces: ["computed:out"] }),
-          record("of:reader", { reads: [derived("computed:out")] }),
-        ]);
-        expect(markOf("of:reader")).toBe(0);
-        const head = writeSource("of:far");
-        register("of:far");
 
         store(asOf, [
           record("of:piece", {
             reads: [far("of:far", head)],
             produces: ["computed:out"],
           }),
+          record("of:reader", { reads: [derived("computed:out")] }),
         ]);
 
-        expect([markOf("of:piece"), markOf("of:reader")]).toEqual([0, 1]);
+        expect([markOf("of:piece"), markOf("of:reader")]).toEqual([0, 0]);
       });
 
       it("reports no false clean for a piece that wrote a vouched instance again after an instance of another space it read changed", () => {
@@ -1775,6 +1758,86 @@ describe("currency-index", () => {
       });
     });
 
+    describe("registerCurrencyReads()", () => {
+      it("returns to no pull an instance that has not changed since it was registered", () => {
+        storeReading();
+
+        expect(pull()).toEqual([]);
+      });
+
+      it("returns the slices of the source its advance marked", () => {
+        const asOf = storeProducer();
+        const changed = writeSource("of:raw");
+
+        const registered = registerCurrencyReads(source, {
+          space: SOURCE,
+          reader: SPACE,
+          reads: [{ id: "computed:far", scopeKey: "space" }],
+        });
+
+        expect(registered.marked.map(({ piece, seq }) => ({ piece, seq })))
+          .toEqual([{ piece: "of:producer", seq: changed }]);
+        expect(registered.entries).toEqual([{
+          id: "computed:far",
+          scopeKey: "space",
+          head: asOf,
+          stale: true,
+        }]);
+      });
+    });
+
+    describe("selectCurrencyReadersMoved()", () => {
+      it("returns a space that registered an instance a commit changed, once the cursor advanced, in a store with no record", () => {
+        storeReading();
+        const before = position();
+        writeSource("of:far");
+        expect(movedSince(before)).toEqual([]);
+
+        advanceCurrencyCursor(source, { space: SOURCE });
+
+        expect(movedSince(before)).toEqual([SPACE]);
+      });
+
+      it("returns no space for a commit to an instance none registered", () => {
+        storeReading();
+        const before = position();
+        writeSource("of:other");
+
+        advanceCurrencyCursor(source, { space: SOURCE });
+
+        expect(movedSince(before)).toEqual([]);
+      });
+
+      it("returns a space that registered an instance whose producer an advance marked, and again once a record of the producer is clean", () => {
+        storeProducer();
+        register("computed:far");
+        const before = position();
+        const changed = writeSource("of:raw");
+        advanceCurrencyCursor(source, { space: SOURCE });
+        expect(movedSince(before)).toEqual([SPACE]);
+        const marked = position();
+
+        storeSource(changed, [
+          record("of:producer", {
+            reads: [{ ...input("of:raw"), space: SOURCE }],
+            produces: ["computed:far"],
+          }),
+        ]);
+
+        expect(movedSince(marked)).toEqual([SPACE]);
+      });
+
+      it("returns a space that registered an instance a piece no longer writes", () => {
+        const asOf = storeProducer();
+        register("computed:far");
+        const before = position();
+
+        storeSource(asOf, [record("of:producer")]);
+
+        expect(movedSince(before)).toEqual([SPACE]);
+      });
+    });
+
     describe("applyCurrencyImports()", () => {
       it("marks `2` each slice that read an instance a pull finds changed, and no slice that read another", () => {
         storeReading("of:pieceA", "of:farA");
@@ -1784,6 +1847,23 @@ describe("currency-index", () => {
         pull();
 
         expect([markOf("of:pieceA"), markOf("of:pieceB")]).toEqual([2, 0]);
+      });
+
+      it("marks `1` a slice that reads what a slice writes that a pull marked", () => {
+        const head = writeSource("of:far");
+        register("of:far");
+        store(write("of:piece", "computed:out"), [
+          record("of:piece", {
+            reads: [far("of:far", head)],
+            produces: ["computed:out"],
+          }),
+          record("of:reader", { reads: [derived("computed:out")] }),
+        ]);
+        writeSource("of:far");
+
+        pull();
+
+        expect([markOf("of:piece"), markOf("of:reader")]).toEqual([2, 1]);
       });
 
       it("marks `1` a slice whose source reports its instance stale upstream, and clears it once the source's producer is recorded clean again", () => {
@@ -1839,25 +1919,15 @@ describe("currency-index", () => {
     });
 
     describe("judgeCurrencyRoots()", () => {
-      it("refuses a root that rests on a slice that read another space, and returns it where the judgment is made across spaces", () => {
+      it("returns a root that rests on a clean slice that read another space", () => {
         storeReading();
-        const rows = [{ id: "of:piece", scopeKey: "space" }];
 
         expect(
           judgeCurrencyRoots(engine, {
             space: SPACE,
             roots: ["of:piece"],
-            rows,
+            rows: [{ id: "of:piece", scopeKey: "space" }],
             epoch: EPOCH,
-          }).refused,
-        ).toEqual([{ root: "of:piece", reason: "reads-another-space" }]);
-        expect(
-          judgeCurrencyRoots(engine, {
-            space: SPACE,
-            roots: ["of:piece"],
-            rows,
-            epoch: EPOCH,
-            acrossSpaces: true,
           }).servable,
         ).toEqual(["of:piece"]);
       });

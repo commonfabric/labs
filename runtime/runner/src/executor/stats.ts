@@ -374,8 +374,8 @@ export type ServingLoopStats = {
     servable: number;
 
     /** Roots a judgment found the store could not serve, by the first reason
-     * found: `no-record`, `marked`, `other-epoch`, `reads-another-space` (the
-     * root's piece), and `unvouched-instance`, `absent-owned`,
+     * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
+     * `unvouched-instance`, `absent-owned`,
      * `owner-not-clean` (a demanded instance of the piece or of one beneath
      * it). */
     refused: Record<string, number>;
@@ -388,6 +388,12 @@ export type ServingLoopStats = {
      * marked the piece, or a session's demand reached an instance the
      * piece does not vouch for. */
     rearmed: number;
+
+    /** Times the loop was woken to judge a root it had left unloaded
+     * because the index changed from outside it: a space a slice read told
+     * this one of a change, or a request made for another space marked a
+     * slice here. */
+    indexWakes: number;
 
     /** Pieces the index held clean that wrote an instance they vouched for
      * again with no input of theirs changed. Each one is a judgment that
@@ -903,6 +909,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     refused: {},
     servedFromStore: 0,
     rearmed: 0,
+    indexWakes: 0,
     falseClean: 0,
   },
   settle: { series: [], dropped: 0 },

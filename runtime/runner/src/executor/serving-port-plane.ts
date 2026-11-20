@@ -522,18 +522,13 @@ class PlaneMemoryServer implements HostMemoryServer {
   judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: {
-      excludePrincipal?: string;
-      epoch: string;
-      acrossSpaces?: boolean;
-    },
+    options: { excludePrincipal?: string; epoch: string },
   ): ReturnType<HostMemoryServer["judgeCurrencyRoots"]> {
     return this.#endpoint.request("server.judgeCurrencyRoots", {
       space,
       roots: [...roots],
       excludePrincipal: options.excludePrincipal,
       epoch: options.epoch,
-      acrossSpaces: options.acrossSpaces,
     });
   }
 
@@ -701,6 +696,9 @@ export class ServingPlane {
     endpoint.onNotice("observer.viewsChanged", ({ space, sessionId }) => {
       this.#viewInterests.noteChanged(space);
       this.#observer?.viewsChanged?.(space, sessionId);
+    });
+    endpoint.onNotice("observer.currencyChanged", ({ space }) => {
+      this.#observer?.currencyChanged?.(space);
     });
     endpoint.onNotice("observer.sessionChanged", ({ event }) => {
       this.#sessions.apply(event);

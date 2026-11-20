@@ -1220,12 +1220,20 @@ executing:
   marked `2` where its read is behind that head or the space cannot be
   asked, and `1` where the instance is stale there. A judgment that may rest
   on such a slice first pulls, from each space the slices its demand rows
-  are resolved under read, what changed since its last pull. Only a loop
-  that records and judges without acting asks for such a judgment: a loop
-  that leaves a servable root unstarted refuses a root that rests on a
-  slice that read another space, since no change there wakes it. For the
-  same reason a slice that reads what a clean slice that read another space
-  writes is marked `1`. A slice that read what a live, clean writer
+  are resolved under read, what changed since its last pull, and the space
+  pulled from first pulls from the spaces it reads itself. A pull arms the
+  reading space: the memory server tells it, once, of the next change to an
+  instance it registered, and until then a judgment asks that space
+  nothing. A commit admitted into a space with an armed reader queues an
+  advance of its cursor, which is what finds the change. A space that is
+  told passes the word to each space armed with it, pulling nothing, and
+  its loop judges again each root it left unstarted. Which spaces are armed
+  is held in the memory server's memory, so after a restart every space
+  pulls before it rests on another. A trigger carries how many triggers
+  lead to it from a commit a client authored, and a space eight or more
+  along such a chain is one no space rests on: a slice that read it is
+  marked `2`, so its piece starts, until a client's commit lands there. A
+  slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
   narrower than the space, and when it records a source origin (§3e), since
@@ -1238,8 +1246,9 @@ executing:
   bounded size, and the last names the pieces the earlier ones stored, so
   pieces that read each other's writes are judged clean together. Each row
   takes its instance's head seq where every commit to it above the settle's
-  visible input head is the loop's own, and that head otherwise, which
-  leaves the slice marked. The serving runtime can hold a frame above that
+  visible input head, or above the watermark where that is higher, is the
+  loop's own, and that seq otherwise, which leaves the slice marked. The
+  serving runtime can hold a frame above that
   head, so the loop takes such a piece's record again at its next settle
   that covers more, and a stored record that leaves one owed wakes the loop
   for it. A vouch row does not move up to a head a commit other than a
@@ -1263,7 +1272,9 @@ executing:
   `currency_import` and `currency_source` on the reading side and
   `currency_reader` and `currency_export` on the side read;
   `runtime/memory/v2/currency-index.ts` is their only writer and reader,
-  pinned in `runtime/memory/test/v2-currency-index.test.ts`.
+  pinned in `runtime/memory/test/v2-currency-index.test.ts`, and what
+  passes between two spaces' indexes in
+  `runtime/memory/test/v2-server-currency.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables

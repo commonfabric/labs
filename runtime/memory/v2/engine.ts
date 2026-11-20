@@ -586,8 +586,7 @@ CREATE TABLE IF NOT EXISTS currency_slice_source (
 -- here read: the instance's head seq there, and whether what it holds is
 -- stale upstream (stale = 1). That is a derived document no recorded piece
 -- of that space writes, or an instance a recorded piece there computes
--- while a slice that decides it is marked, none vouches for it, or a clean
--- slice that decides it read a third space.
+-- while a slice that decides it is marked or none vouches for it.
 CREATE TABLE IF NOT EXISTS currency_import (
   branch    TEXT    NOT NULL,
   source    TEXT    NOT NULL,
@@ -614,9 +613,12 @@ CREATE TABLE IF NOT EXISTS currency_reader (
   scope_key TEXT NOT NULL,
   PRIMARY KEY (branch, reader, id, scope_key)
 );
+CREATE INDEX IF NOT EXISTS idx_currency_reader_instance
+  ON currency_reader (branch, id, scope_key);
 -- What this store last told the spaces that read a registered instance: its
 -- head seq, whether it is stale upstream, and the position at which either
--- last changed. A position is a counter of this store's own, which a
+-- last changed, 0 for a row that has not changed since its instance was
+-- first registered. A position is a counter of this store's own, which a
 -- reading space pulls from.
 CREATE TABLE IF NOT EXISTS currency_export (
   branch    TEXT    NOT NULL,

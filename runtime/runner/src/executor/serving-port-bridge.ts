@@ -161,6 +161,8 @@ export class ServingPortBridge {
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      currencyChanged: (space) =>
+        endpoint.notify("observer.currencyChanged", { space }),
       sessionChanged: (event) =>
         endpoint.notify("observer.sessionChanged", { event }),
     };
@@ -394,11 +396,10 @@ export class ServingPortBridge {
     );
     endpoint.onRequest(
       "server.judgeCurrencyRoots",
-      ({ space, roots, excludePrincipal, epoch, acrossSpaces }) =>
+      ({ space, roots, excludePrincipal, epoch }) =>
         server.judgeCurrencyRoots(space, roots, {
           ...(excludePrincipal !== undefined && { excludePrincipal }),
           epoch,
-          ...(acrossSpaces === true && { acrossSpaces }),
         }),
     );
     endpoint.onRequest(

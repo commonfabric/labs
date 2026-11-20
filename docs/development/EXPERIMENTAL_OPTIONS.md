@@ -2535,9 +2535,10 @@ the per-epic implementation notes).
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
   wrote a vouched output again with no input changed, each one a judgment
-  that would have served a stale value. Under `record` a root may rest on a
-  slice that read another space the same memory server holds, which is
-  asked what changed before the judgment; `skip` refuses such a root.
+  that would have served a stale value. A root may rest on a slice that
+  read another space the same memory server holds: that space is asked
+  what changed before the judgment, and tells the reading space of its next
+  change, which has a loop that left such a root unstarted judge it again.
   `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
@@ -2552,11 +2553,13 @@ the per-epic implementation notes).
   `currency.falseClean` at zero. `SERVER_EXECUTION_CURRENCY_INDEX=off`
   restores a start for every demanded piece, and `record` keeps the index
   and starts every piece.
-- **Status on 2026-11-19.** Implemented, and `skip` by default on toolshed.
+- **Status on 2026-11-20.** Implemented, and `skip` by default on toolshed.
   The index and its marks are covered in
-  `runtime/memory/test/v2-currency-index.test.ts`, and recording, the
-  judgment, and a skipped root's re-arm in
-  `runtime/runner/test/executor/space-server-currency.test.ts`. Measured on a
+  `runtime/memory/test/v2-currency-index.test.ts`, what passes between two
+  spaces' indexes in `runtime/memory/test/v2-server-currency.test.ts`, and
+  recording, the judgment, and a skipped root's re-arm in
+  `runtime/runner/test/executor/space-server-currency.test.ts` and
+  `space-server-currency-wish.test.ts` beside it. Measured on a
   synthetic Topics board under a serving worker and on a counter in the
   browser
   ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).

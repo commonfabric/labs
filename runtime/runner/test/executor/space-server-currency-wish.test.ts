@@ -35,6 +35,9 @@ const aliceSigner = await Identity.fromPassphrase(
   "space-server currency wish alice",
 );
 const home = aliceSigner.did() as MemorySpace;
+const bobSigner = await Identity.fromPassphrase(
+  "space-server currency wish bob",
+);
 
 /** The tag alice's one favorite carries. */
 const FAVORITE_TAG = "currency_wish_favorite";
@@ -82,6 +85,11 @@ const SIDE_WRITER_PROGRAM: RuntimeProgram = {
     ].join("\n"),
   }],
 };
+
+/**
+ * Longer than the memory server keeps the session of a client that left.
+ */
+const DETACHED_SESSION_MS = 31_000;
 
 /** The epoch the hosts of these tests record under. */
 const EPOCH = "test-epoch";
@@ -219,9 +227,13 @@ describe("SpaceServer", () => {
     await closeLastRuntime();
   };
 
-  /** Gives alice's home space one favorite, tagged `FAVORITE_TAG`. */
-  const seedHome = async () => {
-    const writer = openRuntime(aliceSigner, false);
+  /**
+   * Gives the home space of `viewer`, alice by default, one favorite, tagged
+   * `FAVORITE_TAG`.
+   */
+  const seedHome = async (viewer = aliceSigner) => {
+    const home = viewer.did() as MemorySpace;
+    const writer = openRuntime(viewer, false);
     const tx = writer.edit();
     const favorite = writer.getCell(home, "favorite", undefined, tx);
     favorite.set({ name: "a favorite" });
@@ -323,31 +335,42 @@ describe("SpaceServer", () => {
         });
       }
 
-      /**
-       * Serves a piece that wishes for `#favorites` until alice's slice of
-       * it is recorded, then parks the space, and returns the piece's root.
-       */
-      const serveAndPark = async (): Promise<NormalizedFullLink> => {
-        const { root } = await watch(wishProgram("{ query: '#favorites' }"));
-        await awaitEach(
+      /** Resolves once a slice of the piece at `root` read the space `read`. */
+      const sliceReads = (root: NormalizedFullLink, read: MemorySpace) =>
+        awaitEach(
           cycles,
           () =>
             slicesAt(snapshotOf(root), "user").some((slice) =>
-              slice.reads.some((read) => read.space === home)
+              slice.reads.some((entry) => entry.space === read)
             ),
         );
+
+      /**
+       * Serves a piece that wishes for `#favorites` until alice's slice of
+       * it is recorded, then parks the space, and returns the piece's root
+       * with alice's runtime, which goes on watching it.
+       */
+      const serveAndPark = async (): Promise<
+        { alice: Runtime; root: NormalizedFullLink }
+      > => {
+        const watched = await watch(wishProgram("{ query: '#favorites' }"));
+        await sliceReads(watched.root, home);
         await host!.whenQuiescent();
         await host!.spaceServer(space)!.park("test-park");
-        return root;
+        return watched;
       };
 
-      /** Renames alice's favorite, as a runtime that runs nothing. */
-      const renameFavorite = async () => {
-        const writer = openRuntime(aliceSigner, false);
-        const favorite = writer.getCell<{ name: string }>(home, "favorite", {
-          type: "object",
-          properties: { name: { type: "string" } },
-        });
+      /**
+       * Renames the favorite of `viewer`, alice by default, as a runtime
+       * that runs nothing.
+       */
+      const renameFavorite = async (viewer = aliceSigner) => {
+        const writer = openRuntime(viewer, false);
+        const favorite = writer.getCell<{ name: string }>(
+          viewer.did() as MemorySpace,
+          "favorite",
+          { type: "object", properties: { name: { type: "string" } } },
+        );
         await favorite.sync();
         const tx = writer.edit();
         favorite.withTx(tx).key("name").set("another name");
@@ -356,10 +379,14 @@ describe("SpaceServer", () => {
         await closeLastRuntime();
       };
 
+      /** Resolves once the loop has left a root unloaded on a judgment. */
+      const servedFromStore = () =>
+        awaitEach(cycles, () => host!.stats().currency.servedFromStore > 0);
+
       it("counts a root that rests on the viewer's slice as one the store could serve, under `record`", async () => {
         await seedHome();
         host = newHost("record");
-        const root = await serveAndPark();
+        const { root } = await serveAndPark();
 
         await touchSpace();
         await awaitEach(cycles, () => serves(root));
@@ -374,7 +401,7 @@ describe("SpaceServer", () => {
       it("refuses that root once the home space changed while nothing served the piece, under `record`", async () => {
         await seedHome();
         host = newHost("record");
-        const root = await serveAndPark();
+        const { root } = await serveAndPark();
 
         await renameFavorite();
         await touchSpace();
@@ -386,22 +413,98 @@ describe("SpaceServer", () => {
           .toBeGreaterThan(0);
       });
 
-      it("starts a piece whose root rests on the viewer's slice, under `skip`", async () => {
-        // Nothing wakes a session whose root was left unstarted when the
-        // home space changes, so the root is refused however current the
-        // slice is.
-
+      it("leaves the piece unstarted for a viewer whose home space has not changed, under `skip`", async () => {
         await seedHome();
         host = newHost("skip");
-        const root = await serveAndPark();
+        const { root } = await serveAndPark();
 
+        await touchSpace();
+        await servedFromStore();
+        await host.whenQuiescent();
+
+        expect(serves(root)).toBe(false);
+        expect(host.stats().currency.refused["owner-not-clean"])
+          .toBeUndefined();
+      });
+
+      it("starts the piece once the viewer's home space changed while nothing served it, under `skip`", async () => {
+        await seedHome();
+        host = newHost("skip");
+        const { root } = await serveAndPark();
+
+        await renameFavorite();
         await touchSpace();
         await awaitEach(cycles, () => serves(root));
         await host.whenQuiescent();
 
         expect(host.stats().currency.servedFromStore).toBe(0);
-        expect(host.stats().currency.refused["owner-not-clean"])
-          .toBeGreaterThan(0);
+      });
+
+      it("starts a piece left unstarted once the home space of a viewer watching it changes, and the viewer reads the new value, under `skip`", async () => {
+        await seedHome();
+        host = newHost("skip");
+        const { alice, root } = await serveAndPark();
+        await touchSpace();
+        await servedFromStore();
+        await host.whenQuiescent();
+        expect(serves(root)).toBe(false);
+
+        await renameFavorite();
+
+        await awaitEach(cycles, () => serves(root));
+        await waitForCellValue(
+          alice,
+          alice.getCellFromLink<{ reader: string }>(root).key("reader"),
+          (value: string | undefined) =>
+            value?.includes("another name") === true,
+          { stuckLabel: "alice's `reader` to hold the favorite's new name" },
+        );
+        expect(host.stats().currency.indexWakes).toBeGreaterThan(0);
+      });
+
+      it("leaves the piece unstarted when the home space of a viewer who is no longer watching changes, under `skip`", async () => {
+        // The loop is told of the change and judges again, and asks nothing
+        // of a space that no slice a session demands under has read.
+
+        const bobHome = bobSigner.did() as MemorySpace;
+        await seedHome();
+        await seedHome(bobSigner);
+        host = newHost("skip");
+        const program = wishProgram("{ query: '#favorites' }");
+        const { root } = await watch(program);
+        await sliceReads(root, home);
+        const bob = openRuntime(bobSigner, true);
+        const compiled = await bob.patternManager.compilePattern(program, {
+          space,
+        });
+        const bobResult = bob.getCell<Record<string, unknown>>(
+          space,
+          "currency wish result",
+          compiled.resultSchema,
+        );
+        await bobResult.sync();
+        bobResult.sink(() => {});
+        await sliceReads(root, bobHome);
+        await host.whenQuiescent();
+        await host.spaceServer(space)!.park("test-park");
+        await touchSpace();
+        await servedFromStore();
+        await host.whenQuiescent();
+        // Bob's runtime is the one opened last. The session of a client
+        // that left counts as demand until it expires.
+        await closeLastRuntime();
+        await clock.tick(DETACHED_SESSION_MS);
+        await host.whenQuiescent();
+        const wakes = host.stats().currency.indexWakes;
+
+        await renameFavorite(bobSigner);
+
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.indexWakes > wakes,
+        );
+        await host.whenQuiescent();
+        expect(serves(root)).toBe(false);
       });
     });
 

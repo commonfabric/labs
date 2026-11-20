@@ -1,20 +1,20 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 to 3 are done; the rest is a design, with the
+Status: In progress. Steps 1 to 4 are done; the rest is a design, with the
 steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
 
 The currency index leaves a piece unstarted while its record proves every
-demanded output of it current. A slice that read a document in another space
-is never vouched for, so a piece that reads one starts on every demand, for
-each viewer whose slice holds such a read. The commonest way a pattern reads
-another space is a wish: 75 of the 507 pattern sources in this repository
-call `wish()`, and half of the 133 calls with a literal target name the
-viewer's home space, most of them `#profile` or a field of it. A social
-space whose pieces show who is looking at them therefore gets nothing from
-the index today.
+demanded output of it current. An index that stops at its own space cannot
+vouch for a slice that read a document in another space, so a piece that
+reads one would start on every demand, for each viewer whose slice holds
+such a read. The commonest way a pattern reads another space is a wish: 75
+of the 507 pattern sources in this repository call `wish()`, and half of
+the 133 calls with a literal target name the viewer's home space, most of
+them `#profile` or a field of it. A social space whose pieces show who is
+looking at them would get nothing from such an index.
 
 Three things keep such a piece from being served from the store, and this
 plan takes each:
@@ -57,10 +57,11 @@ of those, and the home space the fixture reads holds no profile.
 | `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
 
 For the home-space targets measured, the read in another space is the only
-thing in the way. The wish declares no write in the home space, so the
-piece can be vouched for, and its `space` slice and the viewer's session
-slice are: the reads in the home space are all in the viewer's `user:`
-slice.
+thing in the way, and the index follows it where one memory server holds
+both spaces ("Across spaces"). The wish declares no write in the home
+space, so the piece can be vouched for, and its `space` slice and the
+viewer's session slice are: the reads in the home space are all in the
+viewer's `user:` slice.
 
 The timer of `#now/N` runs in every runtime that holds the wish, a
 browser's included, so a browser session ticks the cell and a session with
@@ -183,16 +184,16 @@ The trigger and the transfer are separate.
 
 What a reader does with a trigger depends on what is waiting on it:
 
-- It notes that the source moved.
-- Where a loop holds a root unstarted on a slice that read that source, it
-  pulls at once, marks its slices, and the root is loaded.
-- Where an armed reader of its own registered an instance that a slice
-  reading that source computes, it triggers that reader in turn, without
-  pulling: something upstream of that instance may have moved.
+- It is no longer armed with that source, which is all the note it keeps
+  that the source moved.
+- Where a loop holds a root unstarted, the loop judges it again, which
+  pulls from each source it is not armed with, marks its slices, and loads
+  the root if a slice it rests on was marked.
+- It triggers every armed reader of its own in turn, without pulling:
+  something those readers registered may have moved with what it read.
 - Where a slice reading that source holds a computation whose writes are
-  not bounded ("Computations that run without demand"), it triggers every
-  armed reader of its own, and pulls at once if a session is watching the
-  space.
+  not bounded ("Computations that run without demand"), it pulls at once if
+  a session is watching the space.
 - Otherwise it does nothing more, and pulls at its next judgment.
 
 So a source that changes often tells each dormant reader once and then
@@ -200,18 +201,64 @@ stays silent toward it, and a dormant space in the middle of a chain passes
 one bit on and marks nothing. A reader that is live pulls on each trigger,
 and what changed while it was pulling arrives in one further trigger.
 
+A space rests on hearing nothing from a source only while that source
+hears of every change upstream of it. So a space is armed with a source
+only once that source has pulled from each space it reads itself, a space
+that is told passes the trigger to all of its own readers, and a space
+whose new record reads a space it has not pulled from tells its readers
+too. Passing the trigger to all of a space's readers, and not only to those
+that registered an instance computed from the source that moved, costs a
+live reader of an unrelated instance one judgment and one pull that returns
+nothing. Narrowing it needs the rule above kept for each instance.
+
 Marking after a pull goes on as it does for a local change: each slice that
 became marked marks the clean slices that read what it writes. Propagation
 stops at a slice that is already marked, and a trigger stops at a reader
 that was already told.
 
-One thing changes where a commit is admitted. Today only a serving loop
-advances the cursor. A commit into a space with an armed reader queues an
-advance on the memory server when none is queued, in a transaction of its
-own after the commit has landed, since the advance is what finds whether a
-registered instance changed. A space whose readers have all been told pays
-one cached check for each commit. This is the second half of the first
-plan's stage 6, needed here for a space no loop serves.
+One thing changes where a commit is admitted. A commit into a space with
+an armed reader queues an advance on the memory server when none is queued,
+in a transaction of its own after the commit has landed, since the advance
+is what finds whether a registered instance changed. A space whose readers
+have all been told pays one check of a map for each commit. A slice of the
+space's own that such an advance marks is kept for the space's serving
+loop, which re-arms a root it left unstarted from the seq the slice was
+marked at.
+
+As built, the memory server holds which readers are armed, and the
+position each pulled at, in memory. After a restart no reader is armed, so
+each pulls before it rests on a source. Every call that changes an index
+ends by bringing what the store reports of its registered instances up to
+date, for the documents a commit wrote and the pieces whose slices changed,
+so finding the readers to tell is one read of the rows that moved. A row
+takes a position when it changes, and none when its instance is first
+registered, since the space registering it is handed the row.
+
+### A circle of triggers
+
+Spaces whose pieces read each other pass a change around: a commit in one
+changes an input of a piece in the other, whose commit changes an input of
+a piece in the first. Within one space the scheduler bounds how often a
+computation runs again in one settle. Across spaces each loop sees only its
+own half, and the trigger adds a second way round, since each change tells
+the other space, whose loop judges and pulls.
+
+One trigger cannot circle: a space is told at most once between two pulls,
+so the trigger stops at the first space already told. What circles is a
+change that keeps being made. So a trigger carries how many triggers lead
+to it from a commit a client authored. A space takes the count of the
+trigger it received, sends it on one higher, and returns to zero when a
+client's commit is admitted there. A space whose count has reached eight
+is one no other space rests on: a judgment that would pull from it marks
+`2` each slice that read it and does not arm, and a record that reads it
+is stored marked `2`. Its readers then start their pieces, as they would
+with no index kept, and no further trigger passes along that edge, until a
+client's commit lands in that space. The memory server counts each chain
+that reaches the limit and logs it.
+
+This bounds what the index adds, and detects the circle. It does not stop
+the recomputation itself, which runs through each loop's own replica once
+the pieces are started, as it does with no index kept ("Not worked out").
 
 ### What a judgment does
 
@@ -240,13 +287,13 @@ Dirtying is one bit along each edge, and runs nothing:
 
 1. A commit changes an input of A. S's advance marks A's slice. `a` is
    registered by T, so its row moves to "stale upstream" and S triggers T.
-2. T notes that S moved. B's slice read S and computes `b`, which U
-   registered, so T triggers U. T pulls nothing and marks nothing.
-3. U notes that T moved, and stops there unless a loop holds a root of C
-   unstarted. If one does, U pulls from T. T pulls from S before it
-   returns, marks `1` the slice of B that read `a` and moves the row of
-   `b` to "stale upstream". U marks `1` the slice of C that read `b`, and
-   the root is loaded.
+2. T is no longer armed with S. U is armed with T, so T triggers U. T
+   pulls nothing and marks nothing.
+3. U is no longer armed with T, and stops there unless a loop holds a root
+   of C unstarted. If one does, the loop judges it again, and U pulls from
+   T. T pulls from S before it returns, marks the slice of B that read `a`
+   and moves the row of `b` to "stale upstream". U marks `1` the slice of C
+   that read `b`, and the root is loaded.
 
 A further change in S reaches nobody until T pulls again.
 
@@ -408,10 +455,14 @@ What to weigh, once there are numbers:
 - `docs/specs/scheduler-v2/README.md` §4.3: a materializer's standing
   demand holds within a started piece, and outside one is carried by the
   index as above.
-- `runtime/runner/src/cfc/` is not expected to change. Whether a producer's
-  staleness, crossing from one space's memory server to another's, is a
-  flow Contextual Flow Control must rule on is settled through
-  `docs/development/cfc-spec-correspondence.md` before step 5.
+- `runtime/runner/src/cfc/` is not expected to change. A producer's
+  staleness and a trigger both pass from one space to the spaces that read
+  it, and a space passes a trigger on to readers that may not read the
+  space it came from. What such a reader gains is whether a piece of its
+  own starts, and no value. Whether that is a flow Contextual Flow Control
+  must rule on is settled through
+  `docs/development/cfc-spec-correspondence.md` before either leaves the
+  process, and before step 5.
 
 ## Decisions
 
@@ -442,9 +493,19 @@ One is owed:
 ## Not worked out
 
 - **A dependency cycle that spans spaces.** Marking stops at a marked
-  slice, so it ends. Recomputation around such a cycle wakes each loop from
-  the other's commit, and no loop's convergence guard sees the whole cycle.
-  The running system has the same exposure today.
+  slice and a trigger at a space already told, so both end, and the count a
+  trigger carries stops the index from resting on a space far along such a
+  chain ("A circle of triggers"). Recomputation around the cycle is not
+  stopped: once the pieces run, each loop's replica delivers the other's
+  commit and the piece runs again, with no trigger involved, and no loop's
+  convergence guard sees the whole cycle. Stopping it needs the same count
+  on what a serving loop derives: a derived commit that carries how many
+  spaces its cause crossed, and a loop that holds a piece back past a
+  limit, as the scheduler holds a computation back within one space.
+- **Which of a space's readers a trigger is passed to.** All of them, as
+  built. Passing it only to the readers of an instance computed from the
+  source that moved needs the walk a pull's marking makes, made without
+  marking, and the arming rule kept for each instance.
 - **A reader space that is deleted or abandoned** leaves its rows in every
   source it registered with.
 - **How long an armed reader trusts silence.** In one process a trigger
@@ -465,25 +526,20 @@ One is owed:
    slice was not vouched for (`currency.unvouched`). A slice that read the
    interval clock was vouched for and left a session with no runtime of its
    own a stopped clock under `skip`; it is no longer vouched for.
-2. **Rows for a read in another space, judged and not acted on.** Done,
-   for two spaces one memory server holds. The snapshot carries the
-   source's sequence number; a record's reads are registered with their
-   source; both sides keep their rows; and a judgment pulls from the sources
-   of the slices its demand rows are resolved under. Under `record` each
-   root that would have been served is counted as today. `skip` goes on
-   starting a root that rests on such a slice, since nothing would yet wake
-   a live session whose root was left unstarted. A source finds what changed
-   when it is pulled from or registered with, and not yet when it changes,
-   which step 4 needs. A refused registration is not built: nothing refuses
-   one where one server holds both stores. Until step 4, what a clean slice
-   that read another space writes is no current input of another slice,
-   which is stored marked `1`: the other space is asked again only before a
-   judgment that may rest on the slice that read it.
+2. **Rows for a read in another space.** Done, for two spaces one memory
+   server holds. The snapshot carries the source's sequence number; a
+   record's reads are registered with their source; both sides keep their
+   rows; and a judgment pulls from the sources of the slices its demand
+   rows are resolved under. A refused registration is not built: nothing
+   refuses one where one server holds both stores.
 3. **Computations that name no piece.** Done, as above.
-4. **The trigger.** The position counter, arming on a pull, the one-bit
-   push and what a reader does with it, marking from a pull, the load of a
-   root a loop holds, and the advance a commit queues in a space with an
-   armed reader. From here `skip` acts on a slice that read another space.
+4. **The trigger.** Done, for spaces one memory server holds: the position
+   counter, arming on a pull, the one-bit push and what a reader does with
+   it, marking from a pull, the load of a root a loop holds, the advance a
+   commit queues in a space with an armed reader, and the count that keeps
+   a circle of triggers from going round. `skip` acts on a slice that read
+   another space. Which readers are armed is held in memory, and a trigger
+   that leaves the process is not built.
 5. **Demand across spaces**, with its ruling, built together with the first
    plan's stage 5, which is the same mechanism within one space.
 6. **Computations that run without demand.** Envelopes among the write
@@ -500,9 +556,11 @@ One is owed:
 ## Acceptance tests
 
 For the index, in `runtime/memory/test/`, with two stores. Tests 1 to 4
-exist in `v2-currency-index.test.ts`, and `v2-server-currency.test.ts` has
-the memory server register and pull, with a source it holds and one another
-owner holds:
+exist in `v2-currency-index.test.ts`, with the readers a source finds to
+tell after each kind of change. Tests 5, 7 and 8 exist in
+`v2-server-currency.test.ts`, which has the memory server register, pull,
+arm and tell, with a source it holds and one another owner holds, and has
+two spaces that read each other reach the limit on a chain of triggers:
 
 1. A slice that read an instance in another space is stored clean when the
    source's head is the sequence number it read at and the source reports
@@ -532,14 +590,14 @@ For the serving loop, in `runtime/runner/test/executor/`:
 
 9. A piece whose wish reads the viewer's home space is recorded with the
    read in that viewer's slice, and under `skip` is not started when the
-   viewer returns and their home space has not changed. The `record` half
-   exists in `space-server-currency-wish.test.ts`: the returning viewer's
-   root is counted as one the store could serve, it is refused once the
-   home space changed while nothing served the piece, and under `skip` the
-   piece is started.
+   viewer returns and their home space has not changed. This exists in
+   `space-server-currency-wish.test.ts`, with the root refused, and under
+   `skip` the piece started, once the home space changed while nothing
+   served the piece.
 10. A change to that viewer's home space while the piece is unstarted and
-    their session is live starts the piece, and a change to another viewer's
-    home space does not.
+    their session is live starts the piece, and the viewer reads the new
+    value. A change to the home space of a viewer who is no longer watching
+    does not. Both exist there.
 11. The chain above, with all three recorded and none running: a demand for
     C alone starts B and A, and C's session reads the value derived from the
     new input.

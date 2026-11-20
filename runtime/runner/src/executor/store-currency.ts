@@ -80,6 +80,9 @@ export class StoreCurrency {
   /** Whether the roots left unloaded are owed a fresh judgment. */
   #judgmentOwed = true;
 
+  /** How many judgments the memory server has not returned yet. */
+  #judging = 0;
+
   /** The store head the marks were last brought up to from here. */
   #advancedThrough = 0;
 
@@ -356,18 +359,17 @@ export class StoreCurrency {
     if (settled) return { servable: [...candidates.keys()], rearm: [] };
     this.#judgmentOwed = false;
     this.#stats.currency.judged += candidates.size;
+    this.#judging += 1;
     const judged = await this.#server.judgeCurrencyRoots(
       this.#space,
       [...new Set(candidates.values())],
       {
         excludePrincipal: this.#serviceIdentity,
         epoch: this.#epoch,
-        // A root that rests on a slice that read another space is judged
-        // and counted, and started all the same: nothing wakes a session
-        // whose root was left unstarted when that other space changes.
-        ...(!this.skips && { acrossSpaces: true }),
       },
-    );
+    ).finally(() => {
+      this.#judging -= 1;
+    });
     for (const [reason, count] of Object.entries(judged.refused)) {
       const counts = this.#stats.currency.refused;
       counts[reason] = (counts[reason] ?? 0) + count;
@@ -417,6 +419,19 @@ export class StoreCurrency {
     if (marked.length === 0) return [];
     this.#judgmentOwed = true;
     return this.#rearmsFor(marked);
+  }
+
+  /**
+   * Notes that the index changed from outside this loop: a space a slice
+   * read told this one of a change, or a request made for another space
+   * marked a slice here.
+   *
+   * @returns Whether a root is left unloaded, or a judgment that may leave
+   * one is under way: a further judgment is then owed.
+   */
+  noteIndexChanged(): boolean {
+    this.#judgmentOwed = true;
+    return this.#served.size > 0 || this.#judging > 0;
   }
 
   /** Forgets the demand key `key`, which no session demands any longer. */

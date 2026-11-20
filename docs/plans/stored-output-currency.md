@@ -129,9 +129,9 @@ of its runs at the snapshot:
 Any other read in another space is registered with that space's index when
 the record is stored
 ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
-and the slice is stored against what that index reports. What a clean slice
-that read another space writes is no current input of another slice, which
-is stored marked `1`.
+and the slice is stored against what that index reports. That space tells
+the reading one of its next change, so the slice is a current input of
+another slice while it is clean.
 
 No slice of a piece is vouched for when its root is not space-scoped, when a
 computation of it declares a write in another space, or when it records a
@@ -328,12 +328,7 @@ wrong.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
 - **A piece with a source origin, or a root narrower than the space, always
-  starts, and so does one whose root rests on a slice that read another
-  space.** Such a slice is recorded and judged, and counted under `record`;
-  `skip` starts its piece until a change in the other space can wake a
-  session
-  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
-  step 4).
+  starts.**
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.

@@ -254,7 +254,6 @@ export type PlaneRequests = {
       roots: string[];
       excludePrincipal: string | undefined;
       epoch: string;
-      acrossSpaces: boolean | undefined;
     };
     result: Awaited<ReturnType<Server["judgeCurrencyRoots"]>>;
   };
@@ -414,6 +413,7 @@ export type BridgeNotices = {
     notDemand: true | undefined;
   };
   "observer.viewsChanged": { space: string; sessionId: string };
+  "observer.currencyChanged": { space: string };
   "observer.sessionChanged": { event: SessionLifecycleEvent };
 
   /**
