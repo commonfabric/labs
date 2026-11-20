@@ -1026,7 +1026,10 @@ export class Handle {
   remove(member: unknown): void {
     const [at] = this.#positionsOf(member);
     if (at === undefined) return;
-    this.set((this.get() as unknown[]).filter((_, index) => index !== at));
+    this.set(
+      (this.instance.readWritingBack(this, () => this.get()) as unknown[])
+        .filter((_, index) => index !== at),
+    );
   }
 
   send(event: unknown): void {
@@ -1057,7 +1060,8 @@ export class Handle {
     const found = this.#positionsOf(member);
     if (found.length === 0) return;
     this.set(
-      (this.get() as unknown[]).filter((_, index) => !found.includes(index)),
+      (this.instance.readWritingBack(this, () => this.get()) as unknown[])
+        .filter((_, index) => !found.includes(index)),
     );
   }
 
@@ -7068,6 +7072,47 @@ export class Instance {
       return;
     }
     host.bound.set(index, { observes: slot.observes, at });
+  }
+
+  /**
+   * Runs the read of a list that a removal through `handle` makes to write
+   * back what it keeps, and binds the slot of the handle in the class
+   * `value` to every position that read went through. The write stores what
+   * the read gave, at other positions of the list and through the links the
+   * list holds, so its label is that of what the list held, and not that of
+   * the reference to the list alone.
+   */
+  readWritingBack<T>(handle: Handle, run: () => T): T {
+    const invoking = this.#invoking.at(-1);
+    const host = this.#handling === undefined
+      ? invoking?.host
+      : this.#handlerHost;
+    const { store } = this;
+    const outer = store.reader;
+    const reader: NonNullable<Store["reader"]> = {
+      by: outer?.by ??
+        { body: this.#handling ?? invoking?.body ?? -1, handle: -1 },
+      seen: [],
+    };
+    store.reader = reader;
+    try {
+      return run();
+    } finally {
+      store.reader = outer;
+      if (outer !== undefined) {
+        for (const position of reader.seen) outer.seen.push(position);
+      }
+      if (host !== undefined && handle.slot !== undefined) {
+        const bound = host.bound.get(handle.slot);
+        host.bound.set(handle.slot, {
+          observes: "value",
+          at: [
+            ...(bound !== undefined && "at" in bound ? bound.at : []),
+            ...reader.seen,
+          ],
+        });
+      }
+    }
   }
 
   /**

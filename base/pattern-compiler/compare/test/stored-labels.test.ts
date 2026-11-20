@@ -77,6 +77,29 @@ describe("stored-labels", () => {
     });
   });
 
+  // `fixtures/remove-shift.tsx`: a word pushed from the event, the input
+  // `note` pushed after it, and the removal of the first, which reads the
+  // list and writes back the rest.
+  describe("soundnessOfScenario() after a removal from a list of plain values in place", () => {
+    it("finds the clause of the input in the stored label of the list that holds its value at another position", async () => {
+      const { soundness, refused } = await soundnessOfScenario(
+        "remove-shift",
+        await artifactOf("remove-shift"),
+        () => undefined,
+        { note: "n" },
+        [
+          { binding: 1, event: { word: "x" } },
+          { binding: 0, event: {} },
+          { binding: 2, event: { word: "x" } },
+        ],
+      );
+
+      expect(refused).toEqual([]);
+      expect(lines("remove-shift", soundness)).toEqual([]);
+      expect(soundness?.dependent).toBeGreaterThanOrEqual(1);
+    });
+  });
+
   describe("soundnessOf()", () => {
     // `fixtures/briefing.tsx` computes `climate` from `city`.
     const checked = async (clause: (name: string) => Atom[] | undefined) => {
