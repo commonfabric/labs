@@ -102,6 +102,29 @@ describe("deepLabel", () => {
   });
 });
 
+describe("deepLabel through a link whose path crosses a link", () => {
+  it("follows the links on the way to the position a link in the value names, with the label at each", () => {
+    // The view holds a link to `element/note` of a document whose
+    // `element` is itself a link to the record: the value the link names
+    // is the record's note.
+    const reader = readerOf(
+      {
+        view: { text: { to: ["frame", "element", "note"] } },
+        frame: { element: { to: ["record"] } },
+        record: { note: "n" },
+      },
+      {
+        frame: { "element": { confidentiality: ["frame"], integrity: [] } },
+        record: { "note": { confidentiality: ["note"], integrity: [] } },
+      },
+    );
+    expect(sorted(deepLabel(reader, { id: "view", path: [] }))).toEqual({
+      confidentiality: ["frame", "note"],
+      integrity: [],
+    });
+  });
+});
+
 describe("deepLabelAlong", () => {
   it("follows a link on the way to the address, with the label at the link", () => {
     const reader = readerOf(

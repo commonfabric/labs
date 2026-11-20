@@ -63,9 +63,35 @@ export const atomKey = (atom: Atom): string =>
   );
 
 /**
+ * The position a read of `address` reaches: each link stored at a position
+ * on the way to its path is followed, as a read follows it, and `crossed`
+ * hears of each such position.
+ */
+const reached = <A>(
+  reader: StoredReader<A>,
+  address: A,
+  crossed: (at: A) => void,
+): A => {
+  let at = reader.withPath(address, []);
+  for (const segment of reader.path(address)) {
+    // A way of more links than this is a cycle, and the read ends there.
+    for (let depth = 0; depth < 16; depth++) {
+      const target = reader.link(reader.value(at), at);
+      if (target === undefined) break;
+      crossed(at);
+      at = target;
+    }
+    at = reader.withPath(at, [...reader.path(at), segment]);
+  }
+  return at;
+};
+
+/**
  * The label of the value at `address` with each link in it followed, as the
- * head of this file says. A position reached twice, as on a cycle of links,
- * is read once. With `descend` false, the positions below the address and
+ * head of this file says. A link names a position by a path, and the links
+ * on the way to that position are followed, with the label at each joined
+ * in. A position reached twice, as on a cycle of links, is read once. With
+ * `descend` false, the positions below the address and
  * below each link target are not read: a read of a container's own entry,
  * through the links at its position.
  */
@@ -101,7 +127,29 @@ export const deepLabel = <A>(
     const held = value === undefined ? reader.value(at) : value.held;
     const target = reader.link(held, at);
     if (target !== undefined) {
-      pending.push({ at: target });
+      pending.push({
+        at: reached(reader, target, (link) => {
+          const key = reader.key(link);
+          if (seen.has(key)) return;
+          seen.add(key);
+          // The label at a link crossed is joined in as the label at a
+          // link the value holds is.
+          const label = reader.label(link);
+          for (const atom of label.confidentiality) {
+            const key = atomKey(atom);
+            if (!confidentiality.has(key)) {
+              trace?.("confidentiality", atom, link);
+            }
+            confidentiality.set(key, atom);
+          }
+          if (label.integrity === "neutral") return;
+          for (const atom of label.integrity) {
+            const key = atomKey(atom);
+            if (!integrity.has(key)) trace?.("integrity", atom, link);
+            integrity.set(key, atom);
+          }
+        }),
+      });
       continue;
     }
     if (!descend || held === null || typeof held !== "object") continue;
@@ -130,21 +178,13 @@ export const deepLabelAlong = <A>(
   descend = true,
 ): Label => {
   const crossed: Label[] = [];
-  let at = reader.withPath(address, []);
-  for (const segment of reader.path(address)) {
-    // A way of more links than this is a cycle, and the read ends there.
-    for (let depth = 0; depth < 16; depth++) {
-      const target = reader.link(reader.value(at), at);
-      if (target === undefined) break;
-      const label = reader.label(at);
-      for (const atom of label.confidentiality) {
-        trace?.("confidentiality", atom, at);
-      }
-      crossed.push(label);
-      at = target;
+  const at = reached(reader, address, (link) => {
+    const label = reader.label(link);
+    for (const atom of label.confidentiality) {
+      trace?.("confidentiality", atom, link);
     }
-    at = reader.withPath(at, [...reader.path(at), segment]);
-  }
+    crossed.push(label);
+  });
   const found = deepLabel(reader, at, trace, descend);
   const confidentiality = new Map<string, Atom>();
   const integrity = new Map<string, Atom>();
