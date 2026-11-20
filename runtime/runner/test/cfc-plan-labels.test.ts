@@ -1740,6 +1740,137 @@ describe("cfc-plan-labels", () => {
     });
   });
 
+  // The labels of a document are stored in the document, so a commit that
+  // changes one of them and no value is a change of the document: whoever
+  // read a value of the document read it under the labels it had (CFC
+  // §8.10.1, label reads are commit dependencies). A label derived from the
+  // earlier one by a computation that does not run again keeps what it had
+  // (§8.9.4, point-in-time semantics).
+  for (const enabled of [false, true]) {
+    describe(`a commit that changes a declared label and no value, with \`compiledPatterns\` ${enabled ? "on" : "off"}`, () => {
+      /**
+       * Seeds a target holding `{ a: "", b: "" }` with no label, a sink that
+       * reads `a`, and a transaction that read `a`. Then commits a write of
+       * the same value under a schema that declares a clause on `at`, and
+       * lets the earlier transaction write another document and commit.
+       */
+      const relabeled = async (at: "a" | "b") => {
+        let outcome:
+          | {
+            wrote: string[];
+            declared: unknown;
+            sinkCalls: { before: number; after: number };
+            otherError: unknown;
+          }
+          | undefined;
+        await withRuntime(enabled, async (runtime) => {
+          const seed = runtime.edit();
+          const cell = runtime.getCell(
+            space,
+            "relabel-target",
+            undefined,
+            seed,
+          );
+          cell.set({ a: "", b: "" });
+          const link = cell.getAsNormalizedFullLink();
+          runtime.getCell(space, "relabel-other", undefined, seed).set("");
+          expect((await seed.commit().settled).error).toBeUndefined();
+          let calls = 0;
+          const cancel = runtime.getCell(space, "relabel-target").key("a")
+            .sink(() => {
+              calls++;
+            });
+          await runtime.idle();
+          const before = calls;
+          const other = runtime.edit();
+          runtime.getCell(space, "relabel-target", undefined, other).key("a")
+            .get();
+
+          const tx = runtime.edit();
+          const labeled = {
+            type: "string",
+            ifc: { confidentiality: ["declared-x"] },
+          } as const;
+          runtime.getCell(
+            space,
+            "relabel-target",
+            {
+              type: "object",
+              properties: {
+                a: at === "a" ? labeled : { type: "string" },
+                b: at === "b" ? labeled : { type: "string" },
+              },
+            },
+            tx,
+          ).set({ a: "", b: "" });
+          const wrote = [...(tx.getWriteDetails?.(space) ?? [])].filter((
+            write,
+          ) => write.address.id === link.id).map((write) =>
+            write.address.path.join("/")
+          );
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await runtime.idle();
+          const after = calls;
+          cancel();
+
+          runtime.getCell(space, "relabel-other", undefined, other).set(
+            "written",
+          );
+          const otherError = (await other.commit().settled).error;
+          const reader = runtime.edit();
+          try {
+            const metadata = readStoredCfcMetadata(reader, {
+              space,
+              id: link.id,
+              scope: "space",
+              type: "application/json",
+            });
+            outcome = {
+              wrote,
+              declared: (metadata?.labelMap.entries ?? []).filter((entry) =>
+                entry.origin === "declared"
+              ).map((entry) => [
+                `/${entry.path.join("/")}`,
+                entry.label.confidentiality,
+              ]),
+              sinkCalls: { before, after },
+              otherError,
+            };
+          } finally {
+            reader.abort();
+          }
+        });
+        return outcome!;
+      };
+
+      it("stores the label and writes no value", async () => {
+        const { wrote, declared } = await relabeled("a");
+        expect(wrote.filter((path) => path.startsWith("value"))).toEqual([]);
+        expect(declared).toEqual([["/a", ["declared-x"]]]);
+      });
+
+      it("runs a sink that read the value again", async () => {
+        const { sinkCalls } = await relabeled("a");
+        expect(sinkCalls.after).toBe(sinkCalls.before + 1);
+      });
+
+      it("conflicts with a transaction that read the value before it", async () => {
+        const { otherError } = await relabeled("a");
+        expect((otherError as Error | undefined)?.name).toBe(
+          "StorageTransactionInconsistent",
+        );
+      });
+
+      it("runs the sink again and conflicts alike where the label is that of another value of the document", async () => {
+        const { sinkCalls, otherError } = await relabeled("b");
+        expect(sinkCalls.after).toBe(sinkCalls.before + 1);
+        expect((otherError as Error | undefined)?.name).toBe(
+          "StorageTransactionInconsistent",
+        );
+      });
+    });
+  }
+
   describe("a label observed from another session's storage", () => {
     let server: MemoryV2Server.Server;
     let managers: EmulatedStorageManager[];
