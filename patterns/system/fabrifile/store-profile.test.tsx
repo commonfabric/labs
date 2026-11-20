@@ -11,8 +11,10 @@ import { ensureFileStore, type FileStoreRecord } from "./store.tsx";
 export default pattern(() => {
   const record = Writable.of<FileStoreRecord>({});
   const ensure = ensureFileStore({ fileStore: record });
+  // Sent through the record's link, as a room's composer sends to its store,
+  // so that the send needs nothing of the store's result but the stream.
   const action_add = action(() => {
-    record.get().store!.get().add.send({ requestId: "add", name: "new.png" });
+    record.key("store").key("add").send({ requestId: "add", name: "new.png" });
   });
 
   return {
