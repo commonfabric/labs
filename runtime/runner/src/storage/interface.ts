@@ -1075,15 +1075,6 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   ): Promise<FabricPlainObject>;
 
   /**
-   * Returns the most UTF-8 bytes one request sent whole may take on this
-   * manager's memory connection for `space`, opening its session there when
-   * none is open: the routed bound on a routed connection, and the
-   * transport's own where it declares one. `undefined` when the connection
-   * states none. Absent from a manager with no memory sessions.
-   */
-  requestBytesLimit?(space: MemorySpace): Promise<number | undefined>;
-
-  /**
    * Administers `space`'s invitations on this manager's memory session
    * there, as its principal, and returns what the invitation service
    * returns. Absent from a manager with no memory sessions; errors are the
@@ -4220,9 +4211,6 @@ export interface ISpaceReplica extends ISpace {
     verb: PatternLifecycleVerb,
     body: FabricPlainObject,
   ): Promise<FabricPlainObject>;
-
-  /** Like `IStorageManager.requestBytesLimit()`, for this replica's space. */
-  requestBytesLimit?(): Promise<number | undefined>;
 
   /** Like `IStorageManager.administerInvites()`, for this replica's space. */
   administerInvites?(invite: InviteAdministration): Promise<FabricValue>;

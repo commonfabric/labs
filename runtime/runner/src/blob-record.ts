@@ -21,14 +21,16 @@ export const MAX_BLOB_FILE_NAME_BYTES = 1024;
  * base64url: a record of about 7.86 MB of bytes, with a short name and media
  * type, fits.
  *
- * An upload is refused above this before anything is sent, and a client
- * outside this repository sizes the files it offers to upload by it. The bound
- * is well under what one commit can carry on a direct memory connection, which
- * refuses a message over 64 MiB by closing the socket; the memory client then
- * sends the same commit again on each new connection, so a record of 64 MiB
- * of incompressible bytes takes the connection down again and again for up to
- * two minutes before its commit fails. A routed connection takes 4 MiB in one
- * request (`ROUTED_QUEUE_LIMIT`), and an upload there is held to that instead.
+ * An upload is refused above this before anything is sent. The bound is well
+ * under what one commit can carry on a direct memory connection, which refuses
+ * a message over 64 MiB by closing the socket. A direct connection declares no
+ * bound of its own, so the memory client then sends the same commit again on
+ * each new connection: a record of 64 MiB of incompressible bytes takes the
+ * connection down again and again, for up to two minutes, before its commit
+ * fails. A routed connection takes 4 MiB in one request
+ * (`ROUTED_QUEUE_LIMIT`), and the memory client refuses a commit past what its
+ * connection takes, unsent, so there an upload of a record past about 4 MiB is
+ * refused that way.
  */
 export const MAX_BLOB_RECORD_BYTES = 10 * 1024 * 1024;
 
@@ -85,8 +87,8 @@ export function blobDocumentId(blobId: string): URI {
 }
 
 /**
- * Returns the number of bytes `record` takes in its JSON encoding, the form an
- * upload to the blob store's route carries it in, which
+ * Returns the number of bytes `record` takes in its JSON encoding, the form
+ * the blob store's upload route takes it in, which
  * {@link MAX_BLOB_RECORD_BYTES} bounds.
  */
 export function encodedBlobRecordBytes(record: BlobRecord): number {

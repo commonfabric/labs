@@ -181,35 +181,6 @@ describe("StorageManager", () => {
       });
     });
 
-    describe("requestBytesLimit()", () => {
-      it("returns the bound on one whole request of the connection the space's session is on", async () => {
-        const manager = managerOver({
-          create: async (space, signer, options) => {
-            const client = await MemoryV2Client.connect({
-              instanceNames: namesInstancesByDefault(),
-              transport: MemoryV2Client.loopback(server, {
-                messageLimits: { bytes: 2048, values: 400, whole: 4096 },
-              }),
-            });
-            const session = await client.mount(
-              space,
-              options ?? {},
-              (_space, _session, context) => ({
-                invocation: {
-                  aud: context.audience,
-                  challenge: context.challenge.value,
-                },
-                authorization: { principal: signer?.did() },
-              }),
-            );
-            return { client, session };
-          },
-        });
-
-        expect(await manager.requestBytesLimit(alice.did())).toBe(4096);
-      });
-    });
-
     describe("administerInvites()", () => {
       it("throws when the space's replica administers no invitations", async () => {
         const storage = { open: () => ({ replica: {} }) };

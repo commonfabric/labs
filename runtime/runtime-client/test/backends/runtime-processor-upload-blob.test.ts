@@ -135,6 +135,51 @@ describe("runtime-processor", () => {
       expect(await storedRecord(id)).toStrictEqual(unnamed);
     });
 
+    it("returns a URL with the requested suffix over the name's own extension", async () => {
+      const { processor } = processorFor(writer);
+
+      const upload = await processor.handleUploadBlob({
+        type: RequestType.UploadBlob,
+        space,
+        contentType: photo.type,
+        body: photo.body,
+        name: photo.name,
+        suffix: "webp",
+      });
+
+      const hash = hashOf(photo).toString().slice("fid1:".length);
+      expect(upload.url).toBe(
+        `http://toolshed.test/${space}/blobs/${hash}.webp`,
+      );
+    });
+
+    it("returns a URL on the host that serves the blob's space", async () => {
+      const { processor, runtime } = processorFor(writer);
+      using _host = stub(
+        runtime,
+        "hostForSpace",
+        (target) =>
+          new URL(
+            target === space
+              ? "http://space-host.test/"
+              : "http://other-host.test/",
+          ),
+      );
+
+      const upload = await processor.handleUploadBlob({
+        type: RequestType.UploadBlob,
+        space,
+        contentType: photo.type,
+        body: photo.body,
+        name: photo.name,
+      });
+
+      const hash = hashOf(photo).toString().slice("fid1:".length);
+      expect(upload.url).toBe(
+        `http://space-host.test/${space}/blobs/${hash}.png`,
+      );
+    });
+
     it("throws for an uploader the space's access list grants only `READ`, and stores nothing", async () => {
       const { processor } = processorFor(reader);
 
@@ -177,27 +222,6 @@ describe("runtime-processor", () => {
       expect(await storedRecord(hashOf(large).toString())).toBeUndefined();
     });
 
-    it("throws for a record over what the space's connection takes in one request, and stores nothing", async () => {
-      const { processor, runtime } = processorFor(writer);
-      const limit = encodedBlobRecordBytes(photo) - 1;
-      using _limit = stub(
-        runtime.storageManager,
-        "requestBytesLimit",
-        (target) => Promise.resolve(target === space ? limit : undefined),
-      );
-
-      await expect(
-        processor.handleUploadBlob({
-          type: RequestType.UploadBlob,
-          space,
-          contentType: photo.type,
-          body: photo.body,
-          name: photo.name,
-        }),
-      ).rejects.toThrow(`a blob takes at most ${limit} bytes encoded`);
-      expect(await storedRecord(hashOf(photo).toString())).toBeUndefined();
-    });
-
     it("throws for a request whose name is not one a blob may hold", async () => {
       const { processor } = processorFor(writer);
 
@@ -209,7 +233,9 @@ describe("runtime-processor", () => {
           body: photo.body,
           name: "",
         }),
-      ).rejects.toThrow("uploadBlob requires a name a blob may hold");
+      ).rejects.toThrow(
+        "uploadBlob requires any name it is given to be one a blob may hold",
+      );
     });
   });
 });

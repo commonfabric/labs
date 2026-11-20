@@ -7,7 +7,6 @@
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { stub } from "@std/testing/mock";
 import type { RealmEncodedValue } from "@commonfabric/data-model/codec-realm";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -403,8 +402,6 @@ describe("runtime-processor-delegation", () => {
 
   describe("blob requests", () => {
     const host = new URL("http://toolshed.test/");
-    const processorForBlobs = () =>
-      buildProcessor({ runtime: { hostForSpace: () => host } });
     const upload = {
       type: RequestType.UploadBlob,
       space,
@@ -412,16 +409,26 @@ describe("runtime-processor-delegation", () => {
       body: new FabricBytes(new Uint8Array([1])),
     } as const;
 
-    it("refuses an upload naming no space, or carrying no bytes, without fetching", async () => {
-      using fetchStub = stub(globalThis, "fetch");
-      const processor = processorForBlobs();
+    it("refuses an upload naming no space, or carrying no bytes, without opening a transaction", async () => {
+      let edits = 0;
+      const processor = buildProcessor({
+        runtime: {
+          hostForSpace: () => host,
+          edit: () => {
+            edits++;
+            throw new Error(
+              "an upload refused on its request opened a transaction",
+            );
+          },
+        },
+      });
       await expect(
         processor.handleRequest({ ...upload, space: "not-a-did" as never }),
       ).rejects.toThrow("uploadBlob requires a space DID");
       await expect(
         processor.handleRequest({ ...upload, body: [1] as never }),
       ).rejects.toThrow("uploadBlob requires bytes as its body");
-      expect(fetchStub.calls).toEqual([]);
+      expect(edits).toBe(0);
     });
   });
 });

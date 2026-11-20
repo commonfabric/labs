@@ -112,7 +112,12 @@ path. (ii) `system` commits carry no user attribution in the commit
 ledger — the envelope is the server's own session — which is
 deliberately accepted; per-user attribution for blob writes is a
 named future hardening, out of v2 scope, in the same family as §2's
-grant-scoped foreign reads.
+grant-scoped foreign reads. The runtime client's own uploads do not
+take that path: `handleUploadBlob()`
+(`runtime/runtime-client/src/backends/runtime-processor.ts`) commits
+the record on the uploader's session, so those writes are `authored`
+and carry the uploader's attribution, and only the route's writes are
+`system`.
 
 **Both arms carry a class; only the ON arm enforces one.** `class`
 metadata is WRITTEN in every arm from stage A onward and ENFORCED

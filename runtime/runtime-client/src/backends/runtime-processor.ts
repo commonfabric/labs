@@ -4421,11 +4421,13 @@ export class RuntimeProcessor {
    * the document `cid:<id>` in a transaction committed on this runtime's
    * session there, so the memory server admits it only for a principal
    * holding `WRITE` on the space, and the upload settles once the commit
-   * does.
+   * does. While the session's connection is down, it waits for the
+   * connection, and the commit is sent once it is back.
    *
    * @throws Error when the request is malformed, when its record would take
-   *   more than {@link MAX_BLOB_RECORD_BYTES} encoded or more than the space's
-   *   connection takes in one request, or when the commit is refused.
+   *   more than {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is
+   *   refused, which it is, unsent, when it is past what the space's
+   *   connection takes in one request.
    */
   async handleUploadBlob(
     request: UploadBlobRequest,
@@ -4447,13 +4449,10 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
-    if (request.name !== undefined && typeof request.name !== "string") {
-      throw new Error(
-        "uploadBlob requires any name it is given to be a string",
-      );
-    }
     if (request.name !== undefined && !isBlobFileName(request.name)) {
-      throw new Error("uploadBlob requires a name a blob may hold");
+      throw new Error(
+        "uploadBlob requires any name it is given to be one a blob may hold",
+      );
     }
     // A blob with no name has no `name` key at all, since its id is the hash
     // of exactly the record stored.
@@ -4464,19 +4463,10 @@ export class RuntimeProcessor {
     };
     const space = request.space;
     const size = encodedBlobRecordBytes(record);
-    // A request over the connection's bound would take the connection down
-    // rather than be refused, so the bound is held here before anything is
-    // staged.
-    const connectionLimit = await this.#runtime.storageManager
-      .requestBytesLimit?.(space);
-    const limit = Math.min(
-      MAX_BLOB_RECORD_BYTES,
-      connectionLimit ?? MAX_BLOB_RECORD_BYTES,
-    );
-    if (size > limit) {
+    if (size > MAX_BLOB_RECORD_BYTES) {
       throw new Error(
-        `Blob upload failed: a blob takes at most ${limit} bytes encoded ` +
-          `in this space, and this one takes ${size}`,
+        `Blob upload failed: a blob takes at most ${MAX_BLOB_RECORD_BYTES} ` +
+          `bytes encoded, and this one takes ${size}`,
       );
     }
 

@@ -82,19 +82,24 @@ can still be too large to rename.
 
 ## What the store provides
 
-- A blob's record takes at most 10 MiB in its JSON encoding, which carries the
-  bytes as base64url, so a file of about 7.86 MB with a short name fits. An
-  upload over that is refused before anything is sent, and the store's upload
-  route answers one with 413. A routed connection takes at most 4 MiB in one
-  request, and an upload over it is refused the same way.
+- How large a file uploads depends on the space's memory connection. Over a
+  direct connection, a blob's record takes at most 10 MiB in its JSON
+  encoding, which carries the bytes as base64url: a file of about 7.86 MB with
+  a short name. Over a routed connection, which takes at most 4 MiB in one
+  request, the record takes at most that: a file of about 3 MB. An upload past
+  either is refused before anything is sent, and the store's upload route
+  answers one past 10 MiB with 413.
+- An upload made while its space's connection is down waits for the
+  connection, and is sent and settles once it is back, rather than failing.
 - A blob is addressed by the hash of its media type, its bytes, and the name
   it was stored with, if any, so the same file uploaded twice under the same
   name has the same id, and under two names has two. The URL is that id plus a
   short suffix: the suffix the upload asks for, which `cf-file-input` takes
   from the file's name, or, for an upload that asks for none, the last
-  extension of the blob's name, when that is one to eight letters or digits; otherwise one chosen from the media type, or `bin`. Two uploads
-  with the same id share a URL when they get the same suffix and have two URLs
-  when they do not. Each URL is immutable and cacheable forever.
+  extension of the blob's name, when that is one to eight letters or digits;
+  otherwise one chosen from the media type, or `bin`. Two uploads with the
+  same id share a URL when they get the same suffix and have two URLs when they
+  do not. Each URL is immutable and cacheable forever.
 - A name is any non-empty string of well-formed Unicode of at most 1024 bytes
   as UTF-8. Every download's
   `Content-Disposition` is `inline` for a type served as itself, and
