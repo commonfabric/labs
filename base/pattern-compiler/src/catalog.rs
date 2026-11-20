@@ -523,18 +523,31 @@ pub const CATALOG: &[Entry] = &[
     ),
 ];
 
-/// The entry of the catalog that `language-subset.md` in this tree does
-/// not have: `array-by-key:state-without-key`, which follows
-/// `array-by-key:mismatch` in the table that has it. `tests/catalog.rs`
-/// reads the document in this tree and fails once it has an entry of this
-/// list, so that the entry moves into [`CATALOG`] and `catalog-ids.txt`.
-pub const PROVISIONAL: &[Entry] = &[part(
-    "array-by-key:state-without-key",
-    Warning,
-    "reported from the plan, for an array whose elements have a member that the body \
+/// The entries of the catalog that `language-subset.md` in this tree does
+/// not have. `array-by-key:state-without-key` follows
+/// `array-by-key:mismatch` in the table that has it.
+/// `removed-form:pattern-tool-interim` is the warning of the interim
+/// acceptance of `patternTool` (`crate::tool_rewrite`), which the owner
+/// ruled on 2026-11-19 and the document does not describe yet: it belongs
+/// beside `removed-form:pattern-tool`. `tests/catalog.rs` reads the
+/// document in this tree and fails once it has an entry of this list, so
+/// that the entry moves into [`CATALOG`] and `catalog-ids.txt`.
+pub const PROVISIONAL: &[Entry] = &[
+    part(
+        "array-by-key:state-without-key",
+        Warning,
+        "reported from the plan, for an array whose elements have a member that the body \
          reads; the type does not say whether the array holds plain values in place or \
          references, and the report is made for both",
-)];
+    ),
+    part(
+        "removed-form:pattern-tool-interim",
+        Warning,
+        "reported for a call that is rewritten to a pattern closure; a call whose result \
+         is bound to a name is rewritten also where other code reads the members `pattern` \
+         or `extraParams` of that name, which the closure does not have",
+    ),
+];
 
 /// The entry for `id`, if the catalog has one.
 pub fn entry(id: &str) -> Option<&'static Entry> {

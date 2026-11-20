@@ -104,6 +104,10 @@ pub fn rewrite(id: &str) -> &'static str {
             "Write an inline `pattern(...)` that captures the bound values, and pass it as \
              the tool."
         }
+        "removed-form:pattern-tool-interim" => {
+            "Write that closure in place of the call, or an inline `pattern(...)` that \
+             captures the bound values."
+        }
         "removed-form:builtin" => "Write the replacement instead.",
         "collection:callback-parameters" => {
             "Write the arrow at the call, with the element and at most the index. Capture \

@@ -164,6 +164,68 @@ type checker or to footprint analysis, or lists it as retired.
 `tests/catalog.rs` compares that table with the identifiers in the
 specification, so the two cannot differ without a failing test.
 
+## The interim acceptance of `patternTool`
+
+By the owner's ruling of 2026-11-19 the crate accepts a call of `patternTool`
+for an interim period, so that one pattern source runs in today's runtime and is
+compiled by the crate. `src/tool_rewrite.rs` replaces the call in the module's
+text before any other stage reads the module, by an inline pattern closure that
+calls the pattern with the bound values (`language-subset.md` §4.4.2):
+
+```text
+patternTool(Search, { donuts })
+pattern<Omit<Parameters<typeof Search>[0], "donuts">>((rest) => Search({ ...rest, donuts }))
+```
+
+The input type of the closure is the input type of the pattern without the bound
+keys. A call with no second argument becomes
+`pattern<Parameters<typeof Search>[0]>((rest) => Search(rest))`. For an inline
+`pattern<I, O>(...)` as the first argument, the type is `I` as written, and the
+inline pattern is the callee of the closure's call. The parameter is named
+`rest`, or `rest2` and so on where the call already uses the name. Where the
+name `pattern` is not bound at the call, the rewrite adds it to the import that
+`patternTool` comes from.
+
+An accepted call is reported with the warning
+`removed-form:pattern-tool-interim`, whose message holds the closure. The
+identifier is not in the catalog of `language-subset.md`, and `src/catalog.rs`
+lists it as provisional. A rewritten call is counted as a `patternTool` call in
+the corpus report.
+
+A call is accepted where all of these hold: the callee is the name `patternTool`
+imported from `commonfabric`, with no alias, no namespace and no type argument;
+the call is in the reactive tier; the first argument is the name of a pattern
+declared at module scope or imported, or an inline `pattern(...)` with a written
+input type; the second argument is absent or is an object literal whose
+properties are plain or shorthand with a key that is an identifier or a string
+literal, each key once; and, where keys are bound, the input type of the pattern
+is an object type that declares each of them. A call whose result is spread,
+read by a member access or called is not accepted, since the closure is not the
+record `{ pattern, extraParams }` that today's `patternTool` returns. A call
+that holds another `patternTool` call is not accepted either, and the inner call
+is decided on its own. Every other call stays in the text and is refused with
+`removed-form:pattern-tool`, as `patternTool` used as a value is.
+
+The rewrite is made on the text because the later stages read the text at the
+spans of the syntax tree. A replacement holds as many line breaks as the text it
+replaces, so every line keeps its number. A diagnostic of a rewritten module is
+reported at its position in the text as written, and an offset inside a
+replacement is reported at the start of the text that was replaced. The offsets
+in a plan and the module text in value code are those of the rewritten text.
+Deciding a call needs its tier and the input type of the pattern, so a program
+in which some module names `patternTool` is parsed twice, and its modules that
+name `patternTool` are walked twice by `src/check`.
+
+The crate does not translate a pattern closure used as a value: the plan lists
+it as the unsupported construct "the built-in `pattern` in the reactive tier",
+`Plan.closures` is empty, no plan with slots of root `params` is made for the
+inline pattern, and the write edge at the path that holds the closure has no
+template. Value code for the closure is not what `plan-and-label-templates.md`
+§3.15 describes, and the executor holds the request of
+`compare/fixtures/pattern-tool.tsx` without the tool. So a module with a
+rewritten call is accepted by the rules and has no complete plan.
+`tests/pattern_tool.rs` states this for that fixture.
+
 ## Value code and the executor
 
 `emit path/to/module.tsx` prints, for each pattern of the module, one artifact:
