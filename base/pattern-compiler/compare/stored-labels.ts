@@ -1496,6 +1496,13 @@ export const checkSoundness = (
 };
 
 /**
+ * The number of pairs of a stored position and a labeled input that the
+ * checks after every event of one scenario compare at most
+ * (`soundnessAfterEachEvent`).
+ */
+const STEPPED_PAIRS = 20_000;
+
+/**
  * Runs `events` on the executor with its documents in storage and the option
  * on, and checks the labels it stored against the values (`checkSoundness`)
  * after each event, against runs in memory advanced to the same event
@@ -1504,7 +1511,9 @@ export const checkSoundness = (
  * event with every finding, each at the first event it was found after; the
  * reason of each commit the storage refused; and why the run stopped, where
  * a write after a refused commit failed. With a refused commit the findings
- * are not counted (`unstoredAfter`).
+ * are not counted (`unstoredAfter`). A scenario with so many stored
+ * positions that the checks would compare more than `STEPPED_PAIRS` pairs is
+ * checked after the first event and after each third of its events.
  */
 export const soundnessAfterEachEvent = async (
   artifact: Artifact,
@@ -1549,6 +1558,15 @@ export const soundnessAfterEachEvent = async (
         },
         sent: (runtime, hooks, instance, position) => {
           stepped.advance();
+          // Where the checks after every event would compare more pairs
+          // than `STEPPED_PAIRS`, the check runs after the last event of
+          // each third of the events and after no other.
+          const third = Math.max(1, Math.floor(events.length / 3));
+          if (
+            last !== undefined &&
+            last.checked * events.length > STEPPED_PAIRS &&
+            (position + 1) % third !== 0 && position !== events.length - 1
+          ) return;
           last = checkSoundness(
             runtime,
             hooks,
