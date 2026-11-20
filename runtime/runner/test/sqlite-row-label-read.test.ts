@@ -27,6 +27,12 @@ import {
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 const OWNER = "did:key:zOwner";
+// A reader as `dbOwner()`/`principal()` name it: the CFC `User{subject}` atom
+// (spec §15.2), never the bare DID.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
 
 const emailTables = {
   emails: table(
@@ -117,9 +123,9 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
     assertEquals(res.labels, [
       {
         confidentiality: [
-          "did:mailto:alice@a.example",
-          "did:mailto:bob@example.com",
-          OWNER,
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+          user(OWNER),
         ],
         integrity: [
           {
@@ -130,10 +136,10 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       },
       {
         confidentiality: [
-          "did:mailto:carol@c.example",
-          "did:mailto:dave@d.example",
-          "did:mailto:erin@e.example",
-          OWNER,
+          user("did:mailto:carol@c.example"),
+          user("did:mailto:dave@d.example"),
+          user("did:mailto:erin@e.example"),
+          user(OWNER),
         ],
       },
     ]);
@@ -215,7 +221,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       rows: [{ cnt: 2 }],
       owner: OWNER,
     }));
-    assertEquals(res.labels, [{ confidentiality: [OWNER] }]);
+    assertEquals(res.labels, [{ confidentiality: [user(OWNER)] }]);
 
     // ...and it fits a ceiling naming the owner, but not one that omits it.
     const kept = expectOk(computeRowLabelRead({
@@ -223,7 +229,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       columns: [col("cnt", null, null)],
       rows: [{ cnt: 2 }],
       owner: OWNER,
-      ceiling: [OWNER],
+      ceiling: [user(OWNER)],
     }));
     assertEquals(kept.keep, [true]);
 
@@ -232,7 +238,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       columns: [col("cnt", null, null)],
       rows: [{ cnt: 2 }],
       owner: OWNER,
-      ceiling: ["did:key:someone-else"],
+      ceiling: [user("did:key:someone-else")],
     });
     expectError(missed, "ceiling");
   });
@@ -320,7 +326,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       owner: OWNER,
     }));
     assertEquals(res.labels, [
-      { confidentiality: [{ anyOf: [OWNER, "did:key:public"] }] },
+      { confidentiality: [{ anyOf: [user(OWNER), "did:key:public"] }] },
     ]);
     // Fits a ceiling naming the public reader alone (subsumption).
     const kept = expectOk(computeRowLabelRead({
@@ -485,20 +491,20 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       owner: OWNER,
     }));
     assertEquals(res.labels, [
-      { confidentiality: ["did:mailbox:seven", OWNER] },
-      { confidentiality: ["did:mailbox:eight", OWNER] },
+      { confidentiality: ["did:mailbox:seven", user(OWNER)] },
+      { confidentiality: ["did:mailbox:eight", user(OWNER)] },
     ]);
   });
 });
 
 describe("computeRowLabelRead — output ceiling + onExceed", () => {
   const CEILING_ALL = [
-    "did:mailto:alice@a.example",
-    "did:mailto:bob@example.com",
-    "did:mailto:carol@c.example",
-    "did:mailto:dave@d.example",
-    "did:mailto:erin@e.example",
-    OWNER,
+    user("did:mailto:alice@a.example"),
+    user("did:mailto:bob@example.com"),
+    user("did:mailto:carol@c.example"),
+    user("did:mailto:dave@d.example"),
+    user("did:mailto:erin@e.example"),
+    user(OWNER),
   ];
 
   it("fail (default): one row exceeding the ceiling refuses the query", () => {
@@ -508,9 +514,9 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: ROWS,
       owner: OWNER,
       ceiling: [
-        "did:mailto:alice@a.example",
-        "did:mailto:bob@example.com",
-        OWNER,
+        user("did:mailto:alice@a.example"),
+        user("did:mailto:bob@example.com"),
+        user(OWNER),
       ],
     });
     expectError(res, "ceiling");
@@ -523,9 +529,9 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: ROWS,
       owner: OWNER,
       ceiling: [
-        "did:mailto:alice@a.example",
-        "did:mailto:bob@example.com",
-        OWNER,
+        user("did:mailto:alice@a.example"),
+        user("did:mailto:bob@example.com"),
+        user(OWNER),
       ],
       onExceed: "skip",
     }));
@@ -562,7 +568,7 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: [{ cnt: 2 }],
       owner: OWNER,
       staticConfidentiality: ["secret"],
-      ceiling: [OWNER],
+      ceiling: [user(OWNER)],
       onExceed: "skip",
     });
     expectError(res, "aggregate");
@@ -575,7 +581,7 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: [{ body: "x" }],
       owner: OWNER,
       staticConfidentiality: ["secret"],
-      ceiling: [OWNER], // "secret" not allowed
+      ceiling: [user(OWNER)], // "secret" not allowed
     });
     expectError(res, "ceiling");
   });
@@ -654,10 +660,6 @@ describe("resolveCeilingPlaceholders", () => {
 // exactly, so a `dbOwner()` row fits it only when the row names the owner in
 // that same form — a bare DID string never does.
 describe("computeRowLabelRead — dbOwner() rows meet a User(owner) ceiling", () => {
-  const user = (subject: string) => ({
-    type: "https://commonfabric.org/cfc/atom/User",
-    subject,
-  });
   const ownedTables = {
     notes: table(
       { id: "integer", body: "text" },
