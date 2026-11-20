@@ -103,13 +103,42 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/patterns/apps/feedback-reports/main.tsx",
-              "moduleIdentity": "KGetoXonU-bp38PBS5i8CoG9WUk71dzsl4ZVlKycYhk",
+              "moduleIdentity": "YAnJbwraVAWA9SiZfask5ZgpKQtrgSqqJaXDdgEUAng",
               "path": [
                 "addReportHandler"
               ]
             }
           }
         }
+      },
+      "TopicLink": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/apps/feedback-reports/main.tsx",
+              "moduleIdentity": "YAnJbwraVAWA9SiZfask5ZgpKQtrgSqqJaXDdgEUAng",
+              "path": [
+                "linkTopicHandler"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "TopicOfMap": {
+        "additionalProperties": {
+          "$ref": "#/$defs/TopicLink"
+        },
+        "properties": {},
+        "type": "object"
       }
     },
     "properties": {
@@ -125,16 +154,12 @@
         "type": "array"
       },
       "topicOf": {
-        "additionalProperties": {
-          "type": "string"
-        },
+        "$ref": "#/$defs/TopicOfMap",
         "asCell": [
           "cell"
         ],
         "default": {},
-        "description": "The Topic each linked report was filed under. `linkTopic` writes here,\none key per call.",
-        "properties": {},
-        "type": "object"
+        "description": "The Topic each linked report was filed under. `linkTopic` writes here,\none key per call."
       }
     },
     "type": "object"

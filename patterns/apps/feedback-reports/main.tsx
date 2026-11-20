@@ -20,17 +20,12 @@ import {
   type WriteAuthorizedBy,
 } from "commonfabric";
 
+import { addReportRefusal, REPORT_ID, TOPIC_ADDRESS } from "./fields.ts";
+
+export { MAX_WORDS, REPORT_KINDS } from "./fields.ts";
+
 /** What a report is about: something that broke, or something wished for. */
 export type ReportKind = "broke" | "wish";
-
-/** The kinds `addReport` accepts. */
-export const REPORT_KINDS: readonly string[] = ["broke", "wish"];
-
-/** What a report id is: exactly 32 lowercase hex characters. */
-export const REPORT_ID = /^[0-9a-f]{32}$/;
-
-/** The most characters a report's `words` may hold. */
-export const MAX_WORDS = 4000;
 
 /**
  * The structured part of a report: `source` and whatever else the sender
@@ -77,12 +72,26 @@ export type StoredReport = AuthoredByCurrentUser<
 export type ReportsCell = Writable<StoredReport[] | Default<[]>>;
 
 /**
+ * A report's Topic address. Only `linkTopic` writes one, and the runtime
+ * labels each write `authored-by` the principal it acts for, so a reader
+ * can honour only links someone it trusts wrote.
+ */
+export type TopicLink = AuthoredByCurrentUser<
+  WriteAuthorizedBy<string, typeof linkTopicHandler>
+>;
+
+/**
  * The cell holding the Topic each linked report was filed under, by report
  * id. Kept beside the reports rather than in them, so that a report stays
  * written by its sender alone.
  */
+export interface TopicOfMap {
+  [id: string]: TopicLink;
+}
+
+/** The same, as the cell `linkTopic` writes. */
 // deno-lint-ignore ban-types
-export type TopicOfCell = Writable<Default<Record<string, string>, {}>>;
+export type TopicOfCell = Writable<Default<TopicOfMap, {}>>;
 
 export interface FeedbackReportsInput {
   /** The reports. `addReport` appends here. */
@@ -176,59 +185,6 @@ export const rejectReport = (
   throw new Error(`${verb} rejected: ${code}: ${reason}`);
 };
 
-/**
- * Why `addReport` refuses `event` on a board already holding reports with
- * the ids `taken`, as a code and a reason, or `undefined` when it accepts it.
- */
-export function addReportRefusal(
-  event: Partial<AddReportEvent>,
-  taken: readonly string[],
-): { code: string; reason: string } | undefined {
-  const name = typeof event.name === "string" ? event.name.trim() : "";
-  const structured = event.structured;
-  if (typeof event.agentName !== "string" || !event.agentName.trim()) {
-    return { code: "unsigned", reason: "agentName must be non-blank" };
-  }
-  if (typeof event.id !== "string" || !REPORT_ID.test(event.id)) {
-    return {
-      code: "bad-id",
-      reason: "id must be 32 lowercase hex characters",
-    };
-  }
-  if (!name) return { code: "missing-name", reason: "name is required" };
-  if (typeof event.kind !== "string" || !event.kind) {
-    return { code: "missing-kind", reason: "kind is required" };
-  }
-  if (!REPORT_KINDS.includes(event.kind)) {
-    return { code: "bad-kind", reason: "kind must be broke or wish" };
-  }
-  if (
-    typeof structured !== "object" || structured === null ||
-    typeof structured.source !== "string" || !structured.source.trim()
-  ) {
-    return {
-      code: "missing-source",
-      reason: "structured.source is required",
-    };
-  }
-  if (event.words !== undefined && typeof event.words !== "string") {
-    return { code: "bad-words", reason: "words must be a string" };
-  }
-  if ((event.words ?? "").length > MAX_WORDS) {
-    return {
-      code: "words-too-long",
-      reason: `words must be at most ${MAX_WORDS} characters`,
-    };
-  }
-  if (taken.includes(event.id)) {
-    return {
-      code: "duplicate-id",
-      reason: `a report with id ${event.id} is already on the board`,
-    };
-  }
-  return undefined;
-}
-
 /** The state `addReport` writes, named so `StoredReport` can refer to the
  * handler without referring to itself. */
 interface AddReportState {
@@ -262,9 +218,11 @@ interface LinkTopicState {
   topicOf: TopicOfCell;
 }
 
-/** Handles `linkTopic`. A report keeps the first Topic it is linked to: a
- * second call naming the same Topic changes nothing, and one naming another
- * is refused. */
+/** Handles `linkTopic`. Linking a report to the Topic it is linked to
+ * changes nothing; linking it to another replaces the link. Anyone who may
+ * write the board may call this, so a link is no fact until a reader checks
+ * who wrote it: a first-link-wins rule would let any writer claim a report
+ * before triage reached it. */
 const linkTopicHandler = handler<
   LinkTopicEvent,
   LinkTopicState,
@@ -282,8 +240,12 @@ const linkTopicHandler = handler<
       "id must be 32 lowercase hex characters",
     );
   }
-  if (!topicAddress) {
-    rejectReport("linkTopic", "missing-topic", "topic is required");
+  if (!TOPIC_ADDRESS.test(topicAddress)) {
+    rejectReport(
+      "linkTopic",
+      "bad-topic",
+      "topic must be a Topic address, top/<n> or of:…",
+    );
   }
   if (!reports.get().some((report) => report.id === reportId)) {
     rejectReport(
@@ -292,15 +254,7 @@ const linkTopicHandler = handler<
       `no report with id ${reportId} is on the board`,
     );
   }
-  const linked = topicOf.get()[reportId];
-  if (linked !== undefined && linked !== topicAddress) {
-    rejectReport(
-      "linkTopic",
-      "already-linked",
-      `${reportId} is already filed under ${linked}`,
-    );
-  }
-  if (linked === undefined) topicOf.key(reportId).set(topicAddress);
+  topicOf.key(reportId).set(topicAddress);
   return { id: reportId, topic: topicAddress };
 });
 

@@ -17,12 +17,23 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import FeedbackReports, { MAX_WORDS, type StoredReport } from "./main.tsx";
+import FeedbackReports, {
+  MAX_WORDS,
+  type StoredReport,
+  type TopicOfMap,
+} from "./main.tsx";
+
+/** One more failing probe than a report may hold. */
+const MANY_PROBES = Array.from(
+  { length: 51 },
+  () => ({ connector: "gmail", probe: "token" }),
+);
 
 export default pattern(() => {
   // Held here so the test can read a stored report's label.
   const reports = new Writable<StoredReport[] | Default<[]>>([]);
-  const board = FeedbackReports({ reports });
+  const topicOf = new Writable<TopicOfMap>({});
+  const board = FeedbackReports({ reports, topicOf });
   const me = new Writable("");
 
   const ID_A = "0123456789abcdef".repeat(2);
@@ -84,18 +95,44 @@ export default pattern(() => {
   );
 
   // Refused: duplicate id, missing id, an id in capitals, an id one short,
-  // missing name, missing kind, unknown kind, missing source, words too long.
-  const valid = { kind: "broke", structured: { source: "report" } };
+  // missing name, a name of another shape, missing kind, unknown kind,
+  // missing source, words too long, a link in `structured`, a cause that is
+  // prose, too many probes. `fields.test.ts` checks the code of each refusal
+  // and the rest of the rules; here each must also leave the board as it was.
+  const valid = {
+    kind: "broke",
+    name: "brave-lynx-3",
+    structured: { source: "report" },
+  };
   const refused = [
     { ...valid, id: ID_A, name: "other-name-1" },
     { ...valid, name: "no-id-2" },
-    { ...valid, id: ID_A.toUpperCase(), name: "caps-3" },
-    { ...valid, id: ID_C.slice(1), name: "short-4" },
+    { ...valid, id: ID_A.toUpperCase() },
+    { ...valid, id: ID_C.slice(1) },
     { ...valid, id: ID_C, name: "  " },
-    { ...valid, id: ID_C, name: "a", kind: "" },
-    { ...valid, id: ID_C, name: "b", kind: "bug" },
-    { ...valid, id: ID_C, name: "c", structured: { source: "" } },
-    { ...valid, id: ID_C, name: "d", words: "x".repeat(MAX_WORDS + 1) },
+    { ...valid, id: ID_C, name: "Quiet Heron" },
+    { ...valid, id: ID_C, kind: "" },
+    { ...valid, id: ID_C, kind: "bug" },
+    { ...valid, id: ID_C, structured: { source: "" } },
+    { ...valid, id: ID_C, words: "x".repeat(MAX_WORDS + 1) },
+    {
+      ...valid,
+      id: ID_C,
+      structured: { source: "report", note: "see https://example.com" },
+    },
+    {
+      ...valid,
+      id: ID_C,
+      structured: { source: "report", want: { cause: "it broke, sorry" } },
+    },
+    {
+      ...valid,
+      id: ID_C,
+      structured: {
+        source: "report",
+        failingProbes: MANY_PROBES,
+      },
+    },
   ];
   const refusals = refused.map((event) =>
     action(() =>
@@ -131,6 +168,18 @@ export default pattern(() => {
       topic: "of:fid1:topic-a",
     });
   });
+  // Another Topic replaces the link: who may be believed is the reader's to
+  // decide, from the link's `authored-by` label.
+  const action_relink = action(() => {
+    board.linkTopic.send({ agentName: "triage", id: ID_B, topic: "top/7" });
+  });
+  const action_relink_again = action(() => {
+    board.linkTopic.send({ agentName: "triage", id: ID_B, topic: "top/8" });
+  });
+  const assert_relinked = assert(() =>
+    board.topicOf[ID_B] === "top/8" &&
+    principalOf(topicOf.key(ID_B), "authored-by") === me.get()
+  );
   // Linking one report leaves the other report of the same name new.
   const assert_linked = assert(() =>
     board.topicOf[ID_A] === "of:fid1:topic-a" &&
@@ -139,18 +188,19 @@ export default pattern(() => {
     board.newCount === 1
   );
 
-  // Refused: another Topic for a linked report, an unknown report, a
-  // malformed id, a blank Topic, unsigned.
+  // Refused: an unknown report, a malformed id, a blank Topic, a Topic
+  // that is a link rather than an address, unsigned.
   const linkRefusals = [
-    { agentName: "triage", id: ID_A, topic: "of:fid1:topic-b" },
     { agentName: "triage", id: ID_C, topic: "of:fid1:topic-a" },
     { agentName: "triage", id: "quiet-heron-41", topic: "of:fid1:topic-a" },
-    { agentName: "triage", id: ID_B, topic: " " },
-    { agentName: "", id: ID_B, topic: "of:fid1:topic-a" },
+    { agentName: "triage", id: ID_A, topic: " " },
+    { agentName: "triage", id: ID_A, topic: "https://example.com/top/1" },
+    { agentName: "", id: ID_A, topic: "of:fid1:topic-b" },
   ].map((event) => action(() => board.linkTopic.send(event)));
   const assert_links_unchanged = assert(() =>
-    Object.keys(board.topicOf).length === 1 &&
-    board.topicOf[ID_A] === "of:fid1:topic-a"
+    Object.keys(board.topicOf).length === 2 &&
+    board.topicOf[ID_A] === "of:fid1:topic-a" &&
+    board.topicOf[ID_B] === "top/8"
   );
 
   return {
@@ -170,6 +220,9 @@ export default pattern(() => {
       { action: action_link },
       { action: action_link_again },
       { assertion: assert_linked },
+      { action: action_relink },
+      { action: action_relink_again },
+      { assertion: assert_relinked },
       ...linkRefusals.flatMap((refusal) => [
         { action: refusal },
         { assertion: assert_links_unchanged },
