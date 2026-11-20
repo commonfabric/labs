@@ -38,7 +38,11 @@ caller and host must read.
 ## What is left behind
 
 A catalog created before this change holds a list the new handler cannot
-write, and never adopts the new source. Its requests are short-lived: a host
-acts on a request within minutes of the tap and answers it once, and nothing
-else reads them later. A host that keeps a catalog for its owner creates a
-fresh one when an update is refused.
+write, and never adopts the new source. Nothing removes a request from the
+list, and each `GetItButton` reads the latest request for its pattern and
+destination, with its answer, every time it renders. A host that replaces
+such a catalog with a fresh one therefore loses that history: a button that
+showed "Got it" or a failure shows nothing and can be tapped again, and a
+request still open on the old catalog is never answered there. A host acts on
+a request within minutes of the tap, so what is lost is what buttons show of
+past taps, not work still to be done.
