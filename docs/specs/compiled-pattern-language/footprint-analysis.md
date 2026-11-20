@@ -1290,6 +1290,21 @@ a hop whose read is dynamic ([§2.1](#21-abstract-values)), that
 observation is a journaled read of the reference at the position, and no
 static entry.
 
+**A removal removes in place.** By ruling (2026-11-20) the row of `h.remove(…)`,
+`h.removeByValue(…)` and `h.removeAll(…)` is the rule: the operation names the
+member to remove, the container's enumeration changes, no kept element is
+written, and the kept elements are not labeled again with what the removal read.
+The label rule follows from the CFC specification and not from today's
+implementation. The analysis records no read of the elements for a removal. The
+prototype's executor does not remove in place: it reads the list through the
+handle and writes back what it keeps with `set` (`Handle.remove` and
+`Handle.removeAll` of `base/pattern-compiler/exec/executor.ts`), so it writes
+each kept element at another position, a value in place over an array of plain
+values and a link over an array of references. As built, the write record of
+such a removal binds the handle's slot as a `value` read of everything the
+removal read (`plan-and-label-templates.md` §2.5, "A removal writes no kept
+element"), which is wider than the rule.
+
 ### 6.2 Targets
 
 A write target is classified by what the analysis knows of its address.

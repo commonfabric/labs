@@ -3446,6 +3446,18 @@ when the cell is created, and a read of the cell reads the default
 cell. Writing the constant at creation as well is legal and is not
 what this design does.
 
+By ruling (2026-11-20) a cell whose schema declares a label is the exception: it
+has a document from the start. A label is stored with a document, so the
+constant is written under the cell's schema when the cell is created, and the
+document stores the label that the schema declares
+(`plan-and-label-templates.md` §1.3). The owner's reason: a state cell that gets
+a document is no problem in general, and what this design avoids storing is the
+intermediate values. The prototype's executor does so (`Instance.stateCell` of
+`base/pattern-compiler/exec/executor.ts`), and leaves a cell without a document
+where the schema holds a declared label as the text of its type, which no store
+takes. The rule is the same for a state cell of an element body in each of the
+three cases of a per-element source.
+
 While such a cell has no document, a read at any path of it reads the
 default at that path. A write of the whole value makes the document,
 also where the value equals the default. A write below the root has to
@@ -3497,7 +3509,8 @@ plain values in place the value, and no reference to the element
 The compiled path therefore stores fewer state cell documents than a
 runtime that writes every first value. The prototype's executor keeps
 the rule for a constant first value: it writes nothing when it creates
-such a cell, and the first write makes the document. Over its corpus
+such a cell, a cell whose schema declares a label excepted, and the
+first write makes the document. Over its corpus
 run 98 state cells have a document after the scenario, where an
 executor that wrote every first value stored 898. The run of today's
 runtime it is compared with has the document of every state cell of

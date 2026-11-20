@@ -886,7 +886,9 @@ and the callee must be one of:
 - an inline `pattern(...)` expression, which the compiler hoists, turning its
   captures into private parameters. In the reactive tier such an expression
   may also be used as a value, a pattern closure, which is what replaces
-  `patternTool` ([language subset](language-subset.md), §4.4.2);
+  `patternTool` ([language subset](language-subset.md), §4.4.2). For an
+  interim period a direct `patternTool(...)` call in a pattern body is
+  accepted with a warning and rewritten to such a closure (§4.4.3 there);
 - a pattern received as a factory value
   ([first-class serializable factories](../pattern-construction/node-factory-shipping.md)).
 

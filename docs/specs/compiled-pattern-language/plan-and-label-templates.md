@@ -3558,6 +3558,17 @@ this.
   state cell of an element body over an array of references, over an
   array of plain values in place, and over the result of another
   per-element construct.
+  By ruling (2026-11-20) a cell whose schema declares a label, at its root or
+  below it, is the exception: it has a document from the start. A label is
+  stored with a document, so while such a cell had no document the clause its
+  type declares would be stored nowhere, and a kept output that is a reference
+  to the cell would read as unlabeled. The constant is written under the cell's
+  schema when the cell is created, and the document stores what the schema
+  declares. The owner's reason: a state cell that gets a document is no problem
+  in general, and what the design avoids storing is the intermediate values.
+  *Assumed:* a schema whose declared label is not resolved to atoms declares
+  nothing for this rule, and its cell follows the rule for every other state
+  cell.
 - **A first value that is not a constant** is computed by a cone and
   written once, when the cell is first created, through a `WriteEdge`
   with target `state` among the `writes` of that cone, which
@@ -5267,6 +5278,50 @@ the slot is **bound**.
   address and need none. A write record gives the further bindings as
   chains below the slot's own. This is what a journaled read of the same
   value through its links consumes today.
+- **Further bindings whose labels are equal are reported once.** The label of a
+  slot is the join over its chains, and chains whose positions hold equal labels
+  add nothing to it. A write record therefore gives one chain for each set of
+  further bindings whose positions have equal label identifiers (provisional,
+  P31; section 4.2), so a read of an array of references whose elements have one
+  label reports one further binding, at any length. A chain with a position that
+  the transaction wrote has no identifier for that position and is kept. Two
+  points are open (section 8, question 186). The identifier that is compared has
+  to be that of the observation the binding makes at each position, a link
+  followed for the positions on the way and the slot's class at the end; the
+  prototype compares the identifier of a read of the value at every position,
+  and that the two agree is not verified. And the report is smaller, but forming
+  it still visits every position: over an array of references the work is linear
+  in the elements. For an array of plain values in place there is no further
+  binding to report, and for the result of another per-element construct whose
+  positions hold links the rule is that of an array of references.
+- **A value in place under a template of one reference slot.** A template that
+  is one `slot` node of the class `identity`, directly or through the `output`
+  and `shared` nodes it names, says that the written path holds a reference.
+  Where the evaluation stores a value in place at that path and no link, the
+  write stored what the slot's positions hold, and its label is that of a
+  `value` read of them: the slot is bound in the class `value` for that write,
+  with the further bindings of a value that holds links. It applies to the
+  record of an output and to the record of a write edge. Two constructs store
+  such a value: the result of a `reduce`, over an array of references, over an
+  array of plain values in place and over the result of another per-element
+  construct, and the array that a spread child copies. For a `reduce` over the
+  result of another per-element construct, whose elements are at no stored
+  position, the slot is bound to the positions that the upstream evaluations
+  read. A position that holds a link or a stream keeps the class `identity`.
+- **A removal writes no kept element.** By ruling (2026-11-20) a removal through
+  a handle (`remove`, `removeAll`, `removeByValue`) removes in place, as
+  `footprint-analysis.md` §6.1 has it: it writes the container's enumeration,
+  and the elements it keeps are not labeled again with what the removal read.
+  The label rule is derived from the CFC specification and not from today's
+  implementation. *Not determined by the ruling:* over an array of plain values
+  in place the values behind the removed element move to another position, and
+  what their label entries do (section 8, question 185). Over an array of
+  references the link at each position is written with its entry. The
+  prototype's executor does not remove in place: it reads the list and writes
+  back what it keeps, and milestone 4 of the integration binds the handle's slot
+  in the class `value` to every position that read went through, for that write,
+  so the kept elements take the label of everything the removal read. That is
+  wider than this rule and is the state as built.
 
 A read stays `dynamic` where the plan cannot name its path ahead of the
 evaluation: a read through a handle that happens on some runs only or at a
@@ -8393,6 +8448,20 @@ for an inferred event type, and for a body that reads every field the
 authored type declares; tighter when the authored type declares a field the
 body does not read.
 
+**A write that leaves the value as it was.** By ruling (2026-11-20) a handler
+run of a compiled pattern that leaves a value as it was still stores a label for
+what it read. A handler that writes `clamp(value + step, min, max)` to `value`
+leaves `value` where the result equals what is stored, and the value that stays
+is a function of `min` all the same: the outcome of the run reveals `min`. The
+write is therefore instantiated and its label stored, although no value changes.
+*Assumed* (section 8, question 184): the label replaces the label at the path,
+as the label of a write that changes the value does, and the rule is for what a
+handler itself writes. Today's runtime writes nothing for such a write and keeps
+the label of the earlier write, so here the template is not **equal** to today:
+it holds the clauses of what the run read, and today's label can lack them.
+Milestone 4 of the integration found the case and does not build the rule: it
+makes no write record for a write that leaves the stored value as it was.
+
 **The label of an event slot.** An event is not stored, so no entry is
 resolved at an address for it. The label of a slot of root `event` is the
 label the event arrived with: the template of the body that sent it (section
@@ -10086,12 +10155,17 @@ made them, as the reads through a handle are attributed to their `dynamic`
 node (section 3.10), and the write of an outcome is a write that a record
 of the plan covers: the runtime has, for each outcome the transaction
 writes, the operation, the bindings of the slots that `Operation.input`
-reaches, and the addresses its resolution read. Without that record per
-outcome the runtime stores the transaction's join at the outcome, which
-is a bound: wider than this rule, and wider than today's label where
-today resolves each wish in a transaction of its own. Milestone 4 of the
-integration is building the record
-([compiled-pattern-language-integration.md](../../plans/compiled-pattern-language-integration.md)).
+reaches, and the addresses its resolution read. The record names the operation,
+and the runtime gives the write the label of the rule above, with no integrity.
+Where a record reports no reads for the entry of `Plan.dynamicReads`, that part
+is the transaction's join, which is a bound. A read of the outcome in the
+transaction that wrote it takes the label staged for the outcome, also at a path
+below it (section 4.5). Whether a `wish` failed is decided by its resolution, as
+its outcome is: a slot that reads the mark of a failure, which the operation's
+state does not hold, is bound to the outcome and has its label. Milestone 4 of
+the integration builds the record
+([compiled-pattern-language-integration.md](../../plans/compiled-pattern-language-integration.md)):
+`wishOutcomeLabel` in `runtime/runner/src/cfc/plan-labels.ts`.
 
 The query decides what the `dynamic` node can hold, the scope, and which
 other records the plan has. Where the `query` operand is a constant, the
@@ -11389,6 +11463,20 @@ evaluated.
   address in this transaction, and not to the stored one. A consumer would
   otherwise take the label of the value that was there before, which can be
   looser or tighter than the label of the value it read.
+  - *Which staged label.* A write covers its target and every path below it. An
+    address takes the label of the nearest path at or above it that a write of
+    the transaction covers, and the transaction's join where none does. A
+    covering write whose own label is being instantiated is passed over, because
+    it read below its own target before it wrote: the address then takes the
+    label of a covering write further up, or the join.
+  - *A chain through a staged position.* A binding whose chain ends at a
+    position the transaction wrote keeps its other positions: the links crossed
+    on the way, and the further bindings below a value that holds links (section
+    2.5). Each position of the binding that the transaction wrote takes the
+    label staged there, and each other position the label stored. A binding that
+    named the staged position alone would leave out what a link stored there
+    leads to. A position that the write being instantiated itself covers is read
+    as it is stored, since what that write stages adds nothing to its own label.
 - **Order.** A write is therefore instantiated before every template that
   has a slot bound to its target. In an event's transaction the order is:
   the derived writes instantiated early (below), each before the read
@@ -15962,3 +16050,38 @@ this document made.
      covers all elements. The alternative instantiates the predicate's
      template per element of the prefix. It is question 311 of the
      continuation plan.
+184. **What the label of a write that leaves the value as it was does to the
+     stored label** (for the project owner; section 3.12). The ruling of
+     2026-11-20 has such a write of a handler store a label for what it read. It
+     does not say whether that label replaces the label at the path or is joined
+     to it, nor whether a derived write whose value comes out equal to the
+     stored one stores a label. *Assumed:* it replaces the label, and the rule
+     is for a handler's own writes. A join never narrows a label without a
+     change of value and is wider. The continuation plan records the ruling
+     under its question 315.
+185. **The label entries of the elements behind a removed one** (for the project
+     owner; section 2.5, "A removal writes no kept element"). The ruling of
+     2026-11-20 has a removal remove in place without labeling the kept elements
+     again, with the rule derived from the CFC specification. Over an array of
+     plain values in place the values behind the removed element move, and a
+     label entry per position that stays where it is then describes another
+     value, which is question 304 of the continuation plan for today's runtime.
+     P31 has a `splice` remove the one `*` entry of section 2.3, so that the
+     elements take the list's label, which is wider than their own; whether a
+     removal in place is such a `splice` is part of this question. *Assumed:*
+     nothing, until the rule is derived. Not built. The continuation plan
+     records the ruling under its question 316.
+186. **How the write records of a transaction are bounded** (for the project
+     owner; sections 2.5 and 4.2). Further bindings with equal labels are
+     reported once. Three costs stay linear in the elements of a list: finding
+     the label identifier of every position a read reached; the one chain of an
+     `identity` slot, which holds every position; and one write record per
+     element of a write of many elements. *Assumed:* as built. The alternative
+     reports by group in each: the groups that P31 keeps with a collection's
+     assembly in place of chains, one chain with `*` at the element's position,
+     and one record per group with `*` in the target. Open with it: whether
+     equal labels for a read of the value at a position imply equal labels for a
+     link followed there, which the report of equal chains assumes. Measured
+     over an array of references; an array of plain values in place and the
+     result of another per-element construct were not measured. It is question
+     318 of the continuation plan.

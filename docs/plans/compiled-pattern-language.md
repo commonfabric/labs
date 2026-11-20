@@ -6284,6 +6284,41 @@ is relitigated.
   407 to 2,280 and the preparation time from 379 ms to 690 ms, about 0.3 ms
   per added preparation. Milestone 4 of the integration builds it
   ([Known limits](#known-limits-of-what-exists)).
+- A handler run of a compiled pattern that leaves a value as it was still stores
+  a label for what it read (2026-11-20, Z67). The owner agreed to the
+  recommendation "yes for compiled patterns, since the run's outcome does reveal
+  min; it would differ from today". The case is a handler that writes a value
+  clamped to a minimum: where the result equals the stored value, the value that
+  stays is still a function of the minimum. Today's runtime writes nothing there
+  and keeps the earlier label, so this is a rule on which the compiled path
+  differs from today's and is not looser. It settles question 315 here.
+  `plan-and-label-templates.md` §3.12 ("A write that leaves the value as it
+  was") states it. Not built: milestone 4 of the integration makes no write
+  record for such a write.
+- A removal through a handle (`remove`, `removeAll`, `removeByValue`) removes in
+  place, as `footprint-analysis.md` §6.1 describes, and the kept elements are
+  not labeled again with what the removal read (2026-11-20, Z68). The label rule
+  is to be derived from the CFC specification and not from today's
+  implementation. The owner's words: "are you matching the pre-existing
+  implementation? it might be labeling too much. let's make sure we do the right
+  thing here from first principles, i.e. CFC spec". It settles question 316
+  here. As built, the prototype's executor reads the list and writes back what
+  it keeps, and milestone 4 labels that write as a read of everything the
+  removal read (`Instance.readWritingBack` of
+  `base/pattern-compiler/exec/executor.ts`), which is wider than the ruling; the
+  code is to be replaced.
+- A state cell whose schema declares a label has a document from the start
+  (2026-11-20, Z69). The owner's words: "state cells getting documents is
+  generally not problematic, it's all the intermediate values that we want to
+  optimize away." It amends the ruling that a state cell whose first value is a
+  constant has no document until something writes it, for these cells, and
+  settles question 317 here. `plan-and-label-templates.md` §1.3 and
+  `execution-and-storage.md` §4.1 state it, and milestone 4 of the integration
+  builds it.
+- The budget of `SPEC-PENDING` markers is raised to 80 (2026-11-20, Z70). The
+  owner's words: "increase the budget to 80". It settles question 319 here. The
+  constant is `SPEC_PENDING_BUDGET` of `tasks/check-cfc-correspondence.ts`, and
+  the change is made on the code branch.
 
 ## Provisional decisions awaiting the owner's ratification
 
@@ -6303,23 +6338,29 @@ pointer to its entry.
 
 **To look at first,** in this order.
 
-1. **The open findings of milestone 4.** Labels from templates at commit
-   are built (milestone 4 of the integration), with every commit of a
-   compiled pattern prepared, and run over the whole corpus with `wish`
-   simulated: of 271 modules 238 run; of 1,695 output rows 1,010 are
-   tighter than today's, 292 equal and 121 looser, and of 196 write rows
-   128 are equal, 9 tighter and 56 looser. Open, most serious first, and
-   each being worked on: "tighter" in the comparison is not evidence of
-   correctness, since 93 rows in 34 modules gained a clause when two
-   binding defects were fixed, and an independent check that changes one
-   input at a time is being built; the outcome of a `wish` is looser than
-   today's until it has a write record of its own; the preparations of
-   one module cost about 650 ms each, cause not found; 60 commits in 33
-   modules are refused with the option on and not off; the runtime took
-   a bound 333 times for a selection, a choice or a dynamic read that is
-   not reported (P37); today's runtime may store too narrow a label at
-   two outputs, not reproduced in isolation; and the atom on a link is
-   not taken by a read of the value through the link (question 313)
+1. **The open findings of milestone 4,** at its sixth corpus run. Labels from
+   templates at commit are built (milestone 4 of the integration), with every
+   commit of a compiled pattern prepared, and run over the whole corpus with
+   `wish` simulated: of 271 modules 238 run; of 1,695 output rows 1,034 are
+   tighter than today's, 286 equal and 90 looser, and of 197 write rows 129 are
+   equal, 10 tighter and 55 looser. Two findings are serious. *First,
+   soundness:* a check that is independent of the label code changes one labeled
+   input at a time and requires its clause at every stored value that changes.
+   It found four defects that stored too narrow a label, all fixed, and it
+   leaves 3 rows of `product/primitives/counter.tsx` that depend on an input and
+   store no clause of it, because a handler run that leaves a value as it was
+   writes nothing and stores no label. The owner ruled on 2026-11-20 that such a
+   run stores a label; that is not built. The check is a lower bound and covers
+   205 of the 238 modules. *Second, a cost that grows with the data:* the write
+   records of one transaction over a list of 10,000 references held 127 MB, hold
+   13 MB after one fix, and are still linear in the elements in three places
+   (question 318, open). Open beside them: a removal through a handle is labeled
+   as a read of the whole list, where the ruling of 2026-11-20 has it remove in
+   place; 40 commits in 23 modules are refused with the option on and not off;
+   the runtime took a bound 333 times for a selection, a choice or a dynamic
+   read that is not reported (P37); today's label holds no clause at 4 rows
+   where the template's holds one, not reproduced in isolation; and the atom on
+   a link is not taken by a read of the value through the link (question 313)
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
    "Milestone 4: labels from templates at commit").
 2. **A pattern closure used as a value is not translated,** and the
@@ -11934,6 +11975,87 @@ and the rulings leave open.
      both in `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`,
      spread the result into a record. *Assumed:* the three stand.
 
+**From the sixth corpus run of milestone 4 of the integration.** The check of
+stored labels against the values and the measurement of the write records raise
+these
+([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
+"Milestone 4: labels from templates at commit"). Rulings of 2026-11-20 settle
+questions 315, 316, 317 and 319, and question 318 is open.
+
+315. **A handler run that leaves a value as it was stores no label of what it
+     read.** Settled by ruling (2026-11-20; [Decided](#decided)): a handler run
+     of a compiled pattern that leaves a value as it was still stores a label
+     for what it read. Found by the check of stored labels against the values of
+     milestone 4: in `patterns/product/primitives/counter.tsx` a handler writes
+     `clamp(value + step, min, max)` to `value`, and where the result equals the
+     stored value nothing is written, so 3 rows that depend on `min` store no
+     clause of it. Today's runtime stores the same label. Not determined by the
+     ruling, each *assumed* in `plan-and-label-templates.md` §3.12: the label of
+     such a write replaces the label at the path, as the label of a write that
+     changes the value does; and the rule covers what a handler itself writes,
+     and a derived write whose value comes out equal was not examined. It
+     changes what CFC decides against today's runtime, so it goes
+     through the specification procedure. Not built.
+316. **A removal through a handle: in place, or a read of the list.** Settled by
+     ruling (2026-11-20; [Decided](#decided)): a removal removes in place, as
+     `footprint-analysis.md` §6.1 describes, the kept elements are not labeled
+     again with what the removal read, and the label rule is derived from the
+     CFC specification and not from today's implementation. For the record of
+     today's implementation: `Cell.remove` and `Cell.removeAll` of
+     `runtime/runner/src/cell.ts` read the list with `get()`, and
+     `Cell.removeByValue` records a mergeable operation. Not determined by the
+     ruling: over an array of plain values in place, what the label entries of
+     the elements behind the removed one do when their values move to another
+     position, which is the defect of question 304 for today's runtime; over an
+     array of references the link at a position is written again with its entry.
+     As built in milestone 4 the write is labeled as a `value` read of
+     everything the removal read, wider than the ruling, until the executor
+     removes in place.
+317. **Whether a state cell whose schema declares a label has a document from
+     the start.** Settled by ruling (2026-11-20; [Decided](#decided)): it has.
+     `plan-and-label-templates.md` §1.3 and `execution-and-storage.md` §4.1
+     state it, and milestone 4 builds it. Not covered: a schema whose declared
+     label the crate emits as the text of its type, which gets no document
+     ([Known limits](#known-limits-of-what-exists)). How many state cells of the
+     corpus it gives a document is not measured.
+318. **How the write records of a transaction are bounded when a slot or a write
+     covers many elements** (PL question 186; for the owner). Measured in
+     milestone 4 on a list of 10,000 references: one transaction recorded 13
+     write records of 126.8 MB together, and 13.0 MB after chains with equal
+     label identifiers were reported once. Three costs stay linear in the
+     elements. (a) The executor walks every position that a read reached to find
+     its label identifier. (b) A slot of the class `identity` keeps every
+     position in its one chain, 20,001 positions and 1.4 MB per record in the
+     measured module. (c) A write of 10,000 elements gives 10,007 write records
+     of 11.9 MB together. The alternatives for each: keep it and accept a cost
+     per commit in the length of the list; or report by group. For (a), a slot
+     that reads a whole collection through its links reports the groups that P31
+     keeps with the collection's assembly, a set of label identifiers with
+     counts, and no chain per element. For (b), the chain names the container
+     once, with `*` at the element's position, as the `uniform` form does. For
+     (c), the elements of one collection written in one transaction with one
+     template are one write record per group, with `*` in the target. The
+     coordinator's recommendation, not a ruling: report by group in all three,
+     so that the size of the records of a transaction depends on the number of
+     distinct groups and not on the number of elements, as P31 has it for a
+     `fold`. *A second point, on soundness:* the fix that reports chains of
+     equal labels once compares the identifier of the label that a recursive
+     read of the value consumes at each position (`labelOf` of
+     `compare/runtime-transactions.ts`), and the runtime observes the positions
+     of a chain that hold links as a link followed. That equal labels of the
+     first kind imply equal labels of the second is assumed and not verified;
+     where it fails, a chain is left out whose label differs, and the stored
+     label is too narrow. *Recommended:* the identifier compared is that of the
+     observation the binding makes at the position. *Assumed meanwhile:* the fix
+     as built, with the three costs open. The measurement is over an array of
+     references; an array of plain values in place and the result of another
+     per-element construct were not measured.
+319. **The budget of `SPEC-PENDING` markers is used up.** Settled by ruling
+     (2026-11-20; [Decided](#decided)): the budget is raised to 80. At commit
+     `8595199b1a` of the branch of milestone 4 the budget is 40 and the governed
+     files hold 40 markers, of which 16 name specs pull request 91 and 24 name
+     13 other pull requests; a 41st marker of milestone 4 was folded into a
+     neighboring one to pass `deno task check-cfc-correspondence`.
 
 ## Open, and not needing the owner
 
@@ -12179,42 +12301,53 @@ The open questions each document ends with stay where they are.
 
 ## Known limits of what exists
 
-- **Milestone 4 of the integration is built and its findings are open.**
-  Labels from templates at commit are built on branch
-  `claude/compiled-pattern-m4`, with every commit of a compiled pattern
-  prepared, and measured over the whole corpus with `wish` simulated
+- **Milestone 4 of the integration is built and its findings are open.** Labels
+  from templates at commit are built on branch `claude/compiled-pattern-m4`,
+  with every commit of a compiled pattern prepared, and measured over the whole
+  corpus with `wish` simulated
   ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md),
-  "Milestone 4: labels from templates at commit"). Of 271 modules 238
-  run. Beside today's, of 1,695 output rows 1,010 are tighter, 292 equal,
-  259 have an atom that names the pattern, 121 are looser and 13
-  incomparable; of 196 write rows 128 are equal, 56 looser, 9 tighter and
-  3 incomparable. Open, most serious first, and each being worked on:
-  - "tighter" in the comparison is not evidence of correctness: 93 rows
-    in 34 modules gained a clause when two binding defects were fixed, and
-    an independent check that changes one input at a time is being built;
-  - the outcome of a `wish` is stored under the join of the transaction
-    that resolves every `wish` of the instance, looser than today's,
-    until each outcome has a write record of its own
-    (`plan-and-label-templates.md` §3.19);
-  - the preparations of `dev/experimental/folksonomy-stress-test.tsx`
-    cost about 650 ms each, and the cause is not found;
-  - 60 commits in 33 modules are refused with the option on and not off,
-    each with a stated reason, and a module with a refused commit holds
-    the labels of an earlier commit;
-  - the runtime took a bound 333 times, because a selection, a choice or
-    the addresses of a dynamic read are not reported
-    (`plan-and-label-templates.md` §4.2; P37);
-  - today's runtime may store too narrow a label at two outputs, of
-    `dev/scope-bug-ct1597-reduce/main.tsx` and
-    `dev/test/non-idempotent/accumulator.tsx`, not reproduced outside the
+  "Milestone 4: labels from templates at commit"). Of 271 modules 238 run.
+  Beside today's, of 1,695 output rows 1,034 are tighter, 286 equal, 272 have an
+  atom that names the pattern, 90 are looser and 13 incomparable; of 197 write
+  rows 129 are equal, 55 looser, 10 tighter and 3 incomparable. Open, most
+  serious first:
+  - a handler run that leaves a value as it was writes nothing and stores no
+    label of what it read, so 3 rows of `product/primitives/counter.tsx` depend
+    on an input and store no clause of it; by the ruling of 2026-11-20 such a
+    run stores a label, which is not built;
+  - the write records of a transaction grow with the data: 13 MB for one
+    transaction over a list of 10,000 references after one fix, with three costs
+    linear in the elements left, and the deduplication of chains rests on an
+    assumption about labels that is not verified (question 318);
+  - the check of stored labels against the values is a lower bound: one change
+    per input, confidentiality alone, 205 of 238 modules, and 59 findings in 11
+    modules with a refused commit that are not counted and not examined;
+    "tighter" in the comparison remains no evidence of correctness;
+  - a removal through a handle is labeled as a read of the whole list, linear in
+    the list; by the ruling of 2026-11-20 a removal removes in place and the
+    kept elements are not labeled again, which is not built;
+  - 40 commits in 23 modules are refused with the option on and not off, each
+    with a stated reason, and a module with a refused commit holds the labels of
+    an earlier commit;
+  - the runtime took a bound 333 times, because a selection, a choice or the
+    addresses of a dynamic read are not reported (`plan-and-label-templates.md`
+    §4.2; P37);
+  - today's label holds no clause at 4 rows where the template's holds one, in
+    `dev/scope-bug-ct1597-reduce/main.tsx`,
+    `dev/test/non-idempotent/accumulator.tsx` and
+    `showcase/battleship/multiplayer/room.tsx`, not reproduced outside the
     corpus run;
-  - the atom of a kept output on a link is not taken by a read of the
-    value through the link (question 313).
+  - the atom of a kept output on a link is not taken by a read of the value
+    through the link (question 313);
+  - a schema whose declared integrity the crate emits as the text of its type,
+    as in `examples/cfc-authorship-chat`, stores no declared label: the runtime
+    refuses it as malformed integrity, and a state cell with such a schema gets
+    no document at the start.
 
-  The preparation times of the run were taken on a machine under load.
-  Steps 11 and 12 of the milestone's plan, instantiation keys and verified
-  units in the prepared digest and a derived write dropped alone, are not
-  built.
+  The preparation times of the run were taken on a machine under load. Steps 11
+  and 12 of the milestone's plan, instantiation keys and verified units in the
+  prepared digest and a derived write dropped alone, are not built.
+
 - **A pattern closure used as a value is not translated by the
   prototype.** `Plan.closures` is empty, and a closure given to a
   language-model built-in as a tool is left out of the request. A
@@ -12970,12 +13103,14 @@ The open questions each document ends with stay where they are.
 
 8. **In the runtime, the milestones of the integration**
    ([compiled-pattern-language-integration.md](compiled-pattern-language-integration.md)):
-   after milestones 1 and 4, the open findings of milestone 4 (the
-   independent check of the labels by changing one input at a time, the
-   write record per outcome of a `wish`, the cost of the preparations of
-   one module, the refused commits, the reports that remove the bounds
-   with the groups of a scan's prefix (P37), the two outputs that today's
-   runtime may label too narrowly, and the atom on a link) and its steps
+   after milestones 1 and 4, the open findings of milestone 4 (the two
+   rulings of 2026-11-20 that are not built, a label for a handler run
+   that leaves a value as it was and a removal in place; the bound on
+   the write records of a transaction; the 59 findings of the check in
+   modules with a refused commit; the refused commits; the reports that
+   remove the bounds with the groups of a scan's prefix (P37); the four
+   rows where today's label holds no clause; and the atom on a link) and
+   its steps
    11 and 12; the translation of a pattern closure used as a value, once
    questions 307 to 310 are decided; then Topics at scale on the
    runtime's storage, a compiled piece in the runner behind the
