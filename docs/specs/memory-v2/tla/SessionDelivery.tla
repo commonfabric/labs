@@ -55,6 +55,26 @@
 (*     replacement): the client's state is wiped while the server session  *)
 (*     survives.                                                           *)
 (*                                                                         *)
+(*   - A frame can be HELD (HoldMode): delivery of `cid:` schema documents *)
+(*     by reference (docs/specs/content-addressed-schemas.md, "Delivery by *)
+(*     reference") names a body without sending it, and a frame naming a   *)
+(*     body the client's registry lacks waits for a fetch in a queue in    *)
+(*     front of the replica, bounded by MaxHeld.  The server has already   *)
+(*     recorded it as delivered.  Drain is the fetch answered: a verified  *)
+(*     body applies the frame at the head, and a body that could not be    *)
+(*     fetched drops it, which the model counts as a loss, as the client   *)
+(*     discards its delivery baseline.  A disconnect discards the queue.   *)
+(*     A removal names no body, so it is held only behind another frame.   *)
+(*       "none"    no frame is held: the design without references;        *)
+(*       "inorder" a frame arriving while any is held queues behind it,    *)
+(*                 as every later sync of a held session does (shipped);   *)
+(*       "bypass"  a frame that names no missing body applies at once,     *)
+(*                 ahead of the frames held before it.                     *)
+(*     The replica applies a push only when it advances the document's     *)
+(*     seq, the monotonic guard 09-invariants.md INV-14 states, so a held  *)
+(*     push that reaches it late cannot move a document backwards; a       *)
+(*     removal is not a seq, and nothing guards it.                        *)
+(*                                                                         *)
 (* Scope of the certification — what "holdings" mode assumes:              *)
 (*                                                                         *)
 (*   - The declaration IS the replica, exactly.  What the model certifies  *)
@@ -75,18 +95,26 @@
 (*     removal.  Local writes and their promotion are the commit model's   *)
 (*     subject (PendingStacks.tla); they enter this model only as the      *)
 (*     rule above — a promotion never enters the declaration — which is    *)
-(*     what keeps the delivered-state abstraction faithful.                *)
+(*     what keeps the delivered-state abstraction faithful.  Commit        *)
+(*     verdicts are not frames and are never held: a verdict processed     *)
+(*     while the frames before it are held is PendingStacks.tla's channel  *)
+(*     delivery, where Deliver and Integrate run independently.            *)
 (***************************************************************************)
-EXTENDS Naturals, FiniteSets
+EXTENDS Naturals, FiniteSets, Sequences
 
 CONSTANTS
   Docs,        \* every document ever watched, e.g. {"d1", "d2"}
   MaxWrites,   \* bound on writes
   MaxLoss,     \* bound on frames the client fails to absorb
   AllowReset,  \* whether the replica may be wiped under a live session
-  Mode         \* "memory" | "holdings"
+  Mode,        \* "memory" | "holdings"
+  HoldMode,    \* "none" | "inorder" | "bypass"
+  MaxHeld      \* bound on the frames held for a body at once
 
 ASSUME Mode \in {"memory", "holdings"}
+ASSUME HoldMode \in {"none", "inorder", "bypass"}
+ASSUME MaxHeld \in Nat
+ASSUME (HoldMode = "none") => (MaxHeld = 0)
 ASSUME MaxWrites \in Nat \ {0}
 ASSUME MaxLoss \in Nat
 ASSUME AllowReset \in BOOLEAN
@@ -102,10 +130,13 @@ VARIABLES
   losses,          \* frames lost so far
   resets,          \* replica wipes so far
   justReconnected, \* the last step was a reconnect (the check point)
-  redundant        \* some reconnect delivered a document the client held
+  redundant,       \* some reconnect delivered a document the client held
+  held,            \* frames waiting for a body, oldest first: [d, s]
+  behind           \* a frame was lost or dropped, or the replica wiped,
+                   \* since the last reconnect
 
 vars == <<seq, ver, union, mem, rep, connected, alive, losses, resets,
-          justReconnected, redundant>>
+          justReconnected, redundant, held, behind>>
 
 Nothing == [d \in Docs |-> 0]
 
@@ -121,48 +152,91 @@ Init ==
   /\ resets = 0
   /\ justReconnected = FALSE
   /\ redundant = FALSE
+  /\ held = <<>>
+  /\ behind = FALSE
+
+(* A frame names one document: a push at seq s >= 1 (a tombstone is a seq
+   like any other), or its removal at s = 0.  Absorbing a push the replica
+   already holds at that seq or later is a no-op. *)
+Absorb(r, f) ==
+  [r EXCEPT ![f.d] = IF f.s = 0 THEN 0 ELSE IF f.s > @ THEN f.s ELSE @]
+
+(* The client's handling of frame f, which the server has recorded as
+   delivered: it absorbs f, loses it, or holds it for a body.  Under
+   "inorder" a frame arriving while any is held queues behind the held
+   ones. *)
+Receive(f) ==
+  IF HoldMode = "inorder" /\ held # <<>>
+  THEN /\ held' = Append(held, f)
+       /\ UNCHANGED <<rep, losses, behind>>
+  ELSE \/ /\ rep' = Absorb(rep, f)
+          /\ UNCHANGED <<held, losses, behind>>
+       \/ /\ losses < MaxLoss
+          /\ losses' = losses + 1
+          /\ behind' = TRUE
+          /\ UNCHANGED <<rep, held>>
+       \/ /\ f.s # 0
+          /\ Len(held) < MaxHeld
+          /\ held' = Append(held, f)
+          /\ UNCHANGED <<rep, losses, behind>>
 
 (* A write lands on the server.  Covered, connected, and alive, the push
-   frame is recorded as delivered and the client absorbs it or loses it;
-   uncovered, nothing is pushed. *)
+   frame is recorded as delivered and the client receives it; uncovered,
+   nothing is pushed. *)
 Write(d) ==
   /\ seq < MaxWrites
   /\ seq' = seq + 1
   /\ ver' = [ver EXCEPT ![d] = seq + 1]
   /\ IF connected /\ alive /\ d \in union
      THEN /\ mem' = [mem EXCEPT ![d] = seq + 1]
-          /\ \/ /\ rep' = [rep EXCEPT ![d] = seq + 1]
-                /\ UNCHANGED losses
-             \/ /\ losses < MaxLoss
-                /\ UNCHANGED rep
-                /\ losses' = losses + 1
-     ELSE UNCHANGED <<mem, rep, losses>>
+          /\ Receive([d |-> d, s |-> seq + 1])
+     ELSE UNCHANGED <<mem, rep, losses, held, behind>>
   /\ justReconnected' = FALSE
   /\ UNCHANGED <<union, connected, alive, resets, redundant>>
 
 (* The client drops a document from its watch set (`session.watch.set`
    over a live session).  The server applies the change and answers with
-   the removal; the client absorbs it or loses it — the lossy path is how
-   the union empties while the replica still holds a document. *)
+   the removal, which the client receives like a push — the lossy path is
+   how the union empties while the replica still holds a document. *)
 Unwatch(d) ==
   /\ connected
   /\ alive
   /\ d \in union
   /\ union' = union \ {d}
   /\ mem' = [mem EXCEPT ![d] = 0]
-  /\ \/ /\ rep' = [rep EXCEPT ![d] = 0]
-        /\ UNCHANGED losses
-     \/ /\ losses < MaxLoss
-        /\ UNCHANGED rep
-        /\ losses' = losses + 1
+  /\ Receive([d |-> d, s |-> 0])
   /\ justReconnected' = FALSE
   /\ UNCHANGED <<seq, ver, connected, alive, resets, redundant>>
 
+(* The fetch the frame at the head of the queue waits for is answered.  A
+   verified body applies the frame.  A body that could not be fetched drops
+   it: the document is not held, and the client discards its delivery
+   baseline, so only a reconnect restores it. *)
+Drain ==
+  /\ connected
+  /\ held # <<>>
+  /\ \/ /\ rep' = Absorb(rep, Head(held))
+        /\ UNCHANGED <<losses, behind>>
+     \/ /\ Head(held).s # 0
+        /\ losses < MaxLoss
+        /\ losses' = losses + 1
+        /\ behind' = TRUE
+        /\ UNCHANGED rep
+  /\ held' = Tail(held)
+  /\ justReconnected' = FALSE
+  /\ UNCHANGED <<seq, ver, union, mem, connected, alive, resets, redundant>>
+
+(* The connection drops, discarding every held frame: the server recorded
+   them as delivered, and the replica never absorbed them.  Nothing marks
+   the session behind for it, since SteadyConverges asks nothing of a
+   disconnected session and the reconnect that follows restores it. *)
 Disconnect ==
   /\ connected
   /\ connected' = FALSE
+  /\ held' = <<>>
   /\ justReconnected' = FALSE
-  /\ UNCHANGED <<seq, ver, union, mem, rep, alive, losses, resets, redundant>>
+  /\ UNCHANGED <<seq, ver, union, mem, rep, alive, losses, resets, redundant,
+                 behind>>
 
 (* The session lapses while the client is away: the server forgets it. *)
 Expire ==
@@ -171,7 +245,7 @@ Expire ==
   /\ alive' = FALSE
   /\ mem' = Nothing
   /\ UNCHANGED <<seq, ver, union, rep, connected, losses, resets,
-                 justReconnected, redundant>>
+                 justReconnected, redundant, held, behind>>
 
 (* A replaced replica: the client's state is wiped, the session is not. *)
 Reset ==
@@ -179,8 +253,10 @@ Reset ==
   /\ resets < 1
   /\ rep' = Nothing
   /\ resets' = resets + 1
+  /\ behind' = TRUE
   /\ justReconnected' = FALSE
-  /\ UNCHANGED <<seq, ver, union, mem, connected, alive, losses, redundant>>
+  /\ UNCHANGED <<seq, ver, union, mem, connected, alive, losses, redundant,
+                 held>>
 
 (* The diff base a reconnect's frame is computed against. *)
 Base ==
@@ -209,11 +285,13 @@ Reconnect ==
         /\ redundant' = (redundant \/ (\E d \in delivered : rep[d] = ver[d]))
   /\ mem' = [d \in Docs |-> IF d \in union THEN ver[d] ELSE 0]
   /\ justReconnected' = TRUE
-  /\ UNCHANGED <<seq, ver, union, losses, resets>>
+  /\ behind' = FALSE
+  /\ UNCHANGED <<seq, ver, union, losses, resets, held>>
 
 Next ==
   \/ \E d \in Docs : Write(d)
   \/ \E d \in Docs : Unwatch(d)
+  \/ Drain
   \/ Disconnect
   \/ Expire
   \/ Reset
@@ -228,6 +306,9 @@ Spec == Init /\ [][Next]_vars
 TypeOK ==
   /\ \A d \in Docs : rep[d] <= ver[d] /\ mem[d] <= ver[d]
   /\ losses <= MaxLoss
+  /\ held \in Seq([d : Docs, s : 0..MaxWrites])
+  /\ (~connected) => (held = <<>>)
+  /\ behind \in BOOLEAN
 
 (* A reconnect brings the replica to the union's current state: whatever
    was lost, wiped, or written while away is held afterwards at its
@@ -245,5 +326,14 @@ ReconnectConverges ==
    "memory" a re-established session is delivered in full; under
    "holdings" the base is the replica on both paths. *)
 NoRedundantDelivery == ~redundant
+
+(* Between reconnects, a session whose frames have all arrived is current:
+   with nothing held, and nothing lost, dropped or wiped since the last
+   reconnect, the replica holds every covered document at its current seq
+   and no uncovered one.  ReconnectConverges checks only the reconnect;
+   this is the same statement for every quiet point between. *)
+SteadyConverges ==
+  (connected /\ held = <<>> /\ ~behind) =>
+    \A d \in Docs : rep[d] = (IF d \in union THEN ver[d] ELSE 0)
 
 =============================================================================
