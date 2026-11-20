@@ -8,6 +8,7 @@
 
 import { valueEqual } from "@commonfabric/data-model";
 import { aclDocId } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
 import * as Engine from "./engine.ts";
 import {
   type BranchName,
@@ -266,10 +267,13 @@ const divergedInstances = (
  * records a serving loop keeps of its own progress through the branch's
  * commits: the event logs, the watermark, and the effect and attention
  * indexes. Those describe what has happened on the branch, which a restore
- * adds to and does not undo.
+ * adds to and does not undo. It leaves alone the invitation service's revision
+ * document too, which follows the service's private ledger, and a restore does
+ * not touch that ledger.
  */
 const isRestored = (id: EntityId, space: string): boolean =>
   id !== aclDocId(space) &&
+  id !== SPACE_INVITES_REVISION_DOC_ID &&
   !id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
   id !== SERVER_EXECUTION_WATERMARK_DOC_ID &&
   id !== SERVER_EXECUTION_ATTENTION_DOC_ID &&

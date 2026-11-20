@@ -24,6 +24,30 @@ import type { Capability } from "./acl.ts";
 export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
 
 /**
+ * The id of the document the invitation service moves on whenever an operation
+ * changes what `list` or `receipts` return: an invitation made or withdrawn, a
+ * new receipt, or an invitation retired because its issuer no longer owns the
+ * space. Its value is an {@link InviteLedgerRevision}. A client that holds a
+ * session on the space watches it to learn that the ledger moved, where nothing
+ * else would say so: another owner's invitation, or a redemption by an identity
+ * that already held the access, which writes a receipt and leaves the access
+ * list as it was.
+ *
+ * The document says only that the ledger moved, never what it holds, so every
+ * principal that may read the space may read it while the ledger stays the
+ * owners'. Expiry moves nothing, since every reader compares `expiresAt` with
+ * the time itself. Only the service writes it: the store refuses it in any
+ * commit but a system one, and a branch restore leaves it as it is.
+ */
+export const SPACE_INVITES_REVISION_DOC_ID = "of:space-invites-revision";
+
+/**
+ * The value of the document {@link SPACE_INVITES_REVISION_DOC_ID} names:
+ * `revision` counts the changes to the ledger, from `1` at the first.
+ */
+export type InviteLedgerRevision = { revision: number };
+
+/**
  * Host limits for version one of the invitation protocol.
  *
  * `suggestedProfile` bounds the profile an issuer may suggest for the person
@@ -39,6 +63,12 @@ export const INVITE_ACCESS = ["READ", "WRITE", "OWNER"] as const;
  * response lacks the field refuses a create carrying `spaceName` or
  * `issuerName` with `invalid-request`, and has no `preview` operation, so a
  * client reads the field before it sends either.
+ *
+ * `revision` names the document the service moves on with its ledger (see
+ * {@link SPACE_INVITES_REVISION_DOC_ID}). It was added after version one too: a
+ * service whose response lacks the field writes no such document, so a client
+ * that wants to learn of a change it did not make reads the ledger again
+ * itself.
  */
 export const SPACE_INVITE_CAPABILITY = {
   version: 1,
@@ -47,6 +77,7 @@ export const SPACE_INVITE_CAPABILITY = {
   access: INVITE_ACCESS,
   suggestedProfile: { maxNameLength: 128, maxPictureBytes: 64 * 1024 },
   preview: { maxNameLength: 128 },
+  revision: { document: SPACE_INVITES_REVISION_DOC_ID },
 } as const;
 
 /**

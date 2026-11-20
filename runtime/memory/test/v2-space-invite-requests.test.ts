@@ -14,10 +14,12 @@ import {
   createInviteCredentials,
   inviteCodeVerifier,
   type InviteMetadata,
+  SPACE_INVITES_REVISION_DOC_ID,
 } from "../space-invites.ts";
 import {
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  type GraphQueryResult,
   type HelloOkMessage,
   MEMORY_PROTOCOL,
   type ResponseMessage,
@@ -363,6 +365,180 @@ describe("space.invite", () => {
 
       expect(failure?.name).toBe("SpaceInviteRefusal");
       expect(failure?.code).toBe("invite-service-unsupported");
+    });
+  });
+  describe("the ledger's revision document", () => {
+    it("reaches an owner watching it when another owner makes an invitation and when a member already holding the access redeems one", async () => {
+      // The two changes a daemon holding the space hears of no other way:
+      // neither is its own, and the redemption leaves the access list as it
+      // was.
+
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const other = (await Identity.generate()).did();
+      const member = (await Identity.generate()).did();
+      const { space, session } = await ownedSpace(server, {
+        [other]: "OWNER",
+        [member]: "WRITE",
+      });
+      const view = await session.watchSet([{
+        id: "ledger",
+        kind: "graph",
+        query: {
+          roots: [{
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      const updates = view.subscribe();
+      const revisionIn = (next: IteratorResult<GraphQueryResult>) =>
+        next.done
+          ? undefined
+          : next.value.entities.find(({ id }) =>
+            id === SPACE_INVITES_REVISION_DOC_ID
+          )?.document;
+      const otherSession = await sessionAs(server, space, other);
+      const { invite, inviteId, code } = creation(space);
+
+      const made = updates.next();
+      await otherSession.administerInvites(invite);
+      const madeRevision = revisionIn(await made);
+      const redeemed = updates.next();
+      const receipt = await server.invite({
+        operation: "redeem",
+        body: { inviteId, code },
+        host: INVITE_HOST,
+        space,
+        principal: member,
+        now: Date.now(),
+      });
+      const redeemedRevision = revisionIn(await redeemed);
+
+      expect(madeRevision).toEqual({ value: { revision: 1 } });
+      expect(receipt).toMatchObject({
+        outcome: "redeemed",
+        currentAccess: "WRITE",
+      });
+      expect(redeemedRevision).toEqual({ value: { revision: 2 } });
+    });
+
+    it("reaches an owner watching it when a refused preview retires an invitation whose issuer no longer owns the space", async () => {
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const other = (await Identity.generate()).did();
+      const stranger = (await Identity.generate()).did();
+      const { space, owner, session } = await ownedSpace(server, {
+        [other]: "OWNER",
+      });
+      const otherSession = await sessionAs(server, space, other);
+      const { invite, inviteId, code } = creation(space);
+      await otherSession.administerInvites(invite);
+      await session.transact({
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [owner]: "OWNER", [other]: "WRITE" } },
+        }],
+      });
+      const view = await session.watchSet([{
+        id: "ledger",
+        kind: "graph",
+        query: {
+          roots: [{
+            id: SPACE_INVITES_REVISION_DOC_ID,
+            selector: { path: [], schema: false },
+          }],
+        },
+      }]);
+      const updates = view.subscribe();
+
+      const retired = updates.next();
+      const refusal = await failureOf(server.invite({
+        operation: "preview",
+        body: { inviteId, code },
+        host: INVITE_HOST,
+        space,
+        principal: stranger,
+        now: Date.now(),
+      }));
+      const next = await retired;
+
+      expect(refusal).toMatchObject({ code: "invite-unavailable" });
+      expect(
+        next.done
+          ? undefined
+          : next.value.entities.find(({ id }) =>
+            id === SPACE_INVITES_REVISION_DOC_ID
+          )?.document,
+      ).toEqual({ value: { revision: 2 } });
+      expect(await session.administerInvites({ operation: "list", body: {} }))
+        .toEqual([]);
+    });
+
+    it("moves in commits that name no principal, so a reader's history names no one whose operation moved it", async () => {
+      // A space's history names each commit's principal to every reader of
+      // the space. The revision commit is the service's: neither a member
+      // whose redemption left the access list alone nor a stranger whose
+      // refused preview retired an invitation appears in it.
+
+      const server = serverWith({ inviteHost: INVITE_HOST });
+      const other = (await Identity.generate()).did();
+      const member = (await Identity.generate()).did();
+      const reader = (await Identity.generate()).did();
+      const stranger = (await Identity.generate()).did();
+      const { space, owner, session } = await ownedSpace(server, {
+        [other]: "OWNER",
+        [member]: "WRITE",
+        [reader]: "READ",
+      });
+      const redeemed = creation(space);
+      await session.administerInvites(redeemed.invite);
+      const otherSession = await sessionAs(server, space, other);
+      const retired = creation(space);
+      await otherSession.administerInvites(retired.invite);
+      await server.invite({
+        operation: "redeem",
+        body: { inviteId: redeemed.inviteId, code: redeemed.code },
+        host: INVITE_HOST,
+        space,
+        principal: member,
+        now: Date.now(),
+      });
+      await session.transact({
+        localSeq: 2,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: {
+            value: {
+              [owner]: "OWNER",
+              [other]: "WRITE",
+              [member]: "WRITE",
+              [reader]: "READ",
+            },
+          },
+        }],
+      });
+      await failureOf(server.invite({
+        operation: "preview",
+        body: { inviteId: retired.inviteId, code: retired.code },
+        host: INVITE_HOST,
+        space,
+        principal: stranger,
+        now: Date.now(),
+      }));
+
+      const readerSession = await sessionAs(server, space, reader);
+      const history = await readerSession.listHistory();
+      const named = new Set(
+        history.flatMap((commit) => [commit.principal, commit.actingPrincipal]),
+      );
+
+      expect(history.length).toBeGreaterThan(4);
+      expect(named.has(member)).toBe(false);
+      expect(named.has(stranger)).toBe(false);
     });
   });
 });

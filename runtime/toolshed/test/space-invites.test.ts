@@ -686,7 +686,9 @@ describe("space-invites", () => {
       // `access` names what this service can issue, `suggestedProfile`
       // bounds the profile an invitation may suggest, and `preview` the names
       // a holder reads before redeeming. A service without one of these
-      // fields predates it and refuses a create that uses it.
+      // fields predates it and refuses a create that uses it. `revision`
+      // names the document this service moves with its ledger; a service
+      // without it writes none.
       expect(await capability.json()).toEqual({
         version: 1,
         maxUses: 1000,
@@ -694,6 +696,7 @@ describe("space-invites", () => {
         access: ["READ", "WRITE", "OWNER"],
         suggestedProfile: { maxNameLength: 128, maxPictureBytes: 65536 },
         preview: { maxNameLength: 128 },
+        revision: { document: "of:space-invites-revision" },
       });
       const preflight = await fetch(
         `${f.host}/api/spaces/${f.space}/invites/redeem`,
