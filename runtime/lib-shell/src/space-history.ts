@@ -113,7 +113,8 @@ export function withPatternChanges(
 
 /**
  * Returns the steps listed so far followed by an `older` stretch of the same
- * history, with the pattern changes of both placed over the whole. A change
+ * history, with the pattern changes of both placed over the whole, each once
+for its piece, scope and revision. A change
  * made shortly before the oldest step of a stretch is placed on that step
  * while the stretch stands alone, and on the older step it belongs to once
  * that one is listed.
@@ -126,7 +127,10 @@ export function withOlderSteps(
   const changes = new Map<string, PatternChange>();
   for (const step of steps) {
     for (const change of step.patternChanges) {
-      changes.set(`${change.pieceId}\n${change.revisionId}`, change);
+      changes.set(
+        `${change.scope ?? "space"}\n${change.pieceId}\n${change.revisionId}`,
+        change,
+      );
     }
   }
   return placeChanges(steps, [...changes.values()]);

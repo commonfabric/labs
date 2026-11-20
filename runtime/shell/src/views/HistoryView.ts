@@ -430,6 +430,26 @@ export class XHistoryView extends BaseView {
     `;
   }
 
+  /**
+   * Renders what a pattern restore left to say, where the change it was
+   * asked of is on no step listed: listing the history again after a restore
+   * starts from the newest steps, which the change may be older than.
+   */
+  #unlistedRestoreNote() {
+    const restore = this.patternRestore;
+    const said = restore?.error ?? restore?.warning;
+    if (restore === undefined || said === undefined) return nothing;
+    const listed = this._steps.some((step) =>
+      step.patternChanges.some((change) =>
+        change.pieceId === restore.pieceId &&
+        change.revisionId === restore.revisionId
+      )
+    );
+    return listed ? nothing : html`
+      <p class="note error pattern-restore-note" role="alert">${said}</p>
+    `;
+  }
+
   override render() {
     const failed = this.#list.status === TaskStatus.ERROR;
     let events = 0;
@@ -446,6 +466,7 @@ export class XHistoryView extends BaseView {
       ${this.error === undefined ? nothing : html`
         <p class="note error" role="alert">${this.error}</p>
       `}
+      ${this.#unlistedRestoreNote()}
       ${failed
         ? html`
           <p class="note error" role="alert">
