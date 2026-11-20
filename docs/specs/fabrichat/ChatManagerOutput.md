@@ -55,6 +55,12 @@ interface ChatManagerOutput {
   /** The people this user's rooms list, by principal. */
   people: PerUser<Record<string, Cell<ChatProfile>[]>>;
 
+  /** `people`, for a session that has asked for them; no one before. */
+  askedPeople: PerSession<Record<string, Cell<ChatProfile>[]>>;
+
+  /** Asks for `askedPeople`, for the session; records no outcome. */
+  askForPeople: Stream<unknown>;
+
   openDirect: Stream<{ requestId: string; counterpart: string }>;
   createGroup: Stream<{
     requestId: string;
@@ -133,10 +139,10 @@ which the room sends.
 ## Views
 
 The manager offers its facts and streams as a `[VIEWS]` group, `chats`, for
-hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`, and
-`people`, and every stream below. A native client drives the manager through
-that group as it drives a room through the room's `room` group (see
-[`clients.md`](clients.md#showing-a-room)).
+hosts that draw natively: `rooms`, `direct`, `requests`, `outgoingNotices`,
+`people`, `askedPeople`, `askForPeople`, and every stream below. A native client
+drives the manager through that group as it drives a room through the room's
+`room` group (see [`clients.md`](clients.md#showing-a-room)).
 
 ## Scopes
 
@@ -158,6 +164,9 @@ which the manager doesn't store and which read no room, are `PerUser` as the
 people drawn from them are. A stream reads none of them, except
 `offerRoom`, which reads `people` for the user that sends it: every other
 request names a room's members by principal or by profile itself.
+`askedPeople` is `PerSession`, since whether it lists anyone is the session's
+own: each session that asks reads the rosters for itself, and one that hasn't
+asked lists no one, whatever another session of the same user has asked.
 
 What a manager says about its reader, rather than about the user's rooms, is
 `PerSession`: whether the reader can start a chat, and the chat address it shows
@@ -284,6 +293,16 @@ session that has none is refused.
   it to offer the people to name a new room's members by, through
   `createGroup`'s `profiles`, and a room's add control the people to add, and
   `offerRoom` offers a room through it to a member named by principal alone.
+  Reading it reads every listed room's roster, in each room's space; it is the
+  form `offerRoom` and hosts that already read it keep.
+- **`askedPeople`** holds `people` for a session that has sent `askForPeople`,
+  an event with no keys that records no outcome, and no one for a session that
+  hasn't. It is drawn from the listed rooms as `people` is, and reads no room's
+  roster until the session asks. A view SHOULD read `askedPeople`, and send
+  `askForPeople` when it opens a picker of the people, as the manager's group
+  control and a room's add control do, so that showing the manager, or a room,
+  reads no other room. Moving `people` itself behind the ask is a later step,
+  and a breaking one for whoever reads `people` now.
 
 ## Reading the list
 

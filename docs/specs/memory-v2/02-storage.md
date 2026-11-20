@@ -134,11 +134,9 @@ CREATE UNIQUE INDEX idx_commit_session_local_seq
 CREATE INDEX idx_commit_invocation_ref ON commit (invocation_ref);
 ```
 
-`original` stores the canonical semantic payload:
-
-- `ClientCommit` for `/memory/transact`
-- normalized branch lifecycle payloads for `/memory/branch/create` and
-  `/memory/branch/delete`
+`original` stores the canonical semantic payload: the `ClientCommit` of a
+`/memory/transact`. Creating or deleting a branch appends no `commit` row
+(section 8).
 
 A `ClientCommit`'s read set decides its own admission. A server stores
 digests unless it is opened with them off (`MEMORY_STORE_READS_DIGEST=false`),
@@ -367,8 +365,8 @@ DO UPDATE SET seq = excluded.seq, op_index = excluded.op_index;
 COMMIT;
 ```
 
-The same pattern applies to branch lifecycle writes, except those commands do
-not append `revision` rows and instead update the `branch` table.
+Branch lifecycle commands take no part in this path: they append neither a
+`commit` row nor `revision` rows, and only update the `branch` table.
 
 ## 5. Read Path
 
@@ -516,11 +514,12 @@ the relevant entry.
 Branches share the same `revision` and `commit` logs but maintain separate head
 pointers in `head`.
 
-Branch creation appends a write-class `commit` row and inserts branch metadata:
+Branch creation takes no seq and appends no `commit` row. It inserts branch
+metadata, with `created_seq` and `head_seq` both the fork seq:
 
 ```sql
 INSERT INTO branch (name, parent_branch, fork_seq, created_seq, head_seq)
-VALUES (:name, :parent_branch, :fork_seq, :created_seq, :created_seq);
+VALUES (:name, :parent_branch, :fork_seq, :fork_seq, :fork_seq);
 ```
 
 ### 8.2 Branch Writes
@@ -531,14 +530,14 @@ that branch name.
 
 ### 8.3 Branch Seq Numbering
 
-Seq is space-global across all branches. `created_seq` records when the branch
-name came into existence. `head_seq` records the newest entity-state change
-visible on that branch.
+Seq is space-global across all branches. `created_seq` records the first seq of
+the branch's own history, which is its fork seq. `head_seq` records the newest
+entity-state change visible on that branch.
 
 ### 8.4 Branch Deletion
 
-Branch deletion appends a write-class `commit` row and marks the branch as
-deleted:
+Branch deletion takes no seq and appends no `commit` row. It marks the branch
+as deleted:
 
 ```sql
 UPDATE branch

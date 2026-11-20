@@ -12,6 +12,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { MAX_UNTRUSTED_MESSAGE_SLOTS } from "@commonfabric/memory/v2";
 import { EnvSchema, loadEnv } from "@/env.ts";
 import { Exited } from "@/test/support/exited.ts";
 
@@ -462,4 +463,27 @@ describe("PLAID_ENV", () => {
   it("refuses `development`, which the Plaid SDK has no address for", () => {
     expect(() => EnvSchema.parse({ PLAID_ENV: "development" })).toThrow();
   });
+});
+
+Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
+  expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
+  for (const accepted of [MAX_UNTRUSTED_MESSAGE_SLOTS, 10_000_000]) {
+    expect(
+      EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: String(accepted) })
+        .MEMORY_UNTRUSTED_MESSAGE_SLOTS,
+    ).toBe(accepted);
+  }
+  for (
+    const refused of [
+      String(MAX_UNTRUSTED_MESSAGE_SLOTS - 1),
+      "1000",
+      "0",
+      "-1",
+      "1500000.5",
+      "lots",
+    ]
+  ) {
+    expect(() => EnvSchema.parse({ MEMORY_UNTRUSTED_MESSAGE_SLOTS: refused }))
+      .toThrow();
+  }
 });
