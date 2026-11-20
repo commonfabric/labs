@@ -553,7 +553,12 @@ implements [specs#106](https://github.com/commonfabric/specs/pull/106) ahead
 of its ruling. Old and new members are paired by equal value, a paired old
 member's `derived` and `structure` entries, existence entries excepted, move
 to its new index, and an unpaired old member's are dropped, except for a
-member edited in place. The attempt's join is stamped only where the diff
+member edited in place: one whose index holds a new member that is also
+unpaired, whose entries stay where the diff did not write. Where no shortest
+edit script within 64 edits aligns the members between the common prefix and
+suffix, those members are paired by value alone, and one left unpaired falls
+under the same exception, which pairs it by index as before the alignment
+existed. The attempt's join is stamped only where the diff
 writes, as before. Whether such a write is one attempted write at the array,
 whose join would then reach every index, is the question specs#106 asks. The
 change moves stored entries at strict, with no default-off dial, and it is not
