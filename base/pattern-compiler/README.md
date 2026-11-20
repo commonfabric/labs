@@ -604,8 +604,11 @@ one its `id` option gives. A name of several parts in a plan is a record
 several declarations of one name, `{ body, site }` for a thing that a site of a
 body makes, and `{ operation, sidecar }` for a sidecar. The names of the memo
 and of the element tables are the texts that the codec gives a record. The
-identifier of a schema and that of a pattern are placeholders that begin with
-`unhashed:`, where the documents have a hash that the crate does not form.
+identifier of a schema is a placeholder that begins with `unhashed:schema/`,
+where the documents have a hash that the crate does not form. The identifier of
+a pattern is the hash PL §1.5 states, of the record `{ module, binding }` with
+the content-addressed identity of the pattern's module in it, written `sha256:`
+and hex (SPEC-NOTES note 208).
 
 The store resolves a reference by key from the key alone (`Store.locate`,
 `fieldsOfKey` in `exec/store.ts`): it forms the keys of the array with the
