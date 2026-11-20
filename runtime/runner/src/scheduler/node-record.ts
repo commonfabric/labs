@@ -217,17 +217,20 @@ export class NodeRegistry {
   /**
    * The pieces a node of which joined or left the active set, or had its
    * status written, since `takeChangedPieces()` last ran: each one named by
-   * the `pieceRootId` of the node's action. `undefined` until
-   * `trackChangedPieces()` asks for the record, so a runtime nothing reads
-   * it from keeps none.
+   * the `pieceRootId` of the node's action, or, for a node that names none,
+   * each piece that answers for it. `undefined` until `trackChangedPieces()`
+   * asks for the record, so a runtime nothing reads it from keeps none.
    */
   #changedPieces: Set<string> | undefined;
 
   /**
    * The pieces that answer for each computation that names no piece, as
-   * `noteAnsweredFor()` was told of them.
+   * `setAnsweredFor()` was last told of them.
    */
   readonly #answering = new WeakMap<Action, Set<string>>();
+
+  /** The computations each piece answers for, which is `#answering` inverted. */
+  readonly #answeredBy = new Map<string, ReadonlySet<Action>>();
 
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
@@ -401,9 +404,10 @@ export class NodeRegistry {
   /**
    * The pieces a node of which joined or left the active set, or had its
    * status written, since this was last called, each named by the
-   * `pieceRootId` of the node's action. A run writes its node's status as it
-   * starts, so every piece a run touched is among them. Empty unless
-   * `trackChangedPieces()` was called.
+   * `pieceRootId` of the node's action. A node that names no piece counts
+   * for each piece `setAnsweredFor()` said answers for it. A run writes its
+   * node's status as it starts, so every piece a run touched is among them.
+   * Empty unless `trackChangedPieces()` was called.
    */
   takeChangedPieces(): string[] {
     const changed = this.#changedPieces;
@@ -414,14 +418,21 @@ export class NodeRegistry {
   }
 
   /**
-   * Records that `piece` answers for `action`, a computation that names no
-   * piece: `piece` is among the changed pieces whenever `action` is the node
-   * that changed.
+   * Records that `piece` answers for `actions`, computations that name no
+   * piece, and for no other: `piece` is among the changed pieces whenever
+   * one of them is the node that changed.
    */
-  noteAnsweredFor(action: Action, piece: string): void {
-    const pieces = this.#answering.get(action);
-    if (pieces === undefined) this.#answering.set(action, new Set([piece]));
-    else pieces.add(piece);
+  setAnsweredFor(piece: string, actions: ReadonlySet<Action>): void {
+    for (const action of this.#answeredBy.get(piece) ?? []) {
+      if (!actions.has(action)) this.#answering.get(action)?.delete(piece);
+    }
+    if (actions.size === 0) this.#answeredBy.delete(piece);
+    else this.#answeredBy.set(piece, actions);
+    for (const action of actions) {
+      const pieces = this.#answering.get(action);
+      if (pieces === undefined) this.#answering.set(action, new Set([piece]));
+      else pieces.add(piece);
+    }
   }
 
   /**

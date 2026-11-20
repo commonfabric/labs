@@ -350,6 +350,37 @@ describe("piece-currency", () => {
         expect(registry.takeChangedPieces()).toEqual([PIECE]);
       });
 
+      it("has the registry stop reporting the piece for a writer whose output a later snapshot of it did not read", () => {
+        snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [{ writes: "of:shared", reads: [] }],
+        });
+        const [before] = unattributedWriters;
+        const nodes = registry;
+        snapshotPieceCurrency(
+          {
+            nodes,
+            liveness: {
+              nodes,
+              materializerIndex: { isMaterializer: () => false },
+            } as unknown as SchedulerLivenessState,
+            dependencies: new WeakMap(),
+            writeIndex: {
+              writersByEntity: new Map(),
+              getSchedulingWrites: () => [],
+            },
+            clockDocuments: new Set(),
+          },
+          SPACE,
+          PIECE,
+        );
+        nodes.trackChangedPieces();
+
+        nodes.setStatus(before, "invalid");
+
+        expect(nodes.takeChangedPieces()).toEqual([]);
+      });
+
       for (
         const [what, given] of [
           ["is not clean", { status: "invalid" }],

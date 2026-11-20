@@ -222,7 +222,10 @@ export function snapshotPieceCurrency(
   const nodes = state.nodes.nodesUnderDemandRoots([piece]).filter((node) =>
     identityOf(node.action)?.pieceRootId === piece
   );
-  if (nodes.length === 0) return undefined;
+  if (nodes.length === 0) {
+    state.nodes.setAnsweredFor(piece, new Set());
+    return undefined;
+  }
   const identity = identityOf(nodes[0].action)!;
   const unvouched = new Set<PieceUnvouchedReason>();
   if (!identity.pieceId.startsWith("space:")) unvouched.add("scoped-root");
@@ -293,6 +296,14 @@ export function snapshotPieceCurrency(
   }
 
   /**
+   * The computations that name no piece and whose output the piece read.
+   * What one read can change, and it can become clean, with nothing of the
+   * piece's own changing, so the piece is due a snapshot whenever one
+   * changes.
+   */
+  const answeredFor = new Set<Action>();
+
+  /**
    * Whether a computation that names a piece writes `id`, and the
    * computations that write it and name none.
    */
@@ -323,10 +334,7 @@ export function snapshotPieceCurrency(
    * nothing it read has changed since.
    */
   const readsOf = (writer: Action): IMemorySpaceAddress[] | undefined => {
-    // What the writer read can change, and it can become clean, with nothing
-    // of the piece's own changing, so the piece is due a snapshot whenever
-    // the writer changes.
-    state.nodes.noteAnsweredFor(writer, piece);
+    answeredFor.add(writer);
     const node = state.nodes.get(writer);
     const log = state.dependencies.get(writer);
     if (
@@ -336,7 +344,7 @@ export function snapshotPieceCurrency(
     return [...log.reads, ...log.shallowReads];
   };
 
-  return {
+  const taken: PieceCurrencySnapshot = {
     piece,
     under,
     unvouched: [...unvouched],
@@ -388,4 +396,6 @@ export function snapshotPieceCurrency(
       };
     }),
   };
+  state.nodes.setAnsweredFor(piece, answeredFor);
+  return taken;
 }

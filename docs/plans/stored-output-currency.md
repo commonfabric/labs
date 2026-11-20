@@ -187,7 +187,10 @@ inputs is stale, and `0` otherwise. An input is stale when:
 
 - a slice that decides it is marked, a broader slice of the same piece
   included;
-- it is a derived document no recorded piece writes;
+- it is a derived document no recorded piece writes. A document whose only
+  writer names no piece, and which the slice answers for, is not one of
+  these: the slice took over what that writer read, and records the
+  document as an input;
 - a recorded piece computes it and no piece vouches for the instance read. A
   record taken while a computation was not running drops its vouches, and
   marks `1` each clean slice that read one of those instances. A viewer's

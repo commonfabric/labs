@@ -296,8 +296,9 @@ runs, since what it read can change with nothing of the piece's own
 changing.
 
 The resolver is shared only for a search that does not depend on the home
-space, so the reads a slice takes over from it are in the piece's own
-space.
+space. One whose `scope` names another space reads that space, and a slice
+that takes over such a read is not vouched for, as for any read in another
+space. One scoped to the piece's own space reads only that space.
 
 ### The interval clock
 
