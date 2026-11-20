@@ -1,6 +1,6 @@
 import type { JSONSchema, Pattern } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
-import { resolveLink, unlessCyclic } from "../link-resolution.ts";
+import { resolveLink } from "../link-resolution.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
@@ -139,8 +139,7 @@ export function listCoordinatorPlan(
     : undefined;
   // `array` callback arguments should observe the actual list entity, not
   // the alias/boxed reference used to pass that list into the builtin.
-  const { listCell, rawList, slots } = listSlotResolutions(
-    runtime,
+  const { listCell, rawList, slots } = listSlotLinks(
     tx,
     inputsCell,
     "list",
@@ -150,7 +149,7 @@ export function listCoordinatorPlan(
     ? undefined
     : !Array.isArray(rawList)
     ? rawList as unknown as Cell<any>[] // non-array: the caller's guard
-    : slots.map((resolved) => runtime.getCellFromLink(resolved, undefined, tx));
+    : slots.map((slot) => runtime.getCellFromLink(slot, undefined, tx));
   const scope = mapContainer !== undefined
     ? listTarget!.scope
     : narrowestCellScope(
@@ -207,9 +206,8 @@ export function listMembershipRead(
   // A declared-onward read (proposed CFC spec §18.6.2, commonfabric/specs#85):
   // the list's membership label lands on `onto`, the caller's result
   // container, as its membership stamp. Every other write the caller
-  // derives from this read is a child's setup, which the caller's
-  // resolution of that child's slot (`listSlotResolutions`) decides: that
-  // read stays in the join.
+  // derives from this read is a child's setup, which the link that child's
+  // slot holds (`listSlotLinks`) decides: that read stays in the join.
   const rawList = onto === undefined
     ? readRawList()
     : tx.runWithAmbientReadMeta(
@@ -220,21 +218,19 @@ export function listMembershipRead(
 }
 
 /**
- * A list input's entity and the value resolution of each of its slots — the
- * cells a coordinator's element keys are built from. One derivation, shared
- * by the plan and by the resume pre-sync: a slot's value chain is followed
- * only through documents that are local, so the identity it ends on depends
- * on what has arrived (a slot holding a cell whose stored value redirects to
- * a piece resolves to the piece when warm and to the cell when cold), and a
- * key derived from a cold chase names a child the warm coordinator never
- * mints. The pre-sync therefore pulls what each round of this resolution
- * ends on, until a round ends where the last one did, before deriving a
- * plan. A slot whose links run in a cycle names no value and resolves to its
- * own place in the list. `slots` is empty when the list is not an array.
- * The list itself is read by `listMembershipRead`, `onto` included.
+ * A list input's entity and the link each of its slots names — the cells a
+ * coordinator's element keys are built from. One derivation, shared by the
+ * plan and by the resume pre-sync. A slot holding a link names that link as
+ * it is stored, and nothing it reaches is read: two slots that reach one
+ * document by different links name two elements, and a link whose target
+ * later moves keeps its element, which reads through the link to wherever
+ * it leads. So an element's key depends on the list document alone, warm or
+ * cold. A slot holding a value names its place in the list, and so does a
+ * slot whose link leads back into its own place, which can name no value.
+ * `slots` is empty when the list is not an array. The list itself is read by
+ * `listMembershipRead`, `onto` included.
  */
-export function listSlotResolutions(
-  runtime: Runtime,
+export function listSlotLinks(
   tx: IExtendedStorageTransaction,
   inputsCell: Cell<any>,
   listKey = "list",
@@ -251,17 +247,27 @@ export function listSlotResolutions(
     onto,
   );
   const listBase = listCell.getAsNormalizedFullLink();
-  // An element whose links run in a cycle, back to a place they passed or
-  // into their own subpath, names no value, so its slot is its place in the
-  // list rather than a failure of the whole list.
+  // A link back into the slot's own place, at it or into a subpath of it,
+  // names no value, so its slot is its place in the list rather than a
+  // failure of the whole list.
   const slots = Array.isArray(rawList)
-    ? rawList.map((slot, i) =>
-      unlessCyclic(() =>
-        resolveLink(runtime, tx, listElementLink(listBase, slot, i), "value")
-      ) ?? listSlotPlace(listBase, i)
-    )
+    ? rawList.map((slot, i) => {
+      const place = listSlotPlace(listBase, i);
+      const link = listElementLink(listBase, slot, i);
+      return isWithin(link, place) ? place : link;
+    })
     : [];
   return { listCell, rawList, slots };
+}
+
+/** Whether `link` names `place` or a subpath of it. */
+function isWithin(
+  link: NormalizedFullLink,
+  place: NormalizedFullLink,
+): boolean {
+  return link.space === place.space && link.id === place.id &&
+    (link.scope ?? "space") === (place.scope ?? "space") &&
+    place.path.every((part, i) => String(link.path[i]) === String(part));
 }
 
 /**
