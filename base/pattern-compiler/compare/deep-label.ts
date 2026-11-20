@@ -21,6 +21,7 @@ import {
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { parseLink } from "../../../runtime/runner/src/link-utils.ts";
 import type { NormalizedFullLink } from "../../../runtime/runner/src/link-types.ts";
+import { normalizeCellScope } from "../../../runtime/runner/src/scope.ts";
 import type { IExtendedStorageTransaction } from "../../../runtime/runner/src/storage/interface.ts";
 import type { Atom, Label } from "./template.ts";
 
@@ -201,13 +202,13 @@ export const deepLabelAlong = <A>(
   };
 };
 
-/** The runtime's link of an address. */
+/** The runtime's link of an address, in the scope the address names. */
 const linkOf = (address: CfcAddress): NormalizedFullLink =>
   ({
     space: address.space,
     id: address.id,
     path: [...address.path],
-    scope: "space",
+    scope: normalizeCellScope(address.scope),
   }) as unknown as NormalizedFullLink;
 
 /**
@@ -221,7 +222,11 @@ export const storedReader = (
 ): StoredReader<CfcAddress> => {
   const metadata = new Map<string, CfcMetadata | undefined>();
   const metadataOf = (address: CfcAddress): CfcMetadata | undefined => {
-    const key = JSON.stringify([address.space, address.id]);
+    const key = JSON.stringify([
+      address.space,
+      address.id,
+      normalizeCellScope(address.scope),
+    ]);
     if (!metadata.has(key)) {
       metadata.set(
         key,
@@ -249,15 +254,24 @@ export const storedReader = (
     },
     link: (value, at) => {
       const link = parseLink(value, linkOf(at));
+      // A link to a document of a user or of a session names that scope,
+      // and the document is read there: the state of a `wish` for a target
+      // of the home space is such a document.
       return link === undefined ? undefined : {
         space: link.space ?? at.space,
         id: link.id as string,
-        scope: "space",
+        scope: normalizeCellScope(link.scope),
         path: [...link.path],
       } as CfcAddress;
     },
     path: (address) => address.path,
     withPath: (address, path) => ({ ...address, path: [...path] }),
-    key: (address) => JSON.stringify([address.space, address.id, address.path]),
+    key: (address) =>
+      JSON.stringify([
+        address.space,
+        address.id,
+        normalizeCellScope(address.scope),
+        address.path,
+      ]),
   };
 };

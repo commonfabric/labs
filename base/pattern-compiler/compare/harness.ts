@@ -1060,7 +1060,7 @@ export const runScenario = async (scenario: Scenario): Promise<Run> => {
           {
             space: link.space,
             id: link.id,
-            scope: "space",
+            scope: link.scope ?? "space",
             path: [...link.path],
           } as CfcAddress,
           undefined,

@@ -1,7 +1,18 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { deepLabel, deepLabelAlong, type StoredReader } from "../deep-label.ts";
+import { Identity } from "@commonfabric/identity";
+
+import { createSigilLinkFromParsedLink } from "../../../../runtime/runner/src/link-utils.ts";
+import { Runtime } from "../../../../runtime/runner/src/runtime.ts";
+import { StorageManager } from "../../../../runtime/runner/src/storage/cache.deno.ts";
+import type { URI } from "../../../../runtime/runner/src/sigil-types.ts";
+import {
+  deepLabel,
+  deepLabelAlong,
+  type StoredReader,
+  storedReader,
+} from "../deep-label.ts";
 import type { Label } from "../template.ts";
 
 type Address = { id: string; path: readonly string[] };
@@ -146,5 +157,50 @@ describe("deepLabelAlong", () => {
         path: ["ui", "children", "0"],
       })),
     ).toEqual({ confidentiality: ["first", "link"], integrity: [] });
+  });
+});
+
+describe("storedReader", () => {
+  /** What `link()` of the reader gives for a stored link to `scope`. */
+  const followed = async (scope: "space" | "user" | undefined) => {
+    const signer = await Identity.fromPassphrase("deep-label stored reader");
+    const space = signer.did();
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    const tx = runtime.edit();
+    try {
+      return storedReader(tx).link(
+        createSigilLinkFromParsedLink({
+          space,
+          id: "of:target" as URI,
+          path: ["inner"],
+          ...(scope === undefined ? {} : { scope }),
+        }),
+        { space, id: "of:holder", scope: "space", path: [] },
+      );
+    } finally {
+      tx.abort();
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  };
+
+  it("follows a link to a document of a user in the scope of the user", async () => {
+    expect(await followed("user")).toMatchObject({
+      id: "of:target",
+      scope: "user",
+      path: ["inner"],
+    });
+  });
+
+  it("follows a link that names no scope in the scope of the space", async () => {
+    expect(await followed(undefined)).toMatchObject({
+      id: "of:target",
+      scope: "space",
+      path: ["inner"],
+    });
   });
 });
