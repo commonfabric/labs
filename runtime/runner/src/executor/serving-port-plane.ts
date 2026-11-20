@@ -309,7 +309,7 @@ class PlaneWaveCommitSink implements WaveCommitSink, WaveCommitSinkReads {
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>> {
+  ): Promise<ReadonlyArray<Engine.SessionOverwrite>> {
     return this.#reads.sessionOverwritePathsSince(
       space,
       doc,

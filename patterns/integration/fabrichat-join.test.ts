@@ -257,9 +257,13 @@ describe("fabrichat-join", () => {
     await waitForSettledText(adder, "cf-profile-badge", "Grace Hopper");
 
     // The adder creates a second group, of their own alone, and opens it. Its
-    // add control offers the person from their chats.
+    // add control offers the person from their chats. The manager's views read
+    // no room's roster until a picker of the people is opened, so the group
+    // control lists the person once the adder asks for the people from their
+    // chats (#10040).
     const secondTitle = "Added team";
     await openChatManager(firstShell, adderIdentity);
+    await clickButtonWithExactText(adder, "Add people from your chats");
     await waitForSettledText(adder, "#fabrichat-group-people", "Grace Hopper");
     await fillCfInput(adder, "#fabrichat-group-title", secondTitle);
     await clickButtonWithExactText(adder, "Create group");

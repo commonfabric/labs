@@ -231,7 +231,7 @@ describe("session-registry", () => {
 
       const cleared = registry.get("space", sessionId)!;
       expect([...cleared.trackedIds]).toEqual([]);
-      expect(cleared.forceFullResync).toBe(true);
+      expect(cleared.forceFullResync).toBe("routed-restore");
       const untouched = registry.get("space", otherId)!;
       expect([...untouched.trackedIds]).toEqual(["of:doc"]);
       expect(untouched.forceFullResync).toBe(false);
