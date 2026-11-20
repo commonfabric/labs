@@ -2986,4 +2986,17 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
         "This changes a type parameter in a way that makes it possible to avoid sending large amounts of unnecessary data. It doesn't affect the actual stored data, so it's a safe change.",
     },
   },
+  {
+    pattern: "system/pattern-catalog/fake-catalog.tsx",
+    baselines: [
+      "20261115T040149Z-wpQ711UAcMmyeWw7",
+      "20261115T231252Z-zcGvv30wqSKYEMK7",
+      "20261116T011727Z-x7lnp7Wavmm2mwx8",
+      "20261119T015645Z-GeQ9sl5yAPihNip6",
+    ],
+    paths: ["argument.getItRequests", "result.getItRequests"],
+    reason:
+      "each request to get a pattern carries its own write policy and author label, so a host can check who asked and which handler wrote it; the list-wide policy cannot be changed in place",
+    record: "docs/history/pattern-catalog-get-it-entries-break.md",
+  },
 ];
