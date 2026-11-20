@@ -645,6 +645,9 @@ export class WebSocketTransport implements MemoryClient.Transport {
    * overtake earlier asynchronous compression. A payload lost with its
    * connection — one queued when the socket closes, one whose write fails, or
    * one sent on a socket that fails to open — rejects with a `ConnectionError`.
+   * One whose socket was replaced while it waited its turn, before any of it
+   * was written, rejects with an `unsentConnectionError()`: no server holds
+   * it.
    */
   async send(payload: string): Promise<void> {
     const opening = this.#open();
@@ -681,7 +684,7 @@ export class WebSocketTransport implements MemoryClient.Transport {
         ? checkedRoutedText(payload, frameSlots)
         : payload;
       if (this.#socket !== connection.socket) {
-        throw MemoryClient.connectionError(
+        throw MemoryClient.unsentConnectionError(
           "Memory websocket changed before send",
         );
       }

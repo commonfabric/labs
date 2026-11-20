@@ -2314,6 +2314,8 @@ describe("WebSocketTransport failure signaling", () => {
       expect((failure as Error).name).toBe("ConnectionError");
       expect((failure as Error).message).toBe("Memory websocket write failed");
       expect((failure as Error).cause).toBe("socket gone");
+      // The write began, so the frame may have reached the server.
+      expect(MemoryClient.isUnsentConnectionError(failure)).toBe(false);
       await transport.close();
     }, () => write.promise);
   });
@@ -2359,6 +2361,8 @@ describe("WebSocketTransport failure signaling", () => {
       expect((failure as Error).message).toBe(
         "Memory websocket changed before send",
       );
+      // None of it was written, and the error says so.
+      expect(MemoryClient.isUnsentConnectionError(failure)).toBe(true);
       expect(activeSocket.sent).toEqual(["first"]);
     }, () => write.promise);
   });

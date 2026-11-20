@@ -15,6 +15,7 @@ import {
   loopback,
   type SpaceSession,
   type Transport,
+  unsentConnectionError,
 } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
@@ -32,7 +33,12 @@ const ID = "of:marked-splices-list";
  * holds each commit handed to a live server, in wire order, and `sent()`
  * resolves once a live server has been handed the commit `localSeq`. While
  * `losesTransactResponses` is set, the client never receives the response to
- * a `transact` frame.
+ * a `transact` frame. While `holdsTransacts` is set, a `transact` send waits
+ * in a queue, as one behind an earlier WebSocket write does, until
+ * `release()`; `queued()` resolves once the commit `localSeq` waits there.
+ * One whose connection changed while it waited rejects, unwritten, with an
+ * `unsentConnectionError()`, as the WebSocket transport's does, and
+ * `unwritten()` resolves for it.
  */
 function hostTransport(server: Server) {
   let host = server;
@@ -41,15 +47,23 @@ function hostTransport(server: Server) {
   const transacts: ClientCommit[] = [];
   const lost = new Set<string>();
   let losesTransactResponses = false;
-  const handed = new Map<number, PromiseWithResolvers<void>>();
-  const handedOf = (localSeq: number) => {
-    let entry = handed.get(localSeq);
-    if (entry === undefined) {
-      entry = Promise.withResolvers<void>();
-      handed.set(localSeq, entry);
-    }
-    return entry;
+  let holdsTransacts = false;
+  let held = Promise.withResolvers<void>();
+  /** Promises keyed by commit `localSeq`, made on first ask. */
+  const signals = () => {
+    const entries = new Map<number, PromiseWithResolvers<void>>();
+    return (localSeq: number) => {
+      let entry = entries.get(localSeq);
+      if (entry === undefined) {
+        entry = Promise.withResolvers<void>();
+        entries.set(localSeq, entry);
+      }
+      return entry;
+    };
   };
+  const handedOf = signals();
+  const queuedOf = signals();
+  const unwrittenOf = signals();
   const open = (next: Server): Transport => {
     const connection = loopback(next);
     connection.setReceiver((payload) => {
@@ -70,6 +84,17 @@ function hostTransport(server: Server) {
         requestId?: string;
         commit?: ClientCommit;
       };
+      if (message.type === "transact" && holdsTransacts) {
+        const connection = active;
+        const release = held.promise;
+        queuedOf(message.commit!.localSeq).resolve();
+        await release;
+        if (active !== connection) {
+          unwrittenOf(message.commit!.localSeq).resolve();
+          throw unsentConnectionError("Memory websocket changed before send");
+        }
+      }
+      if (active === null) throw connectionError("connection refused");
       if (message.type === "transact") {
         transacts.push(message.commit!);
         if (losesTransactResponses) lost.add(message.requestId!);
@@ -96,6 +121,15 @@ function hostTransport(server: Server) {
     transport,
     transacts,
     sent: (localSeq: number) => handedOf(localSeq).promise,
+    queued: (localSeq: number) => queuedOf(localSeq).promise,
+    unwritten: (localSeq: number) => unwrittenOf(localSeq).promise,
+    set holdsTransacts(next: boolean) {
+      holdsTransacts = next;
+    },
+    release(): void {
+      held.resolve();
+      held = Promise.withResolvers<void>();
+    },
     set losesTransactResponses(next: boolean) {
       losesTransactResponses = next;
     },
@@ -223,6 +257,54 @@ describe("v2-client marked splices across a reconnect", () => {
         ],
       }],
     });
+  });
+
+  it("refuses, unsent, a marked commit whose first send its transport wrote none of before the connection changed", async () => {
+    host.holdsTransacts = true;
+    const issued = session.transact(markedInsertion(2));
+    issued.catch(() => {});
+    await host.queued(2);
+    await host.goDown();
+    host.holdsTransacts = false;
+    host.release();
+    await host.unwritten(2);
+    await comeBackWithoutTheMark();
+    await client.restoreConnection();
+
+    const refusal = await issued.then(() => undefined, (error) => error);
+    expect(isMarkedSpliceRefusal(refusal)).toBe(true);
+    expect(host.transacts.filter((commit) => commit.localSeq === 2)).toEqual(
+      [],
+    );
+  });
+
+  it("keeps a marked commit it sent once unchanged when a later resend is written none of", async () => {
+    // Sent once, on a connection that advertises the mark, and unanswered.
+    host.losesTransactResponses = true;
+    const issued = session.transact(markedInsertion(2));
+    await host.sent(2);
+    host.losesTransactResponses = false;
+    // Its resend on the next connection waits, and that connection drops
+    // before any of it is written.
+    host.holdsTransacts = true;
+    await host.goDown();
+    host.comeBack(before);
+    client.restoreConnection().catch(() => {});
+    await host.queued(2);
+    await host.goDown();
+    host.holdsTransacts = false;
+    host.release();
+    await host.unwritten(2);
+    await comeBackWithoutTheMark();
+    await client.restoreConnection();
+
+    // The first send may have reached the store, so the commit still goes
+    // as it was, and the store answers it as the commit it took.
+    const applied = await issued;
+    const sends = host.transacts.filter((commit) => commit.localSeq === 2);
+    expect(sends.length).toBe(2);
+    expect(sends[1]).toEqual(sends[0]);
+    expect(applied.seq).toBeGreaterThan(seeded);
   });
 
   it("sends a marked commit it sent once unchanged after a reconnect, and the store answers it as the commit it took", async () => {

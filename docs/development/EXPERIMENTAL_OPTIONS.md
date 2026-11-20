@@ -1835,7 +1835,11 @@ the per-epic implementation notes).
   commit again at its first send (memory client `isMarkedSpliceRefusal()`),
   and refuses it, unsent, where the connection it would go out on does not
   advertise the capability; the runner takes that as a conflict and diffs
-  the change again. A commit it has sent once goes again unchanged.
+  the change again. A commit it has sent once goes again unchanged, unless
+  the transport reports it wrote none of that send
+  (`unsentConnectionError()`, as the WebSocket transport does for a send
+  whose socket was replaced while it waited), when the next send is checked
+  as a first one.
 - **Purpose.** A change to a long array that inserts, removes or moves
   elements near its head goes as edit-script splices instead of a `replace`
   at every shifted index: on the Topics board, one new topic at the head of

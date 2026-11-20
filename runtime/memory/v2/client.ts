@@ -277,7 +277,10 @@ export type Transport = {
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. A transport whose write of this very payload failed on an open
+   * itself. A transport that knows it wrote none of the payload, such as one
+   * whose socket was replaced while the payload waited its turn, rejects
+   * with `unsentConnectionError()`, so that the client knows no server holds
+   * it. A transport whose write of this very payload failed on an open
    * connection rejects with `writeFailedError()` instead, so that the client
    * stops replaying a commit whose own write keeps failing. Any other
    * rejection fails the request with that error. A response that arrived
@@ -638,8 +641,10 @@ type OutstandingCommit = {
   writeFailures?: number;
 
   /**
-   * Set as the commit's first send begins. Until then, a commit carrying a
-   * marked splice is refused where the connection it would go out on does not
+   * Set as the commit's first send begins, and taken back where the
+   * transport reports it wrote none of that send
+   * ({@link isUnsentConnectionError}). Until then, a commit carrying a marked
+   * splice is refused where the connection it would go out on does not
    * advertise `markedSplicesV1` ({@link isMarkedSpliceRefusal}). From then on
    * every attempt sends it unchanged, whatever the connection advertises: the
    * store may already hold it, and it tells a resend of a commit it took from
@@ -5987,6 +5992,8 @@ export class SpaceSession {
         return;
       }
 
+      // Whether this attempt began the commit's first send.
+      let firstSend = false;
       try {
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
@@ -5999,14 +6006,15 @@ export class SpaceSession {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
           beforeSend: () => {
+            if (pendingCommit.sent === true) return;
             if (
-              pendingCommit.sent !== true &&
               carriesMarkedSplice(pendingCommit.commit) &&
               this.#client.serverFlags?.markedSplicesV1 !== true
             ) {
               throw markedSpliceRefusal();
             }
             pendingCommit.sent = true;
+            firstSend = true;
           },
         });
         this.#noteResult(applied.seq);
@@ -6018,6 +6026,11 @@ export class SpaceSession {
           void this.ack(applied.seq).catch(() => undefined);
         }
       } catch (error) {
+        // A first send the transport wrote none of reached no server, so the
+        // next attempt is a first send again, checked on its own connection.
+        if (firstSend && isUnsentConnectionError(error)) {
+          delete pendingCommit.sent;
+        }
         if (isConnectionError(error) || isSessionRevokedError(error)) {
           // A commit whose own write fails on one new connection after
           // another is at fault itself, and replaying it again would only take
@@ -6508,6 +6521,21 @@ export const connectionError = (message: string, cause?: unknown): Error => {
  */
 export const writeFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownWriteFailed: true });
+
+/**
+ * Like `connectionError()`, except that it marks a payload the transport is
+ * sure it wrote none of to any connection, such as one queued behind earlier
+ * writes whose socket was replaced before its turn: no server holds it
+ * ({@link isUnsentConnectionError}).
+ */
+export const unsentConnectionError = (
+  message: string,
+  cause?: unknown,
+): Error => Object.assign(connectionError(message, cause), { unsent: true });
+
+/** Whether `error` is an {@link unsentConnectionError}. */
+export const isUnsentConnectionError = (error: unknown): boolean =>
+  isConnectionError(error) && (error as { unsent?: unknown }).unsent === true;
 
 /**
  * Like `connectionError()`, except that it marks a frame the transport
