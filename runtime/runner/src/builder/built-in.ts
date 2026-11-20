@@ -243,17 +243,21 @@ export const sqliteDatabase = createNodeFactory({
  * descriptor the runtime maintains them by. The declaration is read when the
  * pattern is built.
  */
-export const indexedCollections: IndexedCollectionsFunction = (kinds) => {
-  // The node's input is the database built-in's, which the descriptor rides
-  // beside `tables`.
+export const indexedCollections: IndexedCollectionsFunction = (
+  kinds,
+  handle,
+) => {
+  // The node's input is the database built-in's, which the descriptor and
+  // the handle's schema ride beside `tables`.
   const node = sqliteDatabase as (
-    definition: IndexedCollectionDefinition,
+    definition: IndexedCollectionDefinition & { handleSchema?: JSONSchema },
   ) => Reactive<SqliteDb>;
-  return node(
-    defineIndexedCollections(
+  return node({
+    ...defineIndexedCollections(
       kinds as Record<string, IndexedCollectionOptions>,
     ),
-  ) as ReturnType<IndexedCollectionsFunction>;
+    ...(handle !== undefined && { handleSchema: handle }),
+  }) as ReturnType<IndexedCollectionsFunction>;
 };
 
 // Shares the single `sqliteQuery` node factory with `db.query` (cell.ts) — see

@@ -4378,9 +4378,18 @@ export interface IndexedCollections<Kinds = Record<string, unknown>>
 /**
  * Declares an {@link IndexedCollections}, which lives at the scope of the
  * space, with a declaration per kind of member.
+ *
+ * `handle` is the schema the collection's handle is stored under, and is how
+ * a collection says who may write it. `add()`, `remove()` and `exec()` each
+ * write the handle in the transaction that carries their database write, so
+ * a writer policy there is one on the collection:
+ * `toSchema<WriteAuthorizedBy<IndexedCollections<Kinds>, typeof addTopic>>()`
+ * lets `addTopic` alone write it, whoever else holds the handle. Without it,
+ * every holder of the handle writes.
  */
 export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
   kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+  handle?: JSONSchema,
 ) => Reactive<IndexedCollections<Kinds>>;
 
 export type SqliteQueryParams = {
