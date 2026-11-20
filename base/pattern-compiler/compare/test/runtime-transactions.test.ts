@@ -653,16 +653,17 @@ describe("write records the runtime instantiates with the option on", () => {
           const position = at.path.slice(0, reached);
           const stored = readStoredCfcMetadata(read, at);
           if (stored !== undefined) {
-            through.push(
-              ...labelForConsumedEntries(
-                consumedEntriesForRead(stored, position, {
-                  nonRecursive: false,
-                  consumes: "value",
-                }),
-                position,
-                false,
-              )?.confidentiality ?? [],
+            const consumed = labelForConsumedEntries(
+              consumedEntriesForRead(stored, position, {
+                nonRecursive: false,
+                consumes: "value",
+              }),
+              position,
+              false,
             );
+            for (const clause of consumed?.confidentiality ?? []) {
+              through.push(clause);
+            }
           }
           const link: NormalizedFullLink | undefined = parseLink(value, at);
           at = link === undefined
