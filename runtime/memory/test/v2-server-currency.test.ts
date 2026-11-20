@@ -6,7 +6,7 @@ import {
   selectCurrencyPiece,
 } from "../v2/currency-index.ts";
 import { applyCommit } from "../v2/engine.ts";
-import { Server } from "../v2/server.ts";
+import { getCurrencyDelivery, Server } from "../v2/server.ts";
 
 const SPACE = "did:key:z6Mk-server-currency-test-space";
 const SOURCE = "did:key:z6Mk-server-currency-test-source";
@@ -258,22 +258,22 @@ describe("v2-server-currency", () => {
       it("asks nothing of a space it pulled from that has told it nothing since", async () => {
         server = newServer();
         await armed();
-        const { pulls } = server.currencyDeliveryStats();
+        const { pulls } = server.currencyDelivery();
 
         expect(await servable()).toBe(true);
 
-        expect(server.currencyDeliveryStats().pulls).toBe(pulls);
+        expect(server.currencyDelivery().pulls).toBe(pulls);
       });
 
       it("pulls from a space that told it of a change, and refuses the root", async () => {
         server = newServer();
         await armed();
-        const { pulls } = server.currencyDeliveryStats();
+        const { pulls } = server.currencyDelivery();
         await change(SOURCE, "of:far");
 
         expect(await servable()).toBe(false);
 
-        expect(server.currencyDeliveryStats().pulls).toBe(pulls + 1);
+        expect(server.currencyDelivery().pulls).toBe(pulls + 1);
       });
 
       it("returns the slices an advance queued behind a commit marked, at the seq of that commit", async () => {
@@ -316,6 +316,36 @@ describe("v2-server-currency", () => {
       });
     });
 
+    describe("currencyDelivery()", () => {
+      it("reports no space and no armed pair for a server no space reads another on", () => {
+        server = newServer();
+
+        expect(server.currencyDelivery()).toEqual({
+          triggers: 0,
+          pulls: 0,
+          advancesQueued: 0,
+          holds: 0,
+          armed: 0,
+          spaces: [],
+        });
+      });
+
+      it("is what `getCurrencyDelivery()` reports for the newest live server, until that server closes", async () => {
+        server = newServer();
+        await armed();
+        const newer = newServer();
+        try {
+          expect(getCurrencyDelivery()).toEqual(newer.currencyDelivery());
+          expect(getCurrencyDelivery()?.pulls).toBe(0);
+        } finally {
+          await newer.close();
+        }
+
+        expect(getCurrencyDelivery()).toEqual(server.currencyDelivery());
+        expect(getCurrencyDelivery()?.pulls).toBe(1);
+      });
+    });
+
     describe("writeDocument()", () => {
       it("tells a reader armed with the space of a change to an instance it registered, once", async () => {
         server = newServer();
@@ -325,7 +355,7 @@ describe("v2-server-currency", () => {
         await change(SOURCE, "of:far");
 
         expect(told).toEqual([SPACE]);
-        expect(server.currencyDeliveryStats().triggers).toBe(1);
+        expect(server.currencyDelivery().triggers).toBe(1);
       });
 
       it("tells the reader again of a change after it pulled", async () => {
@@ -355,7 +385,7 @@ describe("v2-server-currency", () => {
 
         await change(SOURCE, "of:far");
 
-        expect(server.currencyDeliveryStats().advancesQueued).toBe(0);
+        expect(server.currencyDelivery().advancesQueued).toBe(0);
       });
 
       describe("with three spaces in a chain", () => {
@@ -440,7 +470,7 @@ describe("v2-server-currency", () => {
           await change(chain[0], "of:far");
 
           expect(told).toEqual(chain.slice(1));
-          expect(server.currencyDeliveryStats().holds).toBe(0);
+          expect(server.currencyDelivery().holds).toBe(0);
         });
 
         it("arms the last space with the one before it again once it is judged", async () => {
@@ -526,14 +556,14 @@ describe("v2-server-currency", () => {
 
           await goRound(8);
 
-          expect(server.currencyDeliveryStats().holds).toBe(0);
+          expect(server.currencyDelivery().holds).toBe(0);
           expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
         });
 
         it("holds both spaces once a change has come back to them eight times, and marks `2` the slices that read them", async () => {
           await goRound(9);
 
-          expect(server.currencyDeliveryStats().holds).toBe(2);
+          expect(server.currencyDelivery().holds).toBe(2);
           expect([await markOf(), await markOf(SOURCE, "of:back")]).toEqual([
             2,
             2,
@@ -567,7 +597,7 @@ describe("v2-server-currency", () => {
           now += 1_001;
           await recordBoth();
           await goRound(8);
-          expect(server.currencyDeliveryStats().holds).toBe(4);
+          expect(server.currencyDelivery().holds).toBe(4);
 
           now += 1_001;
           await recordBoth();
@@ -588,6 +618,53 @@ describe("v2-server-currency", () => {
           await recordBoth();
 
           expect(await servable()).toBe(true);
+        });
+
+        it("reports each space the change came back to, with the circle it came round", async () => {
+          await goRound(2);
+
+          const report = server.currencyDelivery();
+
+          expect(report.armed).toBe(2);
+          expect(
+            report.spaces.map(({ space, laps, circle, holds }) => ({
+              space,
+              laps,
+              circle,
+              holds,
+            })).sort((a, b) => a.space.localeCompare(b.space)),
+          ).toEqual([
+            { space: SOURCE, laps: 1, circle: [SOURCE, SPACE], holds: 0 },
+            { space: SPACE, laps: 1, circle: [SPACE, SOURCE], holds: 0 },
+          ]);
+        });
+
+        it("reports when the hold of a space ends, while it is held", async () => {
+          await goRound(9);
+          const held = server.currencyDelivery().spaces.map((entry) =>
+            entry.heldUntil
+          );
+          now += 1_001;
+
+          expect(held).toEqual([now - 1, now - 1]);
+          expect(
+            server.currencyDelivery().spaces.map((entry) => entry.heldUntil),
+          ).toEqual([undefined, undefined]);
+        });
+
+        it("names the circle in the warning it logs for a hold", async () => {
+          using warned = stub(console, "warn");
+
+          await goRound(9);
+
+          expect(warned.calls.map((call) => call.args[0])).toEqual([
+            `memory v2: a change came back to the space ${SPACE} 8 times, ` +
+            `round ${SPACE} -> ${SOURCE} -> ${SPACE}; no space rests on its ` +
+            "currency index for 1000 ms",
+            `memory v2: a change came back to the space ${SOURCE} 8 times, ` +
+            `round ${SOURCE} -> ${SPACE} -> ${SOURCE}; no space rests on ` +
+            "its currency index for 1000 ms",
+          ]);
         });
 
         it("ends the hold of a space that a change with no trigger behind it reaches", async () => {

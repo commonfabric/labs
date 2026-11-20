@@ -445,6 +445,22 @@ type CurrencyTrail = {
   /** How many times that change came back to the space since its last hold. */
   laps: number;
 
+  /**
+   * The spaces the latest trigger passed on its way here, the one that sent
+   * it last. Where this space is among them, the spaces before its first
+   * appearance are left out, so the list is no longer than one circle.
+   */
+  path: string[];
+
+  /**
+   * The circle the change last came round, from this space back to the one
+   * that sent it here. Absent while the change has not come back.
+   */
+  circle?: string[];
+
+  /** How many times the space was held. */
+  holds: number;
+
   /** How long the space's last hold lasted, in milliseconds, `0` for none. */
   gapMs: number;
 
@@ -453,7 +469,74 @@ type CurrencyTrail = {
 };
 
 /** The part of a trail a trigger carries. */
-type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops">;
+type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops" | "path">;
+
+/** How many spaces `Server.currencyDelivery()` lists. */
+const CURRENCY_DELIVERY_SPACES_MAX = 50;
+
+/**
+ * What passed between the currency indexes of the spaces a memory server
+ * holds (serving-loop.md §3b), for the health route.
+ */
+export type CurrencyDeliveryReport = {
+  /** Triggers sent to a space that read another. */
+  triggers: number;
+
+  /** Pulls a space made from one it reads. */
+  pulls: number;
+
+  /** Advances of a cursor queued behind a commit, for an armed reader. */
+  advancesQueued: number;
+
+  /** Times a space was held because a change kept coming back to it. */
+  holds: number;
+
+  /** Pairs of a space and a space it is armed with. */
+  armed: number;
+
+  /**
+   * The spaces a change came back to, most often held first, at most
+   * `CURRENCY_DELIVERY_SPACES_MAX` of them.
+   */
+  spaces: Array<{
+    space: string;
+
+    /** The number of the change behind the latest trigger it was sent. */
+    origin: number;
+
+    /** How many triggers lead from that change to the space. */
+    hops: number;
+
+    /** How many times that change came back since the space's last hold. */
+    laps: number;
+
+    /** The circle it last came round, from the space back to its sender. */
+    circle: string[];
+
+    /** How many times the space was held. */
+    holds: number;
+
+    /** How long its last hold lasted, in milliseconds, `0` for none. */
+    gapMs: number;
+
+    /** The time its hold ends, where it is held now. */
+    heldUntil?: number;
+  }>;
+};
+
+/**
+ * Live servers' currency-delivery providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported.
+ */
+const currencyDeliveryProviders: (() => CurrencyDeliveryReport)[] = [];
+
+/**
+ * The co-hosted memory server's currency delivery for the health route — the
+ * most recently constructed server still open; undefined when none is.
+ */
+export const getCurrencyDelivery = (): CurrencyDeliveryReport | undefined =>
+  currencyDeliveryProviders.at(-1)?.();
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -4193,6 +4276,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    currencyDeliveryProviders.push(this.#currencyDeliveryProvider);
     sessionReportsProviders.push(this.#sessionReportsProvider);
     documentInterestsProviders.push(this.#documentInterestsProvider);
   }
@@ -4243,6 +4327,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #currencyDeliveryProvider = () => this.currencyDelivery();
   #sessionReportsProvider = () => this.sessionReports();
   #documentInterestsProvider = (query: DocumentInterestQuery) =>
     this.#sessions.documentInterests(query);
@@ -5706,6 +5791,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(currencyDeliveryProviders, this.#currencyDeliveryProvider);
     withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     withdrawProvider(
       documentInterestsProviders,
@@ -12537,16 +12623,34 @@ export class Server {
   /**
    * What passed between the currency indexes of the spaces this server
    * holds: the triggers sent, the pulls made, the advances a commit queued,
-   * and how often a space was held because a change kept coming back to it.
-   * Diagnostics and tests only.
+   * how often a space was held because a change kept coming back to it, and
+   * the spaces one came back to, each with the circle it came round. The
+   * health route publishes it.
    */
-  currencyDeliveryStats(): {
-    triggers: number;
-    pulls: number;
-    advancesQueued: number;
-    holds: number;
-  } {
-    return { ...this.#currencyDelivery };
+  currencyDelivery(): CurrencyDeliveryReport {
+    const now = Date.now();
+    let armed = 0;
+    for (const readers of this.#currencyArmed.values()) armed += readers.size;
+    const spaces: CurrencyDeliveryReport["spaces"] = [];
+    for (const [space, trail] of this.#currencyTrails) {
+      if (trail.circle === undefined) continue;
+      spaces.push({
+        space,
+        origin: trail.origin,
+        hops: trail.hops,
+        laps: trail.laps,
+        circle: [...trail.circle],
+        holds: trail.holds,
+        gapMs: trail.gapMs,
+        ...(trail.heldUntil > now && { heldUntil: trail.heldUntil }),
+      });
+    }
+    spaces.sort((a, b) => b.holds - a.holds || b.laps - a.laps);
+    return {
+      ...this.#currencyDelivery,
+      armed,
+      spaces: spaces.slice(0, CURRENCY_DELIVERY_SPACES_MAX),
+    };
   }
 
   /**
@@ -12643,9 +12747,13 @@ export class Server {
     const trail = this.#currencyTrails.get(space);
     if (trail === undefined) {
       this.#currencyOrigins += 1;
-      return { origin: this.#currencyOrigins, hops: 1 };
+      return { origin: this.#currencyOrigins, hops: 1, path: [space] };
     }
-    return { origin: trail.origin, hops: trail.hops + 1 };
+    return {
+      origin: trail.origin,
+      hops: trail.hops + 1,
+      path: [...trail.path, space],
+    };
   }
 
   /**
@@ -12660,11 +12768,19 @@ export class Server {
    */
   #noteCurrencyTrail(space: string, step: CurrencyTrailStep): void {
     const trail = this.#currencyTrails.get(space);
+    // The spaces before this one's first appearance are not on the circle.
+    const from = step.path.indexOf(space);
+    const path = from < 0 ? step.path : step.path.slice(from);
     if (trail === undefined || trail.origin !== step.origin) {
       this.#currencyTrails.set(space, {
         origin: step.origin,
         hops: step.hops,
         laps: 0,
+        path,
+        // What is known of the space's earlier circles is kept, for the
+        // report.
+        ...(trail?.circle !== undefined && { circle: trail.circle }),
+        holds: trail?.holds ?? 0,
         gapMs: 0,
         heldUntil: 0,
       });
@@ -12672,6 +12788,8 @@ export class Server {
     }
     if (step.hops <= trail.hops) return;
     trail.hops = step.hops;
+    trail.path = path;
+    trail.circle = path;
     trail.laps += 1;
     if (trail.laps < CURRENCY_TRIGGER_LAPS_MAX) return;
     const now = Date.now();
@@ -12681,11 +12799,13 @@ export class Server {
       : Math.min(trail.gapMs * 2, CURRENCY_HOLD_MAX_MS);
     trail.heldUntil = now + trail.gapMs;
     trail.laps = 0;
+    trail.holds += 1;
     this.#currencyDelivery.holds += 1;
     console.warn(
       `memory v2: a change came back to the space ${space} ` +
-        `${CURRENCY_TRIGGER_LAPS_MAX} times through the spaces that read ` +
-        `it; no space rests on its currency index for ${trail.gapMs} ms`,
+        `${CURRENCY_TRIGGER_LAPS_MAX} times, round ` +
+        `${[...path, space].join(" -> ")}; no space rests on its currency ` +
+        `index for ${trail.gapMs} ms`,
     );
   }
 

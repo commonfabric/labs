@@ -277,7 +277,17 @@ lasted. So a circle that never settles is slowed to one round of eight laps
 in each hold, a circle that settles costs nothing once it has, and no space
 is left held for want of a visit. A change the space has not been sent ends
 a hold at once, and a held space goes on pulling from the spaces it reads
-so that one can reach it. The memory server counts each hold and logs it.
+so that one can reach it.
+
+A trigger also carries the spaces it passed, cut to one circle, so a hold
+is logged with the circle the change came round. `currencyDelivery` on
+`/api/health/stats` publishes the counts and lists each space a change came
+back to, with its laps, its circle and its holds
+([profiling.md](../development/debugging/profiling.md)). Which pieces and
+documents make the circle is in the stores: `cf inspect currency-cycles`
+reads each space's records and prints every cycle of pieces that crosses a
+space boundary, whether or not a change is going round it, which is what a
+pattern's author needs to break one.
 
 Several paths of different lengths from one space to another count as laps
 too, one for each longer path a trigger arrives by, so the limit has to
