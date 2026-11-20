@@ -390,7 +390,9 @@ function inheritedDocument(
   const { row, branch } = resolved;
   switch (row.op) {
     case "set":
-      return row.data === null ? undefined : storedDocument(row.data);
+      // A payload that does not decode, a missing one included, fails here as
+      // it does in the engine, before any patch is applied over it.
+      return storedDocument(row.data);
     case "patch":
       return reconstructWithinBranch(
         space,
@@ -400,8 +402,10 @@ function inheritedDocument(
         row.seq,
         row.op_index,
       );
-    default:
+    case "delete":
       return undefined;
+    default:
+      throw new Error(`unexpected stored revision op: ${row.op}`);
   }
 }
 
