@@ -86,6 +86,8 @@ export type ResultRow = {
   runtime: string;
   /** The runtime's label, as `runtime` shows it. */
   runtimeLabel?: Label;
+  /** The runtime's label with each link below the path followed. */
+  runtimeDeepLabel?: Label;
   runtimeWithoutStatic: string;
   template: string;
   confidentiality: Relation;
@@ -247,6 +249,9 @@ export const resultRow = (
     root: template?.op ?? "",
     runtime: showLabel(row.runtime),
     runtimeLabel: row.runtime,
+    ...(row.runtimeDeep === undefined
+      ? {}
+      : { runtimeDeepLabel: row.runtimeDeep }),
     runtimeWithoutStatic: showLabel(row.runtimeByOrigin.withoutStatic),
     template: showLabel(evaluated.label),
     confidentiality: row.comparison.confidentiality,

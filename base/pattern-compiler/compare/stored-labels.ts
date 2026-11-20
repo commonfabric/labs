@@ -45,8 +45,10 @@ import { Identity } from "@commonfabric/identity";
 import { atomPropagationClass } from "../../../runtime/runner/src/cfc/atom-classes.ts";
 import {
   consumedEntriesForRead,
+  entriesForConsumedLabel,
   labelForConsumedEntries,
 } from "../../../runtime/runner/src/cfc/consumed-label.ts";
+import { deepLabelAlong, storedReader } from "./deep-label.ts";
 import { readStoredCfcMetadata } from "../../../runtime/runner/src/cfc/metadata.ts";
 import { observationLabelResolverFor } from "../../../runtime/runner/src/cfc/prepare.ts";
 import type {
@@ -100,7 +102,13 @@ import { argumentOf, ExecutorRun } from "./values.ts";
 /** The members of a plan this comparison reads. */
 export type LabelPlan = {
   patterns?: string[];
-  outputs: { path: string[]; kept?: boolean; template?: Template }[];
+  outputs: {
+    path: string[];
+    kept?: boolean;
+    template?: Template;
+    collection?: number;
+    interim?: unknown;
+  }[];
   bodies?: { writes?: { template?: Template }[] }[];
   cones?: { writes?: { template?: Template }[] }[];
   stateCells?: { first?: { cone: number; write: number } }[];
@@ -136,6 +144,12 @@ export type OracleCheck = {
    * rows are read as.
    */
   read: Label;
+  /**
+   * The label of everything the value at the path holds after the commit,
+   * each link in it followed (`deepLabelAlong`), with where the walk found
+   * each of its atoms.
+   */
+  deep: Stored;
   /** The evaluator's label, where it evaluated one. */
   oracle?: Label;
   /** The evaluator found a selection or a pick unreported. */
@@ -385,6 +399,63 @@ export const storedLabelAt = (
   return { confidentiality: union(confidentiality), integrity: [] };
 };
 
+/**
+ * A label read with each link below its path followed, and for each of its
+ * atoms the position the read found it at, with the stored entries that give
+ * it there.
+ */
+export type Stored = { label: Label; found: Record<string, string> };
+
+/** The entries that give the label a value read of `address` consumes. */
+const entriesAt = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+): string => {
+  const metadata = readStoredCfcMetadata(tx, linkOf({ ...address, path: [] }));
+  if (metadata === undefined) return "no metadata";
+  return entriesForConsumedLabel(
+    consumedEntriesForRead(metadata, address.path, {
+      nonRecursive: true,
+      consumes: "value",
+    }),
+    address.path,
+    true,
+  ).map((entry) =>
+    `${entry.origin ?? "legacy"}/${entry.observes ?? ""}@/${
+      entry.path.join("/")
+    }`
+  ).join(" ");
+};
+
+/**
+ * `deepLabelAlong` over the runtime's storage, with its atoms in the
+ * evaluator's form and where each was found (`Stored`). A read in the class
+ * `shape` reads the entries of the container at the address, through the
+ * links at its position, and nothing below it.
+ */
+export const deepStoredAt = (
+  tx: IExtendedStorageTransaction,
+  address: CfcAddress,
+  patterns: readonly string[],
+  observes: "value" | "shape" = "value",
+): Stored => {
+  const found: Record<string, string> = {};
+  const label = deepLabelAlong(
+    storedReader(tx, observes),
+    address,
+    (axis, atom, at) => {
+      const key = `${axis === "confidentiality" ? "C" : "I"} ${
+        atomKey(asEvaluatorAtom(atom, patterns))
+      }`;
+      found[key] ??= `${at.id === address.id ? "" : `${at.id.slice(0, 16)} `}/${
+        at.path.join("/")
+      } ${entriesAt(tx, at)}`;
+    },
+    observes === "value",
+  );
+  return { label: asEvaluatorLabel(label, patterns), found };
+};
+
 /** The inputs of one place of a write record, with the enclosing place. */
 type Place = { inputs: PlanInputs; enclosing?: Place };
 
@@ -626,6 +697,7 @@ export const checkWrites = (
         stored,
         entry: entry !== undefined,
         read: storedLabelAt(tx, write.target),
+        deep: deepStoredAt(tx, write.target, patterns),
         bound: false,
         unsupported: [],
       };
@@ -670,9 +742,28 @@ export type StoredRow = {
   stored: string;
   /** Today's label. */
   today: string;
+  /**
+   * The category and the relations of the two labels each read with every
+   * link below the row's path followed, on both sides (`deepLabel`), where
+   * today's row has that label; of `stored` and `today` otherwise.
+   */
   category: Category;
   confidentiality: Relation;
   integrity: Relation;
+  /** The stored and today's labels read with every link followed. */
+  storedDeep?: string;
+  todayDeep?: string;
+  /** Where the stored deep label's atoms were found (`Stored`). */
+  found?: Record<string, string>;
+  /**
+   * The category and relations of `stored` and `today`, each read
+   * recursively below the row's path and through a link at the path only.
+   */
+  shallow?: {
+    category: Category;
+    confidentiality: Relation;
+    integrity: Relation;
+  };
 };
 
 /** One write record whose stored label is not the evaluator's. */
@@ -779,7 +870,7 @@ export const compareWithToday = (
   storedAt: (
     record: "output" | PlanRecord,
     path: readonly string[],
-  ) => Label | undefined,
+  ) => Label | { shallow: Label; deep: Stored } | undefined,
 ): { rows: StoredRow[]; unmatched: Record<string, number> } => {
   const rows: StoredRow[] = [];
   const unmatched: Record<string, number> = {};
@@ -792,7 +883,7 @@ export const compareWithToday = (
       miss("today's row has no label");
       continue;
     }
-    let stored: Label | undefined;
+    let stored: Label | { shallow: Label; deep: Stored } | undefined;
     if (row.kind === "output") {
       stored = storedAt("output", row.path === "" ? [] : row.path.split("/"));
     } else {
@@ -809,9 +900,11 @@ export const compareWithToday = (
       miss(`no stored ${row.kind}`);
       continue;
     }
-    const mapped = orderedLabel(asEvaluatorLabel(stored, patterns));
+    const shallow = "shallow" in stored ? stored.shallow : stored;
+    const deep = "deep" in stored ? stored.deep : undefined;
+    const mapped = orderedLabel(asEvaluatorLabel(shallow, patterns));
     const comparison = compareLabels(mapped, orderedLabel(row.runtimeLabel));
-    rows.push({
+    const base = {
       kind: row.kind,
       path: row.path,
       stored: show(mapped),
@@ -819,6 +912,28 @@ export const compareWithToday = (
       category: categoryOf(comparison),
       confidentiality: comparison.confidentiality,
       integrity: comparison.integrity,
+    };
+    if (deep === undefined || row.runtimeDeepLabel === undefined) {
+      rows.push(base);
+      continue;
+    }
+    const deepComparison = compareLabels(
+      orderedLabel(deep.label),
+      orderedLabel(row.runtimeDeepLabel),
+    );
+    rows.push({
+      ...base,
+      category: categoryOf(deepComparison),
+      confidentiality: deepComparison.confidentiality,
+      integrity: deepComparison.integrity,
+      storedDeep: show(orderedLabel(deep.label)),
+      todayDeep: show(orderedLabel(row.runtimeDeepLabel)),
+      found: deep.found,
+      shallow: {
+        category: base.category,
+        confidentiality: base.confidentiality,
+        integrity: base.integrity,
+      },
     });
   }
   return { rows, unmatched };
@@ -842,7 +957,7 @@ const readStored = (
   instance: Instance,
   plan: LabelPlan,
   checks: readonly OracleCheck[],
-  into: Map<string, Label>,
+  into: Map<string, { shallow: Label; deep: Stored }>,
 ): void => {
   const tx = runtime.edit();
   try {
@@ -850,21 +965,36 @@ const readStored = (
     const result = hooks.entityOf(instance.id);
     for (const output of plan.outputs) {
       if (!output.kept || output.path.includes("*")) continue;
-      into.set(
-        storedKey("output", output.path),
-        storedLabelAt(tx, {
-          space,
-          id: result,
-          scope: "space",
-          path: output.path,
-        }),
+      const address: CfcAddress = {
+        space,
+        id: result,
+        scope: "space",
+        path: output.path,
+      };
+      // A collection's entry and a constructed value's container entry are
+      // read in the class `shape`, as today's rows read them (`harness.ts`).
+      const container = plan.outputs.some((other) =>
+        other.kept !== false && other.interim === undefined &&
+        other.path.length > output.path.length &&
+        output.path.every((segment, index) => other.path[index] === segment)
       );
+      into.set(storedKey("output", output.path), {
+        shallow: storedLabelAt(tx, address),
+        deep: deepStoredAt(
+          tx,
+          address,
+          plan.patterns ?? [],
+          output.collection === undefined && !container ? "value" : "shape",
+        ),
+      });
     }
     for (const check of [...checks].reverse()) {
       if (!("body" in check.record)) continue;
       for (let start = 0; start <= check.path.length; start++) {
         const key = storedKey(check.record, check.path.slice(start));
-        if (!into.has(key)) into.set(key, check.read);
+        if (!into.has(key)) {
+          into.set(key, { shallow: check.read, deep: check.deep });
+        }
       }
     }
   } finally {
@@ -914,7 +1044,7 @@ export const compareModule = async (
     .did();
   const options = instanceOptions(module.module, space, artifacts);
   const checks: OracleCheck[] = [];
-  const stored = new Map<string, Label>();
+  const stored = new Map<string, { shallow: Label; deep: Stored }>();
   const refusedOn: string[] = [];
   const off = await inStorage(
     artifact,
