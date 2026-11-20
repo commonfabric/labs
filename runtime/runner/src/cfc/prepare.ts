@@ -29,7 +29,9 @@ import {
   fabricAwareEqual,
   FabricInstance,
   FabricPrimitive,
+  hashStringOf,
   isFabricObjectOrArray,
+  isFabricPlainContainer,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
@@ -109,6 +111,7 @@ import {
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
+import { keptElementIndices } from "../storage/array-edit-script.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
@@ -3839,6 +3842,216 @@ const valueWriteTargets = (
 /** What one of {@link valueWriteTargets}' documents records of its writes. */
 type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
   Map<string, infer Target> ? Target : never;
+
+/**
+ * Where a stored per-element entry of a rewritten array goes: it stays where
+ * it is, it moves to `path` with the element it labels, or it is dropped with
+ * an element the write removed.
+ */
+type ElementEntryPlacement =
+  | { kind: "kept" }
+  | { kind: "moved"; path: readonly string[] }
+  | { kind: "dropped" };
+
+/**
+ * The most removals and additions the alignment of an array's old and new
+ * elements searches for a shortest edit script within, between their common
+ * prefix and suffix (`keptElementIndices()`). It is the bound the commit's
+ * array diff uses.
+ */
+const ELEMENT_ALIGNMENT_MAX_EDITS = 64;
+
+/** What a stored entry is, for {@link elementEntryPlacements}. */
+const isPerValueElementEntry = (entry: LabelMapEntry): boolean =>
+  (entry.origin === "derived" || entry.origin === "structure") &&
+  entry.observes !== "shape" &&
+  !isRuntimeMintedTemplate({
+    origin: entry.origin,
+    path: canonicalizeLogicalPath(entry.path),
+  });
+
+/**
+ * `value` with the slot at `rel` set to `slot`, or emptied where `present` is
+ * false, copying each container on the way down and nothing else. Returns
+ * `undefined` where a container on the way is not a plain array or record.
+ */
+const withSlotAt = (
+  value: unknown,
+  rel: readonly string[],
+  slot: unknown,
+  present: boolean,
+): unknown[] | Record<string, unknown> | undefined => {
+  if (!isFabricPlainContainer(value as FabricValue)) return undefined;
+  const copy: unknown[] | Record<string, unknown> = Array.isArray(value)
+    ? value.slice()
+    : { ...(value as Record<string, unknown>) };
+  const [key, ...rest] = rel;
+  const slots = copy as Record<string, unknown>;
+  if (rest.length === 0) {
+    if (present) slots[key!] = slot;
+    else delete slots[key!];
+    return copy;
+  }
+  const inner = withSlotAt(slots[key!], rest, slot, present);
+  if (inner === undefined) return undefined;
+  slots[key!] = inner;
+  return copy;
+};
+
+/**
+ * Where each stored per-value entry beneath an element of an array this
+ * transaction rewrote goes, so that an entry follows the element it labels.
+ *
+ * The value diff (`normalizeAndDiff()`) writes an array index by index, and
+ * writes nothing at an index whose value did not change. An element that
+ * moves onto an index holding an equal value is therefore not written there,
+ * and the clear of entries beneath written paths leaves that index the
+ * entries of the element that stood there before. So the old and new arrays
+ * are aligned by a shortest edit script (`keptElementIndices()`), and an
+ * entry beneath an old element the script keeps at another index moves there
+ * with it. An entry beneath an old element the script removes is dropped,
+ * except where the new element at the same index is one the script adds: an
+ * element edited in place pairs with itself there, and its entries are
+ * cleared beneath the paths the diff wrote and kept elsewhere, as before.
+ *
+ * Only `derived` and `structure` entries move, existence entries excepted:
+ * those are frozen at their path's creation (§8.12.8) and stay where they
+ * are. Declared entries are policy for a position, and link entries follow
+ * the reference their slot holds (`linkEntrySuperseded`).
+ *
+ * An array is aligned where the transaction wrote beneath one of its indices
+ * or its length and wrote neither it nor any path above it, and where no
+ * array above it is aligned: an element that moves is equal to what it was,
+ * so nothing beneath it moves within it. The old array is the new one with
+ * each written path's value before the transaction put back, deepest first.
+ * Returns `undefined` where no stored entry is beneath such an array.
+ */
+const elementEntryPlacements = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  written: ValueWriteTarget,
+  writtenPrefixes: PathPrefixIndex,
+  storedEntries: readonly LabelMapEntry[],
+): ((entryPath: readonly string[]) => ElementEntryPlacement) | undefined => {
+  const entryPaths = storedEntries.filter(isPerValueElementEntry)
+    .map((entry) => canonicalizeLogicalPath(entry.path));
+  if (entryPaths.length === 0) return undefined;
+  const candidates = new Map<string, readonly string[]>();
+  for (const path of written.paths) {
+    for (let depth = 0; depth < path.length; depth++) {
+      const segment = path[depth]!;
+      if (segment !== "length" && !isArrayIndexPropertyName(segment)) continue;
+      const array = path.slice(0, depth);
+      const key = pathKey(array);
+      if (candidates.has(key) || writtenPrefixes.hasPrefixOf(array)) continue;
+      if (
+        !entryPaths.some((entryPath) =>
+          entryPath.length > depth && isPrefix(array, entryPath) &&
+          isArrayIndexPropertyName(entryPath[depth]!)
+        )
+      ) {
+        continue;
+      }
+      candidates.set(key, array);
+    }
+  }
+  const arrays = [...candidates.values()].filter((array) =>
+    ![...candidates.values()].some((outer) =>
+      outer.length < array.length && isPrefix(outer, array)
+    )
+  );
+  const alignments: {
+    array: readonly string[];
+    kept: Int32Array;
+    added: Uint8Array;
+    afterLength: number;
+  }[] = [];
+  for (const array of arrays) {
+    const after = tx.readValueOrThrow({ ...target, path: [...array] }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+    if (!Array.isArray(after)) continue;
+    const beneath = written.paths
+      .filter((path) => path.length > array.length && isPrefix(array, path))
+      .sort((left, right) => right.length - left.length);
+    let before: unknown = after.slice();
+    let beforeLength: number | undefined;
+    for (const path of beneath) {
+      const key = pathKey(path);
+      const rel = path.slice(array.length);
+      const previous = written.previousValuesByPath.get(key);
+      if (rel.length === 1 && rel[0] === "length") {
+        if (typeof previous === "number") beforeLength = previous;
+        continue;
+      }
+      before = withSlotAt(
+        before,
+        rel,
+        previous,
+        written.previousPresentByPath.get(key) ?? previous !== undefined,
+      );
+      if (before === undefined) break;
+    }
+    if (!Array.isArray(before)) continue;
+    if (beforeLength !== undefined) before.length = beforeLength;
+    const beforeArray = before;
+    const beforeKeys: (string | undefined)[] = [];
+    const afterKeys: (string | undefined)[] = [];
+    const keyOf = (
+      values: readonly unknown[],
+      keys: (string | undefined)[],
+      index: number,
+    ): string =>
+      keys[index] ??= index in values
+        ? `=${hashStringOf(values[index] as FabricValue)}`
+        : "hole";
+    const kept = keptElementIndices(
+      beforeArray.length,
+      after.length,
+      (beforeIndex, afterIndex) =>
+        (beforeIndex in beforeArray) === (afterIndex in after) &&
+        (Object.is(beforeArray[beforeIndex], after[afterIndex]) ||
+          keyOf(beforeArray, beforeKeys, beforeIndex) ===
+            keyOf(after, afterKeys, afterIndex)),
+      ELEMENT_ALIGNMENT_MAX_EDITS,
+    );
+    const added = new Uint8Array(after.length).fill(1);
+    for (const afterIndex of kept) if (afterIndex >= 0) added[afterIndex] = 0;
+    alignments.push({ array, kept, added, afterLength: after.length });
+  }
+  if (alignments.length === 0) return undefined;
+  return (entryPath) => {
+    for (const { array, kept, added, afterLength } of alignments) {
+      if (entryPath.length <= array.length || !isPrefix(array, entryPath)) {
+        continue;
+      }
+      const segment = entryPath[array.length]!;
+      if (!isArrayIndexPropertyName(segment)) return { kind: "kept" };
+      const index = Number(segment);
+      if (index >= kept.length) return { kind: "kept" };
+      const afterIndex = kept[index]!;
+      if (afterIndex === index) return { kind: "kept" };
+      if (afterIndex >= 0) {
+        return {
+          kind: "moved",
+          path: [
+            ...array,
+            String(afterIndex),
+            ...entryPath.slice(array.length + 1),
+          ],
+        };
+      }
+      return index < afterLength && added[index] === 1
+        ? { kind: "kept" }
+        : { kind: "dropped" };
+    }
+    return { kind: "kept" };
+  };
+};
 
 /**
  * What stands at `rel` below `value`: the first link met on the way down,
@@ -13611,6 +13824,18 @@ export function* prepareBoundaryCommitSteps(
     // slot beside a reference it anchored there.
     const carriedUnplacedStampPaths: (readonly string[])[] = [];
     let placesSlotStamp = false;
+    // Where the per-value entries beneath the elements of an array this
+    // transaction rewrote go: each follows the element it labels.
+    const elementPlacement = flowPersist && flowTarget !== undefined &&
+        existing !== undefined
+      ? elementEntryPlacements(
+        tx,
+        { space, id, scope },
+        flowTarget,
+        flowWrittenPrefixes,
+        existing.labelMap.entries,
+      )
+      : undefined;
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
@@ -13653,6 +13878,46 @@ export function* prepareBoundaryCommitSteps(
           });
           continue;
         }
+      }
+      // An entry beneath an element that moved goes with it, and one beneath
+      // an element the write removed goes with that (`elementEntryPlacements`).
+      // A moved entry is carried as an untouched path's is, at its new path;
+      // the index it leaves takes the entries of whichever element moved
+      // there, or the paths the diff wrote there are cleared as usual.
+      const placement = elementPlacement !== undefined &&
+          isPerValueElementEntry(entry)
+        ? elementPlacement(entryPath)
+        : { kind: "kept" as const };
+      if (placement.kind !== "kept") {
+        flowCleared = true;
+        if (placement.kind === "moved") {
+          const movedLabel = carriedStampLabel(entry, placement.path);
+          if (
+            existing?.stampPlacement !== "committed" &&
+            isWriterStamp({ ...entry, label: movedLabel })
+          ) {
+            carriedUnplacedStampPaths.push(placement.path);
+          }
+          if (hasLabelValues(movedLabel)) {
+            persistedLabelEntries.push({
+              path: [...placement.path],
+              label: cloneLabel(movedLabel),
+              ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+              ...(entry.observes !== undefined
+                ? { observes: entry.observes }
+                : {}),
+            });
+          }
+        } else if (
+          poolsExistence(entry) &&
+          (entry.label.confidentiality?.length ?? 0) > 0
+        ) {
+          clearedExistence.push({
+            path: entryPath,
+            confidentiality: entry.label.confidentiality!,
+          });
+        }
+        continue;
       }
       // A declared entry minted at a slot labels the position, not the
       // pointer the slot holds, so a link-origin entry there stays until its

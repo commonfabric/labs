@@ -698,6 +698,20 @@ describes: a release removes a clause that stands for someone other than the
 owner, which no route under the pin removes, and every such removal is signed
 by the owner and recorded.
 
+An array the value diff rewrites is persisted index by index:
+`normalizeAndDiff` in `data-updating.ts` writes each index whose value changed,
+and the persist region clears the `derived` and `structure` entries beneath
+those paths and stamps them with the attempt's join. An element whose value at
+its index did not change is not written, and keeps the entries stored beneath
+it. An element the write moves to another index keeps them too:
+`elementEntryPlacements` in `cfc/prepare.ts` aligns the old and new arrays by
+a shortest edit script and moves each such entry, existence entries excepted,
+to the element's new index, and drops the entries beneath an element the
+script removes. Without the move, an element moved onto an index holding an
+equal value would take the entries of the element that stood there, and its
+own would be lost. Declared entries stay with their position, and link entries
+follow the reference their slot holds.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`
@@ -718,6 +732,19 @@ by the owner and recorded.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
+- An array write persisted index by index leaves an element it keeps, at its
+  index or moved, the entries of its earlier derivation, and stamps the
+  attempt's join only at the indices the diff wrote. §8.12.8 replaces the
+  derived component at a written path and clears it beneath; whether the
+  attempted write of an array set this way is the whole array, whose join
+  would then reach every element, or the indices the diff writes, is not
+  established. If it is the whole array, an element whose entries lack a
+  clause of the join under-taints. The alignment matches elements by value, so
+  a write that sets an element equal to one stored elsewhere in the array,
+  without reading it, carries that element's entries to it, an over-taint.
+  Where no script within 64 edits aligns the arrays between their common
+  prefix and suffix, the elements between are paired by index, as before the
+  alignment existed.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;
