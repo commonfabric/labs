@@ -739,13 +739,13 @@ async function requestShare(
 const betaMeaning = (listing: PatternIndexListing | undefined): string => {
   switch (listing) {
     case "passed":
-      return "reachable by its link (cf pattern link); nobody finds it until cf pattern stable";
+      return "reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
     case "held":
       return "held: the index found something identifying; see cf pattern mine";
     case "error":
       return "error: the check failed to run and waits for an admin re-run";
     default:
-      return "once the index's privacy check passes, it is reachable by its link (cf pattern link); nobody finds it until cf pattern stable";
+      return "once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
   }
 };
 

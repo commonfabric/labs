@@ -394,7 +394,7 @@ describe("pattern", () => {
         index.publications.get(String(published?.body.patternId))?.channel,
       ).toBe("beta");
       expect(String(rendered[0].value)).toContain(
-        "Beta: once the index's privacy check passes, it is reachable by its link (cf pattern link); nobody finds it until cf pattern stable.",
+        "Beta: once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable.",
       );
     });
 

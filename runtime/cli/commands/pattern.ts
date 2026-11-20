@@ -755,7 +755,7 @@ export const pattern = new Command()
       shareOptions(new Command())
         .description(
           "Share a pattern anonymously on beta: anyone with its link " +
-            "(cf pattern link) can reach it, under a pseudonym of this " +
+            "(cf pattern link --beta) can reach it, under a pseudonym of this " +
             "pattern alone, never linked to your other patterns or your " +
             "name; cf pattern stable makes it findable. Join first with " +
             "cf index join. It " +
