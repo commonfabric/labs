@@ -674,6 +674,9 @@ export class RuntimeTransactions implements TransactionHooks {
           ? {}
           : { observed: observed(write.observed) }),
         ...(write.enumeration ? { enumeration: true as const } : {}),
+        ...(write.removes ? { removes: true as const } : {}),
+        ...(write.moves === undefined ? {} : { moves: write.moves }),
+        ...(write.start === undefined ? {} : { start: write.start }),
       };
       this.#recorded.push(recorded);
       if (unchanged) {

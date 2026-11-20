@@ -730,6 +730,10 @@ type Writing = {
      * a member they added. Absent until a splice moves a member.
      */
     origin?: (number | undefined)[];
+    /** A splice of these writes removed a member. */
+    removes?: true;
+    /** The first position a splice of these writes started at. */
+    start?: number;
   };
 };
 
@@ -8883,9 +8887,9 @@ export class Instance {
   /**
    * On the root: the records of a splice that a write through a handle made
    * of the stored list at `path` (provisional decision P39). Each member
-   * added is recorded at its own position. Each member the splice moved is
-   * recorded at the position it stands at now, with the position it stood
-   * at before the writes, whose stored label its record keeps. The number
+   * added is recorded at its own position. A member the splice moved has no
+   * record: the record of the membership names the runs of members that
+   * moved, and the stored labels move with them (ruling Z72). The number
    * of members and the membership of the list are recorded with what the
    * list stored of its membership. Every record holds what the method
    * compared to find the members. A position before the splice is not
@@ -8908,6 +8912,10 @@ export class Instance {
     const splice = given ?? { start: now.length, removed: 0, inserted: 0 };
     const end = splice.start + splice.inserted;
     const moves = splice.removed !== splice.inserted && end < now.length;
+    if (splice.removed > 0) members.removes = true;
+    if (!kept) {
+      members.start = Math.min(members.start ?? splice.start, splice.start);
+    }
     if (members.origin === undefined && (moves || splice.removed > 0)) {
       members.origin = Array.from(
         { length: now.length - splice.inserted + splice.removed },
@@ -8924,6 +8932,18 @@ export class Instance {
     }
     const { origin, decided } = members;
     const held = decided.length === 0 ? {} : { decided };
+    // The members the writes kept at another position than the one they
+    // stood at before the first splice, as runs of positions.
+    const runs: { from: number; to: number; count: number }[] = [];
+    (origin ?? []).forEach((from, to) => {
+      if (from === undefined || from === to) return;
+      const last = runs.at(-1);
+      if (
+        last !== undefined && last.from + last.count === from &&
+        last.to + last.count === to
+      ) last.count += 1;
+      else runs.push({ from, to, count: 1 });
+    });
     const inputsOf = (template: Template) =>
       writing.instance.#inputsFor(
         template,
@@ -8966,23 +8986,6 @@ export class Instance {
         });
       }
       const inputs = inputsOf(template);
-      if (moves) {
-        for (let at = end; at < now.length; at++) {
-          const from = origin?.[at];
-          writes.push({
-            target: { doc, path: [...path, `${at}`] },
-            record,
-            ...inputs,
-            ...held,
-            ...(from === undefined ? {} : {
-              observed: [{
-                address: { doc, path: [...path, `${from}`] },
-                observes: isLink(now[at]) ? "identity" : "value",
-              }],
-            }),
-          });
-        }
-      }
       if (kept || splice.removed !== splice.inserted) {
         writes.push({
           target: { doc, path: [...path, "length"] },
@@ -8999,6 +9002,11 @@ export class Instance {
         ...held,
         observed: membership,
         enumeration: true,
+        ...(members.removes ? { removes: true as const } : {}),
+        ...(runs.length === 0 ? {} : { moves: runs }),
+        ...(members.start === undefined || origin === undefined
+          ? {}
+          : { start: members.start }),
       });
       return writes;
     });

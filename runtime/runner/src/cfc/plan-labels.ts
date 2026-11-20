@@ -139,13 +139,31 @@ export interface PlanLabels {
    * The label of the membership of each container whose members a write
    * changed in place, with the container's canonical path, by document key.
    */
-  readonly enumerations: ReadonlyMap<
-    string,
-    readonly { path: readonly string[]; label: InternedLabel }[]
-  >;
+  readonly enumerations: ReadonlyMap<string, readonly MembershipLabel[]>;
 
   /** Refusal reasons; the commit is refused when there is any. */
   readonly reasons: readonly string[];
+}
+
+/** What the record of a container's membership gives the preparation. */
+export interface MembershipLabel {
+  /** The canonical path of the container. */
+  readonly path: readonly string[];
+
+  /** The label of the membership: what it stored, joined with `decision`. */
+  readonly label: InternedLabel;
+
+  /**
+   * The label of what decided the change, where it removed members: that
+   * of the record's template joined with what the change compared.
+   */
+  readonly decision?: InternedLabel;
+
+  /** The runs of members the change kept at another position. */
+  readonly moves: NonNullable<PlanWrite["moves"]>;
+
+  /** The first position the change wrote, where it moved or removed. */
+  readonly start?: number;
 }
 
 /**
@@ -398,6 +416,9 @@ export const instantiatePlanLabels = (
     });
   };
 
+  // Per transaction: the label of what decided a change that removed
+  // members of a container, by the record of the container's membership.
+  const decisions = new Map<PlanWriteInput, InternedLabel>();
   // Per transaction: the confidentiality of what one change of a
   // container's members compared, by the array its records share.
   const decidedClauses = new Map<object, readonly CfcConfClause[]>();
@@ -420,7 +441,7 @@ export const instantiatePlanLabels = (
   // joined with the same (provisional decision P39).
   const withObserved = (
     label: InternedLabel,
-    input: PlanWriteInput,
+    input: Pick<PlanWriteInput, "decided" | "observed">,
   ): InternedLabel => {
     if (input.decided === undefined && input.observed === undefined) {
       return label;
@@ -472,16 +493,27 @@ export const instantiatePlanLabels = (
     const shared = input.decided === undefined && input.observed === undefined
       ? undefined
       : sharedTemplateLabels.get(input.slots);
+    // What decided a change that removed members: the label of the
+    // record's template joined with what the change compared.
+    const withDecision = (own: InternedLabel): InternedLabel => {
+      if (input.enumeration === true && input.removes === true) {
+        decisions.set(input, withObserved(own, { decided: input.decided }));
+      }
+      return withObserved(own, input);
+    };
     if (shared !== undefined && sameTemplateInputs(shared.input, input)) {
       work.memoHits++;
-      return withObserved(shared.label, input);
+      return withDecision(shared.label);
     }
     const inputs = inputsFor(plan, input, input, undefined);
     let label = instantiateTemplate(template, inputs, table, work);
-    if (input.decided !== undefined || input.observed !== undefined) {
+    if (
+      input.decided !== undefined || input.observed !== undefined ||
+      input.enumeration === true
+    ) {
       const own = label === NEUTRAL ? table.empty : label;
       sharedTemplateLabels.set(input.slots, { input, label: own });
-      return withObserved(own, input);
+      return withDecision(own);
     }
     if (kept) {
       // Every kept output carries the atom of its pattern, a neutral one
@@ -815,16 +847,20 @@ export const instantiatePlanLabels = (
   noteWork(env, work, bounds);
   const byTarget = new Map<string, Map<string, InternedLabel>>();
   const paths = new Map<string, (readonly string[])[]>();
-  const enumerations = new Map<
-    string,
-    { path: readonly string[]; label: InternedLabel }[]
-  >();
+  const enumerations = new Map<string, MembershipLabel[]>();
   if (reasons.length === 0) {
     for (const [coveringKey, label] of labels) {
       const { documentKey, pathKey, input } = covering.get(coveringKey)!;
       if (input.enumeration === true) {
         const held = enumerations.get(documentKey) ?? [];
-        held.push({ path: canonicalizeLogicalPath(input.target.path), label });
+        const decision = decisions.get(input);
+        held.push({
+          path: canonicalizeLogicalPath(input.target.path),
+          label,
+          ...(decision === undefined ? {} : { decision }),
+          moves: input.moves ?? [],
+          ...(input.start === undefined ? {} : { start: input.start }),
+        });
         enumerations.set(documentKey, held);
         continue;
       }

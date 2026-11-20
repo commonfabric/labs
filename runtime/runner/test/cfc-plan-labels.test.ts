@@ -1162,7 +1162,8 @@ describe("cfc-plan-labels", () => {
        * the two members behind it. With `again`, a fourth reads `b` and
        * appends `"v"`, at the position the removal left without a member.
        * Returns the confidentiality of each derived entry of the target as
-       * `observes /path`.
+       * `observes /path`, and of each `structure` entry as
+       * `structure observes /path`.
        */
       const changed = async (again = false) => {
         let derived: Record<string, unknown[]> = {};
@@ -1278,19 +1279,14 @@ describe("cfc-plan-labels", () => {
               [["list", "2"], "w"],
             ],
             (record) => {
-              record(["list", "1"], {
-                decided,
-                observed: [{ address: at("list", "2"), observes: "value" }],
-              });
-              record(["list", "2"], {
-                decided,
-                observed: [{ address: at("list", "3"), observes: "value" }],
-              });
               record(["list", "length"], { decided, observed: membership });
               record(["list"], {
                 decided,
                 observed: membership,
                 enumeration: true,
+                removes: true,
+                moves: [{ from: 2, to: 1, count: 2 }],
+                start: 1,
               });
             },
           );
@@ -1315,9 +1311,13 @@ describe("cfc-plan-labels", () => {
             });
             derived = Object.fromEntries(
               (metadata?.labelMap.entries ?? [])
-                .filter((entry) => entry.origin === "derived")
+                .filter((entry) =>
+                  entry.origin === "derived" || entry.origin === "structure"
+                )
                 .map((entry) => [
-                  `${entry.observes} /${entry.path.join("/")}`,
+                  `${
+                    entry.origin === "structure" ? "structure " : ""
+                  }${entry.observes} /${entry.path.join("/")}`,
                   [...(entry.label.confidentiality ?? [])].sort(),
                 ]),
             );
@@ -1348,20 +1348,21 @@ describe("cfc-plan-labels", () => {
         expect(derived["value /list/0"]).toBeUndefined();
       });
 
-      it("stores at each position a member moved to the member's stored label joined with what decided the removal", async () => {
+      it("moves the stored entries of a member the removal moved to the position it stands at, as they were", async () => {
+        const derived = await changed();
+        // The member appended under `b` stood at position 3, and the one
+        // that stood at position 2 has no entry of its own.
+        expect(derived["value /list/2"]).toEqual(["secret-a", "secret-b"]);
+        expect(derived["value /list/1"]).toBeUndefined();
+      });
+
+      it("stores what decided the removal once, at the `*` path of the list, for a read of the value and of the existence of a position", async () => {
         const derived = await changed();
         // The comparison observed which positions the list has, so what
         // decided the removal holds what the list stored of its membership.
-        expect(derived["value /list/1"]).toEqual([
-          "secret-a",
-          "secret-b",
-          "secret-c",
-        ]);
-        expect(derived["value /list/2"]).toEqual([
-          "secret-a",
-          "secret-b",
-          "secret-c",
-        ]);
+        const decision = ["secret-a", "secret-b", "secret-c"];
+        expect(derived["structure value /list/*"]).toEqual(decision);
+        expect(derived["structure shape /list/*"]).toEqual(decision);
       });
 
       it("stores no entry at the position the removal left without a member", async () => {

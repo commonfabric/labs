@@ -209,6 +209,7 @@ import {
 import {
   instantiatePlanLabels,
   type JournaledRead,
+  type MembershipLabel,
   planLabelPathKey,
   type PlanLabels,
 } from "./plan-labels.ts";
@@ -4757,6 +4758,78 @@ const writtenValueAt = (
   }
   return undefined;
 };
+
+/**
+ * Where a stored per-element entry of an array whose members changed goes:
+ * it stays where it is, it moves to `path` with the member it labels, or it
+ * is dropped with a member the change removed.
+ */
+type ElementEntryPlacement =
+  | { kind: "kept" }
+  | { kind: "moved"; path: readonly string[] }
+  | { kind: "dropped" };
+
+/**
+ * Where the stored entry at `entryPath` goes under the changes of members
+ * that compiled patterns' membership records report (`PlanWrite.moves`): an
+ * entry at or below a position a run names moves with the run, one at or
+ * below another position at or behind the first the change wrote is that of
+ * a member the change removed, and every other entry stays.
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+// The stored label entries of a member that a splice through a handle keeps
+// at another position move there with it, and no template is instantiated
+// for it. Behind `compiledPatterns`, which defaults off.
+const memberEntryPlacement = (
+  changes: readonly MembershipLabel[],
+  entryPath: readonly string[],
+): ElementEntryPlacement => {
+  for (const { path, moves, start } of changes) {
+    if (
+      start === undefined || entryPath.length <= path.length ||
+      !concretePathHasPrefix(entryPath, path)
+    ) continue;
+    const segment = entryPath[path.length];
+    if (!/^(0|[1-9][0-9]*)$/.test(segment)) continue;
+    const index = Number(segment);
+    if (index < start) continue;
+    const run = moves.find(({ from, count }) =>
+      index >= from && index < from + count
+    );
+    return run === undefined ? { kind: "dropped" } : {
+      kind: "moved",
+      path: [
+        ...path,
+        String(run.to + index - run.from),
+        ...entryPath.slice(path.length + 1),
+      ],
+    };
+  }
+  return { kind: "kept" };
+};
+
+/**
+ * Whether `written`, a path the transaction wrote, is at or below a position
+ * a member moved to under `changes`, or one behind the last member the
+ * array has now (`length`, by the array's path key): the write there is the
+ * move itself or was taken back, and no label of this attempt is stamped
+ * for it.
+ */
+const isMovedMemberWrite = (
+  changes: readonly MembershipLabel[],
+  lengths: ReadonlyMap<string, number>,
+  written: readonly string[],
+): boolean =>
+  changes.some(({ path, moves }) => {
+    if (
+      written.length <= path.length || !concretePathHasPrefix(written, path)
+    ) return false;
+    const segment = written[path.length];
+    if (!/^(0|[1-9][0-9]*)$/.test(segment)) return false;
+    const index = Number(segment);
+    return index >= (lengths.get(pathKey(path)) ?? Infinity) ||
+      moves.some(({ to, count }) => index >= to && index < to + count);
+  });
 
 /**
  * The `plan-write` inputs the preparation honors, by the document each
@@ -13689,6 +13762,17 @@ export function* prepareBoundaryCommitSteps(
     // slot beside a reference it anchored there.
     const carriedUnplacedStampPaths: (readonly string[])[] = [];
     let placesSlotStamp = false;
+    // The changes of members in place that compiled patterns' membership
+    // records report for this document, and the number of members each
+    // array has after them. Empty with `compiledPatterns` off.
+    const memberChanges = flowPersist
+      ? planLabels.enumerations.get(key) ?? []
+      : [];
+    const memberLengths = new Map<string, number>();
+    for (const { path } of memberChanges) {
+      const length = writtenValueAt(flowWrittenValues, [...path, "length"]);
+      if (typeof length === "number") memberLengths.set(pathKey(path), length);
+    }
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
@@ -13731,6 +13815,46 @@ export function* prepareBoundaryCommitSteps(
           });
           continue;
         }
+      }
+      // An entry at or below a member that a compiled pattern's splice
+      // moved goes with the member, and one of a member it removed goes
+      // with that (`memberEntryPlacement`). A moved entry is carried as an
+      // untouched path's is, at its new path.
+      const placement = memberChanges.length > 0 &&
+          (entry.origin === "derived" || entry.origin === "structure") &&
+          !isRuntimeMintedTemplate({ origin: entry.origin, path: entryPath })
+        ? memberEntryPlacement(memberChanges, entryPath)
+        : { kind: "kept" as const };
+      if (placement.kind !== "kept") {
+        flowCleared = true;
+        if (placement.kind === "moved") {
+          const movedLabel = carriedStampLabel(entry, placement.path);
+          if (
+            existing?.stampPlacement !== "committed" &&
+            isWriterStamp({ ...entry, label: movedLabel })
+          ) {
+            carriedUnplacedStampPaths.push(placement.path);
+          }
+          if (hasLabelValues(movedLabel)) {
+            persistedLabelEntries.push({
+              path: [...placement.path],
+              label: cloneLabel(movedLabel),
+              ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+              ...(entry.observes !== undefined
+                ? { observes: entry.observes }
+                : {}),
+            });
+          }
+        } else if (
+          poolsExistence(entry) &&
+          (entry.label.confidentiality?.length ?? 0) > 0
+        ) {
+          clearedExistence.push({
+            path: entryPath,
+            confidentiality: entry.label.confidentiality!,
+          });
+        }
+        continue;
       }
       // A declared entry minted at a slot labels the position, not the
       // pointer the slot holds, so a link-origin entry there stays until its
@@ -13953,6 +14077,14 @@ export function* prepareBoundaryCommitSteps(
           continue;
         }
         seenFlowPaths.add(flowKey);
+        // A write that put a moved member at its position stamps nothing:
+        // the member's stored entries moved with it (`memberEntryPlacement`).
+        if (
+          memberChanges.length > 0 &&
+          isMovedMemberWrite(memberChanges, memberLengths, path)
+        ) {
+          continue;
+        }
         // A recorded link write carries the join at its slot, above.
         if (currentLinkWritePaths.has(flowKey)) {
           continue;
@@ -14190,26 +14322,46 @@ export function* prepareBoundaryCommitSteps(
       // (`PlanWrite.enumeration`). The entries of the positions the change
       // left before it stay, and those of positions at or beyond the
       // number of members the container has now go, so a position created
-      // again mints its existence entry again (§8.12.8). Behind
-      // `compiledPatterns`, which defaults off.
-      const enumerated = flowPersist
-        ? planLabels.enumerations.get(key)
-        : undefined;
-      for (const { path, label } of enumerated ?? []) {
-        const length = writtenValueAt(flowWrittenValues, [...path, "length"]);
+      // again mints its existence entry again (§8.12.8).
+      //
+      // What decided a change that removed members decides what every
+      // position holds from then on. It is stored once, joined into the
+      // container's `*`-child templates of the `value` and `shape` classes
+      // and, for a slot that holds a reference, the `followRef` class
+      // (§4.6.3, "Wildcard per-class entries"), which a read of a position
+      // joins with the position's own entries. Successive removals join
+      // into them, and a write that replaces the container clears them.
+      // Behind `compiledPatterns`, which defaults off.
+      for (const { path, label, decision } of memberChanges) {
+        const length = memberLengths.get(pathKey(path));
+        const star = pathKey([...path, "*"]);
+        const stored = new Map<string, readonly CfcConfClause[]>();
         let kept = 0;
         for (const candidateEntry of persistedLabelEntries) {
           const entryPath = candidateEntry.path;
+          const runtimeOwn = candidateEntry.origin === "derived" ||
+            candidateEntry.origin === "structure";
           const below = entryPath.length > path.length &&
             concretePathHasPrefix(entryPath, path);
           if (
-            candidateEntry.origin === "derived" &&
-            ((candidateEntry.observes === "enumerate" &&
+            (candidateEntry.origin === "derived" &&
+              candidateEntry.observes === "enumerate" &&
               pathKey(entryPath) === pathKey(path)) ||
-              (below && typeof length === "number" &&
-                /^(0|[1-9][0-9]*)$/.test(entryPath[path.length]) &&
-                Number(entryPath[path.length]) >= length))
+            (runtimeOwn && below && length !== undefined &&
+              /^(0|[1-9][0-9]*)$/.test(entryPath[path.length]) &&
+              Number(entryPath[path.length]) >= length)
           ) {
+            continue;
+          }
+          if (
+            decision !== undefined && candidateEntry.origin === "structure" &&
+            candidateEntry.observes !== undefined &&
+            pathKey(entryPath) === star
+          ) {
+            stored.set(
+              candidateEntry.observes,
+              (candidateEntry.label.confidentiality ?? []) as CfcConfClause[],
+            );
             continue;
           }
           persistedLabelEntries[kept++] = candidateEntry;
@@ -14228,6 +14380,20 @@ export function* prepareBoundaryCommitSteps(
             },
             origin: "derived",
             observes: "enumerate",
+          }));
+        }
+        if (decision === undefined) continue;
+        for (const observes of ["shape", "value", "followRef"] as const) {
+          const confidentiality = uniqueCfcAtoms([
+            ...(stored.get(observes) ?? []),
+            ...decision.confidentiality,
+          ]);
+          if (confidentiality.length === 0) continue;
+          persistedLabelEntries.push(markFlowStampEntry({
+            path: [...path, "*"],
+            label: { confidentiality },
+            origin: "structure",
+            observes,
           }));
         }
       }

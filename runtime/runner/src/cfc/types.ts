@@ -1001,6 +1001,33 @@ export type PlanWrite = PlanInputs & {
    * the `enumerate` entry at the target and labels no member.
    */
   readonly enumeration?: true;
+
+  /**
+   * With `enumeration`: the change removed members of the container, so
+   * what decided it decides what every position holds. It is stored once
+   * for the container, at its `*` path, and a read of a position joins it
+   * with the position's own entries.
+   */
+  readonly removes?: true;
+
+  /**
+   * With `enumeration`: the members the change kept at another position,
+   * as runs of positions next to each other: `count` members that stood
+   * from `from` on stand from `to` on. The stored label entries of a member
+   * move with it.
+   */
+  readonly moves?: readonly {
+    readonly from: number;
+    readonly to: number;
+    readonly count: number;
+  }[];
+
+  /**
+   * With `moves` or `removes`: the first position the change wrote. The
+   * members before it stay, and a member that stood at it or behind it and
+   * is in no run of `moves` was removed.
+   */
+  readonly start?: number;
 };
 
 /**

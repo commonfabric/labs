@@ -142,6 +142,24 @@ export type PlanWrite = NamedOutputInputs & {
    * for no read of a member.
    */
   enumeration?: true;
+  /**
+   * With `enumeration`: the change removed members of the container, so
+   * what decided it decides what every position holds (ruling Z71).
+   */
+  removes?: true;
+  /**
+   * With `enumeration`: the members the change kept at another position,
+   * as runs of positions next to each other: `count` members that stood
+   * from `from` on stand from `to` on. The stored labels of a member move
+   * with it, and no record is given for it (ruling Z72).
+   */
+  moves?: { from: number; to: number; count: number }[];
+  /**
+   * With `moves` or `removes`: the first position the change wrote. The
+   * members before it stay, and a member that stood at it or behind it and
+   * is in no run of `moves` was removed.
+   */
+  start?: number;
 };
 
 /** What computed a `derive` (PL §1.1). */

@@ -986,20 +986,21 @@ describe("the records of a change of a list's members through a handle", () => {
       }
     });
 
-    it("records a removal at each position from the removed one on, with the position its member stood at", async () => {
+    it("records a removal at the number of members and for the membership, which names the members that moved, and at no position", async () => {
       const { send } = await pushed();
       send("addWord", { word: "y" });
       const records = send("drop", { word: "x" });
 
       expect(
-        records.filter(({ enumeration }) => !enumeration).map((
-          { target, observed },
-        ) => [`/${target.path.join("/")}`, observedBy(observed)]),
-      ).toEqual([
-        ["/0", ["value /1"]],
-        ["/1", ["value /2"]],
-        ["/length", ["value /length", "enumeration /"]],
-      ]);
+        records.map(({ target, enumeration }) =>
+          `${enumeration ? "enumeration " : ""}/${target.path.join("/")}`
+        ),
+      ).toEqual(["/length", "enumeration /"]);
+      expect(records[1]).toMatchObject({
+        removes: true,
+        start: 0,
+        moves: [{ from: 1, to: 0, count: 2 }],
+      });
     });
 
     it("gives every record of a removal what the comparison read: the membership and the value at each position", async () => {
@@ -1060,14 +1061,9 @@ describe("the records of a change of a list's members through a handle", () => {
         "enumeration /",
         "identity /0",
       ]);
-      expect(
-        records.filter(({ enumeration }) => !enumeration).map((
-          { target, observed },
-        ) => [`/${target.path.join("/")}`, observedBy(observed)]),
-      ).toEqual([
-        ["/0", ["identity /1"]],
-        ["/length", ["value /length", "enumeration /"]],
-      ]);
+      expect(records.map(({ target }) => `/${target.path.join("/")}`))
+        .toEqual(["/length", "/"]);
+      expect(records[1].moves).toEqual([{ from: 1, to: 0, count: 1 }]);
     });
   });
 });
