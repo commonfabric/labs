@@ -924,11 +924,14 @@ export class RuntimeInternals extends EventTarget {
    * that began below `before`, or its newest ones, and the seq to pass as
    * `before` for the stretch older than this one. Each step carries the
    * changes of pattern code the space's pieces recorded during it, as a
-   * piece's own source history lists them.
+   * piece's own source history lists them: the pieces the space lists, and
+   * those `pieceIds` names beside them, which is how a piece the space does
+   * not list has its changes shown.
    */
   async spaceHistory(
     space: DID,
     before?: number,
+    pieceIds: readonly string[] = [],
   ): Promise<{ steps: SpaceHistoryStep[]; next?: number }> {
     this.#check();
     const [page, sources] = await Promise.all([
@@ -936,19 +939,23 @@ export class RuntimeInternals extends EventTarget {
         space,
         ...(before !== undefined ? { before } : {}),
       }),
-      this.#pieceSources(space),
+      this.#pieceSources(space, pieceIds),
     ]);
     return { ...page, steps: withPatternChanges(page.steps, sources) };
   }
 
   /**
    * Helper for `spaceHistory()`, which returns the source of each piece the
-   * space lists. A piece whose source cannot be read is left out, and so is
-   * every piece when the list cannot be: a history is still worth showing
-   * without what it says of pattern code.
+   * space lists and each `pieceIds` names beside them. A piece whose source
+   * cannot be read is left out, and so is every listed piece when the list
+   * cannot be: a history is still worth showing without what it says of
+   * pattern code.
    */
-  async #pieceSources(space: DID): Promise<PieceSourceOfScope[]> {
-    let pieces: { id: string; scope?: CellScope }[];
+  async #pieceSources(
+    space: DID,
+    pieceIds: readonly string[],
+  ): Promise<PieceSourceOfScope[]> {
+    let pieces: { id: string; scope?: CellScope }[] = [];
     try {
       const list = await this.#client.getPiecesListCell<unknown>(space);
       await list.sync();
@@ -970,7 +977,15 @@ export class RuntimeInternals extends EventTarget {
         `listing the pieces of ${space}:`,
         error,
       ]);
-      return [];
+    }
+    // A listed piece is named by its full URI and a routed one without the
+    // scheme, so the two are compared without it.
+    const bare = (id: string) => id.replace(/^of:/, "");
+    const listed = new Set(pieces.map(({ id }) => bare(id)));
+    for (const id of pieceIds) {
+      if (listed.has(bare(id))) continue;
+      listed.add(bare(id));
+      pieces.push({ id });
     }
     const sources = await Promise.allSettled(
       pieces.map(({ id, scope }) =>

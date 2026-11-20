@@ -213,6 +213,13 @@ export class XHistoryView extends BaseView {
   @property({ attribute: false })
   accessor error: string | undefined = undefined;
 
+  /**
+   * The piece in view, where the view names one by id: its pattern changes
+   * are listed whether or not the space lists the piece.
+   */
+  @property({ attribute: false })
+  accessor pieceId: string | undefined = undefined;
+
   /** The pattern restore the panel asked for, while it is unsettled. */
   @property({ attribute: false })
   accessor patternRestore: PatternRestore | undefined = undefined;
@@ -242,14 +249,18 @@ export class XHistoryView extends BaseView {
    */
   #list = new Task<[number | undefined], void>(this, {
     task: async ([before]) => {
-      const { rt, space } = this;
+      const { rt, space, pieceId } = this;
       const listing = ++this.#listing;
       if (rt === undefined || space === undefined) {
         this._steps = [];
         this._next = undefined;
         return;
       }
-      const page = await rt.spaceHistory(space, before);
+      const page = await rt.spaceHistory(
+        space,
+        before,
+        pieceId === undefined ? [] : [pieceId],
+      );
       // A stretch that arrives after a later listing began belongs to a list
       // that one has replaced.
       if (listing !== this.#listing) return;
@@ -272,7 +283,7 @@ export class XHistoryView extends BaseView {
     // can have added to the space's history; opening one adds nothing, and
     // keeps the stretch the open step was chosen from.
     if (
-      moved || changed.has("changes") ||
+      moved || changed.has("changes") || changed.has("pieceId") ||
       (changed.has("open") && this.open === undefined)
     ) {
       void this.#list.run([undefined]);

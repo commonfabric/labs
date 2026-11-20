@@ -1009,6 +1009,14 @@ export class XRootView extends BaseView implements ShellApp {
     }
   }
 
+  /** Returns the id of the piece in view, where the view names one by id. */
+  #viewedPieceId(): string | undefined {
+    const view = this.app.view;
+    return "pieceId" in view && !("pieceSlug" in view) && view.pieceId
+      ? view.pieceId
+      : undefined;
+  }
+
   /**
    * Lets go of the open fork, where there is one, and deletes it. Resolves
    * once the deletion has been answered, and rejects never.
@@ -1098,6 +1106,7 @@ export class XRootView extends BaseView implements ShellApp {
               .space="${this.space}"
               .open="${this._openHistory}"
               .error="${this._historyError}"
+              .pieceId="${this.#viewedPieceId()}"
               .patternRestore="${this._patternRestore}"
               .changes="${this._historyChanges}"
             ></x-history-view>

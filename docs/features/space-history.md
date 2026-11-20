@@ -167,8 +167,9 @@ supplied its connection has no worker of its own to stand a second beside,
 and cannot fork.
 
 `RuntimeInternals.spaceHistory()` gives each step the pattern changes its
-pieces recorded: the source revisions of every piece the space lists, as a
-piece's own source history holds them
+pieces recorded: the source revisions of every piece the space lists and of
+each piece the caller names beside them, which the panel uses for the piece
+in view, as a piece's own source history holds them
 ([`../specs/piece-source-lifecycle.md`](../specs/piece-source-lifecycle.md)),
 each with the operation that made it, the pattern the piece pointed at
 afterwards, where that pattern came from, and whether the piece is on that
