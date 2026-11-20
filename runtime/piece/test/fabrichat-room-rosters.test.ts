@@ -106,6 +106,8 @@ describe("fabrichat-room-rosters", () => {
   let profile: Cell<unknown>;
   let cancelPeople: () => void;
   const rooms: Cell<unknown>[] = [];
+  /** A room the catalog lists from before the others, with no membership. */
+  let unadopted: Cell<unknown>;
 
   /** Creates a group naming the member by profile, and returns its room. */
   const createGroup = async (requestId: string): Promise<Cell<unknown>> => {
@@ -133,7 +135,7 @@ describe("fabrichat-room-rosters", () => {
   const readerRuns = (): Map<string, number> => {
     const runs = new Map<string, number>();
     for (const node of owners.runtime.scheduler.getGraphSnapshot().nodes) {
-      const room = rooms.find((each) =>
+      const room = [...rooms, unadopted].find((each) =>
         (node.reads ?? []).some((read) =>
           read.startsWith(`${each.space}/`) && read.includes("/roster")
         )
@@ -185,7 +187,32 @@ describe("fabrichat-room-rosters", () => {
     cancelPeople = owners.home.key("chatManager").key("people").asSchema(
       peopleSchema,
     ).sink(() => {});
+    // The first room's membership is dropped, so that the catalog lists it,
+    // from before the others, with no membership, as a catalog kept before
+    // the manager recorded memberships does; adopting it lists it again,
+    // keeping the time its catalog entry lists it from.
+    unadopted = await createGroup("g-unadopted");
     for (let i = 0; i < LISTED; i++) rooms.push(await createGroup(`g-${i}`));
+    {
+      const stored = owners.home.key("chatManager").key("roomMembership")
+        .resolveAsCell();
+      const values = await stored.asSchema(
+        {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { room: { type: "unknown", asCell: ["cell"] } },
+          },
+        } as const,
+      ).pull() as { room?: Cell<unknown> }[];
+      const index = values.findIndex((each) =>
+        each.room?.space === unadopted.space
+      );
+      const raw = stored.getRaw() as unknown[];
+      const tx = owners.runtime.edit();
+      stored.withTx(tx).setRaw(raw.filter((_, at) => at !== index) as never);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
     await owners.runtime.idle();
   });
 
@@ -201,14 +228,13 @@ describe("fabrichat-room-rosters", () => {
 
   it("runs only the newly listed room's reader when another room is listed", async () => {
     const before = readerRuns();
-    expect(before.size).toBe(LISTED);
+    for (const room of rooms) expect(before.get(room.space)).toBeGreaterThan(0);
 
     rooms.push(await createGroup("g-added"));
     await owners.runtime.idle();
 
     const after = readerRuns();
     const added = rooms[rooms.length - 1].space;
-    expect(after.size).toBe(LISTED + 1);
     expect(after.get(added)).toBeGreaterThan(0);
     for (const [space, runs] of before) expect(after.get(space)).toBe(runs);
   });
@@ -236,6 +262,28 @@ describe("fabrichat-room-rosters", () => {
       for (const [space, runs] of before) expect(after.get(space)).toBe(runs);
     } finally {
       asked();
+    }
+  });
+
+  it("runs only an adopted room's reader when a room listed from before the others is adopted", async () => {
+    // The room's reader from before its membership was dropped keeps the
+    // runs it made; what adopting it adds is what counts.
+    const before = readerRuns();
+
+    await send(owners.runtime, owners.home, ["chatManager", "joinRoom"], {
+      requestId: "adopt-unadopted",
+      room: owners.runtime.getCellFromLink(
+        unadopted.getAsNormalizedFullLink(),
+      ),
+    });
+    await owners.runtime.idle();
+
+    const after = readerRuns();
+    expect(after.get(unadopted.space)).toBeGreaterThan(
+      before.get(unadopted.space) ?? 0,
+    );
+    for (const [space, runs] of before) {
+      if (space !== unadopted.space) expect(after.get(space)).toBe(runs);
     }
   });
 

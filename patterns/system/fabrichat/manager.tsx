@@ -2259,6 +2259,35 @@ const RoomRoster = pattern<RoomRosterInput, RoomRosterOutput>(({ room }) => {
 });
 
 /**
+ * `entries`, in the order of their rooms' memberships in `memberships`: the
+ * order the rooms were listed in, a room listed since taking the end, whatever
+ * the time its entry lists it from. An entry no membership holds goes first.
+ */
+const inMembershipOrder = (
+  entries: readonly ChatIndexEntry[],
+  memberships: readonly RoomMembership[],
+): ChatIndexEntry[] => {
+  const placeOf = (entry: ChatIndexEntry) =>
+    memberships.findIndex((membership) =>
+      sameRoom(membership.room, entry.room)
+    );
+  return [...entries].sort((a, b) => placeOf(a) - placeOf(b));
+};
+
+/**
+ * `rosters`, the rosters of `ordered`'s rooms in its order, in the order
+ * `entries` lists the same rooms in.
+ */
+const inEntryOrder = (
+  entries: readonly ChatIndexEntry[],
+  ordered: readonly ChatIndexEntry[],
+  rosters: readonly (RoomRosterOutput | undefined)[],
+): (RoomRosterOutput | undefined)[] =>
+  entries.map((entry) =>
+    rosters[ordered.findIndex((each) => sameRoom(each.room, entry.room))]
+  );
+
+/**
  * The people the rosters in `rosters` list, other than `self`: by the
  * principal each profile's own label attests, the profiles attesting it, each
  * once, in the order the rosters, and then each roster, list them. A profile
@@ -2421,19 +2450,23 @@ export const FabriChatManagerCore = pattern<
         direct.get() ?? {},
       )
     );
-    // The listed rooms, oldest first. A map runs each entry by its place in
-    // the list, and `roomsForUser` lists a newly listed room first, which
-    // would move every reader on to another room; listed oldest first, a new
-    // room takes the place after the others, runs its own reader alone, and
-    // every other reader stays with its room. Keying the readers by each
-    // room's link instead would have the map follow every link to tell the
-    // rooms apart, which reads every room's root.
-    const roomsOldestFirstForUser = computed(
-      (): PerUser<ChatIndexEntry[]> => [...roomsForUser].reverse(),
+    // The listed rooms in the order they were listed in, as their
+    // memberships are recorded. A map runs each entry by its place in the
+    // list, and `roomsForUser` lists rooms by the time they were first
+    // listed, which puts a newly listed room first, or among the others for a
+    // room adopted from the catalog, which keeps its entry's time; either
+    // would move readers on to other rooms. In membership order a newly
+    // listed room takes the place after the others, runs its own reader
+    // alone, and every other reader stays with its room. Keying the readers
+    // by each room's link instead would have the map follow every link to
+    // tell the rooms apart, which reads every room's root.
+    const roomsListedOrderForUser = computed(
+      (): PerUser<ChatIndexEntry[]> =>
+        inMembershipOrder(roomsForUser, roomMembership.get() ?? []),
     );
     // Each listed room's roster, each read on its own and per user, as
     // `roomsForUser` is: a room's space is read under the reader's access.
-    const rostersForUser = roomsOldestFirstForUser.map((entry) =>
+    const rostersForUser = roomsListedOrderForUser.map((entry) =>
       RoomRoster.asScope("user")({ room: entry.room })
     );
     // The people the listed rooms' rosters hold, per user, as `roomsForUser`
@@ -2448,7 +2481,10 @@ export const FabriChatManagerCore = pattern<
     // itself.
     const peopleForUser = computed(
       (): PerUser<Record<string, ManagerProfileCell[]>> =>
-        peopleIn([...rostersForUser].reverse(), profileOwnerOf(myProfile)),
+        peopleIn(
+          inEntryOrder(roomsForUser, roomsListedOrderForUser, rostersForUser),
+          profileOwnerOf(myProfile),
+        ),
     );
     // Whether this session has asked for the people its rooms hold, by
     // opening a picker of them: the group control's, or a room's add-member
@@ -2463,14 +2499,17 @@ export const FabriChatManagerCore = pattern<
     // read it, and every roster with it, whether or not the session had
     // asked, since a derivation reads what it is derived from before it runs.
     const roomsAskedForSession = computed((): PerSession<ChatIndexEntry[]> =>
-      peopleAskedForSession.get() === true ? [...roomsOldestFirstForUser] : []
+      peopleAskedForSession.get() === true ? [...roomsListedOrderForUser] : []
     );
     const rostersForSession = roomsAskedForSession.map((entry) =>
       RoomRoster.asScope("user")({ room: entry.room })
     );
     const peopleForSession = computed(
       (): PerSession<Record<string, ManagerProfileCell[]>> =>
-        peopleIn([...rostersForSession].reverse(), profileOwnerOf(myProfile)),
+        peopleIn(
+          inEntryOrder(roomsForUser, roomsAskedForSession, rostersForSession),
+          profileOwnerOf(myProfile),
+        ),
     );
     const joining = joinRooms({});
     const delivering = deliverOffers({});

@@ -46,11 +46,12 @@ meeting it. `people`
 re-types each link where it reads that room's roster, in an instance of its
 own per room whose argument holds the handle, so no list the manager stores
 types a room as more than a handle; a reader that syncs such a list would walk
-into every room it names. The instances run over the listed rooms oldest
-first, each in its place there, so a newly listed room, which `rooms` lists
-first, takes the last place, runs its own instance, and leaves every other
-room's as it was; a room listed with an older `since` than another's moves the
-instances of the rooms after it.
+into every room it names. The instances run over the listed rooms in the
+order their memberships were recorded, each in its place there, so a newly
+listed room, whatever the time `rooms` lists it from, takes the last place,
+runs its own instance, and leaves every other room's as it was; a room
+forgotten, or listed again after it was forgotten, moves the instances of the
+rooms after it.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
