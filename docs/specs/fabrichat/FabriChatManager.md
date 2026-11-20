@@ -37,16 +37,20 @@ re-type the links to `ChatRoomLink`, which declares the rosters; nothing else
 reads them. `outgoingNotices` leaves those notices out in a derivation of its
 own, which also leaves out a notice of a room the catalog says is deleted, and
 which reads no room, so that a change to the catalog, such as a new room,
-derives the list again without reading any notice's room. Since the
-derivation that reads the rooms reads no catalog, it asks the memory server
-whether each notice's room's space is deleted, which opens that space; a
-notice of a room the catalog marks deleted is dropped from what the manager
-stores by its next request naming a room, so that the derivation stops
-meeting it. `people`
-re-types each link where it reads that room's roster, in an instance of its
-own per room whose argument holds the handle, so no list the manager stores
-types a room as more than a handle; a reader that syncs such a list would walk
-into every room it names.
+derives the list again without reading any notice's room. Each notice's room
+is read in an instance of its own per notice, so a room the reader can't read,
+such as one whose access list no longer names them, holds back only its own
+notice's answer, and that notice stays listed. Since those instances read no
+catalog, each asks the memory server whether its notice's room's space is
+deleted, which opens that space; a notice of a room the catalog marks deleted
+is dropped from what the manager stores by its next request naming a room, so
+that its instance stops asking. `people` re-types each link where it reads
+that room's roster, in an instance of its own per room, and each notice's
+instance re-types its notice's room the same way. Each instance's argument
+holds the handle, so no list the manager stores types a room as more than a
+handle; a reader that syncs such a list would walk into every room it names.
+The notices' instances run over the notices in the order the manager stores
+them, so a notice dropped moves the instances of the notices after it.
 
 The manager wishes for `#profile` twice. The user's wish, stored per user,
 supplies the profile `rooms`, `people` and `outgoingNotices` are derived from,
