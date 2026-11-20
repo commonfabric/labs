@@ -2992,6 +2992,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
+    pattern: "system/pattern-catalog/fake-catalog.tsx",
+    baselines: [
+      "20261115T040149Z-wpQ711UAcMmyeWw7",
+      "20261115T231252Z-zcGvv30wqSKYEMK7",
+      "20261116T011727Z-x7lnp7Wavmm2mwx8",
+      "20261119T015645Z-GeQ9sl5yAPihNip6",
+    ],
+    paths: ["argument.getItRequests", "result.getItRequests"],
+    reason:
+      "each request to get a pattern carries its own write policy and author label, so a host can check who asked and which handler wrote it; the list-wide policy cannot be changed in place",
+    record: "docs/history/pattern-catalog-get-it-entries-break.md",
+  },
+  {
     // `MentionablePiece.mentionable` lost its `{ get?: () => ... }`
     // alternative, which the recorded contracts hold as any object. The
     // stored value is a link to an exported array, so no stored piece holds an

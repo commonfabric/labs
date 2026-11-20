@@ -1628,15 +1628,15 @@ snapshots deleted only at or below a boundary; every document reconstructed on
 both files through the inspector's replay — a second implementation of the
 engine's rule — and compared, with the ACL document's `value` unchanged and a
 valid ACL and `compaction` the only member that differs, or its tombstone
-untouched; every table outside the history — `op_*`, `scheduler_basis`,
-`execution_outbox`, `blob_store`, the tables patterns created — identical in
-schema and contents; the content fingerprint; exactly the payloads the runs'
-windows reach hollowed, every marker's hash and length matching the backup's
-bytes, every commit row and every other commit column surviving; the single
-run's counts against its plan; and commit 1's payload byte-identical.
-`--verify-sample <n>` reconstructs every n-th document and checks every n-th
-marker, and skips the fingerprint: a quick pass during rehearsal, and a weaker
-claim.
+untouched; every table outside the history — `op_*`, `scheduler_basis`, the
+`currency_*` tables, `execution_outbox`, `blob_store`, the tables patterns
+created — identical in schema and contents; the content fingerprint; exactly the
+payloads the runs' windows reach hollowed, every marker's hash and length
+matching the backup's bytes, every commit row and every other commit column
+surviving; the single run's counts against its plan; and commit 1's payload
+byte-identical. `--verify-sample <n>` reconstructs every n-th document and
+checks every n-th marker, and skips the fingerprint: a quick pass during
+rehearsal, and a weaker claim.
 
 The dry-run report counts the instances matched and truncated, the boundaries
 that become a `set`, the revision and snapshot rows and bytes that would go, the
@@ -3486,6 +3486,22 @@ the lineage of `<path>` rather than of the file deployed, for a deploy of a copy
 of it (a snapshot in a temporary directory), so the copy continues the
 original's history.
 
+An agent deploying a pattern it wrote for the person (a service building one for
+their piece) says so with `--version-origin agent` on `piece new <file>` or
+`piece setsrc`: the version is kept as agent work, so the person's sharing
+setting treats it as one, in the history of the piece it is deployed to rather
+than of the file, which for such a deploy is a staged copy. Its description and
+hashtags come from the doc comment of the program the deploy committed, not from
+the staged entry, which may be gone by the time the version is recorded.
+`--version-description <text>` says what the version does, in place of that doc
+comment's description (its hashtags stay). `--built-from <patternId>` names the
+index pattern the source was built from, as `piece getsrc` notes it for a file
+it writes: someone else's is credited as the remix's origin on the history's
+first version, and that pattern deployed unchanged keeps no version. None of
+them goes with `--no-index-version`, `setsrc --origin` or `new --from-index`
+(none of which keeps a version), and `--version-origin` does not go with
+`--version-entry`.
+
 `cf pattern checkpoint <entry> --cell <piece>` keeps what a piece runs now as a
 private version of the entry's lineage, without deploying: the pattern the piece
 points at, with its source, so it is exactly what was deployed. It is shared as
@@ -3556,12 +3572,29 @@ predecessor (`priorPatternId`), so the new version keeps the old one's standing.
 A file `cf piece getsrc` wrote from a piece that `cf piece new --from-index`
 created is published as a remix of that pattern (`remixedFrom`), or as a new
 version of it when it was the caller's own; `--remixed-from` names the source
-where `cf` has no record. Sharing then requests a listing. Past the index's
-daily limit it says when the limit resets, and running the same command then
-requests it again. The next step it prints is deploying the pattern with
-`cf piece new --from-index <id>`, or opening it in a loom with
-`/deploy index:<id>`. A listed pattern moves from Unvetted to Main once its
-author opens it in a loom.
+where `cf` has no record. Sharing then shares that version on **beta**: once the
+index's check passes it becomes the lineage's next numbered shared version (1,
+2, 3…), which anyone with its link can open, and nobody finds in search or a
+listing. Past the index's daily limit it says when the limit resets, and running
+the same command then shares it again. The next step it prints is deploying the
+pattern with `cf piece new --from-index <id>`, or opening it in a loom with
+`/deploy index:<id>`. Once stable, a listed pattern moves from Unvetted to Main
+once its author opens it in a loom.
+
+`cf pattern stable <entry>` makes the newest shared version **stable**: what
+search, listings and a plain link give. It passed the check when it was shared,
+so no new source is exposed; only who can find it changes. A share still being
+checked is made stable instead, so it is findable once it passes and an older
+number never becomes stable by being the newest so far. Both channels only move
+forward: to go back, roll back, share again (a new number), then make that
+stable. `cf pattern history` shows each version's shared number and channel.
+
+`cf pattern link <entry>` prints a link that names the pattern by its lineage's
+pseudonym, which shows the person's name only on a lineage published under it:
+`<pseudonym>` for stable (beta when nothing is stable yet), `--beta` for
+`<pseudonym>@beta`, and `--number <n>` for `<pseudonym>@<n>`, exactly version n,
+which never changes. It checks the link with the index first, so it never prints
+one that opens nothing.
 
 `cf pattern unshare <entry>` takes the pattern out of others' searches and
 listings and shares no later version until `cf pattern share` runs again. A
@@ -3570,7 +3603,8 @@ version already shared stays readable by its id, so imports of it keep working.
 ### Publishing under a name
 
 `cf pattern publish <entry file>` shares the pattern as `cf pattern share` does,
-then names the person as its author under one of their Common Fabric profiles
+but on stable, since a published pattern is meant to be found, then names the
+person as its author under one of their Common Fabric profiles
 (`--profile <space>`, the one `#profile` answers with by default). Only that
 lineage is named; the person's other lineages stay anonymous and are not linked
 to it. Without `--as "<the profile's name>"` it prints one line saying the name

@@ -325,22 +325,22 @@ async function withGitHub(
       const wanted = url.searchParams.get("status");
       const page = Number(url.searchParams.get("page") ?? 1);
       const perPage = Number(url.searchParams.get("per_page") ?? 30);
+      const whole = (workflow.runs ?? [])
+        .map((run, index) => ({ run, index }))
+        .filter(({ run }) =>
+          branch === null || (run.branch ?? "main") === branch
+        )
+        .filter(({ run }) =>
+          wanted === null || (run.status ?? "completed") === wanted ||
+          run.conclusion === wanted
+        )
+        .slice(
+          branch === null && wanted === null ? 0 : workflow.laggingRuns ?? 0,
+        );
       return Promise.resolve(Response.json({
-        workflow_runs: (workflow.runs ?? [])
-          .map((run, index) => ({ run, index }))
-          .filter(({ run }) =>
-            branch === null || (run.branch ?? "main") === branch
-          )
-          .filter(({ run }) =>
-            wanted === null || (run.status ?? "completed") === wanted ||
-            run.conclusion === wanted
-          )
-          .slice(
-            branch === null && wanted === null
-              ? 0
-              : workflow.laggingRuns ?? 0,
-          )
-          // A page holds as many runs as it was asked for, newest first.
+        total_count: whole.length,
+        // A page holds as many runs as it was asked for, newest first.
+        workflow_runs: whole
           .slice((page - 1) * perPage, page * perPage)
           .map(({ index }) => runJson(runs[1], workflow, index)),
       }));

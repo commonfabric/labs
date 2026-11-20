@@ -347,6 +347,15 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server advertises `markedSplicesV1`, so
+  // that clients send array changes as marked splices: on for "true" or "1",
+  // off for "false", "0" or no setting, and any other spelling refuses
+  // startup. Turn it on only once every serving worker that may read this
+  // deployment's rows, a rollback's included, reads marked splices. See
+  // docs/development/EXPERIMENTAL_OPTIONS.md, `markedSplicesV1`.
+  MEMORY_MARKED_SPLICES: z.enum(["true", "1", "false", "0"]).default(
+    "false",
+  ).transform((v) => v === "true" || v === "1"),
   // Whether this deployment's memory server stores an admitted commit's reads
   // as a digest where nothing reads them afterward
   // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or
@@ -380,6 +389,18 @@ export const EnvSchema = z.object({
   // in deployment this is the process's bound).
   MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES: z.coerce.number().int()
     .positive().optional(),
+
+  // The most slots one client message may stand for on the memory v2 server
+  // (runtime/memory/v2.ts, MAX_UNTRUSTED_MESSAGE_SLOTS, default 1,000,000):
+  // the places its values fill or leave absent, an array counting its length
+  // and a record its members. It bounds the work one message can cost the
+  // server. Raise it only for a bounded operation that needs more, such as
+  // moving the source of a holder with thousands of members, and unset it
+  // afterwards. It can only raise the default (env.test.ts holds the minimum
+  // to the constant): a direct client sizes its staged watch-set parts by the
+  // default, so a lower limit would refuse a set it sends in parts.
+  MEMORY_UNTRUSTED_MESSAGE_SLOTS: z.coerce.number().int().min(1_000_000)
+    .optional(),
 
   // Set ONLY when a trusted reverse proxy sits in front of this process and
   // overwrites X-Forwarded-For. Rate limiting keys on the real TCP peer by

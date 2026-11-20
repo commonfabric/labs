@@ -73,9 +73,8 @@ import {
   summarizeSpace,
   valueAsIdentity,
 } from "@commonfabric/state-inspector";
-import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { maxOf } from "@commonfabric/collections/math";
-import { loadIdentity } from "../lib/identity.ts";
+import { firstPartySigner } from "../lib/first-party.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 
 function humanSize(bytes: number): string {
@@ -341,9 +340,7 @@ async function remoteSigner(
 ): Promise<RequestSigner | undefined> {
   const path = options.identity ?? Deno.env.get("CF_IDENTITY");
   if (!path) return undefined;
-  const identity = await loadIdentity(path);
-  return ({ url, method }) =>
-    signFirstPartyHttpRequest({ url: new URL(url), method, signer: identity });
+  return await firstPartySigner(path);
 }
 
 // Map a token (full DID, prefix, or substring) to a full space DID on a remote,
