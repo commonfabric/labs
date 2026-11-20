@@ -9355,3 +9355,20 @@ generated from scratch, and none of a `flatMap`.
      undone in the part documents as in the store, with no test of its own; a
      part document or a chunk under concurrent writers, which the executor does
      not have.
+536. **W6 over a value whose type declares no structure** (FA §5.2). FA states
+     W6 by type: a path that enters a recursive type a second time widens below
+     the position of the second entry. A body that walks a value of type
+     `unknown` through helpers, as `patterns/apps/weekly-calendar/view-walk.ts`
+     walks a view, reaches no type that says where it re-enters, and recorded
+     every interleaving of `children` and `*` its composed calls reach
+     (`headerOf`: 28,799 read entries). Chosen, and needing a rule in FA: a path
+     widens, as below a second entry, where it ends in a sequence of segments
+     repeated at once that holds a key, or in three `*` at once (`square_end` in
+     `src/footprint.rs`), and where a key is read again on a value whose type
+     declares no structure for it, which is no type, `unknown`, or an object
+     type with an index signature (`holds_key`). The entry is `value` at the
+     position, without a last `*`. On a declared recursive type W6 by type
+     decides first. Both rules are wider than W6 and never narrower: a path
+     through no recursive type that repeats a sequence with a key, or that holds
+     three `*` at once, widens where W6 does not. Over the corpus no plan
+     changed; `headerOf` records 45 entries.
