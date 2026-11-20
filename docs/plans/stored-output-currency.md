@@ -313,6 +313,9 @@ wrong.
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.
+  [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+  under "Computations that run without demand", is the plan for it and for
+  a materializer's envelope.
 - **A view plan names no producers for a piece that is not started**
   (`viewExecutionNodes`). A browser client renders such a piece from the
   store, checked on a counter in the shell; a pattern whose view depends on

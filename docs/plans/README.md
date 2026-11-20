@@ -41,7 +41,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
   changed or its producer became stale, by a trigger that carries nothing
   and a pull from a position, and demand travels upstream only along stale
   edges; with it, a wish's own computations are recorded under an identity,
-  and a slice that read the interval clock expires.
+  a slice that read the interval clock expires, and a computation the
+  scheduler runs without demand is left unrun until something can observe
+  what it would write.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the

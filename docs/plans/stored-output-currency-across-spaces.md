@@ -27,6 +27,11 @@ plan takes each:
   that read it is vouched for, and that is the defect: nothing marks it when
   the interval passes while no runtime holds the timer.
 
+A fourth matter comes with leaving more pieces unstarted, and with marks
+that travel between spaces: a computation the scheduler runs whether or not
+anything reads it, because it cannot list who does. "Computations that run
+without demand" below says when such a computation has to run.
+
 The rule of the first plan holds here too: a start that was not needed is
 acceptable, and a stored value served as current when it is not is the
 failure to design out.
@@ -162,6 +167,10 @@ What a reader does with a trigger depends on what is waiting on it:
 - Where an armed reader of its own registered an instance that a slice
   reading that source computes, it triggers that reader in turn, without
   pulling: something upstream of that instance may have moved.
+- Where a slice reading that source holds a computation whose writes are
+  not bounded ("Computations that run without demand"), it triggers every
+  armed reader of its own, and pulls at once if a session is watching the
+  space.
 - Otherwise it does nothing more, and pulls at its next judgment.
 
 So a source that changes often tells each dormant reader once and then
@@ -276,6 +285,78 @@ tick. Its record names that time, a judgment refuses a slice past it, and a
 loop that holds a root unstarted on such a slice loads the root when the
 time comes. The start runs the wish, which holds the timer from then on.
 
+## Computations that run without demand
+
+The scheduler keeps two kinds of computation live whether or not anything
+reads what they write: a materializer, which declares an envelope it may
+write anywhere within, and an effect
+(`docs/specs/scheduler-v2/README.md` §4.3). A materializer runs whenever an
+input of it changes because the scheduler cannot list who reads inside its
+envelope. That holds while its piece is started. A piece that is not
+started runs none of its computations, so a change to a materializer's
+input while its piece is unstarted leaves what it would have written as it
+was, for a reader in another piece to read. The index does not make that
+worse, and it is the place to close it.
+
+Running each such computation on every change of its inputs would close it
+at the cost this plan is built to avoid: a dormant space would pull from a
+source that changes often on every trigger. The rule here is narrower:
+
+**A computation that runs without demand may be left unrun for as long as
+nothing can observe what it would write.**
+
+Everything read out of a space passes that space's memory server: a
+session's watch, a judgment, and another space's pull. So for a computation
+that writes only into its own space, the space is the demand cone the
+scheduler could not draw. What has to happen before one of those three
+returns depends on how well the computation's destinations are known.
+
+- **A declared envelope in its own space.** The envelope's documents are
+  among the piece's write rows. A marked slice then marks `1` each slice
+  that reads one of them, moves the rows of those another space registered
+  to "stale upstream", and the piece is started when something in the
+  envelope is demanded, by the first plan's stage 5. Nothing coarser is
+  needed. The snapshot takes write rows from the scheduling write surface,
+  which the scheduler keeps apart from envelopes, so whether an envelope is
+  among them today is the first thing to establish.
+- **Writes that are not bounded, in its own space.** A marked slice with
+  such a computation leaves the space **unsettled**. Before a judgment in
+  the space or a pull from it returns, the loop starts that piece and lets
+  it settle. Until one of those happens nothing runs. A session watching
+  the space observes it all the time, so there the computation runs on each
+  change, as it does today in a started piece.
+- **A declared destination in another space.** The registration of a read
+  has a mirror: the writing space registers, with the destination's owner,
+  that a piece of its writes that instance. The destination then holds a
+  write row whose producer is in another space, marks its readers `1` while
+  the writing space reports that producer stale, and sends demand for it
+  back the way a reading space does.
+- **A destination in another space that is not declared.** Open, below.
+
+The index tells a bounded computation from an unbounded one by what it
+did, not by what it declared: when a record is taken, what each run wrote
+is compared with the piece's declared write surface and envelopes, and a
+computation that wrote outside them is recorded as unbounded.
+
+An effect is left as it is. It runs while its piece is started, and a mark
+on a demanded piece's slice starts the piece.
+
+### A write into another space at an undeclared destination
+
+No rule above covers it, because what could observe the write is behind a
+memory server that knows nothing of the writer. It is not refused. Today a
+piece with a computation that declares a write in another space has no
+slice vouched for, so it starts whenever it is demanded, and runs for
+nobody while it is not; that stays as it is until this is decided.
+
+What to weigh, once there are numbers:
+
+- waking such a piece on each change of its inputs, with a throttle;
+- counts of how often a run that only this rule caused wrote anything, and
+  how much work that write started elsewhere, to say whether the wake pays
+  for itself;
+- requiring the destination to be declared.
+
 ## What changes in the specifications
 
 - `serving-loop.md` §3b: the currency index gains rows about instances in
@@ -290,6 +371,9 @@ time comes. The start runs the wish, which holds the timer from then on.
   marks the reader's slice.
 - `builtins.md` §5: what identity a wish's own computations carry, and the
   expiry of a slice that read the interval clock.
+- `docs/specs/scheduler-v2/README.md` §4.3: a materializer's standing
+  demand holds within a started piece, and outside one is carried by the
+  index as above.
 - `runtime/runner/src/cfc/` is not expected to change. Whether a producer's
   staleness, crossing from one space's memory server to another's, is a
   flow Contextual Flow Control must rule on is settled through
@@ -320,6 +404,7 @@ time comes. The start runs the wish, which holds the timer from then on.
   cannot be lost. Between hosts it can, so the promise an armed reader
   rests on needs a bound: a connection known to be live, or a lease the
   reader renews.
+- **A write into another space at an undeclared destination**, as above.
 - **The first change after many readers armed.** A reader that was told is
   not told again until it pulls, so a space that changes often pays for
   each dormant reader once. A profile edited after its owner visited many
@@ -346,8 +431,14 @@ time comes. The start runs the wish, which holds the timer from then on.
    armed reader. From here `skip` acts on a slice that read another space.
 5. **Demand across spaces**, with its ruling, built together with the first
    plan's stage 5, which is the same mechanism within one space.
-6. **The interval clock's expiry.**
-7. **Measure** a social space whose pieces read each viewer's profile, with
+6. **Computations that run without demand.** Envelopes among the write
+   rows; a computation recorded as unbounded from what it wrote; the
+   unsettled space, settled before a judgment in it or a pull from it
+   returns; the writer's registration for a declared destination in another
+   space; and the counts the open question needs. Built on step 5, which
+   starts a producer.
+7. **The interval clock's expiry.**
+8. **Measure** a social space whose pieces read each viewer's profile, with
    two viewers and with many, for the starts saved and for what a change to
    one profile costs its readers.
 
@@ -397,6 +488,24 @@ For the serving loop, in `runtime/runner/test/executor/`:
     loaded when the interval passes.
 14. Two pieces whose wishes share a hashtag resolver are each recorded
     clean, and a change to what the resolver read marks both.
+
+For computations that run without demand, in both places:
+
+15. A slice that reads a document inside another piece's declared envelope
+    is marked `1` when that piece's slice is marked, and cleared when the
+    piece ran and wrote nothing the slice read.
+16. A change to an input of an unstarted piece with a materializer,
+    followed by a demand for a reader of its envelope in another piece,
+    starts the materializer's piece, and the session reads what it wrote.
+17. A computation that wrote outside its declared surface is recorded as
+    unbounded. A change to its input while its piece is unstarted and no
+    session watches the space starts nothing, and the next judgment in the
+    space starts the piece before it returns.
+18. A pull from an unsettled space returns after that space has settled,
+    and a trigger that reaches it while it is dormant is passed to each of
+    its armed readers without a pull.
+19. A reader of an instance that a piece in another space declares it
+    writes is marked `1` while that piece's slice is marked there.
 
 ## Related
 
