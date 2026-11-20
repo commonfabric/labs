@@ -26,6 +26,9 @@ export type ReportKind = "broke" | "wish";
 /** The kinds `addReport` accepts. */
 export const REPORT_KINDS: readonly string[] = ["broke", "wish"];
 
+/** What a report id is: exactly 32 lowercase hex characters. */
+export const REPORT_ID = /^[0-9a-f]{32}$/;
+
 /** The most characters a report's `words` may hold. */
 export const MAX_WORDS = 4000;
 
@@ -44,7 +47,12 @@ export interface ReportStructured {
 
 /** A report as the board stores it. */
 export interface ReportRecord {
-  /** The report's name, unique on the board, such as `quiet-heron-41`. */
+  /** The report's id, unique on the board: 32 lowercase hex characters the
+   * sender derives, so a resend carries the same one. */
+  id: string;
+
+  /** The report's name, a label for people such as `quiet-heron-41`. Two
+   * senders may use the same one. */
   name: string;
   kind: ReportKind;
 
@@ -70,7 +78,7 @@ export type ReportsCell = Writable<StoredReport[] | Default<[]>>;
 
 /**
  * The cell holding the Topic each linked report was filed under, by report
- * name. Kept beside the reports rather than in them, so that a report stays
+ * id. Kept beside the reports rather than in them, so that a report stays
  * written by its sender alone.
  */
 // deno-lint-ignore ban-types
@@ -89,6 +97,7 @@ export interface AddReportEvent {
   /** The agent sending the report, as Topics verbs take one. The author is
    * the principal whose key signs the call. */
   agentName: string;
+  id: string;
   name: string;
   kind: string;
   words?: string;
@@ -96,7 +105,8 @@ export interface AddReportEvent {
 }
 
 export interface AddReportResult {
-  /** The name the report was stored under. */
+  /** The id the report was stored under. */
+  id: string;
   name: string;
 }
 
@@ -104,20 +114,21 @@ export interface LinkTopicEvent {
   /** The agent linking the report, such as the triage command's. */
   agentName: string;
 
-  /** The report's name. */
-  name: string;
+  /** The report's id. */
+  id: string;
 
   /** The Topic the report was filed under, as an address. */
   topic: string;
 }
 
 export interface LinkTopicResult {
-  name: string;
+  id: string;
   topic: string;
 }
 
 /** One row of the board's index: a report's scalars and its Topic. */
 export interface ReportRow {
+  id: string;
   name: string;
   kind: string;
   source: string;
@@ -134,7 +145,7 @@ export interface FeedbackReportsOutput {
   /** The reports, in the order they arrived. */
   reports: ReportRecord[];
 
-  /** The Topic each linked report was filed under, by report name. */
+  /** The Topic each linked report was filed under, by report id. */
   // deno-lint-ignore ban-types
   topicOf: Default<Record<string, string>, {}>;
 
@@ -166,8 +177,8 @@ export const rejectReport = (
 };
 
 /**
- * Why `addReport` refuses `event` on a board already holding reports named
- * `taken`, as a code and a reason, or `undefined` when it accepts it.
+ * Why `addReport` refuses `event` on a board already holding reports with
+ * the ids `taken`, as a code and a reason, or `undefined` when it accepts it.
  */
 export function addReportRefusal(
   event: Partial<AddReportEvent>,
@@ -177,6 +188,12 @@ export function addReportRefusal(
   const structured = event.structured;
   if (typeof event.agentName !== "string" || !event.agentName.trim()) {
     return { code: "unsigned", reason: "agentName must be non-blank" };
+  }
+  if (typeof event.id !== "string" || !REPORT_ID.test(event.id)) {
+    return {
+      code: "bad-id",
+      reason: "id must be 32 lowercase hex characters",
+    };
   }
   if (!name) return { code: "missing-name", reason: "name is required" };
   if (typeof event.kind !== "string" || !event.kind) {
@@ -203,10 +220,10 @@ export function addReportRefusal(
       reason: `words must be at most ${MAX_WORDS} characters`,
     };
   }
-  if (taken.includes(name)) {
+  if (taken.includes(event.id)) {
     return {
-      code: "duplicate-name",
-      reason: `a report named ${name} is already on the board`,
+      code: "duplicate-id",
+      reason: `a report with id ${event.id} is already on the board`,
     };
   }
   return undefined;
@@ -224,19 +241,20 @@ const addReportHandler = handler<
   AddReportState,
   AddReportResult
 >((event, { reports }) => {
-  const taken = reports.get().map((report) => report.name);
+  const taken = reports.get().map((report) => report.id);
   const refusal = addReportRefusal(event, taken);
   if (refusal) rejectReport("addReport", refusal.code, refusal.reason);
   const name = event.name.trim();
   const kind: ReportKind = event.kind === "wish" ? "wish" : "broke";
   reports.push({
+    id: event.id,
     name,
     kind,
     ...(event.words === undefined ? {} : { words: event.words }),
     structured: event.structured,
     createdAt: Date.now(),
   });
-  return { name };
+  return { id: event.id, name };
 });
 
 interface LinkTopicState {
@@ -251,35 +269,39 @@ const linkTopicHandler = handler<
   LinkTopicEvent,
   LinkTopicState,
   LinkTopicResult
->(({ agentName, name, topic }, { reports, topicOf }) => {
+>(({ agentName, id, topic }, { reports, topicOf }) => {
   if (typeof agentName !== "string" || !agentName.trim()) {
     rejectReport("linkTopic", "unsigned", "agentName must be non-blank");
   }
-  const reportName = typeof name === "string" ? name.trim() : "";
+  const reportId = typeof id === "string" ? id : "";
   const topicAddress = typeof topic === "string" ? topic.trim() : "";
-  if (!reportName) {
-    rejectReport("linkTopic", "missing-name", "name is required");
+  if (!REPORT_ID.test(reportId)) {
+    rejectReport(
+      "linkTopic",
+      "bad-id",
+      "id must be 32 lowercase hex characters",
+    );
   }
   if (!topicAddress) {
     rejectReport("linkTopic", "missing-topic", "topic is required");
   }
-  if (!reports.get().some((report) => report.name === reportName)) {
+  if (!reports.get().some((report) => report.id === reportId)) {
     rejectReport(
       "linkTopic",
       "unknown-report",
-      `no report named ${reportName} is on the board`,
+      `no report with id ${reportId} is on the board`,
     );
   }
-  const linked = topicOf.get()[reportName];
+  const linked = topicOf.get()[reportId];
   if (linked !== undefined && linked !== topicAddress) {
     rejectReport(
       "linkTopic",
       "already-linked",
-      `${reportName} is already filed under ${linked}`,
+      `${reportId} is already filed under ${linked}`,
     );
   }
-  if (linked === undefined) topicOf.key(reportName).set(topicAddress);
-  return { name: reportName, topic: topicAddress };
+  if (linked === undefined) topicOf.key(reportId).set(topicAddress);
+  return { id: reportId, topic: topicAddress };
 });
 
 /** The board's index rows, joining each report with its Topic. */
@@ -290,8 +312,9 @@ const indexOf = lift((
   },
 ): ReportRow[] =>
   (reports ?? []).map((report) => {
-    const topic = topicOf?.[report.name];
+    const topic = topicOf?.[report.id];
     return {
+      id: report.id,
       name: report.name,
       kind: report.kind,
       source: report.structured?.source ?? "",
