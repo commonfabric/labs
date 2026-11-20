@@ -129,7 +129,9 @@ async function followResultCellChain(
  * source is thrown, wrapped to name the source unless it is an abort or a
  * `PieceStateMovedError`, so `owner` does not start without it.
  * `EnsurePieceOptions.onSourceRoot` is told of each source the walk finds,
- * running or not.
+ * running or not. `opened` says that `owner` is a root a caller named on its
+ * own, which can carry a `result` backlink, rather than the end of a `result`
+ * chain, which carries none.
  */
 async function startInputSources(
   runtime: Runtime,
@@ -137,11 +139,12 @@ async function startInputSources(
   options: EnsurePieceOptions | undefined,
   visited: Set<string>,
   unstarted?: { source: NormalizedFullLink; verdict: EnsurePieceVerdict }[],
+  opened = false,
 ): Promise<EnsurePieceVerdict | undefined> {
   const signal = options?.signal;
   const required = options?.sourcesRequired === true;
   const sources = options?.enclosingSourcesOnly === true
-    ? await enclosingPieceOf(runtime, owner, signal)
+    ? await enclosingPieceOf(runtime, owner, signal, opened)
     : await inputSourcesOf(runtime, owner, signal);
   for (const source of sources) {
     const key = rootKey(source);
@@ -286,21 +289,25 @@ async function inputSourcesOf(
 /**
  * Helper for `startInputSources()`, which returns the piece that encloses the
  * piece at `owner`, as a list of that one piece, or an empty list where no
- * piece does. A root carrying a `result` backlink names it outright
- * ({@link builderOf}). Otherwise it is the piece recording `owner` as the
- * output of a nested node of its own graph ({@link enclosesAsNested}), among
- * the pieces whose argument or internal documents `owner`'s argument links
- * into (`inputSourcesOf()`), each asked at once; a link to another piece's
- * result root names no candidate, so the producers a piece is wired to are
- * not asked.
+ * piece does. With `opened`, a root carrying a `result` backlink names it
+ * outright ({@link builderOf}); any other `owner` is the end of its `result`
+ * chain, so it carries none. Otherwise the enclosing piece is the one
+ * recording `owner` as the output of a nested node of its own graph
+ * ({@link enclosesAsNested}), among the pieces whose argument or internal
+ * documents `owner`'s argument links into (`inputSourcesOf()`), each asked at
+ * once; a link to another piece's result root names no candidate, so the
+ * producers a piece is wired to are not asked.
  */
 async function enclosingPieceOf(
   runtime: Runtime,
   owner: OwningRootAddress,
   signal: AbortSignal | undefined,
+  opened: boolean,
 ): Promise<NormalizedFullLink[]> {
-  const builder = await builderOf(runtime, owner, signal);
-  if (builder !== undefined) return [builder];
+  if (opened) {
+    const builder = await builderOf(runtime, owner, signal);
+    if (builder !== undefined) return [builder];
+  }
   // TODO(danfuzz): Find the piece whose handler made `owner` as well, once a
   // child a handler made records its maker where this can read it; until then
   // such a child starts without its maker, and its handlers read inputs
@@ -617,9 +624,11 @@ export type EnsurePieceOptions = {
    * piece, the instances whose graphs set it up as a nested node, and theirs in
    * turn, not every piece whose output its argument links to. An instance a
    * list builtin (`map`, `filter`, `flatMap`) builds for an element carries a
-   * `result` backlink on its root to the piece whose graph holds the builtin,
-   * and the walk takes the first piece that backlink chain reaches as the
-   * enclosing one. A nested node's root stores no pointer to its enclosing
+   * `result` backlink on its root to the piece whose graph holds the builtin.
+   * An open of such an instance (`startWithInputSources()`) takes the first
+   * piece that backlink chain reaches as the enclosing one; a walk from a
+   * link starts at the end of the link's `result` chain, past the instance. A
+   * nested node's root stores no pointer to its enclosing
    * instance; what the runtime stores is the other direction. Setup records
    * each nested node's output among the enclosing instance's `internal`
    * documents, as a document whose whole value is a link to the nested
@@ -1026,6 +1035,7 @@ async function startEnclosingFollowingOrigins(
       },
       new Set([rootKey(root)]),
       unstarted,
+      true,
     );
     for (const { source, verdict } of unstarted) {
       openLogger.warn("input-sources", () => [
