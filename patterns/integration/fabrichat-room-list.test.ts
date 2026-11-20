@@ -1329,6 +1329,130 @@ describe("fabrichat-room-list", () => {
   });
 
   //
+  // A container's conversation
+  //
+
+  describe("a container's conversation once the catalog archives its container", () => {
+    // Nia keeps a room of her own, and joins the chat a container declares in
+    // its own space, as a loom's chat is, which her catalog lists under the
+    // `loom` kind. She then archives the container in her catalog.
+
+    let ownRoom: DID;
+    let containerSpace: DID;
+
+    /** The spaces of the rooms her manager listed before the archive. */
+    let listedBefore: DID[];
+
+    let client: Client;
+    let rows: Row[];
+
+    beforeAll(async () => {
+      const made = await personWithRooms("nia", 1);
+      ownRoom = made.rooms[0];
+      const member = await openMember(server.url, made.person, 0);
+      try {
+        const runtime = member.controller.runtime;
+        containerSpace = await runtime.createSpace({});
+        const tx = runtime.edit();
+        const room = runtime.getCell(
+          containerSpace,
+          "declared conversation",
+          undefined,
+          tx,
+        );
+        room.set({ about: { kind: "group", title: "Workshop chat" } });
+        const container = runtime.getCell<Record<string, unknown>>(
+          containerSpace,
+          "container",
+          undefined,
+          tx,
+        );
+        container.set({ chatRoom: room });
+        runtime.getSpaceCell(containerSpace, undefined, tx).key(
+          "defaultPattern",
+        ).set(container);
+        const { error } = await tx.commit().settled;
+        if (error) throw new Error(`Making the container: ${error.message}`);
+
+        const registered = await sendVerbEvent(
+          member.home.key("registerSharedSpace"),
+          {
+            space: containerSpace,
+            host: normalizeSpaceHost(new URL(runtime.apiUrl).origin).origin,
+            kind: "loom",
+            title: "Workshop",
+          },
+        );
+        if (registered.status !== "committed") {
+          throw new Error("Registering the container did not commit");
+        }
+        const manager = member.home.key("chatManager");
+        await sendVerbEvent(manager.key("joinRoom"), {
+          room,
+          container,
+          requestId: "nia-join",
+        });
+        const joined = await member.waits.until(
+          "the join of the container's chat",
+          manager.key("requests").key("nia-join") as Cell<
+            { status?: string; reason?: string } | undefined
+          >,
+          (value) => value?.status !== undefined,
+        );
+        if (joined.status !== "done") {
+          throw new Error(`The manager refused the join: ${joined.reason}`);
+        }
+        await settle(member.controller);
+        const listed = await member.waits.until(
+          "a list holding the container's chat",
+          manager.key("rooms").asSchema<Row[]>({ type: "array", items: ROW }),
+          (value) => (value?.length ?? 0) >= 2,
+        );
+        listedBefore = listed.map((row) => row.room.space as DID);
+
+        const revision = await manager.key("sharedSpaceCatalog").key("entries")
+          .key(containerSpace).key("revision").asSchema<string>({
+            type: "string",
+          }).pull();
+        const archived = await sendVerbEvent(
+          member.home.key("changeSharedSpaceMembership"),
+          {
+            space: containerSpace,
+            id: "nia-archive",
+            expectedRevision: revision,
+            state: "archived",
+          },
+        );
+        if (archived.status !== "committed") {
+          throw new Error("Archiving the container did not commit");
+        }
+        await settle(member.controller);
+      } finally {
+        await closeMember(member);
+      }
+      client = await bootClient({ person: made.person });
+      rows = await listRooms(client, 1);
+    });
+
+    afterAll(async () => {
+      await client?.controller.dispose();
+    });
+
+    it("lists the container's chat before the container is archived", () => {
+      expect(listedBefore.sort()).toEqual([ownRoom, containerSpace].sort());
+    });
+
+    it("lists only the person's own room once the container is archived", () => {
+      expect(rows.map((row) => row.room.space)).toEqual([ownRoom]);
+    });
+
+    it("opens no session to the container's space, and receives no document from it", () => {
+      expect(openedOf(client, [containerSpace])).toEqual([]);
+      expect(arrivedIn(client, [containerSpace])).toEqual([0]);
+    });
+  });
+
+  //
   // Opening a room that is gone
   //
 
