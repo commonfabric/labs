@@ -120,6 +120,7 @@ export type LabelPlan = {
   }[];
   templates?: Template[];
   bindings?: { handler?: { body?: number } }[];
+  slots?: { root: { kind: string }; path: string[]; observes: string }[];
 };
 
 /** The record of a write, as the write record names it. */
@@ -163,6 +164,11 @@ export type OracleCheck = {
   /** How the evaluator's label stands to the stored one, on each axis. */
   confidentiality?: Relation;
   integrity?: Relation;
+  /**
+   * The bindings of the record that cannot hold the label of what their
+   * slot reads (`unsoundBindings`).
+   */
+  unsound: string[];
 };
 
 /** The template and keep flag of the record a write names. */
@@ -474,6 +480,11 @@ export const checkWrites = (
   runtime: Runtime,
   plan: LabelPlan,
   writes: readonly RecordedPlanWrite[],
+  /**
+   * The clause of each input that the scenario gave one no other input
+   * has (`generateInputs`), as text, by the input's name.
+   */
+  inputClauses: ReadonlyMap<string, string> = new Map(),
 ): OracleCheck[] => {
   const tx = runtime.edit();
   try {
@@ -507,6 +518,32 @@ export const checkWrites = (
         confidentiality: [...label?.confidentiality ?? []],
         integrity: observes === "followRef" ? [] : [...label?.integrity ?? []],
       };
+    };
+
+    /**
+     * The label of a binding to addresses: every chain of it, as
+     * `slotLabel` of `runtime/runner/src/cfc/plan-labels.ts` reads them.
+     */
+    const chainsLabel = (
+      binding: Extract<SlotBinding, { chain: unknown }>,
+    ): Label => {
+      const { chain, observes } = binding;
+      const clauses: Atom[][] = [];
+      let integrity: Atom[] | undefined;
+      for (const each of [chain, ...(binding.below ?? [])]) {
+        if (each.length === 0) throw new NotEvaluated("an empty chain");
+        for (const link of each.slice(0, -1)) {
+          clauses.push(observed(link, "followRef").confidentiality);
+        }
+        const last = observed(each[each.length - 1], observes);
+        clauses.push(last.confidentiality);
+        const atoms = last.integrity as Atom[];
+        const held = new Set(atoms.map(atomKey));
+        integrity = integrity === undefined
+          ? atoms
+          : integrity.filter((atom) => held.has(atomKey(atom)));
+      }
+      return { confidentiality: union(clauses), integrity: integrity ?? [] };
     };
 
     /** Evaluates `template` at the place given. */
@@ -559,24 +596,7 @@ export const checkWrites = (
         if ("constant" in binding) {
           return { confidentiality: [], integrity: [] };
         }
-        const { chain, observes } = binding;
-        // Every chain of the binding, as `slotLabel` of
-        // `runtime/runner/src/cfc/plan-labels.ts` reads them.
-        const clauses: Atom[][] = [];
-        let integrity: Atom[] | undefined;
-        for (const each of [chain, ...(binding.below ?? [])]) {
-          if (each.length === 0) throw new NotEvaluated("an empty chain");
-          for (const link of each.slice(0, -1)) {
-            clauses.push(observed(link, "followRef").confidentiality);
-          }
-          const last = observed(each[each.length - 1], observes);
-          clauses.push(last.confidentiality);
-          const held = new Set(last.integrity.map(atomKey));
-          integrity = integrity === undefined
-            ? last.integrity
-            : integrity.filter((atom) => held.has(atomKey(atom)));
-        }
-        return { confidentiality: union(clauses), integrity: integrity ?? [] };
+        return chainsLabel(binding);
       };
       const slotLabel = (slot: number, from: Place): Label => {
         if (slot >= OUTPUT_SLOT) return outputLabel(slot - OUTPUT_SLOT, from);
@@ -692,6 +712,69 @@ export const checkWrites = (
       };
     };
 
+    /**
+     * A check of the bindings that needs no template: every input of the
+     * scenario is a cell with a clause of its own at its root, so the
+     * label of a slot of the argument that observes more than a reference
+     * holds the clause of the input it is below, and the position each of
+     * its chains ends at holds no link (PL §2.5). Returns each binding of
+     * `inputs`, and of the places in it, for which one of the two fails.
+     */
+    const unsoundBindings = (inputs: PlanInputs): string[] => {
+      const found: string[] = [];
+      const visit = (place: PlanInputs) => {
+        for (const [slot, binding] of Object.entries(place.slots ?? {})) {
+          const record = plan.slots?.[Number(slot)];
+          if (
+            record === undefined || !("chain" in binding) ||
+            binding.observes === "followRef" ||
+            record.root.kind !== "argument" || record.path.length === 0
+          ) continue;
+          const chains = [binding.chain, ...(binding.below ?? [])];
+          for (const chain of chains) {
+            const last = chain[chain.length - 1];
+            if (last === undefined || last.path.includes("*")) continue;
+            const held = tx.readValueOrThrow(linkOf(last));
+            if (parseLink(held, linkOf(last)) !== undefined) {
+              found.push(
+                `slot ${slot} (${record.observes} at ${
+                  record.path.join("/")
+                }): a chain ends at a link, /${last.path.join("/")}`,
+              );
+            }
+          }
+          const clause = inputClauses.get(record.path[0]);
+          if (
+            clause === undefined || chains.some((each) => each.length === 0)
+          ) {
+            continue;
+          }
+          const label = chainsLabel(binding);
+          if (
+            !label.confidentiality.some((held) =>
+              JSON.stringify(ordered(held)) === clause
+            )
+          ) {
+            found.push(
+              `slot ${slot} (${record.observes} at ${
+                record.path.join("/")
+              }): the label has no clause of the input`,
+            );
+          }
+        }
+        for (const output of Object.values(place.outputs ?? {})) visit(output);
+        for (const pick of Object.values(place.picks ?? {})) {
+          if (pick !== null) visit({ slots: pick.slots });
+        }
+        for (const elements of Object.values(place.elements ?? {})) {
+          if ("uniform" in elements) visit(elements.uniform);
+          else for (const group of elements.groups) visit(group);
+        }
+      };
+      visit(inputs);
+      return [...new Set(found)];
+    };
+
     return writes.map((write): OracleCheck => {
       const entry = templateEntryAt(tx, write.target);
       const stored = asEvaluatorLabel(
@@ -707,6 +790,7 @@ export const checkWrites = (
         deep: deepStoredAt(tx, write.target, patterns),
         bound: false,
         unsupported: [],
+        unsound: unsoundBindings(write),
       };
       const { template, kept } = templateOfRecord(plan, write.record);
       if (template === undefined) {
@@ -810,6 +894,12 @@ export type ModuleLabels = {
      * or a pick unreported, or did not evaluate.
      */
     records?: (string | boolean)[][];
+    /**
+     * Each binding that cannot hold the label of what its slot reads
+     * (`OracleCheck.unsound`): the record, the written path, and what
+     * fails.
+     */
+    unsound?: string[][];
   };
   /** Commits refused with the option on and not with it off. */
   refusedOnly?: string[];
@@ -1045,6 +1135,16 @@ export const compareModule = async (
     await scenarioAudience(),
   );
   const argument = argumentOf({ argument: {}, inputs });
+  const clauses = new Map(
+    Object.entries(inputs).flatMap(([name, input]) =>
+      input.declared?.clause === undefined ? [] : [
+        [
+          name,
+          JSON.stringify(ordered(input.declared.clause as Atom)),
+        ] as const,
+      ]
+    ),
+  );
   // Today's run finds each stream where the executor stored it (ruling
   // Z43). Its commits are counted as the labeled arm's are.
   resetAllTimingStats();
@@ -1095,7 +1195,7 @@ export const compareModule = async (
       true,
       {
         committed: (runtime, _hooks, writes) => {
-          for (const check of checkWrites(runtime, plan, writes)) {
+          for (const check of checkWrites(runtime, plan, writes, clauses)) {
             checks.push(check);
           }
         },
@@ -1133,6 +1233,13 @@ export const compareModule = async (
         check.bound,
         ...(check.error === undefined ? [] : [check.error]),
       ]),
+      unsound: checks.flatMap((check) =>
+        check.unsound.map((what) => [
+          JSON.stringify(check.record),
+          check.path.join("/"),
+          what,
+        ])
+      ),
     },
     refusedOnly: refusedOn.filter((reason) =>
       !offReasons.has(refusalReason(reason))
@@ -1311,6 +1418,35 @@ const report = async (file: string, tables: string | undefined) => {
       }\n      oracle ${example.oracle?.slice(0, 300)}`,
     );
   }
+  const unsound = ran.flatMap((result) =>
+    (result.oracle?.unsound ?? []).map(([record, path, what]) => ({
+      module: result.module,
+      record,
+      path,
+      what,
+    }))
+  );
+  console.log(
+    `bindings that cannot hold the label of what their slot reads: ${unsound.length} in ${
+      new Set(unsound.map(({ module }) => module)).size
+    } modules`,
+  );
+  for (
+    const [what, group] of count(
+      unsound,
+      (entry) =>
+        entry.what.replace(/^slot \d+ \(([a-z]+) at [^)]*\)/, "$1 slot")
+          .replace(/, \/.*$/, ""),
+    )
+  ) {
+    console.log(
+      `  ${group.length} in ${
+        new Set(group.map(({ module }) => module)).size
+      } modules: ${what}\n      e.g. ${group[0].module} ${group[0].record} /${
+        group[0].path
+      }: ${group[0].what}`,
+    );
+  }
   const refusedOnly = ran.flatMap((result) =>
     (result.refusedOnly ?? []).map((reason) => ({
       module: result.module,
@@ -1356,6 +1492,7 @@ const report = async (file: string, tables: string | undefined) => {
   await Deno.mkdir(tables, { recursive: true });
   await writeTable(`${tables}/rows-beside-today.tsv`, rows);
   await writeTable(`${tables}/evaluator-differences.tsv`, differs);
+  await writeTable(`${tables}/unsound-bindings.tsv`, unsound);
   await writeTable(`${tables}/refused-with-option-on.tsv`, refusedOnly);
   await writeTable(
     `${tables}/modules.tsv`,
