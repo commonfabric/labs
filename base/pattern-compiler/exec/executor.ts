@@ -7758,7 +7758,19 @@ export class Instance {
           current.push({ doc, path: [...path] });
         }
       });
-      chains.push(current);
+      // Where the link leads to a position an earlier chain ends at, the
+      // links are crossed on the way to that position, and no chain ends
+      // at a link.
+      const [first] = chains;
+      const last = current[current.length - 1];
+      if (
+        first !== undefined &&
+        isLink(this.store.peek(last.doc, last.path))
+      ) {
+        chains[0] = [...current, ...first];
+      } else {
+        chains.push(current);
+      }
     }
     const [chain = [], ...below] = chains;
     return { chain, observes, ...(below.length === 0 ? {} : { below }) };
