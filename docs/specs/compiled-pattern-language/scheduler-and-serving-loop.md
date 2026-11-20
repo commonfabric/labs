@@ -1334,14 +1334,21 @@ own notification.
 
 ### 3.6 A write that changes only a label
 
-A commit can change the label stored for a path and leave the value alone,
-for example when a later write to a document adds a confidentiality clause
-to an entry. The label is stored at a reserved member of the document beside
-its value ([CFC stored envelope](../cfc-stored-envelope.md)), and readers
-register paths under the value, so today such a commit matches no reader.
-The inventory records one consequence: `inspectConfLabel` is the one
-structural built-in a re-run does not reproduce, because the label it read
-changes without its inputs changing
+A commit can change the label stored for a path and leave the value alone, for
+example when a later write to a document adds a confidentiality clause to an
+entry, or when a write of a compiled pattern leaves the value as it was and
+stores its label (`plan-and-label-templates.md` §3.12). The label is stored at a
+reserved member of the document beside its value ([CFC stored
+envelope](../cfc-stored-envelope.md)), and a read of a labeled value consumes
+the label entries. Measured on the branch of milestone 4 of the integration
+(`runtime/runner/test/cfc-plan-labels.test.ts`, "for a write that left the value
+as it was"): a commit that changes the label at a path and writes no value runs
+a sink that reads the value again, and a transaction that read the value before
+the commit fails with a conflict; a commit that would store the label the path
+holds already writes nothing, runs no reader and conflicts with nothing. The
+inventory records one consequence of a label that changes without a value:
+`inspectConfLabel` is the one structural built-in a re-run does not reproduce,
+because the label it read changes without its inputs changing
 (`REPLAYABLE_BUILTIN_REFS` in
 `runtime/runner/src/builder/builtin-replayability.ts`).
 
@@ -1373,6 +1380,15 @@ In this design a label-only change does the following.
   label-dirty, and the next evaluation of the cone instance instantiates
   with the current label. §8.9.4 permits the delay: "There is **no
   retroactive relabeling obligation**".
+
+As built in milestone 4 of the integration, the prototype's executor does not
+keep which outputs read which label. After a commit changed a label and no
+value, it instantiates the labels of all kept outputs again in a derivation
+transaction of its own, each element of a per-element output counted, over an
+array of references, over an array of plain values in place and over the result
+of another per-element construct alike (`Instance.#relabel` of
+`base/pattern-compiler/exec/executor.ts`). The rule above limits that work to
+the demanded outputs whose template reaches the changed slot.
 
 The rule changes when a label is derived again, not what it is. It is
 *assumed*, pending the owner (question 11 of the continuation plan; open

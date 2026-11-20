@@ -1271,7 +1271,7 @@ construct reads ([§10.2](#102-where-the-proposed-analysis-differs)).
 | `h.set(v)` | The cell of `h`, at the path of `h` | The subtree |
 | `h.update(partial)` | The same | The properties of the type of `partial` |
 | `h.push(…)`, `h.pushAll(…)`, `h.addUnique(…)` | The same | The container's enumeration, and `*` below it |
-| `h.remove(…)`, `h.removeByValue(…)`, `h.removeAll(…)` | The same | The container's enumeration |
+| `h.remove(…)`, `h.removeByValue(…)`, `h.removeAll(…)` | The same | The container's enumeration. Provisional (P39): over an array of plain values in place, also each position from the first removed one on |
 | `h.increment(by)`, `h.applyChanges(changes)` | The same | The path |
 | `stream.send(event)` | The stream | The event |
 | `db.exec(sql, params)` | The database handle | The handle (`builtin-inventory.md`, "`SqliteDb.exec`") |
@@ -1292,18 +1292,36 @@ static entry.
 
 **A removal removes in place.** By ruling (2026-11-20) the row of `h.remove(…)`,
 `h.removeByValue(…)` and `h.removeAll(…)` is the rule: the operation names the
-member to remove, the container's enumeration changes, no kept element is
-written, and the kept elements are not labeled again with what the removal read.
-The label rule follows from the CFC specification and not from today's
-implementation. The analysis records no read of the elements for a removal. The
-prototype's executor does not remove in place: it reads the list through the
-handle and writes back what it keeps with `set` (`Handle.remove` and
-`Handle.removeAll` of `base/pattern-compiler/exec/executor.ts`), so it writes
-each kept element at another position, a value in place over an array of plain
-values and a link over an array of references. As built, the write record of
-such a removal binds the handle's slot as a `value` read of everything the
-removal read (`plan-and-label-templates.md` §2.5, "A removal writes no kept
-element"), which is wider than the rule.
+member to remove, the container's enumeration changes, and no kept element is
+written by the body. The analysis records no read of the elements for a removal:
+what the comparison with each member reads is a read of the runtime's operation,
+which the write record of the removal reports. The ruling also says that the
+kept elements are not labeled again with what the removal read, and that the
+label rule follows from the CFC specification and not from today's
+implementation. The rule is derived in `plan-and-label-templates.md` §2.5 ("The
+label rule of a removal through a handle"), and it differs by case. Over an
+array of references no kept element is labeled again, as the ruling says. Over
+an array of plain values in place the elements from the first removed position
+on stand at other positions, and the specification gives each of those positions
+the element's own label joined with what the removal's decision read, which
+contradicts the ruling as worded; it is that document's question 187, and
+provisionally (P39 of the continuation plan, the coordinator's decision) those
+positions are written. The result of another per-element construct has no handle
+to remove through. The prototype's executor removes in place: each removed
+position is one splice of the stored list, and no member the list keeps is
+written (`Handle.remove`, `Handle.removeAll` and `Handle.#removeAt` of
+`base/pattern-compiler/exec/executor.ts`; `removeByValue` calls `removeAll`).
+
+**An addition names no stored element.** For `h.push(…)`, `h.pushAll(…)` and
+`h.addUnique(…)` the row is the rule as well: the container's enumeration and
+the added positions are written, and the elements the container held are not.
+Over an array of plain values in place the label of what the container held
+therefore has to stay where it is stored, and provisionally (P39) the container
+has an enumeration entry of its own that an addition replaces with the stored
+enumeration joined with what decided the addition. As built in milestone 4 of
+the integration a `push` to such an array stores one label for the whole array
+and drops the label of what it held, which is unsound
+(`plan-and-label-templates.md` §2.5, "An addition through a handle").
 
 ### 6.2 Targets
 
