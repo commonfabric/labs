@@ -741,13 +741,15 @@ export const advanceCurrencyCursor = (
  * mark.
  *
  * A row takes the seq its instance's head stands at when every revision of
- * the instance above `batch.asOf` is one `batch.seen` names, and `batch.asOf`
- * otherwise, so a commit the recording loop had not seen leaves the slice
- * marked `2`. A vouch row does not move up to a head that a commit other
- * than a derivation put there: the piece did not write what the store holds,
- * so the slice stays marked until it does. A vouch row a record no longer
- * names is released and kept, so that is still known when the piece vouches
- * for the instance again.
+ * the instance above `batch.asOf` is one `batch.seen` names. Otherwise a
+ * commit the recording loop had not seen leaves the slice marked `2`: a read
+ * row then takes `batch.asOf`, and a vouch row keeps the seq the piece last
+ * answered for the instance at, or is not written for a piece that never
+ * did. A vouch row does not move up to a head that a commit other than a
+ * derivation put there: the piece did not write what the store holds, so the
+ * slice stays marked until it does. A vouch row a record no longer names is
+ * released and kept, so that is still known when the piece vouches for the
+ * instance again.
  *
  * A slice with every row current is `1` while an input of it is stale and
  * `0` otherwise. An input is stale while a marked slice decides it, and
@@ -838,7 +840,8 @@ export const storeCurrencyRecords = (
 
   /**
    * The seq a row for the instance `(id, scopeKey)` takes, and whether a
-   * commit the batch had not seen leaves it behind.
+   * commit the batch had not seen leaves it behind. The seq is the batch's
+   * `asOf` where one does, which a read row takes and a vouch row does not.
    */
   const standingOf = (
     id: string,

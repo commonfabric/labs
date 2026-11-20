@@ -44,6 +44,9 @@ Each row is measured under a serving loop, in
 `runtime/runner/test/executor/space-server-currency-wish.test.ts`, for the
 targets that file names: `#favorites`, `#profileName`, a hashtag among the
 favorites, both headless and not, `#default`, `/`, `#now` and `#now/60`.
+The other targets of a row are placed in it from reading
+`runtime/runner/src/builtins/wish.ts` and not from a run. `#profile` is one
+of those, and the home space the fixture reads holds no profile.
 
 | Target | What the wish reads | What keeps its slice from being served |
 | --- | --- | --- |
@@ -53,10 +56,11 @@ favorites, both headless and not, `#default`, `/`, `#now` and `#now/60`.
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
 | `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
 
-For a home-space target the read in another space is the only thing in the
-way. The wish declares no write in the home space, so the piece can be
-vouched for, and its `space` slice and the viewer's session slice are: the
-reads in the home space are all in the viewer's `user:` slice.
+For the home-space targets measured, the read in another space is the only
+thing in the way. The wish declares no write in the home space, so the
+piece can be vouched for, and its `space` slice and the viewer's session
+slice are: the reads in the home space are all in the viewer's `user:`
+slice.
 
 The timer of `#now/N` runs in every runtime that holds the wish, a
 browser's included, so a browser session ticks the cell and a session with
