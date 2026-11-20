@@ -1,1 +1,0 @@
-{"date":"2026-11-20","from":{"k":"unit","s":"state-inspector","n":"reconstruct parity with memory-v2 engine > child-local patch reconstructs within the child (not inherited base)"},"to":{"k":"unit","s":"state-inspector","n":"reconstruct parity with memory-v2 engine > child-local patch reconstructs over the inherited base"}}

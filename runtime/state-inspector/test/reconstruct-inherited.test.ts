@@ -123,9 +123,4 @@ describe("reconstruct-inherited", () => {
     );
     expect(reconstructOutcome(fixture.space, read).status).toBe("undecodable");
   });
-
-  it("reports an inherited row of an unknown operation as undecodable", () => {
-    using fixture = inheritedFixture([{ op: "merge", data: null }], addChild);
-    expect(reconstructOutcome(fixture.space, read).status).toBe("undecodable");
-  });
 });

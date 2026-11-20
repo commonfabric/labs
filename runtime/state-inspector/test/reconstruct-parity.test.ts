@@ -128,9 +128,9 @@ Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
       assertParity(path, "entity:childonly", "", null);
     });
 
-    // A child-local PATCH on an inherited entity: `feature` holds no base of
-    // its own, so the engine applies the patch over the document the branch
-    // inherits, which its parent holds as of the fork point.
+    // A child-local PATCH on an inherited entity: the engine reconstructs it
+    // within `feature` only (base = {} since feature has no own set), NOT onto
+    // the inherited parent value. This is the case the prior log-merge got wrong.
     applyCommit(engine, {
       sessionId: "session:p:s",
       commit: {
@@ -144,8 +144,8 @@ Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
         }],
       },
     });
-    // The same id, set on the PARENT before the fork would-be base — prove the
-    // child patch does NOT inherit it.
+    // The same id, set on the PARENT before the fork: the fork holds what its
+    // parent held at the fork point, so the child's patch replays over it.
     applyCommit(engine, {
       sessionId: "session:p:s",
       commit: {
@@ -174,9 +174,14 @@ Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
     });
 
     await t.step(
-      "child-local patch reconstructs over the inherited base",
+      "a fork's patch replays over the document it inherits at the fork point",
       () => {
         const e = read(engine, { id: "entity:inheritedbase", branch: "feat2" });
+        assertEquals(
+          e,
+          { value: { parent: 1, child: 2 } },
+          "engine sanity: the fork's patch applies over the inherited document",
+        );
         assertParity(path, "entity:inheritedbase", "feat2", e);
         // parent unaffected
         assertParity(

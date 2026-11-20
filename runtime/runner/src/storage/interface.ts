@@ -1283,6 +1283,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to
@@ -3903,6 +3912,16 @@ export interface ViewInterestLease {
 export interface ISpaceReplica extends ISpace {
   /** Existing session progress without starting I/O or awaiting commits. */
   getDiagnostics?(): SpaceStorageDiagnostic;
+
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1`, so that a transaction may send a change to an array
+   * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
+   * until a session exists and for an older server or a deployment that has
+   * not turned it on, and then the change goes index by index. Optional: a
+   * replica without it reads as `false`.
+   */
+  markedSplices?(): boolean;
 
   /** The sizes of the structures this replica holds. */
   getSizes?(): SpaceStorageSizes;

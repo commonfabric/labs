@@ -2,7 +2,10 @@ import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity";
-import type { AppView } from "@commonfabric/navigation";
+import {
+  type AppView,
+  newTabReservationEnabled,
+} from "@commonfabric/navigation";
 
 import type { AppState, ShellApp } from "../src/lib/app-state.ts";
 import { Navigation } from "../src/lib/navigation.ts";
@@ -110,6 +113,21 @@ afterEach(() => {
 });
 
 describe("navigation", () => {
+  it("turns tab reservation on while it runs, and off once disposed", () => {
+    // The shell takes no `cf-open-external`, so its new tabs open through the
+    // default path, which a slow link keeps only with a tab reserved.
+    expect(newTabReservationEnabled()).toBe(false);
+    withNavigation(
+      "http://common.test/my-space/demo",
+      { view: { builtin: "home" } },
+      (navigation) => {
+        expect(newTabReservationEnabled()).toBe(true);
+        navigation.dispose();
+        expect(newTabReservationEnabled()).toBe(false);
+      },
+    );
+  });
+
   it("reflects the URL it was constructed at into history and the app", () => {
     withNavigation(
       "http://common.test/my-space/demo",
