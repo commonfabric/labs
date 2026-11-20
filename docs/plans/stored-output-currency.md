@@ -117,7 +117,10 @@ of its runs at the snapshot:
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
 - one read a document in another space;
-- one read a document whose writer in this runtime names no piece.
+- one read a document whose writer in this runtime names no piece;
+- one read a document a clock writes, which is the interval cell of a wish
+  for `#now/N`: no commit marks the slice when the interval passes while no
+  runtime holds the clock.
 
 No slice of a piece is vouched for when its root is not space-scoped, when a
 computation of it declares a write in another space, or when it records a
@@ -157,7 +160,11 @@ A later record does not take an overwrite back: a vouch row moves up only to
 a head a derivation put there, since the piece's writer reads nothing it
 writes and so was not woken by the overwrite. A vouch row a record no longer
 names is released and kept for its sequence number, so the overwrite is
-still known when the piece vouches for the instance again.
+still known when the piece vouches for the instance again. A record taken
+below a commit to an instance answers for it at no sequence number: its
+vouch row keeps the one the piece last answered at, and is not written for
+a piece that never did, so a client's first write of an instance is not
+taken for an overwrite once a later record covers it.
 
 Each slice that just became marked marks `1` every clean slice of another
 piece that reads an instance it writes, at its own key or narrower beneath
@@ -322,9 +329,11 @@ wrong.
   a producer's proof has not been checked.
 - **A judgment reads every demand row of the space's sessions**, at about
   15 µs each on the memory server's thread.
-- **A piece whose output depends on something that is not a read**, such as
-  a clock, is held clean while what it would compute moves. The same plan
-  gives the interval clock of a wish an expiry.
+- **A piece whose output depends on something that is not a read** is held
+  clean while what it would compute moves. The interval clock of a wish is
+  the one such input the index knows, and a slice that read it is never
+  vouched for, so its piece always starts. The same plan gives that slice
+  an expiry.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -447,6 +456,13 @@ of which exist:
     once one vouches for it again with the instance unchanged.
 24. An output that was overwritten, that one record stops vouching for and a
     later one vouches for again, is stored marked.
+25. A piece whose first record was taken below a client's write of an
+    instance it vouches for is stored clean once a record covers that
+    write.
+26. A slice that read the interval clock of a wish is stored marked, and
+    under `skip` its piece is started by a demand made after the interval
+    passed, for a session that runs nothing itself
+    (`space-server-currency-wish.test.ts`).
 
 ## Related
 

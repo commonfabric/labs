@@ -38,7 +38,9 @@ export type PieceUnvouchedReason =
   /** A live computation of the slice read a document in another space. */
   | "foreign-read"
   /** A live computation of the slice read a document whose writer names no piece. */
-  | "unattributed-writer";
+  | "unattributed-writer"
+  /** A live computation of the slice read a document a clock writes. */
+  | "clock-read";
 
 /**
  * One slice of a piece: what its computations did when they ran at one scope
@@ -52,7 +54,8 @@ export type PieceCurrencySlice = {
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
    * computation that ran at its key is clean, and everything they read is in
-   * the piece's space with a writer that names a piece.
+   * the piece's space, with a writer that names a piece, and is no document a
+   * clock writes.
    */
   unvouched: PieceUnvouchedReason[];
 
@@ -104,7 +107,19 @@ export type PieceCurrencyState = {
     SchedulerWriteIndex,
     "writersByEntity" | "getSchedulingWrites"
   >;
+
+  /**
+   * The documents a clock writes, each as `clockDocumentKey()` gives it. What
+   * a computation derives from one is current only until the clock's next
+   * tick, and a tick takes a runtime that holds the clock.
+   */
+  clockDocuments: ReadonlySet<string>;
 };
+
+/** The key `PieceCurrencyState.clockDocuments` holds a document under. */
+export const clockDocumentKey = (
+  address: Pick<IMemorySpaceAddress, "space" | "id">,
+): string => `${address.space}\0${address.id}`;
 
 /** The scope names a document id can have a writer registered under. */
 const SCOPE_NAMES = ["space", "user", "session"] as const;
@@ -303,6 +318,9 @@ export function snapshotPieceCurrency(
           slice.unvouched.add("foreign-read");
           reads.push({ ...read, derived: false });
           continue;
+        }
+        if (state.clockDocuments.has(clockDocumentKey(read))) {
+          slice.unvouched.add("clock-read");
         }
         const { written, unattributed } = writersOf(read.id);
         if (unattributed) slice.unvouched.add("unattributed-writer");

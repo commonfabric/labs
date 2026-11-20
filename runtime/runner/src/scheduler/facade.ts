@@ -148,6 +148,7 @@ import { SpeculationLineage } from "./lineage.ts";
 import { SchedulerMaterializers } from "./materializers.ts";
 import { NodeRegistry, type SchedulerNode } from "./node-record.ts";
 import {
+  clockDocumentKey,
   type PieceCurrencySnapshot,
   snapshotPieceCurrency,
 } from "./piece-currency.ts";
@@ -486,6 +487,10 @@ export class Scheduler {
     queueExecution: () => this.queueExecution(),
   });
   #writeIndex!: SchedulerWriteIndex;
+
+  /** The documents a clock writes, as `noteClockDocument()` was told of them. */
+  readonly #clockDocuments = new Set<string>();
+
   readonly #materializers = new SchedulerMaterializers(
     this.#nodes.effects,
     () => this.runtime.scopeKeyIdentity,
@@ -1680,6 +1685,15 @@ export class Scheduler {
   }
 
   /**
+   * Records that a clock writes the document at `address`: something other
+   * than a commit decides when its value is out of date, so the currency
+   * index vouches for no slice that read it.
+   */
+  noteClockDocument(address: Pick<IMemorySpaceAddress, "space" | "id">): void {
+    this.#clockDocuments.add(clockDocumentKey(address));
+  }
+
+  /**
    * What the currency index records of the piece whose result document is
    * `pieceRootId`, in `space`, as this scheduler holds it now, or `undefined`
    * when no active node names it as its piece.
@@ -1694,6 +1708,7 @@ export class Scheduler {
         liveness: this.#dependencyGraphState,
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
+        clockDocuments: this.#clockDocuments,
       },
       space,
       pieceRootId,

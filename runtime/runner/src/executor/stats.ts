@@ -359,8 +359,9 @@ export type ServingLoopStats = {
     /** Records sent of a piece the loop could not vouch for, by reason:
      * `not-clean` (a live computation was not clean), `foreign-read` and
      * `foreign-write` (another space), `unattributed-writer` (it read a
-     * document whose writer names no piece), `scoped-root`, `source-origin`
-     * and `no-pattern`. A record with two reasons counts under both. */
+     * document whose writer names no piece), `clock-read` (it read a document
+     * a clock writes), `scoped-root`, `source-origin` and `no-pattern`. A
+     * record with two reasons counts under both. */
     unvouched: Record<string, number>;
 
     /** Roots put to a judgment, counted at each judgment made. */

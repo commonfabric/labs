@@ -14,6 +14,7 @@ import {
   type NodeStatus,
 } from "../../src/scheduler/node-record.ts";
 import {
+  clockDocumentKey,
   type PieceCurrencyState,
   snapshotPieceCurrency,
 } from "../../src/scheduler/piece-currency.ts";
@@ -52,7 +53,8 @@ describe("piece-currency", () => {
    * fan-out instances the computation ran at, each resolved under its own
    * identity and holding the reads given for it, of which those in `clean`
    * are current. With none, the computation has no fan-out state, and
-   * `reads` is what its one run read.
+   * `reads` is what its one run read. `clocks` are the documents of the
+   * space that a clock writes.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -62,6 +64,7 @@ describe("piece-currency", () => {
     clean?: ScopeKey[];
     status?: NodeStatus;
     reads?: Read[];
+    clocks?: Array<Read["id"]>;
   } = {}) => {
     const instances = options.instances ?? [];
     const nodes = new NodeRegistry();
@@ -117,6 +120,11 @@ describe("piece-currency", () => {
         writersByEntity: new Map(),
         getSchedulingWrites: () => surface,
       },
+      clockDocuments: new Set(
+        (options.clocks ?? []).map((id) =>
+          clockDocumentKey({ space: SPACE, id })
+        ),
+      ),
     };
     return snapshotPieceCurrency(state, SPACE, PIECE)!;
   };
@@ -238,6 +246,20 @@ describe("piece-currency", () => {
         });
 
         expect(sliceOf(taken, user)?.unvouched).toEqual(["foreign-read"]);
+        expect(sliceOf(taken, bobUser)?.unvouched).toEqual([]);
+        expect(taken.unvouched).toEqual([]);
+      });
+
+      it("reports a read of a document a clock writes as a reason its slice alone is not vouched for", () => {
+        const taken = snapshotOf({
+          instances: [
+            { key: user, reads: [{ id: "of:tick" }, { id: "of:shared" }] },
+            { key: bobUser, identity: BOB, reads: [{ id: "of:shared" }] },
+          ],
+          clocks: ["of:tick"],
+        });
+
+        expect(sliceOf(taken, user)?.unvouched).toEqual(["clock-read"]);
         expect(sliceOf(taken, bobUser)?.unvouched).toEqual([]);
         expect(taken.unvouched).toEqual([]);
       });

@@ -1,6 +1,7 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: Not started. This is a design, with the steps to build it. It
+Status: In progress. Step 1 is done; the rest is a design, with the steps
+to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -23,9 +24,10 @@ plan takes each:
 - **A computation that names no piece.** A slice that read a document whose
   writer the record cannot attribute is not vouched for, and some of what a
   wish registers with the scheduler is such a writer.
-- **A clock.** A wish for `#now/N` reads a cell a timer writes. The slice
-  that read it is vouched for, and that is the defect: nothing marks it when
-  the interval passes while no runtime holds the timer.
+- **A clock.** A wish for `#now/N` reads a cell a timer writes. Nothing
+  marks the slice that read it when the interval passes while no runtime
+  holds the timer, so such a slice is never vouched for and its piece
+  always starts.
 
 A fourth matter comes with leaving more pieces unstarted, and with marks
 that travel between spaces: a computation the scheduler runs whether or not
@@ -38,8 +40,12 @@ failure to design out.
 
 ## What a wish reads
 
-This table is from reading `runtime/runner/src/builtins/wish.ts`, and step 1
-checks it against a run.
+Each row is measured under a serving loop, in
+`runtime/runner/test/executor/space-server-currency-wish.test.ts`, for the
+targets that file names: `#favorites`, `#profileName`, a hashtag among the
+favorites, `#default`, `/`, `#now` and `#now/60`. The second row's shared
+resolver is from reading `runtime/runner/src/builtins/wish.ts`; the
+fixture's wish is not headless and shares none.
 
 | Target | What the wish reads | What keeps its slice from being served |
 | --- | --- | --- |
@@ -47,15 +53,18 @@ checks it against a run.
 | Any other hashtag, such as `#note` | The favorites of the home space and what the space's own root lists. Headless wishes for one query in one space share one resolver, which the wish registers with the scheduler under no piece. | The read is in another space, and the resolver's output is a document whose writer names no piece. |
 | `/`, `#default`, `#mentionable`, `#summaryIndex`, `#knowledgeGraph`, `#pieceRegistry` | The root of the piece's own space, or of the home space or a named space where the wish's `scope` says so. | Nothing known for the piece's own space; the read in another space otherwise. |
 | `#now` | A capture of the piece's first load time, written once to a document of the piece's space and read from then on. | Nothing: the value does not move. |
-| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | Nothing, which is the defect described above. |
+| `#now/N` | A cell one timer per runtime writes at each interval, for every wish of that interval in the space. | The read of a document a clock writes (`clock-read`). |
 
-Two things in it are not established. A wish for a home-space target can
-write into the home space, and a piece with a computation that declares a
-write in another space has no slice vouched for; whether the wish's declared
-write surface includes such a write decides whether these steps are enough
-for it. And the timer of `#now/N` runs in every runtime that holds the wish,
-a browser's included, so a browser session ticks the cell for a piece its
-server left unstarted, and a session with no runtime of its own does not.
+For a home-space target the read in another space is the only thing in the
+way. The wish declares no write in the home space, so the piece can be
+vouched for, and its `space` slice and the viewer's session slice are: the
+reads in the home space are all in the viewer's `user:` slice.
+
+The timer of `#now/N` runs in every runtime that holds the wish, a
+browser's included, so a browser session ticks the cell and a session with
+no runtime of its own does not. That second kind of session is why the
+slice is not vouched for: left unstarted, its piece would show such a
+session a clock that had stopped.
 
 ## Across spaces
 
@@ -280,10 +289,11 @@ the resolver stops being shared under a serving runtime.
 
 ### The interval clock
 
-A slice that read the cell of `#now/N` is current until the cell's next
-tick. Its record names that time, a judgment refuses a slice past it, and a
-loop that holds a root unstarted on such a slice loads the root when the
-time comes. The start runs the wish, which holds the timer from then on.
+A slice that read the cell of `#now/N` is not vouched for today, so its
+piece starts on every demand. It is current until the cell's next tick. Its
+record names that time, a judgment refuses a slice past it, and a loop that
+holds a root unstarted on such a slice loads the root when the time comes.
+The start runs the wish, which holds the timer from then on.
 
 ## Computations that run without demand
 
@@ -317,8 +327,9 @@ returns depends on how well the computation's destinations are known.
   to "stale upstream", and the piece is started when something in the
   envelope is demanded, by the first plan's stage 5. Nothing coarser is
   needed. The snapshot takes write rows from the scheduling write surface,
-  which the scheduler keeps apart from envelopes, so whether an envelope is
-  among them today is the first thing to establish.
+  which the scheduler keeps apart from envelopes, and a document a
+  computation writes through a cell it was handed is not among them today
+  (`space-server-currency-wish.test.ts`).
 - **Writes that are not bounded, in its own space.** A marked slice with
   such a computation leaves the space **unsettled**. Before a judgment in
   the space or a pull from it returns, the loop starts that piece and lets
@@ -426,10 +437,11 @@ One is owed:
 
 ## Steps
 
-1. **Measure what blocks each kind of wish.** A serving-loop fixture for
-   each row of the table above, under `record`, read through the reasons a
-   slice was not vouched for (`currency.unvouched`). This settles the two
-   things the table leaves open.
+1. **Measure what blocks each kind of wish.** Done, with a serving-loop
+   fixture for each row of the table above, read through the reasons a
+   slice was not vouched for (`currency.unvouched`). A slice that read the
+   interval clock was vouched for and left a session with no runtime of its
+   own a stopped clock under `skip`; it is no longer vouched for.
 2. **Rows for a read in another space, judged and not acted on.** The
    snapshot carries the source's sequence number; registration; the rows on
    both sides; the pull before a judgment. Under `record` each root that

@@ -1207,8 +1207,9 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space or one whose writer names no
-  piece. Every slice of a record is stored marked when the piece's root is
+  clean, or read a document in another space, one whose writer names no
+  piece, or one a clock writes (the interval cell of a `#now/N` wish), which
+  no commit marks when its interval passes. Every slice of a record is stored marked when the piece's root is
   narrower than the space, and when it records a source origin (§3e), since
   a start is where that origin is followed. A clean computation vouches for
   the instances its runs wrote: for a run at a fan-out instance, the
@@ -1228,7 +1229,11 @@ executing:
   overwrite does not wake it, and the slice stays marked until it writes
   the instance again. A vouch row a record no longer names is released and
   kept, so the seq the piece last answered for the instance at survives a
-  record taken while its writer was not running. An instance a recorded
+  record taken while its writer was not running. A record taken below a
+  commit to an instance answers for it at no seq: its vouch row keeps the
+  seq the piece last answered at, and is not written for a piece that never
+  did, so a client's first write of an instance is not read as an overwrite
+  once a later record covers it. An instance a recorded
   piece computes is a current input only while some piece vouches for it: a
   slice that read one the latest record of its writer's slice no longer
   vouches for is marked `1`, a slice of the same piece included, until the
