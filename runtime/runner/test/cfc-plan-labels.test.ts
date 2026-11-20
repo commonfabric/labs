@@ -584,10 +584,16 @@ describe("cfc-plan-labels", () => {
       ) => void,
       writeRoot: boolean | FabricValue = false,
       options: {
+        /** Whether the transaction reads `of:src-a`. */
+        readA?: boolean;
         /** Whether the transaction reads `of:src-b`. */
         readB?: boolean;
         /** Runs after `record` and before the transaction commits. */
         beforeCommit?: (runtime: Runtime) => Promise<void>;
+        /** The plan registered, `plan` where absent. */
+        plan?: CompiledPlan;
+        /** What the transaction writes at `a`, where not `"x"`. */
+        a?: (runtime: Runtime) => FabricValue;
       } = {},
     ) => {
       let outcome:
@@ -595,6 +601,8 @@ describe("cfc-plan-labels", () => {
           error: unknown;
           value: Record<string, unknown[]>;
           shape: Record<string, unknown[]>;
+          /** Every derived entry, as `observes /path` to its label. */
+          derived: Record<string, unknown>;
         }
         | undefined;
       await withRuntime(enabled, async (runtime) => {
@@ -637,12 +645,14 @@ describe("cfc-plan-labels", () => {
         );
         expect((await seed.commit().settled).error).toBeUndefined();
         const identity = runtime.compiledPlans.register(
-          plan,
+          options.plan ?? plan,
           "code",
           runtimeWritePolicyAuthorization,
         );
         const tx = runtime.edit();
-        tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+        if (options.readA !== false) {
+          tx.readOrThrow(memoryAddress("of:src-a", ["value"]));
+        }
         if (options.readB !== false) {
           tx.readOrThrow(memoryAddress("of:src-b", ["value"]));
         }
@@ -652,6 +662,9 @@ describe("cfc-plan-labels", () => {
             { ...link, path: [] },
             writeRoot === true ? { a: "x", b: "y", c: "z" } : writeRoot,
           );
+        } else if (options.a !== undefined) {
+          tx.writeValueOrThrow({ ...link, path: ["a"] }, options.a(runtime));
+          cell.key("b").set("y");
         } else {
           cell.key("a").set("x");
           cell.key("b").set("y");
@@ -678,7 +691,20 @@ describe("cfc-plan-labels", () => {
                   [...(entry.label.confidentiality ?? [])].sort(),
                 ]),
             );
-          outcome = { error, value: at("value"), shape: at("shape") };
+          const derived = Object.fromEntries(
+            (metadata?.labelMap.entries ?? [])
+              .filter((entry) => entry.origin === "derived")
+              .map((entry) => [
+                `${entry.observes} /${entry.path.join("/")}`,
+                entry.label,
+              ]),
+          );
+          outcome = {
+            error,
+            value: at("value"),
+            shape: at("shape"),
+            derived,
+          };
         } finally {
           reader.abort();
         }
@@ -788,6 +814,82 @@ describe("cfc-plan-labels", () => {
       expect(error).toBeUndefined();
       expect(value["/items/*"]).toBeUndefined();
       expect(value["/items/1"]).toEqual(["secret-b"]);
+    });
+
+    it("stores the atom of a kept output that passes a reference on, on the entry of the link at the output's path", async () => {
+      // PL §3.2, "Where the atom of a kept output is stored": "A kept
+      // output that passes a value on by reference stores a link, and the
+      // atom is in the label of the link at the output path."
+      const kept: CompiledPlan = {
+        ...plan,
+        outputs: [{ template: { op: "slot", slot: 0 }, kept: true }],
+      };
+      const { error, derived } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            {
+              kind: "plan-write",
+              target: { ...target, path: ["a"] },
+              compiledPattern: identity,
+              record: { output: 0 },
+              instance: target.id,
+              keys: [],
+              slots: {
+                0: { chain: [address("of:src-a")], observes: "followRef" },
+              },
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        false,
+        {
+          plan: kept,
+          a: () =>
+            ({
+              "/": { "link@1": { id: "of:src-a", path: [], space } },
+            }) as unknown as FabricValue,
+        },
+      );
+      expect(error).toBeUndefined();
+      const atLink = Object.entries(derived).filter(([where]) =>
+        where.endsWith(" /a")
+      );
+      expect(atLink.length).toBeGreaterThan(0);
+      expect(JSON.stringify(atLink)).toContain(CFC_ATOM_TYPE.TransformedBy);
+    });
+
+    it("stores the label of a kept output written by a transaction whose join is empty", async () => {
+      // Every commit of a compiled pattern is prepared (PL §3.2, "Every
+      // commit is prepared"), so every kept output it writes carries the
+      // atom, a commit that read no labeled data included.
+      const kept: CompiledPlan = {
+        ...plan,
+        outputs: [{ template: { op: "const" }, kept: true }],
+      };
+      const { error, derived } = await commitWrites(
+        true,
+        (tx, identity, target) => {
+          tx.recordCfcWritePolicyInput(
+            {
+              kind: "plan-write",
+              target: { ...target, path: ["a"] },
+              compiledPattern: identity,
+              record: { output: 0 },
+              instance: target.id,
+              keys: [],
+              slots: {},
+            },
+            runtimeWritePolicyAuthorization,
+          );
+        },
+        false,
+        { plan: kept, readA: false, readB: false },
+      );
+      expect(error).toBeUndefined();
+      expect(JSON.stringify(derived["value /a"])).toContain(
+        CFC_ATOM_TYPE.TransformedBy,
+      );
     });
 
     it("stores the transaction's join on both paths with the option off", async () => {

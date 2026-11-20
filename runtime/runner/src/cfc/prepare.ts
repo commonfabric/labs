@@ -12637,7 +12637,11 @@ export function* prepareBoundaryCommitSteps(
       if (targetKeys.has(key)) {
         continue;
       }
-      if (flowHasLabels) {
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // A document a compiled pattern's write covers stores the labels of
+      // its covered paths whatever the join is (PL §3.2, "Every commit is
+      // prepared"). Behind `compiledPatterns`, which defaults off.
+      if (flowHasLabels || planLabels.byTarget.has(key)) {
         targetKeys.add(key);
         continue;
       }
@@ -13840,7 +13844,16 @@ export function* prepareBoundaryCommitSteps(
       }
     }
 
-    if (flowPersist && (flowHasLabels || clearedExistence.length > 0)) {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+    // A document a compiled pattern's write covers stores the labels of the
+    // covered paths whatever the join is: every kept output carries the
+    // pattern's atom, a commit that read no labeled data included. Behind
+    // `compiledPatterns`, which defaults off.
+    if (
+      flowPersist &&
+      (flowHasLabels || clearedExistence.length > 0 ||
+        planLabels.byTarget.has(key))
+    ) {
       // Attach the per-tx join at each written path. Within one tx every
       // write carries the same join, so deeper written paths are redundant
       // with a shallower written ancestor and are collapsed away (§4.6.4
@@ -13868,6 +13881,9 @@ export function* prepareBoundaryCommitSteps(
       const derivedStampPaths: (readonly string[])[] = [];
       const structureStampPaths: (readonly string[])[] = [];
       const seenStructurePaths = new Set<string>();
+      // The paths a compiled pattern's write covers at which this
+      // transaction wrote a link (`linkLabelPaths` below).
+      const linkLabelPaths: (readonly string[])[] = [];
       for (const path of flowWrittenPaths) {
         const flowKey = pathKey(path);
         if (seenFlowPaths.has(flowKey)) {
@@ -13889,6 +13905,18 @@ export function* prepareBoundaryCommitSteps(
             if (seenStructurePaths.has(containerKey)) continue;
             seenStructurePaths.add(containerKey);
             structureStampPaths.push(container);
+          }
+          // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+          // A path a compiled pattern's write covers at or below a write of
+          // links stores its label too: at a link, on the link's own entry
+          // (PL §3.2, "Where the atom of a kept output is stored"), and at
+          // a container of links, as at any covered path. Behind
+          // `compiledPatterns`, which defaults off.
+          for (const covered of planLabels.paths.get(key) ?? []) {
+            if (!isPrefix(path, covered)) continue;
+            const held = writtenValueAt(flowWrittenValues, covered);
+            if (isPrimitiveCellLink(held)) linkLabelPaths.push(covered);
+            else if (held !== undefined) derivedStampPaths.push(covered);
           }
           continue;
         }
@@ -14383,6 +14411,27 @@ export function* prepareBoundaryCommitSteps(
             }));
           }
         }
+      }
+      // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
+      // The label of a covered path that holds a link is the label of the
+      // link: a pointer-class entry at the slot, read by a reader of the
+      // reference, whose integrity a read through the link does not take
+      // (PL §3.2 and §3.10). It holds the pattern's atom of a kept output.
+      for (const path of linkLabelPaths) {
+        const pathLabel = flowLabelAt(key, path);
+        persistedLabelEntries.push(markFlowStampEntry({
+          path,
+          label: {
+            ...(pathLabel.confidentiality.length > 0
+              ? { confidentiality: [...pathLabel.confidentiality] }
+              : {}),
+            ...(pathLabel.integrity.length > 0
+              ? { integrity: [...pathLabel.integrity] }
+              : {}),
+          },
+          origin: "derived",
+          observes: "followRef",
+        }));
       }
       // SPEC-PENDING https://github.com/commonfabric/specs/pull/98
       // A restated data root's value entry is re-derived from the attempt's
