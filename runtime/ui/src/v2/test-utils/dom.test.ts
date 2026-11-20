@@ -243,12 +243,11 @@ describe("dom", () => {
       expect(first.root.activeElement).toBe(null);
     });
 
-    it("is null while focus stays on an element removed from the page", () => {
-      const removed = hostWithInput();
-      const { root } = hostWithInput();
-      removed.input.focus();
+    it("is null on a host's own shadow root while the host holds focus", () => {
+      const { host, root } = hostWithInput();
+      host.tabIndex = 0;
 
-      removed.host.remove();
+      host.focus();
 
       expect(root.activeElement).toBe(null);
     });

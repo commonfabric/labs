@@ -32,6 +32,7 @@
 import {
   type Element as HappyElement,
   type Node as HappyNode,
+  type ShadowRoot as HappyShadowRoot,
   PropertySymbol,
   Window,
 } from "happy-dom";
@@ -60,6 +61,14 @@ const REPLACED =
 // happy-dom reports every exception it catches, from a listener, a timer, or
 // an inline handler, through this one method, so an `ErrorEvent` a test
 // dispatches itself is left alone.
+const reportError = window[PropertySymbol.dispatchError].bind(window);
+window[PropertySymbol.dispatchError] = (error: Error) => {
+  reportError(error);
+  queueMicrotask(() => {
+    throw error;
+  });
+};
+
 // A shadow root's `activeElement` is the focused element, or the host of the
 // shadow tree holding it, found inside that root, and null when focus is
 // outside it. happy-dom's walks up from a focused element in another shadow
@@ -68,10 +77,11 @@ const REPLACED =
 // editor of its own.
 Object.defineProperty(window.ShadowRoot.prototype, "activeElement", {
   configurable: true,
-  get(this: unknown): HappyElement | null {
+  get(this: HappyShadowRoot): HappyElement | null {
     // The focused element itself, not retargeted to a host as
     // `document.activeElement` is.
-    let node: HappyNode | null = window.document[PropertySymbol.activeElement];
+    let node: HappyNode | null =
+      this[PropertySymbol.ownerDocument][PropertySymbol.activeElement];
     while (node) {
       const root = node.getRootNode();
       if (root === this) return node instanceof window.Element ? node : null;
@@ -80,14 +90,6 @@ Object.defineProperty(window.ShadowRoot.prototype, "activeElement", {
     return null;
   },
 });
-
-const reportError = window[PropertySymbol.dispatchError].bind(window);
-window[PropertySymbol.dispatchError] = (error: Error) => {
-  reportError(error);
-  queueMicrotask(() => {
-    throw error;
-  });
-};
 
 // A browser fires `selectionchange` once after the calls that changed the
 // selection have returned, however many there were; happy-dom fires it within
