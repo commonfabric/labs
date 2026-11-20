@@ -122,6 +122,10 @@ export const NO_CANDIDATES = new Map<string, string>([
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
   [
+    "pattern link:number",
+    "a shared version number, which cf pattern history lists",
+  ],
+  [
     "profile attest-name:expect",
     "the receipt from the owner-reviewed inspection",
   ],
