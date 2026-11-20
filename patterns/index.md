@@ -167,8 +167,11 @@ shelf and private visitor recommendations), `examples/router/`,
 `showcase/scrabble/`, `apps/shared-note/` (a shared Markdown document whose live
 cursors carry each viewer's profile name), `examples/shared-profile-demo/`,
 `examples/shared-profile-roster/`, `examples/suggestable/`,
-`apps/weekly-calendar/`, `showcase/wordsearch/` (a word search maker: form,
-puzzle, a PDF of the puzzle and its answer key, and a Play tab).
+`examples/indexed-topics/` (topics that mention one another, held in an indexed
+collection: the board's listing and each topic's "mentioned by" are SQL queries,
+and no list of topics exists), `apps/weekly-calendar/`, `showcase/wordsearch/`
+(a word search maker: form, puzzle, a PDF of the puzzle and its answer key, and
+a Play tab).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and

@@ -96,11 +96,7 @@ describe("RunListFile", () => {
   describe("instance members", () => {
     describe("load()", () => {
       it("returns the heads `save()` wrote", async () => {
-        const saved = head(runs(30, 21), {
-          complete: true,
-          drift: 2,
-          workflow: 1234,
-        });
+        const saved = head(runs(30, 21), { drift: 2, workflow: 1234 });
         await new RunListFile(path).save(() => [saved], 0);
 
         expect(await load(1234)).toEqual(saved);
@@ -158,6 +154,13 @@ describe("RunListFile", () => {
           .toMatchObject({ name: null, path: null });
       });
 
+      it("writes every head as not known to reach the end of its list", async () => {
+        await new RunListFile(path).save(() => [head(runs(30, 21))], 0);
+
+        expect(JSON.parse(await Deno.readTextFile(path)).heads[0].complete)
+          .toBe(false);
+      });
+
       it("returns only the first line of a run's head commit message", async () => {
         await write({
           heads: [head([
@@ -168,6 +171,12 @@ describe("RunListFile", () => {
 
         expect((await loadHead()).runs.map((held) => held.head_commit))
           .toEqual([{ message: "Fix it" }, { message: "commit 29" }]);
+      });
+
+      it("returns no head as known to reach the end of its list", async () => {
+        await write({ heads: [{ ...head(runs(30, 21)), complete: true }] });
+
+        expect((await loadHead()).complete).toBe(false);
       });
 
       it("ignores fields it does not know", async () => {
@@ -189,13 +198,13 @@ describe("RunListFile", () => {
         const { display_title: _, ...untitled } = run(27);
         const held = [...runs(30, 28), untitled, ...runs(26, 21)];
         await write({
-          heads: [{ ...head(runs(30, 21), { complete: true }), runs: held }],
+          heads: [{ ...head(runs(30, 21), { drift: 2 }), runs: held }],
         });
 
         const loaded = await loadHead();
 
         expect(ids(loaded.runs)).toEqual([30, 29, 28]);
-        expect(loaded.complete).toBe(false);
+        expect(loaded.drift).toBe(0);
       });
 
       it("cuts a head back above the first run held out of order", async () => {
