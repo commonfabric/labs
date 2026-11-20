@@ -7,6 +7,7 @@
  * report, and the words stay on the reports board.
  */
 
+import { maxOf } from "@commonfabric/collections/math";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type { Report } from "./read.ts";
@@ -267,7 +268,7 @@ export function bodyOf(reports: readonly Report[]): string {
     `- Kind: ${listed(distinct(reports, (s) => [s.kind]))}`,
     `- Cause: ${listed(distinct(reports, (s) => [s.cause]))}`,
     `- Stop: ${listed(distinct(reports, (s) => [s.stop]))}`,
-    `- Retries: ${retries.length === 0 ? "unknown" : Math.max(...retries)}`,
+    `- Retries: ${retries.length === 0 ? "unknown" : maxOf(retries)}`,
     `- Failing probes: ${listed(distinct(reports, (s) => s.probes))}`,
     `- CFS releases: ${listed(distinct(reports, (s) => [s.release]))}`,
     `- Count: ${reports.length}`,
