@@ -1219,7 +1219,7 @@ export const compareModule = async (
     outcome.outcome !== "committed" ? [] : [{
       index,
       binding: outcome.binding,
-      event: outcome.event === "" ? undefined : JSON.parse(outcome.event),
+      event: outcome.sent,
       at: (outcome.elements ?? []).map(({ key }) => Number(key)),
     }]
   );

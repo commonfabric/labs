@@ -159,7 +159,13 @@ export type ModuleResult = {
   decided?: Run["decided"];
   events?: number;
   /** What became of each event, with the event the generator made. */
-  outcomes?: (Run["events"][number] & { event: string; within?: Within })[];
+  outcomes?: (Run["events"][number] & {
+    /** The event as text, cut at 300 characters. */
+    event: string;
+    /** The event as it was sent; absent from a result read from a file. */
+    sent?: unknown;
+    within?: Within;
+  })[];
   /** The kept outputs the run holds no value at. */
   missing?: {
     path: string;
@@ -506,11 +512,18 @@ export const runModule = async (
     events: events.length,
     outcomes: run.events.map((outcome, index) => {
       const within = withinOf(plan.bindings?.[outcome.binding]?.within);
-      return {
+      const held = {
         ...outcome,
         event: JSON.stringify(events[index]?.event)?.slice(0, 300) ?? "",
         ...(within === undefined ? {} : { within }),
       };
+      // The event itself, for a caller that sends it again. The results
+      // file holds the cut text alone, so the member is not enumerable.
+      Object.defineProperty(held, "sent", {
+        value: events[index]?.event,
+        enumerable: false,
+      });
+      return held;
     }),
     missing: run.missing.map((entry) => ({
       path: entry.path.join("/"),
