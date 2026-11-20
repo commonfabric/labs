@@ -40,8 +40,8 @@ type TestProfile = AddIntegrity<
 /** The gesture a start takes, as a client's start control makes it. */
 const startGesture = { surface: CHAT_START_SURFACE, action: CHAT_START_ACTION };
 
-/** A principal as long as a real one, which the list shortens. */
-const DANA = "did:key:z6MkecWJLQz2vTvJQeDQbKjZ7CMuGJQDW62248YMiefPYdTN";
+/** A stand-in principal as long as a real one, which the list shortens. */
+const DANA = "did:key:z6MkTestFabriChatDirectLabe1CounterpartKeyXyzAbcd9";
 
 /** A stand-in principal short enough that the list shows it whole. */
 const BOB = "did:key:z6MkBob";
@@ -83,7 +83,7 @@ export default pattern(() => {
         assertion: assert(() =>
           manager.rooms.length === 1 &&
           manager.rooms[0]?.counterpart === DANA &&
-          listedLabels(manager[UI]).join("|") === "With did:key:…YdTN"
+          listedLabels(manager[UI]).join("|") === "With did:key:…bcd9"
         ),
       },
       {
@@ -96,7 +96,7 @@ export default pattern(() => {
         assertion: assert(() =>
           manager.rooms.length === 2 &&
           listedLabels(manager[UI]).sort().join("|") ===
-            `With ${BOB}|With did:key:…YdTN`
+            `With ${BOB}|With did:key:…bcd9`
         ),
       },
     ],
