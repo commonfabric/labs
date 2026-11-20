@@ -162,6 +162,16 @@ export type Inspect = {
   ): void;
   /** The reasons of the commits refused at each settle, as it settles. */
   refused?(reasons: readonly string[]): void;
+  /**
+   * The instance and its storage once the event at `position` of the
+   * events given was handled.
+   */
+  sent?(
+    runtime: Runtime,
+    hooks: RuntimeTransactions,
+    instance: Instance,
+    position: number,
+  ): void;
   /** The instance and its storage once every event was handled. */
   end?(
     runtime: Runtime,
@@ -443,6 +453,7 @@ export const inStorage = async (
         restoreRandom();
       }
       compare(`after event ${index}`, memory?.[position + 1]);
+      inspect.sent?.(runtime, hooks, instance, position);
     }
     inspect.end?.(runtime, hooks, instance);
     const stored = hooks.stored();

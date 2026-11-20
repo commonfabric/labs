@@ -15,6 +15,7 @@
  * the seeded home (`wish-home.ts`), which a `wish` reads.
  */
 import { type Artifact, Instance } from "../exec/executor.ts";
+import { linkedSchema } from "../exec/store.ts";
 import { generateValue, type Schema } from "./generate.ts";
 import type { LabeledInput } from "./harness.ts";
 import type { instanceOptions, Sent } from "./integrated.ts";
@@ -113,6 +114,46 @@ export const perturbed = (
   return value;
 };
 
+/**
+ * The events of a scenario three times over: in the reverse of the order
+ * given, then in the order given with each value changed (`perturbed`,
+ * under the schema the binding declares for its event), then in the reverse
+ * order again with that value changed again. Every handler the scenario
+ * runs then runs again on what its own earlier run and the runs of the
+ * other handlers stored, with an event that differs from the earlier ones,
+ * and both before and after each other handler.
+ */
+export const repeatedEvents = (
+  plan: { bindings?: readonly object[] },
+  schemas: readonly { id: string; schema?: unknown }[],
+  events: readonly { binding: number; event: unknown }[],
+): { binding: number; event: unknown }[] => {
+  const changed = (binding: number, event: unknown): unknown => {
+    const declared = (plan.bindings?.[binding] as
+      | { eventSchema?: string }
+      | undefined)?.eventSchema;
+    const schema = linkedSchema(
+      schemas.find((entry) => entry.id === declared)?.schema as
+        | Schema
+        | undefined,
+    ) ?? true;
+    return perturbed(event, schema, schema, `event-${binding}`);
+  };
+  const once = events.map(({ binding, event }) => ({
+    binding,
+    event: changed(binding, event),
+  }));
+  const twice = once.map(({ binding, event }) => ({
+    binding,
+    event: changed(binding, event),
+  }));
+  return [
+    ...events.map(({ binding, event }) => ({ binding, event })).reverse(),
+    ...once,
+    ...twice.reverse(),
+  ];
+};
+
 /** One labeled input and the run with its value alone changed. */
 export type Source = {
   /** The input's name, or `PROFILE_SOURCE`. */
@@ -140,22 +181,26 @@ const firstLine = (error: unknown): string =>
   `${(error as Error)?.message ?? error}`.split("\n")[0].slice(0, 120);
 
 /**
- * Runs the scenario in memory as given, twice, and once for each labeled
- * input with that input alone changed (`perturbed`). A scenario whose two
- * runs as given differ, or that reads the clock, has no determined
- * dependencies and is skipped with the reason.
+ * The runs in memory of one scenario, advanced one event at a time: the
+ * scenario as given, twice, and once for each labeled input with that
+ * input alone changed (`perturbed`). `start` makes the runs with no event
+ * sent, each call of `advance` sends the next event to every run, and
+ * `runs` gives the runs as they then are. Where the two runs as given
+ * differ when `runs` is called, or the scenario read the clock, there are no
+ * determined dependencies from then on, and `runs` gives the reason.
  */
-export const perturbedRuns = async (
+export const steppedRuns = (
   artifact: Artifact,
   argument: Record<string, unknown>,
   events: readonly Sent[],
   options: ReturnType<typeof instanceOptions>,
   inputs: Record<string, LabeledInput>,
-): Promise<PerturbedRuns> => {
+): { start(): Promise<void>; advance(): void; runs(): PerturbedRuns } => {
   const began = performance.now();
   let runs = 0;
+  let sent = 0;
   const wishes = hasWish(artifact.plan);
-  const run = async (
+  const start = async (
     given: Record<string, unknown>,
     profile?: (value: unknown) => unknown,
   ): Promise<Instance> => {
@@ -168,9 +213,8 @@ export const perturbedRuns = async (
     // The draws of the start are seeded as those of each event are, so
     // that two runs draw alike.
     seedRandom(eventSeed(-1));
-    let instance: Instance;
     try {
-      instance = drawing(() =>
+      return drawing(() =>
         new Instance(artifact, structuredClone(given), {
           ...options,
           // The clock holds one time in every run.
@@ -183,73 +227,116 @@ export const perturbedRuns = async (
     } finally {
       restoreRandom();
     }
-    for (const { index, binding, event, at } of events) {
-      seedRandom(eventSeed(index));
-      try {
-        drawing(() => instance.send(binding, structuredClone(event), at));
-      } finally {
-        restoreRandom();
-      }
+  };
+  const send = (instance: Instance, { index, binding, event, at }: Sent) => {
+    seedRandom(eventSeed(index));
+    try {
+      drawing(() => instance.send(binding, structuredClone(event), at));
+    } finally {
+      restoreRandom();
     }
-    return instance;
   };
   const done = (result: Omit<PerturbedRuns, "runs" | "ms">) => ({
     ...result,
     runs,
     ms: performance.now() - began,
   });
-  let baseline: Instance;
-  try {
-    baseline = await run(argument);
-    const again = await run(argument);
-    if (baseline.store.docs.has(CLOCK)) {
-      return done({ skipped: "reads the clock", sources: [] });
-    }
-    if (
-      JSON.stringify(baseline.result()) !== JSON.stringify(again.result())
-    ) {
-      return done({
-        skipped: "two runs on one scenario give different values",
-        sources: [],
-      });
-    }
-  } catch (error) {
-    return done({
-      skipped: `the run in memory fails: ${firstLine(error)}`,
-      sources: [],
-    });
-  }
+  let baseline: Instance | undefined;
+  let again: Instance | undefined;
+  let skipped: string | undefined;
   const sources: Source[] = [];
-  const attempt = async (
-    name: string,
-    given: Record<string, unknown> | undefined,
-    profile?: (value: unknown) => unknown,
-  ) => {
-    if (given === undefined) {
-      sources.push({ name, failed: "no value of the type differs" });
-      return;
+  const current = (): PerturbedRuns => {
+    if (skipped === undefined && baseline !== undefined) {
+      if (baseline.store.docs.has(CLOCK)) skipped = "reads the clock";
+      else if (
+        JSON.stringify(baseline.result()) !== JSON.stringify(again?.result())
+      ) skipped = "two runs on one scenario give different values";
     }
-    try {
-      sources.push({ name, instance: await run(given, profile) });
-    } catch (error) {
-      sources.push({ name, failed: firstLine(error) });
-    }
+    return skipped !== undefined
+      ? done({ skipped, sources: [] })
+      : done({ baseline, sources: sources.map((source) => ({ ...source })) });
   };
-  for (const [name, input] of Object.entries(inputs)) {
-    if (!(name in argument)) continue;
-    const schema = input.schema as Schema;
-    const changed = perturbed(argument[name], schema, schema, name);
-    await attempt(
-      name,
-      JSON.stringify(changed) === JSON.stringify(argument[name])
-        ? undefined
-        : { ...argument, [name]: changed },
-    );
-  }
-  if (wishes) {
-    await attempt(PROFILE_SOURCE, argument, (value) => perturbed(value));
-  }
-  return done({ baseline, sources });
+  return {
+    start: async () => {
+      try {
+        baseline = await start(argument);
+        again = await start(argument);
+      } catch (error) {
+        skipped = `the run in memory fails: ${firstLine(error)}`;
+        return;
+      }
+      const attempt = async (
+        name: string,
+        given: Record<string, unknown> | undefined,
+        profile?: (value: unknown) => unknown,
+      ) => {
+        if (given === undefined) {
+          sources.push({ name, failed: "no value of the type differs" });
+          return;
+        }
+        try {
+          sources.push({ name, instance: await start(given, profile) });
+        } catch (error) {
+          sources.push({ name, failed: firstLine(error) });
+        }
+      };
+      for (const [name, input] of Object.entries(inputs)) {
+        if (!(name in argument)) continue;
+        const schema = input.schema as Schema;
+        const changed = perturbed(argument[name], schema, schema, name);
+        await attempt(
+          name,
+          JSON.stringify(changed) === JSON.stringify(argument[name])
+            ? undefined
+            : { ...argument, [name]: changed },
+        );
+      }
+      if (wishes) {
+        await attempt(PROFILE_SOURCE, argument, (value) => perturbed(value));
+      }
+    },
+    advance: () => {
+      const next = events[sent];
+      sent += 1;
+      if (next === undefined || skipped !== undefined) return;
+      try {
+        send(baseline!, next);
+        send(again!, next);
+      } catch (error) {
+        skipped = `the run in memory fails: ${firstLine(error)}`;
+        return;
+      }
+      for (const source of sources) {
+        if (source.instance === undefined) continue;
+        try {
+          send(source.instance, next);
+        } catch (error) {
+          source.instance = undefined;
+          source.failed = firstLine(error);
+        }
+      }
+    },
+    runs: current,
+  };
+};
+
+/**
+ * Runs the scenario in memory as given, twice, and once for each labeled
+ * input with that input alone changed (`perturbed`), with every event sent
+ * (`steppedRuns`). A scenario whose two runs as given differ, or that reads
+ * the clock, has no determined dependencies and is skipped with the reason.
+ */
+export const perturbedRuns = async (
+  artifact: Artifact,
+  argument: Record<string, unknown>,
+  events: readonly Sent[],
+  options: ReturnType<typeof instanceOptions>,
+  inputs: Record<string, LabeledInput>,
+): Promise<PerturbedRuns> => {
+  const stepped = steppedRuns(artifact, argument, events, options, inputs);
+  await stepped.start();
+  for (const _ of events) stepped.advance();
+  return stepped.runs();
 };
 
 /**

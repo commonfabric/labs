@@ -88,7 +88,9 @@ import {
   type PerturbedRuns,
   perturbedRuns,
   PROFILE_SOURCE,
+  repeatedEvents,
   sentEvents,
+  steppedRuns,
   valueAt,
 } from "./perturbation.ts";
 import type {
@@ -1002,6 +1004,17 @@ export type ModuleLabels = {
   on?: Totals;
   /** The check of the stored labels against the values (`soundnessOf`). */
   soundness?: Soundness;
+  /**
+   * The same check on a second run with the option on, in which the events
+   * of the scenario are sent three times over, each time with other values
+   * (`repeatedEvents`), with the reasons of the commits that run had
+   * refused and why it stopped, where it did.
+   */
+  repeated?: {
+    soundness?: Soundness;
+    refused: string[];
+    failedOn?: string;
+  };
 };
 
 const totals = (figures: readonly Figure[]): Totals => {
@@ -1218,6 +1231,11 @@ export type SoundnessFailure = {
    * the row, read with every link followed, holds the clause.
    */
   today?: "holds the clause" | "lacks the clause";
+  /**
+   * Where the check ran after each event: the position of the first event
+   * after which the stored label lacked the clause.
+   */
+  event?: number;
 };
 
 /** What the check of `soundnessOf` found for one module. */
@@ -1242,6 +1260,8 @@ export type Soundness = {
    * no finding (`unstoredAfter`).
    */
   unstored?: SoundnessFailure[];
+  /** Where the check ran after each event: how many times it ran. */
+  steps?: number;
 };
 
 /**
@@ -1476,18 +1496,112 @@ export const checkSoundness = (
 };
 
 /**
+ * Runs `events` on the executor with its documents in storage and the option
+ * on, and checks the labels it stored against the values (`checkSoundness`)
+ * after each event, against runs in memory advanced to the same event
+ * (`steppedRuns`): a label that a later event's write would cover is found
+ * at the event that leaves it too narrow. Returns the check of the last
+ * event with every finding, each at the first event it was found after; the
+ * reason of each commit the storage refused; and why the run stopped, where
+ * a write after a refused commit failed. With a refused commit the findings
+ * are not counted (`unstoredAfter`).
+ */
+export const soundnessAfterEachEvent = async (
+  artifact: Artifact,
+  argument: Record<string, unknown>,
+  events: Sent[],
+  options: ReturnType<typeof instanceOptions>,
+  inputs: Record<string, LabeledInput>,
+  clauses?: Parameters<typeof checkWrites>[3],
+): Promise<
+  { soundness: Soundness | undefined; refused: string[]; failedOn?: string }
+> => {
+  const plan = artifact.plan as unknown as LabelPlan;
+  const stepped = steppedRuns(artifact, argument, events, options, inputs);
+  await stepped.start();
+  const checks: OracleCheck[] = [];
+  const refused: string[] = [];
+  const failures = new Map<string, SoundnessFailure>();
+  let last: Soundness | undefined;
+  let steps = 0;
+  let main: string | undefined;
+  let failedOn: string | undefined;
+  try {
+    await inStorage(
+      artifact,
+      argument,
+      events,
+      options,
+      undefined,
+      true,
+      true,
+      {
+        committed: (runtime, _hooks, writes) => {
+          main ??= writes[0]?.instance;
+          for (
+            const check of checkWrites(runtime, plan, writes, clauses, main)
+          ) {
+            checks.push(check);
+          }
+        },
+        refused: (reasons) => {
+          for (const reason of reasons) refused.push(reason);
+        },
+        sent: (runtime, hooks, instance, position) => {
+          stepped.advance();
+          last = checkSoundness(
+            runtime,
+            hooks,
+            instance,
+            plan,
+            stepped.runs(),
+            inputs,
+            checks,
+          );
+          steps += 1;
+          for (const failure of last?.failures ?? []) {
+            const key = `${failure.kind} ${failure.path} ${failure.input}`;
+            if (!failures.has(key)) {
+              failures.set(key, { ...failure, event: position });
+            }
+          }
+        },
+      },
+    );
+  } catch (error) {
+    failedOn = `${(error as Error)?.message ?? error}`.split("\n")[0]
+      .slice(0, 160);
+  }
+  const found: Soundness | undefined = last === undefined
+    ? undefined
+    : { ...(last as Soundness), failures: [...failures.values()], steps };
+  return {
+    soundness: unstoredAfter(found, refused),
+    refused,
+    ...(failedOn === undefined ? {} : { failedOn }),
+  };
+};
+
+/**
  * Runs one scenario on the executor with its documents in storage and the
  * option on, and checks the labels it stored against the values
- * (`checkSoundness`). `name` names the instance. Returns what the check
- * found and the reason of each commit the storage refused.
+ * (`checkSoundness`). `name` names the instance. With `repeated`, the
+ * events are sent three times over, each time with other values
+ * (`repeatedEvents`), and the check runs after each event
+ * (`soundnessAfterEachEvent`). Returns what the check found and the reason of each
+ * commit the storage refused.
  */
 export const soundnessOfScenario = async (
   name: string,
   artifact: Artifact,
   artifacts: (id: string) => Artifact | undefined,
   argument: Record<string, unknown>,
-  events: readonly { binding: number; event: unknown }[],
+  given: readonly { binding: number; event: unknown }[],
+  repeated = false,
 ): Promise<{ soundness: Soundness | undefined; refused: string[] }> => {
+  const events = repeated
+    ? repeatedEvents(artifact.plan, artifact.schemas, given)
+    : given;
   const plan = artifact.plan as unknown as LabelPlan;
   const inputs = generateInputs(
     artifact.plan as Parameters<typeof generateInputs>[0],
@@ -1498,6 +1612,16 @@ export const soundnessOfScenario = async (
     .did();
   const options = instanceOptions(name, space, artifacts);
   const sent = sentEvents(artifact, argument, events, options);
+  if (repeated) {
+    const { soundness, refused } = await soundnessAfterEachEvent(
+      artifact,
+      argument,
+      sent,
+      options,
+      inputs,
+    );
+    return { soundness, refused };
+  }
   const runs = await perturbedRuns(artifact, argument, sent, options, inputs);
   const checks: OracleCheck[] = [];
   const refused: string[] = [];
@@ -1676,6 +1800,34 @@ export const compareModule = async (
     failed = `${(error as Error)?.message ?? error}`.split("\n")[0]
       .slice(0, 160);
   }
+  // The check of the stored labels against the values once more, on a run
+  // of its own in which every event is sent three times, each time with
+  // other values, and the check runs after each event: a handler then runs
+  // on what its earlier run and the runs of the other handlers stored. The
+  // rows beside today's are those of the scenario as given.
+  let repeated: ModuleLabels["repeated"];
+  if (events.length > 0) {
+    const all = repeatedEvents(artifact.plan, artifact.schemas, events);
+    const again: Sent[] = all.map(({ binding, event }, index) => ({
+      index,
+      binding,
+      event,
+      // The element positions of the event the repeated one was made from.
+      at: events[
+        Math.floor(index / events.length) === 1
+          ? index % events.length
+          : events.length - 1 - index % events.length
+      ].at,
+    }));
+    repeated = await soundnessAfterEachEvent(
+      artifact,
+      argument,
+      again,
+      options,
+      inputs,
+      clauses,
+    );
+  }
   const { rows, unmatched } = compareWithToday(
     plan,
     today.rows ?? [],
@@ -1735,6 +1887,7 @@ export const compareModule = async (
     ...(soundness === undefined
       ? {}
       : { soundness: unstoredAfter(soundness, refusedOn) }),
+    ...(repeated === undefined ? {} : { repeated }),
   };
 };
 
@@ -1848,6 +2001,82 @@ const writeTable = (
   );
 
 /**
+ * Prints what the check of the stored labels against the values found over
+ * the modules, under `title`, and returns its findings: those counted, and
+ * those of runs with a refused commit.
+ */
+const reportSoundness = (
+  title: string,
+  ran: readonly { module: string; soundness?: Soundness }[],
+) => {
+  const checkedModules = ran.filter((result) =>
+    result.soundness !== undefined && result.soundness.skipped === undefined
+  );
+  const total = (key: "runs" | "ms" | "checked" | "dependent") =>
+    ran.reduce((sum, result) => sum + (result.soundness?.[key] ?? 0), 0);
+  console.log(
+    `${title}: ${checkedModules.length} modules, ${
+      total("runs")
+    } runs in memory in ${total("ms").toFixed(0)} ms, ${
+      total("checked")
+    } pairs of a stored position and a labeled input, ${
+      total("dependent")
+    } with a value that depends on the input`,
+  );
+  for (
+    const [reason, group] of count(
+      ran.filter((result) => result.soundness?.skipped !== undefined),
+      (result) => result.soundness!.skipped!,
+    )
+  ) console.log(`  not checked, ${group.length}: ${reason}`);
+  const unchanged = ran.flatMap((result) =>
+    Object.values(result.soundness?.unchanged ?? {})
+  );
+  for (const [reason, group] of count(unchanged, (reason) => reason)) {
+    console.log(
+      `  an input without a run of its own, ${group.length}: ${reason}`,
+    );
+  }
+  const failuresOf = (member: "failures" | "unstored") =>
+    ran.flatMap((result) =>
+      (result.soundness?.[member] ?? []).map((failure) => ({
+        module: result.module,
+        ...failure,
+      }))
+    );
+  const failures = failuresOf("failures");
+  console.log(
+    `soundness failures, a value that depends on an input and stores no clause of it: ${failures.length} in ${
+      new Set(failures.map(({ module }) => module)).size
+    } modules`,
+  );
+  for (
+    const [kind, group] of count(
+      failures,
+      (failure) =>
+        `${failure.kind}, today's label ${failure.today ?? "is not compared"}`,
+    )
+  ) {
+    console.log(
+      `  ${group.length} in ${
+        new Set(group.map(({ module }) => module)).size
+      } modules: ${kind}\n      e.g. ${group[0].module} /${
+        group[0].path
+      } input ${group[0].input}\n      stored ${
+        group[0].stored.slice(0, 300)
+      }\n      template ${group[0].template.slice(0, 300)}`,
+    );
+  }
+  const unstored = failuresOf("unstored");
+  console.log(
+    `  in runs with a refused commit, not counted: ${unstored.length} in ${
+      new Set(unstored.map(({ module }) => module)).size
+    } modules`,
+  );
+  return { failures, unstored };
+};
+
+/**
  * Prints the summary, and with `tables` writes the full tables there: the
  * rows beside today's, the records that differ from the evaluator, the
  * refusals with the option on alone, and the figures of each module.
@@ -1954,70 +2183,52 @@ const report = async (file: string, tables: string | undefined) => {
       } modules: ${reason}\n      e.g. ${group[0].module}`,
     );
   }
-  const checkedModules = ran.filter((result) =>
-    result.soundness !== undefined && result.soundness.skipped === undefined
+  const { failures, unstored } = reportSoundness(
+    "stored labels checked against the values",
+    ran.map((result) => ({
+      module: result.module,
+      soundness: result.soundness,
+    })),
   );
-  const total = (key: "runs" | "ms" | "checked" | "dependent") =>
-    ran.reduce((sum, result) => sum + (result.soundness?.[key] ?? 0), 0);
+  const again = reportSoundness(
+    "the same check with every event sent three times, each time with other values",
+    ran.map((result) => ({
+      module: result.module,
+      soundness: result.repeated?.soundness,
+    })),
+  );
+  const refusedAgain = ran.flatMap((result) =>
+    [
+      ...new Set(
+        (result.repeated?.refused ?? []).filter((reason) =>
+          !(result.refusedOnly ?? []).some((once) =>
+            refusalReason(once) === refusalReason(reason)
+          )
+        ).map(refusalReason),
+      ),
+    ].map((reason) => ({ module: result.module, reason }))
+  );
   console.log(
-    `stored labels checked against the values: ${checkedModules.length} modules, ${
-      total("runs")
-    } runs in memory in ${total("ms").toFixed(0)} ms, ${
-      total("checked")
-    } pairs of a stored position and a labeled input, ${
-      total("dependent")
-    } with a value that depends on the input`,
-  );
-  for (
-    const [reason, group] of count(
-      ran.filter((result) => result.soundness?.skipped !== undefined),
-      (result) => result.soundness!.skipped!,
-    )
-  ) console.log(`  not checked, ${group.length}: ${reason}`);
-  const unchanged = ran.flatMap((result) =>
-    Object.values(result.soundness?.unchanged ?? {})
-  );
-  for (const [reason, group] of count(unchanged, (reason) => reason)) {
-    console.log(
-      `  an input without a run of its own, ${group.length}: ${reason}`,
-    );
-  }
-  const failuresOf = (member: "failures" | "unstored") =>
-    ran.flatMap((result) =>
-      (result.soundness?.[member] ?? []).map((failure) => ({
-        module: result.module,
-        ...failure,
-      }))
-    );
-  const failures = failuresOf("failures");
-  console.log(
-    `soundness failures, a value that depends on an input and stores no clause of it: ${failures.length} in ${
-      new Set(failures.map(({ module }) => module)).size
+    `  commits refused in that run for a reason the run of the scenario as given did not have: ${refusedAgain.length} in ${
+      new Set(refusedAgain.map(({ module }) => module)).size
     } modules`,
   );
+  for (const [reason, group] of count(refusedAgain, ({ reason }) => reason)) {
+    console.log(
+      `    ${group.length}: ${reason}\n        e.g. ${group[0].module}`,
+    );
+  }
+  const stoppedAgain = ran.filter((result) =>
+    result.repeated?.failedOn !== undefined
+  );
+  console.log(`  runs that stopped: ${stoppedAgain.length}`);
   for (
-    const [kind, group] of count(
-      failures,
-      (failure) =>
-        `${failure.kind}, today's label ${failure.today ?? "is not compared"}`,
-    )
+    const [reason, group] of count(stoppedAgain, (r) => r.repeated!.failedOn!)
   ) {
     console.log(
-      `  ${group.length} in ${
-        new Set(group.map(({ module }) => module)).size
-      } modules: ${kind}\n      e.g. ${group[0].module} /${
-        group[0].path
-      } input ${group[0].input}\n      stored ${
-        group[0].stored.slice(0, 300)
-      }\n      template ${group[0].template.slice(0, 300)}`,
+      `    ${group.length}: ${reason}\n        e.g. ${group[0].module}`,
     );
   }
-  const unstored = failuresOf("unstored");
-  console.log(
-    `  in runs with a refused commit, not counted: ${unstored.length} in ${
-      new Set(unstored.map(({ module }) => module)).size
-    } modules`,
-  );
   const stopped = ran.filter((result) => result.failedOn !== undefined);
   console.log(
     `runs with the option on that stopped after a refused commit: ${stopped.length}`,
@@ -2056,6 +2267,9 @@ const report = async (file: string, tables: string | undefined) => {
   await writeTable(`${tables}/unsound-bindings.tsv`, unsound);
   await writeTable(`${tables}/soundness-failures.tsv`, failures);
   await writeTable(`${tables}/soundness-unstored.tsv`, unstored);
+  await writeTable(`${tables}/soundness-repeated-failures.tsv`, again.failures);
+  await writeTable(`${tables}/soundness-repeated-unstored.tsv`, again.unstored);
+  await writeTable(`${tables}/refused-repeated.tsv`, refusedAgain);
   await writeTable(`${tables}/refused-with-option-on.tsv`, refusedOnly);
   await writeTable(
     `${tables}/modules.tsv`,
@@ -2083,6 +2297,13 @@ const report = async (file: string, tables: string | undefined) => {
       soundnessChecked: result.soundness?.checked ?? 0,
       soundnessRuns: result.soundness?.runs ?? 0,
       soundnessMs: (result.soundness?.ms ?? 0).toFixed(1),
+      repeated: result.repeated === undefined
+        ? "no event"
+        : result.repeated.failedOn ?? result.repeated.soundness?.skipped ??
+          "checked",
+      repeatedFailures: result.repeated?.soundness?.failures.length ?? 0,
+      repeatedDependent: result.repeated?.soundness?.dependent ?? 0,
+      repeatedChecked: result.repeated?.soundness?.checked ?? 0,
     })),
   );
 };

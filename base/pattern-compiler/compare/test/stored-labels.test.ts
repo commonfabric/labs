@@ -59,6 +59,28 @@ describe("stored-labels", () => {
       expect(dependent).toBeGreaterThan(300);
     });
 
+    it("finds it with the events of each fixture sent three times, each time with other values", async () => {
+      const found: string[] = [];
+      let dependent = 0;
+      for (const scenario of await fixtureScenarios()) {
+        if (scenario.events.length === 0) continue;
+        const name = `${scenario.fixture} (${scenario.scenario})`;
+        const { soundness } = await soundnessOfScenario(
+          name,
+          scenario.artifact,
+          scenario.artifacts,
+          scenario.argument,
+          scenario.events,
+          true,
+        );
+        dependent += soundness?.dependent ?? 0;
+        for (const line of lines(name, soundness)) found.push(line);
+      }
+
+      expect(found).toEqual([]);
+      expect(dependent).toBeGreaterThan(100);
+    });
+
     it("finds the user atom of the seeded profile in the stored label of every value of `wish-home` that depends on the profile", async () => {
       const { soundness, refused } = await soundnessOfScenario(
         "wish-home",

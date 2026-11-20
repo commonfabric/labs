@@ -8,6 +8,7 @@ import {
   concretePaths,
   perturbed,
   perturbedRuns,
+  repeatedEvents,
   sentEvents,
   valueAt,
 } from "../perturbation.ts";
@@ -71,6 +72,29 @@ describe("perturbation", () => {
 
     it("leaves an empty array whose items have no schema empty", () => {
       expect(perturbed([])).toEqual([]);
+    });
+  });
+
+  // `fixtures/remove-shift.tsx`: `addWord` and `drop` take an event with a
+  // word, and `addNote` an event it reads nothing of.
+  describe("repeatedEvents()", () => {
+    const repeated = async () => {
+      const artifact = await artifactOf("remove-shift");
+      return repeatedEvents(artifact.plan, artifact.schemas, [
+        { binding: 1, event: { word: "x" } },
+        { binding: 0, event: {} },
+      ]);
+    };
+
+    it("gives the events in reverse, then in order with each value changed, then in reverse with that value changed", async () => {
+      expect(await repeated()).toEqual([
+        { binding: 0, event: {} },
+        { binding: 1, event: { word: "x" } },
+        { binding: 1, event: { word: "x~" } },
+        { binding: 0, event: {} },
+        { binding: 0, event: {} },
+        { binding: 1, event: { word: "x~~" } },
+      ]);
     });
   });
 
