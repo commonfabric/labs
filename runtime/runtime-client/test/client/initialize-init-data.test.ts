@@ -135,6 +135,7 @@ describe("initialize-init-data", () => {
         concurrentWatchRefresh: true,
         awaitHealth: true,
         iframeOuterFrameUrl: "/outer-frame",
+        branches: { "did:key:zSpace": "history:example" },
       } satisfies Required<RuntimeClientOptions>;
 
       const client = await RuntimeClient.initialize(transport, options);

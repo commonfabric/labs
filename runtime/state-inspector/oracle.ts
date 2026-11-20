@@ -12,26 +12,48 @@
 // (i.e. it is not vacuous).
 
 import type { SpaceDb } from "./db.ts";
-import { entityConflicts, type StaleRead } from "./conflicts.ts";
+import {
+  entityConflicts,
+  readCoverage,
+  readSetsNotKeptIn,
+  type StaleRead,
+} from "./conflicts.ts";
+
+/** What {@link readCoherence} found, and how much of the space it checked. */
+export interface ReadCoherence {
+  /** Every anomalous stale read; each is an INV-1 violation. */
+  anomalies: StaleRead[];
+
+  /**
+   * Commits whose reads the check could not replay: stored with a digest in
+   * place of confirmed reads (02-storage.md §3.3), hollowed by compaction,
+   * held in a payload that does not show them, holding a read it could not
+   * replay or resolve, or reading an entity at a basis older than what
+   * compaction kept of the instance read. Empty {@link anomalies} show the
+   * store coherent only when this is 0.
+   */
+  readSetsNotKept: number;
+}
 
 /**
  * Replays the engine's confirmed-read admission check over every entity in
- * the space and returns all anomalous stale reads. A healthy store returns
- * `[]`; any entry is an INV-1 violation (a committed read that the engine's
- * own conflict check would have rejected).
+ * the space. A healthy store whose commits all keep their reads gives no
+ * anomalies and no unchecked read sets; any anomaly is an INV-1 violation (a
+ * committed read that the engine's own conflict check would have rejected).
  */
-export function staleReadAnomalies(
+export function readCoherence(
   space: SpaceDb,
   opts: { branch?: string } = {},
-): StaleRead[] {
+): ReadCoherence {
   const ids = space.db
     .prepare(`SELECT DISTINCT id FROM revision ORDER BY id ASC`)
     .all<{ id: string }>();
+  // One pass over the log for the whole report, shared by every entity.
+  const coverage = readCoverage(space, { everyEntity: true });
   const anomalies: StaleRead[] = [];
   for (const { id } of ids) {
-    for (const staleRead of entityConflicts(space, id, opts).staleReads) {
-      anomalies.push(staleRead);
-    }
+    const { staleReads } = entityConflicts(space, id, { ...opts, coverage });
+    for (const staleRead of staleReads) anomalies.push(staleRead);
   }
-  return anomalies;
+  return { anomalies, readSetsNotKept: readSetsNotKeptIn(coverage) };
 }

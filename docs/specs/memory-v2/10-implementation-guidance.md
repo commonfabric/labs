@@ -41,8 +41,9 @@ target. In particular:
 - a refresh retracts a document a write left no watch reaching, by the
   attribution of tracked documents to what reached them (04-protocol.md section
   4.6.3); explicit watch-set replacement and removal retract the rest
-- branch lifecycle commands are not yet exposed on the v2 wire; current branch
-  creation keeps its fork-seq semantics until that cutover lands
+- branch create, delete, list, history and restore commands are on the v2 wire
+  (04-protocol.md section 4.3.8); branch creation keeps its fork-seq
+  semantics, taking no seq of its own (06-branching.md section 6.3.2)
 
 ## 1. Source Of Truth
 
@@ -324,7 +325,9 @@ through the core storage path:
 - branch-aware point-in-time reads
 - branch-aware watch scopes
 
-Public branch lifecycle commands, merge proposal generation, and advanced branch
+Beyond those, the branch lifecycle commands, sessions of a branch, history
+listing and restore of `06-branching.md` sections 6.15-6.18 are implemented.
+Merge proposal generation, serving loops on branches, and advanced branch
 live-sync behavior remain deferred. Do not block the seq/revision rewrite on
 merge ergonomics.
 

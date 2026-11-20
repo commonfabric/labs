@@ -296,6 +296,14 @@ behavior they change:
 - `state` and `diagnosticsCollector` — cross-stage communication and diagnostic
   collection (§2)
 
+`AssertDiagnosticsTransformer` records a method call's receiver when the call
+has no argument worth recording. It leaves a receiver within an optional chain
+intact, including when the `?.` occurs earlier than the method access, as in
+`entry?.revision.startsWith("1:")`. The chain retains its nullish
+short-circuiting, receiver binding, and single evaluation; arguments remain
+unevaluated when the chain short-circuits. An enclosing operator can still
+record the whole call's result (`test/assert-diagnostics.test.ts`).
+
 ## 5. Call Kind Detection Contract
 
 `detectCallKind()` drives multiple transformers. The set of recognized Common

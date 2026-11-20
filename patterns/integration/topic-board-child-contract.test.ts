@@ -173,9 +173,9 @@ describe("topic-board-child-contract", () => {
  * The board's mention pivot, exercised through a board and the topics it
  * created.
  *
- * `crossrefTable()` derives the whole reference graph once on the board, and
- * each topic reads its own row out of it. Testing that needs two things at the
- * same time: topics that are ON a board, so the pivot sees them, and
+ * The board's collection mirrors what each topic mentions, and each topic asks
+ * it which topics mention it. Testing that needs two things at the same time:
+ * topics that are ON a board, so the collection holds them, and
  * `mention` / `unmention` / `referencedBy` on those same topics. Here both
  * hold, because a caller files through the board and then addresses the
  * created topic by its own fid.
