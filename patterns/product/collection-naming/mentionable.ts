@@ -44,20 +44,20 @@ export interface MentionableRow {
  * `shortName` has produced no value carries the empty name, which is a row no
  * `#42` query matches.
  *
- * Declared structurally, and that is what makes the mid-sync guard a
- * compile-checked read: `get()` on a `ReadonlyCell` is declared to return a
- * value rather than `T | undefined`, so against a cell type omitting the guard
- * type-checks exactly as well as including it. A member with nothing behind it
- * yet — one appended a moment ago, still mid-sync — reads as `undefined` here
- * and gets no row rather than a junk one; the row appears on the next run.
+ * Each member's value type admits `undefined`, and that is what makes the
+ * mid-sync guard a compile-checked read: `get()` returns a value of the
+ * declared type, so against a value type without `undefined` omitting the
+ * guard type-checks exactly as well as including it. A member with nothing
+ * behind it yet — one appended a moment ago, still mid-sync — reads as
+ * `undefined` here and gets no row rather than a junk one; the row appears on
+ * the next run. A cell of the member's own type passes, because a
+ * `ReadonlyCell` accepts a cell whose value type is assignable to its own.
  */
 export function mentionableRowsOf(
   members: readonly (
-    | {
-      get():
-        | { [NAME]?: string; title?: string; shortName?: string }
-        | undefined;
-    }
+    | ReadonlyCell<
+      { [NAME]?: string; title?: string; shortName?: string } | undefined
+    >
     | undefined
   )[],
 ): MentionableRow[] {

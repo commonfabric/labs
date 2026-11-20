@@ -1,14 +1,14 @@
-import { UI, type VNode, type Writable } from "commonfabric";
+import { type ReadonlyCell, UI, type Writable } from "commonfabric";
 
 const isRecord = (value: unknown): value is Record<PropertyKey, unknown> =>
   typeof value === "object" && value !== null;
 
-export const readValue = (value: unknown): unknown => {
-  if (!isRecord(value) || typeof value.get !== "function") {
-    return value;
-  }
-  return (value.get as () => unknown)();
-};
+/** Whether `value` can be read with `get()`, as a cell can. */
+const isReadable = (value: unknown): value is ReadonlyCell<unknown> =>
+  isRecord(value) && typeof value.get === "function";
+
+export const readValue = (value: unknown): unknown =>
+  isReadable(value) ? value.get() : value;
 
 export const propsOf = (
   node: unknown,
@@ -321,18 +321,10 @@ export const answerOwnerCheck = (root: unknown, isOwner: boolean): void =>
 
 /** A rendered view reached as cells rather than as the values they hold. A
  * value read resolves a `$`-prop to the plain value its binding holds, so a
- * test that writes through a binding walks the view this way instead. */
-export interface ViewCell {
-  get(): unknown;
-  key(key: string | number): ViewCell;
-  set(value: unknown): void;
-}
-
-/** The view a handler receives as a `Writable<VNode>`, walkable by key. */
-export function viewCell(cell: Writable<VNode>): ViewCell;
-export function viewCell(cell: unknown): unknown {
-  return cell;
-}
+ * test that writes through a binding walks the view this way instead. A
+ * handle of `unknown` walks to any key, and the `Writable<VNode>` a handler
+ * receives passes as one. */
+export type ViewCell = Writable<unknown>;
 
 /** A node's children paired with the key each sits under. */
 const keyedChildren = (value: unknown): [string | number, unknown][] => {
