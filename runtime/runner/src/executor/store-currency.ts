@@ -359,7 +359,14 @@ export class StoreCurrency {
     const judged = await this.#server.judgeCurrencyRoots(
       this.#space,
       [...new Set(candidates.values())],
-      { excludePrincipal: this.#serviceIdentity, epoch: this.#epoch },
+      {
+        excludePrincipal: this.#serviceIdentity,
+        epoch: this.#epoch,
+        // A root that rests on a slice that read another space is judged
+        // and counted, and started all the same: nothing wakes a session
+        // whose root was left unstarted when that other space changes.
+        ...(!this.skips && { acrossSpaces: true }),
+      },
     );
     for (const [reason, count] of Object.entries(judged.refused)) {
       const counts = this.#stats.currency.refused;

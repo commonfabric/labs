@@ -198,10 +198,11 @@ describe("SpaceServer", () => {
     ),
   ];
 
-  /** What the currency index holds of the `space` slice of the piece. */
-  const recordOf = async (root: NormalizedFullLink) =>
+  /** What the currency index holds of the piece's slice at `slice`. */
+  const recordOf = async (root: NormalizedFullLink, slice = "space") =>
     selectCurrencyPiece(await server.engineForSpace(space), {
       piece: root.id,
+      slice,
     });
 
   /** Commits a write to a document no piece reads. */
@@ -288,7 +289,7 @@ describe("SpaceServer", () => {
           ["#profileName", "{ query: '#profileName' }"],
         ]
       ) {
-        it(`files the reads in the home space under the viewer's slice, and gives no other reason not to vouch, for ${target}`, async () => {
+        it(`files the reads in the home space under the viewer's slice, each at the seq it was read at, and stores that slice clean, for ${target}`, async () => {
           await seedHome();
           host = newHost("record");
           const { root } = await watch(wishProgram(options));
@@ -305,16 +306,103 @@ describe("SpaceServer", () => {
           const [viewer] = slicesAt(taken, "user");
           const others = taken.slices.filter((slice) => slice !== viewer);
           expect(taken.unvouched).toEqual([]);
-          expect(viewer.unvouched).toEqual(["foreign-read"]);
+          expect(taken.slices.flatMap((slice) => slice.unvouched)).toEqual([]);
           expect(otherSpacesReadBy(viewer)).toEqual([home]);
-          expect(others.flatMap((slice) => slice.unvouched)).toEqual([]);
+          expect(
+            viewer.reads.filter((read) => read.space === home).map((read) =>
+              typeof read.seq
+            ),
+          ).not.toContain("undefined");
           expect(others.flatMap(otherSpacesReadBy)).toEqual([]);
-          expect(Object.keys(host.stats().currency.unvouched)).toEqual([
-            "foreign-read",
-          ]);
+          expect(host.stats().currency.unvouched).toEqual({});
           expect(await recordOf(root)).toEqual({ mark: 0, epoch: EPOCH });
+          expect(await recordOf(root, viewer.key)).toEqual({
+            mark: 0,
+            epoch: EPOCH,
+          });
         });
       }
+
+      /**
+       * Serves a piece that wishes for `#favorites` until alice's slice of
+       * it is recorded, then parks the space, and returns the piece's root.
+       */
+      const serveAndPark = async (): Promise<NormalizedFullLink> => {
+        const { root } = await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(
+          cycles,
+          () =>
+            slicesAt(snapshotOf(root), "user").some((slice) =>
+              slice.reads.some((read) => read.space === home)
+            ),
+        );
+        await host!.whenQuiescent();
+        await host!.spaceServer(space)!.park("test-park");
+        return root;
+      };
+
+      /** Renames alice's favorite, as a runtime that runs nothing. */
+      const renameFavorite = async () => {
+        const writer = openRuntime(aliceSigner, false);
+        const favorite = writer.getCell<{ name: string }>(home, "favorite", {
+          type: "object",
+          properties: { name: { type: "string" } },
+        });
+        await favorite.sync();
+        const tx = writer.edit();
+        favorite.withTx(tx).key("name").set("another name");
+        expect((await tx.commit().settled).error).toBeUndefined();
+        await writer.storageManager.synced();
+        await closeLastRuntime();
+      };
+
+      it("counts a root that rests on the viewer's slice as one the store could serve, under `record`", async () => {
+        await seedHome();
+        host = newHost("record");
+        const root = await serveAndPark();
+
+        await touchSpace();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.servable).toBeGreaterThan(0);
+        expect(host.stats().currency.refused["owner-not-clean"])
+          .toBeUndefined();
+        expect(host.stats().currency.falseClean).toBe(0);
+      });
+
+      it("refuses that root once the home space changed while nothing served the piece, under `record`", async () => {
+        await seedHome();
+        host = newHost("record");
+        const root = await serveAndPark();
+
+        await renameFavorite();
+        await touchSpace();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.servable).toBe(0);
+        expect(host.stats().currency.refused["owner-not-clean"])
+          .toBeGreaterThan(0);
+      });
+
+      it("starts a piece whose root rests on the viewer's slice, under `skip`", async () => {
+        // Nothing wakes a session whose root was left unstarted when the
+        // home space changes, so the root is refused however current the
+        // slice is.
+
+        await seedHome();
+        host = newHost("skip");
+        const root = await serveAndPark();
+
+        await touchSpace();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.servedFromStore).toBe(0);
+        expect(host.stats().currency.refused["owner-not-clean"])
+          .toBeGreaterThan(0);
+      });
     });
 
     describe("recording a piece whose wish reads nothing outside its space", () => {

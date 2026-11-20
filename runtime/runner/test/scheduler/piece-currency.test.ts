@@ -62,7 +62,8 @@ describe("piece-currency", () => {
    * identity and holding the reads given for it, of which those in `clean`
    * are current. With none, the computation has no fan-out state, and
    * `reads` is what its one run read. `clocks` are the documents of the
-   * space that a clock writes. Each of `unattributed` is a computation that
+   * space that a clock writes, and `sourceSeqs` the seq the replica holds
+   * each document of another space at, by id. Each of `unattributed` is a computation that
    * names no piece, clean and live unless it says otherwise, with the
    * document it writes and what it read.
    */
@@ -75,6 +76,7 @@ describe("piece-currency", () => {
     status?: NodeStatus;
     reads?: Read[];
     clocks?: Array<Read["id"]>;
+    sourceSeqs?: Record<string, number>;
     unattributed?: Array<
       { writes: Read["id"]; reads: Read[]; status?: NodeStatus; live?: boolean }
     >;
@@ -153,6 +155,7 @@ describe("piece-currency", () => {
           clockDocumentKey({ space: SPACE, id })
         ),
       ),
+      sourceSeqOf: ({ id }) => options.sourceSeqs?.[id],
     };
     return snapshotPieceCurrency(state, SPACE, PIECE)!;
   };
@@ -278,6 +281,43 @@ describe("piece-currency", () => {
         expect(taken.unvouched).toEqual([]);
       });
 
+      it("names the seq of a read of another space's shared instance that the replica holds, and gives it as no reason", () => {
+        const far = "did:key:z6Mk-another-space" as MemorySpace;
+        const taken = snapshotOf({
+          reads: [
+            { space: far, id: "of:far" },
+            { space: far, id: "of:prefs", scope: "user" },
+          ],
+          sourceSeqs: { "of:far": 7, "of:prefs": 9 },
+        });
+
+        expect(sliceOf(taken, "space")?.reads).toEqual([
+          {
+            space: far,
+            id: "of:far",
+            scopeKey: "space",
+            derived: false,
+            seq: 7,
+          },
+          {
+            space: far,
+            id: "of:prefs",
+            scopeKey: ANY_INSTANCE,
+            derived: false,
+          },
+        ]);
+        expect(sliceOf(taken, "space")?.unvouched).toEqual(["foreign-read"]);
+        expect(
+          sliceOf(
+            snapshotOf({
+              reads: [{ space: far, id: "of:far" }],
+              sourceSeqs: { "of:far": 7 },
+            }),
+            "space",
+          )?.unvouched,
+        ).toEqual([]);
+      });
+
       it("reports a read of a document a clock writes as a reason its slice alone is not vouched for", () => {
         const taken = snapshotOf({
           instances: [
@@ -370,6 +410,7 @@ describe("piece-currency", () => {
               getSchedulingWrites: () => [],
             },
             clockDocuments: new Set(),
+            sourceSeqOf: () => undefined,
           },
           SPACE,
           PIECE,

@@ -116,7 +116,12 @@ of its runs at the snapshot:
 
 - a live computation is not clean, which covers one a throttle, a debounce
   or a convergence backoff is holding;
-- one read a document in another space;
+- one read a document in another space at an instance narrower than the
+  space, or at a seq its replica cannot name. Any other read in another
+  space is registered with that space's index
+  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)),
+  and the slice is stored against what it reports. What such a slice writes
+  is no current input of another slice;
 - one read a document whose writer in this runtime names no piece and
   cannot be answered for. A writer that is live, clean and runs once is
   answered for by the slice, which takes over what it read;
@@ -319,9 +324,12 @@ wrong.
 - **A space with effects always in flight records nothing.** Attributing an
   outbox entry to its piece lifts this.
 - **A piece with a source origin, or a root narrower than the space, always
-  starts, and so does a viewer's slice that read another space.**
-  [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
-  is the plan for the read in another space.
+  starts, and so does one whose root rests on a slice that read another
+  space.** Such a slice is recorded and judged, and counted under `record`;
+  `skip` starts its piece until a change in the other space can wake a
+  session
+  ([`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md),
+  step 4).
 - **A write a computation makes outside its declared surface is not in the
   write rows.** A document written that way reads as an input nothing
   computes.

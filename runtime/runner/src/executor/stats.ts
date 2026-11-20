@@ -357,8 +357,9 @@ export type ServingLoopStats = {
     recordsStored: number;
 
     /** Records sent of a piece the loop could not vouch for, by reason:
-     * `not-clean` (a live computation was not clean), `foreign-read` and
-     * `foreign-write` (another space), `unattributed-writer` (it read a
+     * `not-clean` (a live computation was not clean), `foreign-read` (a read
+     * in another space that the snapshot cannot name the instance or the seq
+     * of), `foreign-write` (another space), `unattributed-writer` (it read a
      * document whose writer names no piece and is not live, not clean, or
      * runs once for each viewer), `clock-read` (it read a document a clock
      * writes), `scoped-root`, `source-origin` and `no-pattern`. A record with
@@ -373,9 +374,10 @@ export type ServingLoopStats = {
     servable: number;
 
     /** Roots a judgment found the store could not serve, by the first reason
-     * found: `no-record`, `marked`, `other-epoch` (the root's piece), and
-     * `unvouched-instance`, `absent-owned`, `owner-not-clean` (a demanded
-     * instance of the piece or of one beneath it). */
+     * found: `no-record`, `marked`, `other-epoch`, `reads-another-space` (the
+     * root's piece), and `unvouched-instance`, `absent-owned`,
+     * `owner-not-clean` (a demanded instance of the piece or of one beneath
+     * it). */
     refused: Record<string, number>;
 
     /** Roots left unloaded and unstarted on that judgment, which only the

@@ -35,7 +35,10 @@ export type PieceUnvouchedReason =
   | "foreign-write"
   /** A live computation of the slice is not clean. */
   | "not-clean"
-  /** A live computation of the slice read a document in another space. */
+  /**
+   * A live computation of the slice read a document in another space, at an
+   * instance or a seq the snapshot cannot name.
+   */
   | "foreign-read"
   /**
    * A live computation of the slice read a document whose writer names no
@@ -57,19 +60,28 @@ export type PieceCurrencySlice = {
 
   /**
    * Why the slice cannot be vouched for, empty when it can: every live
-   * computation that ran at its key is clean, and everything they read is in
-   * the piece's space, is no document a clock writes, and has no writer the
-   * slice cannot answer for.
+   * computation that ran at its key is clean, and everything they read is no
+   * document a clock writes, has no writer the slice cannot answer for, and
+   * is in the piece's space or is a shared instance of another space that
+   * the snapshot names the seq of.
    */
   unvouched: PieceUnvouchedReason[];
 
   /**
    * The document instances the slice's live computations read, and those a
    * writer that names no piece read to write one of them. `scopeKey` is
-   * `ANY_INSTANCE` for a read whose instance the run does not name.
+   * `ANY_INSTANCE` for a read whose instance the run does not name. `seq`
+   * is, for a read in another space, the seq of that space this runtime's
+   * replica of it holds the instance at.
    */
   reads: Array<
-    { space: MemorySpace; id: string; scopeKey: string; derived: boolean }
+    {
+      space: MemorySpace;
+      id: string;
+      scopeKey: string;
+      derived: boolean;
+      seq?: number;
+    }
   >;
 
   /**
@@ -119,6 +131,15 @@ export type PieceCurrencyState = {
    * tick, and a tick takes a runtime that holds the clock.
    */
   clockDocuments: ReadonlySet<string>;
+
+  /**
+   * The seq of another space's store at which this runtime's replica of it
+   * holds the shared instance of the document at `address`, or `undefined`
+   * where it cannot say.
+   */
+  sourceSeqOf: (
+    address: Pick<IMemorySpaceAddress, "space" | "id">,
+  ) => number | undefined;
 };
 
 /** The key `PieceCurrencyState.clockDocuments` holds a document under. */
@@ -355,8 +376,17 @@ export function snapshotPieceCurrency(
       // while it is walked, and is walked in its turn.
       for (const read of slice.reads.values()) {
         if (read.space !== space) {
-          slice.unvouched.add("foreign-read");
-          reads.push({ ...read, derived: false });
+          // What says whether the instance moved since is its own space's
+          // index, which is asked with the seq it was read at.
+          const seq = read.scopeKey === "space"
+            ? state.sourceSeqOf(read)
+            : undefined;
+          if (seq === undefined) slice.unvouched.add("foreign-read");
+          reads.push({
+            ...read,
+            derived: false,
+            ...(seq !== undefined && { seq }),
+          });
           continue;
         }
         if (state.clockDocuments.has(clockDocumentKey(read))) {

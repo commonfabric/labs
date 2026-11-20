@@ -1709,6 +1709,9 @@ export class Scheduler {
         dependencies: this.#dependencies,
         writeIndex: this.#writeIndex,
         clockDocuments: this.#clockDocuments,
+        sourceSeqOf: ({ space: source, id }) =>
+          this.runtime.storageManager.open(source).replica
+            .speculationRetirementView?.(id, "space").confirmedSeq,
       },
       space,
       pieceRootId,

@@ -2535,7 +2535,10 @@ the per-epic implementation notes).
   `currency.servable` counts the roots the store could have served, and
   `currency.falseClean` counts the pieces that were held clean and then
   wrote a vouched output again with no input changed, each one a judgment
-  that would have served a stale value. `skip` acts on the judgment: a root
+  that would have served a stale value. Under `record` a root may rest on a
+  slice that read another space the same memory server holds, which is
+  asked what changed before the judgment; `skip` refuses such a root.
+  `skip` acts on the judgment: a root
   whose piece vouches for every demanded instance of it, in slices that are
   clean, is neither loaded nor started, until an input marks a slice a
   demanded instance is resolved under or a session's demand reaches an

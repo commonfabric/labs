@@ -165,15 +165,23 @@ import {
 } from "./session-reports.ts";
 import {
   advanceCurrencyCursor,
+  applyCurrencyImports,
   type CurrencyBatch,
   type CurrencyInstance,
   type CurrencyMarked,
   type CurrencyRefusal,
   type CurrencyStored,
+  dropUnreadCurrencyImports,
+  forgetCurrencySource,
   judgeCurrencyRoots,
+  pullCurrencyExports,
+  registerCurrencyReads,
   selectCurrencyPiece,
+  selectCurrencySourcePosition,
+  selectCurrencySources,
   storeCurrencyRecords,
 } from "./currency-index.ts";
+import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
   executeInvite,
@@ -12425,15 +12433,88 @@ export class Server {
   }
 
   /**
+   * The engine of `source`, a space whose store a slice of another space
+   * read, or `undefined` where this server cannot ask it: another owner
+   * holds the space, or it is deleted.
+   */
+  async #currencySourceEngine(
+    source: string,
+  ): Promise<Engine.Engine | undefined> {
+    if (
+      this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
+    ) return undefined;
+    const engine = await this.#openEngine(source);
+    return this.#deletedRefusal(engine, source) === null ? engine : undefined;
+  }
+
+  /**
+   * Brings what `space`'s currency index holds of the space `source` up to
+   * what `source` reports now, or forgets it where `source` cannot be asked.
+   */
+  async #followCurrencySource(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+  ): Promise<void> {
+    const sourceEngine = await this.#currencySourceEngine(source);
+    if (sourceEngine === undefined) {
+      forgetCurrencySource(engine, { space, source });
+      return;
+    }
+    const pulled = pullCurrencyExports(sourceEngine, {
+      space: source,
+      reader: space,
+      since: selectCurrencySourcePosition(engine, { space, source }),
+      dropped: dropUnreadCurrencyImports(engine, { space, source }),
+    });
+    applyCurrencyImports(engine, {
+      space,
+      source,
+      entries: pulled.entries,
+      position: pulled.position,
+    });
+  }
+
+  /**
    * Stores the records a serving loop took of `space`'s pieces at a quiescent
-   * point in its currency index (serving-loop.md §3b). Server-internal
-   * machinery and tests only.
+   * point in its currency index (serving-loop.md §3b). Each instance of
+   * another space that a record read is registered with that space's index
+   * first, where this server holds its store, so the record is stored
+   * against what that space reports of it. Server-internal machinery and
+   * tests only.
    */
   async storeCurrencyRecords(
     space: string,
     batch: Omit<CurrencyBatch, "space">,
   ): Promise<CurrencyStored> {
     const engine = await this.#openEngine(space);
+    const reads = new Map<string, Map<string, CurrencyInstance>>();
+    for (const record of batch.records) {
+      for (const slice of record.slices) {
+        for (const { space: source, id, scopeKey } of slice.reads) {
+          if (source === space) continue;
+          let instances = reads.get(source);
+          if (instances === undefined) {
+            instances = new Map();
+            reads.set(source, instances);
+          }
+          instances.set(`${scopeKey}\0${id}`, { id, scopeKey });
+        }
+      }
+    }
+    for (const [source, instances] of reads) {
+      const sourceEngine = await this.#currencySourceEngine(source);
+      if (sourceEngine === undefined) continue;
+      applyCurrencyImports(engine, {
+        space,
+        source,
+        entries: registerCurrencyReads(sourceEngine, {
+          space: source,
+          reader: space,
+          reads: [...instances.values()],
+        }),
+      });
+    }
     return storeCurrencyRecords(engine, { ...batch, space });
   }
 
@@ -12446,13 +12527,21 @@ export class Server {
    * is judged as the piece its `result` back-links lead to, which is the
    * piece a structure load of it starts.
    *
+   * With `acrossSpaces`, a root may rest on a slice that read another space:
+   * each such space is pulled from first, for the slices the demand rows are
+   * resolved under. Without it, such a slice refuses the root.
+   *
    * @returns The roots that pass, each with the piece it was judged as, how
    * many roots each reason refused, and the pieces the advance marked.
    */
   async judgeCurrencyRoots(
     space: string,
     roots: readonly string[],
-    options: { excludePrincipal?: string; epoch: string },
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      acrossSpaces?: boolean;
+    },
   ): Promise<{
     servable: Array<{ root: string; piece: string }>;
     refused: Partial<Record<CurrencyRefusal, number>>;
@@ -12504,11 +12593,23 @@ export class Server {
         }
       }
     };
+    if (options.acrossSpaces === true) {
+      const slices = new Set<string>([SPACE_SLICE]);
+      for (const { scopeKey } of rows()) {
+        if (slices.has(scopeKey)) continue;
+        for (const slice of sliceChain(scopeKey)) slices.add(slice);
+      }
+      const sources = selectCurrencySources(engine, { space, slices });
+      for (const source of sources) {
+        await this.#followCurrencySource(engine, space, source);
+      }
+    }
     const judgment = judgeCurrencyRoots(engine, {
       space,
       roots: [...new Set(pieces.values())],
       rows: rows(),
       epoch: options.epoch,
+      ...(options.acrossSpaces === true && { acrossSpaces: true }),
     });
     const passing = new Set(judgment.servable);
     const reasons = new Map(

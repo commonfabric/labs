@@ -1,6 +1,6 @@
 # Serving a stored output that depends on another space or on a wish
 
-Status: In progress. Steps 1 and 3 are done; the rest is a design, with the
+Status: In progress. Steps 1 to 3 are done; the rest is a design, with the
 steps to build it. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
@@ -139,15 +139,23 @@ check and nothing more.
 
 ### Registering
 
-A read is registered when its record is stored. The serving host that read
-the instance holds a session on the source's owner, and registers over that
-session, so the source admits a registration on the decision that admitted
-the read (`protocol.md` §2 and §2b): the free read of space-scoped state,
-or the actor's own grant for a scoped instance. The source returns the head
+A read is registered when its record is stored. The source returns the head
 and the state of each instance in the same step that writes the reader row,
-so a change that lands afterward is always one its readers are told of. The
-record carries those to the reading space's memory server, which stores the
-slice marked when a row is behind or an input is stale.
+so a change that lands afterward is always one its readers are told of, and
+the slice is stored marked when a row is behind or an input is stale.
+
+As built, the reading space's memory server registers, and only with a
+source whose store it holds itself: the record names the instances a
+serving runtime read under a session the source admitted, and a slice that
+read a space another owner holds is stored marked `2`, as before. A
+registration that travels to another owner is to go over the session the
+serving host holds on it, so that the source admits it on the decision that
+admitted the read (`protocol.md` §2 and §2b): the free read of space-scoped
+state, or the actor's own grant for a scoped instance.
+
+Two reads are left out, and a slice with either is not vouched for: one of
+an instance narrower than the space, and one whose seq the serving replica
+cannot name.
 
 A reading space that no longer holds a row for an instance names it in its
 next request, and the source drops the registration.
@@ -455,12 +463,20 @@ One is owed:
    slice was not vouched for (`currency.unvouched`). A slice that read the
    interval clock was vouched for and left a session with no runtime of its
    own a stopped clock under `skip`; it is no longer vouched for.
-2. **Rows for a read in another space, judged and not acted on.** The
-   snapshot carries the source's sequence number; registration; the rows on
-   both sides; the pull before a judgment. Under `record` each root that
-   would have been served is counted as today. `skip` goes on starting a
-   root that rests on such a slice, since nothing would yet wake a live
-   session whose root was left unstarted.
+2. **Rows for a read in another space, judged and not acted on.** Done,
+   for two spaces one memory server holds. The snapshot carries the
+   source's sequence number; a record's reads are registered with their
+   source; both sides keep their rows; and a judgment pulls from the sources
+   of the slices its demand rows are resolved under. Under `record` each
+   root that would have been served is counted as today. `skip` goes on
+   starting a root that rests on such a slice, since nothing would yet wake
+   a live session whose root was left unstarted. A source finds what changed
+   when it is pulled from or registered with, and not yet when it changes,
+   which step 4 needs. A refused registration is not built: nothing refuses
+   one where one server holds both stores. Until step 4, what a clean slice
+   that read another space writes is no current input of another slice,
+   which is stored marked `1`: the other space is asked again only before a
+   judgment that may rest on the slice that read it.
 3. **Computations that name no piece.** Done, as above.
 4. **The trigger.** The position counter, arming on a pull, the one-bit
    push and what a reader does with it, marking from a pull, the load of a
@@ -481,7 +497,10 @@ One is owed:
 
 ## Acceptance tests
 
-For the index, in `runtime/memory/test/`, with two stores:
+For the index, in `runtime/memory/test/`, with two stores. Tests 1 to 4
+exist in `v2-currency-index.test.ts`, and `v2-server-currency.test.ts` has
+the memory server register and pull, with a source it holds and one another
+owner holds:
 
 1. A slice that read an instance in another space is stored clean when the
    source's head is the sequence number it read at and the source reports
@@ -511,7 +530,11 @@ For the serving loop, in `runtime/runner/test/executor/`:
 
 9. A piece whose wish reads the viewer's home space is recorded with the
    read in that viewer's slice, and under `skip` is not started when the
-   viewer returns and their home space has not changed.
+   viewer returns and their home space has not changed. The `record` half
+   exists in `space-server-currency-wish.test.ts`: the returning viewer's
+   root is counted as one the store could serve, it is refused once the
+   home space changed while nothing served the piece, and under `skip` the
+   piece is started.
 10. A change to that viewer's home space while the piece is unstarted and
     their session is live starts the piece, and a change to another viewer's
     home space does not.

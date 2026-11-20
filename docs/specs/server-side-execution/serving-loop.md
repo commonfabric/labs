@@ -1207,10 +1207,25 @@ executing:
   holds, which are those of the viewers demanding the piece then, and
   replaces them; a slice it does not name keeps its rows and its mark. A
   slice is stored marked when a live computation that ran at its key is not
-  clean, or read a document in another space, or one a clock writes (the
+  clean, or read a document in another space at an instance narrower than
+  the space or at a seq its replica cannot name, or one a clock writes (the
   interval cell of a `#now/N` wish), which no commit marks when its interval
   passes, or one whose writer names no piece and is not live, not clean, or
-  runs once for each viewer. A slice that read what a live, clean writer
+  runs once for each viewer. A read of another space's shared instance is
+  registered with that space's index when the record is stored, where one
+  memory server holds both stores: that index keeps the spaces that read
+  each of its instances and what it last told them, the instance's head and
+  whether a piece there computes it and does not answer for it at present,
+  and the reading index keeps what it was last told. A slice is stored
+  marked `2` where its read is behind that head or the space cannot be
+  asked, and `1` where the instance is stale there. A judgment that may rest
+  on such a slice first pulls, from each space the slices its demand rows
+  are resolved under read, what changed since its last pull. Only a loop
+  that records and judges without acting asks for such a judgment: a loop
+  that leaves a servable root unstarted refuses a root that rests on a
+  slice that read another space, since no change there wakes it. For the
+  same reason a slice that reads what a clean slice that read another space
+  writes is marked `1`. A slice that read what a live, clean writer
   that names no piece wrote, such as a wish's shared hashtag resolver, takes
   over that writer's reads as its own. Every slice of a record is stored marked when the piece's root is
   narrower than the space, and when it records a source origin (§3e), since
@@ -1244,9 +1259,11 @@ executing:
   because a start is what re-fires an effect whose result never landed (§6
   step 3). The tables are `currency_slice`, `currency_under`,
   `currency_read`, `currency_write`, `currency_vouch` and
-  `currency_cursor`; `runtime/memory/v2/currency-index.ts` is their only
-  writer and reader, pinned in
-  `runtime/memory/test/v2-currency-index.test.ts`.
+  `currency_cursor`, and for reads across spaces `currency_slice_source`,
+  `currency_import` and `currency_source` on the reading side and
+  `currency_reader` and `currency_export` on the side read;
+  `runtime/memory/v2/currency-index.ts` is their only writer and reader,
+  pinned in `runtime/memory/test/v2-currency-index.test.ts`.
 
 The index's DDL, authored (closes scopes.md §8 item 1). This is the
 engine-v3 migration Phase 1 stage C reduces the observation tables

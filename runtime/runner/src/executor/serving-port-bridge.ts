@@ -394,10 +394,11 @@ export class ServingPortBridge {
     );
     endpoint.onRequest(
       "server.judgeCurrencyRoots",
-      ({ space, roots, excludePrincipal, epoch }) =>
+      ({ space, roots, excludePrincipal, epoch, acrossSpaces }) =>
         server.judgeCurrencyRoots(space, roots, {
           ...(excludePrincipal !== undefined && { excludePrincipal }),
           epoch,
+          ...(acrossSpaces === true && { acrossSpaces }),
         }),
     );
     endpoint.onRequest(
