@@ -89,6 +89,7 @@ import {
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
 import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
 import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
@@ -3508,6 +3509,33 @@ const refuseAuthoredAttentionIndexWrites = (
       throw new ProtocolError(
         `authored write to server-owned attention index ` +
           `"${SERVER_EXECUTION_ATTENTION_DOC_ID}" refused`,
+      );
+    }
+  }
+};
+
+/**
+ * Refuses a write to the invitation service's revision document
+ * (`SPACE_INVITES_REVISION_DOC_ID`) in any commit but a system one. The
+ * document is the service's word that its private ledger moved, written in the
+ * transaction that moves the ledger. A write from anyone else would say the
+ * ledger moved when it had not, and send every client watching the document to
+ * read the ledger for nothing.
+ */
+const refuseInviteRevisionWritesOutsideTheService = (
+  commit: ClientCommit,
+  commitClass: CommitClass,
+): void => {
+  if (commitClass === "system") return;
+  for (const operation of commit.operations) {
+    if (
+      operation.op !== "sqlite" &&
+      operation.id === SPACE_INVITES_REVISION_DOC_ID
+    ) {
+      throw new ProtocolError(
+        `write to the invitation service's revision document ` +
+          `\`${SPACE_INVITES_REVISION_DOC_ID}\` refused: only the invitation ` +
+          `service writes it`,
       );
     }
   }
@@ -8454,6 +8482,7 @@ const applyCommitTransaction = (
     scopeKeyByOpIndex,
   });
 
+  refuseInviteRevisionWritesOutsideTheService(commit, commitClass);
   const eventAppendPlan = validateEventAppends(engine, {
     commit,
     commitClass,
