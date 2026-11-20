@@ -578,9 +578,7 @@ ${notesXml}
                       Settings
                     </cf-button>
                   </div>
-                  {sortedEntries.map((entry: any) => (
-                    <cf-cell-link $cell={entry} />
-                  ))}
+                  {sortedEntries.map((entry) => <cf-cell-link $cell={entry} />)}
                 </cf-vstack>
               </cf-vstack>
             </div>

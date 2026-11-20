@@ -38,6 +38,7 @@ import {
 } from "../summary-index/summary-index.tsx";
 import SuggestionHistory from "../suggestion-history/suggestion-history.tsx";
 import { type MentionablePiece } from "../backlinks-index/backlinks-index.tsx";
+import { type PromptSendEvent } from "../cfc/prompt-injection/prompt.ts";
 
 type SuggestionResult = {
   [NAME]?: string;
@@ -50,7 +51,7 @@ const triggerGeneration = handler<
   {
     addMessage: Stream<BuiltInLLMMessage>;
     situation: string;
-    result: any | null;
+    result: SuggestionResult | undefined;
   }
 >((_, { addMessage, situation, result }) => {
   if (!result) {
@@ -62,7 +63,7 @@ const triggerGeneration = handler<
 });
 
 const sendMessage = handler<
-  { detail: { text: string; attachments?: Array<any> } },
+  PromptSendEvent,
   { addMessage: Stream<BuiltInLLMMessage> }
 >((event, { addMessage }) => {
   addMessage.send({
@@ -101,7 +102,7 @@ const onQuestionAnswer = handler<
 export default pattern<
   {
     situation: string;
-    context: { [id: string]: any };
+    context: Record<string, Writable<unknown>>;
     initialResults: SuggestionResultCell[] | Default<[]>;
   },
   WishState<SuggestionResultCell> & { [UI]: VNode }
