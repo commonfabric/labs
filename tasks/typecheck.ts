@@ -65,6 +65,7 @@ const DIRS = [
   "patterns/apps/bookmarks",
   "patterns/apps/budget-tracker",
   "patterns/apps/cheeseboard",
+  "patterns/apps/feedback-reports/tools",
   "patterns/apps/contacts",
   "patterns/apps/deep-research",
   "patterns/apps/image-analysis",

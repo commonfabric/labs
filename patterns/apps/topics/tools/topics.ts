@@ -619,7 +619,7 @@ export async function writeSession(
 }
 
 /** One write: the verb, the piece it is called on, and its payload. */
-interface Write {
+export interface Write {
   target: string;
   verb: string;
   payload: Record<string, unknown>;
@@ -629,7 +629,7 @@ interface Write {
 }
 
 /** What a write that settled produced. */
-interface Written {
+export interface Written {
   result: unknown;
 
   /** The invocation's id. */
@@ -653,7 +653,7 @@ function cfEnv(board: Board): Record<string, string> {
  * standard error when it fails.
  */
 async function cf(
-  deps: TopicsDeps,
+  deps: Pick<TopicsDeps, "run" | "launcher">,
   board: Board,
   args: readonly string[],
   env: Record<string, string> = {},
@@ -684,8 +684,8 @@ async function cf(
  * once it has dispatched, which may have committed, says how to settle it by
  * naming the id again.
  */
-async function invoke<T>(
-  deps: TopicsDeps,
+export async function invoke<T>(
+  deps: Pick<TopicsDeps, "run" | "launcher" | "warn">,
   board: Board,
   options: TopicsOptions,
   { target, verb, payload, resultSchema }: Write,
@@ -834,8 +834,8 @@ async function step(
 }
 
 /**
- * Refreshes the copy after a write and prints the Topic it wrote to, failing
- * when `wrote` does not hold of what reads back.
+ * Refreshes the copy after a write, prints the Topic it wrote to, and returns
+ * it as it reads back, failing when `wrote` does not hold of it.
  */
 async function confirm(
   deps: TopicsDeps,
@@ -843,7 +843,7 @@ async function confirm(
   reference: string,
   wrote: (topic: Topic) => boolean | Promise<boolean>,
   done: (topic: Topic) => string,
-): Promise<void> {
+): Promise<Topic> {
   const topic = findTopic(await readTopics(deps, board), reference);
   if (!await wrote(topic)) {
     throw new UnconfirmedWrite(
@@ -852,11 +852,12 @@ async function confirm(
   }
   const [shown] = redact([topic], await displayFit(deps, board));
   deps.write(`${done(shown)}\n${formatTopicLine(shown, nowFor(deps))}`);
+  return topic;
 }
 
 /**
  * Writes to the Topic `reference` names with `verb`, then confirms the write
- * reads back.
+ * reads back, and returns the Topic as it reads back.
  */
 async function writeTopic(
   deps: TopicsDeps,
@@ -866,11 +867,11 @@ async function writeTopic(
   payload: (agentName: string) => Record<string, unknown>,
   wrote: (before: Topic, after: Topic, repeated: boolean) => boolean,
   done: string,
-): Promise<void> {
+): Promise<Topic> {
   const board = boardFrom(deps, options);
   const agentName = agentFrom(deps, options);
   const target = findTopic(await readTopics(deps, board), reference);
-  await invoke(
+  return await invoke(
     deps,
     board,
     options,
@@ -878,7 +879,7 @@ async function writeTopic(
     async (written) => {
       const { repeated } = written;
       await step(deps, board, `/${target.address}`, written);
-      await confirm(
+      return await confirm(
         deps,
         board,
         target.number,
@@ -1063,17 +1064,17 @@ export async function syncAction(
   );
 }
 
-/** Runs the `new` command. */
+/** Runs the `new` command, and returns the Topic it created. */
 export async function newAction(
   options: TopicsOptions,
   title: string,
   body: string | undefined,
   deps: TopicsDeps = defaultDeps,
-): Promise<void> {
+): Promise<Topic> {
   const board = boardFrom(deps, options);
   const agentName = agentFrom(deps, options);
   const text = await textFrom(deps, body, "body");
-  await invoke(
+  return await invoke(
     deps,
     board,
     options,
@@ -1099,7 +1100,7 @@ export async function newAction(
         );
       }
       await step(deps, board, topic, written);
-      await confirm(
+      return await confirm(
         deps,
         board,
         topic,
@@ -1113,20 +1114,20 @@ export async function newAction(
   );
 }
 
-/** Runs the `comment` command. */
+/** Runs the `comment` command, and returns the Topic commented on. */
 export async function commentAction(
   options: TopicsOptions,
   reference: string,
   body: string | undefined,
   deps: TopicsDeps = defaultDeps,
-): Promise<void> {
+): Promise<Topic> {
   const text = await textFrom(deps, body, "comment");
   // A comment like an earlier one confirms nothing: the count has to grow,
   // unless an earlier run of this invocation already made it.
   const like = (topic: Topic) =>
     topic.comments.filter((c) => c.body.trim() === text.trim() && !c.removed)
       .length;
-  await writeTopic(
+  return await writeTopic(
     deps,
     options,
     reference,
@@ -1137,15 +1138,15 @@ export async function commentAction(
   );
 }
 
-/** Runs the `body` command. */
+/** Runs the `body` command, and returns the Topic whose body it replaced. */
 export async function bodyAction(
   options: TopicsOptions,
   reference: string,
   body: string | undefined,
   deps: TopicsDeps = defaultDeps,
-): Promise<void> {
+): Promise<Topic> {
   const text = await textFrom(deps, body, "body");
-  await writeTopic(
+  return await writeTopic(
     deps,
     options,
     reference,
@@ -1569,15 +1570,18 @@ export async function main(
       return await syncAction({ ...options, rebuild: flags.rebuild }, deps);
     case "new": {
       const [title, body] = take(1, 2);
-      return await newAction(options, title!, body, deps);
+      await newAction(options, title!, body, deps);
+      return;
     }
     case "comment": {
       const [topic, body] = take(1, 2);
-      return await commentAction(options, topic!, body, deps);
+      await commentAction(options, topic!, body, deps);
+      return;
     }
     case "body": {
       const [topic, body] = take(1, 2);
-      return await bodyAction(options, topic!, body, deps);
+      await bodyAction(options, topic!, body, deps);
+      return;
     }
     case "title": {
       const [topic, title] = take(2, 2);
