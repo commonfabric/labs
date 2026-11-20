@@ -26,16 +26,18 @@ a pattern later both implement the same shape.
   the caller sends, never into anything shared.
 - `GetItButton` is the only way to get a pattern. A person's tap appends
   `{requestId, patternId, destination, requestedAt, host}` to the catalog's
-  `getItRequests`, whose type (`GetItRequests`) declares the button's handler as
-  its one trusted writer: a push from anywhere else, or a send to the button
-  without a trusted tap, is refused. `destination` is defined by the host; a
-  host that places patterns on boards takes the board's id. The host writes its
-  answer to `getItAnswers` under the request's id (`started`, then `placed`,
-  `failed` or `cancelled`), and the button shows the answer to its latest
-  request. While that request is open or placed, a tap adds nothing; after a
-  failure or a cancellation, a tap asks again. `host` is copied from the
-  catalog's own `host`; while the catalog names none, nothing acts on requests,
-  so the button is disabled and says so.
+  `getItRequests` as a document of its own. Each request's type (`GetItEntry`)
+  declares the button's handler as its one trusted writer and labels the request
+  `authored-by` the person who tapped: a push from anywhere else, or a send to
+  the button without a trusted tap, is refused. Both are stored on the request
+  itself, so a host can check them on each request it acts on. `destination` is
+  defined by the host; a host that places patterns on boards takes the board's
+  id. The host writes its answer to `getItAnswers` under the request's id
+  (`started`, then `placed`, `failed` or `cancelled`), and the button shows the
+  answer to its latest request. While that request is open or placed, a tap adds
+  nothing; after a failure or a cancellation, a tap asks again. `host` is copied
+  from the catalog's own `host`; while the catalog names none, nothing acts on
+  requests, so the button is disabled and says so.
 - The button is a `cf-pattern-install`, which says in its own words what a tap
   does: "Install “title” onto loom". The title is the catalog's own, from the
   entry in `entries` with the button's `patternId`; when the window does not
@@ -78,19 +80,21 @@ pattern that's no longer available". A caller that cannot mount `CatalogByline`
 ## Implementing it
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
-stored under the `GetItRequests` type so the write policy holds, and `host` set
-to an opaque id for the host instance that acts on get requests. Each instance
-mints its own id and never takes one from a copy of another instance's state. It
-answers each `page` request in that request's `result`. It sets `authorProfile`
-only from the profile the index says the author published under
-(`author.published.profile`), as a `link@1` link to that profile's piece; a
-reference with no piece gets no `authorProfile`, so the entry shows the
-pseudonym. It sets `remixOf` only from the chain the index returns to this
-viewer (`remixChain`, each step's `name` as its `title`; never `remixedFrom`
-alone); a step it cannot read ends the chain as `{unavailable: true}`. It acts
-only on a request that names its own `host`, so a cloned host instance never
-acts on another's requests, and only within a window it chooses by
-`requestedAt`. It answers each request id in `getItRequests` under that id in
+stored under the `GetItRequests` type so each request's write policy and author
+label hold, and `host` set to an opaque id for the host instance that acts on
+get requests. Each instance mints its own id and never takes one from a copy of
+another instance's state. It answers each `page` request in that request's
+`result`. It sets `authorProfile` only from the profile the index says the
+author published under (`author.published.profile`), as a `link@1` link to that
+profile's piece; a reference with no piece gets no `authorProfile`, so the entry
+shows the pseudonym. It sets `remixOf` only from the chain the index returns to
+this viewer (`remixChain`, each step's `name` as its `title`; never
+`remixedFrom` alone); a step it cannot read ends the chain as
+`{unavailable: true}`. It acts only on a request that names its own `host`, so a
+cloned host instance never acts on another's requests, and only within a window
+it chooses by `requestedAt`. It may also refuse a request whose stored labels do
+not name the person it acts for as the author, or the button's handler as the
+writer. It answers each request id in `getItRequests` under that id in
 `getItAnswers`: `started` while it works, if it says anything before it is done,
 then one final state (`placed`, `failed` or `cancelled`) that it never changes.
 `FakeCatalog` (`fake-catalog.tsx`) answers from a fixed list of entries, as host
