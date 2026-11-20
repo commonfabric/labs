@@ -6531,7 +6531,15 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
 export const unsentConnectionError = (
   message: string,
   cause?: unknown,
-): Error => Object.assign(connectionError(message, cause), { unsent: true });
+): Error => markUnsent(connectionError(message, cause));
+
+/**
+ * Marks `error`, a `ConnectionError` such as a `writeFailedError()`, as one
+ * for a payload the transport wrote none of, as
+ * {@link unsentConnectionError} does, and returns it.
+ */
+export const markUnsent = (error: Error): Error =>
+  Object.assign(error, { unsent: true });
 
 /** Whether `error` is an {@link unsentConnectionError}. */
 export const isUnsentConnectionError = (error: unknown): boolean =>
