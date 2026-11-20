@@ -320,9 +320,9 @@ export const instantiatePlanLabels = (
     }
     if (!("chain" in binding)) return stagedLabel(binding.staged);
     const { chain, observes } = binding;
-    // SPEC-PENDING https://github.com/commonfabric/specs/pull/91
     // A read made after the transaction wrote its position observes, at
-    // each position the transaction wrote, the label staged there.
+    // each position the transaction wrote, the label staged there; the
+    // marker below covers it.
     const at = (
       address: CfcAddress,
       observes: ReadObservationShape,
@@ -350,7 +350,8 @@ export const instantiatePlanLabels = (
     // each position a link in the value led to, as a recursive read does:
     // the slot's confidentiality joins what every chain consumes, and its
     // integrity is the atoms the observation at the end of every chain
-    // carries.
+    // carries. A position read after the transaction wrote it is observed
+    // with the label staged there (`at`).
     const clauses: CfcConfClause[] = [];
     let integrity: CfcAtom[] | undefined;
     for (const each of [chain, ...(binding.below ?? [])]) {
@@ -408,8 +409,9 @@ export const instantiatePlanLabels = (
   };
 
   /**
-   * The label of the outcome of a `wish` (PL §3.19, "The outcome of each
-   * `wish` has a label of its own"): the instantiated `Operation.input`
+   * The label of the outcome of a `wish` (section 3.19 of
+   * `plan-and-label-templates.md`, "The outcome of each `wish` has a label
+   * of its own"): the instantiated `Operation.input`
    * joined with the label of what the resolution read, which the write
    * reports under the entry of `Plan.dynamicReads` of kind `search` that
    * names the operation. It mints no integrity. A write that reports no
