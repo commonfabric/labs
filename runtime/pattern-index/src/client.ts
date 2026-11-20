@@ -298,6 +298,9 @@ export interface PatternIndexPattern {
   /** A remix's originals, nearest first, cut to what the reader may see. */
   remixChain?: readonly PatternIndexRemixLink[];
 
+  /** With `ref`: the shared version the link names now. */
+  link?: PatternIndexLink;
+
   lineageId?: string;
 
   /** The caller's own version with this source; owner only. */
@@ -333,9 +336,28 @@ export interface PatternIndexPattern {
   annotations?: Readonly<Record<string, PatternIndexGardenerVerdict>>;
 }
 
-export interface PatternIndexGetRequest {
-  patternId: string;
-  includeSource?: boolean;
+/**
+ * One pattern, named by its id, or by a pattern link: its lineage's
+ * pseudonym for the stable channel, `<pseudonym>@beta` for beta, or
+ * `<pseudonym>@<n>` for shared version n.
+ */
+export type PatternIndexGetRequest =
+  & ({ patternId: string; ref?: never } | { ref: string; patternId?: never })
+  & { includeSource?: boolean };
+
+/** The two channels a shared version is on: findable, or by link only. */
+export type PatternIndexChannel = "beta" | "stable";
+
+/** What a pattern link names now, as `getPattern {ref}` answers it. */
+export interface PatternIndexLink {
+  ref: string;
+  channel: PatternIndexChannel | "number";
+
+  /** The shared version number it resolved to. */
+  number: number;
+
+  /** Whether that number is on the stable channel. */
+  stable: boolean;
 }
 
 /**
@@ -397,6 +419,10 @@ export interface PatternIndexListedPattern {
   bucket?: PatternIndexBucket;
   listed?: boolean;
   listing?: PatternIndexListing;
+
+  /** `beta` on a record shared to beta only; owner only. */
+  channel?: "beta";
+
   grandfathered?: true;
   hidden?: true;
 
@@ -695,6 +721,9 @@ export interface PatternIndexVersionSummary {
   rolledBackFrom?: string;
 
   remixedFrom?: string;
+
+  /** Its source's newest shared version number, once others can read it. */
+  shared?: { number: number; stable: boolean };
 }
 
 /** One version with its full metadata and, when asked for, its source. */
@@ -726,6 +755,15 @@ export interface PatternIndexLineage {
   /** How many versions it has, and how many of them others can read. */
   versions: number;
   sharedVersions: number;
+
+  /**
+   * Its shared version numbers: the newest, and the one each channel's link
+   * gives now. Each is absent while nothing is there.
+   */
+  channels?: { latest?: number; stable?: number; beta?: number };
+
+  /** Unshared: nothing of it is offered on a channel until shared again. */
+  withdrawn?: boolean;
 
   published?: PatternIndexPublishedAuthor;
   tier: number;
@@ -764,6 +802,9 @@ export interface PatternIndexShareVersionResponse {
   visibility: PatternIndexVisibility;
   share: PatternIndexShareState;
   listing?: PatternIndexListing;
+
+  /** Its shared version number, once the check has passed. */
+  shared?: number;
 
   /** `false` when it was already shared or being checked. */
   changed: boolean;
@@ -1492,7 +1533,9 @@ export class PatternIndexClient {
     return this.#call<PatternIndexPattern>(
       "getPattern",
       {
-        patternId: request.patternId,
+        ...(request.ref !== undefined
+          ? { ref: request.ref }
+          : { patternId: request.patternId }),
         ...(request.includeSource !== undefined
           ? { includeSource: request.includeSource }
           : {}),
@@ -1775,9 +1818,14 @@ export class PatternIndexClient {
     return this.#call("rollback", { ...request });
   }
 
-  /** Asks that one of the caller's versions be checked and shared anonymously. */
+  /**
+   * Asks that one of the caller's versions be checked and shared anonymously,
+   * on `channel` (stable when unsaid). On a source already shared, it moves
+   * the channel: `stable` promotes the newest shared version, and is refused
+   * (409 `not_newest`) for an older one.
+   */
   shareVersion(
-    request: { versionId: string },
+    request: { versionId: string; channel?: PatternIndexChannel },
   ): Promise<PatternIndexShareVersionResponse> {
     return this.#call("shareVersion", { ...request });
   }

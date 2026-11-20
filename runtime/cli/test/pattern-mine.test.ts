@@ -135,15 +135,17 @@ describe("pattern-mine", () => {
         row({ patternId: "m", listing: "passed", bucket: "main" }),
         row({ patternId: "f", listing: "passed", bucket: "featured" }),
         row({ patternId: "l", listing: "passed" }),
+        row({ patternId: "b", listing: "passed", channel: "beta" }),
       ], noEntry);
 
       expect(Object.fromEntries(rows.map((r) => [r.patternId, r.next])))
         .toEqual({
-          n: "unlisted: run cf pattern share <entry file> to request a listing",
+          n: "not shared: run cf pattern share <entry file> to share it on beta, by link",
           off: "unlisted",
           m: "in Main: other people's use ranks it",
           f: "featured",
           l: "listed",
+          b: "on beta, by link only: cf pattern stable <entry file> makes it findable",
         });
     });
   });

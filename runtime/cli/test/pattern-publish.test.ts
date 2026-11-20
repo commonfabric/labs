@@ -295,6 +295,66 @@ describe("pattern-publish", () => {
       });
     });
 
+    it("shares on beta through the version it kept, and says so", async () => {
+      const report = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.listing).toEqual({
+        status: "requested",
+        listing: "pending",
+        channel: "beta",
+        changed: true,
+      });
+      expect(index.calls.some((call) => call.fn === "requestListing"))
+        .toBe(false);
+      expect(publishReportLines(report).join("\n")).toContain("Beta: ");
+    });
+
+    it("says where it is did not change when sharing on beta a source already stable", async () => {
+      const deps = depsWith(scripted([PASS, PASS, PASS], []));
+      const first = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "stable" },
+        deps,
+      );
+      const checking = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        deps,
+      );
+      index.setListing(first.patternId, "passed");
+      const again = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        deps,
+      );
+
+      expect(checking.listing).toMatchObject({ changed: false });
+      expect(publishReportLines(checking).join("\n")).toContain(
+        "Already being checked: where it goes did not change.",
+      );
+      expect(again.listing).toMatchObject({ changed: false });
+      const text = publishReportLines(again).join("\n");
+      expect(text).toContain("Already shared: where it is did not change");
+      expect(text).not.toContain("nobody finds it");
+    });
+
+    it("shares nothing, rather than asking for a listing, on beta without a version", async () => {
+      const report = await publishedReport(
+        { entry, channel: "beta" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.listing).toEqual({
+        status: "failed",
+        reason: "the index kept no version of it to share on beta",
+      });
+      expect(
+        index.calls.some((call) =>
+          call.fn === "requestListing" || call.fn === "shareVersion"
+        ),
+      ).toBe(false);
+    });
+
     it("shares through an index that keeps no lineages as it did before", async () => {
       const deps = depsWith(scripted([PASS], []));
       const client = deps.client;
@@ -306,6 +366,7 @@ describe("pattern-publish", () => {
             getGardenerPrompt: (r) => client.getGardenerPrompt(r),
             publishPattern: (r) => client.publishPattern(r),
             requestListing: (r) => client.requestListing(r),
+            shareVersion: (r) => client.shareVersion(r),
             getPattern: (r) => client.getPattern(r),
             whoami: () => client.whoami(),
             listLineages: () =>
@@ -715,7 +776,7 @@ describe("pattern-publish", () => {
       )).toEqual([
         "Local privacy check: passed.",
         "Shared id-1.",
-        "Listing not requested: HTTP 503.",
+        "Not shared: HTTP 503.",
         "Next: open it.",
       ]);
     });

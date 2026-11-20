@@ -166,15 +166,14 @@ The cell `push` method concatenates arrays using `forEach` on the original
 
 ### Cell read path (`runtime/runner/src/traverse.ts`)
 
-`traverseDAG` reconstructs arrays from storage. It uses `forEach` on
-`doc.value`, assigning populated elements by index into `new Array(len)`. The
-result array is registered with the cycle tracker before population so that
-circular references can return it early.
+`traverseDAG` reconstructs arrays from storage. It visits the indices present
+in `doc.value` with `for` + `i in`, assigning populated elements by index into
+`new Array(len)`. The result array is registered with the cycle tracker before
+population so that circular references can return it early.
 
-`traverseArrayWithSchema` (the schema-driven traversal path) uses `for` + `i in`
-because it has early `return undefined` exits (broken redirects, schema
-mismatches). It pre-allocates with `new Array(len)` and uses indexed assignment
-instead of `push`.
+`traverseArrayWithSchema` (the schema-driven traversal path) visits the indices
+the same way. It pre-allocates with `new Array(len)` and uses indexed
+assignment instead of `push`.
 
 ### Diff engine (`runtime/runner/src/data-updating.ts`)
 
