@@ -6,7 +6,6 @@ import {
   type FabricValue,
   toStructuredDebugValue,
 } from "@commonfabric/data-model";
-import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   type SiteTable,
@@ -133,6 +132,13 @@ import {
   publishCustodyAnswer,
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
+import {
+  blobSuffix,
+  encodedBlobRecordBytes,
+  isBlobFileName,
+  MAX_BLOB_RECORD_BYTES,
+  storedBlobPath,
+} from "@commonfabric/runner/blob-record";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
@@ -401,8 +407,6 @@ const MAX_CONSOLE_DEBUG_DEPTH = 7;
 
 /** How many commits of a space's history one page of its steps reads. */
 const HISTORY_PAGE_COMMITS = 500;
-
-const blobUploadCodec = newDefaultJsonCodecEngine();
 
 /** Each registered logger's enabled state and level. */
 function loggerMetadata(): LoggerMetadata {
@@ -4411,24 +4415,29 @@ export class RuntimeProcessor {
     this.#runtime.scheduler.setBreakpoints(request.actionIds);
   }
 
+  /**
+   * Stores the request's blob in the request's space, and returns its id and
+   * the URL that space's host serves it at. The blob's record is staged as
+   * the document `cid:<id>` in a transaction committed on this runtime's
+   * session there, so the memory server admits it only for a principal
+   * holding `WRITE` on the space, and the upload settles once the commit
+   * does.
+   *
+   * @throws Error when the request is malformed, when its record would take
+   *   more than {@link MAX_BLOB_RECORD_BYTES} encoded or more than the space's
+   *   connection takes in one request, or when the commit is refused.
+   */
   async handleUploadBlob(
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
-    // A request arrives as data, so its `space` is checked here. A request
-    // whose `space` is not a DID fails with an error that says so. Without the
-    // check, a request with no `space` would build an upload URL whose path
-    // begins `/undefined/blobs/`.
+    // A request arrives as data, so its fields are checked here, each with an
+    // error that says what is wrong.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
-    // With no suffix, the upload names no blob in its path, and the store
-    // chooses the suffix itself.
-    const suffix = request.suffix?.replace(/^\./, "");
-    const blobPath = suffix ? `/upload.${encodeURIComponent(suffix)}` : "";
-    // The blob belongs to the named space, so it uploads to — and its
-    // returned URL resolves against — THAT space's host.
-    const host = this.#runtime.hostForSpace(request.space);
-    const target = new URL(`/${request.space}/blobs${blobPath}`, host);
+    if (typeof request.contentType !== "string") {
+      throw new Error("uploadBlob requires a media type");
+    }
     // The envelope's decode already produced this; `request.body` is a
     // `FabricBytes` by the time it arrives, and a handler owns the values its
     // request carries per `BaseRequest`, so nothing else is reading it. The
@@ -4443,32 +4452,57 @@ export class RuntimeProcessor {
         "uploadBlob requires any name it is given to be a string",
       );
     }
-    // Blob upload payloads must preserve FabricBytes even when the wider
-    // process is running with legacy memory JSON flags. A blob with no name
-    // has no `name` key at all, since its id is the hash of exactly what is
-    // sent.
-    const body = blobUploadCodec.encode({
+    if (request.name !== undefined && !isBlobFileName(request.name)) {
+      throw new Error("uploadBlob requires a name a blob may hold");
+    }
+    // A blob with no name has no `name` key at all, since its id is the hash
+    // of exactly the record stored.
+    const record = {
       type: request.contentType,
       body: bytes,
       ...(request.name === undefined ? {} : { name: request.name }),
-    });
-    const response = await fetch(target, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
-    if (!response.ok) {
+    };
+    const space = request.space;
+    const size = encodedBlobRecordBytes(record);
+    // A request over the connection's bound would take the connection down
+    // rather than be refused, so the bound is held here before anything is
+    // staged.
+    const connectionLimit = await this.#runtime.storageManager
+      .requestBytesLimit?.(space);
+    const limit = Math.min(
+      MAX_BLOB_RECORD_BYTES,
+      connectionLimit ?? MAX_BLOB_RECORD_BYTES,
+    );
+    if (size > limit) {
       throw new Error(
-        `Blob upload failed: ${response.status} ${await response.text()}`,
+        `Blob upload failed: a blob takes at most ${limit} bytes encoded ` +
+          `in this space, and this one takes ${size}`,
       );
     }
-    const result = await response.json() as Partial<UploadBlobResponse>;
-    if (typeof result.id !== "string" || typeof result.url !== "string") {
-      throw new Error("Blob upload returned an invalid response");
+
+    const tx = this.#runtime.edit();
+    const id = tx.stageContentAddressedDocument(space, record)
+      .slice("cid:".length);
+    this.#runtime.prepareTxForCommit(tx);
+    const result = await tx.commit().settled;
+    if (result.error) {
+      throw new Error(`Blob upload failed: ${result.error.message}`);
     }
+
+    // A requested suffix is the extension of a name made of it alone, and
+    // without one the extension comes from the blob's own name.
+    const suffix = request.suffix?.replace(/^\./, "");
+    const host = this.#runtime.hostForSpace(space);
     return {
-      id: result.id,
-      url: resolveBlobUrl(result.url, host, request.space),
+      id,
+      url: resolveBlobUrl(
+        storedBlobPath(
+          id,
+          blobSuffix(suffix ? `.${suffix}` : request.name, record.type),
+        ),
+        host,
+        space,
+      ),
     };
   }
 

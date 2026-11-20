@@ -3750,6 +3750,14 @@ export class SpaceSession {
     return this.#declaredSpaceKind;
   }
 
+  /**
+   * Most UTF-8 bytes one request sent whole may take on the connection this
+   * session is on, as `Client.requestBytesLimit` gives it.
+   */
+  get requestBytesLimit(): number | undefined {
+    return this.#client.requestBytesLimit;
+  }
+
   /** The error this session was terminated with, or undefined while it is open.
    *  A permanent reopen denial stores its `AuthorizationError` here (see
    *  `restore`), which is what `#assertOpen` rethrows; a storage subscriber reads

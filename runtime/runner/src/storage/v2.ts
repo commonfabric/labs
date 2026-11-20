@@ -2757,6 +2757,11 @@ export class StorageManager implements IStorageManager {
   }
 
   /** @inheritDoc */
+  async requestBytesLimit(space: MemorySpace): Promise<number | undefined> {
+    return await this.open(space).replica.requestBytesLimit?.();
+  }
+
+  /** @inheritDoc */
   async administerInvites(
     space: MemorySpace,
     invite: MemoryV2Client.InviteAdministration,
@@ -8429,6 +8434,12 @@ export class SpaceReplica
     // A verb changes the space, so a late host hint may no longer move it.
     this.#markRouteWriteIssued();
     return await session.runPatternLifecycle(verb, body);
+  }
+
+  /** @inheritDoc */
+  async requestBytesLimit(): Promise<number | undefined> {
+    const { session } = await this.#activeSessionHandle();
+    return session.requestBytesLimit;
   }
 
   /** @inheritDoc */

@@ -82,14 +82,17 @@ can still be too large to rename.
 
 ## What the store provides
 
-- One upload holds at most 10 MB; the server returns 413 above that.
+- A blob's record takes at most 10 MiB in its JSON encoding, which carries the
+  bytes as base64url, so a file of about 7.86 MB with a short name fits. An
+  upload over that is refused before anything is sent, and the store's upload
+  route answers one with 413. A routed connection takes at most 4 MiB in one
+  request, and an upload over it is refused the same way.
 - A blob is addressed by the hash of its media type, its bytes, and the name
   it was stored with, if any, so the same file uploaded twice under the same
   name has the same id, and under two names has two. The URL is that id plus a
-  short suffix: the last extension of the name the upload is posted under,
-  which `cf-file-input` takes from the file's name, or, for an upload posted
-  under none, of the blob's name, when that extension is one to eight letters
-  or digits; otherwise one chosen from the media type, or `bin`. Two uploads
+  short suffix: the suffix the upload asks for, which `cf-file-input` takes
+  from the file's name, or, for an upload that asks for none, the last
+  extension of the blob's name, when that is one to eight letters or digits; otherwise one chosen from the media type, or `bin`. Two uploads
   with the same id share a URL when they get the same suffix and have two URLs
   when they do not. Each URL is immutable and cacheable forever.
 - A name is any non-empty string of well-formed Unicode of at most 1024 bytes
@@ -108,10 +111,16 @@ can still be too large to rename.
   name it gives is readable by anyone who can fetch the blob.
 - Nothing deletes a blob. Removing a record drops the reference; the bytes
   stay.
-- The upload and download routes are not authenticated: anyone who holds a
-  blob's URL can fetch it, and anyone can upload into a space.
+- A download takes no credential: anyone who holds a blob's URL can fetch it.
+- An upload through `cf-file-input`, or any other through the runtime client's
+  `uploadBlob()`, is a commit on the uploader's own session in the space, which
+  the memory server admits only for a principal the space's access list grants
+  `WRITE`. The store's upload route takes no credential, so anyone can upload
+  into a space through it.
 - Both routes answer a page on any origin, with
   `Access-Control-Allow-Origin: *`, so such a page can read an upload's reply
   and a blob's bytes.
 
-The store is `runtime/toolshed/routes/blobs/blobs.index.ts`.
+The store's routes are `runtime/toolshed/routes/blobs/blobs.index.ts`, and the
+runtime client's upload is `RuntimeProcessor.handleUploadBlob()` in
+`runtime/runtime-client/src/backends/runtime-processor.ts`.

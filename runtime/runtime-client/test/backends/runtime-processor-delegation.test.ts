@@ -423,27 +423,5 @@ describe("runtime-processor-delegation", () => {
       ).rejects.toThrow("uploadBlob requires bytes as its body");
       expect(fetchStub.calls).toEqual([]);
     });
-
-    it("rejects with the host's status and text when the upload fails", async () => {
-      using _fetch = stub(
-        globalThis,
-        "fetch",
-        () => Promise.resolve(new Response("store full", { status: 507 })),
-      );
-      await expect(processorForBlobs().handleRequest(upload)).rejects.toThrow(
-        "Blob upload failed: 507 store full",
-      );
-    });
-
-    it("rejects when the host responds without an id and URL", async () => {
-      using _fetch = stub(
-        globalThis,
-        "fetch",
-        () => Promise.resolve(Response.json({ id: "fid1:abc" })),
-      );
-      await expect(processorForBlobs().handleRequest(upload)).rejects.toThrow(
-        "Blob upload returned an invalid response",
-      );
-    });
   });
 });
