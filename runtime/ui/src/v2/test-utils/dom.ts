@@ -32,8 +32,8 @@
 import {
   type Element as HappyElement,
   type Node as HappyNode,
-  type ShadowRoot as HappyShadowRoot,
   PropertySymbol,
+  type ShadowRoot as HappyShadowRoot,
   Window,
 } from "happy-dom";
 
