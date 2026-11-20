@@ -609,6 +609,34 @@ describe("invites", () => {
       await f.close();
     }
   });
+  it("lists the receipts of the one invitation it is asked for, and every receipt when asked for none", async () => {
+    const f = await fixture();
+    try {
+      const shared = f.create({ maxUses: 2 });
+      const single = f.create();
+      f.run({ operation: "redeem", body: shared }, f.guest);
+      f.run({ operation: "redeem", body: shared }, f.second);
+      f.run({ operation: "redeem", body: single }, f.guest);
+
+      const one = f.run({
+        operation: "receipts",
+        body: { inviteId: shared.inviteId },
+      });
+      const every = f.run({ operation: "receipts", body: {} });
+
+      expect(one).toHaveLength(2);
+      expect(one).toEqual(expect.arrayContaining([
+        { inviteId: shared.inviteId, did: f.guest },
+        { inviteId: shared.inviteId, did: f.second },
+      ]));
+      expect(every).toHaveLength(3);
+      expect(every).toEqual(expect.arrayContaining([
+        { inviteId: single.inviteId, did: f.guest },
+      ]));
+    } finally {
+      await f.close();
+    }
+  });
   it("preserves a stronger wildcard without masking its independent removal", async () => {
     const f = await fixture();
     try {
