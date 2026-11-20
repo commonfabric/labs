@@ -347,6 +347,14 @@ export const EnvSchema = z.object({
   MEMORY_SYNC_CID_REFERENCES: z.enum(["true", "1", "false", "0"]).default(
     "true",
   ).transform((v) => v === "true" || v === "1"),
+  // Whether this deployment's memory server stores an admitted commit's reads
+  // as a digest where nothing reads them afterward
+  // (docs/specs/memory-v2/02-storage.md §3.3); on unless set to "false" or
+  // "0", and any other spelling refuses startup. Turn it off before rolling
+  // back to a version that predates digest-form rows.
+  MEMORY_STORE_READS_DIGEST: z.enum(["true", "1", "false", "0"]).default(
+    "true",
+  ).transform((v) => v === "true" || v === "1"),
   // Client retirement is disabled; reject settings that would enable it.
   MEMORY_MINIMUM_CLIENT_GENERATION: z.literal("0", {
     error:
@@ -383,10 +391,18 @@ export const EnvSchema = z.object({
 
   // Whether `/api/health/collected-memory` answers: it runs a full garbage
   // collection on every thread it measures, pausing each, for whoever asks.
-  // Off, the route answers 404. Local development servers and test servers
+  // Off, the route answers 404. Every server exposes V8's collector at
+  // startup either way, for the serving-worker pool to collect a worker
+  // before it ends one for its heap. Local development servers and test servers
   // turn it on. On, ENV must be one of TEST_ENVIRONMENTS, so that a server
   // that declares itself staging or production refuses to start with it.
   EXPOSE_GC: boolFlag(),
+
+  // Whether the main thread samples its heap from startup, for the profiles
+  // SIGUSR2 writes (`lib/heap-profiles.ts`). Off by default: the sampler's
+  // inspector session makes Deno hold each worker the main thread starts
+  // about a second for a debugger. The serving workers sample either way.
+  HEAP_PROFILE_MAIN_THREAD: boolFlag(),
 
   // The space this deployment keeps its ingest registry in: channel
   // registrations, their indexes, and Gmail mailbox bindings. Empty means the

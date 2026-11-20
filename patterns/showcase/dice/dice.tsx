@@ -1,3 +1,8 @@
+/**
+ * A dice roller with buttons to roll a six-sided or twenty-sided die and a
+ * display of the current value. A check button reads the value back into a
+ * report line.
+ */
 import {
   Default,
   NAME,

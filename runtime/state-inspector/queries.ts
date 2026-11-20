@@ -10,10 +10,11 @@ import {
   readAclHeads,
 } from "@commonfabric/memory/v2/acl-heads";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
+import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
 import {
-  COMPACTION_SESSION_PREFIX,
-  payloadDigest,
-} from "@commonfabric/memory/v2/engine";
+  storedOperationCount,
+  storedReadCounts,
+} from "@commonfabric/memory/v2/stored-commit";
 import { rowLimit } from "./model.ts";
 import { branchReadChain, owningLink } from "./reconstruct.ts";
 import { utf8Compare } from "@commonfabric/text/utf8";
@@ -131,9 +132,9 @@ export interface CommitInfo {
   hollowedBy?: string;
 
   /**
-   * The payload is a derived commit stored digested
-   * (`docs/specs/memory-v2/02-storage.md`): its operations are in the
-   * revision table, and `ops` is the count its digest names.
+   * The payload holds a digest in place of its operations
+   * (`docs/specs/memory-v2/02-storage.md` §3.3): they are in the revision
+   * table, and `ops` is the count the digest records.
    */
   digested?: true;
 }
@@ -161,17 +162,14 @@ export function listCommits(
     let digested: true | undefined;
     try {
       // `original` is a ClientCommit, stored either codec-encoded or plain
-      // JSON, or a derived commit stored digested — unless compaction wrote
-      // it: a compaction run's own commit holds the run's plan, and a
-      // hollowed commit holds a marker.
+      // JSON — unless compaction wrote it: a compaction run's own commit holds
+      // the run's plan, and a hollowed commit holds a marker.
       const marker = decodeHollowedPayload(r.original);
       if (marker !== undefined) {
         hollowedBy = marker.runId;
       } else {
-        const decoded = decodeStored(r.original);
-        const parsed = decoded as {
+        const parsed = decodeStored(r.original) as {
           operations?: unknown[];
-          reads?: { confirmed?: unknown[]; pending?: unknown[] };
           compaction?: {
             runId?: unknown;
             report?: {
@@ -191,17 +189,15 @@ export function listCommits(
         ) {
           compactionRun = parsed.compaction.runId;
         }
-        // Recognized by shape alone, because this reader opens stores from
-        // before the commit's class was recorded.
-        const digest = payloadDigest(decoded);
-        if (digest !== undefined) digested = true;
-        ops = digest !== undefined
-          ? digest.operations
-          : Array.isArray(parsed.operations)
-          ? parsed.operations.length
-          : 0;
-        reads = (parsed.reads?.confirmed?.length ?? 0) +
-          (parsed.reads?.pending?.length ?? 0);
+        // A commit stored with a digest in place of its operations or its
+        // reads records their counts in the digest. Each is recognized by
+        // shape alone, because this reader opens stores from before the
+        // commit's class was recorded.
+        const operations = storedOperationCount(parsed);
+        ops = operations?.operations ?? 0;
+        if (operations?.kept === false) digested = true;
+        const counts = storedReadCounts(parsed);
+        reads = counts === undefined ? 0 : counts.confirmed + counts.pending;
       }
     } catch {
       // leave zeroed if payload is unparseable

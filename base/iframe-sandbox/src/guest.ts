@@ -3,8 +3,11 @@
  * Calls may begin before port handoff and settle once the host is ready.
  */
 
+import { decodeBase64 } from "@std/encoding/base64";
+
 import {
   cloneIfNecessary,
+  debugStr,
   type FabricPlainObject,
   type FabricValue,
   isFabricPlainObject,
@@ -17,6 +20,12 @@ import {
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import {
+  type AssetRecord,
+  ASSETS_ATTRIBUTE,
+  assetUrlParts,
+  toAssetRecord,
+} from "./assets.ts";
 import {
   BRIDGE_PROTOCOL,
   BRIDGE_READ_REFUSED,
@@ -873,6 +882,88 @@ export class RemotePresence {
   }
 }
 
+/**
+ * One of the assets the host wrote into the guest's document, as
+ * `fabric.asset()` returns it. Its bytes are decoded in the guest, from the
+ * URL: the guest's policy refuses `fetch()` of a `data:` URL.
+ */
+export interface GuestAsset {
+  /** The media type the URL carries, with any parameters it gives. */
+  readonly mediaType: string;
+
+  /** The size of the decoded bytes. */
+  readonly size: number;
+
+  /** The asset as a `data:` URL, for an element or a style the script sets. */
+  readonly url: string;
+
+  /**
+   * Returns the decoded bytes, for `FontFace`, `decodeAudioData()`, or WebGL,
+   * as a fresh copy on each call.
+   */
+  bytes(): Uint8Array<ArrayBuffer>;
+
+  /** Returns the decoded bytes as a `Blob` of the asset's media type. */
+  blob(): Blob;
+
+  /** Returns the decoded bytes read as UTF-8, for an SVG the script inlines. */
+  text(): string;
+
+  /**
+   * Returns a new image element showing the asset, once the image has been
+   * decoded, which is what a 2D canvas and most engines take.
+   *
+   * @throws EncodingError, as a rejection, when the asset is not an image the
+   *   browser can decode.
+   */
+  image(): Promise<HTMLImageElement>;
+
+  /**
+   * Returns the asset decoded with `createImageBitmap()`, for drawing to a
+   * canvas or uploading a WebGL texture without an element.
+   */
+  bitmap(): Promise<ImageBitmap>;
+}
+
+/**
+ * Returns the asset whose URL is `url`, which `toAssetRecord()` has admitted.
+ */
+function guestAsset(url: string): GuestAsset {
+  const { mediaType, base64 } = assetUrlParts(url)!;
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  const bytes = () => decodeBase64(base64);
+  const blob = () => new Blob([bytes()], { type: mediaType });
+  return Object.freeze({
+    mediaType,
+    size: base64.length / 4 * 3 - padding,
+    url,
+    bytes,
+    blob,
+    text: () => new TextDecoder().decode(bytes()),
+    image: async () => {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+      return image;
+    },
+    bitmap: () => createImageBitmap(blob()),
+  });
+}
+
+/**
+ * Returns the assets the host wrote into this document, which are none when
+ * there is no element carrying them.
+ *
+ * @throws SyntaxError when the element's text is not JSON, and TypeError when
+ *   it is JSON other than an asset record.
+ */
+function documentAssets(): AssetRecord {
+  const element = globalThis.document?.querySelector(
+    `script[${ASSETS_ATTRIBUTE}]`,
+  );
+  return element ? toAssetRecord(JSON.parse(element.textContent ?? "")) : {};
+}
+
 type PendingRequest = {
   resolve: (value: FabricValue | undefined) => void;
   reject: (error: unknown) => void;
@@ -899,6 +990,9 @@ export class FabricClient {
   #presences = new Map<string, RemotePresence>();
   #manifest: Promise<BridgeManifest> | undefined;
   #disconnected = false;
+
+  /** The assets this document carries, once `asset()` has read them. */
+  #assets: AssetRecord | undefined;
 
   constructor() {
     globalThis.addEventListener("message", this.#onHandoff);
@@ -979,6 +1073,28 @@ export class FabricClient {
   /** Returns a sender for the stream resource `name`. */
   stream<T = FabricValue>(name: string): RemoteStream<T> {
     return new RemoteStream<T>(this, name);
+  }
+
+  /**
+   * Returns the asset `name`, one of those the host wrote into this document.
+   * They are there from the start, ahead of every script and before the host
+   * hands over a port, so this reads one synchronously.
+   *
+   * @throws Error when the document carries no asset named `name`, listing
+   *   the names it does carry.
+   */
+  asset(name: string): GuestAsset {
+    const assets = this.#assets ??= documentAssets();
+    if (!Object.hasOwn(assets, name)) {
+      const names = Object.keys(assets).map((carried) => `\`${carried}\``);
+      throw new Error(
+        debugStr`This document carries no asset named $quote${name}; ` +
+          (names.length === 0
+            ? "it carries none."
+            : `it carries ${names.join(", ")}.`),
+      );
+    }
+    return guestAsset(assets[name]);
   }
 
   /** Returns the one shared guest handle for the presence resource `name`. */

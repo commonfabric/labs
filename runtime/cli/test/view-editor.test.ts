@@ -15,7 +15,7 @@ import {
   promptText,
 } from "./view-helpers.ts";
 import { highlightDocument } from "../lib/view/languages/typescript/parse.ts";
-import { renderFrame } from "../lib/view/render.ts";
+import { cursorScreenPos, renderFrame } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import type { Key } from "../lib/view/keys.ts";
 import {
@@ -85,6 +85,48 @@ Deno.test("editor: e reveals the cursor, a bare arrow scrolls, ESC hides it", ()
   assertEquals(s.view().cursor, { line: 2, col: 1 }, "then arrows move it");
   press(s, "escape");
   assertEquals(s.view().cursor, null, "ESC hides it again");
+});
+
+Deno.test("editor: the cursor stays on screen at the end of a line of wide characters", () => {
+  // Thirty Han characters take sixty columns of a forty-column view.
+  const { src } = memSource();
+  const s = editSession(`${"漢".repeat(30)}\n`, src, 6);
+
+  press(s, "e", "end");
+  const pos = cursorScreenPos(s.displayDoc(), s.view());
+
+  assertEquals(s.view().cursor, { line: 0, col: 30 });
+  assertEquals(pos, { row: 1, col: 40 });
+  assertEquals(s.view().left, 21);
+});
+
+Deno.test("editor: the whole of a wide character under the cursor comes into view", () => {
+  // The twentieth Han character after the a takes columns 39 and 40 of a
+  // forty-column view, counting from 0.
+  const { src } = memSource();
+  const s = editSession(`a${"漢".repeat(30)}\n`, src, 6);
+
+  press(s, "e", "home");
+  for (let i = 0; i < 20; i++) press(s, "right");
+
+  assertEquals(s.view().cursor, { line: 0, col: 20 });
+  assertEquals(s.view().left, 1);
+  assertEquals(cursorScreenPos(s.displayDoc(), s.view()), { row: 1, col: 39 });
+});
+
+Deno.test("editor: Page Down keeps the cursor's display column over wide characters", () => {
+  // The view shows five rows, so Page Down moves four; the cursor's display
+  // column 4 falls on the third Han character, at column 2.
+  const { src } = memSource();
+  const lines = ["abcdef", "x", "x", "x", "漢字かなab", "x", "x"];
+  const s = editSession(`${lines.join("\n")}\n`, src, 6);
+
+  press(s, "e", "home", "right", "right", "right", "right", "pagedown");
+  const paged = s.view().cursor;
+  press(s, "up", "up", "up", "up");
+
+  assertEquals(paged, { line: 4, col: 2 });
+  assertEquals(s.view().cursor, { line: 0, col: 4 }, "the goal column stays");
 });
 
 Deno.test("editor: revealing the cursor forces the pictures display mode", () => {

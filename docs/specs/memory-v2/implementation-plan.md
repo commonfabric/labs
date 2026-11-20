@@ -53,9 +53,10 @@ Explicitly deferred:
 - full UCAN transport framing for all wire messages
 - server-issued or principal-bound session ids; resume remains keyed by the
   caller-provided `sessionId`
-- public branch lifecycle commands on the v2 wire protocol
 - merge proposal generation, merge conflict workflows, and advanced branch
   live-sync optimizations
+- branches a serving loop runs: a session of a branch other than the default
+  computes what the branch stores itself (`06-branching.md` section 6.16)
 - the structured-codec readiness proof required before a WordGard integration
 - broad protocol-spec reconciliation outside these implementation notes
 
@@ -86,9 +87,9 @@ memory route.
   Session-id hardening is deferred.
 - Keep blob payload storage content-addressed. The seq rewrite applies to JSON
   entity storage, not blob data.
-- Keep branch-aware reads, writes, and watch scopes where already supported.
-  Defer public branch lifecycle commands, merge proposals, and advanced branch
-  sync.
+- Keep branch-aware reads, writes, and watch scopes, and the public branch
+  lifecycle, history and restore commands (`04-protocol.md` section 4.3.8).
+  Defer merge proposals and advanced branch sync.
 
 ## Phase 0: Spec Maintenance
 
@@ -117,8 +118,8 @@ memory route.
 - Make current and point-in-time reads use `snapshot + revision replay`.
 - Store patch arrays inline on `revision.data`.
 - Deduplicate replay by `(session_id, local_seq)` plus canonical equality of the
-  stored `original` payload, in whichever form it was stored: whole, or for an
-  eligible derived commit digested (`02-storage.md`).
+  stored `original` payload, in whichever form it was stored: whole, or in a
+  digest form (`02-storage.md` §3.3).
 - Remove parent-hash resolution from JSON commit handling entirely.
 
 ## Phase 2: Server Protocol and Session Watches
@@ -189,10 +190,16 @@ Implemented in this pass:
 - branch-aware current reads
 - branch-aware point-in-time reads
 - branch-aware watch scopes
+- branch create, delete and list commands on the v2 wire protocol
+  (`04-protocol.md` section 4.3.8)
+- sessions opened on a branch (`06-branching.md` section 6.16)
+- history listing, and restoring the default branch to a point of its own or
+  another branch's history (`06-branching.md` sections 6.15 and 6.17)
+- collaborative fields on branches (`06-branching.md` section 6.18)
 
 Deferred:
 
-- public branch create/delete/list commands on the v2 wire protocol
+- sequencing branch creation and deletion as commit-logged writes
 - merge proposal generation
 - merge conflict workflow
 - advanced branch-specific live sync optimizations
@@ -217,8 +224,9 @@ Deferred:
 - point-in-time reads through patch chains
 - set / patch / delete revision replay
 - idempotent replay by `(sessionId, localSeq)` with identical `original`, whole
-  or digested
-- protocol error on replay with different `original`, whole or digested
+  or in a digest form
+- protocol error on replay with different `original`, whole or in a digest
+  form
 - branch create/delete/list and branch-aware reads
 
 ### Server / Client

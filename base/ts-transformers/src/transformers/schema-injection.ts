@@ -54,7 +54,6 @@ import {
   type FunctionCapabilitySummary,
   HelpersOnlyTransformer,
   type SchemaHint,
-  type SchemaHints,
   TransformationContext,
   type TypeRegistry,
 } from "../core/mod.ts";
@@ -257,37 +256,27 @@ function capabilitySummaryMemoFor(
 function findCapabilitySummaryForParameter(
   fn: ts.ArrowFunction | ts.FunctionExpression,
   index: number,
-  context?: TransformationContext,
-  options?: {
-    readonly checker?: ts.TypeChecker;
-    readonly includeNestedCallbacks?: boolean;
-  },
+  context: TransformationContext,
+  includeNestedCallbacks: boolean,
 ): CapabilityParamSummary | undefined {
-  const summary = options?.includeNestedCallbacks
+  const summary = includeNestedCallbacks
     ? analyzeFunctionCapabilities(fn, {
-      checker: options.checker,
-      typeRegistry: context?.state.typeRegistry,
+      checker: context.checker,
+      typeRegistry: context.state.typeRegistry,
       // A call into a helper the same file declares is followed, so a cell
       // handed to one is charged what the helper does with it, a write there
       // included.
       interprocedural: true,
       includeNestedCallbacks: true,
-      summaryCache: context
-        ? capabilitySummaryMemoFor(context).nested
-        : undefined,
+      summaryCache: capabilitySummaryMemoFor(context).nested,
     })
-    : context
-    ? (context.lookupCapabilitySummary(fn) ??
+    : (context.lookupCapabilitySummary(fn) ??
       analyzeFunctionCapabilities(fn, {
         checker: context.checker,
         typeRegistry: context.state.typeRegistry,
         summaryCache: capabilitySummaryMemoFor(context).fallback,
-      }))
-    : analyzeFunctionCapabilities(fn, {
-      checker: options?.checker,
-    });
-  if (!summary) return undefined;
-  if (context && summary.unreadableCellArguments) {
+      }));
+  if (summary.unreadableCellArguments) {
     // A cell argument reached an imported parameter the capability contract
     // could not classify, so its capability was silently lost. Deduped by
     // source range across the per-parameter calls that share this summary.
@@ -312,47 +301,54 @@ function findCapabilitySummaryForParameter(
  * `node`, a verb's authored event, as the node its schema is generated from:
  * a node of its own around it, which carries the handler body's capability
  * summary (`SchemaHint.contractCapabilities`), so that only this reading of
- * the node is narrowed; `node` itself where there is no state to record that
- * in.
+ * the node is narrowed. The body's observed paths still validate against the
+ * authored type: a read of an unknown-typed property is an authoring error
+ * under either mode.
  */
 function contractReading(
   node: ts.TypeNode,
   type: ts.Type | undefined,
   summary: CapabilityParamSummary,
+  checker: ts.TypeChecker,
   factory: ts.NodeFactory,
-  context: TransformationContext | undefined,
+  context: TransformationContext,
+  fn: ts.Node,
 ): ts.TypeNode {
-  if (!context) return node;
   const reading = factory.createParenthesizedType(node);
   if (type) context.state.typeRegistry.set(reading, type);
   context.state.recordSchemaHint(reading, { contractCapabilities: summary });
+  validateShrinkCoverage(
+    summary,
+    node,
+    type,
+    [
+      ...summary.readPaths,
+      ...summary.writePaths,
+      ...summary.fullShapePaths ?? [],
+    ],
+    reading,
+    context,
+    fn,
+    checker,
+  );
   return reading;
 }
 
 function applyCapabilitySummaryToArgument(
   fn: ts.ArrowFunction | ts.FunctionExpression,
-  argumentNode: ts.TypeNode | undefined,
+  argumentNode: ts.TypeNode,
   argumentType: ts.Type | undefined,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  mode: CapabilitySummaryApplicationMode = "full",
-  context?: TransformationContext,
-  fnNode?: ts.Node,
-): ts.TypeNode | undefined {
-  if (!argumentNode) return argumentNode;
-
+  mode: CapabilitySummaryApplicationMode,
+  context: TransformationContext,
+): ts.TypeNode {
   const paramSummary = findCapabilitySummaryForParameter(
     fn,
     0,
     context,
-    isSyntheticNode(argumentNode) &&
-      context?.isSyntheticComputeCallback?.(fnNode ?? fn)
-      ? {
-        checker,
-        includeNestedCallbacks: true,
-      }
-      : undefined,
+    isSyntheticNode(argumentNode) && context.isSyntheticComputeCallback(fn),
   );
   if (!paramSummary) {
     return argumentNode;
@@ -360,39 +356,25 @@ function applyCapabilitySummaryToArgument(
   if (mode === "contract") {
     // The contract half of docs/history/plans/verb-input-contract.md: the
     // authored event's schema is generated as written, and its cells take
-    // the capabilities the body's usage earns (`contractReading()`). The
-    // body's observed paths still validate against the authored type — a
-    // read of an unknown-typed property is an authoring error under either
-    // mode.
-    const reading = contractReading(
+    // the capabilities the body's usage earns (`contractReading()`).
+    return contractReading(
       argumentNode,
       argumentType,
       paramSummary,
+      checker,
       factory,
       context,
+      fn,
     );
-    if (context) {
-      validateShrinkCoverage(
-        paramSummary,
-        argumentNode,
-        argumentType,
-        [
-          ...paramSummary.readPaths,
-          ...paramSummary.writePaths,
-          ...paramSummary.fullShapePaths ?? [],
-        ],
-        reading,
-        context,
-        fnNode ?? fn,
-        checker,
-      );
-    }
-    return reading;
   }
-  let innerTypeNode = getAuthoredCellValueTypeNode(argumentNode, checker);
+  // A printed node is not taken apart: its value is printed from its type.
+  let innerTypeNode = context.state.printedFrom(argumentNode)
+    ? undefined
+    : getAuthoredCellValueTypeNode(argumentNode, checker);
   if (!innerTypeNode && argumentType && isCellLikeType(argumentType, checker)) {
     // A cell whose wrapper no node writes out, such as one reached through a
-    // generic alias, has no authored value node, so its value type is printed.
+    // generic alias, or a printed one, has no authored value node, so its
+    // value type is printed.
     // Schema generation can read some prints only from the type behind them —
     // a name the emitting module does not import, the brand arm of an expanded
     // `Default` — so the node is registered with its type.
@@ -401,10 +383,10 @@ function applyCapabilitySummaryToArgument(
       valueType,
       checker,
       sourceFile,
-      context?.state,
+      context.state,
     );
     if (innerTypeNode && valueType) {
-      context?.state.typeRegistry.set(innerTypeNode, valueType);
+      context.state.typeRegistry.set(innerTypeNode, valueType);
     }
   }
   const shouldWrap = !!innerTypeNode;
@@ -420,7 +402,7 @@ function applyCapabilitySummaryToArgument(
     baseType = getTypeFromTypeNodeWithFallback(
       baseTypeNode,
       checker,
-      context?.state.typeRegistry,
+      context.state.typeRegistry,
     );
   }
 
@@ -435,7 +417,7 @@ function applyCapabilitySummaryToArgument(
     mode,
     mode === "defaults_only" ? "opaque" : paramSummary.capability,
     context,
-    fnNode ?? fn,
+    fn,
     preservedWrapper,
   );
 }
@@ -443,55 +425,34 @@ function applyCapabilitySummaryToArgument(
 function applyCapabilitySummaryToParameter(
   fn: ts.ArrowFunction | ts.FunctionExpression,
   parameterIndex: number,
-  parameterNode: ts.TypeNode | undefined,
-  parameterType: ts.Type | undefined,
+  parameterNode: ts.TypeNode,
+  parameterType: ts.Type,
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  context?: TransformationContext,
-  fnNode?: ts.Node,
+  context: TransformationContext,
   mode: CapabilitySummaryApplicationMode = "full",
-): ts.TypeNode | undefined {
-  if (!parameterNode) return parameterNode;
-
+): ts.TypeNode {
   const paramSummary = findCapabilitySummaryForParameter(
     fn,
     parameterIndex,
     context,
-    {
-      checker,
-      includeNestedCallbacks: true,
-    },
+    true,
   );
   if (!paramSummary) {
     return parameterNode;
   }
   if (mode === "contract") {
     // See the matching branch in applyCapabilitySummaryToArgument.
-    const reading = contractReading(
+    return contractReading(
       parameterNode,
       parameterType,
       paramSummary,
+      checker,
       factory,
       context,
+      fn,
     );
-    if (context) {
-      validateShrinkCoverage(
-        paramSummary,
-        parameterNode,
-        parameterType,
-        [
-          ...paramSummary.readPaths,
-          ...paramSummary.writePaths,
-          ...paramSummary.fullShapePaths ?? [],
-        ],
-        reading,
-        context,
-        fnNode ?? fn,
-        checker,
-      );
-    }
-    return reading;
   }
 
   const innerTypeNode = getAuthoredCellValueTypeNode(parameterNode, checker);
@@ -499,23 +460,13 @@ function applyCapabilitySummaryToParameter(
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(parameterNode, parameterType, checker)
     : undefined;
-  const baseTypeNode = innerTypeNode ?? parameterNode;
-  let baseType = shouldWrap && parameterType
-    ? (unwrapCellLikeType(parameterType, checker) ?? parameterType)
-    : parameterType;
-
-  if (!baseType) {
-    baseType = getTypeFromTypeNodeWithFallback(
-      baseTypeNode,
-      checker,
-      context?.state.typeRegistry,
-    );
-  }
 
   return applyShrinkAndWrap(
     paramSummary,
-    baseTypeNode,
-    baseType,
+    innerTypeNode ?? parameterNode,
+    shouldWrap
+      ? (unwrapCellLikeType(parameterType, checker) ?? parameterType)
+      : parameterType,
     shouldWrap,
     checker,
     sourceFile,
@@ -523,7 +474,7 @@ function applyCapabilitySummaryToParameter(
     mode,
     paramSummary.capability,
     context,
-    fnNode ?? fn,
+    fn,
     preservedWrapper,
   );
 }
@@ -533,10 +484,10 @@ function collectFunctionSchemaTypeNodes(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  fallbackArgType?: ts.Type,
-  typeRegistry?: TypeRegistry,
-  argumentCapabilityMode: CapabilitySummaryApplicationMode = "full",
-  context?: TransformationContext,
+  fallbackArgType: ts.Type | undefined,
+  typeRegistry: TypeRegistry | undefined,
+  argumentCapabilityMode: CapabilitySummaryApplicationMode,
+  context: TransformationContext,
 ): {
   argument?: ts.TypeNode;
   argumentType?: ts.Type; // Store the Type for registry
@@ -580,7 +531,7 @@ function collectFunctionSchemaTypeNodes(
         paramType,
         checker,
         sourceFile,
-        context?.state,
+        context.state,
       );
     }
     // If inference failed, leave argumentNode undefined - we'll use unknown below
@@ -589,7 +540,7 @@ function collectFunctionSchemaTypeNodes(
   // Capability-based shrinking and wrapper selection for the first parameter.
   const originalArgumentNode = argumentNode;
   const originalArgumentType = argumentType;
-  argumentNode = applyCapabilitySummaryToArgument(
+  argumentNode = argumentNode && applyCapabilitySummaryToArgument(
     fn,
     argumentNode,
     argumentType,
@@ -598,7 +549,6 @@ function collectFunctionSchemaTypeNodes(
     factory,
     argumentCapabilityMode,
     context,
-    fn,
   );
   if (
     argumentNode && originalArgumentNode &&
@@ -666,7 +616,7 @@ function collectFunctionSchemaTypeNodes(
         returnType,
         checker,
         sourceFile,
-        context?.state,
+        context.state,
       );
     }
     // If inference failed, leave resultNode undefined - we'll use unknown below
@@ -687,25 +637,21 @@ function collectFunctionSchemaTypeNodes(
   const unwrappedReturnExpr = returnExpr
     ? unwrapExpression(returnExpr)
     : undefined;
-  const uiContractHint = context &&
-      unwrappedReturnExpr &&
+  const returnedObject = unwrappedReturnExpr &&
       ts.isObjectLiteralExpression(unwrappedReturnExpr)
-    ? propagateUiContractHintsFromObjectLiteral(
-      unwrappedReturnExpr,
+    ? unwrappedReturnExpr
+    : undefined;
+  const uiContractHint = returnedObject &&
+    propagateUiContractHintsFromObjectLiteral(
+      returnedObject,
       resultNode,
       context,
-    )
-    : undefined;
+    );
 
-  if (
-    uiContractHint &&
-    context &&
-    unwrappedReturnExpr &&
-    ts.isObjectLiteralExpression(unwrappedReturnExpr)
-  ) {
+  if (uiContractHint && returnedObject) {
     const previousResultNode = resultNode;
     const synthesizedResult = buildObjectLiteralReturnTypeNode(
-      unwrappedReturnExpr,
+      returnedObject,
       checker,
       sourceFile,
       factory,
@@ -724,18 +670,16 @@ function collectFunctionSchemaTypeNodes(
   }
 
   if (
-    context &&
-    unwrappedReturnExpr &&
-    ts.isObjectLiteralExpression(unwrappedReturnExpr) &&
+    returnedObject &&
     objectLiteralHasPreservedValueTypeNodes(
-      unwrappedReturnExpr,
+      returnedObject,
       checker,
       sourceFile,
       context.state,
     )
   ) {
     const scopedResult = buildObjectLiteralReturnTypeNode(
-      unwrappedReturnExpr,
+      returnedObject,
       checker,
       sourceFile,
       factory,
@@ -763,13 +707,9 @@ function collectFunctionSchemaTypeNodes(
     );
 
   if (needsResultRecovery) {
-    if (
-      context &&
-      unwrappedReturnExpr &&
-      ts.isObjectLiteralExpression(unwrappedReturnExpr)
-    ) {
+    if (returnedObject) {
       const recoveredNode = buildObjectLiteralReturnTypeNode(
-        unwrappedReturnExpr,
+        returnedObject,
         checker,
         sourceFile,
         factory,
@@ -795,16 +735,14 @@ function collectFunctionSchemaTypeNodes(
         argumentNode,
         argumentType ?? fallbackArgType,
         typeRegistry,
-        context?.state,
+        context.state,
       );
       if (projectedResult?.result) {
-        if (context) {
-          preserveUiContractHint(
-            resultNode,
-            projectedResult.result,
-            context,
-          );
-        }
+        preserveUiContractHint(
+          resultNode,
+          projectedResult.result,
+          context,
+        );
         resultNode = projectedResult.result;
         resultType = projectedResult.resultType;
       }
@@ -816,7 +754,7 @@ function collectFunctionSchemaTypeNodes(
   // `typeToTypeNodeWithRegistry()` records one, and schema generation reads it
   // as that type. The print is not tried again: one that threw would throw
   // again.
-  if (!resultNode && resultType && context) {
+  if (!resultNode && resultType) {
     resultNode = createUnknownSchemaTypeNode(factory);
     typeRegistry?.set(resultNode, resultType);
     context.state.recordPrintedFrom(resultNode, resultType);
@@ -1652,38 +1590,27 @@ function isCellScopeValue(value: string): value is CellScope {
   return value === "space" || value === "user" || value === "session";
 }
 
+const SCOPED_CONSTRUCTOR_ACCESSOR_SCOPES: ReadonlyMap<string, CellScope> =
+  new Map([
+    ["perSpace", "space"],
+    ["perUser", "user"],
+    ["perSession", "session"],
+  ]);
+
 function scopedConstructorAccessorScope(
   node: ts.CallExpression | ts.NewExpression,
 ): CellScope | undefined {
   const callee = unwrapExpression(node.expression);
   if (!ts.isPropertyAccessExpression(callee)) return undefined;
 
-  if (ts.isNewExpression(node)) {
-    switch (callee.name.text) {
-      case "perSpace":
-        return "space";
-      case "perUser":
-        return "user";
-      case "perSession":
-        return "session";
-      default:
-        return undefined;
-    }
-  }
-
-  const constructorView = unwrapExpression(callee.expression);
-  if (!ts.isPropertyAccessExpression(constructorView)) return undefined;
-
-  switch (constructorView.name.text) {
-    case "perSpace":
-      return "space";
-    case "perUser":
-      return "user";
-    case "perSession":
-      return "session";
-    default:
-      return undefined;
-  }
+  // `new X.perUser(...)` names the scope on its callee, `X.perUser.of(...)` on
+  // the constructor view its factory is read off.
+  const accessor = ts.isNewExpression(node)
+    ? callee
+    : unwrapExpression(callee.expression);
+  return ts.isPropertyAccessExpression(accessor)
+    ? SCOPED_CONSTRUCTOR_ACCESSOR_SCOPES.get(accessor.name.text)
+    : undefined;
 }
 
 function cellConstructorCallScope(
@@ -1832,7 +1759,6 @@ function createSchemaCallWithRegistryTransfer(
   checker: ts.TypeChecker,
   typeRegistry?: TypeRegistry,
   options?: SchemaCallOptions,
-  schemaHints?: SchemaHints,
 ): ts.CallExpression {
   const emittedTypeNode = normalizeSchemaInjectionTypeNode(
     typeNode,
@@ -1841,20 +1767,6 @@ function createSchemaCallWithRegistryTransfer(
     typeRegistry,
   );
   const schemaCall = createToSchemaCall(context, emittedTypeNode, options);
-  // This leaf utility takes a narrowed `context` (Pick) and the schemaHints map
-  // explicitly, so it can't use context.recordSchemaHint; preserve the
-  // cfcUiContract hint directly on the raw map (mirroring to the original node).
-  if (schemaHints) {
-    const hint = schemaHints.get(typeNode)?.cfcUiContract ??
-      schemaHints.get(ts.getOriginalNode(typeNode))?.cfcUiContract;
-    if (hint) {
-      schemaHints.set(schemaCall, { cfcUiContract: hint });
-      const originalSchemaCall = ts.getOriginalNode(schemaCall);
-      if (originalSchemaCall !== schemaCall) {
-        schemaHints.set(originalSchemaCall, { cfcUiContract: hint });
-      }
-    }
-  }
 
   // Transfer TypeRegistry entry from source typeNode to schema call
   // This preserves type information for closure-captured variables
@@ -1966,17 +1878,15 @@ function registerInjectedCallResultType(
   resultTypeNode: ts.TypeNode,
   resultTypeValue: ts.Type | undefined,
   checker: ts.TypeChecker,
-  typeRegistry?: TypeRegistry,
+  typeRegistry: TypeRegistry,
 ): void {
-  if (!typeRegistry) return;
-
   const resolvedType = getTypeFromRegistryOrFallback(
     resultTypeNode,
     resultTypeValue,
     typeRegistry,
   ) ?? getTypeFromTypeNodeWithFallback(resultTypeNode, checker, typeRegistry);
 
-  if (!resolvedType || isAnyOrUnknownType(resolvedType)) {
+  if (isAnyOrUnknownType(resolvedType)) {
     return;
   }
 
@@ -1985,7 +1895,7 @@ function registerInjectedCallResultType(
 }
 
 function applyCallbackBuilderArgumentCapabilitySummary(
-  callback: ts.ArrowFunction | ts.FunctionExpression | undefined,
+  callback: ts.ArrowFunction | ts.FunctionExpression,
   argumentTypeNode: ts.TypeNode,
   argumentTypeValue: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -1997,10 +1907,6 @@ function applyCallbackBuilderArgumentCapabilitySummary(
   argumentTypeNode: ts.TypeNode;
   argumentTypeValue: ts.Type | undefined;
 } {
-  if (!callback) {
-    return { argumentTypeNode, argumentTypeValue };
-  }
-
   const transformedArgumentType = applyCapabilitySummaryToArgument(
     callback,
     argumentTypeNode,
@@ -2010,13 +1916,7 @@ function applyCallbackBuilderArgumentCapabilitySummary(
     factory,
     mode,
     context,
-    callback,
   );
-
-  if (!transformedArgumentType) {
-    return { argumentTypeNode, argumentTypeValue };
-  }
-
   return {
     argumentTypeNode: transformedArgumentType,
     argumentTypeValue: transformedArgumentType === argumentTypeNode
@@ -2042,7 +1942,7 @@ function resolveDualSchemaBuilderTypes(
     readonly capabilityMode?: CapabilitySummaryApplicationMode;
     readonly applyExplicitArgumentCapabilitySummary?: boolean;
   },
-): ResolvedDualSchemaBuilderTypes | undefined {
+): ResolvedDualSchemaBuilderTypes {
   let argumentTypeNode = options?.explicitArgumentTypeNode;
   let argumentTypeValue = options?.explicitArgumentTypeValue ??
     (argumentTypeNode
@@ -2072,10 +1972,7 @@ function resolveDualSchemaBuilderTypes(
   let inferred:
     | ReturnType<typeof collectFunctionSchemaTypeNodes>
     | undefined;
-  if (!argumentTypeNode || !options?.explicitResultTypeNode) {
-    if (!callback) {
-      return undefined;
-    }
+  if (callback && (!argumentTypeNode || !options?.explicitResultTypeNode)) {
     inferred = collectFunctionSchemaTypeNodes(
       callback,
       checker,
@@ -2204,7 +2101,7 @@ function visitInjectedDualSchemaBuilderCall(
   visit: (node: ts.Node) => ts.Node,
   transformation: ts.TransformationContext,
   checker: ts.TypeChecker,
-  typeRegistry?: TypeRegistry,
+  typeRegistry: TypeRegistry,
 ): ts.Node {
   const updated = prependSchemaArguments(
     context,
@@ -2352,8 +2249,8 @@ function inferLiftFactoryResultType(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  typeRegistry?: TypeRegistry,
-  context?: TransformationContext,
+  typeRegistry: TypeRegistry | undefined,
+  context: TransformationContext,
 ): ts.Type | undefined {
   const valueInitializer = getVariableInitializer(node, checker);
   if (!valueInitializer || !ts.isCallExpression(valueInitializer)) {
@@ -2375,24 +2272,14 @@ function inferLiftFactoryResultType(
 
   const callback = resolveFunctionLikeExpression(
     factoryInitializer.arguments[0],
-    checker,
-    sourceFile,
   );
   if (!callback) {
     return undefined;
   }
 
-  let fallbackArgType: ts.Type | undefined;
-  if (factoryInitializer.typeArguments?.length) {
-    const [argumentType] = factoryInitializer.typeArguments;
-    if (argumentType) {
-      fallbackArgType = getTypeFromTypeNodeWithFallback(
-        argumentType,
-        checker,
-        typeRegistry,
-      );
-    }
-  }
+  const [argumentType] = factoryInitializer.typeArguments ?? [];
+  const fallbackArgType = argumentType &&
+    getTypeFromTypeNodeWithFallback(argumentType, checker, typeRegistry);
 
   const inferred = collectFunctionSchemaTypeNodes(
     callback,
@@ -2477,19 +2364,11 @@ function findTypeLiteralPropertyTypeNode(
     return undefined;
   }
 
-  const member = argumentNode.members.find((member) =>
+  return argumentNode.members.find((member): member is ts.PropertySignature =>
     ts.isPropertySignature(member) &&
-    member.type &&
-    ((ts.isIdentifier(member.name) && member.name.text === propertyName) ||
-      (ts.isStringLiteralLike(member.name) &&
-        member.name.text === propertyName))
-  );
-
-  if (!member || !ts.isPropertySignature(member) || !member.type) {
-    return undefined;
-  }
-
-  return member.type;
+    (ts.isIdentifier(member.name) || ts.isStringLiteralLike(member.name)) &&
+    member.name.text === propertyName
+  )?.type;
 }
 
 function recoverProjectedResultSchema(
@@ -2545,8 +2424,8 @@ function inferLiftAppliedResultTypeFromInitializer(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  typeRegistry?: TypeRegistry,
-  context?: TransformationContext,
+  typeRegistry: TypeRegistry | undefined,
+  context: TransformationContext,
 ): ts.Type | undefined {
   const initializer = getVariableInitializer(node, checker);
   if (!initializer || !ts.isCallExpression(initializer)) {
@@ -2558,11 +2437,7 @@ function inferLiftAppliedResultTypeFromInitializer(
     return undefined;
   }
 
-  const liftAppliedArgs = resolveLiftAppliedInputAndCallback(
-    initializer,
-    checker,
-    sourceFile,
-  );
+  const liftAppliedArgs = resolveLiftAppliedInputAndCallback(initializer);
   if (!liftAppliedArgs) {
     return undefined;
   }
@@ -2572,17 +2447,14 @@ function inferLiftAppliedResultTypeFromInitializer(
     getTypeAtLocationWithFallback(firstArg, checker, typeRegistry) ??
       checker.getTypeAtLocation(firstArg);
   if (isAnyOrUnknownType(argumentType)) {
-    const recoveredArgumentType = inferLiftFactoryResultType(
+    argumentType = inferLiftFactoryResultType(
       firstArg,
       checker,
       sourceFile,
       factory,
       typeRegistry,
       context,
-    );
-    if (recoveredArgumentType && !isAnyOrUnknownType(recoveredArgumentType)) {
-      argumentType = recoveredArgumentType;
-    }
+    ) ?? argumentType;
   }
 
   const inferred = collectFunctionSchemaTypeNodes(
@@ -2614,8 +2486,8 @@ function inferExpressionTypeWithInitializerFallback(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  typeRegistry?: TypeRegistry,
-  context?: TransformationContext,
+  typeRegistry: TypeRegistry | undefined,
+  context: TransformationContext,
 ): ts.Type | undefined {
   const type = getTypeAtLocationWithFallback(expr, checker, typeRegistry) ??
     checker.getTypeAtLocation(expr);
@@ -2623,31 +2495,23 @@ function inferExpressionTypeWithInitializerFallback(
     return type;
   }
 
-  const fromLift = inferLiftFactoryResultType(
+  return inferLiftFactoryResultType(
     expr,
     checker,
     sourceFile,
     factory,
     typeRegistry,
     context,
-  );
-  if (fromLift && !isAnyOrUnknownType(fromLift)) {
-    return fromLift;
-  }
-
-  const fromLiftApplied = inferLiftAppliedResultTypeFromInitializer(
-    expr,
-    checker,
-    sourceFile,
-    factory,
-    typeRegistry,
-    context,
-  );
-  if (fromLiftApplied && !isAnyOrUnknownType(fromLiftApplied)) {
-    return fromLiftApplied;
-  }
-
-  return type;
+  ) ??
+    inferLiftAppliedResultTypeFromInitializer(
+      expr,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      context,
+    ) ??
+    type;
 }
 
 function buildObjectLiteralReturnTypeNode(
@@ -2655,8 +2519,8 @@ function buildObjectLiteralReturnTypeNode(
   checker: ts.TypeChecker,
   sourceFile: ts.SourceFile,
   factory: ts.NodeFactory,
-  typeRegistry?: TypeRegistry,
-  context?: TransformationContext,
+  typeRegistry: TypeRegistry | undefined,
+  context: TransformationContext,
   freshValuesDefineDocument = false,
 ): ts.TypeNode | undefined {
   const members: ts.TypeElement[] = [];
@@ -2689,10 +2553,10 @@ function buildObjectLiteralReturnTypeNode(
       checker,
       sourceFile,
       typeRegistry,
-      context?.state,
+      context.state,
     );
     const valueTypeNode = explicit?.typeNode ??
-      typeToSchemaTypeNode(valueType, checker, sourceFile, context?.state);
+      typeToSchemaTypeNode(valueType, checker, sourceFile, context.state);
     if (!valueTypeNode) {
       return undefined;
     }
@@ -2700,16 +2564,14 @@ function buildObjectLiteralReturnTypeNode(
     // resolve to nothing here, and the type carries the wrappers the body's
     // view of the binding has stripped. An authored node reads on its own.
     typeRegistry?.set(valueTypeNode, explicit?.printedFrom ?? valueType);
-    const valueHint = context
-      ? getUiContractHintFromNode(valueExpr, context)
-      : undefined;
-    if (valueHint && context) {
+    const valueHint = getUiContractHintFromNode(valueExpr, context);
+    if (valueHint) {
       context.recordSchemaHint(valueTypeNode, { cfcUiContract: valueHint });
     }
     // Fresh data under a writer policy is data the result document holds
     // itself, so the value's schema defines that document.
     if (
-      freshValuesDefineDocument && context &&
+      freshValuesDefineDocument &&
       holdsFreshWriterPolicy(valueExpr, valueType, checker)
     ) {
       context.recordSchemaHint(valueTypeNode, { definesDocument: true });
@@ -3201,15 +3063,11 @@ function preserveUiContractHint(
 }
 
 function getUiContractHintFromNode(
-  node: ts.Node | undefined,
+  node: ts.Node,
   context: TransformationContext,
 ):
   | UiContractHint
   | undefined {
-  if (!node) {
-    return undefined;
-  }
-
   const storedHint = context.lookupSchemaHint(node)?.cfcUiContract;
   if (storedHint) {
     return storedHint;
@@ -3294,9 +3152,12 @@ function getObjectLiteralPropertyName(
  *
  * Rules:
  * - No parameter → never (schema: false)
- * - Parameter with _ prefix and no type → never (schema: false)
  * - Parameter with explicit type → use that type
  * - Parameter without type → unknown (schema: true)
+ *
+ * No `_`-prefixed parameter reaches this: callers use it only where
+ * `collectFunctionSchemaTypeNodes()` inferred no argument, and that infers
+ * `never` for such a parameter.
  */
 function getParameterSchemaType(
   factory: ts.NodeFactory,
@@ -3310,11 +3171,6 @@ function getParameterSchemaType(
   // Has explicit type → use it
   if (param.type) {
     return param.type;
-  }
-
-  // Check if parameter name starts with _ (unused convention)
-  if (isIntentionallyUnusedSchemaParameter(param)) {
-    return factory.createKeywordTypeNode(ts.SyntaxKind.NeverKeyword);
   }
 
   // Parameter exists without type → unknown
@@ -3345,28 +3201,12 @@ function inferParameterSchemaType(
     return param.type;
   }
 
-  // Try to infer from signature
+  // Infer from the parameter's type, or use unknown where that fails
   if (param) {
-    const signature = checker.getSignatureFromDeclaration(fn);
-    if (signature && signature.parameters.length > paramIndex) {
-      const paramSymbol = signature.parameters[paramIndex];
-      if (paramSymbol) {
-        const paramType = checker.getTypeOfSymbol(paramSymbol);
-        if (paramType && !isAnyOrUnknownType(paramType)) {
-          const typeNode = typeToSchemaTypeNode(
-            paramType,
-            checker,
-            sourceFile,
-            state,
-          );
-          if (typeNode) {
-            return typeNode;
-          }
-        }
-      }
-    }
-    // Inference failed - use unknown
-    return factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    const paramType = checker.getTypeAtLocation(param);
+    return (!isAnyOrUnknownType(paramType) &&
+      typeToSchemaTypeNode(paramType, checker, sourceFile, state)) ||
+      factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
   }
 
   // No parameter at all - use never
@@ -3421,34 +3261,28 @@ function prependSchemaArguments(
   argumentType: ts.Type | undefined,
   resultTypeNode: ts.TypeNode,
   resultType: ts.Type | undefined,
-  typeRegistry?: TypeRegistry,
-  checker?: ts.TypeChecker,
+  typeRegistry: TypeRegistry,
+  checker: ts.TypeChecker,
 ): ts.CallExpression {
-  const argSchemaCall = checker
-    ? createSchemaCallWithRegistryTransfer(
-      context,
-      argumentTypeNode,
-      checker,
-      typeRegistry,
-    )
-    : createToSchemaCall(context, argumentTypeNode);
-  const resSchemaCall = checker
-    ? createSchemaCallWithRegistryTransfer(
-      context,
-      resultTypeNode,
-      checker,
-      typeRegistry,
-    )
-    : createToSchemaCall(context, resultTypeNode);
+  const argSchemaCall = createSchemaCallWithRegistryTransfer(
+    context,
+    argumentTypeNode,
+    checker,
+    typeRegistry,
+  );
+  const resSchemaCall = createSchemaCallWithRegistryTransfer(
+    context,
+    resultTypeNode,
+    checker,
+    typeRegistry,
+  );
 
   // Register Types if they were inferred (not from original source)
-  if (typeRegistry && checker) {
-    if (argumentType && !isUnresolvedSchemaType(argumentType)) {
-      typeRegistry.set(argSchemaCall, argumentType);
-    }
-    if (resultType && !isUnresolvedSchemaType(resultType)) {
-      typeRegistry.set(resSchemaCall, resultType);
-    }
+  if (argumentType && !isUnresolvedSchemaType(argumentType)) {
+    typeRegistry.set(argSchemaCall, argumentType);
+  }
+  if (resultType && !isUnresolvedSchemaType(resultType)) {
+    typeRegistry.set(resSchemaCall, resultType);
   }
 
   // For the lift-applied shape (__cfHelpers.lift(cb)(input)), schemas are
@@ -3556,16 +3390,13 @@ function prependSchemaArguments(
  */
 function findFunctionArgument(
   argsArray: readonly ts.Expression[],
-  checker: ts.TypeChecker,
-  sourceFile?: ts.SourceFile,
 ): {
   expression: ts.Expression;
   callback: ts.ArrowFunction | ts.FunctionExpression;
 } | undefined {
   for (let i = argsArray.length - 1; i >= 0; i--) {
     const arg = argsArray[i];
-    const callback = arg &&
-      resolveFunctionLikeExpression(arg, checker, sourceFile);
+    const callback = resolveFunctionLikeExpression(arg);
     if (arg && callback) {
       return { expression: arg, callback };
     }
@@ -3573,29 +3404,22 @@ function findFunctionArgument(
   return undefined;
 }
 
+/**
+ * The input and callback of `call`, a call `detectCallKind()` classifies as
+ * lift-applied, or `undefined` where either is missing or the callback is not
+ * a function this file can point at.
+ */
 function resolveLiftAppliedInputAndCallback(
   call: ts.CallExpression,
-  checker: ts.TypeChecker,
-  sourceFile: ts.SourceFile,
 ): {
   input: ts.Expression;
   callback: ts.ArrowFunction | ts.FunctionExpression;
 } | undefined {
-  const callKind = detectCallKind(call, checker);
-  if (callKind?.kind !== "lift-applied") {
-    return undefined;
-  }
-
   // Lift-applied `lift(...)(input)` is function-first: the callback is inner
   // argument zero even when schemas/options trail it; input is outer arg zero.
-  const innerCall = getLiftAppliedInnerCall(call);
-  if (!innerCall) {
-    return undefined;
-  }
-  const callbackExpression = innerCall.arguments[0];
-  const callback = callbackExpression
-    ? resolveFunctionLikeExpression(callbackExpression, checker, sourceFile)
-    : undefined;
+  const callback = resolveFunctionLikeExpression(
+    getLiftAppliedInnerCall(call)?.arguments[0],
+  );
   if (!callback) {
     return undefined;
   }
@@ -3617,48 +3441,18 @@ function resolveLiftAppliedInputAndCallback(
  */
 function resolveFunctionLikeExpression(
   expression: ts.Expression | undefined,
-  checker: ts.TypeChecker,
-  sourceFile?: ts.SourceFile,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
-  return resolveFunctionLikeExpressionInner(
-    expression,
-    checker,
-    sourceFile,
-    new Set(),
-  );
-}
-
-function resolveFunctionLikeExpressionInner(
-  expression: ts.Expression | undefined,
-  checker: ts.TypeChecker,
-  sourceFile: ts.SourceFile | undefined,
-  seen: Set<ts.Node>,
 ): ts.ArrowFunction | ts.FunctionExpression | undefined {
   if (!expression) {
     return undefined;
   }
 
   const unwrapped = unwrapExpression(expression);
-  if (seen.has(unwrapped)) {
-    return undefined;
-  }
-  seen.add(unwrapped);
-
   if (isFunctionLikeExpression(unwrapped)) {
     return unwrapped;
   }
 
   const hardened = unwrapHardenedFunctionExpression(unwrapped);
-  if (hardened) {
-    return resolveFunctionLikeExpressionInner(
-      hardened,
-      checker,
-      sourceFile,
-      seen,
-    );
-  }
-
-  return undefined;
+  return hardened && resolveFunctionLikeExpression(hardened);
 }
 
 function unwrapHardenedFunctionExpression(
@@ -3701,21 +3495,17 @@ function detectSchemaArguments(
   return schemas;
 }
 
-function isTopLevelAnyOrUnknownTypeNode(
-  node: ts.TypeNode | undefined,
-): boolean {
-  if (!node) return false;
+function isTopLevelAnyOrUnknownTypeNode(node: ts.TypeNode): boolean {
   const current = unwrapTypeParentheses(node);
   return current.kind === ts.SyntaxKind.AnyKeyword ||
     current.kind === ts.SyntaxKind.UnknownKeyword;
 }
 
 function shouldReportPermissiveInferredPatternResult(
-  resultNode: ts.TypeNode | undefined,
+  resultNode: ts.TypeNode,
   resultType: ts.Type | undefined,
   state: CrossStageState,
 ): boolean {
-  if (!resultNode) return true;
   // A print is read as the type it was printed from, as schema generation
   // reads it, and that type is all a placeholder for a type with no print
   // carries.
@@ -3756,6 +3546,7 @@ function reportUnknownPatternResult(
   resultType: ts.Type | undefined,
 ): void {
   if (
+    !resultNode ||
     shouldReportPermissiveInferredPatternResult(
       resultNode,
       resultType,
@@ -3765,7 +3556,6 @@ function reportUnknownPatternResult(
     reportAnyResultSchema(context, node);
     return;
   }
-  if (!resultNode) return;
   // A placeholder for a type with no print holds none of its structure, so
   // the type it stands for is walked in its place.
   const placeholderFor = isTopLevelAnyOrUnknownTypeNode(resultNode)
@@ -3904,7 +3694,7 @@ function collectUnknownResultTypePaths(
       for (const property of checker.getPropertiesOfType(current)) {
         // Schema generation leaves this member out, so no consumer receives
         // it as a field.
-        if (isInternalMemberName(property.name)) continue;
+        if (isInternalMemberName(String(property.escapedName))) continue;
         walk(
           checker.getTypeOfSymbol(property),
           path ? `${path}.${property.name}` : property.name,
@@ -3962,11 +3752,7 @@ function handlePatternSchemaInjection(
   const argsArray = Array.from(node.arguments);
 
   // Find the function argument
-  const builderFunctionArg = findFunctionArgument(
-    argsArray,
-    checker,
-    sourceFile,
-  );
+  const builderFunctionArg = findFunctionArgument(argsArray);
   if (!builderFunctionArg) {
     return undefined; // No function found - skip transformation
   }
@@ -4234,8 +4020,7 @@ function handlePatternSchemaInjection(
     factory,
     argumentCapabilityMode,
     context,
-    builderFunction,
-  ) ?? inputTypeNode;
+  );
   if (inputTypeNode !== originalInputTypeNode) {
     // Capability lowering produced a synthetic wrapped/shrunk node.
     // Avoid reusing stale type references from the pre-shrunk node.
@@ -4500,13 +4285,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
       ) {
         const factory = transformation.factory;
 
-        if (node.typeArguments && node.typeArguments.length >= 2) {
-          const eventType = node.typeArguments[0];
-          const stateType = node.typeArguments[1];
-          if (!eventType || !stateType) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
-
+        const [eventType, stateType] = node.typeArguments ?? [];
+        if (eventType && stateType) {
           // The schema-first authored form — handler<E, T[, R]>(eventSchema,
           // stateSchema, callback[, options]) — already carries its schemas,
           // so nothing is prepended: injecting generated ones on top would
@@ -4544,11 +4324,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           let eventTypeNode: ts.TypeNode = eventType;
           let stateTypeNode: ts.TypeNode = stateType;
           const handlerCandidate = node.arguments[0];
-          const handlerFn = resolveFunctionLikeExpression(
-            handlerCandidate,
-            checker,
-            sourceFile,
-          );
+          const handlerFn = resolveFunctionLikeExpression(handlerCandidate);
           if (handlerCandidate && handlerFn) {
             const eventTypeValue = getTypeFromTypeNodeWithFallback(
               eventType,
@@ -4574,9 +4350,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               sourceFile,
               factory,
               context,
-              handlerFn,
               isSyntheticNode(eventType) ? "full" : "contract",
-            ) ?? eventType;
+            );
 
             stateTypeNode = applyCapabilitySummaryToParameter(
               handlerFn,
@@ -4587,13 +4362,12 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               sourceFile,
               factory,
               context,
-              handlerFn,
-            ) ?? stateType;
+            );
             const stateSummary = findCapabilitySummaryForParameter(
               handlerFn,
               1,
               context,
-              { checker, includeNestedCallbacks: true },
+              true,
             );
             applyIdentityArrayItemSchemaHints(
               stateTypeNode,
@@ -4637,11 +4411,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
 
         if (node.arguments.length === 1) {
           const handlerCandidate = node.arguments[0];
-          const handlerFn = resolveFunctionLikeExpression(
-            handlerCandidate,
-            checker,
-            sourceFile,
-          );
+          const handlerFn = resolveFunctionLikeExpression(handlerCandidate);
           if (handlerCandidate && handlerFn) {
             // Infer types from the handler function for both parameters. The
             // event is a verb's input contract, so an AUTHORED event type —
@@ -4664,25 +4434,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
             );
 
             // Event type: use inferred or fallback to never/unknown refinement.
-            // Validation already ran inside collectFunctionSchemaTypeNodes (via
-            // applyCapabilitySummaryToArgument), so don't pass `context` here
-            // to avoid double-validation with degraded type info (the shrunk
-            // node is synthetic and the recovered argumentType may be undefined).
-            const eventTypeBase = inferred.argument ??
-              getParameterSchemaType(factory, handlerFn.parameters[0]);
             const eventType = inferred.argument ??
-              applyCapabilitySummaryToParameter(
-                handlerFn,
-                0,
-                eventTypeBase,
-                inferred.argumentType,
-                checker,
-                sourceFile,
-                factory,
-                undefined,
-                handlerFn,
-                "contract",
-              ) ?? eventTypeBase;
+              getParameterSchemaType(factory, handlerFn.parameters[0]);
 
             // State type: use helper for second parameter
             const stateTypeBase = inferParameterSchemaType(
@@ -4694,25 +4447,23 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               context.state,
             );
             const stateParam = handlerFn.parameters[1];
-            const stateTypeValue = stateParam
-              ? checker.getTypeAtLocation(stateParam)
-              : undefined;
-            const stateType = applyCapabilitySummaryToParameter(
-              handlerFn,
-              1,
-              stateTypeBase,
-              stateTypeValue,
-              checker,
-              sourceFile,
-              factory,
-              context,
-              handlerFn,
-            ) ?? stateTypeBase;
+            const stateType = stateParam
+              ? applyCapabilitySummaryToParameter(
+                handlerFn,
+                1,
+                stateTypeBase,
+                checker.getTypeAtLocation(stateParam),
+                checker,
+                sourceFile,
+                factory,
+                context,
+              )
+              : stateTypeBase;
             const stateSummary = findCapabilitySummaryForParameter(
               handlerFn,
               1,
               context,
-              { checker, includeNestedCallbacks: true },
+              true,
             );
             applyIdentityArrayItemSchemaHints(
               stateType,
@@ -4752,11 +4503,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
 
       if (callKind?.kind === "lift-applied") {
         const factory = transformation.factory;
-        const liftAppliedArgs = resolveLiftAppliedInputAndCallback(
-          node,
-          checker,
-          sourceFile,
-        );
+        const liftAppliedArgs = resolveLiftAppliedInputAndCallback(node);
 
         // For the lift-applied shape (callee is itself a call), the generic
         // type arguments live on the *inner* lift call, not on the outer
@@ -4772,15 +4519,10 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         // removed. (It is NOT derive-specific; the prior comment misattributed
         // it to the removed "legacy derive shape.")
         const innerLiftCall = getLiftAppliedInnerCall(node);
-        const sourceTypeArguments = innerLiftCall?.typeArguments ??
-          node.typeArguments;
+        const [argumentType, resultType] = innerLiftCall?.typeArguments ??
+          node.typeArguments ?? [];
 
-        if (sourceTypeArguments && sourceTypeArguments.length >= 2) {
-          const [argumentType, resultType] = sourceTypeArguments;
-          if (!argumentType || !resultType) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
-
+        if (argumentType && resultType) {
           // Always apply the capability-summary shrink to the explicit
           // argument TypeNode. (Previously this was suppressed for calls
           // marked by syntheticLiftAppliedCallRegistry, to avoid collapsing
@@ -4804,9 +4546,6 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               applyExplicitArgumentCapabilitySummary: true,
             },
           );
-          if (!resolved) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
 
           return visitInjectedDualSchemaBuilderCall(
             node,
@@ -4850,20 +4589,14 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               checker,
             );
             if (isAnyOrUnknownType(fallbackArgType)) {
-              const recoveredArgumentType = inferLiftFactoryResultType(
+              fallbackArgType = inferLiftFactoryResultType(
                 firstArg,
                 checker,
                 sourceFile,
                 factory,
                 typeRegistry,
                 context,
-              );
-              if (
-                recoveredArgumentType &&
-                !isAnyOrUnknownType(recoveredArgumentType)
-              ) {
-                fallbackArgType = recoveredArgumentType;
-              }
+              ) ?? fallbackArgType;
             }
           }
 
@@ -4885,9 +4618,6 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               applyExplicitArgumentCapabilitySummary: false,
             },
           );
-          if (!resolved) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
 
           return visitInjectedDualSchemaBuilderCall(
             node,
@@ -4911,11 +4641,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           unwrapExpression(node.arguments[0]);
         if (firstArgument && isToSchemaCall(firstArgument)) {
           const argumentType = firstArgument.typeArguments?.[0];
-          const liftCallback = resolveFunctionLikeExpression(
-            node.arguments[2],
-            checker,
-            sourceFile,
-          );
+          const liftCallback = resolveFunctionLikeExpression(node.arguments[2]);
           if (argumentType && liftCallback) {
             // CT-1621: when the toSchema argument is a SYNTHETIC capability
             // wrapper TypeNode (pos < 0, e.g. `__cfHelpers.ComparableCell<…>`),
@@ -4988,17 +4714,9 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           }
         }
 
-        if (node.typeArguments && node.typeArguments.length >= 2) {
-          const [argumentType, resultType] = node.typeArguments;
-          if (!argumentType || !resultType) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
-
-          const liftCallback = resolveFunctionLikeExpression(
-            node.arguments[0],
-            checker,
-            sourceFile,
-          );
+        const [argumentType, resultType] = node.typeArguments ?? [];
+        if (argumentType && resultType) {
+          const liftCallback = resolveFunctionLikeExpression(node.arguments[0]);
           const resolved = resolveDualSchemaBuilderTypes(
             liftCallback,
             checker,
@@ -5013,9 +4731,6 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               explicitResultTypeValue: typeRegistry.get(resultType),
             },
           );
-          if (!resolved) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
 
           return visitInjectedDualSchemaBuilderCall(
             node,
@@ -5031,17 +4746,8 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           );
         }
 
-        if (node.typeArguments && node.typeArguments.length === 1) {
-          const [argumentType] = node.typeArguments;
-          if (!argumentType) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
-
-          const liftCallback = resolveFunctionLikeExpression(
-            node.arguments[0],
-            checker,
-            sourceFile,
-          );
+        if (argumentType) {
+          const liftCallback = resolveFunctionLikeExpression(node.arguments[0]);
           if (!liftCallback) {
             return ts.visitEachChild(node, visit, transformation);
           }
@@ -5063,9 +4769,6 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               explicitArgumentTypeValue: typeRegistry.get(argumentType),
             },
           );
-          if (!resolved) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
 
           return visitInjectedDualSchemaBuilderCall(
             node,
@@ -5084,11 +4787,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
         if (
           node.arguments.length === 1
         ) {
-          const callback = resolveFunctionLikeExpression(
-            node.arguments[0],
-            checker,
-            sourceFile,
-          );
+          const callback = resolveFunctionLikeExpression(node.arguments[0]);
           if (!callback) {
             return ts.visitEachChild(node, visit, transformation);
           }
@@ -5106,9 +4805,6 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
               ),
             },
           );
-          if (!resolved) {
-            return ts.visitEachChild(node, visit, transformation);
-          }
 
           // Always transform with both schemas
           return visitInjectedDualSchemaBuilderCall(

@@ -1,8 +1,8 @@
-import { basename } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   buildFuseChildDenoArgs,
   fuseMod,
+  isCompiledBinary,
   type MountStateEntry,
   writeMountStateFile,
 } from "./fuse.ts";
@@ -51,12 +51,10 @@ export function buildFuseChildCommand(
   options: FuseSupervisorOptions,
 ): { command: string; args: string[] } {
   const execPath = options.execPath ?? Deno.execPath();
-  const execBase = basename(execPath);
-  const isCompiledBinary = execBase !== "deno" && execBase !== "deno.exe";
 
   // The child is the daemon, so it receives the daemon's flags only: the mount
   // state file stays with this process.
-  if (isCompiledBinary) {
+  if (isCompiledBinary(execPath)) {
     return {
       command: execPath,
       args: ["fuse-daemon", options.mountpoint, ...mountFlagArgs(options)],
@@ -117,12 +115,12 @@ export async function runFuseSupervisor(
   addSupervisorSignalListener("SIGINT", onSigint, options.addSignalListener);
 
   try {
-    if (options.statePath) {
-      await recordFuseMountState(options, child.pid);
-    }
+    await recordFuseMountState(options, child.pid);
     const status = await child.status;
     childExited = true;
-    exit(status.code);
+    // A forwarded signal exits with that signal's status once the child is
+    // down, whatever status the child exits with.
+    if (!terminating) exit(status.code);
   } finally {
     removeSupervisorSignalListener(
       "SIGTERM",
@@ -213,19 +211,34 @@ export async function recordFuseMountState(
   }
 }
 
-if (import.meta.main) {
+/**
+ * Runs the supervisor from its command-line arguments, as `deno run` of this
+ * module does: prints help when asked, and reports a failure on stderr with
+ * exit status 1.
+ */
+export async function supervisorMain(
+  args: string[],
+  deps: {
+    run?: (options: FuseSupervisorOptions) => Promise<void>;
+    exit?: (code: number) => never | void;
+    output?: Pick<Console, "log" | "error">;
+  } = {},
+): Promise<void> {
+  const output = deps.output ?? console;
   try {
-    const { options, help } = parseSupervisorArgs(Deno.args);
+    const { options, help } = parseSupervisorArgs(args);
     if (help) {
-      console.log(supervisorHelp());
-      Deno.exit(0);
+      output.log(supervisorHelp());
+      return;
     }
-    await runFuseSupervisor(options);
+    await (deps.run ?? runFuseSupervisor)(options);
   } catch (error) {
-    console.error(describeFailure(error));
-    Deno.exit(1);
+    output.error(describeFailure(error));
+    (deps.exit ?? Deno.exit)(1);
   }
 }
+
+if (import.meta.main) await supervisorMain(Deno.args);
 
 function addSupervisorSignalListener(
   signal: Deno.Signal,

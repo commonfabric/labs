@@ -463,6 +463,7 @@ describe("main command", () => {
           // the missing argument.
           const positionals: Record<string, string[]> = {
             "pattern publish": ["./entry.tsx"],
+            "pattern share": ["./entry.tsx"],
           };
           for (const entry of named) {
             if (!entry.includes(" ")) continue;

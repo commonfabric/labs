@@ -5030,5 +5030,45 @@ interface HasWeakSet {
         /WeakSet cannot be used in pattern inputs\/outputs because it is not JSON-serializable/,
       );
     });
+
+    it("throws for an array of Maps", async () => {
+      const generator = new SchemaGenerator();
+      const code = `
+interface HasMaps {
+  data: Map<string, number>[];
+}`;
+      const { type, checker } = await getTypeFromCode(code, "HasMaps");
+
+      expect(() => generator.generateSchema(type, checker)).toThrow(
+        /^Map cannot be used in pattern inputs\/outputs/,
+      );
+    });
+
+    it("throws for a Set passed as a type argument", async () => {
+      const generator = new SchemaGenerator();
+      const code = `
+interface Box<T> {
+  value: T;
+}
+type SetBox = Box<Set<string>>;`;
+      const { type, checker } = await getTypeFromCode(code, "SetBox");
+
+      expect(() => generator.generateSchema(type, checker)).toThrow(
+        /^Set cannot be used in pattern inputs\/outputs/,
+      );
+    });
+
+    it("throws for a property typed by a parameter constrained to a Map", async () => {
+      const generator = new SchemaGenerator();
+      const code = `
+interface Holder<T extends Map<string, number>> {
+  value: T;
+}`;
+      const { type, checker } = await getTypeFromCode(code, "Holder");
+
+      expect(() => generator.generateSchema(type, checker)).toThrow(
+        /^Map cannot be used in pattern inputs\/outputs/,
+      );
+    });
   });
 });

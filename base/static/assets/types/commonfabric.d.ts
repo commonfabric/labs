@@ -2410,9 +2410,20 @@ export interface AsReadonlyCell extends HKT {
   type: ReadonlyCell<this["_A"]>;
 }
 
+/**
+ * A cell handle that can be read through and not written through. Each cell
+ * type that can be read is assignable to it: a `Cell<T>`, and so a
+ * `Writable<T>`, passes where a `ReadonlyCell<T>` is declared, as does a cell
+ * that `.key()` returns from one. A `ReadonlyCell<T>` does not pass where a
+ * `Cell<T>` is declared, and a cell that cannot be read, such as a
+ * `WriteonlyCell<T>`, does not pass where a `ReadonlyCell<T>` is.
+ */
+// The brand names the kind of each cell assignable to this one: its own, and
+// `"cell"`, the kind of the other cell type that can be read. The schema
+// generator reads that union as the kind `"readonly"` (`getCellBrand()`).
 export interface ReadonlyCell<T>
   extends
-    BrandedCell<T, "readonly">,
+    BrandedCell<T, "readonly" | "cell">,
     IAnyCell<T>,
     ICreatable<ReadonlyCell<T>>,
     IReadable<T>,
@@ -3447,7 +3458,9 @@ export interface BuiltInCompileAndRunParams<T> {
 
   /**
    * Names of entries in `files` that carry data rather than code. A pattern
-   * reads one with `dataFile()`; nothing compiles, imports, or transforms it.
+   * reads a text file with `dataFile()`, and an image, a font, or a sound with
+   * `dataFile.url()` or `dataFile.urls()`; nothing compiles, imports, or
+   * transforms one.
    */
   dataFiles?: string[];
 
@@ -3861,7 +3874,8 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  *   trimmed, is `control`, and dispatches a click on it, so the handler bound
  *   there receives the event with the provenance its rendered markers give.
  *   `within` names text an element around the control shows, for a view that
- *   shows `control` more than once, such as a row of a list.
+ *   shows `control` more than once, such as a row of a list. `modifiers` names
+ *   the keys held during the click, such as `["meta"]` for a Cmd-click.
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
@@ -3881,7 +3895,12 @@ export type TestStep =
     event?: unknown;
     trustedUi?: { surface: string; action: string };
   }>
-  | OnlyTestStep<"press", { press: unknown; control: string; within?: string }>
+  | OnlyTestStep<"press", {
+    press: unknown;
+    control: string;
+    within?: string;
+    modifiers?: ("alt" | "ctrl" | "meta" | "shift")[];
+  }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
   | OnlyTestStep<"label", { label: string }>
@@ -4096,8 +4115,42 @@ export type CompileAndRunFunction = <T = any, S = any>(
  * closure, so this reads memory rather than storage: it is synchronous, it
  * cannot fail part-way, and it returns the same bytes on every load of a given
  * source revision. A path naming no attached data file throws.
+ *
+ * A binary media file (an image other than SVG, a font, or a sound, by its
+ * extension) has no text, and reading one this way throws; read it with
+ * `dataFile.url()`. An SVG is text, and this returns its markup.
  */
-export type DataFileFunction = (path: string) => string;
+export interface DataFileFunction {
+  /** Reads the text of the attached data file `path` names. */
+  (path: string): string;
+
+  /**
+   * Reads an attached data file as a base64 `data:` URL carrying its media
+   * type, such as `data:image/png;base64,…`: the form an image, a font, or a
+   * sound takes in an iframe guest, since `data:` URLs are the one image source
+   * every embedding's Content Security Policy admits (see `cf-iframe`'s
+   * `assets`). `path` resolves as for `dataFile()`.
+   *
+   * The media type comes from the file's extension: `.png`, `.jpg`, `.jpeg`,
+   * `.gif`, `.webp`, `.avif`, `.svg`, `.woff2`, `.woff`, `.ttf`, `.otf`,
+   * `.mp3`, `.ogg`, and `.wav`. Any other extension throws.
+   */
+  url(path: string): string;
+
+  /**
+   * Reads every asset in an attached directory as a `data:` URL, keyed by its
+   * file name without the extension, so `assets/glaze.png` is `glaze` in
+   * `dataFile.urls("./assets")`. An asset is a file directly inside the
+   * directory whose extension `dataFile.url()` reads; other files and
+   * subdirectories are left out. `path` resolves as for `dataFile()`.
+   *
+   * Building the program attaches the directory's assets by listing it, which
+   * a program read over HTTP cannot do. A file whose name without the
+   * extension holds characters other than letters, digits, `_`, and `-`, or
+   * two files that would share a name, throw.
+   */
+  urls(path: string): Readonly<Record<string, string>>;
+}
 
 //
 // SQLite builtins (docs/specs/sqlite-builtin)
@@ -4546,23 +4599,28 @@ export declare function principalsOf(
  * principal that the label of the cell a write to `target` lands in names as
  * the one the value represents, in the form the runtime writes, at that
  * label's root, and only when no claim anywhere in the label names anyone
- * else. The value's own cell is that cell when the value is the whole of it
- * and the cell holds no link to a value elsewhere: a value at a path within a
- * document reads with that document's label, and a link stored in the cell
- * leads to a value it does not hold. `undefined` in every other case, for a
- * value stored without a label, and for a `target` of `undefined`.
+ * else. The value's own cell is that cell when the value is the whole of it,
+ * the cell is in the space of the document holding `target`'s field, and the
+ * cell holds no link to a value elsewhere: a value at a path within a document
+ * reads with that document's label, and a link stored in the cell leads to a
+ * value it does not hold. `undefined` in every other case, for a value stored
+ * without a label, and for a `target` of `undefined`.
  *
- * The label says whom the cell's value represents, not who pointed `target`
- * at that cell: the links on the way, write redirects among them, are
- * followed. A write declared `RepresentsCurrentUser`, as a profile's
- * `setPicture` is, labels the value with the principal it acts for, and a
- * profile's owner-protected fields keep their write redirects from being
- * repointed. So comparing this with `profileOwnerOf()` says whether a
- * profile's `picture` is one its owner set. It can be called where
- * `principalOf()` can: in a reactive computation the result updates when the
- * label or the links change, and in a handler a document still loading has
- * the handler run again once it arrives. Calling it in a pattern body throws,
- * and so does a label stored in a form the runtime cannot interpret.
+ * The label says whom the cell's value represents, not who pointed `target` at
+ * that cell: the links on the way, write redirects among them, are followed. A
+ * cell in another space is refused, since its label says who wrote the value
+ * there, not that anyone put it at this field. Name the field through the
+ * document holding it, as `profile.key("picture")` does: a write redirect of
+ * your own to the field, stored in another space, is refused like any other. A
+ * write declared `RepresentsCurrentUser`, as a profile's `setPicture` is,
+ * labels the value with the principal it acts for, so comparing this with
+ * `profileOwnerOf()` says whether a profile's `picture` is one its owner set.
+ * Within the profile's space, a visitor can still point a face field at another
+ * cell the owner wrote there. It can be called where `principalOf()` can: in a
+ * reactive computation the result updates when the label or the links change,
+ * and in a handler a document still loading has the handler run again once it
+ * arrives. Calling it in a pattern body throws, and so does a label stored in a
+ * form the runtime cannot interpret.
  */
 export declare function writtenPrincipalOf<T>(
   target: AnyCell<T> | undefined,
@@ -5323,6 +5381,50 @@ export type SpaceMembersFunction = (
 ) => SpaceMemberList | undefined;
 
 export declare const spaceMembers: SpaceMembersFunction;
+
+/**
+ * One member of a social space, as `joinSpaceMembers()` returns it, with the
+ * profiles of type `P` that are their own.
+ */
+export interface SpaceMemberOf<P> {
+  /** The principal's DID, as the space's access list names it. */
+  principal: DID;
+
+  /** The level the access list's entry for `principal` grants. */
+  level: SpaceGrantLevel;
+
+  /**
+   * The roster's profiles that are `principal`'s own, each once, in the order
+   * the roster first lists them, and empty for a member with none there. A
+   * reader that shows one face for the member shows the first.
+   */
+  profiles: P[];
+}
+
+/**
+ * Returns the members of a social space whose access list is `list` and whose
+ * roster is `roster`: one for each principal `list` names, sorted by DID,
+ * each with the profiles on `roster` whose owner, as `ownerOf` returns it, is
+ * that principal. `list`'s `anyone` names no one, so it adds no member, and a
+ * profile `ownerOf` returns no owner for, or an owner `list` does not name,
+ * is left out. `undefined` while `list` is, so a reader can tell "not known
+ * yet" from "nobody".
+ *
+ * Two profiles `keyOf` returns the same key for are one profile, counted
+ * once; a profile it returns no key for is the same as nothing but itself.
+ * In pattern code, `ownerOf` is `profileOwnerOf` and `keyOf` is `equalsKey`,
+ * so a profile counts toward a member exactly when it counts as theirs
+ * anywhere else; it can then be called where those can. It reads nothing
+ * itself, so it does no more than `ownerOf` and `keyOf` do.
+ */
+export type JoinSpaceMembersFunction = <P>(
+  roster: readonly P[],
+  list: SpaceMemberList | undefined,
+  ownerOf: (profile: P) => DID | undefined,
+  keyOf: (profile: P) => string | undefined,
+) => SpaceMemberOf<P>[] | undefined;
+
+export declare const joinSpaceMembers: JoinSpaceMembersFunction;
 
 /**
  * Returns the DID of the space `target`'s value lives in, after following any

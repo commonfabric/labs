@@ -28,9 +28,12 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  BranchInfo,
+  BranchName,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
+  CommitSummary,
   DeliveryFailureClass,
   DocumentPath,
   EntityDocument,
@@ -89,6 +92,7 @@ import type {
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
+  CfcMetadata,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -933,9 +937,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
    * session has answered, to whether some root was kept only for having been
    * loaded or read since the previous call began, which a later call may
-   * release.
+   * release. Then, unless a commit spanning several spaces is still
+   * applying, it releases each space nothing uses any more, as "Releasing a
+   * space's session" in `docs/features/document-release.md` says: it closes
+   * the space's session and forgets the space, which the next use opens
+   * again.
    */
   releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
+
+  /** Calls `observer` with each space a release pass releases. */
+  subscribeSpacesReleased?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1371,6 +1382,45 @@ export interface IStorageProvider {
 
   /** Test one live space-scoped entity identifier without loading its value. */
   entityIdExists?(id: string): Promise<boolean | undefined>;
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this provider's session is of),
+   * then those it inherits from each ancestor up to its fork point, below
+   * `options.before`. At most `options.limit` are returned, and 500 at the
+   * most, which is also the limit when none is given. Rejects when the
+   * server serves no history.
+   */
+  listHistory?(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]>;
+
+  /** Returns the space's branches, deleted ones included. */
+  listBranches?(): Promise<BranchInfo[]>;
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the
+   * default branch) as of `options.forkSeq` (absent, the parent's head).
+   */
+  createBranch?(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo>;
+
+  /** Deletes the branch `name`, which then takes no further commit. */
+  deleteBranch?(name: BranchName): Promise<void>;
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent,
+   * its head). The space's access list, session-scoped documents, the
+   * serving loop's records and SQLite databases are left as they are.
+   * Returns the restoring commit's seq, or `undefined` when the default
+   * branch already held that state.
+   */
+  restoreBranch?(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined>;
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
   sqliteQuery?(
@@ -1863,10 +1913,11 @@ export interface IStorageTransaction {
   /**
    * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
    * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the
-   * document. Set by link resolution on a serving runtime only, where such an
-   * instance is one the serving loop has not produced yet, and read by the
-   * reactive action's commit, which a run that read one does not make.
+   * and another derivation registered in the same runtime writes the document
+   * and has not yet run for that instance. Set by link resolution on a serving
+   * runtime only, where such an instance is one the serving loop has not
+   * produced yet, and read by the reactive action's commit, which a run that
+   * read one does not make.
    */
   unproducedScopedInstance?: string;
 
@@ -1938,12 +1989,9 @@ export interface IStorageTransaction {
   readonly journal: ITransactionJournal;
 
   /**
-   * Optional lightweight dependency summary.
-   *
-   * V2 transactions can provide this directly instead of requiring callers to
-   * reconstruct it from journal activity.
+   * The transaction's dependency summary: the addresses it read and wrote.
    */
-  getReactivityLog?(): TransactionReactivityLog;
+  getReactivityLog(): TransactionReactivityLog;
 
   /**
    * Optional scheduler observation payload to persist alongside the native
@@ -2515,6 +2563,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void;
 
   /**
+   * Record a folded SQLite write onto this transaction. See
+   * {@link IStorageTransaction.recordSqliteWrite}.
+   */
+  recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void;
+
+  /**
    * Stages the content-addressed document holding `value` into this
    * transaction and returns its id: `cid:` plus the general content hash
    * of the value. The document is the value and nothing else, so no
@@ -2529,12 +2583,11 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   /**
    * Mints the runtime secret called `name` in `space` when no trusted value
    * is stored: a random value, written under the secret's label and writer
-   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns
-   * nothing; the runtime reads a secret back with `readRuntimeSecret()`. The
-   * one writer of the reserved namespace, which refuses every unprivileged
-   * write, and callable only with the runtime's authorization, since code
-   * that minted a secret in its own transaction could read it back there
-   * before its label is stored.
+   * claim (`runtime-secret.ts`), replacing any untrusted value. Returns the
+   * secret, the trusted stored value or the one minted. The one writer of the
+   * reserved namespace, which refuses every unprivileged write, and callable
+   * only with the runtime's authorization, since code that minted a secret in
+   * its own transaction could read it back there before its label is stored.
    *
    * @throws Error without the runtime's authorization, or when the stored
    * value's schema cannot be resolved.
@@ -2543,7 +2596,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void;
+  ): string;
 
   tx: IStorageTransaction;
 
@@ -2646,7 +2699,7 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * underlying transaction after resolving the link to a memory address. See
    * {@link IStorageTransaction.recordTextChanges}.
    */
-  recordTextChanges?(
+  recordTextChanges(
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string;
@@ -3174,6 +3227,23 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * fails closed at prepare (S18 class).
    */
   writeCfcGrant(input: CfcGrantWriteInput): { space: MemorySpace; id: string };
+
+  /**
+   * The repair of a compile-cache record a flow stamp labeled: writes
+   * `replacement`'s value and label envelope over the document a compile-cache
+   * record's key `target.key` names, or deletes the document when
+   * `replacement` is absent, inside the privileged system-write scope.
+   * Requires the transaction's current implementation identity to be the
+   * `compile-cache-repair` builtin, and the key to be a compile-cache record's.
+   * The caller, `repairCompileCacheStamps()`, computes the replacement from
+   * the verified closure; this method trusts it.
+   *
+   * @throws When the identity is not the repair's, or the key not a record's.
+   */
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void;
 
   /**
    * The trusted writer path for an owner's release of the confidentiality

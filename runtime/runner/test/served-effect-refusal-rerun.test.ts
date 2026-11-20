@@ -23,7 +23,6 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 
 import type { Cell } from "../src/cell.ts";
-import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { addCfcDenialListener } from "../src/cfc/denial-report.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
@@ -213,15 +212,6 @@ type Fixture = {
 };
 
 /**
- * The confidentiality a source labeled for the holder rule carries: the
- * owner's `User` clause, which no store of Alice's space is held by.
- */
-const ownerUserClause = [{
-  type: "https://commonfabric.org/cfc/atom/User",
-  subject: owner.did(),
-}];
-
-/**
  * Writes the owner's source document, whose `url` field the node reads, in
  * `sourceSpace` (the owner's space unless given), with that field labeled when
  * `labeled`, by `confidentiality` (`medical` unless given), and returns a link
@@ -272,16 +262,13 @@ async function seedSource(
  * runtime whose ceiling for the builtin's sink admits no confidentiality. The
  * node's URL is `input`: a plain URL, or a link to the owner's source document
  * (see `seedSource()`), which the ceiling refuses when that document is
- * labeled. With `refusal: "holder"` the serving runtime declares no ceiling,
- * and what the case counts as a refusal is the served-run holder rule's
- * (§8.12.5.1) refusal of the run's own state write.
+ * labeled.
  */
 async function withFixture<T>(
-  { builtin, scope, input, refusal = "ceiling" }: {
+  { builtin, scope, input }: {
     builtin: Builtin;
     scope: "space" | "user";
     input: (ownerRuntime: Runtime) => Promise<string | NormalizedFullLink>;
-    refusal?: "ceiling" | "holder";
   },
   body: (f: Fixture) => Promise<T>,
 ): Promise<T> {
@@ -292,9 +279,7 @@ async function withFixture<T>(
   const abandonedStamps: ServerRunInfo[] = [];
   const abandonments = new Map<string, number>();
   let host: ExecutorHost | undefined;
-  let ceiling: readonly string[] | undefined = refusal === "ceiling"
-    ? []
-    : undefined;
+  let ceiling: readonly string[] | undefined = [];
   let nodeRun: PromiseWithResolvers<void> | undefined;
   let undemanded = false;
   let refusals = 0;
@@ -310,9 +295,7 @@ async function withFixture<T>(
     const reasons = (denial.inputs.reasons ?? []) as readonly string[];
     if (
       reasons.some((reason) =>
-        refusal === "holder"
-          ? reason.includes("(cross-holder, §8.12.5.1)")
-          : reason.includes(`exceeds ceiling for ${builtin.name}`)
+        reason.includes(`exceeds ceiling for ${builtin.name}`)
       )
     ) {
       refusals += 1;
@@ -683,8 +666,7 @@ async function expectRefusedEnding(
 
 /**
  * Seeds the source document of a case over a prompt read from the node's own
- * space: labeled `medical`, which the served-run holder rule (§8.12.5.1)
- * admits everywhere the node writes, so only the sink ceiling refuses it.
+ * space: labeled `medical`, which the sink ceiling refuses.
  */
 const ownSpaceSource = (ownerRuntime: Runtime, value = `${url}?labeled`) =>
   seedSource(ownerRuntime, value, true, ["medical"], space);
@@ -1000,151 +982,6 @@ describe("served-effect-refusal-rerun", () => {
       });
     });
   }
-
-  it("ends a served fetchText whose state write the holder rule refuses, without running it again", async () => {
-    // Alice's node reads its URL through a link to another space's document
-    // labeled with that space owner's `User` clause, which no store of
-    // Alice's space is held by, so the served-run holder rule (§8.12.5.1)
-    // refuses the run's write of the node's state. Its abandoned request's
-    // ending, written in the open wave, is what stops it running again.
-
-    await withFixture({
-      builtin: fetchText,
-      scope: "space",
-      refusal: "holder",
-      input: (ownerRuntime) =>
-        seedSource(ownerRuntime, `${url}?private`, true, ownerUserClause),
-    }, async (f) => {
-      await f.settle();
-
-      expect(f.refusals()).toBeGreaterThan(0);
-      expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
-      expect(f.requests()).toBe(0);
-      const ending = { pending: false, error: refusedMessage(fetchText) };
-      expect(
-        f.servingView(f.fetched.getAsNormalizedFullLink(), undefined),
-      ).toMatchObject(ending);
-      expect(await f.freshView()).toMatchObject(ending);
-      expect(f.unstampedSealRefusals()).toBe(0);
-    });
-  });
-
-  it("leaves a served compileAndRun whose state write the holder rule refuses without an ending, reporting its refusal", async () => {
-    // The program's source comes through a link to another space's document
-    // labeled with that space owner's `User` clause, so the holder rule
-    // refuses the run that stages its compile, and then refuses its ending
-    // too: the node is left showing no error.
-    //
-    // TODO(danfuzz): The node should end showing "compileAndRun request was
-    // refused before it started", as the `llm` builtins' nodes do. It can't
-    // yet: the ending decides whether its request is still the target's by
-    // reading the program, which is labeled, so the holder rule refuses
-    // everything the ending writes. Deciding from an in-memory record of the
-    // latest run's program instead would lose the guarantee that an abandoned
-    // request's ending never lands over a program that replaced it
-    // ("leaves an abandoned request's outputs to the program that replaced
-    // it", in `compile-and-run-served.test.ts`). See the paired TODO at the
-    // ending in `compile-and-run.ts`.
-
-    const rejected: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => {
-      const line = args.map(String).join(" ");
-      if (line.includes("[compileAndRun]")) rejected.push(line);
-      originalError(...args);
-    };
-    try {
-      await withFixture({
-        builtin: compileAndRun,
-        scope: "space",
-        refusal: "holder",
-        input: (ownerRuntime) =>
-          seedSource(
-            ownerRuntime,
-            "export default 1;",
-            true,
-            ownerUserClause,
-          ),
-      }, async (f) => {
-        await f.settle();
-
-        expect(f.refusals()).toBeGreaterThan(0);
-        expect(f.refusals()).toBeLessThanOrEqual(RUN_BOUND);
-        expect(rejected.length).toBeGreaterThan(0);
-        expect(
-          rejected.every((line) =>
-            line.includes("Writing the abandoned request's error") &&
-            line.includes("was rejected")
-          ),
-        ).toBe(true);
-        const servingView = f.servingView(
-          f.fetched.getAsNormalizedFullLink(),
-          undefined,
-        );
-        expect(servingView?.error).toBeUndefined();
-        expect((await f.freshView())?.error).toBeUndefined();
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
-
-  it("ends a served llmDialog turn whose staging the holder rule refuses, with no rejected ending", async () => {
-    // The dialog's system prompt comes through a link to another space's
-    // document labeled with that space owner's `User` clause, so the holder
-    // rule refuses the handler run that stages a turn. A dialog's ending
-    // leaves its conversation alone and takes its pending flag down, and
-    // that write must land rather than be refused in turn.
-
-    const llmDialog: Builtin = {
-      name: "llmDialog",
-      call: `llmDialog({ messages, system: url, builtinTools: false })`,
-    };
-    const rejected: string[] = [];
-    const originalError = console.error;
-    console.error = (...args: unknown[]) => {
-      const line = args.map(String).join(" ");
-      if (line.includes("[llmDialog]")) rejected.push(line);
-      originalError(...args);
-    };
-    try {
-      await withFixture({
-        builtin: llmDialog,
-        scope: "space",
-        refusal: "holder",
-        input: (ownerRuntime) =>
-          seedSource(
-            ownerRuntime,
-            "the system prompt",
-            true,
-            ownerUserClause,
-          ),
-      }, async (f) => {
-        await waitForCellValue(
-          f.client,
-          f.fetched,
-          (view) =>
-            !!(view as { addMessage?: unknown } | undefined)?.addMessage,
-        );
-        await f.settle(async () => {
-          f.fetched.key("addMessage" as never).asSchema({
-            ...LLMMessageSchema,
-            asCell: ["stream"],
-          }).send({ role: "user", content: "hello" } as never);
-          await f.client.idle();
-        });
-
-        expect(f.refusals()).toBeGreaterThan(0);
-        expect(f.runsSinceTrigger()).toBeLessThanOrEqual(RUN_BOUND);
-        expect(rejected).toEqual([]);
-        expect(
-          f.servingView(f.fetched.getAsNormalizedFullLink(), undefined),
-        ).toMatchObject({ pending: false });
-      });
-    } finally {
-      console.error = originalError;
-    }
-  });
 
   it("ends a served fetchText that nobody demands, whose request the sink ceiling refuses", async () => {
     // Alice's node runs once for her, its URL unlabeled. Then the serving

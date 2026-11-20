@@ -21,7 +21,7 @@ import { type BlameRunner, blameRunner } from "./blame.ts";
 import type { Document } from "./model.ts";
 import { decodeKeys } from "./keys.ts";
 import { cursorScreenPos, renderFrame, type ViewState } from "./render.ts";
-import { Session, type SessionOptions } from "./session.ts";
+import { type PushedFrame, Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
 import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
@@ -51,14 +51,27 @@ import {
   watchForPullRequest,
 } from "./pullrequest.ts";
 import {
+  describePush,
   type GitQuery,
   openPage,
   pushBranch,
+  type PushedBranch,
   type PushIo,
   pushRefused,
   realPushIo,
 } from "./push.ts";
 import { readSettings, saveSettings, type ViewSettings } from "./settings.ts";
+import {
+  type BeginStep,
+  link,
+  name,
+  pullRequest,
+  quote,
+  say,
+  type TaskOutput,
+  type TaskText,
+  words,
+} from "./tasklog.ts";
 import { connectPinned, runTool, touchGate } from "./touchgate.ts";
 
 const encoder = new TextEncoder();
@@ -79,11 +92,27 @@ const PUSH_FRAME_MS = 90;
  * enough to read twice over, short enough not to outstay what prompted it. */
 const MESSAGE_LINGER_MS = 2000;
 
+/** Gap between the frames of the spinner of a running step in the task
+ * dialog. */
+const SPINNER_FRAME_MS = 150;
+
 /** How long the task dialog gives the address of the pull request that quits
  * the viewer, saying it is quitting, before the viewer closes. */
-const PULL_REQUEST_QUIT_MS = 500;
+const PULL_REQUEST_QUIT_MS = 2000;
 
 export type PagerOptions = SessionOptions;
+
+/** Why `error` happened, to follow a colon in the task dialog, with the
+ * reason GitHub gave quoted when GitHub refused a request. */
+function failure(error: unknown): TaskText {
+  if (!(error instanceof GitHubRefusal)) {
+    return words(`${describeFailure(error)}.`);
+  }
+  const status = `${error.status}`;
+  return error.reason === ""
+    ? say`GitHub answered ${status}.`
+    : say`GitHub answered ${status}: ${quote(error.reason)}`;
+}
 
 /** The keyboard handle the pager reads from — satisfied by a `Deno.FsFile`. */
 export interface PagerTty {
@@ -111,6 +140,10 @@ export interface PagerDeps {
   /** Schedule `handler` after `ms`; returns a function that cancels it. */
   setTimer(handler: () => void, ms: number): () => void;
 
+  /** Schedule `handler` to turn the task dialog's spinner a frame, after
+   * {@link SPINNER_FRAME_MS}; returns a function that cancels it. */
+  setSpinnerTimer(handler: () => void): () => void;
+
   /** Resolve after `ms`. Used to hold a frame on screen for a moment on a path
    * that then tears the screen down, where a cancellable timer has nothing left
    * to run in. */
@@ -123,9 +156,9 @@ export interface PagerDeps {
   onGrammarLoad(listener: (failure?: string) => void): () => void;
 
   /** The operations a branch push performs, against the repository the viewer
-   * is running in, showing git's output with `write` and stopping git when
-   * `signal` aborts. */
-  pushIo(write: (text: string) => void, signal: AbortSignal): PushIo;
+   * is running in, saying what it does and showing git's output with
+   * `output`, and stopping git when `signal` aborts. */
+  pushIo(output: TaskOutput, signal: AbortSignal): PushIo;
 
   /** Runs git in the repository the viewer is running in, for its standard
    * output, or returns null when git fails. Nothing is shown. */
@@ -160,7 +193,8 @@ export function realPagerDeps(
   home: string = Deno.env.get("HOME") ?? "",
 ): PagerDeps {
   let io: PushIo | undefined;
-  const repository = () => io ??= realPushIo({ write: () => {} });
+  const repository = () =>
+    io ??= realPushIo({ write: () => {}, step: () => () => {} });
   return {
     openTty: () => Deno.openSync("/dev/tty", { read: true }),
     write: (text) => {
@@ -175,9 +209,13 @@ export function realPagerDeps(
       const id = setTimeout(handler, ms);
       return () => clearTimeout(id);
     },
+    setSpinnerTimer: (handler) => {
+      const id = setTimeout(handler, SPINNER_FRAME_MS);
+      return () => clearTimeout(id);
+    },
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     onGrammarLoad,
-    pushIo: (write, signal) => realPushIo({ write, signal }),
+    pushIo: (output, signal) => realPushIo({ ...output, signal }),
     git: (args) => repository().query(args),
     open: (url) => repository().open(url),
     github: githubApi(githubToken),
@@ -227,25 +265,46 @@ export async function runPager(
     realFileGateway(),
   );
 
-  const paint = (doc: Document, view: ViewState) => {
-    // A push still running when the viewer closes ends after the screen is
-    // gone, and has nothing left to draw on.
-    if (cleanedUp) return;
+  // While a dialog is up, the terminal reports every key in full, so that
+  // Alt with a letter reaches the dialog as Alt even from iTerm2 with Option
+  // set to type characters. A request to report every key counts as made as
+  // soon as it is written, and one to stop only once the write is done, so
+  // that a failed write leaves the closing viewer still asking to stop.
+  let reportingAllKeys = false;
+
+  // The rows the last frame painted, which a frame painted with
+  // `changedOnly` compares against, writing only the rows that differ. Every
+  // other frame writes every row, so that whatever else disturbed the screen
+  // is painted over.
+  let painted: readonly string[] = [];
+  const paint = (doc: Document, view: ViewState, changedOnly = false) => {
     const rows = renderFrame(doc, view);
-    // Re-assert the padding background every frame. Some terminals drop the
-    // OSC 11 default set at startup after the first repaint, so setting it once
-    // is not enough; re-sending the same value is a no-op where it already holds.
-    let out = (padBg ? term.setDefaultBg(padBg) : "") +
+    const allKeys = view.dialog != null;
+    // Re-assert the padding background on every frame that writes every row.
+    // Some terminals drop the OSC 11 default set at startup after the first
+    // repaint, so setting it once is not enough; re-sending the same value is
+    // a no-op where it already holds.
+    let out =
+      (allKeys === reportingAllKeys
+        ? ""
+        : allKeys
+        ? term.reportAllKeys
+        : term.reportKeysAsBefore) +
+      (padBg && !changedOnly ? term.setDefaultBg(padBg) : "") +
       `${CSI}?7l${term.hideCursor}`; // disable autowrap while drawing
     for (let i = 0; i < rows.length; i++) {
+      if (changedOnly && rows[i] === painted[i]) continue;
       out += term.moveTo(i + 1, 1) + term.clearLine + rows[i];
     }
+    painted = rows;
     out += `${CSI}?7h`;
     // Show the text cursor at its cell when edit mode has one; otherwise the
     // terminal cursor stays hidden.
     const cur = cursorScreenPos(doc, view);
     if (cur) out += term.moveTo(cur.row, cur.col) + term.showCursor;
+    reportingAllKeys ||= allKeys;
     deps.write(out);
+    reportingAllKeys = allKeys;
   };
 
   // Drawing the blame column can ask for files' blame. Each load runs while
@@ -253,9 +312,14 @@ export async function runPager(
   // button press is playing its frames, which end with a draw of their own.
   // Closing the viewer stops the loads still running.
   const blameController = new AbortController();
-  const draw = () => {
+  const draw = (changedOnly = false) => {
+    // A push still running when the viewer closes ends after the screen is
+    // gone, and has nothing left to draw on.
     if (cleanedUp) return;
-    paint(session.displayDoc(), session.view());
+    paint(session.displayDoc(), session.view(), changedOnly);
+    if (session.taskSpinning) {
+      cancelSpin ??= deps.setSpinnerTimer(spin);
+    }
     for (const load of session.takeBlameLoads()) {
       deps.blame(load.request, blameController.signal).then(
         (lines) => session.finishBlameLoad(load, lines),
@@ -268,6 +332,17 @@ export async function runPager(
         if (!cancelReveal && !cancelPush) draw();
       });
     }
+  };
+
+  // While the task dialog shows a running step, its spinner turns a frame at
+  // a time, writing only the rows it changes, except while a pressed button
+  // is drawn, whose own draw starts its timer again.
+  let cancelSpin: (() => void) | undefined;
+  const spin = () => {
+    cancelSpin = undefined;
+    if (!session.taskSpinning || cancelPush) return;
+    session.advanceSpinner();
+    draw(true);
   };
 
   // Ctrl-L leaves the session at the finished state; these frames walk the lines
@@ -313,9 +388,7 @@ export async function runPager(
       cancelPush = undefined;
     }
   };
-  const startPush = (): boolean => {
-    const push = session.pendingPush;
-    if (!push) return false;
+  const startPush = (push: PushedFrame) => {
     paint(push.doc, push.view);
     cancelPush = deps.setTimer(() => {
       cancelPush = undefined;
@@ -323,7 +396,6 @@ export async function runPager(
       draw();
       startExpiry();
     }, PUSH_FRAME_MS);
-    return true;
   };
 
   // Ctrl-L pressed where the bar does not offer it says why, and the key changed
@@ -387,13 +459,16 @@ export async function runPager(
     taskController?.abort();
     stopWatching();
     cancelQuit?.();
+    cancelSpin?.();
     blameController.abort();
     try {
       tty.setRaw(false);
     } catch { /* ignore */ }
     try {
       deps.write(
-        `${term.disableMouse}${CSI}?7h${term.showCursor}` +
+        (reportingAllKeys ? term.reportKeysAsBefore : "") +
+          `${term.disableMouse}${CSI}?7h` +
+          term.showCursor +
           (padBg ? term.resetDefaultBg : "") + term.leaveAltScreen +
           (session.exitMessage === null ? "" : `${session.exitMessage}\n`),
       );
@@ -469,14 +544,12 @@ export async function runPager(
     }
   };
 
-  const notWatching = (reason: string) =>
-    session.setPullRequestWatch(
-      `Not watching for the pull request: ${reason}.`,
-    );
+  const notWatching = (reason: TaskText) =>
+    session.stopPullRequestWatch(reason);
 
   // While the task dialog is up, the viewer can watch the relay for the
-  // delivery that `match` returns the pull request's address for, as the
-  // pull request `event`. `match` returns null when there is nothing to
+  // delivery that `match` returns the pull request's address for, saying
+  // `waiting` while it does. `match` returns null when there is nothing to
   // watch for, as when `origin` is not on GitHub. A watch that cannot start
   // says why in the task dialog, and leaves the task it follows to be
   // reported as it went. The relay keeps nothing for a subscriber that is not
@@ -486,23 +559,23 @@ export async function runPager(
   const startWatching = async (
     settings: ViewSettings,
     task: AbortSignal,
-    event: "opens" | "merges",
+    waiting: TaskText,
     match: () => ((delivery: GitHubDelivery) => string | null) | null,
   ) => {
     try {
       if (!settings.quitOnPullRequest) return;
       const connect = deps.relay(settings.webhookRelay);
       if (connect === undefined) {
-        notWatching("no webhook relay is set in the settings");
+        notWatching(say`no webhook relay is set in the settings.`);
         return;
       }
       const matcher = match();
       if (matcher === null) {
-        notWatching("origin is not a GitHub repository");
+        notWatching(say`${name("origin")} is not a GitHub repository.`);
         return;
       }
       if (task.aborted) {
-        notWatching("the watch was aborted");
+        notWatching(say`the watch was aborted.`);
         return;
       }
       const controller = new AbortController();
@@ -511,15 +584,18 @@ export async function runPager(
       // What aborts the task draws the dialog itself.
       const abandon = () => {
         controller.abort();
-        notWatching("the watch was aborted");
+        notWatching(say`the watch was aborted.`);
         ready.resolve();
       };
       task.addEventListener("abort", abandon, { once: true });
-      session.setPullRequestWatch("Connecting to the webhook relay.");
+      const connecting = session.beginWatchStep(
+        say`Connecting to the webhook relay`,
+      );
       draw();
       watchForPullRequest(connect, matcher, controller.signal, () => {
         task.removeEventListener("abort", abandon);
-        session.setPullRequestWatch(`Quitting when the pull request ${event}.`);
+        connecting();
+        session.beginWatchStep(waiting, "person");
         draw();
         ready.resolve();
       }).then((url) => {
@@ -530,12 +606,12 @@ export async function runPager(
         task.removeEventListener("abort", abandon);
         ready.resolve();
         if (controller.signal.aborted) return;
-        notWatching(describeFailure(error));
+        notWatching(failure(error));
         draw();
       });
       await ready.promise;
     } catch (error) {
-      notWatching(describeFailure(error));
+      notWatching(failure(error));
     }
   };
 
@@ -561,17 +637,30 @@ export async function runPager(
     }
   };
 
-  const writeTask = (text: string) => {
-    session.appendTaskOutput(text);
+  /** Shows `text` as a step of the task in the task dialog, and returns the
+   * function that shows the step is done. */
+  const step: BeginStep = (text, kind) => {
+    const done = session.beginTaskStep(text, kind);
     draw();
+    return () => {
+      done();
+      draw();
+    };
   };
 
   // What creating or merging a pull request waits for, such as a security
   // key's touch, shows even when the output was scrolled back.
-  const writeRequest = (text: string) => {
-    session.appendTaskOutput(text, true);
+  const serviceStep: BeginStep = (text, kind) => {
     session.showTaskEnd();
-    draw();
+    return step(text, kind);
+  };
+
+  const taskOutput: TaskOutput = {
+    write: (text) => {
+      session.appendTaskOutput(text);
+      draw();
+    },
+    step,
   };
 
   /** The service that creates and merges pull requests as `settings` say. */
@@ -591,6 +680,19 @@ export async function runPager(
       await deps.github.find(target, signal);
   };
 
+  /** Says in the task dialog where it looks for `branch`'s open pull
+   * request, and resolves with where that is and the pull request, or null
+   * when there is none. */
+  const lookForPullRequest = async (branch: string, signal: AbortSignal) => {
+    const target = pullRequestTarget(deps.git, branch);
+    const looking = step(
+      say`Looking for the pull request of ${branch} in ${target.repository}`,
+    );
+    const found = await findPullRequest(target, signal);
+    looking();
+    return { target, found };
+  };
+
   // A push, or creating or merging a pull request, that fails leaves a button
   // in the task dialog that tries it again, as `retry` says.
   let retry: { readonly label: string; readonly run: () => void } | null = null;
@@ -605,10 +707,10 @@ export async function runPager(
 
   /** Ends the task the task dialog shows with `summary`, offering to try
    * again what failed. */
-  const endTask = (summary: string) => {
+  const endTask = (summary: TaskText) => {
     const label = retry?.label ?? "";
     session.finishTask(
-      label === "" ? summary : `${summary} To retry, press ${label}.`,
+      label === "" ? summary : say`${summary} To retry, press ${label}.`,
       label,
     );
     drawOrQuit();
@@ -618,14 +720,14 @@ export async function runPager(
   // such as the touch-gate token, takes effect, and continues the task
   // dialog's output.
   const retryTask = async (
-    work: (settings: ViewSettings, signal: AbortSignal) => Promise<string>,
-    declined: string,
+    work: (settings: ViewSettings, signal: AbortSignal) => Promise<TaskText>,
+    declined: TaskText,
   ) => {
     const controller = new AbortController();
     taskController = controller;
     session.continueTask(() => controller.abort());
     draw();
-    let summary: string;
+    let summary: TaskText;
     try {
       const settings = readSettings(deps.git);
       // Settings that cannot be read leave the same retry to try again.
@@ -635,7 +737,7 @@ export async function runPager(
         ? await work(settings, controller.signal)
         : declined;
     } catch (error) {
-      summary = `Git failed: ${describeFailure(error)}.`;
+      summary = say`Git failed: ${failure(error)}`;
     }
     endTask(summary);
   };
@@ -649,30 +751,31 @@ export async function runPager(
     settings: ViewSettings,
     branch: string,
     signal: AbortSignal,
-  ): Promise<string> => {
+  ): Promise<TaskText> => {
     try {
-      const target = pullRequestTarget(deps.git, branch);
-      const open = await findPullRequest(target, signal);
+      const { target, found: open } = await lookForPullRequest(branch, signal);
       if (open !== null) {
-        return `Pull request ${open.number} is open: ${open.url}`;
+        return say`Pull request ${
+          pullRequest(open.number, open.url)
+        } is open: ${link(open.url)}`;
       }
       const { title, body } = pullRequestText(deps.git, target);
       const { repository, head, base } = target;
-      writeTask(
-        `Creating a pull request in ${repository} from ${head} into ` +
-          `${base}.\n`,
+      const creating = step(
+        say`Creating a pull request in ${repository} from ${head} into ${base}`,
       );
       const url = await service(settings).create(
         { repository, head, base, title, body },
-        writeRequest,
+        serviceStep,
         signal,
       );
+      creating();
       if (settings.quitOnPullRequest && PULL_REQUEST_URL.test(url)) {
         session.quitForPullRequest(url);
       }
       return PULL_REQUEST_URL.test(url)
-        ? `Created ${url}`
-        : `Created the pull request: ${url}`;
+        ? say`Created ${link(url)}`
+        : say`Created the pull request: ${quote(url)}`;
     } catch (error) {
       if (retryable(error)) {
         retry = {
@@ -680,14 +783,13 @@ export async function runPager(
           run: () =>
             retryTask(
               (settings, signal) => createPullRequest(settings, branch, signal),
-              "The settings no longer create pull requests.",
+              say`The settings no longer create pull requests.`,
             ),
         };
       }
       return signal.aborted
-        ? "Creating the pull request was aborted. It may have been created " +
-          "anyway."
-        : `Creating the pull request failed: ${describeFailure(error)}.`;
+        ? say`Creating the pull request was aborted. It may have been created anyway.`
+        : say`Creating the pull request failed: ${failure(error)}`;
     }
   };
 
@@ -700,27 +802,32 @@ export async function runPager(
     branch: string,
     url: string | null,
     signal: AbortSignal,
-  ): Promise<string> => {
+  ): Promise<TaskText> => {
     let settings: ViewSettings;
     try {
       settings = readSettings(deps.git);
     } catch (error) {
-      if (url === null) return "";
-      notWatching(describeFailure(error));
+      if (url === null) return [];
+      notWatching(failure(error));
       return openPage(io, url);
     }
     const tool = settings.pullRequestTool;
     if (tool === "api" || tool === "touch-gate") {
       return await createPullRequest(settings, branch, signal);
     }
-    if (url === null) return "";
-    await startWatching(settings, signal, "opens", () => {
-      const head = pushedHead(deps.git, branch);
-      return head && ((delivery) => openedPullRequest(delivery, head));
-    });
+    if (url === null) return [];
+    await startWatching(
+      settings,
+      signal,
+      say`Waiting for the pull request to open.`,
+      () => {
+        const head = pushedHead(deps.git, branch);
+        return head && ((delivery) => openedPullRequest(delivery, head));
+      },
+    );
     return tool === "browser"
       ? openPage(io, url)
-      : `Create a pull request at ${url}`;
+      : say`Create a pull request at ${link(url)}`;
   };
 
   // A push that fails, unless the server refused it, can be tried again, as
@@ -732,8 +839,37 @@ export async function runPager(
     }
   };
 
+  // Pushing a branch that origin already has asks first, saying what the
+  // push would do, and which pull request is open from the branch, if one
+  // is. A pull request that cannot be looked for, or whose search Abort
+  // stops, leaves the push to ask without it.
+  const askToPush = async (
+    branch: string,
+    remote: PushedBranch,
+    signal: AbortSignal,
+  ): Promise<null> => {
+    let open: TaskText;
+    try {
+      const { found } = await lookForPullRequest(branch, signal);
+      open = found === null
+        ? say`It has no open pull request.`
+        : say`Pull request ${
+          pullRequest(found.number, found.url)
+        } is open from it: ${link(found.url)}`;
+    } catch (error) {
+      open = signal.aborted
+        ? say`Stopped looking for its pull request.`
+        : say`Could not look for its pull request: ${failure(error)}`;
+    }
+    session.confirmPush(say`${describePush(branch, remote)} ${open}`);
+    return null;
+  };
+
+  // Once the push dialog has asked, or a push has failed, pushing again
+  // continues the dialog, and asks nothing.
   const startBranchPush = async (again = false) => {
     session.branchPushRequested = false;
+    session.pushConfirmed = false;
     // A watch is for the push whose dialog it outlived.
     stopWatching();
     const controller = new AbortController();
@@ -741,19 +877,23 @@ export async function runPager(
     if (again) session.continueTask(() => controller.abort());
     else session.beginTask("Push", () => controller.abort());
     retry = null;
-    let summary: string;
+    let summary: TaskText | null;
     try {
-      const io = deps.pushIo(writeTask, controller.signal);
+      const io = deps.pushIo(taskOutput, controller.signal);
       summary = await pushBranch(
         io,
         controller.signal,
         (branch, url) => pushed(io, branch, url, controller.signal),
         pushFailed,
+        again
+          ? undefined
+          : (branch, remote) => askToPush(branch, remote, controller.signal),
       );
     } catch (error) {
-      summary = `Push failed: ${describeFailure(error)}.`;
+      summary = say`Push failed: ${failure(error)}`;
     }
-    endTask(summary);
+    if (summary === null) draw();
+    else endTask(summary);
   };
 
   // A merge that fails, unless GitHub refused it as one that cannot succeed,
@@ -764,23 +904,19 @@ export async function runPager(
     request: MergeRequest,
     settings: ViewSettings,
     signal: AbortSignal,
-  ): Promise<string> => {
+  ): Promise<TaskText> => {
+    const { repository, number, method } = request;
+    const url = pullRequestUrl(repository, number);
     try {
-      writeTask(
-        `Merging pull request ${request.number} of ${request.repository} ` +
-          `by ${request.method}.\n`,
+      const merging = step(
+        say`Merging pull request ${
+          pullRequest(number, url)
+        } of ${repository} by ${method}`,
       );
-      const merged = await service(settings).merge(
-        request,
-        writeRequest,
-        signal,
-      );
-      if (settings.quitOnPullRequest) {
-        session.quitForPullRequest(
-          pullRequestUrl(request.repository, request.number),
-        );
-      }
-      return merged;
+      await service(settings).merge(request, serviceStep, signal);
+      merging();
+      if (settings.quitOnPullRequest) session.quitForPullRequest(url);
+      return say`Merged ${link(url)}`;
     } catch (error) {
       if (retryable(error)) {
         retry = {
@@ -788,13 +924,13 @@ export async function runPager(
           run: () =>
             retryTask(
               (settings, signal) => mergePullRequest(request, settings, signal),
-              "The settings no longer merge pull requests.",
+              say`The settings no longer merge pull requests.`,
             ),
         };
       }
       return signal.aborted
-        ? "Landing aborted. The pull request may have merged anyway."
-        : `Landing failed: ${describeFailure(error)}.`;
+        ? say`Landing aborted. The pull request may have merged anyway.`
+        : say`Landing failed: ${failure(error)}`;
     }
   };
 
@@ -809,7 +945,7 @@ export async function runPager(
   /** Finds the pull request to land, and lands it as the settings say.
    * Resolves with how that ended, or with null once the task dialog asks
    * whether to merge. */
-  const land = async (signal: AbortSignal): Promise<string | null> => {
+  const land = async (signal: AbortSignal): Promise<TaskText | null> => {
     const settings = readSettings(deps.git);
     const branch = /^refs\/heads\/(.+)$/.exec(
       deps.git(["symbolic-ref", "--quiet", "HEAD"])?.trim() ?? "",
@@ -817,27 +953,25 @@ export async function runPager(
     if (branch === undefined) {
       throw new Error("this checkout is not on a branch");
     }
-    const target = pullRequestTarget(deps.git, branch);
-    writeTask(
-      `Looking for the pull request of ${branch} in ${target.repository}.\n`,
-    );
-    const found = await findPullRequest(target, signal);
+    const { target, found } = await lookForPullRequest(branch, signal);
     signal.throwIfAborted();
     if (found === null) {
-      return `${branch} has no open pull request in ${target.repository}.`;
+      return say`${branch} has no open pull request in ${target.repository}.`;
     }
     const tool = settings.pullRequestTool;
     if (tool === "link" || tool === "browser") {
       await startWatching(
         settings,
         signal,
-        "merges",
+        say`Waiting for the pull request to merge.`,
         () => (delivery) =>
           mergedPullRequest(delivery, target.repository, found.number),
       );
       return tool === "browser" && deps.open(found.url)
-        ? `Opened ${found.url}`
-        : `Pull request ${found.number}: ${found.url}`;
+        ? say`Opened ${link(found.url)}`
+        : say`Pull request ${pullRequest(found.number, found.url)}: ${
+          link(found.url)
+        }`;
     }
     const sha = deps.git(["rev-parse", "--verify", "--quiet", "HEAD"])?.trim();
     if (!sha) throw new Error("nothing is checked out");
@@ -866,13 +1000,13 @@ export async function runPager(
     const controller = new AbortController();
     taskController = controller;
     session.beginTask("Land", () => controller.abort());
-    let summary: string | null;
+    let summary: TaskText | null;
     try {
       summary = await land(controller.signal);
     } catch (error) {
       summary = controller.signal.aborted
-        ? "Landing aborted."
-        : `Cannot land: ${describeFailure(error)}.`;
+        ? say`Landing aborted.`
+        : say`Cannot land: ${failure(error)}`;
     }
     if (summary === null) draw();
     else endTask(summary);
@@ -889,6 +1023,7 @@ export async function runPager(
 
   const startRequested = () => {
     if (session.branchPushRequested) startBranchPush();
+    if (session.pushConfirmed) startBranchPush(true);
     if (session.retryRequested) {
       session.retryRequested = false;
       retry?.run();
@@ -931,11 +1066,12 @@ export async function runPager(
         stopExpiry();
         stopPush();
         pushStarted = false;
-        session.handleKey(key, () => {
+        session.handleKey(key, (push) => {
           // activateButton calls this after capturing the pushed frame and
           // before running the action, so a slow synchronous save leaves the
           // button visibly depressed for the duration of the work.
-          pushStarted = startPush();
+          startPush(push);
+          pushStarted = true;
         });
         serviceSettings();
         // A task starts as soon as its key is handled, so that the keys after

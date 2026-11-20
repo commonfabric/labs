@@ -11,6 +11,12 @@ export interface UniqueIdentifierOptions extends SanitizeIdentifierOptions {
   readonly suffixSeparator?: string;
 }
 
+/**
+ * Whether `name` can be written as an identifier anywhere in a module,
+ * binding positions included: an identifier that is neither a reserved word
+ * nor one that strict-mode or module code reserves, as `let`, `yield` and
+ * `await` are, nor `eval` or `arguments`, which strict code may not bind.
+ */
 export function isSafeIdentifierText(name: string): boolean {
   if (name.length === 0) return false;
   const codePoints = Array.from(name);
@@ -30,17 +36,24 @@ export function isSafeIdentifierText(name: string): boolean {
       return false;
     }
   }
-  const scanner = ts.createScanner(
+  const token = ts.createScanner(
     ts.ScriptTarget.ESNext,
     /*skipTrivia*/ false,
     ts.LanguageVariant.Standard,
     name,
-  );
-  const token = scanner.scan();
-  const isWholeToken = scanner.getTokenText().length === name.length;
-  if (!isWholeToken) return true;
-  return token < ts.SyntaxKind.FirstReservedWord ||
-    token > ts.SyntaxKind.LastReservedWord;
+  ).scan();
+  const within = (first: ts.SyntaxKind, last: ts.SyntaxKind) =>
+    token >= first && token <= last;
+  return !within(
+    ts.SyntaxKind.FirstReservedWord,
+    ts.SyntaxKind.LastReservedWord,
+  ) &&
+    !within(
+      ts.SyntaxKind.FirstFutureReservedWord,
+      ts.SyntaxKind.LastFutureReservedWord,
+    ) &&
+    token !== ts.SyntaxKind.AwaitKeyword &&
+    name !== "eval" && name !== "arguments";
 }
 
 export function sanitizeIdentifierCandidate(
@@ -88,30 +101,15 @@ export function sanitizeIdentifierCandidate(
     candidate = fallback;
   }
 
-  const ensureIdentifierStart = (text: string): string => {
-    if (text.length === 0) return fallback;
-    const first = text.codePointAt(0);
-    if (
-      first !== undefined &&
-      ts.isIdentifierStart(first, ts.ScriptTarget.ESNext)
-    ) {
-      return text;
-    }
-    return `${fallback}${text}`;
-  };
-
-  candidate = ensureIdentifierStart(candidate);
-
-  if (!isSafeIdentifierText(candidate)) {
-    candidate = fallback;
+  const first = candidate.codePointAt(0);
+  if (
+    first === undefined ||
+    !ts.isIdentifierStart(first, ts.ScriptTarget.ESNext)
+  ) {
+    candidate = `${fallback}${candidate}`;
   }
 
-  let safe = candidate;
-  while (!isSafeIdentifierText(safe)) {
-    safe = ensureIdentifierStart(`${safe}_`);
-  }
-
-  return safe;
+  return isSafeIdentifierText(candidate) ? candidate : fallback;
 }
 
 export function getUniqueIdentifier(
@@ -122,10 +120,7 @@ export function getUniqueIdentifier(
   const fallback = options.fallback ?? DEFAULT_FALLBACK;
   const separator = options.suffixSeparator ?? "_";
 
-  const base = sanitizeIdentifierCandidate(candidate, options);
-  let name = base.length > 0
-    ? base
-    : sanitizeIdentifierCandidate(fallback, options);
+  let name = sanitizeIdentifierCandidate(candidate, options);
 
   if (used.has(name)) {
     let index = 1;
@@ -292,37 +287,25 @@ export function normalizeBindingName(
     return maybeReuseIdentifier(name, used);
   }
 
-  if (ts.isObjectBindingPattern(name)) {
-    const elements = name.elements.map((element) =>
-      factory.createBindingElement(
-        element.dotDotDotToken,
-        element.propertyName,
-        normalizeBindingName(element.name, factory, used),
-        element.initializer as ts.Expression | undefined,
-      )
+  const normalizeElement = (element: ts.BindingElement) =>
+    factory.createBindingElement(
+      element.dotDotDotToken,
+      element.propertyName,
+      normalizeBindingName(element.name, factory, used),
+      element.initializer,
     );
-    return factory.createObjectBindingPattern(elements);
+
+  if (ts.isObjectBindingPattern(name)) {
+    return factory.createObjectBindingPattern(
+      name.elements.map(normalizeElement),
+    );
   }
 
-  if (ts.isArrayBindingPattern(name)) {
-    const elements = name.elements.map((element) => {
-      if (ts.isOmittedExpression(element)) {
-        return element;
-      }
-      if (ts.isBindingElement(element)) {
-        return factory.createBindingElement(
-          element.dotDotDotToken,
-          element.propertyName,
-          normalizeBindingName(element.name, factory, used),
-          element.initializer as ts.Expression | undefined,
-        );
-      }
-      return element;
-    });
-    return factory.createArrayBindingPattern(elements);
-  }
-
-  return name;
+  return factory.createArrayBindingPattern(
+    name.elements.map((element) =>
+      ts.isOmittedExpression(element) ? element : normalizeElement(element)
+    ),
+  );
 }
 
 export function extractBindingNames(binding: ts.BindingName): string[] {

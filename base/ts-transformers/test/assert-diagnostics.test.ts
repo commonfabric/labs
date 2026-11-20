@@ -1,5 +1,11 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
+
+import { TransformationContext } from "../src/core/mod.ts";
+import { transformCfDirective } from "../src/mod.ts";
+import { AssertDiagnosticsTransformer } from "../src/transformers/assert-diagnostics.ts";
 
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
@@ -705,4 +711,151 @@ Deno.test("assert leaves a body with no return alone", async () => {
 
   assertEquals(assertCaptures(root), []);
   assertEquals(recordSource(root), undefined);
+});
+
+describe("AssertDiagnosticsTransformer", () => {
+  describe("transform()", () => {
+    /** Runs the assertion's lowered callback with its captured inputs. */
+    async function compileAssertion(expression: string): Promise<
+      (inputs: unknown) => { ok: boolean }
+    > {
+      const root = await transformed(
+        `import { assert, cell, pattern } from "commonfabric";
+export default pattern(() => {
+  const holder = cell<{ revision: string } | null | undefined>(undefined);
+  const prefix = cell<string>("1:");
+  const check = assert(() => ${expression} ?? false);
+  return { check };
+});`,
+      );
+      const [lift] = callsNamed(root, "lift");
+      const callback = lift.arguments[0];
+      const printed = ts.createPrinter().printNode(
+        ts.EmitHint.Expression,
+        callback,
+        root,
+      );
+      const { outputText } = ts.transpileModule(`const run = (${printed});`, {
+        compilerOptions: { target: ts.ScriptTarget.ESNext },
+      });
+      return new Function("__cfHelpers", `${outputText}\nreturn run;`)({
+        assertCapture: (_parts: unknown, _source: string, value: unknown) =>
+          value,
+        assertRenderParts: () => [],
+      });
+    }
+
+    for (
+      const expression of [
+        'holder.get()?.revision.startsWith("1:")',
+        'holder.get()?.["revision"].startsWith("1:")',
+        'holder.get()?.revision.toUpperCase().startsWith("1:")',
+        'holder.get()?.revision.startsWith?.("1:")',
+      ]
+    ) {
+      it(`preserves the optional chain in \`${expression}\``, async () => {
+        const run = await compileAssertion(expression);
+        for (const value of [undefined, null, "1:current", "2:later"]) {
+          let reads = 0;
+          let revisionReads = 0;
+          const ok = run({
+            holder: {
+              get: () => {
+                reads++;
+                return value == null ? value : {
+                  get revision() {
+                    revisionReads++;
+                    return value;
+                  },
+                };
+              },
+            },
+          }).ok;
+          expect(ok).toBe(value === "1:current");
+          expect(reads).toBe(1);
+          expect(revisionReads).toBe(value == null ? 0 : 1);
+        }
+      });
+    }
+
+    it("skips argument evaluation when the receiver is absent", async () => {
+      const run = await compileAssertion(
+        "holder.get()?.revision.startsWith(prefix.get())",
+      );
+      let argumentsRead = 0;
+      const prefix = {
+        get: () => {
+          argumentsRead++;
+          return "1:";
+        },
+      };
+      expect(run({ holder: { get: () => undefined }, prefix }).ok).toBe(false);
+      expect(argumentsRead).toBe(0);
+      expect(
+        run({ holder: { get: () => ({ revision: "1:current" }) }, prefix })
+          .ok,
+      ).toBe(true);
+      expect(argumentsRead).toBe(1);
+    });
+
+    it("keeps an unguarded missing member inside a present chain throwing", async () => {
+      const run = await compileAssertion(
+        'holder.get()?.revision.startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => ({}) } })).toThrow(TypeError);
+    });
+
+    it("keeps parentheses that end an optional chain", async () => {
+      const run = await compileAssertion(
+        '(holder.get()?.revision).startsWith("1:")',
+      );
+      expect(() => run({ holder: { get: () => undefined } })).toThrow(
+        TypeError,
+      );
+      expect(run({ holder: { get: () => ({ revision: "1:current" }) } }).ok)
+        .toBe(true);
+    });
+  });
+
+  describe("filter()", () => {
+    /** What `filter()` returns for a module holding `source`. */
+    function filterResult(source: string): boolean | undefined {
+      const fileName = "/module.ts";
+      const sourceFile = ts.createSourceFile(
+        fileName,
+        source,
+        ts.ScriptTarget.ES2020,
+        true,
+      );
+      const options: ts.CompilerOptions = { noLib: true };
+      const host = ts.createCompilerHost(options);
+      host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+      const program = ts.createProgram([fileName], options, host);
+      let result: boolean | undefined;
+      ts.transform(sourceFile, [(tsContext) => (file) => {
+        result = new AssertDiagnosticsTransformer({}).filter(
+          new TransformationContext({ program, sourceFile: file, tsContext }),
+        );
+        return file;
+      }]);
+      return result;
+    }
+
+    const usesAssert = `import { assert } from "commonfabric";
+assert(true);
+`;
+
+    it("returns `true` for a module with helpers that mentions `assert`", () => {
+      expect(filterResult(transformCfDirective(usesAssert))).toBe(true);
+    });
+
+    it("returns `false` for a module with helpers that does not mention `assert`", () => {
+      expect(filterResult(transformCfDirective("export const value = 1;\n")))
+        .toBe(false);
+    });
+
+    it("returns `false` for a module without helpers that mentions `assert`", () => {
+      expect(filterResult(usesAssert)).toBe(false);
+    });
+  });
 });

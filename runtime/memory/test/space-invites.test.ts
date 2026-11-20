@@ -342,6 +342,11 @@ describe("space-invites", () => {
       for (
         const other of [
           `${INVITE_LINK_SCHEME}://setup?n=abc123`,
+          // A space link grants nothing and is never an invitation.
+          `${INVITE_LINK_SCHEME}://space?host=https://service.example&space=${space}`,
+          // Nor is an action this reader does not know, such as a later one.
+          `${INVITE_LINK_SCHEME}://other${query}${link.hash}`,
+          `${INVITE_LINK_SCHEME}://other${query}`,
           // The setup action is never an invitation, whatever it carries.
           `${INVITE_LINK_SCHEME}://setup${query}${link.hash}`,
           `https://links.example/setup${query}${link.hash}`,
@@ -375,8 +380,7 @@ describe("space-invites", () => {
         [link.href.replace(link.hash, "").replace("/join?", "/open?"), {
           code: invite.code,
         }],
-        // Any other URL on the scheme.
-        [`${INVITE_LINK_SCHEME}://other${query}${link.hash}`, {}],
+        // A malformed `join`, or a scheme URL naming no action.
         [`${INVITE_LINK_SCHEME}://JOIN${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:join${query}${link.hash}`, {}],
         [`${INVITE_LINK_SCHEME}:/join${query}${link.hash}`, {}],

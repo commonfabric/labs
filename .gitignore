@@ -78,3 +78,6 @@ tasks/.write-lcov-uncompiled.*.ts
 # read-budget limits table once the derivation succeeds. A failed derivation
 # leaves this file behind holding the counts it did observe.
 topics-read-budget-limits.derived
+
+# A Weaver user's own patterns (skills/weaver-patterns)
+/my-patterns/

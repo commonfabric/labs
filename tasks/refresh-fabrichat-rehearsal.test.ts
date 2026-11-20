@@ -25,14 +25,27 @@ const SOURCES: Readonly<Record<string, string>> = {
 };
 
 /**
- * A git that knows `origin/main` and `release` as `COMMIT`, and holds
- * `sources` at it, failing as git does for anything else.
+ * A git that knows `refs/remotes/origin/main` and `release` as `COMMIT`, and
+ * `upstream/main` too where `upstream` says so, and holds `sources` at it,
+ * failing as git does for anything else.
  */
-function fakeGit(sources: Readonly<Record<string, string>> = SOURCES): Git {
+function fakeGit(
+  sources: Readonly<Record<string, string>> = SOURCES,
+  upstream = false,
+): Git {
   return (...args) => {
     const command = args.join(" ");
     const answer = {
-      [`rev-parse --verify origin/main^{commit}`]: `${COMMIT}\n`,
+      [`for-each-ref --format=%(refname) refs/remotes/upstream/main`]: upstream
+        ? "refs/remotes/upstream/main\n"
+        : "",
+      ...upstream
+        ? {
+          [`rev-parse --verify refs/remotes/upstream/main^{commit}`]:
+            `${COMMIT}\n`,
+        }
+        : {},
+      [`rev-parse --verify refs/remotes/origin/main^{commit}`]: `${COMMIT}\n`,
       [`rev-parse --verify release^{commit}`]: `${COMMIT}\n`,
       [`ls-tree --name-only ${COMMIT} patterns/system/fabrichat/`]: LISTING,
       ...Object.fromEntries(
@@ -82,7 +95,17 @@ describe("refresh-fabrichat-rehearsal", () => {
         "system/loom/participants.tsx.txt": "export const roster = 3;\n",
       });
       expect(said).toBe(
-        `Copied 3 modules from origin/main (${COMMIT}) into ${fixtures}.`,
+        `Copied 3 modules from refs/remotes/origin/main (${COMMIT}) into ${fixtures}.`,
+      );
+    });
+
+    it("copies from `upstream/main` where the checkout has one and the command line names nothing", async () => {
+      const said = await refreshRehearsal([], {
+        git: fakeGit(SOURCES, true),
+        fixtures,
+      });
+      expect(said).toBe(
+        `Copied 3 modules from refs/remotes/upstream/main (${COMMIT}) into ${fixtures}.`,
       );
     });
 

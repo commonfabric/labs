@@ -77,6 +77,7 @@ import {
   settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
+  startWithInputSources,
 } from "@commonfabric/runner";
 import type {
   CfcConfClause,
@@ -1109,10 +1110,19 @@ export class PiecesController<T = unknown> {
     }
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
-      // effect if already running.
+      // effect if already running. The pieces that enclose the piece start
+      // first, each following its origin where this open follows the
+      // piece's, so that a nested instance opened on its own runs against
+      // what its enclosing instance derives.
       await timePiecePhase(
         "get.runtime.start",
-        () => this.runtime.start(piece),
+        () =>
+          startWithInputSources(
+            this.runtime,
+            piece,
+            () => this.runtime.start(piece),
+            { followOrigins: reconcile },
+          ),
       );
       // A start that was in flight before the pointer moved may have
       // instantiated the outgoing pattern. Its watcher begins the follow as
@@ -1970,7 +1980,7 @@ export class PiecesController<T = unknown> {
       "openPiece.patternPointerFollowed",
       () => this.#patternPointerFollowed(opened, outcome === "updated"),
     );
-    await this.startPiece(opened);
+    await this.startPiece(opened, undefined, { followOrigins: true });
     // A start that was in flight before the pointer moved may have
     // instantiated the outgoing pattern. Its watcher begins the follow as it
     // is installed, which the wait ahead of the start came too early to
@@ -2020,15 +2030,20 @@ export class PiecesController<T = unknown> {
    * retained root watch demands server execution, while mounted renderers
    * own local graph registration.
    *
-   * With `awaitSetupCommit`, the start waits for the commit of the setup
-   * writes of the graph it instantiates, and this rejects when that commit
-   * failed, which leaves the piece stopped. Otherwise such a failure reaches
-   * only the runtime's log; see `Runner.startWithCommit()`.
+   * The pieces that enclose the piece start first (`startWithInputSources()`),
+   * each following its origin with `followOrigins`, as an open that reconciles
+   * the piece follows its own. With `awaitSetupCommit`, the start waits for the
+   * commit of the setup writes of the graph it instantiates, and this rejects
+   * when that commit failed, which leaves the piece stopped. Otherwise such a
+   * failure reaches only the runtime's log; see `Runner.startWithCommit()`. A
+   * piece an enclosing piece sets up as its child is running when the start
+   * begins, so the start installs nothing and waits for nothing, as for any
+   * piece already running.
    */
   async startPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
     scope?: CellScope,
-    options: { awaitSetupCommit?: boolean } = {},
+    options: { awaitSetupCommit?: boolean; followOrigins?: boolean } = {},
   ): Promise<void> {
     const piece = typeof pieceOrId === "string"
       ? await timePiecePhase(
@@ -2046,9 +2061,15 @@ export class PiecesController<T = unknown> {
     await timePiecePhase(
       "startPiece.runtime.start",
       () =>
-        options.awaitSetupCommit
-          ? this.runtime.startWithCommit(piece)
-          : this.runtime.start(piece),
+        startWithInputSources(
+          this.runtime,
+          piece,
+          () =>
+            options.awaitSetupCommit
+              ? this.runtime.startWithCommit(piece)
+              : this.runtime.start(piece),
+          { followOrigins: options.followOrigins === true },
+        ),
     );
     await timePiecePhase(
       "startPiece.result.pull",
@@ -2060,7 +2081,8 @@ export class PiecesController<T = unknown> {
   /**
    * Stop a running piece (no-op if not running). `scope` completes an id into
    * a document address and defaults to the space, as it does for
-   * {@link getPieceCell}; a `Cell` argument already carries one.
+   * {@link getPieceCell}; a `Cell` argument already carries one. The pieces
+   * that enclose it, which an open of it started, keep running.
    */
   async stopPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
@@ -2261,7 +2283,11 @@ export class PiecesController<T = unknown> {
     }
 
     if (targetIsPiece && start) {
-      await this.runtime.start(targetCell);
+      await startWithInputSources(
+        this.runtime,
+        targetCell,
+        () => this.runtime.start(targetCell),
+      );
       await this.getResult(targetCell).pull();
     }
     await this.synced();

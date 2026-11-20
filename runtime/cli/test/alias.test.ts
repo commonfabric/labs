@@ -1,6 +1,5 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { cliName } from "../lib/cli-name.ts";
 import { argv, cf, checkStderr, stripAnsi } from "./utils.ts";
 
 describe("CLI naming", () => {
@@ -28,12 +27,5 @@ describe("CLI naming", () => {
     expect(help).toContain(
       "cf exec /tmp/cf/home/pieces/notes/result/search.tool --query milk",
     );
-  });
-
-  it("ignores unsupported CF_CLI_NAME values", () => {
-    expect(cliName({ envName: "legacy" })).toBe("cf");
-    expect(cliName({ envName: "cf.exe" })).toBe("cf");
-    expect(cliName({ envName: "$(touch /tmp/pwned)" })).toBe("cf");
-    expect(cliName({ envName: "`touch /tmp/pwned`" })).toBe("cf");
   });
 });

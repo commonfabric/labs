@@ -970,7 +970,7 @@ export function llm(
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
     const stateKey = identity
-      ? resolveScopeKey(outputScope ?? "space", identity)
+      ? resolveScopeKey(outputScope, identity)
       : "local";
     let state = states.get(stateKey);
     if (!state) {
@@ -1222,7 +1222,7 @@ export function llm(
           builtinId: "llm",
           effectKey,
           identity,
-          scope: outputScope ?? "space",
+          scope: outputScope,
         },
       );
 
@@ -1462,7 +1462,7 @@ export function generateText(
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
     const stateKey = identity
-      ? resolveScopeKey(outputScope ?? "space", identity)
+      ? resolveScopeKey(outputScope, identity)
       : "local";
     let state = states.get(stateKey);
     if (!state) {
@@ -1717,7 +1717,7 @@ export function generateText(
           builtinId: "generateText",
           effectKey,
           identity,
-          scope: outputScope ?? "space",
+          scope: outputScope,
         },
       );
 
@@ -1904,7 +1904,7 @@ export function generateObject<T extends Record<string, unknown>>(
       ? tx.tx.scopeKeyIdentity ?? runtime.scopeKeyIdentity
       : undefined;
     const stateKey = identity
-      ? resolveScopeKey(outputScope ?? "space", identity)
+      ? resolveScopeKey(outputScope, identity)
       : "local";
     let state = states.get(stateKey);
     if (!state) {
@@ -2268,7 +2268,7 @@ export function generateObject<T extends Record<string, unknown>>(
             builtinId: "generateObject",
             effectKey,
             identity,
-            scope: outputScope ?? "space",
+            scope: outputScope,
           },
         );
 
@@ -2688,7 +2688,7 @@ export function generateObject<T extends Record<string, unknown>>(
             builtinId: "generateObject",
             effectKey,
             identity,
-            scope: outputScope ?? "space",
+            scope: outputScope,
           },
         );
 

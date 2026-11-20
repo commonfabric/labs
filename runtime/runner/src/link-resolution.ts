@@ -1083,12 +1083,14 @@ export function resolveLinkTracingDereferences(
         (followedHop || inputViaLinkHop) && deadEndDocMissing &&
         link.scope !== "space" && runtime.servingPosture &&
         tx.tx.sourceAction !== undefined &&
-        runtime.scheduler.hasOtherWriterOf(link, tx.tx.sourceAction)
+        runtime.scheduler.owesScopedInstance(link, tx)
       ) {
         // A serving runtime reads one such row differently: a missing
         // instance of a document that another derivation registered here
-        // writes is one the serving loop owes and has not produced yet, not
-        // one its principal never wrote. The read still reads `undefined`,
+        // writes, and that has not yet run for this instance, is one the
+        // serving loop owes and has not produced yet, not one its principal
+        // never wrote. Once the writer has run for it, the absence is what it
+        // produced. The read still reads `undefined`,
         // as above, and stays subscribed, so the run comes again once the
         // instance is produced; what the transaction records is that this
         // run's value was derived from an instance not yet there, which

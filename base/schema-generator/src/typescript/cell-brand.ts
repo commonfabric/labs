@@ -27,16 +27,17 @@ export interface CellWrapperInfo {
   typeRef: ts.TypeReference;
 }
 
-export function isCellInternalMarkerName(name: string): boolean {
-  return name === "CELL_BRAND" ||
-    name === "CELL_INNER_TYPE" ||
-    name.startsWith("__@CELL_BRAND") ||
+/**
+ * Whether `name` is the name of a member keyed by one of the `unique symbol`s
+ * `CELL_BRAND` and `CELL_INNER_TYPE` that `BrandedCell` declares.
+ */
+function isCellInternalMarkerName(name: string): boolean {
+  return name.startsWith("__@CELL_BRAND") ||
     name.startsWith("__@CELL_INNER_TYPE");
 }
 
 function isCellBrandSymbol(symbol: ts.Symbol): boolean {
-  const name = symbol.getName();
-  if (isCellInternalMarkerName(name)) {
+  if (isCellInternalMarkerName(symbol.getName())) {
     return true;
   }
 
@@ -109,7 +110,43 @@ function computeCellBrand(
   if (brandType && (brandType.flags & ts.TypeFlags.StringLiteral)) {
     return (brandType as ts.StringLiteralType).value as CellBrand;
   }
+  if (brandType?.isUnion()) {
+    return kindOfBrandUnion(brandType);
+  }
 
+  return undefined;
+}
+
+/**
+ * For a kind, the other kinds of cell assignable to a cell of that kind. A
+ * cell type declares its brand as the union of its own kind and the kinds
+ * listed here for it, which is what makes cells of those kinds assignable to
+ * it: `ReadonlyCell` declares `"readonly" | "cell"`.
+ */
+const KINDS_ASSIGNABLE_TO: ReadonlyMap<CellBrand, readonly CellBrand[]> =
+  new Map([["readonly", ["cell"]]]);
+
+/**
+ * Helper for `computeCellBrand()`, which returns the kind a brand that is a
+ * union names: the kind whose entry in `KINDS_ASSIGNABLE_TO` lists exactly the
+ * union's other members. Any other union, such as the brand of a union of a
+ * cell and a stream, names no kind.
+ */
+function kindOfBrandUnion(brand: ts.UnionType): CellBrand | undefined {
+  const members = new Set<string>();
+  for (const member of brand.types) {
+    if (!member.isStringLiteral()) return undefined;
+    members.add(member.value);
+  }
+  for (const [kind, others] of KINDS_ASSIGNABLE_TO) {
+    if (
+      members.size === others.length + 1 &&
+      members.has(kind) &&
+      others.every((other) => members.has(other))
+    ) {
+      return kind;
+    }
+  }
   return undefined;
 }
 
@@ -126,14 +163,6 @@ export function getCellBrand(
 
 export function isCellType(type: ts.Type, checker: ts.TypeChecker): boolean {
   return getCellBrand(type, checker) !== undefined;
-}
-
-export function isCellBrand(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-  brand: CellBrand,
-): boolean {
-  return getCellBrand(type, checker) === brand;
 }
 
 /**
@@ -168,9 +197,7 @@ function brandToWrapperKind(brand: CellBrand): CellWrapperKind | undefined {
   }
 }
 
-export function wrapperKindToBrand(
-  wrapperKind: CellWrapperKind,
-): CellBrand | undefined {
+export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
   switch (wrapperKind) {
     case "OpaqueCell":
     case "Reactive":
@@ -187,8 +214,6 @@ export function wrapperKindToBrand(
       return "writeonly";
     case "SqliteDb":
       return "sqlite";
-    default:
-      return undefined;
   }
 }
 

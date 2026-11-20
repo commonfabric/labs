@@ -48,8 +48,8 @@ rewrite. In particular:
 - route-level `Origin` enforcement remains deferred
 - session resume remains keyed by caller-supplied `(space, sessionId)` rather
   than a server-issued, principal-bound identifier
-- the public one-shot read surfaces are `graph.query`, `entity-id.list`, and
-  `entity-id.exists`
+- the public one-shot read surfaces are `graph.query`, `entity-id.list`,
+  `entity-id.exists`, `history.list`, and `branch.list`
 - watch-set mutations return inline `sync` payloads; a pushed frame retracts a
   document a write left no watch reaching, and a client shrinks its watch set
   explicitly
@@ -124,6 +124,7 @@ If the server accepts the protocol, it returns:
     "patternLifecycleScopes": true,
     "servedRequests": true,
     "spaceInvites": true,
+    "branches": true,
     "syncCrossingsV1": true,
     "watchRemoveV1": true,
     "syncPartsV1": true,
@@ -478,6 +479,14 @@ server. A client of a build that knows the capability treats the
 `session/revoked` reason `instance-names` as the refusal
 `clientUpdateRequired` marks, and keeps it the same way.
 
+`branches` advertises that the server opens a session on a branch
+(`SessionDescriptor.branch`, section 4.1.2) and serves the branch and history
+commands (section 4.3.8). It is build-inherent, defaults to `false` when
+absent, and only the server advertises it. A client refuses to open a session
+on a branch against a server that does not advertise it, since that server
+would open the session on the default branch and the session would write
+there, and sends such a server none of the commands.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -531,6 +540,12 @@ interface SessionOpenRequest {
     // Present when no one waits on the session's results (see the rules).
     // Absent means the session is demand. Inside the signed descriptor.
     demand?: false;
+    // The branch the session is of (see the rules). Absent means the default
+    // branch. Inside the signed descriptor.
+    branch?: BranchId;
+    // Present when the server is to fork `branch` where the space has no
+    // branch of that name (see the rules). Inside the signed descriptor.
+    forkBranch?: true;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -705,12 +720,15 @@ Rules:
   the field would open, or refuse, the session without redeeming anything
 - a session that no one waits on declares `demand: false`: a server-side
   component that reads and writes a space as an ordinary client and keeps its
-  sessions open for as long as it runs, such as a toolshed's webhook runtime.
-  A value other than `false` refuses the message. A client declares it on
-  every open, a resume included. A server running the serving loop counts
-  such a session of its service identity as the loop's own: it neither
-  activates the space, nor keeps it from parking, nor adds to its demand
-  (`server-side-execution/serving-loop.md` §1). A server that does not know the
+  sessions open for as long as it runs, such as a toolshed's webhook runtime,
+  or a client that only copies a space's documents, such as a command-line
+  tool's local mirror. A value other than `false` refuses the message. A
+  client declares it on every open, a resume included. A server running the
+  serving loop leaves such a session out of client demand, whichever identity
+  signed it: it neither activates the space, nor keeps it from parking, nor
+  adds to its demand (`server-side-execution/serving-loop.md` §1). The
+  session still reads and writes as any other; what it gives up is the
+  server deriving anything on its account. A server that does not know the
   field ignores it, and the session counts as it did before;
 - a session whose runtime names instances declares `instanceNames: true`, and
   one that declares nothing is positional; a value other than `true` refuses
@@ -726,6 +744,29 @@ Rules:
   refuses every later commit to the space from a positional session, and
   revokes the space's positional sessions with the reason `instance-names`.
   INV-16 states the rule
+- a session is of the branch its `session.open` descriptor names in `branch`,
+  and of the default branch when it names none: what the session sends
+  without naming a branch reads and writes that one (`06-branching.md`
+  section 6.16). A value that is not a string refuses the message. A client
+  declares the branch on every open, a resume included, and only to a server
+  advertising `branches`. The server refuses an open on a branch the space
+  does not have, or has deleted, with a `ProtocolError`, after authorization,
+  so a principal the space would refuse learns nothing of its branches; and it
+  refuses a resume that declares another branch than the session's. A session
+  of a branch other than the default is not client demand, as a session
+  declaring `demand: false` is not
+- an open that names a `branch` and carries `forkBranch: true` asks the server
+  to make that branch where the space has none of the name (`06-branching.md`
+  section 6.16). For a principal that may write to the space, the server
+  forks the branch from the default branch's head and opens the session on
+  it. For a principal that may not, it makes no branch and opens the session
+  on the default branch. An open naming a branch a `branch.create` would
+  refuse the name of (section 4.3.8) is refused. A branch that exists and is
+  active is used as it is, and an open on a deleted branch is refused as it
+  is without `forkBranch`. Any value other than `true` reads as absent. A
+  client carries `forkBranch` on every open of the session, a resume
+  included, so a session the server opened on the default branch resumes
+  there
 - the server rotates `sessionToken` on every successful `session.open`
 - a client sends the same `resumeKey` on every open of one session, a random
   value it makes for that session alone, with a `resumeAttempt` that counts
@@ -848,6 +889,7 @@ interface HelloMessage {
     spaceKind?: boolean;
     // INV-16.
     instanceNameMark?: boolean;
+    branches?: boolean;
   };
 }
 
@@ -858,6 +900,11 @@ interface RequestMessage {
     | "graph.query"
     | "entity-id.list"
     | "entity-id.exists"
+    | "branch.create"
+    | "branch.delete"
+    | "branch.list"
+    | "history.list"
+    | "branch.restore"
     | "session.watch.set"
     | "session.watch.add"
     | "session.watch.remove"
@@ -1083,9 +1130,14 @@ oldest is dropped past that, and its principal then learns of a grant only by
 opening the session again. A connection whose peer did not advertise
 `admissionNotice` records nothing, and neither does a routed connection
 ([`routed-mode-a.md`](routed-mode-a.md)), whatever its peers advertise. Nor does
-a session opened `actingAs: "space-owner"`: only a co-hosted serving runtime
-opens one, and it hears of every access-list commit in process, after which its
-next read of the space opens the session again.
+a session opened `actingAs: "space-owner"`, which only a serving runtime opens.
+An access-list change that gives the session's space an owner the binding can
+stand for, such as the genesis ACL of a home space created after the session
+opened, binds the session to that owner in place rather than revoking it (a
+profile's own DID is not one), because a serving runtime in
+another process hears of no access-list commit on this server. A co-hosted
+serving runtime whose session a change does revoke hears of the commit in
+process, after which its next read of the space opens the session again.
 
 Live data delivery is not routed through the initiating request id.
 
@@ -1213,7 +1265,12 @@ with it, as it loses any frame in flight.
 The routed host splits a sync that one message could not carry, past the
 routed frame cap or the bytes a message may take, into parts of at most 1 MiB
 ([`routed-mode-a.md`](routed-mode-a.md)): splitting costs the server more than
-sending whole. A direct server sends every sync whole.
+sending whole. The toolshed's direct memory socket splits a sync larger than
+the largest message it still sends compressed (256 MiB), or one too long for
+the server to encode whole, into parts of at most 32 MiB
+(`MEMORY_SOCKET_SYNC_PARTS`); an entry larger than that goes alone, in a part
+of its own, as above. A direct connection given no part bounds sends every
+sync whole.
 
 #### Negotiated schema-table encoding
 
@@ -1826,11 +1883,37 @@ Semantics:
 - a `session.close` naming a session the connection does not hold gets a
   `SessionError`
 
-### 4.3.8 Branch Lifecycle Commands
+### 4.3.8 Branch and History Commands
 
-Branch create / delete / merge lifecycle commands are not currently exposed on
-the v2 wire. The engine already carries branch state internally, but public wire
-commands for that surface remain deferred in this pass.
+A server advertising the `branches` capability serves five session commands
+about a space's branches and its history. `06-branching.md` holds the
+semantics of each; this section holds the wire shape and what each requires
+of the session. Every one carries `requestId`, `space` and `sessionId`, and
+its result carries `serverSeq`.
+
+| Command          | Further fields                       | Result                | Requires |
+| ---------------- | ------------------------------------ | --------------------- | -------- |
+| `branch.create`  | `name`, `parentBranch?`, `forkSeq?`  | `branch: BranchInfo`  | WRITE    |
+| `branch.delete`  | `name`                               |                       | WRITE    |
+| `branch.list`    |                                      | `branches`            | READ     |
+| `history.list`   | `branch?`, `before?`, `limit?`       | `commits`             | READ     |
+| `branch.restore` | `source?`, `sourceSeq?`              | `seq?`                | OWNER    |
+
+- A request the engine refuses, for a name that is taken, a fork point outside
+  the parent's history or below the store's compaction floor, or a branch
+  that does not exist, gets a `QueryError` carrying the reason.
+- `branch.create` refuses, the same way, a name that holds a control character
+  or that begins with `view-demand:` or `view-support:`.
+- `history.list` reports a commit as a restore (`restored`) only when it is a
+  `system` commit.
+- `branch.restore` restores the default branch only, and only from its own
+  history: the server refuses a `source` other than the default branch with a
+  `QueryError`, after the OWNER check (`06-branching.md` section 6.15). It is
+  serialized with the space's commits, and the documents it writes reach the
+  space's sessions as any commit's do.
+- A client sends none of these to a server that does not advertise `branches`.
+
+Merge commands remain deferred (`06-branching.md` section 6.7).
 
 ### 4.3.9 `session.watch.remove` — Shrink the Session Watch Set
 
@@ -1985,7 +2068,7 @@ side of
 [owner routing](../server-side-execution/serving-loop.md#2-the-lease-single-deriver-operationally), where a crossing
 was a call on the host's own co-hosted memory server. A server advertises it
 with the `servedRequests` capability flag. The session is the host's routed
-session to the owner, open as the deployment's service identity.
+session to the owner, open as the identity of the host's process.
 
 ```typescript
 // Shown at module scope.
@@ -2067,9 +2150,15 @@ Semantics:
   `payload-too-large`. A client refuses before sending a request whose
   encoding takes more than that, or more than its connection takes in one
   request
-- the session's principal must be of the access list's delegating class
-  (`acl.delegatingDids`, the deployment's service identity); any other
-  session is refused with `forbidden`. The crossing then runs under the actor
+- the session's principal must be of the access list's delegating class;
+  any other session is refused with `forbidden`. The class is the identities
+  of the deployment's serving processes: the server's own process identity
+  (`acl.delegatingDids`), which is the whole class where every process shares
+  one identity, and, behind the memory router, where each toolshed has an
+  identity of its own, every toolshed identity the deployment's directory
+  lists (`acl.isDelegatingPeer`; `routed-mode-a.md`, "Toolshed deployment
+  inputs"). The directory is read on each decision, so a toolshed removed
+  from it is refused from the next request. The crossing then runs under the actor
   its body carries, as the delegated carriage does on the host's own server
   (`protocol.md` §2): the deployment's processes trust each other's carried
   actor claims, and admissibility comes from the validated grant
@@ -2732,7 +2821,11 @@ entity values remain content-addressed.
 ## 4.10 Branch Parameter
 
 `branch` on read and write commands still determines which branch is being read
-or mutated. If omitted, the default branch is used.
+or mutated. If omitted, the branch the session was opened on is used
+(`SessionDescriptor.branch`, section 4.1.2; `06-branching.md` section 6.16),
+which is the default branch unless the open named another. The commands that
+carry no `branch` and are served on the default branch alone are refused from
+a session of another branch; section 6.16 lists them.
 
 ## 4.11 Message Ordering
 

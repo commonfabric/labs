@@ -159,9 +159,11 @@ export function startServer(deps: ServerStartDeps): Promise<void> {
     log,
   );
   // Before any worker starts, so that the flag never changes while another
-  // thread runs.
+  // thread runs. The serving-worker pool collects a worker's garbage before
+  // it ends one for its heap; the route answers only on a server started
+  // with EXPOSE_GC=true.
+  deps.exposeGarbageCollector();
   if (env.EXPOSE_GC) {
-    deps.exposeGarbageCollector();
     log(
       "EXPOSE_GC=true: /api/health/collected-memory collects garbage on request",
     );

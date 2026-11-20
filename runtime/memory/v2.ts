@@ -29,6 +29,17 @@ import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
 
+/**
+ * Prefix of the name of a branch opened to look at an earlier step of a
+ * space: a history fork, named with this prefix and a UUID. A page that goes
+ * away with one open leaves the branch active in the store, and nothing but
+ * its name says it is one, so compaction takes every active branch whose name
+ * starts with this for a leftover history fork and deletes it. The prefix is
+ * reserved for that use: a branch meant to outlive a compaction is named
+ * otherwise.
+ */
+export const HISTORY_FORK_BRANCH_PREFIX = "history:" as const;
+
 export type EntityId = string;
 export type BranchName = string;
 export type SessionId = string;
@@ -1599,6 +1610,14 @@ export type MemoryProtocolFlags = {
    */
   instanceNameMark?: boolean;
 
+  /**
+   * Server capability: the server opens sessions on a branch
+   * (`SessionDescriptor.branch`) and serves the `branch.*` and
+   * `history.list` requests (04-protocol.md §4.3.8). Absent (an older
+   * server) parses to false, and a client then sends none of them.
+   */
+  branches?: boolean;
+
   /** The peer supports router-scoped binary connection authentication. */
   routedAuthV1?: boolean;
 
@@ -1661,6 +1680,7 @@ export type WireMemoryProtocolFlags = {
   servedRequests?: boolean;
   spaceInvites?: boolean;
   instanceNameMark?: boolean;
+  branches?: boolean;
   routedAuthV1?: boolean;
   routedCompressionV1?: boolean;
 };
@@ -1713,12 +1733,13 @@ export type SessionDescriptor = {
 
   /**
    * Declares that no one waits on this session's results: a server-side
-   * component that reads and writes a space as an ordinary client, such as a
-   * toolshed's webhook runtime, and keeps its sessions open for as long as it
-   * runs. The server counts the session as it counts its serving loop's own,
-   * so the session neither activates its space for serving, nor keeps it from
-   * parking, nor adds to its demand. Only the literal `false`; absent, the
-   * session is demand. Declared afresh on every open, and signed into the
+   * component that reads and writes a space as an ordinary client and keeps
+   * its sessions open for as long as it runs, such as a toolshed's webhook
+   * runtime, or a client that only copies documents, such as a command-line
+   * tool's mirror. The server leaves the session out of client demand,
+   * whichever identity signed it, so the session neither activates its space
+   * for serving, nor keeps it from parking, nor adds to its demand. Only the
+   * literal `false`; absent, the session is demand. Declared afresh on every open, and signed into the
    * session.open invocation with the rest of this descriptor.
    */
   demand?: false;
@@ -1770,17 +1791,21 @@ export type SessionDescriptor = {
    * 2026-08-19: the service identity reads a space's ACL only; every
    * other served read runs under the acting USER's identity). A session
    * opened with `actingAs: "space-owner"` by a principal in the memory
-   * ACL's DELEGATING class (`acl.delegatingDids` — under the flag, the
-   * co-hosted process identity; the LT5 trust footing of the write
-   * plane's carried actors) has its READ-class capability decisions
+   * ACL's DELEGATING class (`acl.delegatingDids` and `acl.isDelegatingPeer`
+   * — under the flag, the co-hosted process identity and, behind the memory
+   * router, each toolshed identity its directory lists; the LT5 trust
+   * footing of the write plane's carried actors) has its READ-class
+   * capability decisions
    * resolved as the space's ACL OWNER — the user whose space it is —
    * which the server resolves itself from the ACL (the ruled
    * service-identity ACL read). WRITE/OWNER-class requirements keep
    * resolving against the ENVELOPE principal: the binding grants no
    * write path (served writes ride the wave's §2b delegated carriage).
-   * A non-delegating principal sending the marker is refused. Spaces
-   * with no valid concrete-owner ACL bind nothing (today's rules
-   * apply). Signed into the session.open invocation with the rest of
+   * A non-delegating principal sending the marker is refused, and a
+   * bound session whose principal leaves the class is revoked. A space
+   * with no valid concrete-owner ACL binds nothing at open (today's rules
+   * apply), and the session binds to the owner an access list later
+   * names. Signed into the session.open invocation with the rest of
    * this descriptor.
    */
   actingAs?: "space-owner";
@@ -1795,6 +1820,30 @@ export type SessionDescriptor = {
    * on the resumes after it.
    */
   invite?: { inviteId: string; code: string };
+
+  /**
+   * The branch the session is of (`06-branching.md` §6.16): every commit,
+   * query and watch the session sends without naming a branch reads and
+   * writes this one, so a runtime that knows nothing of branches runs a
+   * space as the branch holds it. Absent, the default branch. Signed into
+   * the session.open invocation with the rest of this descriptor, declared
+   * afresh on every open, and admitted only by a server advertising
+   * `branches`. A session of a branch other than the default is never
+   * client demand, whatever `demand` says: no serving loop runs a branch,
+   * and the session's own runtime computes what the branch stores.
+   */
+  branch?: BranchName;
+
+  /**
+   * Asks the server to fork `branch` from the default branch's head when the
+   * space has no branch of that name, so that a runtime showing a fork of
+   * one space keeps what it writes to every other space apart as well. The
+   * fork is made only for a principal that may write to the space; any
+   * other is given a session of the default branch, to which it can write
+   * nothing. A branch that was deleted is not made again, and the open is
+   * refused as it is without this.
+   */
+  forkBranch?: true;
 };
 
 /**
@@ -2169,6 +2218,152 @@ export type EntityIdLookupRequest = {
   id: EntityId;
 };
 
+/**
+ * A branch as the server reports it. `forkSeq` is the point of
+ * `parentBranch`'s history the branch holds; both are `null` for the default
+ * branch. A `deleted` branch takes no more commits.
+ */
+export type BranchInfo = {
+  name: BranchName;
+  parentBranch: BranchName | null;
+  forkSeq: number | null;
+  createdSeq: number;
+  headSeq: number;
+  status: "active" | "deleted";
+};
+
+/** One commit of a branch's history, without the documents it wrote. */
+export type CommitSummary = {
+  seq: number;
+
+  /** The branch the commit landed on, which a fork's history inherits from. */
+  branch: BranchName;
+
+  /** Who made the commit: a client, a serving loop, or the server itself. */
+  class: CommitClass;
+
+  /** When the server admitted the commit, as an ISO 8601 UTC time. */
+  createdAt: string;
+
+  /** The user a server-produced authored commit acted for. */
+  actingPrincipal?: string;
+
+  /**
+   * Who made the commit: the user a server-produced commit acted for, and
+   * otherwise the principal of the session that committed. Absent for a
+   * commit of a session with no principal. This is the store's record and
+   * no more than the server verified: where a server admits sessions
+   * without a principal, such a session chooses its own id, and can choose
+   * one in the form the store keeps a principal's session under.
+   */
+  principal?: string;
+
+  /** How many events the commit appended to streams. */
+  events: number;
+
+  /** The ids of the events whose handler consequences the commit carries. */
+  consequenceOf?: string[];
+
+  /**
+   * On a serving loop's commit, the seq through which the loop had then
+   * computed everything the branch's authored commits called for: the state
+   * as of this commit is settled when no authored commit lies between
+   * `derivedThrough` and it.
+   */
+  derivedThrough?: number;
+
+  /** The point of history the commit restored its branch to. */
+  restored?: { branch: BranchName; seq: number };
+
+  /** How many documents the commit wrote. */
+  writes: number;
+};
+
+/**
+ * Forks `name` from `parentBranch` (absent, the default branch) as of
+ * `forkSeq` (absent, the parent's head). Needs write access to the space.
+ */
+export type BranchCreateRequest = {
+  type: "branch.create";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+  parentBranch?: BranchName;
+  forkSeq?: number;
+};
+
+export type BranchCreateResult = {
+  serverSeq: number;
+  branch: BranchInfo;
+};
+
+/** Deletes the branch `name`. Needs write access to the space. */
+export type BranchDeleteRequest = {
+  type: "branch.delete";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  name: BranchName;
+};
+
+export type BranchDeleteResult = {
+  serverSeq: number;
+};
+
+/** Lists the space's branches, deleted ones included. */
+export type BranchListRequest = {
+  type: "branch.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+};
+
+export type BranchListResult = {
+  serverSeq: number;
+  branches: BranchInfo[];
+};
+
+/**
+ * Lists the commits of `branch`'s history (absent, the session's branch),
+ * newest first, those below `before` only, and at most `limit` of them.
+ */
+export type HistoryListRequest = {
+  type: "history.list";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  branch?: BranchName;
+  before?: number;
+  limit?: number;
+};
+
+export type HistoryListResult = {
+  serverSeq: number;
+  commits: CommitSummary[];
+};
+
+/**
+ * Restores the default branch to the state `source` (absent, the default
+ * branch) held as of `sourceSeq` (absent, its head), as one commit on the
+ * default branch. Needs owner access to the space.
+ */
+export type BranchRestoreRequest = {
+  type: "branch.restore";
+  requestId: string;
+  space: string;
+  sessionId: SessionId;
+  source?: BranchName;
+  sourceSeq?: number;
+};
+
+export type BranchRestoreResult = {
+  serverSeq: number;
+
+  /** The restoring commit's seq, absent when nothing differed. */
+  seq?: number;
+};
+
 //
 // SQLite builtins (docs/specs/sqlite-builtin)
 //
@@ -2376,6 +2571,9 @@ export type SessionViewInterest = {
   /** Whether the session is a serving loop's own, not a client's (the
    * server's `SessionState.servingOwn`). */
   servingOwn?: true;
+  /** Whether the session declared that it is not demand (the server's
+   * `SessionState.notDemand`). */
+  notDemand?: true;
   /** Whether a connection currently owns the retained session. */
   attached: boolean;
   view: ViewInterest;
@@ -2881,6 +3079,11 @@ export type ClientMessage =
   | OperationFieldQueryRequest
   | EntityIdListRequest
   | EntityIdLookupRequest
+  | BranchCreateRequest
+  | BranchDeleteRequest
+  | BranchListRequest
+  | HistoryListRequest
+  | BranchRestoreRequest
   | SqliteQueryRequest
   | SqliteRegisterDiskSourceRequest
   | WatchSetRequest
@@ -3146,6 +3349,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // Build-inherent: this build's server records a space's instance-naming
   // mark and admits sessions and commits by it (INV-16).
   instanceNameMark: true,
+  // Build-inherent: this build's server opens sessions on a branch and
+  // serves the branch and history requests.
+  branches: true,
   // Build-inherent: this build's lifecycle verbs take an origin.
   patternLifecycleOrigins: true,
   // Build-inherent: this build's `setsrc` and `follow` take a scope.
@@ -3233,6 +3439,7 @@ const BOOLEAN_MEMORY_PROTOCOL_FLAGS: Record<BooleanMemoryProtocolFlag, true> = {
   servedRequests: true,
   spaceInvites: true,
   instanceNameMark: true,
+  branches: true,
   syncCrossingsV1: true,
   watchRemoveV1: true,
   syncPartsV1: true,
@@ -3335,6 +3542,9 @@ export const parseMemoryProtocolFlags = (
     // Absent (an older server) parses to false: the server records no mark
     // and admits a declaring session's commits without one.
     instanceNameMark: value.instanceNameMark === true,
+    // Absent (an older server) parses to false: a client then opens no
+    // session on a branch and sends no branch or history request.
+    branches: value.branches === true,
     // Absent (an older server) parses to false: a client then sends neither
     // `follow` nor a `setsrc` origin.
     patternLifecycleOrigins: value.patternLifecycleOrigins === true,
@@ -3406,6 +3616,7 @@ export const wireMemoryProtocolFlags = (
   servedRequests: flags.servedRequests,
   spaceInvites: flags.spaceInvites,
   instanceNameMark: flags.instanceNameMark,
+  branches: flags.branches,
   routedAuthV1: flags.routedAuthV1,
   routedCompressionV1: flags.routedCompressionV1,
   syncCrossingsV1: flags.syncCrossingsV1,

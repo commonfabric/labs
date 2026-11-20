@@ -33,7 +33,7 @@ import {
   refuseFirstEventCommit,
   staleReadRefusal,
 } from "../support/refuse-event-commit.ts";
-import { captureLogs } from "../support/log-capture.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 import {
   createSchedulerTestRuntime,
   disposeSchedulerTestRuntime,
@@ -204,7 +204,7 @@ describe("events", () => {
 
       expect(eventQueue).not.toContain(event);
       expect(settled).toEqual(["error"]);
-      expect(capture.messages("scheduler")).toContainEqual([
+      expect(capture.messagesOf("scheduler")).toContainEqual([
         "routine purge",
         { eventLink: ref },
       ]);
@@ -306,7 +306,7 @@ describe("events", () => {
       }
 
       expect(ran).toBe(1);
-      const timings = capture.messages("action-timing");
+      const timings = capture.messagesOf("action-timing");
       expect(timings.length).toBe(1);
       expect(String(timings[0][0])).toMatch(/^Action .* completed in /);
     });
@@ -698,7 +698,7 @@ describe("events", () => {
       runner.pendingPatternChangeFor = consult;
 
       expect(received).toEqual(["first", "second"]);
-      expect(capture.messages("scheduler")).toContainEqual([
+      expect(capture.messagesOf("scheduler")).toContainEqual([
         expect.stringMatching(/waits for its piece's pattern change$/),
       ]);
     });
@@ -731,7 +731,7 @@ describe("events", () => {
 
       expect(received).toEqual([]);
       expect(settled).toEqual(["error"]);
-      expect(capture.messages("scheduler-lineage"))
+      expect(capture.messagesOf("scheduler-lineage"))
         .toEqual([[
           "Dropping event from failed lineage origin",
           { eventId: "events-failed-origin-event" },
@@ -1164,7 +1164,7 @@ describe("events", () => {
         expect(outcomes).toEqual([]);
         expect(logger.countsByKey["served-event-commit-failed"]?.warn ?? 0)
           .toBe(warnsBefore);
-        expect(capture.messages("lt1-late-seal-refused"))
+        expect(capture.messagesOf("lt1-late-seal-refused"))
           .toEqual([[
             "LT1 in-process copy of lt1-copy sealed outside its appending " +
             "wave and was refused; the drain delivers the entry",

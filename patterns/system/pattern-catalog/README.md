@@ -60,23 +60,48 @@ buckets still send. An `unlisted` entry is one only its author is shown: others
 cannot find it until it is listed, so a caller shows its state to the author and
 never shows it to anyone else.
 
+An entry whose author chose to be named (`cf pattern publish --as`) also carries
+`authorProfile`, a link to that Common Fabric profile; one shared anonymously
+carries only the pseudonym and its `authorTier` (0 to 9: how much others use the
+author's other shared patterns), shown as "credibility 4 of 9" beside the
+pseudonym and never beside a profile. A remix carries `remixOf`, the originals
+it was made from, nearest first; a step the viewer may not see is
+`{unavailable: true}` and ends the chain. `CatalogByline` shows both the way
+every caller should: the profile's badge, which reads the name and picture from
+the profile itself (so a host never carries a name, and a renamed profile shows
+at once), or else the pseudonym; then "Remix of “Habit tracker”, a remix of …",
+stopping at the first step the viewer may not see. A step with no title reads
+"an untitled pattern", never its id, and the step that ends the chain reads "a
+pattern that's no longer available". A caller that cannot mount `CatalogByline`
+(a native client) follows these same rules.
+
 ## Implementing it
 
 An implementation's result has the `PatternCatalog` shape, with `getItRequests`
 stored under the `GetItRequests` type so the write policy holds, and `host` set
 to an opaque id for the host instance that acts on get requests. Each instance
 mints its own id and never takes one from a copy of another instance's state. It
-answers each `page` request in that request's `result`. It acts only on a
-request that names its own `host`, so a cloned host instance never acts on
-another's requests, and only within a window it chooses by `requestedAt`. It
-answers each request id in `getItRequests` under that id in `getItAnswers`:
-`started` while it works, if it says anything before it is done, then one final
-state (`placed`, `failed` or `cancelled`) that it never changes. `FakeCatalog`
-(`fake-catalog.tsx`) answers from a fixed list of entries, as host `fake-host`
-unless told otherwise, every match in one page with no `next`, and
+answers each `page` request in that request's `result`. It sets `authorProfile`
+only from the profile the index says the author published under
+(`author.published.profile`), as a `link@1` link to that profile's piece; a
+reference with no piece gets no `authorProfile`, so the entry shows the
+pseudonym. It sets `remixOf` only from the chain the index returns to this
+viewer (`remixChain`, each step's `name` as its `title`; never `remixedFrom`
+alone); a step it cannot read ends the chain as `{unavailable: true}`. It acts
+only on a request that names its own `host`, so a cloned host instance never
+acts on another's requests, and only within a window it chooses by
+`requestedAt`. It answers each request id in `getItRequests` under that id in
+`getItAnswers`: `started` while it works, if it says anything before it is done,
+then one final state (`placed`, `failed` or `cancelled`) that it never changes.
+`FakeCatalog` (`fake-catalog.tsx`) answers from a fixed list of entries, as host
+`fake-host` unless told otherwise, every match in one page with no `next`, and
 `pattern-catalog.test.tsx` pins the behavior through it.
 
 ## Not yet settled
+
+- "Remix of" is text. Linking a step to its original waits for a way to open a
+  pattern by id from the catalog.
+- A brand's pattern (`author.brand` in the index) shows only its pseudonym.
 
 - Every caller and the fake run in one space in these tests. A caller in one
   space writing to a catalog in the viewer's home has not been tested; each

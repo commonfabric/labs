@@ -37,12 +37,6 @@ import {
 import { broaderCellScopes } from "./cfc-scoped-instance-labels.ts";
 import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
-  digestedPayloadOf,
-  isDigestEligible,
-  payloadDigest,
-  storedPayloadMatches,
-} from "./commit-payload.ts";
-import {
   admitsDroppedDeclaredPaths,
   droppedDeclaredPaths,
 } from "./envelope-admission.ts";
@@ -53,7 +47,6 @@ import {
   RowLabelCommitError,
 } from "./sqlite/commit-eval.ts";
 export { RowLabelCommitError } from "./sqlite/commit-eval.ts";
-export { payloadDigest } from "./commit-payload.ts";
 import {
   applyPatchToDocument,
   emptyEntityDocument,
@@ -71,7 +64,15 @@ import {
 import { replaceSchedulerBasisRows } from "./scheduler-basis.ts";
 import { TouchedPathIndex } from "./touched-path-index.ts";
 import { ExecutionLeases } from "./execution-lease.ts";
+import { HeldDocuments } from "./held-documents.ts";
 import { prepare, type PreparedStatement } from "./prepared-statement.ts";
+import {
+  digestsOperations,
+  encodeStoredCommit,
+  omitsOperations,
+  type StoredClientCommit,
+  storesCommit,
+} from "./stored-commit.ts";
 import {
   insertExecutionOutboxRows,
   type OutboxAppendRow,
@@ -93,6 +94,7 @@ import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
+  type BranchInfo,
   type BranchName,
   type CellScope,
   type ClientCommit,
@@ -858,8 +860,8 @@ WHERE session_id = :session_id
 // Compaction (docs/plans/compact-space.md, I4) attributes the boundary row of
 // every instance it truncates to a commit stamped with
 // {@link COMPACTION_SESSION_PREFIX}, so this row says whether history below
-// it was deleted or never existed — see {@link historyCompactedBelow}.
-const SELECT_OLDEST_REVISION_ATTRIBUTION = `
+// it was deleted or never existed — see {@link historyCompactedBelowRow}.
+export const SELECT_OLDEST_REVISION_ATTRIBUTION = `
 SELECT r.seq AS seq, c.class AS class, c.session_id AS session_id
 FROM revision r
 JOIN "commit" c ON c.seq = r.commit_seq
@@ -887,6 +889,7 @@ SELECT
      AND id = :id
      AND scope_key = :scope_key
      AND seq > :after_seq
+     AND seq <= :through_seq
      AND op IN ('set', 'delete')
    ORDER BY seq DESC, op_index DESC
    LIMIT 1) AS seq,
@@ -896,6 +899,7 @@ SELECT
             AND id = :id
             AND scope_key = :scope_key
             AND seq > :after_seq
+            AND seq <= :through_seq
             AND op = 'patch') AS patched
 `;
 
@@ -906,6 +910,7 @@ WHERE branch = :branch
   AND id = :id
   AND scope_key = :scope_key
   AND seq > :after_seq
+  AND seq <= :through_seq
   AND op = 'patch'
 ORDER BY seq DESC, op_index DESC
 `;
@@ -945,6 +950,7 @@ SELECT
      AND r.id = :id
      AND r.scope_key = :scope_key
      AND r.seq > :after_seq
+     AND r.seq <= :through_seq
      AND r.op IN ('set', 'delete')
      AND (c.session_id <> :exclude_session
           OR c.local_seq NOT IN
@@ -958,6 +964,7 @@ SELECT
             AND r.id = :id
             AND r.scope_key = :scope_key
             AND r.seq > :after_seq
+            AND r.seq <= :through_seq
             AND r.op = 'patch'
             AND (c.session_id <> :exclude_session
                  OR c.local_seq NOT IN
@@ -972,6 +979,7 @@ WHERE r.branch = :branch
   AND r.id = :id
   AND r.scope_key = :scope_key
   AND r.seq > :after_seq
+  AND r.seq <= :through_seq
   AND r.op = 'patch'
   AND (c.session_id <> :exclude_session
        OR c.local_seq NOT IN (SELECT value FROM json_each(:named_local_seqs)))
@@ -1055,9 +1063,19 @@ FROM instance_name_mark
  */
 export const COMPACTION_SESSION_PREFIX = "compaction:";
 
+/** An instance's oldest row and the commit it is attributed to, as
+ * {@link SELECT_OLDEST_REVISION_ATTRIBUTION} reads it. */
+export type OldestRevisionAttribution = {
+  seq: number;
+  class: string;
+  session_id: string;
+};
+
 /**
  * Whether the instance's history below `basisSeq` was compacted away, as
- * opposed to never having existed.
+ * opposed to never having existed, given its oldest row `oldest`, which
+ * {@link SELECT_OLDEST_REVISION_ATTRIBUTION} reads (undefined for an
+ * instance with no row).
  *
  * Reconstructing a basis reads the newest row at or before it, and a basis
  * older than the instance's oldest row reads as absent either way. The two
@@ -1072,6 +1090,16 @@ export const COMPACTION_SESSION_PREFIX = "compaction:";
  * instance whose oldest row points at an ordinary commit lost nothing, and a
  * basis older than it is a genuine absence.
  */
+export const historyCompactedBelowRow = (
+  oldest: OldestRevisionAttribution | undefined,
+  basisSeq: number,
+): boolean =>
+  oldest !== undefined &&
+  basisSeq < oldest.seq &&
+  oldest.class === "system" &&
+  oldest.session_id.startsWith(COMPACTION_SESSION_PREFIX);
+
+/** {@link historyCompactedBelowRow} for the instance's row in `engine`. */
 const historyCompactedBelow = (
   engine: Engine,
   options: {
@@ -1080,17 +1108,15 @@ const historyCompactedBelow = (
     scopeKey: string;
     basisSeq: number;
   },
-): boolean => {
-  const oldest = engine.statement("selectOldestRevisionAttribution").get({
-    branch: options.branch,
-    id: options.id,
-    scope_key: options.scopeKey,
-  }) as { seq: number; class: string; session_id: string } | undefined;
-  return oldest !== undefined &&
-    options.basisSeq < oldest.seq &&
-    oldest.class === "system" &&
-    oldest.session_id.startsWith(COMPACTION_SESSION_PREFIX);
-};
+): boolean =>
+  historyCompactedBelowRow(
+    engine.statement("selectOldestRevisionAttribution").get({
+      branch: options.branch,
+      id: options.id,
+      scope_key: options.scopeKey,
+    }) as OldestRevisionAttribution | undefined,
+    options.basisSeq,
+  );
 
 /** A decoded revision the engine keeps, with the encoded size it stands in
  * for in the cache's byte budget. */
@@ -1146,6 +1172,10 @@ export type DocumentCacheDiagnostics = DocumentCacheStats & {
   bytes: number;
   budgetBytes: number;
   maxEntries: number;
+
+  /** Entries in {@link Engine.heldDocuments}: decoded revisions some reader
+   * may still hold, cached or not. */
+  held: number;
 };
 
 export type Engine = {
@@ -1156,6 +1186,11 @@ export type Engine = {
   operationCheckpointInterval: number;
   legacyCommitMetadataRefsRequired: boolean;
   operationCodecs: OperationCodecRegistry;
+
+  /** Whether admission stores a commit's reads as a digest where nothing
+   * reads them afterward ({@link OpenOptions.storeReadsDigest}). */
+  storeReadsDigest: boolean;
+
   /** Returns the statement {@link STATEMENTS} names, from `prepare()`. */
   statement: (name: StatementName) => PreparedStatement;
 
@@ -1201,6 +1236,15 @@ export type Engine = {
   documentCacheMaxEntries: number;
 
   documentCacheStats: DocumentCacheStats;
+
+  /**
+   * The decoded copy of each durable revision that a reader still holds,
+   * whether or not {@link Engine.documentCache} still caches it. A read that
+   * decodes a revision again takes the held copy instead of its own, so
+   * readers that hold the same revision, such as the memory server's
+   * sessions watching the same documents, hold one copy between them.
+   */
+  heldDocuments: HeldDocuments<EntityDocument>;
 
   /** The coordinator this engine's cache reports to for the bound across
    * engines (the open option of the same name), if it has one. */
@@ -1378,6 +1422,17 @@ export type OpenOptions = {
   operationCheckpointInterval?: number;
   operationCodecs?: OperationCodecRegistry;
 
+  /**
+   * Whether admission stores an admitted commit's reads as a digest of the
+   * whole submission where nothing reads them afterward (02-storage.md §3.3).
+   * On by default. Every engine reads both forms whatever this says. A store
+   * that must keep its read sets passes `false`: a test whose stale-read
+   * audit replays them, or a deployment about to roll back to a version that
+   * predates digest-form rows, which refuses a retry of a commit stored with
+   * a digest as a replay mismatch.
+   */
+  storeReadsDigest?: boolean;
+
   /** Byte budget for the decoded-document cache, in encoded UTF-8 bytes of
    * the documents as stored (default DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES;
    * what an entry weighs is under DocumentCacheEntry). */
@@ -1530,6 +1585,24 @@ export type ApplyCommitOptions = {
     principal: string;
     sessionId: SessionId;
   };
+
+  /**
+   * The scope instance each scoped write of a `system`-class commit lands
+   * in, by operation index: how the server's restore of a branch names
+   * every instance it rewrites, having no session to resolve one from.
+   * Refused on any other class.
+   */
+  scopeKeys?: ReadonlyMap<number, string>;
+
+  /**
+   * Makes each `set` of a `system`-class commit end the collaborative fields
+   * of the document it writes, as a `delete` does, where a `set` otherwise
+   * may not change an active field's value: how the server's restore of a
+   * branch rewrites a document some session is editing. An editor finds the
+   * field inactive and starts it again from the restored value. Refused on
+   * any other class.
+   */
+  releasesOperationFields?: boolean;
 };
 
 export type AppliedRevision = {
@@ -1622,14 +1695,7 @@ export type PutBlobOptions = {
   contentType: string;
 };
 
-export type BranchState = {
-  name: BranchName;
-  parentBranch: BranchName | null;
-  forkSeq: number | null;
-  createdSeq: number;
-  headSeq: number;
-  status: string;
-};
+export type BranchState = BranchInfo;
 
 type HeadRow = {
   seq: number;
@@ -1680,7 +1746,7 @@ type BranchRow = {
   fork_seq: number | null;
   created_seq: number;
   head_seq: number;
-  status: string;
+  status: "active" | "deleted";
 };
 
 export const DEFAULT_SNAPSHOT_INTERVAL = 10;
@@ -2323,6 +2389,7 @@ export const open = async (
     snapshotRetention = DEFAULT_SNAPSHOT_RETENTION,
     operationCheckpointInterval = DEFAULT_OPERATION_CHECKPOINT_INTERVAL,
     operationCodecs = createDefaultOperationCodecRegistry(),
+    storeReadsDigest = true,
     documentCacheBudgetBytes = DEFAULT_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries = DEFAULT_DOCUMENT_CACHE_MAX_ENTRIES,
     documentCacheCoordinator,
@@ -2366,6 +2433,7 @@ export const open = async (
     operationCheckpointInterval,
     legacyCommitMetadataRefsRequired: commitMetadataRefsRequired(database),
     operationCodecs,
+    storeReadsDigest,
     statement: (name) => prepared(STATEMENTS[name]),
     prepare: prepared,
     executionLeases,
@@ -2380,6 +2448,7 @@ export const open = async (
       patchReplays: 0,
       resumes: 0,
     },
+    heldDocuments: new HeldDocuments(),
     ...(documentCacheCoordinator === undefined
       ? {}
       : { documentCacheCoordinator }),
@@ -2397,6 +2466,7 @@ export const documentCacheDiagnostics = (
   bytes: engine.documentCacheBytes,
   budgetBytes: engine.documentCacheBudgetBytes,
   maxEntries: engine.documentCacheMaxEntries,
+  held: engine.heldDocuments.size,
 });
 
 /**
@@ -2442,9 +2512,43 @@ export const close = (engine: Engine): void => {
   engine.documentCacheCoordinator?.removed(engine);
   engine.documentCache.clear();
   engine.documentCacheBytes = 0;
+  engine.heldDocuments.clear();
   engine.database.close();
 };
 
+/** The longest name a branch may carry. */
+export const MAX_BRANCH_NAME_LENGTH = 128;
+
+/**
+ * The seq below which the store's history is closed: that of the newest
+ * commit `cf space compact` inserted, or 0 for a store never compacted.
+ * Compaction deletes revisions below a cut it chooses per document, so a
+ * point of history below its commit can hold a document as absent that the
+ * space held then. A fork or a restore of such a point would take that
+ * absence for the state, so neither reaches below this seq.
+ */
+export const compactionFloor = (engine: Engine): number =>
+  (engine.prepare(`
+SELECT COALESCE(MAX(seq), 0) AS seq FROM "commit"
+WHERE class = 'system' AND session_id LIKE :prefix
+`).get({ prefix: `${COMPACTION_SESSION_PREFIX}%` }) as { seq: number }).seq;
+
+/**
+ * Creates the branch `name`, forked from `options.parentBranch` (the default
+ * branch when absent) as of `options.forkSeq` (the parent's head when
+ * absent), and returns it. The branch holds what its parent held at the fork
+ * point, shares the parent's revisions up to there, and diverges from its
+ * first own commit. Creating a branch that already exists and is active
+ * returns it unchanged, provided it has the same parent and, where
+ * `options.forkSeq` is given, that fork point. Creating the default branch
+ * returns it.
+ *
+ * @throws When `name` is longer than {@link MAX_BRANCH_NAME_LENGTH}, when the
+ * parent does not exist or is deleted, when the fork point lies outside the
+ * parent's history or below the store's {@link compactionFloor}, or when
+ * `name` is taken by a deleted branch or by one with another parent or fork
+ * point.
+ */
 export const createBranch = (
   engine: Engine,
   name: BranchName,
@@ -2457,13 +2561,36 @@ export const createBranch = (
     if (name === DEFAULT_BRANCH) {
       return requireBranch(txEngine, DEFAULT_BRANCH);
     }
+    const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
     const existing = getBranch(txEngine, name);
     if (existing !== null) {
+      if (
+        existing.status !== "active" ||
+        existing.parentBranch !== parentBranch ||
+        (options.forkSeq !== undefined && existing.forkSeq !== options.forkSeq)
+      ) {
+        throw new Error(`branch name is taken: ${name}`);
+      }
       return existing;
     }
-    const parentBranch = options.parentBranch ?? DEFAULT_BRANCH;
+    if (name.length > MAX_BRANCH_NAME_LENGTH) {
+      throw new Error("branch name is too long");
+    }
     const parent = requireBranch(txEngine, parentBranch);
+    if (parent.status !== "active") {
+      throw new Error(`branch is not active: ${parentBranch}`);
+    }
     const forkSeq = options.forkSeq ?? parent.headSeq;
+    const firstSeq = parentBranch === DEFAULT_BRANCH ? 0 : parent.createdSeq;
+    if (
+      !Number.isSafeInteger(forkSeq) || forkSeq < firstSeq ||
+      forkSeq > parent.headSeq
+    ) {
+      throw new Error(
+        `seq ${forkSeq} is out of range for branch ${parentBranch}`,
+      );
+    }
+    assertAboveCompactionFloor(txEngine, forkSeq);
     txEngine.statement("insertBranch").run({
       name,
       parent_branch: parentBranch,
@@ -2474,6 +2601,30 @@ export const createBranch = (
     return requireBranch(txEngine, name);
   }).immediate(engine);
 
+/**
+ * Throws when `seq` names a point of history below the store's
+ * {@link compactionFloor}.
+ */
+export const assertAboveCompactionFloor = (
+  engine: Engine,
+  seq: number,
+): void => {
+  const floor = compactionFloor(engine);
+  if (seq < floor) {
+    throw new Error(
+      `history below seq ${floor} was compacted, and seq ${seq} names no ` +
+        "state of the space",
+    );
+  }
+};
+
+/**
+ * Deletes `branch`: it takes no further commit and
+ * {@link listBranches} reports it as deleted, while its name stays taken and
+ * its history stays readable. Deleting the default branch does nothing.
+ *
+ * @throws When the branch does not exist.
+ */
 export const deleteBranch = (
   engine: Engine,
   branch: BranchName,
@@ -2481,6 +2632,15 @@ export const deleteBranch = (
   requireBranch(engine, branch);
   engine.statement("deleteBranch").run({ branch });
 };
+
+/**
+ * Returns `branch` as the store holds it now, or `null` when there is no
+ * such branch.
+ */
+export const branchState = (
+  engine: Engine,
+  branch: BranchName,
+): BranchState | null => getBranch(engine, branch);
 
 export const listBranches = (engine: Engine): BranchState[] => {
   return (engine.statement("selectBranches").all() as BranchRow[]).map(
@@ -2559,7 +2719,6 @@ export const queryOperationField = (
     after,
   }: OperationFieldQuery,
 ): OperationFieldSnapshot => {
-  assertDefaultOperationBranch(branch);
   validateOperationPath(path);
   if (typeof id !== "string" || id.length === 0) {
     throw new ProtocolError("operation field id is malformed");
@@ -2672,7 +2831,6 @@ export const pruneOperationFieldHistory = (
   }: OperationFieldQuery,
 ): OperationHistoryPruneResult =>
   engine.database.transaction((txEngine: Engine) => {
-    assertDefaultOperationBranch(branch);
     validateOperationPath(path);
     if (typeof id !== "string" || id.length === 0) {
       throw new ProtocolError("operation field id is malformed");
@@ -2865,7 +3023,10 @@ const readStateForScopeKey = (
         // `sqlite` ops are never stored as revisions; unreachable.
         throw new Error(`unexpected stored revision op: ${row.op}`);
     }
-    cacheDocumentForRevision(engine, cacheKey, { document, weight });
+    document = cacheDocumentForRevision(engine, cacheKey, {
+      document,
+      weight,
+    });
   }
 
   return {
@@ -5206,14 +5367,6 @@ const retainedOperationVersion = (
   return row.version === null ? field.version : row.version - 1;
 };
 
-const assertDefaultOperationBranch = (branch: BranchName): void => {
-  if (branch !== DEFAULT_BRANCH) {
-    throw new ProtocolError(
-      "collaborative operation fields only support the default branch",
-    );
-  }
-};
-
 const decodedIntegratedOperations = (
   epoch: number,
   rows: readonly IntegratedOperationRow[],
@@ -5576,7 +5729,6 @@ const applyOperation = (
   },
 ): { resolution: ApplyOpResolution; revisions: AppliedRevision[] } => {
   const { branch, seq, opIndex, operation, principal, sessionId } = options;
-  assertDefaultOperationBranch(branch);
   validateApplyOperation(operation);
   if (isStreamEntriesDocId(operation.id)) {
     throw new ProtocolError(
@@ -6150,7 +6302,6 @@ const releaseOperationField = (
   },
 ): void => {
   const { branch, operation, principal, sessionId } = options;
-  assertDefaultOperationBranch(branch);
   validateOperationPath(operation.path);
   if (!validateCursor(operation.cursor)) {
     throw new OpCursorMismatchError(
@@ -6306,7 +6457,7 @@ const releaseEntityOperationFields = (
   engine: Engine,
   options: {
     branch: BranchName;
-    operation: DeleteOperation;
+    operation: DeleteOperation | SetOperation;
     principal?: string;
     sessionId: SessionId;
     scopeKeyOverride?: string;
@@ -6389,6 +6540,8 @@ const applyCommitTransaction = (
     derivedThrough,
     delegated,
     systemEventActor,
+    scopeKeys,
+    releasesOperationFields = false,
     allowEmptyOperations,
     elidedVerdicts = false,
   }: ApplyCommitOptions,
@@ -6415,19 +6568,16 @@ const applyCommitTransaction = (
   // NEW derived commits, and a network retry of an already-ACCEPTED one must
   // keep its stored answer after the producing lease was released or
   // succeeded by a new holder. The stored
-  // identity spans the payload (storedPayloadMatches, which compares a
-  // digested derived payload by its digest) AND the admission envelope
-  // (class; for derived, the producing holder): a same-key resubmission
-  // differing in either is a DIFFERENT submission and is refused, never
-  // answered.
+  // identity spans the payload (`storesCommit()`) AND the admission
+  // envelope (class; for derived, the producing holder): a same-key
+  // resubmission differing in either is a DIFFERENT submission and is
+  // refused, never answered.
   const existing = engine.statement("selectExistingCommit").get({
     session_id: sessionKey,
     local_seq: commit.localSeq,
   }) as CommitRow | undefined;
   if (existing) {
-    if (
-      !storedPayloadMatches(existing, commit, encodeMemoryBoundary(commit))
-    ) {
+    if (!storesCommit(existing, commit)) {
       throw new ProtocolError(
         `commit replay mismatch for session ${sessionId} localSeq ${commit.localSeq}`,
       );
@@ -6709,6 +6859,33 @@ const applyCommitTransaction = (
       }
     }
   }
+  if (releasesOperationFields && commitClass !== "system") {
+    throw new ProtocolError(
+      "releasing a written document's operation fields is system-commit " +
+        "admission only",
+    );
+  }
+  if (scopeKeys !== undefined) {
+    if (commitClass !== "system") {
+      throw new ProtocolError(
+        "explicit scope keys are system-commit admission only",
+      );
+    }
+    for (const [opIndex, scopeKey] of scopeKeys) {
+      const operation = commit.operations[opIndex];
+      if (
+        operation === undefined || operation.op === "sqlite" ||
+        !isScopeKey(scopeKey) ||
+        scopeOfScopeKey(scopeKey) !== normalizeScope(operation.scope)
+      ) {
+        throw new ProtocolError(
+          `system commit rejected: scope_key "${scopeKey}" does not name ` +
+            `an instance of the scope operation ${opIndex} writes`,
+        );
+      }
+      scopeKeyByOpIndex.set(opIndex, scopeKey);
+    }
+  }
   const hasPreconditions = (commit.preconditions?.length ?? 0) > 0;
   const hasReads = commit.reads.confirmed.length > 0 ||
     commit.reads.pending.length > 0;
@@ -6724,6 +6901,17 @@ const applyCommitTransaction = (
   const branch = commit.branch ?? DEFAULT_BRANCH;
   if (requireBranch(engine, branch).status !== "active") {
     throw new Error(`branch is not active: ${branch}`);
+  }
+  // A pattern's SQLite database is one file per space and scope, with no
+  // branches: a write to it from a fork would land in the space itself.
+  if (
+    branch !== DEFAULT_BRANCH &&
+    commit.operations.some((operation) => operation.op === "sqlite")
+  ) {
+    throw new ProtocolError(
+      "a commit on a branch other than the default cannot write a SQLite " +
+        "database, which no branch holds a copy of",
+    );
   }
 
   // A sessionless delegated chain has NO session instance (scopes.md
@@ -7454,13 +7642,12 @@ const applyCommitTransaction = (
         if (row === undefined || (row.branch || DEFAULT_BRANCH) !== branch) {
           return { known: false };
         }
-        const stored = decodeTrustedMemoryBoundary(row.original);
-        // A digested layer keeps no operations to replay, which leaves its
-        // view of the document as unknown as a missing layer does.
-        if (row.class === "derived" && payloadDigest(stored) !== undefined) {
-          return { known: false };
-        }
-        const layer = stored as ClientCommit;
+        const layer = decodeTrustedMemoryBoundary(
+          row.original,
+        ) as StoredClientCommit;
+        // A layer stored without its operations has none to replay, which
+        // leaves its view of the document as unknown as a missing layer does.
+        if (omitsOperations(layer)) return { known: false };
         for (const operation of layer.operations) {
           if (operation.op === "sqlite" || !sameDocument(operation)) continue;
           // An op-field operation on the document is not replayable here.
@@ -7710,10 +7897,21 @@ const applyCommitTransaction = (
   const authorizationRef = engine.legacyCommitMetadataRefsRequired
     ? LEGACY_EMPTY_AUTHORIZATION_REF
     : null;
+  // An engine opened to store digests keeps the reads only where something
+  // reads them after this admission. `identityLayerBasis()` reads a layer's
+  // reads of a document whose operations in it went unwritten, and needs them
+  // only when the first of those is a `patch`; only an identity commit leaves
+  // a `patch` unwritten. The genesis receipt keeps its reads because
+  // `readGenesisReceipt()` requires them.
+  const keepsReads = !engine.storeReadsDigest || seq === 1 ||
+    [...elidedOpIndexes].some((opIndex) =>
+      commit.operations[opIndex].op === "patch"
+    );
   const encoded = encodeMemoryBoundary(commit);
-  const original = isDigestEligible(commit, commitClass, seq)
-    ? digestedPayloadOf(commit, encoded)
-    : encoded;
+  const original = encodeStoredCommit(commit, {
+    reads: keepsReads,
+    operations: !digestsOperations(commit, commitClass, seq),
+  }, encoded);
   const resolution = encodeMemoryBoundary(
     resolvedPendingReads.length > 0 ? { seq, resolvedPendingReads } : { seq },
   );
@@ -7820,7 +8018,10 @@ const applyCommitTransaction = (
       });
       continue;
     }
-    if (operation.op === "delete") {
+    if (
+      operation.op === "delete" ||
+      (releasesOperationFields && operation.op === "set")
+    ) {
       releaseEntityOperationFields(engine, {
         branch,
         operation,
@@ -7895,8 +8096,8 @@ const applyCommitTransaction = (
     });
   }
 
-  // The whole encoding, never a digested payload: the guard reads every
-  // string the operations carry out of it.
+  // The whole encoding, never the stored form: the guard reads every string
+  // the operations carry out of it.
   validateStoredSyncSchemaRefs(engine, branch, revisions, encoded);
 
   // Per-stream `eventWatermark` maintenance (Phase 3; events.md §4): a
@@ -8271,14 +8472,7 @@ const validateCommitPreconditions = (
       }
       case "entity-absent": {
         const scopeKey = resolveScopeKey(precondition.scope, scopeContext);
-        const existingSetOrDelete = engine.statement("selectSetDeleteConflict")
-          .get({
-            branch,
-            id: precondition.id,
-            scope_key: scopeKey,
-            after_seq: 0,
-          }) as SetDeleteConflictRow;
-        if (existingSetOrDelete.seq !== null) {
+        if (hasSetOrDelete(engine, branch, precondition.id, scopeKey)) {
           throw new PreconditionFailedError(
             "receipt-exists",
             `entity-absent precondition target already exists: ${precondition.id}`,
@@ -8428,7 +8622,7 @@ const requireReadPath = (
  * that position. Negative zero is not one: it compares equal to `0`, but the
  * SQLite binding throws on it rather than binding it as `0`.
  */
-const isLogSeq = (seq: unknown): boolean =>
+export const isLogSeq = (seq: unknown): boolean =>
   Number.isSafeInteger(seq) && ((seq as number) > 0 || Object.is(seq, 0));
 
 /**
@@ -8663,12 +8857,12 @@ const identityLayerBasis = (
     }) as CommitRow | undefined;
     if (row === undefined || row.seq <= identityBasis) continue;
     if ((row.branch || DEFAULT_BRANCH) !== branch) continue;
-    const stored = decodeTrustedMemoryBoundary(row.original);
-    // A digested layer keeps no operations to prove an identity from.
-    if (row.class === "derived" && payloadDigest(stored) !== undefined) {
-      continue;
-    }
-    const layer = stored as ClientCommit;
+    const layer = decodeTrustedMemoryBoundary(
+      row.original,
+    ) as StoredClientCommit;
+    // A layer stored without its operations has none to prove an identity
+    // from.
+    if (omitsOperations(layer)) continue;
     const opIndexes: number[] = [];
     let replayable = true;
     for (const [opIndex, operation] of layer.operations.entries()) {
@@ -8689,10 +8883,14 @@ const identityLayerBasis = (
     // The read the identity proof reconstructed the layer's view from, chosen
     // as `applyCommitTransaction()`'s `basisOf()` chooses it: the first
     // pending read of the document, else its first confirmed read on the
-    // branch. Another read of the document beside it proved nothing.
-    const provedPending = layer.reads.pending.find(sameDocument);
+    // branch. Another read of the document beside it proved nothing. A layer
+    // whose reads the log holds only as a digest elided no `patch`
+    // (`applyCommitTransaction()` keeps the reads of every one that did), so
+    // its first operation on the document is a `set`, which proves the view
+    // without them.
+    const provedPending = layer.reads?.pending.find(sameDocument);
     const provedConfirmed = provedPending === undefined
-      ? layer.reads.confirmed.find((candidate) =>
+      ? layer.reads?.confirmed.find((candidate) =>
         sameDocument(candidate) && (candidate.branch ?? branch) === branch
       )
       : undefined;
@@ -8839,6 +9037,97 @@ const findConflictSeq = (
   // statements.
   exclude?: ConflictExclusion,
 ): number | null => {
+  const own = findConflictSeqOnBranch(
+    engine,
+    scans,
+    branch,
+    id,
+    scopeKey,
+    afterSeq,
+    Number.MAX_SAFE_INTEGER,
+    readPath,
+    nonRecursive,
+    exclude,
+  );
+  // The default branch inherits nothing, which spares its reads the lineage
+  // lookup.
+  if (own !== null || typeof branch !== "string" || branch === DEFAULT_BRANCH) {
+    return own;
+  }
+  // A fork holds what its ancestors wrote up to each fork point, so a write
+  // there after the basis conflicts as one of the fork's own does. An
+  // unknown branch has no lineage, and is refused where the commit's branch
+  // is resolved.
+  let lineage = getLineage(engine, branch);
+  while (lineage !== null && lineage.parentBranch !== null) {
+    const forkSeq = lineage.forkSeq ?? 0;
+    if (afterSeq >= forkSeq) return null;
+    const inherited = findConflictSeqOnBranch(
+      engine,
+      // What a bounded scan learns is not what a scan of the whole branch
+      // would, so it is kept apart from those.
+      new Map(),
+      lineage.parentBranch,
+      id,
+      scopeKey,
+      afterSeq,
+      forkSeq,
+      readPath,
+      nonRecursive,
+      exclude,
+    );
+    if (inherited !== null) return inherited;
+    lineage = getLineage(engine, lineage.parentBranch);
+  }
+  return null;
+};
+
+/**
+ * Returns whether the history `branch` holds, its own and what it inherits
+ * from each ancestor up to the fork point, has a `set` or a `delete` of the
+ * instance `scopeKey` of the document `id`.
+ */
+const hasSetOrDelete = (
+  engine: Engine,
+  branch: BranchName,
+  id: EntityId,
+  scopeKey: string,
+): boolean => {
+  let from: BranchName | null = branch;
+  let throughSeq = Number.MAX_SAFE_INTEGER;
+  while (from !== null) {
+    const row = engine.statement("selectSetDeleteConflict").get({
+      branch: from,
+      id,
+      scope_key: scopeKey,
+      after_seq: 0,
+      through_seq: throughSeq,
+    }) as SetDeleteConflictRow;
+    if (row.seq !== null) return true;
+    if (from === DEFAULT_BRANCH) return false;
+    const lineage = requireLineage(engine, from);
+    throughSeq = Math.min(throughSeq, lineage.forkSeq ?? 0);
+    from = lineage.parentBranch;
+  }
+  return false;
+};
+
+/**
+ * Helper for `findConflictSeq()`, which decides a read against the writes
+ * `branch` itself holds after `afterSeq` and through `throughSeq`.
+ */
+const findConflictSeqOnBranch = (
+  engine: Engine,
+  scans: ConflictScans,
+  branch: BranchName,
+  id: EntityId,
+  scopeKey: string,
+  afterSeq: number,
+  throughSeq: number,
+  readPath: readonly string[],
+  nonRecursive: boolean,
+  exclude: ConflictExclusion | undefined,
+): number | null => {
   const key = conflictScanKey(branch, id, scopeKey, exclude);
   let document = key === undefined ? undefined : scans.get(key);
   if (key !== undefined && document === undefined) {
@@ -8857,6 +9146,7 @@ const findConflictSeq = (
     id,
     scope_key: scopeKey,
     after_seq: afterSeq,
+    through_seq: throughSeq,
     ...(exclude === undefined ? {} : {
       exclude_session: exclude.sessionKey,
       named_local_seqs: JSON.stringify(exclude.namedLocalSeqs),
@@ -8901,7 +9191,11 @@ const findConflictSeq = (
       // so closing its generator can leave a cursor alive after rollback.
       // `get()` resets before querying; this bound matches no valid seq,
       // releasing the cursor with one index probe and no older row copies.
-      patchStatement.get({ ...params, after_seq: Number.MAX_SAFE_INTEGER });
+      patchStatement.get({
+        ...params,
+        after_seq: Number.MAX_SAFE_INTEGER,
+        through_seq: Number.MAX_SAFE_INTEGER,
+      });
     }
   });
   for (
@@ -9298,6 +9592,14 @@ const storedEntitySourcesMayContainRef = (
       containsReservedSchemaRefSubstring(baseRow.data);
   }
   if (baseMayContain) return true;
+  // With no base on this branch the pre-state starts from the document the
+  // branch inherits, whose rows this probe does not read.
+  if (
+    !snapshotRow && !baseRow && branch !== DEFAULT_BRANCH &&
+    requireLineage(engine, branch).parentBranch !== null
+  ) {
+    return true;
+  }
 
   const patches = engine.statement("selectPatches").all({
     branch,
@@ -9557,7 +9859,22 @@ const reconstructPatchedDocument = (
       document = cachedBase?.document ?? decodeStoredDocument(baseRow.data);
       encodedBytes = cachedBase?.weight ?? storedByteLength(baseRow.data);
     } else {
-      document = emptyEntityDocument();
+      // With no base on this branch, the patches were written over the
+      // document the branch inherits, which its parent holds as of the fork
+      // point.
+      const lineage = baseRow === undefined && branch !== DEFAULT_BRANCH
+        ? requireLineage(engine, branch)
+        : null;
+      const forkSeq = lineage?.forkSeq ?? 0;
+      const inherited = lineage !== null && lineage.parentBranch !== null
+        ? readStateForScopeKey(engine, {
+          id,
+          scopeKey,
+          branch: lineage.parentBranch,
+          seq: forkSeq,
+        })?.document
+        : undefined;
+      document = inherited ?? emptyEntityDocument();
       encodedBytes = encodedByteLength(document);
     }
   }
@@ -9998,7 +10315,8 @@ const cachedDocumentForRevision = (
 };
 
 /**
- * Remember the document a revision decodes to.
+ * Remember the document a revision decodes to, and return the copy of it
+ * that readers are to be given.
  *
  * `applyCommit()` stages decoded revisions privately for reuse within its
  * transaction. Success publishes those entries; rollback discards them, so
@@ -10013,24 +10331,32 @@ const cachedDocumentForRevision = (
  * whole budget is served but not retained. The engine's coordinator, if it
  * has one, hears of each insertion and trims across engines then, the one
  * moment its total grows.
+ *
+ * A durable revision's copy is the one {@link Engine.heldDocuments} holds, so
+ * a revision decoded again while a reader holds an earlier copy returns that
+ * earlier copy. A staged entry, or one declined inside a transaction, is
+ * returned as decoded: its revision is not durable yet.
  */
 const cacheDocumentForRevision = (
   engine: Engine,
   key: string,
   entry: DocumentCacheEntry,
-): void => {
+): EntityDocument | null => {
   if (engine.stagedDocumentCache !== undefined) {
     engine.stagedDocumentCache.set(key, entry);
-    return;
+    return entry.document;
   }
   if (engine.database.inTransaction) {
-    return;
+    return entry.document;
   }
+  const document = entry.document === null
+    ? null
+    : engine.heldDocuments.intern(key, entry.document);
   // A weight of at least one keeps the byte budget a real bound even for
   // rows with no data (a delete).
   const weight = Math.max(entry.weight, 1);
   if (weight > engine.documentCacheBudgetBytes) {
-    return;
+    return document;
   }
   while (
     engine.documentCache.size > 0 &&
@@ -10039,9 +10365,10 @@ const cacheDocumentForRevision = (
   ) {
     dropOldestDocumentCacheEntry(engine);
   }
-  engine.documentCache.set(key, { document: entry.document, weight });
+  engine.documentCache.set(key, { document, weight });
   engine.documentCacheBytes += weight;
   engine.documentCacheCoordinator?.admitted(engine, weight);
+  return document;
 };
 
 const decodeStoredDocument = (data: string | null): EntityDocument =>

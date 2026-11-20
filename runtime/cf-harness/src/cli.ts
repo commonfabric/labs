@@ -282,6 +282,7 @@ const CLI_STRING_FLAGS = [
   "max-confidentiality",
   "space-db",
   "pattern-index-url",
+  "pattern-index-origin",
   "host-mount",
   "browser-access-lease-id",
   "browser-access-cdp-url",
@@ -793,6 +794,10 @@ Options:
                                 record_feedback, and run_pattern's patternId argument;
                                 signs with the fabric session identity, so it needs the
                                 three --fabric-* flags
+  --pattern-index-origin agent  The run is a person's own agent making patterns for
+                                them: each published version says so and names the
+                                piece it was deployed to, so the index shares it,
+                                under their sharing setting, once they use it
   --no-pattern-index-publish    Read the pattern index without contributing to it: a
                                 pattern the model authors and runs is not published back
   --host-mount <spec>           Extra host bind mount (repeatable: name=<id>,source=<host>,target=<sandbox>,mode=readonly|writable)
@@ -2088,6 +2093,14 @@ export const parseCfHarnessCliArgs = async (
     throw new Error("--pattern-index-url requires a non-empty value");
   }
   let patternIndex: HarnessPatternIndexConfig | undefined;
+  if (
+    args["pattern-index-origin"] !== undefined &&
+    (rawPatternIndexUrl === undefined || rawPatternIndexUrl === "")
+  ) {
+    throw new Error(
+      "--pattern-index-origin needs --pattern-index-url: an origin says who a published pattern is for",
+    );
+  }
   if (rawPatternIndexUrl !== undefined) {
     try {
       new URL(rawPatternIndexUrl);
@@ -2111,10 +2124,17 @@ export const parseCfHarnessCliArgs = async (
     const publishDiscoverable = nonEmptyEnvValue(
       env.CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE,
     ) === "1";
+    const origin = args["pattern-index-origin"];
+    if (origin !== undefined && origin !== "agent") {
+      throw new Error(
+        `--pattern-index-origin must be "agent": ${String(origin)}`,
+      );
+    }
     patternIndex = {
       baseUrl: rawPatternIndexUrl,
       ...(publish ? {} : { publish: false }),
       ...(publishDiscoverable ? { publishDiscoverable: true } : {}),
+      ...(origin === "agent" ? { origin } : {}),
     };
   }
   const rawSkillsRegistryUrl = typeof args["skills-registry-url"] === "string"

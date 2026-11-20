@@ -13,12 +13,15 @@ import {
   ConflictError,
   type Engine,
   open,
-  payloadDigest,
   serverSeq,
 } from "../v2/engine.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import { readGenesisRoot } from "../v2/genesis-root.ts";
 import { CODEMIRROR_CHANGESET_CODEC } from "../v2/operation-codec.ts";
+import {
+  omitsOperations,
+  type StoredClientCommit,
+} from "../v2/stored-commit.ts";
 import {
   type ClientCommit,
   decodeTrustedMemoryBoundary,
@@ -52,10 +55,14 @@ describe("derived commit payload", () => {
   let engine: Engine;
   let holder: string;
 
-  beforeEach(async () => {
-    setServerExecutionConfig(true);
+  /**
+   * Opens a fresh engine holding the space's execution lease and one authored
+   * commit.
+   */
+  const start = async (options: { storeReadsDigest?: boolean } = {}) => {
     engine = await open({
       url: new URL(`memory://derived-payload-${crypto.randomUUID()}`),
+      ...options,
     });
     holder = executionLeaseHolder(SERVICE);
     expect(engine.executionLeases.acquire(SPACE, holder)).toBe(true);
@@ -73,6 +80,11 @@ describe("derived commit payload", () => {
         }],
       },
     });
+  };
+
+  beforeEach(async () => {
+    setServerExecutionConfig(true);
+    await start();
   });
 
   afterEach(() => {
@@ -85,6 +97,10 @@ describe("derived commit payload", () => {
     engine.database.prepare(
       `SELECT original, class FROM "commit" WHERE seq = ?`,
     ).get<{ original: string; class: string }>(seq)!;
+
+  /** The decoded stored payload of the commit at `seq`. */
+  const storedCommit = (seq: number): StoredClientCommit =>
+    decodeTrustedMemoryBoundary(storedRow(seq).original) as StoredClientCommit;
 
   /** Rewrites the stored payload of the commit at `seq`. */
   const rewritePayload = (seq: number, original: string): void => {
@@ -182,9 +198,7 @@ describe("derived commit payload", () => {
       seedDerived();
       const commit = mixedCommit(2);
       const applied = wave(commit);
-      expect(payloadDigest(
-        decodeTrustedMemoryBoundary(storedRow(applied.seq).original),
-      )).toBeDefined();
+      expect(omitsOperations(storedCommit(applied.seq))).toBe(true);
       rewritePayload(applied.seq, encodeMemoryBoundary(commit));
 
       const replayed = wave(mixedCommit(2));
@@ -198,7 +212,7 @@ describe("derived commit payload", () => {
   });
 
   describe("stored form", () => {
-    it("stores a derived commit of `set`, `patch` and `delete` past seq 1 as its digested payload", () => {
+    it("stores a derived commit of `set`, `patch` and `delete` past seq 1 with one digest in place of its operations and its reads", () => {
       seedDerived();
       const commit: ClientCommit = {
         ...mixedCommit(2),
@@ -209,9 +223,31 @@ describe("derived commit payload", () => {
       const { seq } = wave(commit);
 
       const row = storedRow(seq);
-      const { operations: _operations, ...kept } = commit;
+      const { operations: _operations, reads: _reads, ...kept } = commit;
       expect(row.class).toBe("derived");
       expect(decodeTrustedMemoryBoundary(row.original)).toEqual({
+        ...kept,
+        digest: {
+          sha256: toUnpaddedBase64url(sha256(encoded)),
+          bytes: encoded.length,
+          confirmed: 1,
+          pending: 0,
+          operations: 4,
+        },
+      });
+    });
+
+    it("stores a derived commit with its reads and a digest in place of its operations on an engine opened with `storeReadsDigest: false`", async () => {
+      close(engine);
+      await start({ storeReadsDigest: false });
+      seedDerived();
+      const commit = mixedCommit(2);
+      const encoded = new TextEncoder().encode(encodeMemoryBoundary(commit));
+
+      const { seq } = wave(commit);
+
+      const { operations: _operations, ...kept } = commit;
+      expect(decodeTrustedMemoryBoundary(storedRow(seq).original)).toEqual({
         ...kept,
         digest: {
           sha256: toUnpaddedBase64url(sha256(encoded)),
@@ -282,20 +318,16 @@ describe("derived commit payload", () => {
       }
     });
 
-    it("stores an authored commit past seq 1 whole", () => {
+    it("stores an authored commit past seq 1 with its operations", () => {
       const commit = mixedCommit(2);
+      const operations = commit.operations.slice(0, 2);
 
       const { seq } = applyCommit(engine, {
         sessionId: "session:author",
-        commit: { ...commit, operations: commit.operations.slice(0, 2) },
+        commit: { ...commit, operations },
       });
 
-      expect(storedRow(seq).original).toBe(
-        encodeMemoryBoundary({
-          ...commit,
-          operations: commit.operations.slice(0, 2),
-        }),
-      );
+      expect(storedCommit(seq).operations).toEqual(operations);
     });
 
     it("stores a derived commit carrying an `apply-op` whole, and one carrying a `release-op-field`", () => {
@@ -397,10 +429,7 @@ describe("derived commit payload", () => {
         reads: noReads(),
         operations: [{ op: "set", id: "of:p", value: { value: { n: 1 } } }],
       });
-      expect(
-        payloadDigest(decodeTrustedMemoryBoundary(storedRow(seq).original)),
-      )
-        .toBeDefined();
+      expect(omitsOperations(storedCommit(seq))).toBe(true);
       return basisSeq;
     };
 
@@ -492,9 +521,7 @@ describe("derived commit payload", () => {
       });
       expect(identity.elidedOpIndexes).toEqual([0]);
       expect(identity.revisions).toEqual([]);
-      expect(payloadDigest(
-        decodeTrustedMemoryBoundary(storedRow(identity.seq).original),
-      )).toBeDefined();
+      expect(omitsOperations(storedCommit(identity.seq))).toBe(true);
 
       expect(() => wave(reader(readSeq))).toThrow(ConflictError);
     });

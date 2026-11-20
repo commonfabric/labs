@@ -297,7 +297,7 @@ describe("server-lifecycle", () => {
 
       await startServer(deps);
 
-      expect(events).toEqual(["runtimes", "listening"]);
+      expect(events).toEqual(["expose gc", "runtimes", "listening"]);
       const server = await bound.promise;
       const port = server.addr.port;
       expect(logged).toContainEqual([
@@ -334,14 +334,16 @@ describe("server-lifecycle", () => {
       await server.finished;
     });
 
-    it("exposes the garbage collector before serving only when EXPOSE_GC is set", () => {
-      const exposed = startDeps({ env: { ...quietEnv, EXPOSE_GC: true } });
-      void startServer(exposed.deps);
-      expect(exposed.events).toEqual(["expose gc", "runtimes"]);
+    it("exposes the garbage collector before serving, with EXPOSE_GC set or not", () => {
+      // The serving-worker pool collects a worker before ending it for its
+      // heap; EXPOSE_GC decides only whether the route answers.
+      const routed = startDeps({ env: { ...quietEnv, EXPOSE_GC: true } });
+      void startServer(routed.deps);
+      expect(routed.events).toEqual(["expose gc", "runtimes"]);
 
-      const hidden = startDeps();
-      void startServer(hidden.deps);
-      expect(hidden.events).toEqual(["runtimes"]);
+      const unrouted = startDeps();
+      void startServer(unrouted.deps);
+      expect(unrouted.events).toEqual(["expose gc", "runtimes"]);
     });
 
     it("exits 3 when the port is already in use", () => {
@@ -390,7 +392,7 @@ describe("server-lifecycle", () => {
           "Configured internal API origin:",
           ORIGIN,
         ]);
-        expect(events).toEqual([]);
+        expect(events).toEqual(["expose gc"]);
         expect((await fake.request("http://127.0.0.1:8123/")).status).toBe(
           503,
         );
@@ -398,7 +400,7 @@ describe("server-lifecycle", () => {
         fake.listen();
         await started;
 
-        expect(events).toEqual(["runtimes", "listening"]);
+        expect(events).toEqual(["expose gc", "runtimes", "listening"]);
         expect(await (await fake.request("http://127.0.0.1:8123/")).text())
           .toBe("donuts");
       });
@@ -419,7 +421,7 @@ describe("server-lifecycle", () => {
         expect(String(errors[0][0])).toMatch(
           new RegExp(`^API_INTERNAL_URL ${ORIGIN} is not this server: `),
         );
-        expect(events).toEqual([]);
+        expect(events).toEqual(["expose gc"]);
         const probe = new Request("http://127.0.0.1:8123/api/meta", {
           headers: { [STARTUP_PROBE_HEADER]: "a guessed token" },
         });

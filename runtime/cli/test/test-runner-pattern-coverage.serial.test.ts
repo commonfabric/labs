@@ -227,15 +227,15 @@ describe(
         expect(failed).toBe(0);
         expect(
           errors.some((line) =>
-            line.includes(
-              "[cf test] failed to write pattern coverage for alice:",
+            /\[cf test\] failed to write pattern coverage for alice: \S/.test(
+              line,
             )
           ),
         ).toBe(true);
         expect(
           errors.some((line) =>
-            line.includes(
-              "[cf test] failed to write pattern coverage for bob:",
+            /\[cf test\] failed to write pattern coverage for bob: \S/.test(
+              line,
             )
           ),
         ).toBe(true);

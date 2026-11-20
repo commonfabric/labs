@@ -30,7 +30,6 @@ import {
   ConflictError,
   type Engine,
   open,
-  payloadDigest,
   ProtocolError,
   read,
   selectDocHead,
@@ -49,6 +48,7 @@ import {
   deleteExecutionOutboxRow,
   selectPendingExecutionOutboxRows,
 } from "../v2/execution-outbox.ts";
+import { storedOperationCount } from "../v2/stored-commit.ts";
 import {
   type ClientCommit,
   commitPreconditionValueHash,
@@ -1120,7 +1120,10 @@ Deno.test("wave replay does not re-insert durable outbox rows: the stored result
     const stored = db.prepare(`SELECT original FROM "commit" WHERE seq = 2`)
       .get<{ original: string }>()!.original;
     db.close();
-    expect(payloadDigest(decodeMemoryBoundary(stored))?.operations).toBe(1);
+    expect(storedOperationCount(decodeMemoryBoundary(stored))).toEqual({
+      operations: 1,
+      kept: false,
+    });
     assertEquals(
       selectPendingExecutionOutboxRows(engine, { branch: "" }).length,
       1,

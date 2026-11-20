@@ -185,7 +185,9 @@ describe("github", () => {
           "Fix the frobnicator\n\nIt was broken.\n\nNow not.",
         );
         commit("second.txt", "Second");
-        const query = realPushIo({ cwd: root, env, write() {} }).query;
+        const query =
+          realPushIo({ cwd: root, env, write() {}, step: () => () => {} })
+            .query;
 
         expect(pullRequestText(query, TARGET)).toEqual({
           title: "Fix the frobnicator",
@@ -291,7 +293,7 @@ describe("github", () => {
           title: "Title",
           body: "Body",
         },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       );
 
@@ -320,7 +322,7 @@ describe("github", () => {
             title: "Title",
             body: "",
           },
-          () => {},
+          () => () => {},
           new AbortController().signal,
         ),
       ).rejects.toThrow("GitHub did not say which pull request it created");
@@ -332,18 +334,17 @@ describe("github", () => {
         JSON.stringify({ merged: true }),
       );
 
-      const merged = await githubApi(() => "t0k", send).merge(
+      await githubApi(() => "t0k", send).merge(
         {
           repository: "octo/repo",
           number: 12,
           method: "rebase",
           sha: "c0ffee",
         },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       );
 
-      expect(merged).toBe("Merged https://github.com/octo/repo/pull/12");
       expect(requests[0].url).toBe(
         "https://api.github.com/repos/octo/repo/pulls/12/merge",
       );
@@ -352,6 +353,30 @@ describe("github", () => {
         merge_method: "rebase",
         sha: "c0ffee",
       });
+    });
+
+    it("merges a pull request whose successful answer is not JSON, but rejects such an answer to a creation", async () => {
+      const { send } = fakeFetch(200, "Merged.");
+      const api = githubApi(() => "t0k", send);
+
+      await expect(api.merge(
+        { repository: "octo/repo", number: 12, method: "merge", sha: "c0ffee" },
+        () => () => {},
+        new AbortController().signal,
+      )).resolves.toBeUndefined();
+      await expect(
+        api.create(
+          {
+            repository: "octo/repo",
+            head: "feature",
+            base: "main",
+            title: "Title",
+            body: "",
+          },
+          () => () => {},
+          new AbortController().signal,
+        ),
+      ).rejects.toThrow("GitHub did not say which pull request it created");
     });
 
     it("asks GitHub's GraphQL API for the method its page would merge by", async () => {
@@ -435,7 +460,7 @@ describe("github", () => {
               method: "squash",
               sha: "c0",
             },
-            () => {},
+            () => () => {},
             new AbortController().signal,
           ),
         ).rejects.toThrow(message);
@@ -448,7 +473,7 @@ describe("github", () => {
       await expect(
         githubApi(() => null, send).merge(
           { repository: "octo/repo", number: 12, method: "squash", sha: "c0" },
-          () => {},
+          () => () => {},
           new AbortController().signal,
         ),
       ).rejects.toThrow("there is no GitHub token");
@@ -538,7 +563,29 @@ describe("github", () => {
           "exists for octo:feature",
       );
       expect(new GitHubRefusal(502, "").message).toBe("GitHub answered 502");
+      expect(
+        new GitHubRefusal(
+          422,
+          JSON.stringify({ message: ".", errors: [{ message: "Taken." }] }),
+        ).message,
+      ).toBe("GitHub answered 422: Taken");
       expect(new GitHubRefusal(502, "{}").message).toBe("GitHub answered 502");
+    });
+
+    it("gives GitHub's status, and the reason its reply gives as GitHub wrote it, a message per line, or an empty reason when the reply says nothing", () => {
+      const refusal = new GitHubRefusal(
+        422,
+        JSON.stringify({
+          message: "Validation Failed.",
+          errors: [{ message: "A pull request already exists." }],
+        }),
+      );
+
+      expect([refusal.status, refusal.reason]).toEqual([
+        422,
+        "Validation Failed.\nA pull request already exists.",
+      ]);
+      expect(new GitHubRefusal(502, "{}").reason).toBe("");
     });
 
     it("is retryable unless its status says the request itself cannot succeed", () => {

@@ -264,6 +264,13 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
+      // The people his views show hold no one until the session asks for
+      // them, as opening the group control's picker does, so that nothing
+      // they show reads the rooms' rosters before then.
+      {
+        assertion: assert(() => Object.keys(manager.askedPeople).length === 0),
+      },
+      { action: manager.askForPeople, event: {} },
       // The direct room's roster holds Bob and Alice; his people hold only
       // her, by the principal her profile attests, through her profile.
       {

@@ -977,10 +977,10 @@ The tool takes `actions`, one to eight, in the order they should run:
 
 - `invoke_command` with an `invocation` of
   `{ command, args, target?, approval }` runs one Weaver command: `command` is a
-  catalog id, `args` its arguments (at most 16 KiB of JSON; a larger call is
-  refused before anything is delivered), `target` `{ loomId, expectedVersion? }`
-  the loom it acts on, and `approval` the one its catalog entry names
-  (`automatic` or `person`).
+  catalog id, `args` its arguments (at most 2 MiB of serialized UTF-8 JSON; a
+  larger call is refused before anything is delivered), `target`
+  `{ loomId, expectedVersion? }` the loom it acts on, and `approval` the one its
+  catalog entry names (`automatic` or `person`).
 - `list_commands` with a `request` of `{ detail? }` asks for the Weaver's
   catalog, with full descriptions for up to sixteen ids named in `detail`.
 - `open_loom` and `open_url`, the final-action kinds `finish_task` uses, ask the

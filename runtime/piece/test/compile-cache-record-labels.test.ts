@@ -24,6 +24,7 @@ import {
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import { servedInstantiatePiece } from "../src/ops/served-lifecycle.ts";
 
 const signer = await Identity.fromPassphrase("compile-cache record labels");
 
@@ -56,6 +57,21 @@ export default pattern<Args, { label: string }>(({ seed }) => ({
     }],
   };
 }
+
+/** A program that declares no policy on anything it writes. */
+const PLAIN_PROGRAM: RuntimeProgram = {
+  main: "/plain.tsx",
+  files: [{
+    name: "/plain.tsx",
+    contents: `/// <cts-enable />
+import { NAME, pattern } from "commonfabric";
+export default pattern<{ seed: string }, { label: string }>(({ seed }) => ({
+  [NAME]: "Plain",
+  label: "plain:" + seed,
+}));
+`,
+  }],
+};
 
 describe("compile-cache-record-labels", () => {
   let storage: ReturnType<typeof StorageManager.emulate>;
@@ -231,58 +247,171 @@ describe("compile-cache-record-labels", () => {
     }
   });
 
-  it("refuses a fresh setup of a program whose records already store a label, and leaves that label stored", async () => {
-    // Records an earlier runtime stamped, at the delegation field and at the
-    // root, as a labeled transition and a later write-back leave them. A setup
-    // reading them consumes the label, and its argument write misfits.
-    // TODO(danfuzz): This pins a refusal that is wrong for the setup (see the
-    // `TODO` on `stageModuleDelegations()`): flip it to a committed setup once
-    // a repair drops the stamps the compile-cache builtin's writes left.
+  describe("with the successor's records storing a label an earlier runtime left", () => {
+    // A runtime that staged a source update's delegations in the transition's
+    // own transaction left the piece data's label on the successor's records,
+    // and a later write-back of a record moved part of it to the root. The
+    // entries planted here are the ones such a runtime was measured to leave.
+    // A setup that reads them consumes the label, and its argument write
+    // misfits, unless the load ahead of it repairs the records.
 
-    const first = strictRuntime();
-    const firstPieces = await controllerOn(first);
-    const program = confidentialArgumentProgram("v2");
-    const existing = await firstPieces.create(program, {
-      input: { seed: "b" },
-    });
-    await first.idle();
-    const identity = getPatternIdentityRef(existing.getCell())!.identity;
-    await first.patternManager.flushCompileCacheWrites();
-    await firstPieces.synced();
-    const version = await first.patternManager.compileCacheRuntimeVersion({
-      patternCoverage: false,
-    });
-    const keys = [sourceDocKey(identity), compiledDocKey(version!, identity)];
-    for (const key of keys) {
-      const { id } = recordConfidentiality(first, key);
+    /** The confidentiality entries a source update's staging left. */
+    const updateStamp = (atom: unknown): FabricValue[] =>
+      ([
+        [["delegatedModuleIdentities"], "structure", "enumerate"],
+        [["delegatedModuleIdentities"], "structure", "shape"],
+        [["delegatedModuleIdentities", "*"], "structure", "followRef"],
+        [["delegatedModuleIdentities", "*"], "structure", "shape"],
+        [["delegatedModuleIdentities", "*"], "structure", "value"],
+        [["delegatedModuleIdentities", "0"], "derived", "shape"],
+        [["delegatedModuleIdentities", "0"], "derived", "value"],
+      ] as const).map(([path, origin, observes]) => ({
+        path: [...path],
+        origin,
+        observes,
+        label: { confidentiality: [atom as FabricValue] },
+      }));
+
+    /**
+     * The confidentiality entries a write-back of a record carrying
+     * {@link updateStamp} left: its root's, the compile-cache writer's
+     * transformation on the value entry, and the existence entries the
+     * write kept.
+     */
+    const writeBackStamp = (atom: unknown): FabricValue[] => [
+      {
+        path: [],
+        origin: "derived",
+        observes: "shape",
+        label: { confidentiality: [atom as FabricValue] },
+      },
+      {
+        path: [],
+        origin: "derived",
+        observes: "value",
+        label: {
+          confidentiality: [atom as FabricValue],
+          integrity: [{
+            type: "https://commonfabric.org/cfc/atom/TransformedBy",
+            identity: { kind: "builtin", builtinId: "compile-cache" },
+          }],
+        },
+      },
+      ...updateStamp(atom).filter((entry) =>
+        (entry as { observes: string }).observes === "shape"
+      ),
+    ];
+
+    /**
+     * The root pair alone, as measured on the source records of a real space
+     * whose records a write-back left stamped: {@link writeBackStamp} without
+     * the existence entries at the delegation list.
+     */
+    const rootPairStamp = (atom: unknown): FabricValue[] =>
+      writeBackStamp(atom).filter((entry) =>
+        (entry as { path: unknown[] }).path.length === 0
+      );
+
+    /**
+     * Updates a piece onto `confidentialArgumentProgram("v2")` and plants
+     * `entries` on the successor's source record and, unless `sourceOnly`,
+     * its compiled record, and returns the keys of both.
+     */
+    const stampedSuccessor = async (
+      entries: FabricValue[],
+      sourceOnly = false,
+    ): Promise<string[]> => {
+      const first = strictRuntime();
+      const firstPieces = await controllerOn(first);
+      const piece = await firstPieces.create(
+        confidentialArgumentProgram("v1"),
+        {
+          input: { seed: "a" },
+        },
+      );
+      await first.idle();
+      await piece.setPattern(confidentialArgumentProgram("v2"));
+      await first.idle();
+      const successor = getPatternIdentityRef(piece.getCell())!.identity;
+      await first.patternManager.flushCompileCacheWrites();
+      await firstPieces.synced();
+      const version = await first.patternManager.compileCacheRuntimeVersion({
+        patternCoverage: false,
+      });
+      const keys = [
+        sourceDocKey(successor),
+        compiledDocKey(version!, successor),
+      ];
+      for (const key of sourceOnly ? keys.slice(0, 1) : keys) {
+        await plantEntries(
+          first,
+          recordConfidentiality(first, key).id,
+          entries,
+        );
+      }
+      return keys;
+    };
+
+    for (
+      const [left, entries, sourceOnly] of [
+        ["a source update", updateStamp(UNDECLARED_ATOM), false],
+        ["a write-back", writeBackStamp(UNDECLARED_ATOM), false],
+        [
+          "a write-back at the source record's root",
+          rootPairStamp(UNDECLARED_ATOM),
+          true,
+        ],
+      ] as const
+    ) {
+      it(`commits a fresh setup of the successor over the label ${left} left, and leaves no label stored`, async () => {
+        const keys = await stampedSuccessor(entries, sourceOnly);
+        const second = strictRuntime();
+        const secondPieces = await controllerOn(second);
+        const fresh = await secondPieces.create(
+          confidentialArgumentProgram("v2"),
+          { input: { seed: "c" } },
+        );
+        await second.idle();
+
+        expect(await fresh.result.get(["label"])).toBe("v2:c");
+        for (const key of keys) {
+          expect(recordConfidentiality(second, key).atoms, key).toEqual([]);
+        }
+      });
+    }
+
+    it("commits a served instantiation, its receipt included, of a program whose source record a write-back stamped at its root", async () => {
+      // The instantiation writes its receipt in the setup's transaction,
+      // under a schema that declares no policy, so a clause the setup
+      // consumed from a stamped record misfits the receipt even where the
+      // program itself declares nothing.
+
+      const first = strictRuntime();
+      const firstPieces = await controllerOn(first);
+      const created = await firstPieces.create(PLAIN_PROGRAM, {
+        input: { seed: "a" },
+      });
+      await first.idle();
+      const identity = getPatternIdentityRef(created.getCell())!.identity;
+      await first.patternManager.flushCompileCacheWrites();
+      await firstPieces.synced();
       await plantEntries(
         first,
-        id,
-        [["delegatedModuleIdentities"], []].flatMap((path) => [
-          {
-            path,
-            origin: "derived",
-            observes: "shape",
-            label: { confidentiality: [UNDECLARED_ATOM] },
-          },
-          {
-            path,
-            origin: "derived",
-            observes: "value",
-            label: { confidentiality: [UNDECLARED_ATOM] },
-          },
-        ]),
+        recordConfidentiality(first, sourceDocKey(identity)).id,
+        rootPairStamp(UNDECLARED_ATOM),
       );
-    }
 
-    const second = strictRuntime();
-    const secondPieces = await controllerOn(second);
-    await expect(secondPieces.create(program, { input: { seed: "c" } }))
-      .rejects.toThrow("writer-fit confidentiality misfit");
-    for (const key of keys) {
-      expect(recordConfidentiality(second, key).atoms, key).toContain(
-        UNDECLARED_ATOM,
-      );
-    }
+      const second = strictRuntime();
+      const receipt = await servedInstantiatePiece(await controllerOn(second), {
+        requestKey: "compile-cache-record-labels-receipt",
+        argument: { seed: "c" },
+        source: { pattern: { identity, symbol: "default" } },
+        actingUser: signer.did(),
+      });
+
+      expect(receipt.requestKey).toBe("compile-cache-record-labels-receipt");
+      expect(recordConfidentiality(second, sourceDocKey(identity)).atoms)
+        .toEqual([]);
+    });
   });
 });

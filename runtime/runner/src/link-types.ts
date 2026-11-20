@@ -271,8 +271,16 @@ export function isWriteRedirectLink(
  * Parse any link-like value to normalized format
  *
  * Overloads just help make fields non-optional that can be guaranteed to exist
- * in various combinations.
+ * in various combinations: a link with no id of its own takes the base's.
  */
+export function parseLinkPrimitive(
+  value: PrimitiveCellLink,
+  base: NormalizedLink & { id: URI },
+): NormalizedLink & { id: URI };
+export function parseLinkPrimitive(
+  value: PrimitiveCellLink,
+  base?: NormalizedLink,
+): NormalizedLink;
 export function parseLinkPrimitive(
   value: PrimitiveCellLink,
   base?: NormalizedLink,

@@ -246,6 +246,9 @@ export const localJobSpecOf = async (
     },
     patternIndexUrl: profile.patternIndexUrl,
     patternIndexPublish: profile.patternIndexPublish,
+    ...(profile.patternIndexOrigin !== undefined
+      ? { patternIndexOrigin: profile.patternIndexOrigin }
+      : {}),
   };
 };
 

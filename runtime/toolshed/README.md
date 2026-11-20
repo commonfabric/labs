@@ -294,10 +294,13 @@ fragment, with the code passed separately as `parseInviteLink(url, { code })`,
 which is how Android delivers it (the code arrives as the intent's `S.code`
 extra). The result's `host` is always the service named in the query, never the
 link's own origin. Other paths, a `/join` or `/open` URL whose query names none
-of `host`, `space`, and `invite`, and `fbrc://setup?n=<nonce>` return
-`undefined`; the last is the reply a Weaver receives while making itself the
-browser's default for the scheme, and is never an invitation. Any other URL on
-the scheme throws `invalid-link`. `inviter` is a display hint that anyone
+of `host`, `space`, and `invite`, and any scheme action but `join` return
+`undefined`: `fbrc://setup?n=<nonce>`, the reply a Weaver receives while making
+itself the browser's default for the scheme; a space link, `fbrc://space?…`
+(below); and any action added later, so a newer link reaches an older reader as
+one it does not know rather than a malformed one. A malformed `join` URL
+(`fbrc://JOIN?…`, `fbrc://join/?…`) or a scheme URL naming no action
+(`fbrc:join?…`) throws `invalid-link`. `inviter` is a display hint that anyone
 holding the link can change; it is checked only syntactically and is not part of
 the code verifier. A recipient cannot read the space ACL before redeeming, and
 afterwards an ACL check can show at most that the DID is an owner, not that it
@@ -318,6 +321,23 @@ or response parsing failures use `create-outcome-unknown`. Validation failures
 before sending remain `SpaceInviteError` refusals. `redeem` and `preview` accept
 only `inviteId` and `code`, and `preview` always sends the signed HTTP request;
 `list` and `receipts` return arrays; `revoke` returns `{ "revoked": true }`.
+
+A space link names a space and grants nothing, so a member can say which space
+they mean without handing out access: it opens the space for someone who already
+has access, and anyone else is told they don't.
+`@commonfabric/memory/space-links` defines it, and
+`@commonfabric/runner/space-invites` re-exports it.
+`buildSpaceLink(shell, link)` makes `/space?host&space` on the shell origin, and
+`parseSpaceLink` reads that and the scheme form `fbrc://space?host&space`. The
+service and the space follow the invitation's rules: an HTTPS (or loopback)
+origin, and a `did:key`. Each link names exactly one `host` and one `space`;
+unlike an invitation's, whose fields its code binds, other query fields and any
+fragment are ignored. The format has no version number: a new field may only add
+what a reader can safely ignore, and anything that would change what an existing
+link means takes a new path or scheme action. `parseSpaceLink` returns
+`undefined` for anything that is not a space link, including other scheme
+actions, and throws a `SpaceLinkError`: `invalid-link` for a malformed space
+link, and `invalid-host` for a link or service that is not a secure origin.
 
 Given a `session`, a function that sends an operation on the space's memory
 session as `IStorageManager.administerInvites()` does, `SpaceInviteClient` sends

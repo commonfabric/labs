@@ -10,7 +10,6 @@ export type CommonFabricRuntimeExportSpec =
     category: "call";
     callKind:
       | "cell-factory"
-      | "lift-applied"
       | "ifElse"
       | "when"
       | "unless"
@@ -388,6 +387,14 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
   // and builds no graph node either.
   {
     exportName: "spaceMembers",
+    category: "ignored",
+    reactiveOrigin: false,
+  },
+  // joinSpaceMembers(roster, list, ownerOf, keyOf) joins a member list and a
+  // roster through the two functions it is given, and returns a plain array.
+  // It reads nothing itself and builds no graph node.
+  {
+    exportName: "joinSpaceMembers",
     category: "ignored",
     reactiveOrigin: false,
   },

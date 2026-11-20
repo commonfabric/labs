@@ -22,10 +22,10 @@ import {
   close,
   type Engine,
   open,
-  payloadDigest,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { storedOperationCount } from "@commonfabric/memory/v2/stored-commit";
 
 import { verifyCompaction } from "../compaction.ts";
 import { entityConflicts } from "../conflicts.ts";
@@ -119,7 +119,14 @@ describe("derived-payload", () => {
   };
 
   describe("entityConflicts()", () => {
-    it("reports the same stale reads whether a derived commit's payload is stored whole or digested", () => {
+    // The scan replays a commit's reads, so the engine here keeps them.
+    beforeEach(async () => {
+      close(engine);
+      engine = await open({ url: toFileUrl(path), storeReadsDigest: false });
+      expect(engine.executionLeases.acquire(SPACE, holder)).toBe(true);
+    });
+
+    it("reports the same stale reads whether a derived commit that keeps its reads is stored with its operations or with a digest of them", () => {
       // Sessions a and b write `of:x` at seqs 1 and 2, and session c writes
       // `of:w` at seq 3. The derived commit at seq 4 reads `of:x` at seq 2.
       // Session c's later write of `of:x` is then moved to seq 3, inside the
@@ -150,7 +157,8 @@ describe("derived-payload", () => {
       const stored = db.prepare(`SELECT original FROM "commit" WHERE seq = ?`)
         .get<{ original: string }>(seq)!.original;
       db.close();
-      expect(payloadDigest(decodeTrustedMemoryBoundary(stored))).toBeDefined();
+      expect(storedOperationCount(decodeTrustedMemoryBoundary(stored))?.kept)
+        .toBe(false);
 
       const digested = conflictsOfX();
       rewritePayload(seq, encodeMemoryBoundary(reader));
@@ -257,9 +265,9 @@ describe("derived-payload", () => {
       const after = derivedRows(result);
       expect(
         before.map((original) =>
-          payloadDigest(decodeTrustedMemoryBoundary(original)) !== undefined
+          storedOperationCount(decodeTrustedMemoryBoundary(original))?.kept
         ),
-      ).toEqual(Array(7).fill(true));
+      ).toEqual(Array(7).fill(false));
       expect(after.map((original) => decodeHollowedPayload(original)?.hash))
         .toEqual(before.map((original) => hashStringOf(original)));
     });

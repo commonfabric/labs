@@ -61,6 +61,7 @@ export class FakePatternIndex {
   readonly #invites: Map<string, string>;
   readonly #members = new Map<DIDKey, { handle: string; role: "user" }>();
   readonly #options: FakePatternIndexOptions;
+  readonly #lineageSeqs = new Map<string, number>();
 
   constructor(options: FakePatternIndexOptions = {}) {
     this.#options = options;
@@ -126,6 +127,12 @@ export class FakePatternIndex {
         return this.#get(member.handle, body);
       case "listPatterns":
         return this.#list(member.handle, body);
+      case "listLineages":
+        return json(200, {
+          lineages: [...this.#lineageSeqs.keys()]
+            .filter((key) => key.startsWith(`${member.handle}\n`))
+            .map((key) => ({ slot: key.slice(member.handle.length + 1) })),
+        });
       default:
         return json(404, { error: `no function ${fn}` });
     }
@@ -169,12 +176,20 @@ export class FakePatternIndex {
 
   #publish(owner: string, body: Record<string, unknown>): Response {
     const patternId = String(body.patternId);
+    // A version number per owner and slot, as the index numbers a lineage's
+    // versions; a publication without a slot gets none.
+    const lineageKey = typeof body.slot === "string"
+      ? `${owner}\n${body.slot}`
+      : undefined;
     const existing = this.publications.get(patternId);
     if (existing !== undefined) {
       return json(200, {
         patternId,
         created: false,
         listing: existing.listing,
+        ...(lineageKey === undefined
+          ? {}
+          : { seq: this.#lineageSeqs.get(lineageKey) }),
       });
     }
     this.publications.set(patternId, {
@@ -183,7 +198,19 @@ export class FakePatternIndex {
       body,
       listing: "not_requested",
     });
-    return json(200, { patternId, created: true, listing: "not_requested" });
+    if (lineageKey === undefined) {
+      return json(200, { patternId, created: true, listing: "not_requested" });
+    }
+    const seq = (this.#lineageSeqs.get(lineageKey) ?? 0) + 1;
+    this.#lineageSeqs.set(lineageKey, seq);
+    return json(200, {
+      patternId,
+      created: true,
+      listing: "not_requested",
+      seq,
+      visibility: "private",
+      share: "none",
+    });
   }
 
   #requestListing(owner: string, body: Record<string, unknown>): Response {

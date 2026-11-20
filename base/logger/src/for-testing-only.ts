@@ -21,6 +21,9 @@ export type CapturedLog = {
    * `Error` as its message, and anything else as `Deno.inspect()` renders it.
    */
   text: string;
+
+  /** The line's resolved messages as they were, not rendered. */
+  messages: readonly unknown[];
 };
 
 /** What a capture recorded so far, which disposing ends. */
@@ -29,6 +32,18 @@ export type CapturedLogs = Disposable & {
 
   /** The text of every line logged under `key`. */
   textsOf(key: string): string[];
+
+  /** The resolved messages of every line logged under `key`. */
+  messagesOf(key: string): (readonly unknown[])[];
+
+  /**
+   * Resolves with the first line logged under `key` since the capture began:
+   * at once when one is already recorded, otherwise when the logger logs one.
+   * A line logged under another key does not resolve it. Rejects, naming the
+   * key, when the capture is disposed before such a line is logged, and at
+   * once when it is called on a capture already disposed without one.
+   */
+  first(key: string): Promise<CapturedLog>;
 };
 
 /**
@@ -48,7 +63,8 @@ let runningCaptures = 0;
  * logs is recorded rather than printed, whether it would have gone to
  * `console` or, under `LOG_TO_STDERR`, to stderr, and the count summary the
  * logger prints every so many calls is left out of both. Disposing puts back
- * the logger's state, and the floor once no other capture is running.
+ * the logger's state, and the floor once no other capture is running, and
+ * rejects every `first()` still waiting.
  *
  * @throws When the logger is already being captured.
  */
@@ -67,10 +83,12 @@ export const captureLogsForTestingOnly = (
     setGlobalLogFloor(undefined);
   }
   const logs: CapturedLog[] = [];
-  logSinks.set(logger, (level, key, messages) =>
-    logs.push({
+  const waiters = new Map<string, PromiseWithResolvers<CapturedLog>[]>();
+  logSinks.set(logger, (level, key, messages) => {
+    const log: CapturedLog = {
       level,
       key,
+      messages,
       text: messages.map((message) =>
         typeof message === "string"
           ? message
@@ -78,16 +96,40 @@ export const captureLogsForTestingOnly = (
           ? message.message
           : Deno.inspect(message)
       ).join(" "),
-    }));
+    };
+    logs.push(log);
+    for (const waiter of waiters.get(key) ?? []) waiter.resolve(log);
+    waiters.delete(key);
+  });
+  let ended = false;
+  const endedBefore = (key: string) =>
+    new Error(
+      `The capture of "${moduleName}" ended before a line was logged under "${key}".`,
+    );
   return {
     logs,
+    first: (key) => {
+      const found = logs.find((log) => log.key === key);
+      if (found !== undefined) return Promise.resolve(found);
+      if (ended) return Promise.reject(endedBefore(key));
+      const waiter = Promise.withResolvers<CapturedLog>();
+      waiters.set(key, [...waiters.get(key) ?? [], waiter]);
+      return waiter.promise;
+    },
     textsOf: (key) =>
       logs.filter((log) => log.key === key).map((log) => log.text),
+    messagesOf: (key) =>
+      logs.filter((log) => log.key === key).map((log) => log.messages),
     [Symbol.dispose]: () => {
       logSinks.delete(logger);
       logger.disabled = prior.disabled;
       logger.level = prior.level;
       if (--runningCaptures === 0) setGlobalLogFloor(floorBeforeCaptures);
+      ended = true;
+      for (const [key, waiting] of waiters) {
+        for (const waiter of waiting) waiter.reject(endedBefore(key));
+      }
+      waiters.clear();
     },
   };
 };

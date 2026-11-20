@@ -205,6 +205,7 @@ describe("fabrichat-four-writer-room-update", () => {
   let releasedIdentity: string;
   let storedBefore: { writer: string; module: unknown }[];
   let windowsBefore: unknown;
+  let argumentClaimsBefore: unknown;
   let failuresBefore: Record<string, number>;
   let failuresAfter: Record<string, number>;
 
@@ -235,6 +236,22 @@ describe("fabrichat-four-writer-room-update", () => {
   const reactionsOn = async (message: Cell<unknown>) =>
     ((await message.key("reactions").pull()) as { emoji?: string }[] ?? [])
       .map((reaction) => reaction?.emoji);
+
+  /**
+   * What the room's argument stores under its two lone writer claims: the
+   * participants `addParticipant` added, and the `about` the room was
+   * created with.
+   */
+  const argumentClaims = () => {
+    const stored = room.getArgumentCell<unknown>()!.getRaw() as {
+      participants?: { items?: unknown[] };
+      about?: unknown;
+    };
+    return {
+      participants: stored.participants?.items?.length,
+      about: stored.about,
+    };
+  };
 
   /** The document the room's result links for the session's windows. */
   const windowsDocument = () => {
@@ -383,6 +400,42 @@ describe("fabrichat-four-writer-room-update", () => {
         "ChatReact",
       ),
     );
+    // A member who joined, through the earlier program's own
+    // `addParticipant`, and an `about`, so that the room holds a value under
+    // each of its two lone writer claims, as rooms people use do. The `about`
+    // is planted where a manager's `commitStart` writes it as it creates the
+    // room, since this test runs no manager.
+    {
+      const tx = runtime.edit();
+      runtime.getCell(owner.did(), "joined profile", undefined, tx).set({
+        name: "Joined",
+      });
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+    }
+    await send("addParticipant", {
+      profile: runtime.getCell(owner.did(), "joined profile"),
+    });
+    {
+      const { id } = room.getArgumentCell<unknown>()!.getAsNormalizedFullLink();
+      const address = {
+        space: roomSpace,
+        scope: "space" as const,
+        id,
+        path: [],
+      };
+      const plant = runtime.edit();
+      const stored = storedFields(plant, address);
+      seedStoredEnvelope(plant, address, {
+        ...stored,
+        value: {
+          ...(stored.value as FabricPlainObject),
+          about: { kind: "group", title: "Four writers" },
+        },
+      });
+      expect((await plant.commit().settled).error).toBeUndefined();
+      await runtime.idle();
+    }
     await room.key("messages").key("openWindow").pull();
     // Two windows: `main`, which a case opens again, and `old`, which a case
     // closes.
@@ -412,6 +465,7 @@ describe("fabrichat-four-writer-room-update", () => {
       "messages/*",
     );
     windowsBefore = windowsDocument();
+    argumentClaimsBefore = argumentClaims();
 
     // The release: the room opens as a person opening it would, follows its
     // origin to this tree's room, and waits for the running room to swap.
@@ -497,6 +551,14 @@ describe("fabrichat-four-writer-room-update", () => {
     expect(proposed).toBeDefined();
     expect(sorted(proposed!)).toEqual(sorted(prepared.delegations));
     expect(prepared.delegations.size).toBeGreaterThan(0);
+  });
+
+  it("keeps the participant and the `about` its argument stores under their writers' claims", () => {
+    expect(argumentClaimsBefore).toEqual({
+      participants: 1,
+      about: { kind: "group", title: "Four writers" },
+    });
+    expect(argumentClaims()).toEqual(argumentClaimsBefore);
   });
 
   it("keeps the session's windows where the room's result linked them", () => {
@@ -1061,16 +1123,13 @@ describe("fabrichat-four-writer-room-update", () => {
 
   describe("with the released program's records storing another member's label", () => {
     // The labels a source update of a room whose own data carries another
-    // member's personal space left on the released program's records, at the
-    // delegation field and at the root, on a runtime that stamped them. A room
-    // set up from that program in the same space reads them, and its writes
-    // misfit; the room's own next update commits. Nothing rewrites what is
-    // stored. Last in the file, so that no other case here runs over the
-    // planted labels.
-    // TODO(danfuzz): The fresh-room cases pin a refusal that is wrong for the
-    // room (see the `TODO` on `stageModuleDelegations()`): flip them to a set
-    // up room once a repair drops the stamps the compile-cache builtin's writes
-    // left.
+    // member's personal space left on the released program's records, on a
+    // runtime that staged the update's delegations in its transition: the
+    // entries such a runtime was measured to leave at the delegation field,
+    // and those a later write-back of the record left at its root. A room set
+    // up from that program in the same space reads them, and the load ahead
+    // of the setup repairs them, warm or cold. Last in the file, so that no
+    // other case here runs over the planted labels.
 
     const personalSpaceOf = async (passphrase: string) => ({
       type: "https://commonfabric.org/cfc/atom/PersonalSpace",
@@ -1135,14 +1194,40 @@ describe("fabrichat-four-writer-room-update", () => {
               ...cfc.labelMap,
               entries: [
                 ...cfc.labelMap.entries,
-                ...[["delegatedModuleIdentities"], []].flatMap((path) =>
-                  ["shape", "value"].map((observes) => ({
-                    path,
-                    origin: "derived",
-                    observes,
-                    label: { confidentiality: [otherMember] },
-                  }))
-                ),
+                ...([
+                  [["delegatedModuleIdentities"], "structure", "enumerate"],
+                  [["delegatedModuleIdentities"], "structure", "shape"],
+                  [
+                    ["delegatedModuleIdentities", "*"],
+                    "structure",
+                    "followRef",
+                  ],
+                  [["delegatedModuleIdentities", "*"], "structure", "shape"],
+                  [["delegatedModuleIdentities", "*"], "structure", "value"],
+                  [["delegatedModuleIdentities", "0"], "derived", "shape"],
+                  [["delegatedModuleIdentities", "0"], "derived", "value"],
+                  [[], "derived", "shape"],
+                  [[], "derived", "value"],
+                ] as const).map(([path, origin, observes]) => ({
+                  path: [...path],
+                  origin,
+                  observes,
+                  label: {
+                    confidentiality: [otherMember],
+                    ...(path.length === 0 && observes === "value"
+                      ? {
+                        integrity: [{
+                          type:
+                            "https://commonfabric.org/cfc/atom/TransformedBy",
+                          identity: {
+                            kind: "builtin",
+                            builtinId: "compile-cache",
+                          },
+                        }],
+                      }
+                      : {}),
+                  },
+                })),
               ],
             },
           },
@@ -1170,13 +1255,14 @@ describe("fabrichat-four-writer-room-update", () => {
       return fresh;
     };
 
-    it("refuses a fresh room from the released program", async () => {
-      await expect(freshRoom(runtime, roomController)).rejects.toThrow(
-        "writer-fit confidentiality misfit",
-      );
+    it("sets up a fresh room from the released program", async () => {
+      const fresh = await freshRoom(runtime, roomController);
+
+      expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+        .toBe(releasedIdentity);
     });
 
-    it("refuses a fresh room from the released program on a runtime that starts cold", async () => {
+    it("sets up a fresh room from the released program on a runtime that starts cold", async () => {
       const coldStorage = EmulatedStorageManager.connectTo(server, {
         as: owner,
       });
@@ -1191,9 +1277,10 @@ describe("fabrichat-four-writer-room-update", () => {
       try {
         await coldPieces.synced();
 
-        await expect(freshRoom(cold, coldPieces)).rejects.toThrow(
-          "writer-fit confidentiality misfit",
-        );
+        const fresh = await freshRoom(cold, coldPieces);
+
+        expect(getPatternIdentityRef(await fresh.withTx().sync())?.identity)
+          .toBe(releasedIdentity);
       } finally {
         await coldPieces.dispose();
         await cold.dispose();
@@ -1211,7 +1298,12 @@ describe("fabrichat-four-writer-room-update", () => {
       expect(updated?.identity).not.toBe(releasedIdentity);
     });
 
-    it("leaves the planted label stored on every released record", () => {
+    it("leaves the planted label on no released record once a load verifies the program", async () => {
+      await runtime.patternManager.prepareSourceClosureVerification(
+        roomSpace,
+        [releasedIdentity],
+      );
+
       const tx = runtime.edit();
       try {
         for (const record of records) {
@@ -1222,7 +1314,7 @@ describe("fabrichat-four-writer-room-update", () => {
                 entry.label.confidentiality ?? []
               ),
             id,
-          ).toContainEqual(otherMember);
+          ).not.toContainEqual(otherMember);
         }
       } finally {
         tx.abort("planted labels read");

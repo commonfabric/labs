@@ -210,8 +210,9 @@ profile. Snapshotting the `#profileName` value and the profile's face instead
 is the self-containment fallback (renders with remote profile spaces offline).
 `profileFace(profile)`, from `patterns/system/profile-face/profile-face.ts`,
 reads the face to copy: the picture, or else the avatar text, only as the
-profile's owner set it. Anyone can
-write a profile's picture, so a picture copied another way may be a visitor's.
+profile's owner set it. A stored picture may not be its owner's: earlier
+releases let anyone set one through `setPicture`, and bytes can be stored
+without a label, so a picture copied another way may be someone else's.
 The copy itself carries no claim: only a live `<cf-profile-badge>` checks the
 face it draws.
 See
@@ -769,10 +770,12 @@ an empty list. Call it where `spaceAccess(target)` can be called. In a
 computation the value is the viewer's own, and updates when the access list
 changes.
 
-It lists principals, not people. To show each member by the profile they joined
-with, match the space's roster against it with `principalOf()` (see
-[Build the roster by join](#build-the-roster-by-join)), and show a member with
-no matching profile by their DID.
+It lists principals, not people. To show each member by the profiles they
+joined with, join the space's roster (see
+[Build the roster by join](#build-the-roster-by-join)) to it with
+`joinSpaceMembers(roster, members, profileOwnerOf, equalsKey)`, which gives each
+member the roster's profiles of their own, and show a member with none by their
+DID.
 [`space-access.md`](../../features/space-access.md#a-spaces-members) has the
 details.
 

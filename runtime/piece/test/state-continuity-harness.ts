@@ -230,8 +230,8 @@ export interface VintageRuntime {
  *   still all there in `revision`, which is where `cf inspect history`,
  *   `timeline` and `diff` read them from.
  *
- * The engine's own use is unaffected either way: `storedPayloadMatches()`
- * (`memory/v2/commit-payload.ts`) is reached only through
+ * The engine's own use is unaffected either way: `storesCommit()`
+ * (`memory/v2/stored-commit.ts`) is reached only through
  * `SELECT_EXISTING_COMMIT`, keyed `session_id`+`local_seq`, and a fresh replay
  * session cannot match a stored session id. Commit ROWS always stay, so
  * `MAX(seq)` allocation and the `revision.commit_seq` foreign key are intact.

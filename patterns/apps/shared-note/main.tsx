@@ -10,6 +10,7 @@ import {
   computed,
   currentPrincipal,
   Default,
+  FabricEpochNsec,
   type FieldAnchors,
   FS,
   handler,
@@ -56,6 +57,13 @@ export interface SharedNoteInput {
    * `status` is `"draft"` is a comment its author is still writing.
    */
   comments?: PerSpace<StoredComment[] | Default<[]>>;
+
+  /**
+   * What members did in the note, one row per editing session, edit verb
+   * call, comment or reply, each labeled with who did it. Told as the
+   * result's `"[ACTIVITY]"`.
+   */
+  activity?: PerSpace<ActivityRow[] | Default<[]>>;
 }
 
 /** Readable Markdown and the same compact view for standalone and embedded use. */
@@ -80,6 +88,14 @@ export interface SharedNoteOutput {
   content: PerSpace<string>;
   comments: PerSpace<StoredComment[]>;
   participantName: PerUser<string>;
+
+  /**
+   * What members did in the note, for the other members of a shared space to
+   * hear: "edited \"Packing list\"", "commented on \"Packing list\"". The words
+   * never say who; each row is labeled `authored-by` the person whose handler
+   * run wrote it.
+   */
+  "[ACTIVITY]": PerSpace<ActivityRow[]>;
 
   /**
    * Where each comment's text is now: the body's anchors, two per comment,
@@ -165,21 +181,27 @@ export interface CommentReplyEvent extends CommentIdEvent {
 // refuses the commit, and the verb runs again against the new text. Memory
 // moves every comment's anchor through the edit as it stores it.
 
-const appendLine = handler<LineEvent, { content: Writable<string> }>(
-  ({ text }, { content }) => {
-    const current = content.get();
-    const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-    content.applyChanges({ from: current.length, insert: separator + text });
-  },
-);
+/** What the verbs that edit the body work on. */
+export interface EditState extends ActivityState {
+  content: Writable<string>;
+}
 
-const prependLine = handler<LineEvent, { content: Writable<string> }>(
-  ({ text }, { content }) => {
-    const current = content.get();
-    const separator = current === "" || text.endsWith("\n") ? "" : "\n";
-    content.applyChanges({ from: 0, insert: text + separator });
-  },
-);
+const appendLine = handler<LineEvent, EditState>(({ text }, state) => {
+  const current = state.content.get();
+  const separator = current === "" || current.endsWith("\n") ? "" : "\n";
+  state.content.applyChanges({
+    from: current.length,
+    insert: separator + text,
+  });
+  report("edited", state);
+});
+
+const prependLine = handler<LineEvent, EditState>(({ text }, state) => {
+  const current = state.content.get();
+  const separator = current === "" || text.endsWith("\n") ? "" : "\n";
+  state.content.applyChanges({ from: 0, insert: text + separator });
+  report("edited", state);
+});
 
 /**
  * Where `text` occurs in `body`, which must be exactly once.
@@ -212,8 +234,9 @@ const onlyOccurrence = (
   return from;
 };
 
-const replaceText = handler<ReplaceTextEvent, { content: Writable<string> }>(
-  (event, { content }) => {
+const replaceText = handler<ReplaceTextEvent, EditState>(
+  (event, state) => {
+    const { content } = state;
     if (event.old === "") {
       throw new Error(
         "replaceText needs a non-empty `old` to anchor on; to add text, use " +
@@ -226,6 +249,7 @@ const replaceText = handler<ReplaceTextEvent, { content: Writable<string> }>(
       to: from + event.old.length,
       insert: event.new,
     });
+    report("edited", state);
   },
 );
 
@@ -367,6 +391,95 @@ type CommentsCell = Writable<StoredComment[] | Default<[]>>;
 
 /** The body's anchors, as a handler reads and writes them. */
 type AnchorsCell = Writable<FieldAnchors | undefined>;
+
+//
+// Activity: what a member did in the note, for the other members of a shared
+// space to hear without reading the note. A row says what was done, in the
+// note's words, and never who did it; the runtime labels each row
+// `authored-by` the person whose handler run wrote it.
+//
+
+/** One thing a member did in the note. */
+export interface NoteActivity {
+  /** What was done, without who did it: `edited "Packing list"`. */
+  body: string;
+
+  /** When, by the handler's clock, in nanoseconds since the epoch. */
+  doneAt: FabricEpochNsec;
+}
+
+/**
+ * A stored activity row: written only by the handlers that report an edit or
+ * a comment, labeled with its author. The list is fixed once a row is
+ * stored: a later schema can re-bind a listed writer to its successor, but
+ * cannot add a new one, and one it leaves out is kept.
+ */
+export type ActivityRow = AuthoredByCurrentUser<
+  WritePolicyAnyOf<NoteActivity, [
+    WriteAuthorizedBy<unknown, typeof reportEdit>,
+    WriteAuthorizedBy<unknown, typeof appendLine>,
+    WriteAuthorizedBy<unknown, typeof prependLine>,
+    WriteAuthorizedBy<unknown, typeof replaceText>,
+    WriteAuthorizedBy<unknown, typeof postComment>,
+    WriteAuthorizedBy<unknown, typeof addComment>,
+    WriteAuthorizedBy<unknown, typeof commitReply>,
+  ]>
+>;
+
+type ActivityCell = Writable<ActivityRow[] | Default<[]>>;
+
+/** What reporting activity reads: the note's title, and where rows go. */
+export interface ActivityState {
+  title: Writable<string>;
+  activity: ActivityCell;
+}
+
+/** The most of a title a row repeats; a longer one is cut short. */
+const ROW_TITLE_MAX = 80;
+
+/**
+ * Adds a row saying `did` the note now, as `<did> "<title>"`. The caller is
+ * the handler the row is reported by, so the write counts as that handler's.
+ * The title is cut short to keep a row brief: anyone can write a title of
+ * any length, and a host may refuse a long row.
+ */
+const report = (did: string, { title, activity }: ActivityState): void => {
+  const whole = title.get().trim() || "Untitled note";
+  const name = whole.length > ROW_TITLE_MAX
+    ? whole.slice(0, ROW_TITLE_MAX - 1) + "…"
+    : whole;
+  activity.push({
+    body: `${did} "${name}"`,
+    doneAt: new FabricEpochNsec(BigInt(Date.now()) * 1_000_000n),
+  });
+};
+
+/**
+ * Notes that the viewer changed a field in this session. The editor's
+ * `cf-edit` and the title field's `cf-input` tell only the viewer's own
+ * changes, never another member's or one the field's cell pushed.
+ */
+const markEdited = handler<unknown, { edited: Writable<boolean> }>(
+  (_, { edited }) => {
+    if (!edited.get()) edited.set(true);
+  },
+);
+
+/**
+ * Ends an editing session as the field loses focus: reports one edit if the
+ * viewer changed the field since it last did. A session is everything typed
+ * between gaining focus and losing it, so one row stands for many
+ * keystrokes. A session whose tab closes before the field loses focus is
+ * not reported.
+ */
+const reportEdit = handler<
+  unknown,
+  ActivityState & { edited: Writable<boolean> }
+>((_, state) => {
+  if (!state.edited.get()) return;
+  state.edited.set(false);
+  report("edited", state);
+});
 
 /** The id of the anchor where the text of the comment `id` starts. */
 const fromAnchorOf = (id: string): string => `${id}:from`;
@@ -720,7 +833,7 @@ const closeComposer = handler<unknown, CloseComposerState>(
 );
 
 /** What posting from the composer works on. */
-export interface PostCommentState {
+export interface PostCommentState extends ActivityState {
   comments: CommentsCell;
   myProfile: ProfileCell | undefined;
   composing: Writable<string>;
@@ -760,11 +873,12 @@ const postComment = handler<unknown, PostCommentState>((_, state) => {
   state.composing.set("");
   state.draft.set("");
   state.notice.set("");
+  report("commented on", state);
   selectId(id, state);
 });
 
 /** What the `addComment` verb works on. */
-export interface AddCommentState {
+export interface AddCommentState extends ActivityState {
   content: Writable<string>;
   anchors: AnchorsCell;
   comments: CommentsCell;
@@ -772,7 +886,8 @@ export interface AddCommentState {
 }
 
 const addComment = handler<AddCommentEvent, AddCommentState>(
-  (event, { content, anchors, comments, myProfile }) => {
+  (event, state) => {
+    const { content, anchors, comments, myProfile } = state;
     const profile = ownProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
     const body = event.body.trim();
@@ -786,6 +901,7 @@ const addComment = handler<AddCommentEvent, AddCommentState>(
     const id = mintCommentId();
     anchorComment(anchors, id, from, from + event.quote.length);
     storeComment(comments, id, profile, body, event.quote, "posted");
+    report("commented on", state);
   },
 );
 
@@ -795,8 +911,12 @@ export interface ReplyState {
   myProfile: ProfileCell | undefined;
 }
 
-const commitReply = handler<CommentReplyEvent, ReplyState>(
-  (event, { comments, myProfile }) => {
+/** What committing a reply works on: replying, and reporting the reply. */
+export interface CommitReplyState extends ReplyState, ActivityState {}
+
+const commitReply = handler<CommentReplyEvent, CommitReplyState>(
+  (event, state) => {
+    const { comments, myProfile } = state;
     const profile = ownProfile(myProfile);
     if (profile === undefined) throw new Error(NO_PROFILE);
     const record = commentNamed(comments, event.id);
@@ -807,6 +927,7 @@ const commitReply = handler<CommentReplyEvent, ReplyState>(
       body,
       postedAt: Date.now(),
     });
+    report("replied to a comment on", state);
   },
 );
 
@@ -934,6 +1055,12 @@ export interface SharedNoteCoreInput {
 
   /** The viewer's name on live cursors, or empty for none. */
   participantName: string;
+
+  /** The note's title, which activity rows name the note by. */
+  title: Writable<string>;
+
+  /** Where the note's activity rows go. */
+  activity: ActivityCell;
 }
 
 /** The body's editor with its comments panel, and the verbs. */
@@ -958,7 +1085,7 @@ export interface SharedNoteCoreOutput {
 export const SharedNoteCore = pattern<
   SharedNoteCoreInput,
   SharedNoteCoreOutput
->(({ content, comments, myProfile, participantName }) => {
+>(({ content, comments, myProfile, participantName, title, activity }) => {
   const error = new Writable.perSession("");
   const recovery = new Writable.perSession<string | null>(null);
   const hasError = computed(() => error.get() !== "");
@@ -968,7 +1095,9 @@ export const SharedNoteCore = pattern<
   const recoveryText = computed(() => recovery.get() ?? "");
 
   const anchors = anchorsOf(content);
-  const replyVerb = commitReply({ comments, myProfile });
+  const replyVerb = commitReply({ comments, myProfile, title, activity });
+  // Whether the viewer has changed the body since its editor last lost focus.
+  const edited = new Writable.perSession(false);
   const resolveVerb = resolveComment({ comments });
   const reopenVerb = reopenComment({ comments });
   const deleteVerb = deleteComment({ anchors, comments });
@@ -1150,6 +1279,8 @@ export const SharedNoteCore = pattern<
         oncf-presence-join={clearPresenceNotice({ presenceNotice })}
         oncf-selection-change={trackSelection({ content, selection })}
         oncf-highlight-click={selectHighlight({ selectedId, replyDraft })}
+        oncf-edit={markEdited({ edited })}
+        oncf-blur={reportEdit({ edited, title, activity })}
         style={{ minHeight: "20rem" }}
       >
         <cf-vstack gap="2" id="shared-note-comments-header">
@@ -1195,6 +1326,8 @@ export const SharedNoteCore = pattern<
               onClick={postComment({
                 comments,
                 myProfile,
+                title,
+                activity,
                 composing,
                 draft,
                 selectedId,
@@ -1470,10 +1603,17 @@ export const SharedNoteCore = pattern<
   return {
     [UI]: view,
     commentAnchors: anchors,
-    appendLine: appendLine({ content }),
-    prependLine: prependLine({ content }),
-    replaceText: replaceText({ content }),
-    addComment: addComment({ content, anchors, comments, myProfile }),
+    appendLine: appendLine({ content, title, activity }),
+    prependLine: prependLine({ content, title, activity }),
+    replaceText: replaceText({ content, title, activity }),
+    addComment: addComment({
+      content,
+      anchors,
+      comments,
+      myProfile,
+      title,
+      activity,
+    }),
     replyToComment: replyVerb,
     resolveComment: resolveVerb,
     reopenComment: reopenVerb,
@@ -1482,7 +1622,7 @@ export const SharedNoteCore = pattern<
 });
 
 export default pattern<SharedNoteInput, SharedNoteOutput>(
-  ({ title, content, comments }) => {
+  ({ title, content, comments, activity }) => {
     const profile = wish<NoteProfile>({ query: "#profile" });
     const profileName = wish<string>({ query: "#profileName" });
     const participantName = computed(() =>
@@ -1497,7 +1637,12 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       comments,
       myProfile: profile.result,
       participantName,
+      title,
+      activity,
     });
+    // Whether the viewer has changed the title since its field last lost
+    // focus.
+    const titleEdited = new Writable.perSession(false);
 
     const view = (
       <cf-vstack
@@ -1512,6 +1657,8 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
         >
           <cf-input
             $value={title}
+            oncf-input={markEdited({ edited: titleEdited })}
+            oncf-blur={reportEdit({ edited: titleEdited, title, activity })}
             aria-label="Note title"
             placeholder="Untitled note"
             style={{ flex: "1 1 16rem", minWidth: "0" }}
@@ -1545,6 +1692,7 @@ export default pattern<SharedNoteInput, SharedNoteOutput>(
       content,
       comments,
       participantName,
+      "[ACTIVITY]": activity,
       commentAnchors: note.commentAnchors,
       appendLine: note.appendLine,
       prependLine: note.prependLine,

@@ -38,6 +38,13 @@ import { isObjectOrArray, isPlainObject } from "@commonfabric/js-values/types";
 
 import type { CellScope, JSONSchema } from "../builder/types.ts";
 import {
+  COMPILE_CACHE_COMPILED_KEY_PREFIX,
+  COMPILE_CACHE_REPAIR_WRITER,
+  COMPILE_CACHE_SOURCE_KEY_PREFIX,
+} from "../compilation-cache/writer-identity.ts";
+import { createRef } from "../create-ref.ts";
+import { toURI } from "../uri-utils.ts";
+import {
   type CfcConfidentialityRelease,
   type CfcConfidentialityReleaseByIntent,
   type CfcConfidentialityReleaseByIntentInput,
@@ -221,7 +228,6 @@ import {
   isUiInputBlindWriteTx,
   markLazyMaterializationTx,
   noteSchemaRefusalTx,
-  reactivityLogFromActivities,
   takeSchemaRefusalTx,
   unmarkLazyMaterializationTx,
 } from "./reactivity-log.ts";
@@ -231,7 +237,6 @@ import {
   TransactionCompleteError,
 } from "./transaction-errors.ts";
 import {
-  getDirectTransactionReactivityLog,
   getTransactionReadActivities,
   getTransactionWriteAttempts,
   getTransactionWriteDetails,
@@ -2873,6 +2878,59 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     return { space: prepared.space, id: prepared.id };
   }
 
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void {
+    // SPEC-PENDING https://github.com/commonfabric/specs/pull/103
+    this.#assertWritable("writeRepairedCompileCacheRecord()");
+    // The repair writes a stored label the commit boundary did not derive, so
+    // it takes the repair's own builtin identity, as a release takes the
+    // release writer's. Pattern and handler code runs under a `verified`
+    // identity or none, and is refused.
+    const identity = this.#cfcState.implementationIdentity;
+    if (
+      identity?.kind !== "builtin" ||
+      identity.builtinId !== COMPILE_CACHE_REPAIR_WRITER
+    ) {
+      throw new Error(
+        "compile-cache repair: `writeRepairedCompileCacheRecord()` requires " +
+          `the \`${COMPILE_CACHE_REPAIR_WRITER}\` builtin implementation ` +
+          "identity",
+      );
+    }
+    // The document is the one a compile-cache record's key names, and no
+    // other: the repair writes value and label over whatever it names.
+    if (
+      !target.key.startsWith(COMPILE_CACHE_SOURCE_KEY_PREFIX) &&
+      !target.key.startsWith(COMPILE_CACHE_COMPILED_KEY_PREFIX)
+    ) {
+      throw new Error(
+        `compile-cache repair: ${target.key} is not a compile-cache record key`,
+      );
+    }
+    const record = {
+      space: target.space,
+      id: toURI(createRef({}, target.key)),
+      scope: normalizeCellScope(undefined),
+    };
+    const address = { ...record, type: "application/json" as const };
+    // Deliberately NOT marked CFC-relevant, like a release: the caller's
+    // verification is the whole of the decision, and the record's new label
+    // is the one it computed, which a preparation would derive again from
+    // the label the repair removes.
+    this.#runPrivilegedSystemWrite(() => {
+      if (replacement === undefined) {
+        this.writeOrThrow({ ...address, path: [] }, undefined, {
+          delete: true,
+        });
+        return;
+      }
+      this.writeOrThrow({ ...address, path: ["value"] }, replacement.value);
+      writeStoredCfcEnvelope(this, record, replacement.cfc);
+    });
+  }
+
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease {
@@ -3624,20 +3682,21 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void {
+  ): string {
     if (!runtimeWritePolicyAuthorized(authorization)) {
       throw new Error(
         "ensureRuntimeSecret() requires the runtime's authorization",
       );
     }
     this.#assertWritable("ensureRuntimeSecret()");
-    if (readRuntimeSecret(this, space, name) !== undefined) return;
+    const stored = readRuntimeSecret(this, space, name);
+    if (stored !== undefined) return stored;
     const link = runtimeSecretLink(space, name);
+    const secret = toUnpaddedBase64url(
+      crypto.getRandomValues(new Uint8Array(32)),
+    );
     this.#runPrivilegedSystemWrite(() => {
-      this.writeValueOrThrow(
-        link,
-        toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(32))),
-      );
+      this.writeValueOrThrow(link, secret);
     });
     // The label arrives the way a schema-declared one does on any write, so
     // the secret carries it from the commit that creates it.
@@ -3659,6 +3718,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     } finally {
       assignCfcImplementationIdentity(this, identity);
     }
+    return secret;
   }
 
   /**
@@ -4033,8 +4093,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   getReactivityLog(): TransactionReactivityLog {
-    return getDirectTransactionReactivityLog(this.tx) ??
-      reactivityLogFromActivities(this.tx.journal.activity());
+    return this.tx.getReactivityLog();
   }
 
   addCommitPrecondition(
@@ -5139,8 +5198,8 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     space: MemorySpace,
     name: string,
     authorization: RuntimeWritePolicyAuthorization,
-  ): void {
-    this.#wrapped.ensureRuntimeSecret(space, name, authorization);
+  ): string {
+    return this.#wrapped.ensureRuntimeSecret(space, name, authorization);
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
@@ -5421,6 +5480,13 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     return this.#wrapped.writeCfcGrant(input);
   }
 
+  writeRepairedCompileCacheRecord(
+    target: { space: MemorySpace; key: string },
+    replacement: { value: FabricValue; cfc: CfcMetadata } | undefined,
+  ): void {
+    this.#wrapped.writeRepairedCompileCacheRecord(target, replacement);
+  }
+
   releaseCfcConfidentiality(
     input: CfcConfidentialityReleaseInput,
   ): CfcConfidentialityRelease {
@@ -5472,8 +5538,7 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   }
 
   getReactivityLog(): TransactionReactivityLog {
-    return this.#wrapped.getReactivityLog?.() ??
-      reactivityLogFromActivities(this.#wrapped.journal.activity());
+    return this.#wrapped.getReactivityLog();
   }
 
   addCommitPrecondition(
@@ -5518,20 +5583,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     link: NormalizedFullLink,
     changes: readonly TextChange[],
   ): string {
-    if (!this.#wrapped.recordTextChanges) {
-      throw new Error(
-        "storage transaction does not support recordTextChanges()",
-      );
-    }
     return this.#wrapped.recordTextChanges(link, changes);
   }
 
   recordSqliteWrite(space: MemorySpace, op: SqliteOperation): void {
-    if (!this.#wrapped.recordSqliteWrite) {
-      throw new Error(
-        "storage transaction does not support recordSqliteWrite()",
-      );
-    }
     this.#wrapped.recordSqliteWrite(space, op);
   }
 

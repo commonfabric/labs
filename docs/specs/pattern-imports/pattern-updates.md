@@ -559,8 +559,10 @@ as `patternIdentity`, verified by a parity test against the real
   and the compiler folds each one into the hash of the module that reads it,
   which the entry's hash covers. The light path
   attaches them by the same step (`attachDeclaredDataFiles`), and reads each
-  one as a program stores it: strictly as UTF-8, keeping a leading byte order
-  mark that decoding it as source would drop.
+  one as a program stores it, through `decodeDataFile`: a binary image, font,
+  or sound as its base64 `data:` URL, and any other file, SVG included,
+  strictly as UTF-8,
+  keeping a leading byte order mark that decoding it as source would drop.
 
 Both the `?identity` representation and every source-module representation use
 strong checksum `ETag`s with `Cache-Control: public, no-cache`. The identity

@@ -127,6 +127,12 @@ export interface LocalJobProfile extends HarnessModelLimits {
   patternIndexPublish?: boolean;
 
   /**
+   * `"agent"` when the profile's jobs are the person's own agents making
+   * patterns for them, so what they publish says so; absent otherwise.
+   */
+  patternIndexOrigin?: "agent";
+
+  /**
    * The subagent profiles `delegate_task` may spawn, which the profile's
    * `tools` must then name. `browser` is not among them: a job gains it only
    * by declaring a browser host (`browserHost`).
@@ -285,6 +291,7 @@ const profileOf = async (
     fabric,
     patternIndexUrl,
     patternIndexPublish,
+    patternIndexOrigin,
     subagentProfiles,
   } = record;
   if (
@@ -402,6 +409,12 @@ const profileOf = async (
   if (patternIndexPublish !== undefined && patternIndexUrl === undefined) {
     fail("`patternIndexPublish` needs `patternIndexUrl`");
   }
+  if (patternIndexOrigin !== undefined && patternIndexOrigin !== "agent") {
+    fail('`patternIndexOrigin` must be "agent"');
+  }
+  if (patternIndexOrigin !== undefined && patternIndexUrl === undefined) {
+    fail("`patternIndexOrigin` needs `patternIndexUrl`");
+  }
   if (patternIndexUrl !== undefined && session === undefined) {
     fail("`patternIndexUrl` needs `fabric`: the index signs as its identity");
   }
@@ -482,6 +495,9 @@ const profileOf = async (
       ? {
         patternIndexUrl: patternIndexUrl as string,
         patternIndexPublish: patternIndexPublish !== false,
+        ...(patternIndexOrigin === "agent"
+          ? { patternIndexOrigin: "agent" as const }
+          : {}),
       }
       : {}),
     ...(children.length > 0 ? { subagentProfiles: children } : {}),

@@ -11,6 +11,7 @@
 import { basename } from "@std/path";
 
 import { cpLen } from "./ansi.ts";
+import { shownCells, truncate } from "./display.ts";
 import type { Semantics } from "./languages/language.ts";
 import type {
   Document,
@@ -873,8 +874,9 @@ function fieldTypeInlineParts(field: SchemaField): Part[] {
   return [[field.type, "typeKeyword"]];
 }
 
+/** How many columns the text of `parts` takes. */
 function partsLen(parts: Part[]): number {
-  return parts.reduce((n, [t]) => n + cpLen(t), 0);
+  return parts.reduce((n, [t]) => n + shownCells(t).length, 0);
 }
 
 function schemaMultiline(schema: SchemaMeta, indent: number): Line[] {
@@ -938,7 +940,7 @@ function row(...parts: Part[]): Line {
   for (const [t, cls] of parts) {
     if (t.length === 0) continue;
     spans.push({ col, text: t, cls });
-    col += cpLen(t); // columns are code points, so non-BMP glyphs are 1 wide
+    col += cpLen(t); // a span's source column counts code points
     text += t;
   }
   return { text, spans };
@@ -957,9 +959,10 @@ function crumbLabel(node: StructureNode): string {
   return node.label;
 }
 
+/** `text` with each run of whitespace in it written as one space, cut to fit
+ * a card's line. */
 function trimContext(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > 56 ? `${trimmed.slice(0, 55)}…` : trimmed;
+  return truncate(text.trim().replace(/\s+/g, " "), INLINE_MAX, true);
 }
 
 function glyph(kind: StructureNode["kind"]): string {
