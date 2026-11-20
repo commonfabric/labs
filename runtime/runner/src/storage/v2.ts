@@ -7948,8 +7948,9 @@ export class SpaceReplica
    * `isMarkedSpliceRefusal()`), which `#pushCommit()` takes as a local
    * conflict. A resend of one already sent keeps its bytes, so that the store
    * can answer a resend of a commit it already took (its replay identity).
-   * Every server of a build that advertises the mark reads it, which is what
-   * makes such a resend safe on a server that reconnects without it.
+   * That resend reaches a server that does not read the mark only after a
+   * rollback past marked splices, which under server execution a deployment
+   * must not make (docs/specs/memory-v2/08-conflict-granularity.md).
    */
   markedSplices(): boolean {
     return advertisesMarkedSplices(this.#sessionClient);

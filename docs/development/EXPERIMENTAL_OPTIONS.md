@@ -3211,11 +3211,14 @@ reads a stored marked splice as overwriting nothing, and under server
 execution can let a delayed handler's write land over the change it stands
 for. Removed once Estuary ran with it on: a server of this build advertises
 the capability unconditionally (`getMemoryProtocolFlags()`), and toolshed
-ignores the environment variable. The capability itself stays. A client still
-sends marked splices only to a server that advertises it, checked again at
-each commit's first send, so a server that predates marked splices still gets
-the per-index form. Under server execution, a deployment still does not roll
-back to such a server
+ignores the environment variable. The capability itself stays. A client
+builds a commit with marked splices only on a connection that advertises it,
+and checks again at the commit's first send, so a commit first sent to a
+server that predates marked splices goes per index. A commit already sent
+goes again unchanged after a reconnect, whatever the new connection
+advertises, so that the store can answer it as the commit it took. Such a
+resend reaches a server that predates the mark only after a rollback past it,
+which under server execution a deployment must not make
 ([08-conflict-granularity.md](../specs/memory-v2/08-conflict-granularity.md)).
 
 ## Appendix B: Related toggles that are not experimental flags

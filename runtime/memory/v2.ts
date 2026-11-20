@@ -1503,11 +1503,10 @@ export type MemoryProtocolFlags = {
    * `pinned`) and reads each one's overwritten indices for server
    * execution's supersession. A client sends a change to an array as marked
    * splices only to a server that advertises it, and otherwise index by
-   * index. Build-inherent since the switch that gated it was removed; absent,
-   * as from a server that predates marked splices, it parses to false. Such a
-   * server reads a stored marked splice as overwriting nothing, so under
-   * server execution a deployment does not roll back to one
-   * (docs/specs/memory-v2/08-conflict-granularity.md).
+   * index. Build-inherent; absent, as from a server that predates marked
+   * splices, it parses to false. Such a server reads a stored marked splice
+   * as overwriting nothing, so under server execution a deployment must not
+   * roll back to one (docs/specs/memory-v2/08-conflict-granularity.md).
    */
   markedSplicesV1?: boolean;
 
