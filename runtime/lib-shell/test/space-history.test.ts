@@ -394,6 +394,52 @@ describe("space-history", () => {
       ).toEqual([["piece-a"], ["piece-b"]]);
     });
 
+    it("keeps both changes of one piece to one revision that the two stretches read in different scopes", () => {
+      const history = [revisionAt("r1", 1000)];
+      const listed = withPatternChanges([stepAt(2, 60_000)], [
+        { source: sourceOf("piece-a", history), scope: "user" },
+      ]);
+      const older = withPatternChanges([stepAt(1, 1000)], [
+        { source: sourceOf("piece-a", history), scope: "session" },
+      ]);
+
+      const [newer, step] = withOlderSteps(listed, older);
+
+      expect(newer.patternChanges).toEqual([]);
+      expect(
+        step.patternChanges.map((change) => [
+          change.pieceId,
+          change.revisionId,
+          change.scope,
+        ]),
+      ).toEqual([["piece-a", "r1", "user"], ["piece-a", "r1", "session"]]);
+    });
+
+    it("keeps one change, the older stretch's, where one stretch read it in the scope `space` and the other in none", () => {
+      const history = [revisionAt("r1", 1000)];
+      const scoped = {
+        source: sourceOf("piece-a", history),
+        scope: "space",
+      } as const;
+      const plain = { source: sourceOf("piece-a", history) };
+
+      const scopedLast = withOlderSteps(
+        withPatternChanges([stepAt(2, 60_000)], [plain]),
+        withPatternChanges([stepAt(1, 1000)], [scoped]),
+      );
+      const plainLast = withOlderSteps(
+        withPatternChanges([stepAt(2, 60_000)], [scoped]),
+        withPatternChanges([stepAt(1, 1000)], [plain]),
+      );
+
+      expect(scopedLast[1].patternChanges.map((change) => change.scope))
+        .toEqual(["space"]);
+      expect(plainLast[1].patternChanges.map((change) => change.scope))
+        .toEqual([undefined]);
+      expect(scopedLast[0].patternChanges).toEqual([]);
+      expect(plainLast[0].patternChanges).toEqual([]);
+    });
+
     it("returns the listed steps and their changes, given no older step", () => {
       const listed = page([stepAt(2, 60_000), stepAt(1, 0)], [
         revisionAt("r2", 59_000),

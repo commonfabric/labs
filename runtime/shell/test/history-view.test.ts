@@ -482,6 +482,86 @@ describe("XHistoryView", () => {
     });
   });
 
+  describe("the note of a restore whose change is on no listed step", () => {
+    const note = 'class="note error pattern-restore-note"';
+
+    /** The text of the panel's note in `markup`, which holds one. */
+    function noteText(markup: string): string {
+      const start = markup.indexOf(">", markup.indexOf(note)) + 1;
+      return markup.slice(start, markup.indexOf("</p>", start)).trim();
+    }
+
+    it("renders the restore's failure, once, where no step lists the change", async () => {
+      const { view, markup } = await listed([
+        // The same piece's other revision, and another piece's revision of
+        // the same name, are not the change.
+        step(4, [change("fid1:a", "r2"), change("fid1:b", "r1")]),
+      ]);
+
+      view.patternRestore = {
+        pieceId: "fid1:a",
+        revisionId: "r1",
+        busy: false,
+        error: "The restored pattern threw as it started.",
+      };
+
+      const rendered = markup();
+      expect(noteText(rendered)).toBe(
+        "The restored pattern threw as it started.",
+      );
+      expect(rendered.split("The restored pattern threw")).toHaveLength(2);
+      // The note stands above the list of steps.
+      expect(rendered.indexOf(note)).toBeLessThan(rendered.indexOf("<ol"));
+    });
+
+    it("renders the restore's warning where no step lists the change, and the failure where the restore has both", async () => {
+      const { view, markup } = await listed([step(4)]);
+
+      view.patternRestore = {
+        pieceId: "fid1:a",
+        revisionId: "r1",
+        busy: false,
+        warning: "The source does not fit the data.",
+      };
+      expect(noteText(markup())).toBe("The source does not fit the data.");
+
+      view.patternRestore = {
+        ...view.patternRestore,
+        error: "the piece is gone",
+      };
+      expect(noteText(markup())).toBe("the piece is gone");
+    });
+
+    it("renders none where a step lists the change, whose row alone says it", async () => {
+      const { view, markup } = await listed([
+        step(5),
+        step(4, [change("fid1:a", "r1")]),
+      ]);
+
+      view.patternRestore = {
+        pieceId: "fid1:a",
+        revisionId: "r1",
+        busy: false,
+        error: "the piece is gone",
+      };
+
+      const rendered = markup();
+      expect(rendered).not.toContain("pattern-restore-note");
+      expect(rendered.split("the piece is gone")).toHaveLength(2);
+      expect(changeMarkup(rendered, "r1")).toContain("the piece is gone");
+    });
+
+    it("renders none with no restore, or with one that has neither a failure nor a warning", async () => {
+      const { view, markup } = await listed([step(4)]);
+      expect(markup()).not.toContain("pattern-restore-note");
+
+      view.patternRestore = { pieceId: "fid1:a", revisionId: "r1", busy: true };
+
+      expect(markup()).not.toContain("pattern-restore-note");
+      expect(markup()).not.toContain('role="alert"');
+    });
+  });
+
   describe("the older steps", () => {
     it("moves a change the newest stretch showed on its oldest step to the older step it was made during, rendering it once", async () => {
       // The change was made half a minute before the newest stretch's oldest
