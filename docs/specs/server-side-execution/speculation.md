@@ -237,8 +237,11 @@ currency. The existing overlay and retirement rules below still apply.
   reads is in transit. Such a run runs again once the loads of those
   documents have settled, whatever they find, since a document that
   arrives absent changes nothing its reads could see. A document whose
-  load fails is no longer in transit, so the run after the failure
-  clears the result rather than asking for the load again. Everywhere else
+  load has settled is no longer in transit, whether the load failed or
+  ended without delivering it, as a load from a space that refuses this
+  replica ends (the store's ledger records no failure for one: the
+  document is absent for its reader), so the run after that clears the
+  result rather than asking for the load again. Everywhere else
   the disposal is as above: a refusal over an input that has arrived
   clears the result, as the [2026-09-14 derived-state correction
   decision](../../history/development/2026-09-14-derived-state-correction.md)

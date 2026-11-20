@@ -4298,6 +4298,91 @@ export type SqliteDatabaseFunction = {
   asScope(scope: CellScope): SqliteDatabaseFunction;
 };
 
+/**
+ * What an indexed collection mirrors of one kind of member, each of which is
+ * a cell holding a `T` (docs/features/indexed-collections.md).
+ */
+export interface IndexedCollectionOptions<T = unknown> {
+  /**
+   * Values mirrored as columns of the kind's table. A column is named for
+   * the member field it mirrors and given the SQLite type it is stored
+   * under, or is declared with a type and, as needed, the path of a value
+   * nested in the member and the column's label. A value that is absent is
+   * stored as `NULL`.
+   */
+  columns?: Record<string, string | IndexedColumnSpec>;
+
+  /**
+   * Member fields holding one reference to another cell, or a list of them.
+   * Each becomes a table named for the kind and the relation, holding a
+   * `source_cf_link` and a `target_cf_link` column, with one row per
+   * reference. A list names fields of the member; a map gives each relation
+   * the path of a nested field.
+   */
+  relations?:
+    | ReadonlyArray<keyof T & string>
+    | Record<string, readonly string[]>;
+
+  /** Secondary indexes over the kind's table, each a list of columns. */
+  indexes?: ReadonlyArray<ReadonlyArray<string>>;
+}
+
+/** A column of an indexed collection declared with more than its type. */
+export interface IndexedColumnSpec {
+  /** SQLite column type the value is stored under. */
+  type: string;
+
+  /** Keys leading from the member to the value, when it is nested. */
+  path?: readonly string[];
+
+  /**
+   * The column's label. A member's value that carries confidentiality is
+   * mirrored only into a column whose `confidentiality` covers it, and a
+   * query reading the column carries that label.
+   */
+  ifc?: {
+    confidentiality?: readonly FabricValue[];
+    maxConfidentiality?: readonly FabricValue[];
+  };
+}
+
+/**
+ * A collection of cells whose membership lives in a SQLite database the
+ * runtime keeps current. Its members come in the kinds it declares. Each kind
+ * has a table named for it, and each of its relations a table named for the
+ * kind and the relation, joined by an underscore, so a statement can join one
+ * kind's members to another's. The collection is read with `query()` and with
+ * nothing else: there is no list of members to read. `add()` and `remove()`
+ * change membership inside a handler, and the runtime re-reads a member
+ * whenever a document its mirrored fields were read from is written.
+ */
+export interface IndexedCollections<Kinds = Record<string, unknown>>
+  extends SqliteDb {
+  /**
+   * Adds `member` as one of `kind`, mirroring its declared fields in the
+   * caller's transaction. Adding a member the collection holds refreshes its
+   * rows.
+   */
+  add<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+
+  /** Removes `member` of `kind` and every row mirrored from it. */
+  remove<K extends keyof Kinds & string>(
+    kind: K,
+    member: Kinds[K] | AnyCell<Kinds[K]>,
+  ): void;
+}
+
+/**
+ * Declares an {@link IndexedCollections}, which lives at the scope of the
+ * space, with a declaration per kind of member.
+ */
+export type IndexedCollectionsFunction = <Kinds = Record<string, unknown>>(
+  kinds: { [K in keyof Kinds & string]: IndexedCollectionOptions<Kinds[K]> },
+) => Reactive<IndexedCollections<Kinds>>;
+
 export type SqliteQueryParams = {
   db: FactoryInput<SqliteDatabase | SqliteDb>;
   sql: string;
@@ -4390,8 +4475,12 @@ export type SqliteTableFunction = (
   rule?: SqliteRowLabelRule,
   /** CFC Phase 3.b: `{ allowReadClearance: true }` opts the table into
    *  read-time clearance (reader-filtered `db.query({ readClearance: true })`).
-   *  Needs a `rule` — throws at `table()` time without one. */
-  opts?: { allowReadClearance?: boolean },
+   *  Needs a `rule` — throws at `table()` time without one. `indexes`
+   *  declares secondary indexes, each a list of column names in key order. */
+  opts?: {
+    allowReadClearance?: boolean;
+    indexes?: ReadonlyArray<ReadonlyArray<string>>;
+  },
 ) => JSONSchema;
 
 /**
@@ -5218,6 +5307,7 @@ export declare const compileAndRun: CompileAndRunFunction;
 export declare const dataFile: DataFileFunction;
 export declare const sqliteDatabase: SqliteDatabaseFunction;
 export declare const sqliteQuery: SqliteQueryFunction;
+export declare const indexedCollections: IndexedCollectionsFunction;
 export declare const table: SqliteTableFunction;
 export declare const cfLink: SqliteCfLinkFunction;
 export declare const cfSqlite: CfSqliteHelpers;

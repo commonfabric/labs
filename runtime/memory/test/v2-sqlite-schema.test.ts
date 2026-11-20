@@ -6,6 +6,7 @@ import { expect } from "@std/expect";
 
 import {
   cfLink,
+  createIndexSQL,
   createTableSQL,
   linkColumnsOf,
   table,
@@ -132,5 +133,54 @@ describe("createTableSQL", () => {
       properties: {},
     } as unknown as Parameters<typeof createTableSQL>[1];
     expect(() => createTableSQL("t", empty)).toThrow("at least one column");
+  });
+});
+
+describe("createIndexSQL", () => {
+  it("returns no statement for a table declaring no index", () => {
+    expect(createIndexSQL("t", table({ a: "text" }))).toEqual([]);
+  });
+
+  it("generates one additive statement per declared index", () => {
+    const schema = table({ a: "text", b: "integer" }, undefined, {
+      indexes: [["a"], ["b", "a"]],
+    });
+    expect(createIndexSQL("t", schema)).toEqual([
+      'CREATE INDEX IF NOT EXISTS "t__idx(a)" ON "t" ("a")',
+      'CREATE INDEX IF NOT EXISTS "t__idx(b,a)" ON "t" ("b", "a")',
+    ]);
+  });
+
+  it("names differently two indexes whose table and columns join to one string", () => {
+    const [first] = createIndexSQL(
+      "a",
+      table({ b__c: "text" }, undefined, { indexes: [["b__c"]] }),
+    );
+    const [second] = createIndexSQL(
+      "a__b",
+      table({ c: "text" }, undefined, { indexes: [["c"]] }),
+    );
+
+    expect(first.split(" ON ")[0]).not.toBe(second.split(" ON ")[0]);
+  });
+
+  it("qualifies the index, not the table, with an attach alias", () => {
+    const schema = table({ a: "text" }, undefined, { indexes: [["a"]] });
+    expect(createIndexSQL("t", schema, "cell")).toEqual([
+      'CREATE INDEX IF NOT EXISTS "cell"."t__idx(a)" ON "t" ("a")',
+    ]);
+  });
+
+  it("throws at `table()` time on an index naming an undeclared column", () => {
+    expect(() =>
+      table({ a: "text" }, undefined, {
+        indexes: [["b" as "a"]],
+      })
+    ).toThrow("undeclared column");
+  });
+
+  it("throws on a wire-supplied index that names no column", () => {
+    const schema = { ...table({ a: "text" }), indexes: [[]] };
+    expect(() => createIndexSQL("t", schema)).toThrow("names no column");
   });
 });

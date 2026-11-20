@@ -1283,6 +1283,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to

@@ -3286,7 +3286,11 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
-      await this.#deleteForkBranches();
+      // Each provider's `destroy()` marks it destroyed and aborts its route
+      // before its first await, so a host hint or a session ending during the
+      // close sees a closing provider. Awaiting here only when there is a
+      // fork branch to delete keeps that synchronous for every other manager.
+      if (this.#forkBranch !== undefined) await this.#deleteForkBranches();
       // allSettled: one rejecting teardown must not release the lease (the
       // finally below) while sibling teardowns are still draining frames.
       const outcomes = await Promise.allSettled(
@@ -5447,6 +5451,13 @@ class Provider
   /** See {@link SpaceReplica.presentCount}. */
   presentCount(absences: readonly UnexaminedAbsence[]): number {
     return this.replica.presentCount(absences);
+  }
+
+  /** See {@link SpaceReplica.stillUnexamined}. */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return this.replica.stillUnexamined(absences);
   }
 
   /** See {@link SpaceReplica.storeReportedAbsent}. */
@@ -11382,6 +11393,23 @@ export class SpaceReplica
       if ((this.#docs.get(key)?.confirmed.seq ?? 0) > 0) present += 1;
     }
     return present;
+  }
+
+  /**
+   * Those of `absences` this replica still holds no record of: neither a
+   * revision nor an examined absence. `absences` is a list an
+   * {@link unexaminedAbsences} call returned, of this replica or of one it
+   * replaced, keyed as {@link presentCount} keys it.
+   */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return absences.filter((absence) =>
+      !this.#docs.has(docKey(
+        absence.id,
+        this.instanceKey(absence.scope, undefined, absence.scopeKey),
+      ))
+    );
   }
 
   /**

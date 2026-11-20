@@ -68,6 +68,7 @@ was last checked against the code.
 | [`SERVER_EXECUTION_WORKER`](#server_execution_worker) | `SERVER_EXECUTION_WORKER` env on toolshed | on in toolshed over a file store; off in the test harness's serving memory server | Bernhard Seefeld (the serving loop off the request thread) | soak with the default on, then delete the knob and the in-process arm | implemented, on by default in toolshed |
 | [`SERVER_EXECUTION_OWNER_ROUTING`](#server_execution_owner_routing) | `SERVER_EXECUTION_OWNER_ROUTING` env on toolshed | on in toolshed | Bernhard Seefeld (serve each space from the process that owns it) | delete the knob and the in-process crossings once every process keeps the lease in memory | implemented for every crossing, on by default in toolshed |
 | [`SERVER_EXECUTION_OVERLAP_COMMIT`](#server_execution_overlap_commit) | `SERVER_EXECUTION_OVERLAP_COMMIT` env on toolshed, or `SpaceServerPolicy.overlapWaveCommit` | off | Bernhard Seefeld (the wave commit overlapped with the next cycle) | measure under the worker, flip on where it pays, then delete the knob and the inline arm | implemented, off by default |
+| [`SERVER_EXECUTION_CURRENCY_INDEX`](#server_execution_currency_index) | `SERVER_EXECUTION_CURRENCY_INDEX` env on toolshed (`skip`, `record`, `off`), or `SpaceServerPolicy.currencyIndex` | `skip` on toolshed; none for a policy that sets no mode | Bernhard Seefeld (the currency index of a space's store) | make `skip` the only behavior once deployed spaces have run it with `currency.falseClean` at zero | implemented, on by default on toolshed |
 | [`SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`](#server_execution_flush_deadline_max_ms) | `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS` env on toolshed, or `SpaceServerPolicy.flushDeadlineMaxMs` | off (a fixed deadline) | Bernhard Seefeld (the flush deadline that grows after a cut settle) | measure the vote burst and the seed with a cap, pick a default cap where it pays, then delete the knob | implemented, off by default |
 | [`fuseNfsCacheTuning`](#fusenfscachetuning)                                 | `cf fuse mount --attrcache-timeout <whole seconds; 0 = untuned>` or `--noattrcache`                                                             | cf adds `attrcache-timeout=1` (one second) to FUSE-T mounts                          | Ian Hickson                                           | keep the default; shrink the exec.ts listing-recheck delay once the default has field-soaked                                                                                                                                      | implemented, on by default for FUSE-T, soak-validated                           |
 
@@ -2495,6 +2496,68 @@ the per-epic implementation notes).
   7.8 s. It stays off until the fan-out floor moves.
 - **Path to removal.** Measure the vote burst and the seed under the worker
   with the overlap on, flip the default where it pays, then delete the knob.
+
+### `SERVER_EXECUTION_CURRENCY_INDEX`
+
+- **Toggle via.** The `SERVER_EXECUTION_CURRENCY_INDEX` environment variable
+  on toolshed, read by the serving-host bootstrap
+  ([`runtime/toolshed/lib/server-execution.ts`](../../runtime/toolshed/lib/server-execution.ts))
+  into `SpaceServerPolicy.currencyIndex`; a harness constructing an
+  `ExecutorHost` sets the policy field directly, and a test's serving memory
+  server (`runtime/runner/src/executor/serving-memory-server.deno.ts`) reads
+  the same variable for a policy that leaves the field unset. On toolshed
+  the mode is `skip` unless the variable says otherwise: `record` and `skip`
+  select a mode, `off` keeps no index, and anything else warns and leaves
+  `skip`. A policy that sets no mode keeps no index, and the test server
+  keeps one only for the literal `record` or `skip`.
+  `SERVER_EXECUTION_CURRENCY_EPOCH` names the build whose records are
+  trusted (`SpaceServerPolicy.currencyEpoch`). Unset on toolshed, the epoch
+  is the commit baked into a compiled binary, so a deployment trusts the
+  records of its own build across restarts, and one made up per process for
+  a source run, whose checkout can change under the commit it names. A
+  serving loop asked to `skip` with no epoch named runs as `record`, with a
+  warning. Meaningful only with the serving loop running
+  ([`serverExecution`](#serverexecution) on).
+- **Added by.** Bernhard Seefeld, in the change that adds the currency index
+  of a space's store.
+- **Purpose.** A serving loop starts a piece whenever a session's demand
+  reaches one of its documents, and a fresh serving runtime runs every
+  demanded computation of it again, although the store holds what they
+  wrote. With a mode set, the loop records at each quiescent point, per
+  piece, what its computations read, what they write, and which stored
+  document instances they vouch for
+  ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §3b).
+  A commit above one of those rows marks the piece, and a marked piece
+  marks each piece that reads a document it writes. `record` stores the
+  records, judges each eligible cold root, and loads every root regardless:
+  `currency.servable` counts the roots the store could have served, and
+  `currency.falseClean` counts the pieces that were held clean and then
+  wrote a vouched output again with no input changed, each one a judgment
+  that would have served a stale value. `skip` acts on the judgment: a root
+  whose piece is clean and vouches for every demanded instance of it is
+  neither loaded nor started, until an input marks the piece or a session's
+  demand reaches an instance it does not vouch for
+  ([serving-loop.md](../specs/server-side-execution/serving-loop.md) §1).
+  [The plan](../plans/stored-output-currency.md) carries the design, its
+  limits and the stages after this one.
+- **Current default and planned end state.** `skip` on toolshed, and no index
+  for a serving host whose policy sets no mode. The end state is `skip` as
+  the only behavior, once deployed spaces have run it with
+  `currency.falseClean` at zero. `SERVER_EXECUTION_CURRENCY_INDEX=off`
+  restores a start for every demanded piece, and `record` keeps the index
+  and starts every piece.
+- **Status on 2026-11-19.** Implemented, and `skip` by default on toolshed.
+  The index and its marks are covered in
+  `runtime/memory/test/v2-currency-index.test.ts`, and recording, the
+  judgment, and a skipped root's re-arm in
+  `runtime/runner/test/executor/space-server-currency.test.ts`. Measured on a
+  synthetic Topics board under a serving worker and on a counter in the
+  browser
+  ([the record](../history/development/performance/2026-11-19-currency-index-topics-board.md)).
+  Not measured on a deployed space or on a copy of the production board.
+- **Path to removal.** Watch `currency.falseClean` on deployed spaces, cut
+  the judgment's cost for each demand row, then delete the mode and the
+  unconditional start.
 
 ### `SERVER_EXECUTION_FLUSH_DEADLINE_MAX_MS`
 

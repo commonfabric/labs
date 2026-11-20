@@ -239,7 +239,7 @@ class Head {
       repo: this.repo,
       workflow: this.workflow,
       runs: this.runs,
-      complete: this.complete,
+      complete: false,
       drift: this.drift,
       readAt: this.readAt,
       usedAt: this.usedAt,
@@ -263,11 +263,12 @@ class Head {
 
   /**
    * Takes the runs and readers a file kept as `saved`. The next reading reads
-   * the top of the list, whenever the top was last read.
+   * the top of the list, whenever the top was last read, and a reading that
+   * needs runs past the last one held reads on down the list to see whether
+   * it ends there.
    */
   restore(saved: SavedHead): void {
     this.runs = saved.runs;
-    this.complete = saved.complete;
     this.drift = saved.drift;
     this.readAt = saved.readAt;
     for (const { reader, id, at } of saved.readers) {
@@ -284,9 +285,19 @@ class RunList {
     readonly workflow: string | number,
   ) {}
 
-  /** Reads one page of the unfiltered list, rejecting one out of order. */
-  async page(page: number, size: number): Promise<GitHubRun[]> {
-    const runs = await this.#list({
+  /**
+   * Reads one page of the unfiltered list, and returns its runs and whether
+   * the list ends with them: whether they reach the count of the list's runs
+   * GitHub sends with them. Rejects a page out of order, one without the
+   * count, and one that contradicts the count: one that holds runs past it,
+   * or one shorter than asked for that falls short of it, which GitHub
+   * sometimes answers from the middle of the list.
+   */
+  async page(
+    page: number,
+    size: number,
+  ): Promise<{ runs: GitHubRun[]; ends: boolean }> {
+    const { runs, total } = await this.#list({
       per_page: String(size),
       page: String(page),
     });
@@ -298,16 +309,32 @@ class RunList {
         );
       }
     }
-    return runs;
+    if (total === undefined) {
+      throw new Error(
+        `GitHub listed ${this.repo} ${this.workflow} without counting its runs`,
+      );
+    }
+    const reached = (page - 1) * size + runs.length;
+    if (
+      runs.length > 0 && reached > total ||
+      runs.length < size && reached < total
+    ) {
+      throw new Error(
+        `GitHub listed ${runs.length} runs on page ${page} of ${this.repo} ` +
+          `${this.workflow} at ${size} a page, against the ${total} it counts`,
+      );
+    }
+    return { runs, ends: reached >= total };
   }
 
   /** Reads one page of the list narrowed by `filter`. */
   async filtered(filter: RunFilter, page: number): Promise<GitHubRun[]> {
-    return await this.#list({
+    const { runs } = await this.#list({
       ...filter,
       per_page: String(PAGE),
       page: String(page),
     });
+    return runs;
   }
 
   /** Reads the run as GitHub serves it now, or `undefined` once deleted. */
@@ -325,15 +352,25 @@ class RunList {
     }
   }
 
-  /** Helper for `page()` and `filtered()`, which reads one list request. */
-  async #list(query: Record<string, string>): Promise<GitHubRun[]> {
-    const answer = await this.request<{ workflow_runs?: GitHubRun[] }>(
+  /**
+   * Helper for `page()` and `filtered()`, which reads one list request, and
+   * returns its runs and the count of the list's runs, when GitHub sends one.
+   */
+  async #list(
+    query: Record<string, string>,
+  ): Promise<{ runs: GitHubRun[]; total?: number }> {
+    const answer = await this.request<
+      { workflow_runs?: GitHubRun[]; total_count?: number }
+    >(
       `repos/${this.repo}/actions/workflows/${this.workflow}/runs?${
         new URLSearchParams(query)
       }`,
       { runListAccess: RUN_LIST_ACCESS },
     );
-    return (answer.workflow_runs ?? []).map(narrow);
+    return {
+      runs: (answer.workflow_runs ?? []).map(narrow),
+      total: answer.total_count,
+    };
   }
 }
 
@@ -571,8 +608,8 @@ async function readTop(
   const readUnder = webhooks.stream;
   const held = new Set(head.runs.map((run) => run.id));
   const newestHeld = head.runs[0]?.id ?? Infinity;
-  const top = await list.page(1, size);
-  let ended = top.length < size;
+  const { runs: top, ends } = await list.page(1, size);
+  let ended = ends;
   const reaches = () => top.some((run) => held.has(run.id));
   const passes = () => (top.at(-1)?.id ?? Infinity) < newestHeld;
   while (!ended && !reaches() && !passes()) {
@@ -824,7 +861,7 @@ async function follow(
     const last = runs[runs.length - 1].id;
     const { page, size } = pageHolding(position, room);
     const start = (page - 1) * size;
-    const batch = await list.page(page, size);
+    const { runs: batch, ends } = await list.page(page, size);
     const newer = batch.filter((run) => run.id > last).length;
     const holds = batch[newer]?.id === last;
     const older = batch.length - newer - (holds ? 1 : 0);
@@ -843,9 +880,9 @@ async function follow(
       const added = batch.slice(first);
       const found = runs.length - (start + first);
       for (const run of added) runs.push(run);
-      return { added, dropped, ended: batch.length < size, drift: found };
+      return { added, dropped, ended: ends, drift: found };
     }
-    if (newer > 0 && batch.length < size) {
+    if (newer > 0 && ends) {
       // The list ends before the last run: it and the held runs after the
       // oldest run on this page are gone.
       dropAfter(batch[batch.length - 1].id);
