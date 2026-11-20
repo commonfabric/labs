@@ -1,8 +1,8 @@
 /**
  * How a FabriChat manager's readers of its rooms' rosters, which its people
  * are drawn from, follow the rooms it lists: each reader stays with its room,
- * so a newly listed room, which the list puts ahead of the others, runs its
- * own reader and leaves every other reader as it was.
+ * so a room listed, forgotten, or listed again starts or stops its own reader
+ * and leaves every other reader as it was.
  */
 
 import { expect } from "@std/expect";
@@ -37,6 +37,18 @@ const outcomeSchema = {
     entry: {
       type: "object",
       properties: { room: { asCell: ["cell"] } },
+    },
+  },
+} as const;
+
+/** What the tests read of the manager's rooms: each one's link and revision. */
+const roomsSchema = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: {
+      room: { type: "unknown", asCell: ["cell"] },
+      revision: { type: "string" },
     },
   },
 } as const;
@@ -287,10 +299,46 @@ describe("fabrichat-room-rosters", () => {
     }
   });
 
-  it("lists a person's profiles newest room first", async () => {
-    // The readers run over the rooms oldest first; the people are drawn in
-    // the order the rooms are listed, newest first, all the same.
+  it("runs no other room's reader when a room is forgotten, or listed again", async () => {
+    const forgotten = rooms[1];
+    const room = () =>
+      owners.runtime.getCellFromLink(forgotten.getAsNormalizedFullLink());
+    const listed = async () =>
+      await owners.home.key("chatManager").key("rooms").asSchema(roomsSchema)
+        .pull() as { room?: Cell<unknown>; revision?: string }[];
+    const revision = (await listed()).find((each) =>
+      each.room?.space === forgotten.space
+    )?.revision;
+    expect(revision).toBeDefined();
+    const before = readerRuns();
 
+    await send(owners.runtime, owners.home, ["chatManager", "forget"], {
+      requestId: "forget-one",
+      room: room(),
+      revision,
+    });
+    expect((await listed()).map((each) => each.room?.space)).not.toContain(
+      forgotten.space,
+    );
+    const afterForget = readerRuns();
+    for (const [space, runs] of before) {
+      if (space !== forgotten.space) expect(afterForget.get(space)).toBe(runs);
+    }
+
+    await send(owners.runtime, owners.home, ["chatManager", "joinRoom"], {
+      requestId: "list-again",
+      room: room(),
+    });
+    const afterListing = readerRuns();
+    expect(afterListing.get(forgotten.space)).toBeGreaterThan(
+      afterForget.get(forgotten.space) ?? 0,
+    );
+    for (const [space, runs] of afterForget) {
+      if (space !== forgotten.space) expect(afterListing.get(space)).toBe(runs);
+    }
+  });
+
+  it("lists a person's profiles newest room first", async () => {
     await send(
       members.runtime,
       members.home,
