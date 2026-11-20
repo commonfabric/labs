@@ -184,8 +184,8 @@ pub struct Checker<'p, 'a> {
     /// The start of an initializer and the name of the `const` it is
     /// assigned to.
     name_hint: Option<(u32, String)>,
-    /// The starts of the references to a removed helper that are the callee
-    /// of a call or the tag of a template.
+    /// The starts of the references to a removed helper or to `patternTool`
+    /// that are the callee of a call or the tag of a template.
     helper_callees: HashSet<u32>,
     /// The start of the builder call that is the whole initializer of the
     /// module-scope `const` being visited.
@@ -1944,7 +1944,7 @@ impl<'p, 'a> Checker<'p, 'a> {
             return;
         }
         self.statement_call = None;
-        if value == ApiValue::RemovedHelper {
+        if matches!(value, ApiValue::RemovedHelper | ApiValue::PatternTool) {
             self.helper_callees
                 .insert(unwrap(&call.callee).span().start);
         }
@@ -1972,12 +1972,14 @@ impl<'p, 'a> Checker<'p, 'a> {
                     );
                 }
             }
+            // A call the interim acceptance covers is not in the text
+            // this walk reads (`crate::tool_rewrite`).
             ApiValue::PatternTool => {
                 self.count("form:patternTool");
                 self.report(
                     "removed-form:pattern-tool",
                     call.span,
-                    "A call of `patternTool`",
+                    "A call of `patternTool` in a form the interim acceptance does not cover",
                 );
             }
             ApiValue::RemovedBuiltin(replacement) => {
@@ -3337,6 +3339,17 @@ impl<'a> Visit<'a> for Checker<'_, 'a> {
                 if helper && !self.helper_callees.contains(&it.span.start) {
                     self.report(
                         "removed-form:helper-unsupported",
+                        it.span,
+                        format!("`{}` passed as a value", it.name),
+                    );
+                }
+                let tool = self
+                    .model
+                    .api_ref(symbol)
+                    .is_some_and(|api| api.value() == ApiValue::PatternTool);
+                if tool && !self.helper_callees.contains(&it.span.start) {
+                    self.report(
+                        "removed-form:pattern-tool",
                         it.span,
                         format!("`{}` passed as a value", it.name),
                     );

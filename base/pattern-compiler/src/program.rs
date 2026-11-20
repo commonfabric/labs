@@ -47,6 +47,10 @@ pub struct ModuleAnalysis {
     /// (`plan-and-label-templates.md` §1.1).
     #[serde(skip)]
     pub plans: Vec<crate::plan::PatternPlan>,
+    /// The text the offsets of the plans are in, where it is not the text
+    /// the module was given with (`crate::tool_rewrite`).
+    #[serde(skip)]
+    pub rewritten: Option<String>,
 }
 
 impl ModuleAnalysis {
@@ -110,7 +114,7 @@ pub enum Place {
 }
 
 impl<'m, 'a> Resolver<'m, 'a> {
-    fn new(
+    pub(crate) fn new(
         files: &'m [SourceFile],
         models: &'m [Option<ModuleModel>],
         parsed: &'m [Option<Parsed<'a>>],
@@ -250,7 +254,7 @@ impl<'m, 'a> Resolver<'m, 'a> {
         identities
     }
 
-    fn set_bodies(&self, module: usize, bodies: &[Body]) {
+    pub(crate) fn set_bodies(&self, module: usize, bodies: &[Body]) {
         self.bodies.borrow_mut()[module] =
             bodies.iter().map(|body| (body.span, body.kind)).collect();
     }
@@ -412,6 +416,14 @@ fn join(from: &str, specifier: &str) -> String {
 
 /// Runs the front end over a set of modules.
 pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let mut analysis = analyze_rewritten(rewritten.files());
+    rewritten.finish(&mut analysis);
+    analysis
+}
+
+/// [`analyze`] for modules that `crate::tool_rewrite` has rewritten.
+fn analyze_rewritten(files: &[SourceFile]) -> ProgramAnalysis {
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let mut failures = Vec::new();
     let parsed: Vec<Option<Parsed<'_>>> = files
@@ -666,6 +678,7 @@ pub fn analyze(files: &[SourceFile]) -> ProgramAnalysis {
         modules.push(ModuleAnalysis {
             path: files[index].path.clone(),
             plans: std::mem::take(&mut all_plans[index]),
+            rewritten: None,
             model,
             bodies: check.bodies,
             diagnostics,
@@ -983,6 +996,8 @@ fn footprint_counts(
 /// The footprint of every body of the program `files` that the analysis of
 /// `footprint-analysis.md` runs on.
 pub fn footprints(files: &[SourceFile]) -> Vec<crate::footprint::BodyFootprint> {
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let files = rewritten.files();
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let parsed: Vec<Option<Parsed<'_>>> = files
         .iter()
@@ -1032,28 +1047,63 @@ pub const TYPE_MARKER: &str = "/*?*/";
 /// marked by writing it in parentheses. An expression with no type is given
 /// as the label the measurement counts it under.
 pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
+    at_markers(files, |resolver, module, expression| {
+        Some(match expression {
+            Some(expression) => match resolver.declared(module, expression) {
+                Ok(ty) => resolver.display(ty),
+                Err(origin) => origin.label().to_string(),
+            },
+            None => "no expression at the marker".to_string(),
+        })
+    })
+}
+
+/// The JSON schema of the input type of each pattern factory value that is
+/// marked with [`TYPE_MARKER`], as [`types_at_markers`] finds the marked
+/// expressions. A marked expression that is no pattern factory value has
+/// no entry.
+pub fn closure_inputs_at_markers(files: &[SourceFile]) -> Vec<serde_json::Value> {
+    at_markers(files, |resolver, module, expression| {
+        let factory = resolver.declared(module, expression?).ok()?;
+        match resolver.shape(factory) {
+            crate::types::Shape::PatternFactory(input, _) => Some(resolver.schema_of(input)),
+            _ => None,
+        }
+    })
+}
+
+/// What `describe` gives for the expression at each [`TYPE_MARKER`] of a
+/// program, in the order of the files and of the source. `describe` is
+/// given `None` for a marker that no expression starts at.
+fn at_markers<T, F>(files: &[SourceFile], describe: F) -> Vec<T>
+where
+    F: for<'m, 'a> Fn(&Resolver<'m, 'a>, usize, Option<&oxc_ast::ast::Expression<'a>>) -> Option<T>,
+{
     use oxc_ast::ast::Expression;
     use oxc_ast_visit::{walk, Visit};
     use oxc_span::GetSpan;
 
-    struct Find<'r, 'm, 'a> {
+    struct Find<'r, 'm, 'a, T, F> {
         resolver: &'r Resolver<'m, 'a>,
         module: usize,
         start: u32,
-        found: Option<String>,
+        describe: &'r F,
+        found: Option<Option<T>>,
     }
-    impl<'a> Visit<'a> for Find<'_, '_, 'a> {
+    impl<'a, T, F> Visit<'a> for Find<'_, '_, 'a, T, F>
+    where
+        F: for<'m, 'b> Fn(&Resolver<'m, 'b>, usize, Option<&Expression<'b>>) -> Option<T>,
+    {
         fn visit_expression(&mut self, it: &Expression<'a>) {
             if it.span().start == self.start {
-                self.found = Some(match self.resolver.declared(self.module, it) {
-                    Ok(ty) => self.resolver.display(ty),
-                    Err(origin) => origin.label().to_string(),
-                });
+                self.found = Some((self.describe)(self.resolver, self.module, Some(it)));
             }
             walk::walk_expression(self, it);
         }
     }
 
+    let rewritten = crate::tool_rewrite::rewrite(files);
+    let files = rewritten.files();
     let allocators: Vec<Allocator> = files.iter().map(|_| Allocator::default()).collect();
     let parsed: Vec<Option<Parsed<'_>>> = files
         .iter()
@@ -1072,7 +1122,7 @@ pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
         }
     }
     resolver.types.borrow_mut().reports.clear();
-    let mut types = Vec::new();
+    let mut found = Vec::new();
     for (module, file) in files.iter().enumerate() {
         let Some(parsed) = &parsed[module] else {
             continue;
@@ -1084,16 +1134,17 @@ pub fn types_at_markers(files: &[SourceFile]) -> Vec<String> {
                 resolver: &resolver,
                 module,
                 start: (offset + TYPE_MARKER.len() + blank) as u32,
+                describe: &describe,
                 found: None,
             };
             find.visit_program(parsed.program);
-            types.push(
+            found.extend(
                 find.found
-                    .unwrap_or_else(|| "no expression at the marker".to_string()),
+                    .unwrap_or_else(|| describe(&resolver, module, None)),
             );
         }
     }
-    types
+    found
 }
 
 /// Reports what a computation or the reactive tier may not do when it does
